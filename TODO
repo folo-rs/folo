@@ -1,0 +1,11 @@
+* Identifying and informing of hardware present in system and used for current process
+* Mapping of current process to processors in different processor groups (including in multiple processor groups)
+* Pinning of current thread to specific processors
+* Mapping current process to arbitrary set of N processors (distributed)
+* Mapping current process to arbitrary set of N processors (same group)
+* Test/benchmark harness that distributes work to multiple processor groups
+* Do we want some support for "soft pinning" - prefer one processor but allow others?
+* Do we need some consideration for different hierarchy levels? e.g. same physical memory but different caches?
+* Do we need to offer any socket-related functionality? In terms of RSS targeting - do we want to be able to pin certain threads to RSS processors or to non-RSS processors? Unclear what may be desirable but there is potential there.
+* Support Windows (native)
+* Support Linux (libnuma?)
