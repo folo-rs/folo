@@ -18,3 +18,7 @@ windows = { version = "0.58", features = [
 
 [dev-dependencies]
 criterion = { version = "0.5" }
+
+[[bench]]
+name = "cross_memory_region_channels"
+harness = false

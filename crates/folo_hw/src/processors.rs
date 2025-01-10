@@ -718,6 +718,7 @@ fn get_all() -> ProcessorSet {
         next = unsafe { next.byte_add(info.Size as usize) };
 
         // Even though we request NumaNodeEx, it returns entries with NumaNode because... it does.
+        // TODO: Does it ever return NumaNodeEx? What about when returning multiple groups?
         assert_eq!(info.Relationship, RelationNumaNode);
 
         let details = unsafe { &info.Anonymous.NumaNode };
@@ -726,8 +727,18 @@ fn get_all() -> ProcessorSet {
 
         // In the struct definition, this is a 1-element array because Rust has no notion
         // of dynamic-size arrays. We use pointer arithmetic to access the real array elements.
+        //
+        // INSANITY: this & is crucial here because otherwise the compiler will give us a pointer
+        // to some temporary value on the stack that does not actually contain the correct data.
+        // This is because without the &, the Rust compiler will happily try to copy out the value
+        // of GroupMasks and use that. This would be a guaranteed problem if GroupCount>1 since the
+        // compiler did not know it would have to copy more than one element. However, for some
+        // unclear reason it is also a problem with GroupCount==1 because the compiler apparently
+        // copies out some garbage onto the stack instead of the correct value. Reason unknown.
+        // Just make sure to keep the & here and anywhere else unions are used by reference/ptr.
+        //
         // SAFETY: RelationNumaNodeEx guarantees that this union member is present.
-        let mut group_mask_array = unsafe { details.Anonymous.GroupMasks }.as_ptr();
+        let mut group_mask_array = unsafe { &details.Anonymous.GroupMasks }.as_ptr();
 
         for _ in 0..details.GroupCount {
             // SAFETY: The OS promises us that this array contains `GroupCount` elements.
@@ -886,10 +897,7 @@ mod tests {
     #[test]
     fn filter_in_all() {
         // If we filter in all processors, we should get all of them.
-        let processors = ProcessorSet::builder()
-            .filter(|_| true)
-            .take_all()
-            .unwrap();
+        let processors = ProcessorSet::builder().filter(|_| true).take_all().unwrap();
 
         assert_eq!(processors.len(), ALL_PROCESSORS.len());
     }
