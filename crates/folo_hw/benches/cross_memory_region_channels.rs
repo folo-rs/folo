@@ -16,33 +16,39 @@ const TWO_PROCESSORS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("cross_memory_region_channels");
 
-    let far_processor_pair = ProcessorSet::builder()
+    if let Some(far_processor_pair) = ProcessorSet::builder()
         .performance_processors_only()
         .different_memory_regions()
         .take(TWO_PROCESSORS)
-        .expect("must have two processors in different memory regions for this benchmark");
+    {
+        group.bench_function("different_region_channels", |b| {
+            b.iter_batched(
+                || BenchmarkRun::new(&far_processor_pair),
+                |run| run.wait(),
+                BatchSize::PerIteration,
+            );
+        });
+    } else {
+        eprintln!(
+            "skipping different_memory_regions benchmark because the PC only has one memory region"
+        );
+    }
 
-    let near_processor_pair = ProcessorSet::builder()
+    if let Some(near_processor_pair) = ProcessorSet::builder()
         .performance_processors_only()
         .same_memory_region()
         .take(TWO_PROCESSORS)
-        .expect("must have two processors in the same memory region for this benchmark");
-
-    group.bench_function("same_region_channels", |b| {
-        b.iter_batched(
-            || BenchmarkRun::new(&near_processor_pair),
-            |run| run.wait(),
-            BatchSize::PerIteration,
-        );
-    });
-
-    group.bench_function("different_region_channels", |b| {
-        b.iter_batched(
-            || BenchmarkRun::new(&far_processor_pair),
-            |run| run.wait(),
-            BatchSize::PerIteration,
-        );
-    });
+    {
+        group.bench_function("same_memory_region", |b| {
+            b.iter_batched(
+                || BenchmarkRun::new(&near_processor_pair),
+                |run| run.wait(),
+                BatchSize::PerIteration,
+            );
+        });
+    } else {
+        eprintln!("skipping same_memory_region benchmark because the PC has no memory region with two available processors");
+    }
 
     group.finish();
 }
