@@ -44,6 +44,7 @@ Setup (Linux):
 
 1. Navigate to repo shared with Windows host (under `/mnt/c/`)
 1. Open Visual Studio code via `code .`
+    * Install required extensions if this is the first time you run Visual Studio Code under Linux.
 1. Execute from task palette (F1):
     * `Tasks: Run Build Task`
     * `Tasks: Run Test Task`
