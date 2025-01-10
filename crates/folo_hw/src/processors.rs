@@ -10,7 +10,7 @@ use itertools::Itertools;
 use nonempty::{nonempty, NonEmpty};
 use rand::{
     seq::{IteratorRandom, SliceRandom},
-    thread_rng, Rng, RngCore,
+    thread_rng,
 };
 use windows::{
     core::HRESULT,
@@ -88,17 +88,6 @@ impl Display for Processor {
             "processor {} [{}-{}]",
             self.global_index, self.group_index, self.index_in_group
         )
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-struct MemoryRegion {
-    index: MemoryRegionIndex,
-}
-
-impl MemoryRegion {
-    fn new(id: MemoryRegionIndex) -> Self {
-        Self { index: id }
     }
 }
 
@@ -395,7 +384,7 @@ impl ProcessorSetBuilder {
                     .iter()
                     .choose_multiple(&mut thread_rng(), count.get())
                     .into_iter()
-                    .map(|(region, processors)| {
+                    .map(|(_, processors)| {
                         processors
                             .iter()
                             .choose(&mut thread_rng())
