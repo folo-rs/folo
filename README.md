@@ -43,8 +43,9 @@ Validation (Windows):
 Setup (Linux):
 
 1. Navigate to repo shared with Windows host (under `/mnt/c/`)
+1. If first time setup, execute `git config --global credential.helper "/mnt/c/Program\ Files/Git/mingw64/bin/git-credential-manager.exe"` to set the correct Git authentication flow.
 1. Open Visual Studio code via `code .`
-    * Install required extensions if this is the first time you run Visual Studio Code under Linux.
+    * If first time setup, install required extensions.
 1. Execute from task palette (F1):
     * `Tasks: Run Build Task`
     * `Tasks: Run Test Task`
