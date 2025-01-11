@@ -38,7 +38,7 @@ Validation:
 Prerequisites:
 
 * Ubuntu 24 installed in WSL
-* `sudo apt install -y git git-lfs build-essential cmake gcc make curl libnuma-dev`
+* `sudo apt install -y git git-lfs build-essential cmake gcc make curl`
 * Rust development tools (see `rust-toolchain.toml` for version) with additional tools:
     * `cargo install cargo-nextest --locked`
 
