@@ -4,6 +4,7 @@ description = "Hardware awareness for Rust apps"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
