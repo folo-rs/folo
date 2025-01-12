@@ -217,6 +217,7 @@ fn get_numa_nodes() -> Option<NonEmpty<NonEmpty<Range<ProcessorGlobalIndex>>>> {
 }
 
 // 0-7,16-23,55,67
+// note: this fails to support the stride operator and is overall a very basic parser
 fn parse_cpulist(cpulist: &str) -> NonEmpty<Range<ProcessorGlobalIndex>> {
     let parts = cpulist.split(',');
 

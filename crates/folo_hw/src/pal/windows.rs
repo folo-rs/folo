@@ -72,7 +72,7 @@ impl ProcessorCommon for Processor {
         self.global_index
     }
 
-    fn memory_region_index(&self) -> MemoryRegionIndex {
+    fn memory_region(&self) -> MemoryRegionIndex {
         self.memory_region_index
     }
 
