@@ -20,7 +20,7 @@ pub(crate) trait ProcessorCommon {
 
     /// The global index of the memory region that the processor belongs to,
     /// uniquely identifying a specific memory region on the current system.
-    fn memory_region_index(&self) -> MemoryRegionIndex;
+    fn memory_region(&self) -> MemoryRegionIndex;
 
     /// The efficiency class of the processor.
     fn efficiency_class(&self) -> EfficiencyClass;

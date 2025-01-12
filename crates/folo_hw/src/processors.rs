@@ -50,8 +50,8 @@ impl ProcessorCommon for Processor {
         self.inner.index()
     }
 
-    fn memory_region_index(&self) -> MemoryRegionIndex {
-        self.inner.memory_region_index()
+    fn memory_region(&self) -> MemoryRegionIndex {
+        self.inner.memory_region()
     }
 
     fn efficiency_class(&self) -> EfficiencyClass {
@@ -407,7 +407,7 @@ impl ProcessorSetBuilder {
                     return None;
                 }
 
-                Some((p.memory_region_index(), p))
+                Some((p.memory_region(), p))
             })
             .into_group_map()
     }
