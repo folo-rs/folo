@@ -2,11 +2,10 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "type": "cargo",
-            "command": "build",
+            "type": "process",
+            "command": "just",
             "args": [
-                "--all-features",
-                "--all-targets"
+                "build",
             ],
             "problemMatcher": [
                 "$rustc"
@@ -15,14 +14,13 @@
                 "kind": "build",
                 "isDefault": true
             },
-            "label": "rust: cargo build"
+            "label": "just: build"
         },
         {
-            "type": "cargo",
-            "command": "nextest",
+            "type": "process",
+            "command": "just",
             "args": [
-                "run",
-                "--all-features"
+                "test",
             ],
             "problemMatcher": [
                 "$rustc"
@@ -31,13 +29,13 @@
                 "kind": "test",
                 "isDefault": true
             },
-            "label": "rust: cargo nextest"
+            "label": "just: test"
         },
         {
-            "type": "cargo",
-            "command": "test",
+            "type": "process",
+            "command": "just",
             "args": [
-                "--all-features"
+                "test-docs",
             ],
             "problemMatcher": [
                 "$rustc"
@@ -45,46 +43,31 @@
             "group": {
                 "kind": "test"
             },
-            "label": "rust: cargo test"
+            "label": "just: test-docs"
         },
         {
-            "type": "cargo",
-            "command": "test",
+            "type": "process",
+            "command": "just",
             "args": [
-                "--all-features",
-                "--doc"
-            ],
-            "problemMatcher": [
-                "$rustc"
-            ],
-            "group": {
-                "kind": "test"
-            },
-            "label": "rust: cargo test --doc"
-        },
-        {
-            "type": "cargo",
-            "command": "doc",
-            "args": [
-                "--all-features"
+                "docs"
             ],
             "problemMatcher": [
                 "$rustc"
             ],
             "group": "none",
-            "label": "rust: cargo doc"
+            "label": "just: docs"
         },
         {
-            "type": "cargo",
-            "command": "bench",
+            "type": "process",
+            "command": "just",
             "args": [
-                "--all-features"
+                "bench"
             ],
             "problemMatcher": [
                 "$rustc"
             ],
             "group": "none",
-            "label": "rust: cargo bench"
+            "label": "just: bench"
         },
     ]
 }
