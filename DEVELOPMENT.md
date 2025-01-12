@@ -13,15 +13,20 @@ Prerequisites:
 * Windows 11
 * Visual Studio 2022 with workload "Desktop development with C++"
 * Visual Studio Code with extensions:
-    * rust-analyzer
     * C/C++
+    * rust-analyzer
+    * vscode-just
     * WSL
-* Rust development tools (see `rust-toolchain.toml` for version) with additional tools:
-    * `cargo install cargo-nextest --locked`
+* PowerShell 7
+* Rust development tools (see `rust-toolchain.toml` for version)
+* `cargo install just`
 
 Setup:
 
-1. In repo directory, execute `git config --local include.path ./.gitconfig` to attach the repo-specific Git configuration.
+1. Clone the repo to a directory of your choosing.
+1. Open a terminal in the repo root.
+1. Execute `git config --local include.path ./.gitconfig` to attach the repo-specific Git configuration.
+1. Execute `just install-tools` to install development tools.
 
 Validation:
 
@@ -36,17 +41,18 @@ Prerequisites:
 
 * Ubuntu 24 installed in WSL
 * `sudo apt install -y git git-lfs build-essential cmake gcc make curl`
-* Rust development tools (see `rust-toolchain.toml` for version) with additional tools:
-    * `cargo install cargo-nextest --locked`
+* Rust development tools (see `rust-toolchain.toml` for version)
+* `cargo install just`
+* If first time Git setup, execute `git config --global credential.helper "/mnt/c/Program\ Files/Git/mingw64/bin/git-credential-manager.exe"` to setup authentication flow
 
 Setup:
 
-1. Navigate to repo shared with Windows host (under `/mnt/c/`)
-1. If first time setup, execute `git config --global credential.helper "/mnt/c/Program\ Files/Git/mingw64/bin/git-credential-manager.exe"` to set the correct Git authentication flow.
+1. Navigate to repo shared with Windows host (under `/mnt/c/`). Do not create a separate clone of the repo for Linux.
+1. Execute `just install-tools` to install development tools.
 1. Open Visual Studio code via `code .`
 1. If first time setup, install required Visual Studio Code extensions:
-    * rust-analyzer
     * C/C++
+    * rust-analyzer
 
 Validation:
 
