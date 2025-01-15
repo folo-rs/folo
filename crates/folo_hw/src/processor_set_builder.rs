@@ -92,116 +92,118 @@ impl From<ProcessorSetBuilderCore<pal::Platform>> for ProcessorSetBuilder {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use std::sync::{Arc, Barrier};
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Barrier};
 
-//     use super::*;
+    use super::*;
 
-//     // TODO: We need a "give up" mechanism so tests do not hang forever if they fail.
+    // TODO: We need a "give up" mechanism so tests do not hang forever if they fail.
 
-//     const ONE: NonZeroUsize = NonZeroUsize::new(1).unwrap();
+    const ONE: NonZeroUsize = NonZeroUsize::new(1).unwrap();
 
-//     #[test]
-//     fn spawn_on_any_processor() {
-//         let done = Arc::new(Barrier::new(2));
+    #[test]
+    fn spawn_on_any_processor() {
+        let done = Arc::new(Barrier::new(2));
 
-//         let set = ProcessorSet::all();
-//         set.spawn_thread({
-//             let done = Arc::clone(&done);
+        let set = ProcessorSet::all();
+        set.spawn_thread({
+            let done = Arc::clone(&done);
 
-//             move |_| {
-//                 done.wait();
-//             }
-//         });
+            move |_| {
+                done.wait();
+            }
+        });
 
-//         done.wait();
-//     }
+        done.wait();
+    }
 
-//     #[test]
-//     fn spawn_on_every_processor() {
-//         let processor_count: usize = ALL_PROCESSORS.len();
+    #[test]
+    fn spawn_on_every_processor() {
+        let processor_count = ProcessorSet::all().len();
 
-//         let done = Arc::new(Barrier::new(processor_count + 1));
+        let done = Arc::new(Barrier::new(processor_count + 1));
 
-//         let set = ProcessorSet::all();
-//         set.spawn_threads({
-//             let done = Arc::clone(&done);
+        let set = ProcessorSet::all();
+        set.spawn_threads({
+            let done = Arc::clone(&done);
 
-//             move |_| {
-//                 done.wait();
-//             }
-//         });
+            move |_| {
+                done.wait();
+            }
+        });
 
-//         done.wait();
-//     }
+        done.wait();
+    }
 
-//     #[test]
-//     fn filter_by_memory_region_real() {
-//         // We know there is at least one memory region, so these must succeed.
-//         ProcessorSet::builder()
-//             .same_memory_region()
-//             .take_all()
-//             .unwrap();
-//         ProcessorSet::builder()
-//             .same_memory_region()
-//             .take(ONE)
-//             .unwrap();
-//         ProcessorSet::builder()
-//             .different_memory_regions()
-//             .take_all()
-//             .unwrap();
-//         ProcessorSet::builder()
-//             .different_memory_regions()
-//             .take(ONE)
-//             .unwrap();
-//     }
+    #[test]
+    fn filter_by_memory_region_real() {
+        // We know there is at least one memory region, so these must succeed.
+        ProcessorSet::builder()
+            .same_memory_region()
+            .take_all()
+            .unwrap();
+        ProcessorSet::builder()
+            .same_memory_region()
+            .take(ONE)
+            .unwrap();
+        ProcessorSet::builder()
+            .different_memory_regions()
+            .take_all()
+            .unwrap();
+        ProcessorSet::builder()
+            .different_memory_regions()
+            .take(ONE)
+            .unwrap();
+    }
 
-//     #[test]
-//     fn filter_by_efficiency_class_real() {
-//         // There must be at least one.
-//         ProcessorSet::builder()
-//             .performance_processors_only()
-//             .take_all()
-//             .unwrap();
-//         ProcessorSet::builder()
-//             .performance_processors_only()
-//             .take(ONE)
-//             .unwrap();
+    #[test]
+    fn filter_by_efficiency_class_real() {
+        // There must be at least one.
+        ProcessorSet::builder()
+            .performance_processors_only()
+            .take_all()
+            .unwrap();
+        ProcessorSet::builder()
+            .performance_processors_only()
+            .take(ONE)
+            .unwrap();
 
-//         // There might not be any. We just try resolving it and ignore the result.
-//         // As long as it does not panic, we are good.
-//         ProcessorSet::builder()
-//             .efficiency_processors_only()
-//             .take_all();
-//         ProcessorSet::builder()
-//             .efficiency_processors_only()
-//             .take(ONE);
-//     }
+        // There might not be any. We just try resolving it and ignore the result.
+        // As long as it does not panic, we are good.
+        ProcessorSet::builder()
+            .efficiency_processors_only()
+            .take_all();
+        ProcessorSet::builder()
+            .efficiency_processors_only()
+            .take(ONE);
+    }
 
-//     #[test]
-//     fn filter_in_all() {
-//         // If we filter in all processors, we should get all of them.
-//         let processors = ProcessorSet::builder().filter(|_| true).take_all().unwrap();
+    #[test]
+    fn filter_in_all() {
+        // If we filter in all processors, we should get all of them.
+        let processors = ProcessorSet::builder().filter(|_| true).take_all().unwrap();
 
-//         assert_eq!(processors.len(), ALL_PROCESSORS.len());
-//     }
+        let processor_count = ProcessorSet::all().len();
 
-//     #[test]
-//     fn filter_out_all() {
-//         // If we filter out all processors, there should be nothing left.
-//         assert!(ProcessorSet::builder()
-//             .filter(|_| false)
-//             .take_all()
-//             .is_none());
-//     }
+        assert_eq!(processors.len(), processor_count);
+    }
 
-//     #[test]
-//     fn except_all() {
-//         // If we exclude all processors, there should be nothing left.
-//         assert!(ProcessorSet::builder()
-//             .except(ProcessorSet::all().processors())
-//             .take_all()
-//             .is_none());
-//     }
-// }
+    #[test]
+    fn filter_out_all() {
+        // If we filter out all processors, there should be nothing left.
+        assert!(ProcessorSet::builder()
+            .filter(|_| false)
+            .take_all()
+            .is_none());
+    }
+
+    #[test]
+    fn except_all() {
+        // If we exclude all processors, there should be nothing left.
+        assert!(ProcessorSet::builder()
+            .except(&ProcessorSet::all().processors())
+            .take_all()
+            .is_none());
+    }
+}

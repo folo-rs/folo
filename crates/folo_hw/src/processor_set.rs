@@ -1,7 +1,7 @@
 use std::{sync::LazyLock, thread};
 
 use itertools::Itertools;
-use nonempty::nonempty;
+use nonempty::{nonempty, NonEmpty};
 
 use crate::{pal, Processor, ProcessorSetBuilder, ProcessorSetCore};
 
@@ -59,13 +59,16 @@ impl ProcessorSet {
         self.inner.len()
     }
 
-    pub fn processors(&self) -> impl IntoIterator<Item = Processor> {
+    pub fn processors(&self) -> NonEmpty<Processor> {
         // We return a converted copy of the list because it is relatively cheap to do this
         // conversion and we do not expect this to be on any hot path.
-        self.inner
-            .processors()
-            .map(|p| Into::<Processor>::into(*p))
-            .collect_vec()
+        NonEmpty::from_vec(
+            self.inner
+                .processors()
+                .map(|p| Into::<Processor>::into(*p))
+                .collect_vec(),
+        )
+        .expect("processor sets contain at least one processor by definition")
     }
 
     /// Modifies the affinity of the current thread to execute
