@@ -81,16 +81,17 @@ impl ProcessorCommon for Processor {
     }
 }
 
+#[derive(Copy, Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 pub(crate) struct Platform;
 
 impl PlatformCommon for Platform {
     type Processor = Processor;
 
-    fn get_all_processors() -> NonEmpty<Self::Processor> {
+    fn get_all_processors(&self) -> NonEmpty<Self::Processor> {
         get_all()
     }
 
-    fn pin_current_thread_to<P>(processors: &NonEmpty<P>)
+    fn pin_current_thread_to<P>(&self, processors: &NonEmpty<P>)
     where
         P: AsRef<Self::Processor>,
     {

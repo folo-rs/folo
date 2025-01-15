@@ -1,3 +1,8 @@
+use std::{
+    fmt::{Debug, Display},
+    hash::Hash,
+};
+
 use nonempty::NonEmpty;
 
 pub(crate) type ProcessorGlobalIndex = u32;
@@ -14,11 +19,13 @@ pub(crate) enum EfficiencyClass {
     Performance,
 }
 
-pub(crate) trait ProcessorCommon {
+pub(crate) trait ProcessorCommon:
+    Clone + Copy + Debug + Display + Eq + Hash + PartialEq + Send
+{
     /// The global index of the processor, uniquely identifying it on the current system.
     fn index(&self) -> ProcessorGlobalIndex;
 
-    /// The global index of the memory region that the processor belongs to,
+    /// The index of the memory region that the processor belongs to,
     /// uniquely identifying a specific memory region on the current system.
     fn memory_region(&self) -> MemoryRegionIndex;
 
@@ -26,11 +33,14 @@ pub(crate) trait ProcessorCommon {
     fn efficiency_class(&self) -> EfficiencyClass;
 }
 
-pub(crate) trait PlatformCommon {
-    type Processor;
+pub(crate) trait PlatformCommon:
+    Clone + Copy + Debug + Eq + Ord + Hash + PartialEq + PartialOrd + Send + Sync + 'static
+{
+    type Processor: ProcessorCommon;
 
-    fn get_all_processors() -> NonEmpty<Self::Processor>;
-    fn pin_current_thread_to<P>(processors: &NonEmpty<P>)
+    fn get_all_processors(&self) -> NonEmpty<Self::Processor>;
+
+    fn pin_current_thread_to<P>(&self, processors: &NonEmpty<P>)
     where
         P: AsRef<Self::Processor>;
 }
