@@ -1,5 +1,3 @@
-//#![allow(dead_code, unused_imports, unused_variables)]
-
 mod processor;
 mod processor_core;
 mod processor_set;

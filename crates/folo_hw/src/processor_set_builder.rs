@@ -10,7 +10,7 @@ pub struct ProcessorSetBuilder {
 impl ProcessorSetBuilder {
     pub fn new() -> Self {
         Self {
-            inner: ProcessorSetBuilderCore::new(&pal::PlatformImpl),
+            inner: ProcessorSetBuilderCore::new(&pal::CURRENT),
         }
     }
 

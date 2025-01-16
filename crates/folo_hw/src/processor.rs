@@ -34,7 +34,7 @@ impl AsRef<ProcessorCore<pal::PlatformImpl>> for Processor {
 
 impl From<pal::ProcessorImpl> for Processor {
     fn from(value: pal::ProcessorImpl) -> Self {
-        Self::new(ProcessorCore::new(value, &pal::PlatformImpl))
+        Self::new(ProcessorCore::new(value, &pal::CURRENT))
     }
 }
 
