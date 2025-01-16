@@ -8,18 +8,13 @@ use crate::{pal::Platform, ProcessorCore, ProcessorSetBuilderCore};
 extern crate alloc;
 
 #[derive(Clone, Debug)]
-pub(crate) struct ProcessorSetCore<PAL>
-where
-    PAL: Platform,
-{
+pub(crate) struct ProcessorSetCore<PAL: Platform> {
     processors: NonEmpty<ProcessorCore<PAL>>,
+
     pub(crate) pal: &'static PAL,
 }
 
-impl<PAL> ProcessorSetCore<PAL>
-where
-    PAL: Platform,
-{
+impl<PAL: Platform> ProcessorSetCore<PAL> {
     pub fn to_builder(&self) -> ProcessorSetBuilderCore<PAL> {
         ProcessorSetBuilderCore::<PAL>::new(self.pal).filter(|p| self.processors.contains(p))
     }
@@ -73,10 +68,7 @@ where
     }
 }
 
-impl<PAL> From<ProcessorCore<PAL>> for ProcessorSetCore<PAL>
-where
-    PAL: Platform,
-{
+impl<PAL: Platform> From<ProcessorCore<PAL>> for ProcessorSetCore<PAL> {
     fn from(value: ProcessorCore<PAL>) -> Self {
         ProcessorSetCore::new(nonempty![value], value.pal)
     }

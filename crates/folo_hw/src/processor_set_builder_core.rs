@@ -12,17 +12,12 @@ use rand::{
 };
 
 use crate::{
-    pal::{
-        EfficiencyClass, MemoryRegionIndex, Platform, Processor, ProcessorGlobalIndex,
-    },
+    pal::{EfficiencyClass, MemoryRegionIndex, Platform, ProcessorGlobalIndex},
     ProcessorCore, ProcessorSetCore,
 };
 
 #[derive(Clone, Debug)]
-pub(crate) struct ProcessorSetBuilderCore<PAL>
-where
-    PAL: Platform,
-{
+pub(crate) struct ProcessorSetBuilderCore<PAL: Platform> {
     processor_type_selector: ProcessorTypeSelector,
     memory_region_selector: MemoryRegionSelector,
 
@@ -31,10 +26,7 @@ where
     pal: &'static PAL,
 }
 
-impl<PAL> ProcessorSetBuilderCore<PAL>
-where
-    PAL: Platform,
-{
+impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
     pub(crate) fn new(pal: &'static PAL) -> Self {
         Self {
             processor_type_selector: ProcessorTypeSelector::Any,
