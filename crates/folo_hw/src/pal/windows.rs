@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display};
+use std::collections::HashMap;
 
 use nonempty::NonEmpty;
 use windows::{
@@ -19,73 +19,20 @@ use windows::{
     },
 };
 
-use crate::pal::{
-    EfficiencyClass, MemoryRegionIndex, PlatformCommon, ProcessorCommon, ProcessorGlobalIndex,
-};
+use crate::pal::{EfficiencyClass, Platform, ProcessorGlobalIndex};
+
+mod processor;
+
+pub(crate) use processor::*;
 
 type ProcessorGroupIndex = u16;
 type ProcessorIndexInGroup = u8;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct Processor {
-    group_index: ProcessorGroupIndex,
-    index_in_group: ProcessorIndexInGroup,
-
-    // Cumulative index when counting across all groups.
-    global_index: ProcessorGlobalIndex,
-
-    memory_region_index: MemoryRegionIndex,
-
-    efficiency_class: EfficiencyClass,
-}
-
-impl Processor {
-    fn new(
-        group_index: ProcessorGroupIndex,
-        index_in_group: ProcessorIndexInGroup,
-        global_index: ProcessorGlobalIndex,
-        memory_region_index: MemoryRegionIndex,
-        efficiency_class: EfficiencyClass,
-    ) -> Self {
-        Self {
-            group_index,
-            index_in_group,
-            global_index,
-            memory_region_index,
-            efficiency_class,
-        }
-    }
-}
-
-impl Display for Processor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "processor {} [{}-{}]",
-            self.global_index, self.group_index, self.index_in_group
-        )
-    }
-}
-
-impl ProcessorCommon for Processor {
-    fn index(&self) -> ProcessorGlobalIndex {
-        self.global_index
-    }
-
-    fn memory_region(&self) -> MemoryRegionIndex {
-        self.memory_region_index
-    }
-
-    fn efficiency_class(&self) -> EfficiencyClass {
-        self.efficiency_class
-    }
-}
-
 #[derive(Copy, Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
-pub(crate) struct Platform;
+pub(crate) struct PlatformImpl;
 
-impl PlatformCommon for Platform {
-    type Processor = Processor;
+impl Platform for PlatformImpl {
+    type Processor = ProcessorImpl;
 
     fn get_all_processors(&self) -> NonEmpty<Self::Processor> {
         get_all()
@@ -298,7 +245,7 @@ fn get_performance_processor_global_indexes() -> Box<[ProcessorGlobalIndex]> {
     }
 }
 
-fn get_all() -> NonEmpty<Processor> {
+fn get_all() -> NonEmpty<ProcessorImpl> {
     let memory_region_relationships_raw = get_logical_processor_information_raw(RelationNumaNodeEx);
 
     // This is the data we want to extract - a mapping of which processor group belongs to
@@ -389,7 +336,7 @@ fn get_all() -> NonEmpty<Processor> {
                 EfficiencyClass::Efficiency
             };
 
-            let processor = Processor::new(
+            let processor = ProcessorImpl::new(
                 group_index as ProcessorGroupIndex,
                 index_in_group,
                 global_index,

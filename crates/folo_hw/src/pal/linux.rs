@@ -1,5 +1,4 @@
 use std::{
-    fmt::Display,
     fs::{self, read_to_string},
     num::NonZeroU32,
     ops::Range,
@@ -8,46 +7,20 @@ use std::{
 use itertools::Itertools;
 use nonempty::{nonempty, NonEmpty};
 
-use crate::pal::{
-    EfficiencyClass, MemoryRegionIndex, PlatformCommon, ProcessorCommon, ProcessorGlobalIndex,
-};
+use crate::pal::{EfficiencyClass, MemoryRegionIndex, Platform, ProcessorGlobalIndex};
+
+mod processor;
+
+pub(crate) use processor::*;
 
 // https://github.com/cloudhead/nonempty/issues/68
 extern crate alloc;
 
-/// A processor present on the system and available to the current process.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct Processor {
-    index: ProcessorGlobalIndex,
-    memory_region: MemoryRegionIndex,
-    efficiency_class: EfficiencyClass,
-}
-
-impl Display for Processor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "processor {} [node {}]", self.index, self.memory_region)
-    }
-}
-
-impl ProcessorCommon for Processor {
-    fn index(&self) -> ProcessorGlobalIndex {
-        self.index
-    }
-
-    fn memory_region(&self) -> MemoryRegionIndex {
-        self.memory_region
-    }
-
-    fn efficiency_class(&self) -> EfficiencyClass {
-        self.efficiency_class
-    }
-}
-
 #[derive(Copy, Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
-pub(crate) struct Platform;
+pub(crate) struct PlatformImpl;
 
-impl PlatformCommon for Platform {
-    type Processor = Processor;
+impl Platform for PlatformImpl {
+    type Processor = ProcessorImpl;
 
     fn get_all_processors(&self) -> nonempty::NonEmpty<Self::Processor> {
         get_all()
@@ -61,7 +34,7 @@ impl PlatformCommon for Platform {
     }
 }
 
-fn get_all() -> NonEmpty<Processor> {
+fn get_all() -> NonEmpty<ProcessorImpl> {
     // There are two main ways to get processor information on Linux:
     // 1. Use various APIs to get the information as objects.
     // 2. Parse files in the /sys and /proc virtual filesystem.
@@ -110,7 +83,7 @@ fn get_all() -> NonEmpty<Processor> {
             EfficiencyClass::Performance
         };
 
-        Processor {
+        ProcessorImpl {
             index: info.index,
             memory_region: memory_region as MemoryRegionIndex,
             efficiency_class,

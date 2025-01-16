@@ -2,7 +2,7 @@ use std::thread;
 
 use nonempty::{nonempty, NonEmpty};
 
-use crate::{pal::PlatformCommon, ProcessorCore, ProcessorSetBuilderCore};
+use crate::{pal::Platform, ProcessorCore, ProcessorSetBuilderCore};
 
 // https://github.com/cloudhead/nonempty/issues/68
 extern crate alloc;
@@ -10,7 +10,7 @@ extern crate alloc;
 #[derive(Clone, Debug)]
 pub(crate) struct ProcessorSetCore<PAL>
 where
-    PAL: PlatformCommon,
+    PAL: Platform,
 {
     processors: NonEmpty<ProcessorCore<PAL>>,
     pub(crate) pal: &'static PAL,
@@ -18,7 +18,7 @@ where
 
 impl<PAL> ProcessorSetCore<PAL>
 where
-    PAL: PlatformCommon,
+    PAL: Platform,
 {
     pub fn to_builder(&self) -> ProcessorSetBuilderCore<PAL> {
         ProcessorSetBuilderCore::<PAL>::new(self.pal).filter(|p| self.processors.contains(p))
@@ -75,7 +75,7 @@ where
 
 impl<PAL> From<ProcessorCore<PAL>> for ProcessorSetCore<PAL>
 where
-    PAL: PlatformCommon,
+    PAL: Platform,
 {
     fn from(value: ProcessorCore<PAL>) -> Self {
         ProcessorSetCore::new(nonempty![value], value.pal)

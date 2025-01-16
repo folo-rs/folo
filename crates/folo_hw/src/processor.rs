@@ -1,18 +1,15 @@
 use std::fmt::Display;
 
-use crate::{
-    pal::{self, EfficiencyClass, MemoryRegionIndex, ProcessorCommon, ProcessorGlobalIndex},
-    ProcessorCore,
-};
+use crate::{pal, ProcessorCore};
 
 /// A processor present on the system and available to the current process.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Processor {
-    inner: ProcessorCore<pal::Platform>,
+    inner: ProcessorCore<pal::PlatformImpl>,
 }
 
 impl Processor {
-    pub(crate) fn new(inner: ProcessorCore<pal::Platform>) -> Self {
+    pub(crate) fn new(inner: ProcessorCore<pal::PlatformImpl>) -> Self {
         Self { inner }
     }
 }
@@ -23,52 +20,38 @@ impl Display for Processor {
     }
 }
 
-impl ProcessorCommon for Processor {
-    fn index(&self) -> ProcessorGlobalIndex {
-        self.inner.index()
-    }
-
-    fn memory_region(&self) -> MemoryRegionIndex {
-        self.inner.memory_region()
-    }
-
-    fn efficiency_class(&self) -> EfficiencyClass {
-        self.inner.efficiency_class()
-    }
-}
-
-impl AsRef<pal::Processor> for Processor {
-    fn as_ref(&self) -> &pal::Processor {
+impl AsRef<pal::ProcessorImpl> for Processor {
+    fn as_ref(&self) -> &pal::ProcessorImpl {
         self.inner.as_ref()
     }
 }
 
-impl AsRef<ProcessorCore<pal::Platform>> for Processor {
-    fn as_ref(&self) -> &ProcessorCore<pal::Platform> {
+impl AsRef<ProcessorCore<pal::PlatformImpl>> for Processor {
+    fn as_ref(&self) -> &ProcessorCore<pal::PlatformImpl> {
         &self.inner
     }
 }
 
-impl From<pal::Processor> for Processor {
-    fn from(value: pal::Processor) -> Self {
-        Self::new(ProcessorCore::new(value, &pal::Platform))
+impl From<pal::ProcessorImpl> for Processor {
+    fn from(value: pal::ProcessorImpl) -> Self {
+        Self::new(ProcessorCore::new(value, &pal::PlatformImpl))
     }
 }
 
-impl From<Processor> for ProcessorCore<pal::Platform> {
+impl From<Processor> for ProcessorCore<pal::PlatformImpl> {
     fn from(value: Processor) -> Self {
         *value.as_ref()
     }
 }
 
-impl From<Processor> for pal::Processor {
+impl From<Processor> for pal::ProcessorImpl {
     fn from(value: Processor) -> Self {
         *value.as_ref()
     }
 }
 
-impl From<ProcessorCore<pal::Platform>> for Processor {
-    fn from(value: ProcessorCore<pal::Platform>) -> Self {
+impl From<ProcessorCore<pal::PlatformImpl>> for Processor {
+    fn from(value: ProcessorCore<pal::PlatformImpl>) -> Self {
         Self::new(value)
     }
 }

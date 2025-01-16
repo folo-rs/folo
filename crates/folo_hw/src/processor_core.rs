@@ -1,13 +1,13 @@
 use std::fmt::Display;
 
 use crate::pal::{
-    self, EfficiencyClass, MemoryRegionIndex, PlatformCommon, ProcessorCommon, ProcessorGlobalIndex,
+    self, EfficiencyClass, MemoryRegionIndex, Platform, Processor, ProcessorGlobalIndex,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ProcessorCore<PAL>
 where
-    PAL: PlatformCommon,
+    PAL: Platform,
 {
     inner: PAL::Processor,
     pub(crate) pal: &'static PAL,
@@ -15,7 +15,7 @@ where
 
 impl<PAL> ProcessorCore<PAL>
 where
-    PAL: PlatformCommon,
+    PAL: Platform,
 {
     pub(crate) fn new(inner: PAL::Processor, pal: &'static PAL) -> Self {
         Self { inner, pal }
@@ -24,16 +24,16 @@ where
 
 impl<PAL> Display for ProcessorCore<PAL>
 where
-    PAL: PlatformCommon,
+    PAL: Platform,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Display::fmt(&self.inner, f)
     }
 }
 
-impl<PAL> ProcessorCommon for ProcessorCore<PAL>
+impl<PAL> Processor for ProcessorCore<PAL>
 where
-    PAL: PlatformCommon,
+    PAL: Platform,
 {
     fn index(&self) -> ProcessorGlobalIndex {
         self.inner.index()
@@ -50,15 +50,15 @@ where
 
 impl<PAL> AsRef<PAL::Processor> for ProcessorCore<PAL>
 where
-    PAL: PlatformCommon,
+    PAL: Platform,
 {
     fn as_ref(&self) -> &PAL::Processor {
         &self.inner
     }
 }
 
-impl From<ProcessorCore<pal::Platform>> for pal::Processor {
-    fn from(value: ProcessorCore<pal::Platform>) -> Self {
+impl From<ProcessorCore<pal::PlatformImpl>> for pal::ProcessorImpl {
+    fn from(value: ProcessorCore<pal::PlatformImpl>) -> Self {
         *value.as_ref()
     }
 }

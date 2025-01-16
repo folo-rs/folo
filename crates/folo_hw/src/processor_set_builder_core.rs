@@ -13,7 +13,7 @@ use rand::{
 
 use crate::{
     pal::{
-        EfficiencyClass, MemoryRegionIndex, PlatformCommon, ProcessorCommon, ProcessorGlobalIndex,
+        EfficiencyClass, MemoryRegionIndex, Platform, Processor, ProcessorGlobalIndex,
     },
     ProcessorCore, ProcessorSetCore,
 };
@@ -21,7 +21,7 @@ use crate::{
 #[derive(Clone, Debug)]
 pub(crate) struct ProcessorSetBuilderCore<PAL>
 where
-    PAL: PlatformCommon,
+    PAL: Platform,
 {
     processor_type_selector: ProcessorTypeSelector,
     memory_region_selector: MemoryRegionSelector,
@@ -33,7 +33,7 @@ where
 
 impl<PAL> ProcessorSetBuilderCore<PAL>
 where
-    PAL: PlatformCommon,
+    PAL: Platform,
 {
     pub(crate) fn new(pal: &'static PAL) -> Self {
         Self {
@@ -77,7 +77,7 @@ where
     pub fn except<'a, I>(mut self, processors: I) -> Self
     where
         I: IntoIterator<Item = &'a ProcessorCore<PAL>>,
-        <PAL as PlatformCommon>::Processor: 'a,
+        <PAL as Platform>::Processor: 'a,
     {
         for processor in processors {
             self.except_indexes.insert(processor.index());

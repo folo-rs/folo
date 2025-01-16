@@ -31,7 +31,7 @@ static ALL_PROCESSORS: LazyLock<ProcessorSet> = LazyLock::new(|| {
 /// processors will not be considered a member of any set.
 #[derive(Clone, Debug)]
 pub struct ProcessorSet {
-    inner: ProcessorSetCore<pal::Platform>,
+    inner: ProcessorSetCore<pal::PlatformImpl>,
 }
 
 impl ProcessorSet {
@@ -50,7 +50,7 @@ impl ProcessorSet {
         self.inner.to_builder().into()
     }
 
-    fn new(inner: ProcessorSetCore<pal::Platform>) -> Self {
+    fn new(inner: ProcessorSetCore<pal::PlatformImpl>) -> Self {
         Self { inner }
     }
 
@@ -111,12 +111,12 @@ impl ProcessorSet {
 
 impl From<Processor> for ProcessorSet {
     fn from(value: Processor) -> Self {
-        ProcessorSetCore::new(nonempty![value.into()], &pal::Platform).into()
+        ProcessorSetCore::new(nonempty![value.into()], &pal::PlatformImpl).into()
     }
 }
 
-impl From<ProcessorSetCore<pal::Platform>> for ProcessorSet {
-    fn from(value: ProcessorSetCore<pal::Platform>) -> Self {
+impl From<ProcessorSetCore<pal::PlatformImpl>> for ProcessorSet {
+    fn from(value: ProcessorSetCore<pal::PlatformImpl>) -> Self {
         Self::new(value)
     }
 }
