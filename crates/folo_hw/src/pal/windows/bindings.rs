@@ -1,4 +1,4 @@
-use std::{fmt::Debug, hash::Hash};
+use std::fmt::Debug;
 
 use windows::{
     core::Result,
@@ -20,25 +20,23 @@ use windows::{
 /// Bindings for FFI calls into external libraries (either provided by operating system or not).
 ///
 /// All PAL FFI calls must go through this trait, enabling them to be mocked.
-#[expect(non_snake_case)] // Following Windows API naming.
-pub(super) trait Bindings:
-    Clone + Copy + Debug + Eq + Ord + Hash + PartialEq + PartialOrd + Send + Sync + 'static
-{
-    fn GetActiveProcessorCount(&self, group_number: u16) -> u32;
-    fn GetMaximumProcessorCount(&self, group_number: u16) -> u32;
+#[cfg_attr(test, mockall::automock)]
+pub(super) trait Bindings: Debug + Send + Sync + 'static {
+    fn get_active_processor_count(&self, group_number: u16) -> u32;
+    fn get_maximum_processor_count(&self, group_number: u16) -> u32;
 
-    fn GetMaximumProcessorGroupCount(&self) -> u16;
+    fn get_maximum_processor_group_count(&self) -> u16;
 
-    fn GetCurrentThread(&self) -> HANDLE;
+    fn get_current_thread(&self) -> HANDLE;
 
-    unsafe fn SetThreadGroupAffinity(
+    unsafe fn set_thread_group_affinity(
         &self,
         thread: HANDLE,
         group_affinity: *const GROUP_AFFINITY,
         previous_group_affinity: Option<*mut GROUP_AFFINITY>,
     ) -> BOOL;
 
-    unsafe fn GetLogicalProcessorInformationEx(
+    unsafe fn get_logical_processor_information_ex(
         &self,
         relationship_type: LOGICAL_PROCESSOR_RELATIONSHIP,
         buffer: Option<*mut SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>,
@@ -46,31 +44,31 @@ pub(super) trait Bindings:
     ) -> Result<()>;
 }
 
-#[derive(Copy, Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
+#[derive(Debug, Default)]
 pub(super) struct BindingsImpl;
 
 impl Bindings for BindingsImpl {
-    fn GetActiveProcessorCount(&self, group_number: u16) -> u32 {
+    fn get_active_processor_count(&self, group_number: u16) -> u32 {
         // SAFETY: No safety requirements.
         unsafe { GetActiveProcessorCount(group_number) }
     }
 
-    fn GetMaximumProcessorCount(&self, group_number: u16) -> u32 {
+    fn get_maximum_processor_count(&self, group_number: u16) -> u32 {
         // SAFETY: No safety requirements.
         unsafe { GetMaximumProcessorCount(group_number) }
     }
 
-    fn GetMaximumProcessorGroupCount(&self) -> u16 {
+    fn get_maximum_processor_group_count(&self) -> u16 {
         // SAFETY: No safety requirements.
         unsafe { GetMaximumProcessorGroupCount() }
     }
 
-    fn GetCurrentThread(&self) -> HANDLE {
+    fn get_current_thread(&self) -> HANDLE {
         // SAFETY: No safety requirements.
         unsafe { GetCurrentThread() }
     }
 
-    unsafe fn SetThreadGroupAffinity(
+    unsafe fn set_thread_group_affinity(
         &self,
         thread: HANDLE,
         group_affinity: *const GROUP_AFFINITY,
@@ -79,7 +77,7 @@ impl Bindings for BindingsImpl {
         SetThreadGroupAffinity(thread, group_affinity, previous_group_affinity)
     }
 
-    unsafe fn GetLogicalProcessorInformationEx(
+    unsafe fn get_logical_processor_information_ex(
         &self,
         relationship_type: LOGICAL_PROCESSOR_RELATIONSHIP,
         buffer: Option<*mut SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>,

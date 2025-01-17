@@ -8,7 +8,7 @@ pub(crate) static CURRENT: PlatformImpl = PlatformImpl {
     inner: PlatformCore::new(&BindingsImpl),
 };
 
-#[derive(Copy, Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+#[derive(Debug)]
 pub(crate) struct PlatformImpl {
     inner: PlatformCore<BindingsImpl>,
 }

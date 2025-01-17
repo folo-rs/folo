@@ -14,7 +14,7 @@ use crate::pal::{
 // https://github.com/cloudhead/nonempty/issues/68
 extern crate alloc;
 
-#[derive(Copy, Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+#[derive(Debug)]
 pub(super) struct PlatformCore<B: Bindings> {
     bindings: &'static B,
 }

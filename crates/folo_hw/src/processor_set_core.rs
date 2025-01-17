@@ -7,7 +7,7 @@ use crate::{pal::Platform, ProcessorCore, ProcessorSetBuilderCore};
 // https://github.com/cloudhead/nonempty/issues/68
 extern crate alloc;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct ProcessorSetCore<PAL: Platform> {
     processors: NonEmpty<ProcessorCore<PAL>>,
 
@@ -65,6 +65,15 @@ impl<PAL: Platform> ProcessorSetCore<PAL> {
             set.pin_current_thread_to();
             entrypoint(set)
         })
+    }
+}
+
+impl<PAL: Platform> Clone for ProcessorSetCore<PAL> {
+    fn clone(&self) -> Self {
+        Self {
+            processors: self.processors.clone(),
+            pal: self.pal,
+        }
     }
 }
 

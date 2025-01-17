@@ -16,7 +16,7 @@ use crate::{
     ProcessorCore, ProcessorSetCore,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct ProcessorSetBuilderCore<PAL: Platform> {
     processor_type_selector: ProcessorTypeSelector,
     memory_region_selector: MemoryRegionSelector,
@@ -263,6 +263,17 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
         self.pal
             .get_all_processors()
             .map(|p| ProcessorCore::new(p, self.pal))
+    }
+}
+
+impl<PAL: Platform> Clone for ProcessorSetBuilderCore<PAL> {
+    fn clone(&self) -> Self {
+        Self {
+            processor_type_selector: self.processor_type_selector,
+            memory_region_selector: self.memory_region_selector,
+            except_indexes: self.except_indexes.clone(),
+            pal: self.pal,
+        }
     }
 }
 

@@ -6,7 +6,7 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub(crate) use linux::*;
 
-#[cfg(target_os = "windows")]
+#[cfg(windows)]
 mod windows;
-#[cfg(target_os = "windows")]
+#[cfg(windows)]
 pub(crate) use windows::*;

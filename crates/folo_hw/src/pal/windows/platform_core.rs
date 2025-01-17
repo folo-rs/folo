@@ -17,7 +17,7 @@ use crate::pal::{
     EfficiencyClass, ProcessorGlobalIndex, ProcessorImpl,
 };
 
-#[derive(Copy, Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+#[derive(Debug)]
 pub(super) struct PlatformCore<B: Bindings> {
     bindings: &'static B,
 }
@@ -47,7 +47,7 @@ impl<B: Bindings> PlatformCore<B> {
         // any potential intermediate state where everything is cleared.
 
         // This is a pseudo handle and does not need to be closed.
-        let current_thread = self.bindings.GetCurrentThread();
+        let current_thread = self.bindings.get_current_thread();
 
         let processor_group_sizes = self.get_processor_group_max_sizes();
 
@@ -75,7 +75,7 @@ impl<B: Bindings> PlatformCore<B> {
             // of the call. We do - it is backed by a local variable that lives to end of scope.
             unsafe {
                 self.bindings
-                    .SetThreadGroupAffinity(current_thread, &affinity, None)
+                    .set_thread_group_affinity(current_thread, &affinity, None)
             }
             .expect("SetThreadGroupAffinity failed unexpectedly");
         }
@@ -84,12 +84,12 @@ impl<B: Bindings> PlatformCore<B> {
     /// Returns the max number of processors in each processor group.
     /// This is used to calculate the global index of a processor.
     fn get_processor_group_max_sizes(&self) -> Box<[u8]> {
-        let group_count = self.bindings.GetMaximumProcessorGroupCount();
+        let group_count = self.bindings.get_maximum_processor_group_count();
 
         let mut group_sizes = Vec::with_capacity(group_count as usize);
 
         for group_index in 0..group_count {
-            let processor_count = self.bindings.GetMaximumProcessorCount(group_index);
+            let processor_count = self.bindings.get_maximum_processor_count(group_index);
 
             // The OS says there are up to 64, so this is guaranteed but let's be explicit.
             assert!(processor_count <= u8::MAX as u32);
@@ -105,12 +105,12 @@ impl<B: Bindings> PlatformCore<B> {
     /// This is used to identify which processors actually exist.
     fn get_processor_group_active_sizes(&self) -> Box<[u8]> {
         // We always consider all groups, even if they have 0 processors.
-        let group_count = self.bindings.GetMaximumProcessorGroupCount();
+        let group_count = self.bindings.get_maximum_processor_group_count();
 
         let mut group_sizes = Vec::with_capacity(group_count as usize);
 
         for group_index in 0..group_count {
-            let processor_count = self.bindings.GetActiveProcessorCount(group_index);
+            let processor_count = self.bindings.get_active_processor_count(group_index);
 
             // The OS says there are up to 64, so this is guaranteed but let's be explicit.
             assert!(processor_count <= u8::MAX as u32);
@@ -131,7 +131,7 @@ impl<B: Bindings> PlatformCore<B> {
 
             // SAFETY: Pointers must outlive the call (true - local variable lives beyond call).
             let probe_result = unsafe {
-                self.bindings.GetLogicalProcessorInformationEx(
+                self.bindings.get_logical_processor_information_ex(
                     relationship,
                     None,
                     &raw mut required_length,
@@ -149,7 +149,7 @@ impl<B: Bindings> PlatformCore<B> {
 
             // SAFETY: Pointers must outlive the call (true - local variables live beyond call).
             let real_result = unsafe {
-                self.bindings.GetLogicalProcessorInformationEx(
+                self.bindings.get_logical_processor_information_ex(
                     relationship,
                     Some(buffer.as_mut_ptr().cast()),
                     &raw mut final_length,
@@ -213,7 +213,7 @@ impl<B: Bindings> PlatformCore<B> {
             // individually without worrying about SMT logic.
             let group_index: ProcessorGroupIndex = details.GroupMask[0].Group;
 
-            let processors_in_group = self.bindings.GetMaximumProcessorCount(group_index);
+            let processors_in_group = self.bindings.get_maximum_processor_count(group_index);
 
             // Minimum effort approach for WOW64 support - we only see the first 32 in a group.
             let processors_in_group = processors_in_group.min(usize::BITS);

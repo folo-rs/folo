@@ -8,6 +8,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+derive_more = { version = "1", features = ["as_ref"] }
 itertools = "0.14"
 nonempty = "0.11"
 rand = "0.8"
@@ -20,6 +21,7 @@ windows = { version = "0.58", features = [
 
 [dev-dependencies]
 criterion = { version = "0.5" }
+mockall = "0.13"
 
 [[bench]]
 name = "cross_memory_region_channels"

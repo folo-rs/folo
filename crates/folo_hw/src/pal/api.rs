@@ -33,9 +33,7 @@ pub(crate) trait Processor:
     fn efficiency_class(&self) -> EfficiencyClass;
 }
 
-pub(crate) trait Platform:
-    Clone + Copy + Debug + Eq + Ord + Hash + PartialEq + PartialOrd + Send + Sync + 'static
-{
+pub(crate) trait Platform: Debug + Send + Sync + 'static {
     type Processor: Processor;
 
     fn get_all_processors(&self) -> NonEmpty<Self::Processor>;

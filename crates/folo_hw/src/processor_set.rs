@@ -111,7 +111,8 @@ impl ProcessorSet {
 
 impl From<Processor> for ProcessorSet {
     fn from(value: Processor) -> Self {
-        ProcessorSetCore::new(nonempty![value.into()], &pal::CURRENT).into()
+        let processor_core = *value.as_ref();
+        ProcessorSetCore::new(nonempty![processor_core], &pal::CURRENT).into()
     }
 }
 
