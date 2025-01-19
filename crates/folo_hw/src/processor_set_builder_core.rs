@@ -5,7 +5,7 @@ use std::{
 };
 
 use itertools::Itertools;
-use nonempty::NonEmpty;
+use nonempty::{nonempty, NonEmpty};
 use rand::{
     seq::{IteratorRandom, SliceRandom},
     thread_rng,
@@ -311,4 +311,62 @@ enum ProcessorTypeSelector {
     ///
     /// There is no guarantee that any efficiency processors are present on the system.
     Efficiency,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::LazyLock;
+
+    use crate::pal::{FakeProcessor, MockPlatform};
+
+    use super::*;
+
+    #[test]
+    fn smoke_test() {
+        static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
+            let mut mock = MockPlatform::new();
+
+            let pal_processors = nonempty![
+                FakeProcessor {
+                    index: 0,
+                    memory_region: 0,
+                    efficiency_class: EfficiencyClass::Efficiency,
+                },
+                FakeProcessor {
+                    index: 1,
+                    memory_region: 0,
+                    efficiency_class: EfficiencyClass::Performance,
+                }
+            ];
+
+            mock.expect_get_all_processors_core()
+                .return_const(pal_processors);
+
+            mock
+        });
+
+        let builder = ProcessorSetBuilderCore::new(&*PAL);
+
+        // Simplest possible test, verify that we see all the processors.
+        let set = builder.take_all().unwrap();
+        assert_eq!(set.len(), 2);
+    }
+
+    // TODO: Verify that efficiency class filters are respected.
+    // TODO: ... for both take(N) and take_all()
+    // TODO: Verify that take(N) returns only N processors.
+    // TODO: Verify that take(N) returns None if not enough processors remaining.
+    // TODO: Verify that take_all() returns None if not enough processors remaining.
+    // TODO: Verify that except() filters are respected.
+    // TODO: ... for both take(N) and take_all()
+    // TODO: Verify that custom filter is respected.
+    // TODO: ... for both take(N) and take_all()
+    // TODO: Verify that "same memory region" filter is respected.
+    // TODO: ... even if only some of the memory regions have enough processors.
+    // TODO: ... for both take(N) and take_all()
+    // TODO: Verify that "different memory region" filter is respected.
+    // TODO: ... for both take(N) and take_all()
+    // TODO: Verify filter combinations: efficiency class + except + memory region.
+    // TODO: ... for both take(N) and take_all()
+    
 }
