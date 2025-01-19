@@ -58,3 +58,54 @@ impl<PAL: Platform> Display for ProcessorCore<PAL> {
         Display::fmt(&self.inner, f)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::LazyLock;
+
+    use crate::pal::{FakeProcessor, MockPlatform};
+
+    use super::*;
+
+    #[test]
+    fn smoke_test() {
+        let pal_processor = FakeProcessor {
+            index: 42,
+            memory_region: 13,
+            efficiency_class: EfficiencyClass::Efficiency,
+        };
+
+        static PAL: LazyLock<MockPlatform> = LazyLock::new(MockPlatform::new);
+
+        let processor = ProcessorCore::new(pal_processor, &*PAL);
+
+        // Getters appear to get the expected values.
+        assert_eq!(processor.index(), 42);
+        assert_eq!(processor.memory_region(), 13);
+        assert_eq!(processor.efficiency_class(), EfficiencyClass::Efficiency);
+
+        // A clone is a legit clone.
+        #[expect(clippy::clone_on_copy)] // Intentional.
+        let processor_clone = processor.clone();
+        assert_eq!(processor, processor_clone);
+
+        // Clones have the same hash.
+        let mut hasher1 = std::collections::hash_map::DefaultHasher::new();
+        processor.hash(&mut hasher1);
+        let hash1 = hasher1.finish();
+
+        let mut hasher2 = std::collections::hash_map::DefaultHasher::new();
+        processor_clone.hash(&mut hasher2);
+        let hash2 = hasher2.finish();
+
+        assert_eq!(hash1, hash2);
+
+        // Display writes something (anything - as long as it writes something and does not panic).
+        let displayed = format!("{processor}");
+        assert!(!displayed.is_empty());
+
+        // Debug writes something (anything - as long as it writes something and does not panic).
+        let debugged = format!("{processor:?}");
+        assert!(!debugged.is_empty());
+    }
+}

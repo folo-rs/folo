@@ -10,3 +10,8 @@ pub(crate) use linux::*;
 mod windows;
 #[cfg(windows)]
 pub(crate) use windows::*;
+
+#[cfg(test)]
+mod mocks;
+#[cfg(test)]
+pub(crate) use mocks::*;
