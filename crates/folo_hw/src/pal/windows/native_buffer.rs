@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Probably will use later.
+
 use std::{
     alloc::Layout,
     marker::PhantomData,

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use itertools::Itertools;
 use nonempty::NonEmpty;
 use windows::{
     core::HRESULT,
@@ -180,12 +181,18 @@ impl<B: Bindings> PlatformCore<B> {
 
     // Gets the global index of every performance processor.
     // Implicitly, anything not on this list is an efficiency processor.
-    fn get_performance_processor_global_indexes(&self) -> Box<[ProcessorGlobalIndex]> {
+    fn get_performance_processor_global_indexes(
+        &self,
+        group_max_sizes: &[u8],
+    ) -> Box<[ProcessorGlobalIndex]> {
         let core_relationships_raw =
             self.get_logical_processor_information_raw(RelationProcessorCore);
 
-        let mut result_zero = Vec::new();
-        let mut result_nonzero = Vec::new();
+        // We create a list of processor index to efficiency class. Then we simply take all
+        // processors with the max efficiency class (whatever the numeric value) - those are the
+        // performance processors.
+
+        let mut processor_to_efficiency_class = HashMap::new();
 
         // The structures returned by the OS are dynamically sized so we only have various
         // disgusting options for parsing/processing them. Pointer wrangling is the most readable.
@@ -213,7 +220,7 @@ impl<B: Bindings> PlatformCore<B> {
             // individually without worrying about SMT logic.
             let group_index: ProcessorGroupIndex = details.GroupMask[0].Group;
 
-            let processors_in_group = self.bindings.get_maximum_processor_count(group_index);
+            let processors_in_group = group_max_sizes[group_index as usize] as u32;
 
             // Minimum effort approach for WOW64 support - we only see the first 32 in a group.
             let processors_in_group = processors_in_group.min(usize::BITS);
@@ -225,23 +232,36 @@ impl<B: Bindings> PlatformCore<B> {
                     continue;
                 }
 
-                let global_index: ProcessorGlobalIndex =
-                    group_index as u32 * processors_in_group + index_in_group;
+                let group_start_offset: ProcessorGlobalIndex = group_max_sizes
+                    .iter()
+                    .take(group_index as usize)
+                    .map(|x| *x as ProcessorGlobalIndex)
+                    .sum();
 
-                if details.EfficiencyClass == 0 {
-                    result_nonzero.push(global_index);
-                } else {
-                    result_zero.push(global_index);
-                }
+                let global_index: ProcessorGlobalIndex = group_start_offset + index_in_group;
+                processor_to_efficiency_class.insert(global_index, details.EfficiencyClass);
             }
         }
 
-        // If all processors are equal, they might all be in the "zero" list.
-        if result_nonzero.is_empty() {
-            result_zero.into_boxed_slice()
-        } else {
-            result_nonzero.into_boxed_slice()
-        }
+        let max_efficiency_class = processor_to_efficiency_class
+            .values()
+            .max()
+            .copied()
+            .expect(
+                "there must be at least one processor - this code is running on one, after all",
+            );
+
+        processor_to_efficiency_class
+            .iter()
+            .filter_map(|(&global_index, &efficiency_class)| {
+                if efficiency_class == max_efficiency_class {
+                    Some(global_index)
+                } else {
+                    None
+                }
+            })
+            .collect_vec()
+            .into_boxed_slice()
     }
 
     fn get_all(&self) -> NonEmpty<ProcessorImpl> {
@@ -306,7 +326,8 @@ impl<B: Bindings> PlatformCore<B> {
 
         let processor_group_max_sizes = self.get_processor_group_max_sizes();
         let processor_group_active_sizes = self.get_processor_group_active_sizes();
-        let performance_processors = self.get_performance_processor_global_indexes();
+        let performance_processors =
+            self.get_performance_processor_global_indexes(&processor_group_max_sizes);
 
         let mut processors =
             Vec::with_capacity(processor_group_max_sizes.iter().map(|&s| s as usize).sum());
@@ -379,7 +400,7 @@ mod tests {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
 
-            simulate_processor_layout(&mut mock, [4], [4], [0], [&[0, 0, 0, 0]]);
+            simulate_processor_layout(&mut mock, [4], [4], [0], [vec![0, 0, 0, 0]]);
 
             mock
         });
@@ -403,7 +424,130 @@ mod tests {
         );
     }
 
-    // TODO: Size changes after size probe.
+    #[test]
+    fn test_two_numa_nodes_efficiency_performance() {
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
+            let mut mock = MockBindings::new();
+            // Two groups, each with 2 active processors:
+            // Group 0 -> [Performance, Efficiency], Group 1 -> [Efficiency, Performance].
+            simulate_processor_layout(&mut mock, [2, 2], [2, 2], [0, 1], [vec![1, 0], vec![0, 1]]);
+            mock
+        });
+        let platform = PlatformCore::new(&*BINDINGS);
+        let processors = platform.get_all_processors();
+        assert_eq!(processors.len(), 4);
+
+        // Group 0
+        let p0 = &processors[0];
+        assert_eq!(p0.efficiency_class, EfficiencyClass::Performance);
+        let p1 = &processors[1];
+        assert_eq!(p1.efficiency_class, EfficiencyClass::Efficiency);
+
+        // Group 1
+        let p2 = &processors[2];
+        assert_eq!(p2.efficiency_class, EfficiencyClass::Efficiency);
+        let p3 = &processors[3];
+        assert_eq!(p3.efficiency_class, EfficiencyClass::Performance);
+    }
+
+    #[test]
+    fn test_one_big_numa_two_small_nodes() {
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
+            let mut mock = MockBindings::new();
+            // Three groups: group 0 -> 4 Performance, group 1 -> 2 Efficiency, group 2 -> 2 Efficiency
+            simulate_processor_layout(
+                &mut mock,
+                [4, 2, 2],
+                [4, 2, 2],
+                [0, 1, 2],
+                [vec![1, 1, 1, 1], vec![0, 0], vec![0, 0]],
+            );
+            mock
+        });
+        let platform = PlatformCore::new(&*BINDINGS);
+        let processors = platform.get_all_processors();
+        assert_eq!(processors.len(), 8);
+
+        // First 4 in group 0 => Performance
+        for i in 0..4 {
+            assert_eq!(processors[i].efficiency_class, EfficiencyClass::Performance);
+        }
+        // Next 2 in group 1 => Efficiency
+        assert_eq!(processors[4].efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(processors[5].efficiency_class, EfficiencyClass::Efficiency);
+        // Last 2 in group 2 => Efficiency
+        assert_eq!(processors[6].efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(processors[7].efficiency_class, EfficiencyClass::Efficiency);
+    }
+
+    #[test]
+    fn test_one_active_one_inactive_numa_node() {
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
+            let mut mock = MockBindings::new();
+            // Group 0 -> [Performance, Efficiency, Performance], Group 1 -> inactive
+            simulate_processor_layout(&mut mock, [3, 0], [3, 2], [0, 1], [vec![1, 0, 1], vec![]]);
+            mock
+        });
+        let platform = PlatformCore::new(&*BINDINGS);
+        let processors = platform.get_all_processors();
+        assert_eq!(processors.len(), 3);
+
+        // Group 0 => [Perf, Eff, Perf]
+        assert_eq!(processors[0].efficiency_class, EfficiencyClass::Performance);
+        assert_eq!(processors[1].efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(processors[2].efficiency_class, EfficiencyClass::Performance);
+    }
+
+    #[test]
+    fn test_two_numa_nodes_some_inactive_processors() {
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
+            let mut mock = MockBindings::new();
+            // Group 0 -> Efficiency, Group 1 -> Performance
+            simulate_processor_layout(&mut mock, [2, 2], [4, 4], [0, 1], [vec![0, 0], vec![1, 1]]);
+            mock
+        });
+        let platform = PlatformCore::new(&*BINDINGS);
+        let processors = platform.get_all_processors();
+        assert_eq!(processors.len(), 4);
+
+        // Group 0 => [Eff, Eff]
+        assert_eq!(processors[0].efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(processors[1].efficiency_class, EfficiencyClass::Efficiency);
+
+        // Group 1 => [Perf, Perf]
+        assert_eq!(processors[2].efficiency_class, EfficiencyClass::Performance);
+        assert_eq!(processors[3].efficiency_class, EfficiencyClass::Performance);
+    }
+
+    #[test]
+    fn test_one_multi_group_numa_node_one_small() {
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
+            let mut mock = MockBindings::new();
+            // Group 0 -> [Perf, Perf], Group 1 -> [Eff, Eff], Group 2 -> [Perf]
+            simulate_processor_layout(
+                &mut mock,
+                [2, 2, 1],
+                [2, 2, 1],
+                [0, 0, 1],
+                [vec![1, 1], vec![0, 0], vec![1]],
+            );
+            mock
+        });
+        let platform = PlatformCore::new(&*BINDINGS);
+        let processors = platform.get_all_processors();
+        assert_eq!(processors.len(), 5);
+
+        // Group 0 => [Performance, Performance]
+        assert_eq!(processors[0].efficiency_class, EfficiencyClass::Performance);
+        assert_eq!(processors[1].efficiency_class, EfficiencyClass::Performance);
+
+        // Group 1 => [Efficiency, Efficiency]
+        assert_eq!(processors[2].efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(processors[3].efficiency_class, EfficiencyClass::Efficiency);
+
+        // Group 2 => [Performance]
+        assert_eq!(processors[4].efficiency_class, EfficiencyClass::Performance);
+    }
 
     /// Configures mock bindings to simulate a particular type of processor layout.
     ///
@@ -416,7 +560,7 @@ mod tests {
         group_max_counts: [ProcessorIndexInGroup; GROUP_COUNT],
         group_memory_regions: [MemoryRegionIndex; GROUP_COUNT],
         // Only for the active processors in each group.
-        efficiency_ratings_per_group: [&[u8]; GROUP_COUNT],
+        efficiency_ratings_per_group: [Vec<u8>; GROUP_COUNT],
     ) {
         assert_eq!(group_active_counts.len(), group_max_counts.len());
         assert_eq!(group_active_counts.len(), group_memory_regions.len());
@@ -499,10 +643,6 @@ mod tests {
         }
 
         // There will be a call to get the groups that are members of each NUMA node.
-        struct NumaResponse<const MEMORY_REGION_COUNT: usize> {
-            memory_region_responses: [ExpandedLogicalProcessorInformation; MEMORY_REGION_COUNT],
-        }
-
         // The NUMA response is structured by memory region, not by processor group.
         // Therefore we need to also structure our data this way.
         let memory_regions_to_group_indexes = group_memory_regions
