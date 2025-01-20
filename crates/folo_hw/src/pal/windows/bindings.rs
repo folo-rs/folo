@@ -45,9 +45,9 @@ pub(super) trait Bindings: Debug + Send + Sync + 'static {
 }
 
 #[derive(Debug, Default)]
-pub(super) struct BindingsImpl;
+pub(super) struct CurrentBindings;
 
-impl Bindings for BindingsImpl {
+impl Bindings for CurrentBindings {
     fn get_active_processor_count(&self, group_number: u16) -> u32 {
         // SAFETY: No safety requirements.
         unsafe { GetActiveProcessorCount(group_number) }

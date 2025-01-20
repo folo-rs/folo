@@ -5,7 +5,7 @@ use std::{
 
 use derive_more::derive::AsRef;
 
-use crate::pal::{EfficiencyClass, MemoryRegionIndex, Platform, Processor, ProcessorGlobalIndex};
+use crate::pal::{EfficiencyClass, MemoryRegionIndex, Platform, AbstractProcessor, ProcessorGlobalIndex};
 
 #[derive(AsRef, Debug)]
 pub(crate) struct ProcessorCore<PAL: Platform> {

@@ -4,45 +4,45 @@ use crate::{pal, Processor, ProcessorSet, ProcessorSetBuilderCore};
 
 #[derive(Clone, Debug)]
 pub struct ProcessorSetBuilder {
-    inner: ProcessorSetBuilderCore<pal::PlatformImpl>,
+    core: ProcessorSetBuilderCore<pal::CurrentPlatform>,
 }
 
 impl ProcessorSetBuilder {
     pub fn new() -> Self {
         Self {
-            inner: ProcessorSetBuilderCore::new(&pal::CURRENT),
+            core: ProcessorSetBuilderCore::new(&pal::CURRENT),
         }
     }
 
     pub fn performance_processors_only(self) -> Self {
         Self {
-            inner: self.inner.performance_processors_only(),
+            core: self.core.performance_processors_only(),
         }
     }
 
     pub fn efficiency_processors_only(self) -> Self {
         Self {
-            inner: self.inner.efficiency_processors_only(),
+            core: self.core.efficiency_processors_only(),
         }
     }
 
     pub fn different_memory_regions(self) -> Self {
         Self {
-            inner: self.inner.different_memory_regions(),
+            core: self.core.different_memory_regions(),
         }
     }
 
     pub fn same_memory_region(self) -> Self {
         Self {
-            inner: self.inner.same_memory_region(),
+            core: self.core.same_memory_region(),
         }
     }
 
     /// Uses a predicate to identify processors that are valid candidates for the set.
     pub fn filter(self, predicate: impl Fn(&Processor) -> bool) -> Self {
         Self {
-            inner: self
-                .inner
+            core: self
+                .core
                 .filter(|p| predicate(&Into::<Processor>::into(*p))),
         }
     }
@@ -54,8 +54,8 @@ impl ProcessorSetBuilder {
         I: IntoIterator<Item = &'a Processor>,
     {
         Self {
-            inner: self
-                .inner
+            core: self
+                .core
                 .except(processors.into_iter().map(|p| p.as_ref())),
         }
     }
@@ -65,7 +65,7 @@ impl ProcessorSetBuilder {
     ///
     /// Returns `None` if there were not enough matching processors to satisfy the request.
     pub fn take(self, count: NonZeroUsize) -> Option<ProcessorSet> {
-        self.inner.take(count).map(|p| p.into())
+        self.core.take(count).map(|p| p.into())
     }
 
     /// Returns a processor set with all processors that match the specified criteria.
@@ -76,7 +76,7 @@ impl ProcessorSetBuilder {
     ///
     /// Returns `None` if there were no matching processors to satisfy the request.
     pub fn take_all(self) -> Option<ProcessorSet> {
-        self.inner.take_all().map(|p| p.into())
+        self.core.take_all().map(|p| p.into())
     }
 }
 
@@ -86,9 +86,9 @@ impl Default for ProcessorSetBuilder {
     }
 }
 
-impl From<ProcessorSetBuilderCore<pal::PlatformImpl>> for ProcessorSetBuilder {
-    fn from(inner: ProcessorSetBuilderCore<pal::PlatformImpl>) -> Self {
-        Self { inner }
+impl From<ProcessorSetBuilderCore<pal::CurrentPlatform>> for ProcessorSetBuilder {
+    fn from(inner: ProcessorSetBuilderCore<pal::CurrentPlatform>) -> Self {
+        Self { core: inner }
     }
 }
 

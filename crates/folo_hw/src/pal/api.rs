@@ -19,7 +19,7 @@ pub(crate) enum EfficiencyClass {
     Performance,
 }
 
-pub(crate) trait Processor:
+pub(crate) trait AbstractProcessor:
     Clone + Copy + Debug + Display + Eq + Hash + PartialEq + Send
 {
     /// The global index of the processor, uniquely identifying it on the current system.
@@ -34,7 +34,7 @@ pub(crate) trait Processor:
 }
 
 pub(crate) trait Platform: Debug + Send + Sync + 'static {
-    type Processor: Processor;
+    type Processor: AbstractProcessor;
 
     fn get_all_processors(&self) -> NonEmpty<Self::Processor>;
 

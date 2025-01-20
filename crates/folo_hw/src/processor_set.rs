@@ -31,7 +31,7 @@ static ALL_PROCESSORS: LazyLock<ProcessorSet> = LazyLock::new(|| {
 /// processors will not be considered a member of any set.
 #[derive(Clone, Debug)]
 pub struct ProcessorSet {
-    inner: ProcessorSetCore<pal::PlatformImpl>,
+    core: ProcessorSetCore<pal::CurrentPlatform>,
 }
 
 impl ProcessorSet {
@@ -47,23 +47,23 @@ impl ProcessorSet {
     /// Returns a `ProcessorSetBuilder` that considers all processors in the current set as
     /// candidates, to be used to further narrow down the set to a specific subset.
     pub fn to_builder(&self) -> ProcessorSetBuilder {
-        self.inner.to_builder().into()
+        self.core.to_builder().into()
     }
 
-    fn new(inner: ProcessorSetCore<pal::PlatformImpl>) -> Self {
-        Self { inner }
+    fn new(inner: ProcessorSetCore<pal::CurrentPlatform>) -> Self {
+        Self { core: inner }
     }
 
     #[expect(clippy::len_without_is_empty)] // Never empty by definition.
     pub fn len(&self) -> usize {
-        self.inner.len()
+        self.core.len()
     }
 
     pub fn processors(&self) -> NonEmpty<Processor> {
         // We return a converted copy of the list because it is relatively cheap to do this
         // conversion and we do not expect this to be on any hot path.
         NonEmpty::from_vec(
-            self.inner
+            self.core
                 .processors()
                 .map(|p| Into::<Processor>::into(*p))
                 .collect_vec(),
@@ -80,7 +80,7 @@ impl ProcessorSet {
     /// An arbitrary processor may be preferentially used, with others used only when the preferred
     /// processor is otherwise busy. This behavior is not configurable.
     pub fn pin_current_thread_to(&self) {
-        self.inner.pin_current_thread_to();
+        self.core.pin_current_thread_to();
     }
 
     /// Spawns one thread for each processor in the set, pinned to that processor,
@@ -90,7 +90,7 @@ impl ProcessorSet {
         E: Fn(Processor) -> R + Send + Clone + 'static,
         R: Send + 'static,
     {
-        self.inner.spawn_threads(move |p| entrypoint(p.into()))
+        self.core.spawn_threads(move |p| entrypoint(p.into()))
     }
 
     /// Spawns a thread pinned to all processors in the set.
@@ -105,7 +105,7 @@ impl ProcessorSet {
         E: Fn(ProcessorSet) -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.inner.spawn_thread(move |p| entrypoint(p.into()))
+        self.core.spawn_thread(move |p| entrypoint(p.into()))
     }
 }
 
@@ -116,8 +116,8 @@ impl From<Processor> for ProcessorSet {
     }
 }
 
-impl From<ProcessorSetCore<pal::PlatformImpl>> for ProcessorSet {
-    fn from(value: ProcessorSetCore<pal::PlatformImpl>) -> Self {
+impl From<ProcessorSetCore<pal::CurrentPlatform>> for ProcessorSet {
+    fn from(value: ProcessorSetCore<pal::CurrentPlatform>) -> Self {
         Self::new(value)
     }
 }

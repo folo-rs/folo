@@ -2,7 +2,7 @@ use derive_more::derive::Display;
 use mockall::mock;
 use nonempty::NonEmpty;
 
-use crate::pal::{EfficiencyClass, MemoryRegionIndex, Platform, Processor, ProcessorGlobalIndex};
+use crate::pal::{EfficiencyClass, MemoryRegionIndex, Platform, AbstractProcessor, ProcessorGlobalIndex};
 
 #[derive(Clone, Copy, Debug, Display, Eq, Hash, PartialEq)]
 #[display("FakeProcessor({index} in node {memory_region}, {efficiency_class:?})")]
@@ -12,7 +12,7 @@ pub(crate) struct FakeProcessor {
     pub(crate) efficiency_class: EfficiencyClass,
 }
 
-impl Processor for FakeProcessor {
+impl AbstractProcessor for FakeProcessor {
     fn index(&self) -> ProcessorGlobalIndex {
         self.index
     }
