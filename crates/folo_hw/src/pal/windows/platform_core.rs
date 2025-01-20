@@ -422,6 +422,11 @@ mod tests {
                 .dedup()
                 .count()
         );
+
+        let p0 = &processors[0];
+        assert_eq!(p0.group_index, 0);
+        assert_eq!(p0.index_in_group, 0);
+        assert_eq!(p0.memory_region_index, 0);
     }
 
     #[test]
@@ -439,14 +444,28 @@ mod tests {
 
         // Group 0
         let p0 = &processors[0];
+        assert_eq!(p0.group_index, 0);
+        assert_eq!(p0.index_in_group, 0);
+        assert_eq!(p0.memory_region_index, 0);
         assert_eq!(p0.efficiency_class, EfficiencyClass::Performance);
+
         let p1 = &processors[1];
+        assert_eq!(p1.group_index, 0);
+        assert_eq!(p1.index_in_group, 1);
+        assert_eq!(p1.memory_region_index, 0);
         assert_eq!(p1.efficiency_class, EfficiencyClass::Efficiency);
 
         // Group 1
         let p2 = &processors[2];
+        assert_eq!(p2.group_index, 1);
+        assert_eq!(p2.index_in_group, 0);
+        assert_eq!(p2.memory_region_index, 1);
         assert_eq!(p2.efficiency_class, EfficiencyClass::Efficiency);
+
         let p3 = &processors[3];
+        assert_eq!(p3.group_index, 1);
+        assert_eq!(p3.index_in_group, 1);
+        assert_eq!(p3.memory_region_index, 1);
         assert_eq!(p3.efficiency_class, EfficiencyClass::Performance);
     }
 
@@ -470,14 +489,28 @@ mod tests {
 
         // First 4 in group 0 => Performance
         for i in 0..4 {
-            assert_eq!(processors[i].efficiency_class, EfficiencyClass::Performance);
+            let p = &processors[i];
+            assert_eq!(p.group_index, 0);
+            assert_eq!(p.index_in_group, i as ProcessorIndexInGroup);
+            assert_eq!(p.memory_region_index, 0);
+            assert_eq!(p.efficiency_class, EfficiencyClass::Performance);
         }
         // Next 2 in group 1 => Efficiency
-        assert_eq!(processors[4].efficiency_class, EfficiencyClass::Efficiency);
-        assert_eq!(processors[5].efficiency_class, EfficiencyClass::Efficiency);
+        for i in 4..6 {
+            let p = &processors[i];
+            assert_eq!(p.group_index, 1);
+            assert_eq!(p.index_in_group, (i - 4) as ProcessorIndexInGroup);
+            assert_eq!(p.memory_region_index, 1);
+            assert_eq!(p.efficiency_class, EfficiencyClass::Efficiency);
+        }
         // Last 2 in group 2 => Efficiency
-        assert_eq!(processors[6].efficiency_class, EfficiencyClass::Efficiency);
-        assert_eq!(processors[7].efficiency_class, EfficiencyClass::Efficiency);
+        for i in 6..8 {
+            let p = &processors[i];
+            assert_eq!(p.group_index, 2);
+            assert_eq!(p.index_in_group, (i - 6) as ProcessorIndexInGroup);
+            assert_eq!(p.memory_region_index, 2);
+            assert_eq!(p.efficiency_class, EfficiencyClass::Efficiency);
+        }
     }
 
     #[test]
@@ -493,9 +526,23 @@ mod tests {
         assert_eq!(processors.len(), 3);
 
         // Group 0 => [Perf, Eff, Perf]
-        assert_eq!(processors[0].efficiency_class, EfficiencyClass::Performance);
-        assert_eq!(processors[1].efficiency_class, EfficiencyClass::Efficiency);
-        assert_eq!(processors[2].efficiency_class, EfficiencyClass::Performance);
+        let p0 = &processors[0];
+        assert_eq!(p0.group_index, 0);
+        assert_eq!(p0.index_in_group, 0);
+        assert_eq!(p0.memory_region_index, 0);
+        assert_eq!(p0.efficiency_class, EfficiencyClass::Performance);
+
+        let p1 = &processors[1];
+        assert_eq!(p1.group_index, 0);
+        assert_eq!(p1.index_in_group, 1);
+        assert_eq!(p1.memory_region_index, 0);
+        assert_eq!(p1.efficiency_class, EfficiencyClass::Efficiency);
+
+        let p2 = &processors[2];
+        assert_eq!(p2.group_index, 0);
+        assert_eq!(p2.index_in_group, 2);
+        assert_eq!(p2.memory_region_index, 0);
+        assert_eq!(p2.efficiency_class, EfficiencyClass::Performance);
     }
 
     #[test]
@@ -511,12 +558,30 @@ mod tests {
         assert_eq!(processors.len(), 4);
 
         // Group 0 => [Eff, Eff]
-        assert_eq!(processors[0].efficiency_class, EfficiencyClass::Efficiency);
-        assert_eq!(processors[1].efficiency_class, EfficiencyClass::Efficiency);
+        let p0 = &processors[0];
+        assert_eq!(p0.group_index, 0);
+        assert_eq!(p0.index_in_group, 0);
+        assert_eq!(p0.memory_region_index, 0);
+        assert_eq!(p0.efficiency_class, EfficiencyClass::Efficiency);
+
+        let p1 = &processors[1];
+        assert_eq!(p1.group_index, 0);
+        assert_eq!(p1.index_in_group, 1);
+        assert_eq!(p1.memory_region_index, 0);
+        assert_eq!(p1.efficiency_class, EfficiencyClass::Efficiency);
 
         // Group 1 => [Perf, Perf]
-        assert_eq!(processors[2].efficiency_class, EfficiencyClass::Performance);
-        assert_eq!(processors[3].efficiency_class, EfficiencyClass::Performance);
+        let p2 = &processors[2];
+        assert_eq!(p2.group_index, 1);
+        assert_eq!(p2.index_in_group, 0);
+        assert_eq!(p2.memory_region_index, 1);
+        assert_eq!(p2.efficiency_class, EfficiencyClass::Performance);
+
+        let p3 = &processors[3];
+        assert_eq!(p3.group_index, 1);
+        assert_eq!(p3.index_in_group, 1);
+        assert_eq!(p3.memory_region_index, 1);
+        assert_eq!(p3.efficiency_class, EfficiencyClass::Performance);
     }
 
     #[test]
@@ -538,15 +603,27 @@ mod tests {
         assert_eq!(processors.len(), 5);
 
         // Group 0 => [Performance, Performance]
-        assert_eq!(processors[0].efficiency_class, EfficiencyClass::Performance);
-        assert_eq!(processors[1].efficiency_class, EfficiencyClass::Performance);
+        for (i, p) in processors.iter().enumerate() {
+            if i < 2 {
+                assert_eq!(p.group_index, 0);
+                assert_eq!(p.memory_region_index, 0);
+            } else if i < 4 {
+                assert_eq!(p.group_index, 1);
+                assert_eq!(p.memory_region_index, 0);
+            } else {
+                assert_eq!(p.group_index, 2);
+                assert_eq!(p.memory_region_index, 1);
+            }
+            assert_eq!(p.index_in_group, i as ProcessorIndexInGroup % 2); // Groups of max 2.
 
-        // Group 1 => [Efficiency, Efficiency]
-        assert_eq!(processors[2].efficiency_class, EfficiencyClass::Efficiency);
-        assert_eq!(processors[3].efficiency_class, EfficiencyClass::Efficiency);
-
-        // Group 2 => [Performance]
-        assert_eq!(processors[4].efficiency_class, EfficiencyClass::Performance);
+            if i < 2 {
+                assert_eq!(p.efficiency_class, EfficiencyClass::Performance);
+            } else if i < 4 {
+                assert_eq!(p.efficiency_class, EfficiencyClass::Efficiency);
+            } else {
+                assert_eq!(p.efficiency_class, EfficiencyClass::Performance);
+            }
+        }
     }
 
     /// Configures mock bindings to simulate a particular type of processor layout.
