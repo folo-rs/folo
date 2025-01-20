@@ -21,7 +21,7 @@ use windows::{
 ///
 /// All PAL FFI calls must go through this trait, enabling them to be mocked.
 #[cfg_attr(test, mockall::automock)]
-pub(super) trait Bindings: Debug + Send + Sync + 'static {
+pub(crate) trait Bindings: Debug + Send + Sync + 'static {
     fn get_active_processor_count(&self, group_number: u16) -> u32;
     fn get_maximum_processor_count(&self, group_number: u16) -> u32;
 
@@ -44,10 +44,14 @@ pub(super) trait Bindings: Debug + Send + Sync + 'static {
     ) -> Result<()>;
 }
 
+/// FFI bindings that target the real operating system that the build is targeting.
+///
+/// You would only use different bindings in PAL unit tests that need to use mock bindings.
+/// Even then, whenever possible, unit tests should use real bindings for maximum realism.
 #[derive(Debug, Default)]
-pub(super) struct CurrentBindings;
+pub(crate) struct BuildTargetBindings;
 
-impl Bindings for CurrentBindings {
+impl Bindings for BuildTargetBindings {
     fn get_active_processor_count(&self, group_number: u16) -> u32 {
         // SAFETY: No safety requirements.
         unsafe { GetActiveProcessorCount(group_number) }

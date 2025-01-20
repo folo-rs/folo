@@ -4,13 +4,13 @@ use crate::{pal, Processor, ProcessorSet, ProcessorSetBuilderCore};
 
 #[derive(Clone, Debug)]
 pub struct ProcessorSetBuilder {
-    core: ProcessorSetBuilderCore<pal::CurrentPlatform>,
+    core: ProcessorSetBuilderCore<pal::BuildTargetPlatform>,
 }
 
 impl ProcessorSetBuilder {
     pub fn new() -> Self {
         Self {
-            core: ProcessorSetBuilderCore::new(&pal::CURRENT),
+            core: ProcessorSetBuilderCore::new(&pal::BUILD_TARGET_PLATFORM),
         }
     }
 
@@ -86,8 +86,8 @@ impl Default for ProcessorSetBuilder {
     }
 }
 
-impl From<ProcessorSetBuilderCore<pal::CurrentPlatform>> for ProcessorSetBuilder {
-    fn from(inner: ProcessorSetBuilderCore<pal::CurrentPlatform>) -> Self {
+impl From<ProcessorSetBuilderCore<pal::BuildTargetPlatform>> for ProcessorSetBuilder {
+    fn from(inner: ProcessorSetBuilderCore<pal::BuildTargetPlatform>) -> Self {
         Self { core: inner }
     }
 }

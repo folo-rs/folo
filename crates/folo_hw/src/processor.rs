@@ -7,12 +7,12 @@ use crate::{pal, ProcessorCore};
 /// A processor present on the system and available to the current process.
 #[derive(AsRef, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Processor {
-    #[as_ref(ProcessorCore<pal::CurrentPlatform>, pal::ProcessorImpl)]
-    core: ProcessorCore<pal::CurrentPlatform>,
+    #[as_ref(ProcessorCore<pal::BuildTargetPlatform>, pal::ProcessorImpl)]
+    core: ProcessorCore<pal::BuildTargetPlatform>,
 }
 
 impl Processor {
-    pub(crate) fn new(inner: ProcessorCore<pal::CurrentPlatform>) -> Self {
+    pub(crate) fn new(inner: ProcessorCore<pal::BuildTargetPlatform>) -> Self {
         Self { core: inner }
     }
 }
@@ -23,8 +23,8 @@ impl Display for Processor {
     }
 }
 
-impl From<ProcessorCore<pal::CurrentPlatform>> for Processor {
-    fn from(value: ProcessorCore<pal::CurrentPlatform>) -> Self {
+impl From<ProcessorCore<pal::BuildTargetPlatform>> for Processor {
+    fn from(value: ProcessorCore<pal::BuildTargetPlatform>) -> Self {
         Self::new(value)
     }
 }
