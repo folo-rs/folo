@@ -266,8 +266,9 @@ impl<B: Bindings> PlatformCore<B> {
             // SAFETY: We just process the data in the form the OS promises to give it to us.
             next = unsafe { next.byte_add(info.Size as usize) };
 
-            // Even though we request NumaNodeEx, it returns entries with NumaNode because... it does.
-            // TODO: Does it ever return NumaNodeEx? What about when returning multiple groups?
+            // Even though we request NumaNodeEx, it returns entries with NumaNode. It just does.
+            // It always does, asking for Ex simply allows it to return multiple processor groups
+            // for the same NUMA node (instead of just the primary group as with plain NumaNode).
             assert_eq!(info.Relationship, RelationNumaNode);
 
             let details = unsafe { &info.Anonymous.NumaNode };
@@ -351,5 +352,361 @@ impl<B: Bindings> PlatformCore<B> {
         NonEmpty::from_vec(processors).expect(
             "we are returning all processors on the system - obviously there must be at least one",
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        mem,
+        sync::{Arc, LazyLock},
+    };
+
+    use itertools::Itertools;
+    use mockall::Sequence;
+
+    use crate::pal::{
+        windows::{MockBindings, NativeBuffer, ProcessorIndexInGroup},
+        MemoryRegionIndex,
+    };
+
+    use super::*;
+
+    #[test]
+    fn get_all_processors_smoke_test() {
+        // We imagine a simple system with 2 physical cores, 4 logical processors, all in a
+        // single processor group and a single memory region. Welcome to 2010!
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
+            let mut mock = MockBindings::new();
+
+            simulate_processor_layout(&mut mock, [4], [4], [0], [&[0, 0, 0, 0]]);
+
+            mock
+        });
+
+        let platform = PlatformCore::new(&*BINDINGS);
+
+        let processors = platform.get_all_processors();
+
+        // We expect to see 4 logical processors. This API does not care about the physical cores.
+        assert_eq!(processors.len(), 4);
+
+        // All processors must be in the same group and memory region.
+        assert_eq!(1, processors.iter().map(|p| p.group_index).dedup().count());
+        assert_eq!(
+            1,
+            processors
+                .iter()
+                .map(|p| p.memory_region_index)
+                .dedup()
+                .count()
+        );
+    }
+
+    // TODO: Size changes after size probe.
+
+    /// Configures mock bindings to simulate a particular type of processor layout.
+    ///
+    /// The simulation is valid for one call to get_all_processors() only.
+    fn simulate_processor_layout<const GROUP_COUNT: usize>(
+        mock: &mut MockBindings,
+        // If entry is 0 the group is not considered active. Such groups have to be at the end.
+        // Presumably. Lack of machine to actually test this on limits our ability to be sure.
+        group_active_counts: [ProcessorIndexInGroup; GROUP_COUNT],
+        group_max_counts: [ProcessorIndexInGroup; GROUP_COUNT],
+        group_memory_regions: [MemoryRegionIndex; GROUP_COUNT],
+        // Only for the active processors in each group.
+        efficiency_ratings_per_group: [&[u8]; GROUP_COUNT],
+    ) {
+        assert_eq!(group_active_counts.len(), group_max_counts.len());
+        assert_eq!(group_active_counts.len(), group_memory_regions.len());
+        assert_eq!(
+            group_active_counts.len(),
+            efficiency_ratings_per_group.len()
+        );
+
+        for (group_index, group_active_processors) in group_active_counts.iter().enumerate() {
+            assert!(*group_active_processors <= group_max_counts[group_index]);
+
+            assert_eq!(
+                efficiency_ratings_per_group[group_index].len(),
+                *group_active_processors as usize
+            );
+        }
+
+        // Copy the data because we need to keep referencing it in the mock.
+        let group_active_counts = Arc::new(group_active_counts.to_vec());
+        let group_max_counts = Arc::new(group_max_counts.to_vec());
+        let group_memory_regions = Arc::new(group_memory_regions.to_vec());
+        let efficiency_ratings_per_group = Arc::new(
+            efficiency_ratings_per_group
+                .iter()
+                .map(|x| x.to_vec())
+                .collect_vec(),
+        );
+
+        simulate_get_counts(mock, &group_active_counts, &group_max_counts);
+        simulate_get_numa_relations(mock, &group_memory_regions, &group_active_counts);
+        simulate_get_core_info(mock, &group_active_counts, &efficiency_ratings_per_group);
+    }
+
+    fn simulate_get_counts(
+        mock: &mut MockBindings,
+        group_active_counts: &Arc<Vec<ProcessorIndexInGroup>>,
+        group_max_counts: &Arc<Vec<ProcessorIndexInGroup>>,
+    ) {
+        let max_group_count = group_active_counts.len() as u16;
+
+        // We do not care how many times the "get count" type functions are called.
+        // TODO: It might be desirable to call them only once? Avoid de-sync possibility.
+
+        // Note that "get active group count" is not actually used - the code probes all groups
+        // and just checks number of processors in group to identify if the group is active.
+        mock.expect_get_maximum_processor_group_count()
+            .return_const(max_group_count);
+
+        mock.expect_get_active_processor_count().returning({
+            let group_active_counts = Arc::clone(group_active_counts);
+
+            move |group_number| group_active_counts[group_number as usize] as u32
+        });
+
+        mock.expect_get_maximum_processor_count().returning({
+            let group_max_counts = Arc::clone(group_max_counts);
+
+            move |group_number| group_max_counts[group_number as usize] as u32
+        });
+    }
+
+    fn simulate_get_numa_relations(
+        mock: &mut MockBindings,
+        group_memory_regions: &Arc<Vec<u32>>,
+        group_active_counts: &Arc<Vec<ProcessorIndexInGroup>>,
+    ) {
+        // NB! WARNING! size_of<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>() is not correct! This is
+        // because there is a dynamically-sized array in there that in the Rust bindings is just
+        // hardcoded to size 1. The real size in memory may be greater than size_of()!
+        //
+        // We define here some additional buffer to add on top of the "known" memory.
+        const MAX_ADDITIONAL_PROCESSOR_GROUPS: usize = 32;
+
+        #[repr(C)]
+        struct ExpandedLogicalProcessorInformation {
+            root: SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
+            // We do not necessarily use it in-place, this is a fake member
+            // just to make room in the sizeof calculation.
+            extra_buffer: [GROUP_AFFINITY; MAX_ADDITIONAL_PROCESSOR_GROUPS],
+        }
+
+        // There will be a call to get the groups that are members of each NUMA node.
+        struct NumaResponse<const MEMORY_REGION_COUNT: usize> {
+            memory_region_responses: [ExpandedLogicalProcessorInformation; MEMORY_REGION_COUNT],
+        }
+
+        // The NUMA response is structured by memory region, not by processor group.
+        // Therefore we need to also structure our data this way.
+        let memory_regions_to_group_indexes = group_memory_regions
+            .iter()
+            .enumerate()
+            .map(|(group_index, memory_region_index)| (memory_region_index, group_index))
+            .into_group_map();
+
+        let memory_region_count = memory_regions_to_group_indexes.len();
+
+        let memory_region_responses = memory_regions_to_group_indexes
+            .into_iter()
+            .map(|(memory_region_index, group_indexes)| {
+                // We made some additional space in the struct to allow for more groups
+                // but there is still an upper limit to what we can fit, so be careful.
+                assert!(group_indexes.len() <= MAX_ADDITIONAL_PROCESSOR_GROUPS);
+
+                let mut response = ExpandedLogicalProcessorInformation {
+                    root: SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX {
+                        // This is always RelationNumaNode, even if RelationNumaNodeEx is requested.
+                        // RelationNumaNodeEx simply allows the group count to be more than 1.
+                        Relationship: RelationNumaNode,
+                        Size: mem::size_of::<ExpandedLogicalProcessorInformation>() as u32,
+                        ..Default::default()
+                    },
+                    extra_buffer: [Default::default(); MAX_ADDITIONAL_PROCESSOR_GROUPS],
+                };
+
+                // SAFETY: We define RelationNumaNode above so this dereference is valid.
+                let response_numa = unsafe { &mut response.root.Anonymous.NumaNode };
+
+                response_numa.NodeNumber = *memory_region_index;
+                response_numa.GroupCount = group_indexes.len() as u16;
+
+                // The type definition just has an array of 1 here (not correct), so we write
+                // through pointers to fill each array element.
+                //
+                // SAFETY: We define GroupCount above so this dereference is valid.
+                let mut group_mask = unsafe { &raw mut response_numa.Anonymous.GroupMask };
+
+                for group_index in group_indexes {
+                    // Make a usize here with the number of bits set to the number of active processors.
+                    let mask = (1 << group_active_counts[group_index]) - 1;
+
+                    let group_data = GROUP_AFFINITY {
+                        Group: group_index as u16,
+                        // The mask has a bit set for each processor that exists in the group.
+                        // We only set the bits for the processors that are active.
+                        Mask: mask,
+                        ..Default::default()
+                    };
+
+                    // SAFETY: We define GroupCount above and ensured that we have enough space
+                    // via MAX_ADDITIONAL_PROCESSOR_GROUPS so this is valid.
+                    unsafe {
+                        group_mask.write(group_data);
+                    }
+
+                    // SAFETY: We define GroupCount above and ensured that we have enough space
+                    // via MAX_ADDITIONAL_PROCESSOR_GROUPS so this is valid.
+                    group_mask = unsafe { group_mask.add(1) };
+                }
+
+                response
+            })
+            .collect_vec();
+
+        let memory_region_response_buffer = NativeBuffer::from_vec(memory_region_responses);
+        let memory_region_response_len = memory_region_response_buffer.len();
+
+        let mut seq = Sequence::new();
+
+        // This will actually be two calls, one for the size probe and one for the real data.
+        mock.expect_get_logical_processor_information_ex()
+            .times(1)
+            .in_sequence(&mut seq)
+            .withf(|relationship_type, buffer, _| {
+                *relationship_type == RelationNumaNodeEx && buffer.is_none()
+            })
+            .returning(move |_, _, returned_length| {
+                // SAFETY: Caller must guarantee that the pointer is valid for use.
+                unsafe {
+                    *returned_length = memory_region_response_len as u32;
+                }
+
+                Err(windows::core::Error::from_hresult(HRESULT::from_win32(
+                    ERROR_INSUFFICIENT_BUFFER.0,
+                )))
+            });
+
+        mock.expect_get_logical_processor_information_ex()
+            .times(1)
+            .in_sequence(&mut seq)
+            .withf(|relationship_type, buffer, _| {
+                *relationship_type == RelationNumaNodeEx && buffer.is_some()
+            })
+            .returning_st(move |_, buffer, returned_length| {
+                // SAFETY: Caller must guarantee that the pointer is valid for use.
+                unsafe {
+                    *returned_length = memory_region_response_len as u32;
+                }
+
+                // SAFETY: Caller must guarantee that the pointer is valid for use.
+                unsafe {
+                    buffer
+                        .unwrap()
+                        .cast::<ExpandedLogicalProcessorInformation>()
+                        .copy_from_nonoverlapping(
+                            memory_region_response_buffer.as_ptr().as_ptr(),
+                            memory_region_count,
+                        );
+                }
+
+                Ok(())
+            });
+    }
+
+    fn simulate_get_core_info(
+        mock: &mut MockBindings,
+        group_active_counts: &Arc<Vec<ProcessorIndexInGroup>>,
+        efficiency_ratings_per_group: &Arc<Vec<Vec<u8>>>,
+    ) {
+        // Next we define the "get core info" simulation, used to access metadata of each processor.
+        // Specifically, this provides the efficiency class. The other info is currently unused.
+
+        // In case of RelationProcessorCore, we do not use any dynamically sized arrays, which
+        // keeps the size logic a bit simpler than with the NUMA nodes response. We have one entry
+        // in the response for each processor. For the sake of simplicity (the code does not care)
+        // we pretend that each core is 1 logical processor (no SMT).
+        let response_entries = group_active_counts
+            .iter()
+            .enumerate()
+            .flat_map(|(group_index, group_active_count)| {
+                (0..*group_active_count).map({
+                    let efficiency_ratings_per_group = Arc::clone(efficiency_ratings_per_group);
+
+                    move |index_in_group| {
+                        let mut entry = SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX {
+                            Relationship: RelationProcessorCore,
+                            Size: mem::size_of::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>() as u32,
+                            ..Default::default()
+                        };
+
+                        // SAFETY: We define RelationProcessorCore above so this dereference is valid.
+                        let entry_processor = unsafe { &mut entry.Anonymous.Processor };
+
+                        entry_processor.EfficiencyClass =
+                            efficiency_ratings_per_group[group_index][index_in_group as usize];
+
+                        entry_processor.GroupCount = 1;
+                        entry_processor.GroupMask[0].Group = group_index as u16;
+                        entry_processor.GroupMask[0].Mask = 1 << index_in_group;
+
+                        entry
+                    }
+                })
+            })
+            .collect_vec();
+
+        let core_info_response_entry_count = response_entries.len();
+        let core_info_response_buffer = NativeBuffer::from_vec(response_entries);
+        let core_info_response_len = core_info_response_buffer.len();
+
+        let mut seq = Sequence::new();
+
+        // This will actually be two calls, one for the size probe and one for the real data.
+        mock.expect_get_logical_processor_information_ex()
+            .times(1)
+            .in_sequence(&mut seq)
+            .withf(|relationship_type, buffer, _| {
+                *relationship_type == RelationProcessorCore && buffer.is_none()
+            })
+            .returning(move |_, _, returned_length| {
+                // SAFETY: Caller must guarantee that the pointer is valid for use.
+                unsafe {
+                    *returned_length = core_info_response_len as u32;
+                }
+
+                Err(windows::core::Error::from_hresult(HRESULT::from_win32(
+                    ERROR_INSUFFICIENT_BUFFER.0,
+                )))
+            });
+
+        mock.expect_get_logical_processor_information_ex()
+            .times(1)
+            .in_sequence(&mut seq)
+            .withf(|relationship_type, buffer, _| {
+                *relationship_type == RelationProcessorCore && buffer.is_some()
+            })
+            .returning_st(move |_, buffer, returned_length| {
+                // SAFETY: Caller must guarantee that the pointer is valid for use.
+                unsafe {
+                    *returned_length = core_info_response_len as u32;
+                }
+
+                // SAFETY: Caller must guarantee that the pointer is valid for use.
+                unsafe {
+                    buffer.unwrap().copy_from_nonoverlapping(
+                        core_info_response_buffer.as_ptr().as_ptr(),
+                        core_info_response_entry_count,
+                    );
+                }
+
+                Ok(())
+            });
     }
 }
