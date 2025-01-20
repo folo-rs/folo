@@ -6,6 +6,6 @@ use std::fmt::Debug;
 pub(super) trait Bindings: Debug + Send + Sync + 'static {}
 
 #[derive(Debug, Default)]
-pub(super) struct BindingsImpl;
+pub(super) struct CurrentBindings;
 
-impl Bindings for BindingsImpl {}
+impl Bindings for CurrentBindings {}

@@ -1,19 +1,19 @@
 use crate::pal::{
-    linux::{BindingsImpl, PlatformCore},
+    linux::{CurrentBindings, PlatformCore},
     Platform, ProcessorImpl,
 };
 
 /// The singleton instance that allows types to work with the current platform.
-pub(crate) static CURRENT: PlatformImpl = PlatformImpl {
-    inner: PlatformCore::new(&BindingsImpl),
+pub(crate) static CURRENT: CurrentPlatform = CurrentPlatform {
+    inner: PlatformCore::new(&CurrentBindings),
 };
 
 #[derive(Debug)]
-pub(crate) struct PlatformImpl {
-    inner: PlatformCore<BindingsImpl>,
+pub(crate) struct CurrentPlatform {
+    inner: PlatformCore<CurrentBindings>,
 }
 
-impl Platform for PlatformImpl {
+impl Platform for CurrentPlatform {
     type Processor = ProcessorImpl;
 
     fn get_all_processors(&self) -> nonempty::NonEmpty<Self::Processor> {

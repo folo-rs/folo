@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::pal::{EfficiencyClass, MemoryRegionIndex, Processor, ProcessorGlobalIndex};
+use crate::pal::{AbstractProcessor, EfficiencyClass, MemoryRegionIndex, ProcessorGlobalIndex};
 
 /// A processor present on the system and available to the current process.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -16,7 +16,7 @@ impl Display for ProcessorImpl {
     }
 }
 
-impl Processor for ProcessorImpl {
+impl AbstractProcessor for ProcessorImpl {
     fn index(&self) -> ProcessorGlobalIndex {
         self.index
     }
