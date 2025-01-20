@@ -2,6 +2,11 @@ use std::{fmt::Debug, num::NonZeroUsize};
 
 use crate::{pal, Processor, ProcessorSet, ProcessorSetBuilderCore};
 
+// This is a specialization of *Core type for the build target platform. It is the only
+// specialization available via the crate's public API surface - other specializations
+// exist only for unit testing purposes where the platform is mocked, in which case the
+// *Core type is used directly instead of using a newtype wrapper like we have here.
+
 #[derive(Clone, Debug)]
 pub struct ProcessorSetBuilder {
     core: ProcessorSetBuilderCore<pal::BuildTargetPlatform>,

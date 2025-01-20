@@ -14,6 +14,11 @@ static ALL_PROCESSORS: LazyLock<ProcessorSet> = LazyLock::new(|| {
         .expect("there must be at least one processor - how could this code run if not")
 });
 
+// This is a specialization of *Core type for the build target platform. It is the only
+// specialization available via the crate's public API surface - other specializations
+// exist only for unit testing purposes where the platform is mocked, in which case the
+// *Core type is used directly instead of using a newtype wrapper like we have here.
+
 /// One or more processors present on the system.
 ///
 /// You can obtain the full set of processors via `ProcessorSet::all()` or specify more
