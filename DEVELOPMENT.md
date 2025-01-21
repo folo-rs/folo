@@ -18,7 +18,8 @@ Prerequisites:
     * vscode-just
     * WSL
 * PowerShell 7
-* Rust development tools (see `rust-toolchain.toml` for version)
+* Rust development tools for version listed in `rust-toolchain.toml`
+* `rustup toolchain install nightly`
 * `cargo install just`
 
 Setup:
@@ -41,7 +42,8 @@ Prerequisites:
 
 * Ubuntu 24 installed in WSL
 * `sudo apt install -y git git-lfs build-essential cmake gcc make curl`
-* Rust development tools (see `rust-toolchain.toml` for version)
+* Rust development tools for version listed in `rust-toolchain.toml`
+* `rustup toolchain install nightly`
 * `cargo install just`
 * If first time Git setup, execute `git config --global credential.helper "/mnt/c/Program\ Files/Git/mingw64/bin/git-credential-manager.exe"` to setup authentication flow
 
