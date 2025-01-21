@@ -118,6 +118,10 @@ impl<T: Sized> NativeBuffer<T> {
         self.len
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     /// Sets the length of the data in the buffer, in bytes.
     ///
     /// # Safety

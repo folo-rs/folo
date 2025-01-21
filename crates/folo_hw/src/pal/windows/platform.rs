@@ -643,6 +643,68 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_insufficient_buffer_retry() {
+        use mockall::Sequence;
+
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
+            let mut mock = MockBindings::new();
+            let mut seq = Sequence::new();
+
+            // First iteration, probe (None) => size=64 => insufficient buffer
+            mock.expect_get_logical_processor_information_ex()
+                .times(1)
+                .in_sequence(&mut seq)
+                .withf(|rel, buf, _| rel == &RelationProcessorCore && buf.is_none())
+                .returning(|_, _, returned_length| {
+                    unsafe { *returned_length = 64 };
+                    Err(windows::core::Error::from_hresult(
+                        ERROR_INSUFFICIENT_BUFFER.to_hresult(),
+                    ))
+                });
+
+            // First iteration, real call (Some(64)) => still insufficient => size=96
+            mock.expect_get_logical_processor_information_ex()
+                .times(1)
+                .in_sequence(&mut seq)
+                .withf(|rel, buf, _| rel == &RelationProcessorCore && buf.is_some())
+                .returning(|_, _, returned_length| {
+                    unsafe { *returned_length = 96 };
+                    Err(windows::core::Error::from_hresult(
+                        ERROR_INSUFFICIENT_BUFFER.to_hresult(),
+                    ))
+                });
+
+            // Second iteration, probe (None) => size=128 => insufficient
+            mock.expect_get_logical_processor_information_ex()
+                .times(1)
+                .in_sequence(&mut seq)
+                .withf(|rel, buf, _| rel == &RelationProcessorCore && buf.is_none())
+                .returning(|_, _, returned_length| {
+                    unsafe { *returned_length = 128 };
+                    Err(windows::core::Error::from_hresult(
+                        ERROR_INSUFFICIENT_BUFFER.to_hresult(),
+                    ))
+                });
+
+            // Second iteration, real call (Some(128)) => success
+            mock.expect_get_logical_processor_information_ex()
+                .times(1)
+                .in_sequence(&mut seq)
+                .withf(|rel, buf, _| rel == &RelationProcessorCore && buf.is_some())
+                .returning(|_, _, returned_length| {
+                    unsafe { *returned_length = 128 };
+                    Ok(())
+                });
+
+            mock
+        });
+
+        let platform = BuildTargetPlatform::new(&*BINDINGS);
+        let buffer = platform.get_logical_processor_information_raw(RelationProcessorCore);
+        assert!(!buffer.is_empty(), "Expected final buffer to be filled");
+    }
+
     /// Configures mock bindings to simulate a particular type of processor layout.
     ///
     /// The simulation is valid for one call to get_all_processors() only.
