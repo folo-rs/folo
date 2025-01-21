@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, num::NonZeroUsize};
 
 use itertools::Itertools;
 use nonempty::NonEmpty;
@@ -14,7 +14,7 @@ use windows::{
 };
 
 use crate::pal::{
-    windows::{Bindings, BuildTargetBindings, ProcessorGroupIndex},
+    windows::{Bindings, BuildTargetBindings, NativeBuffer, ProcessorGroupIndex},
     EfficiencyClass, Platform, ProcessorGlobalIndex, ProcessorImpl,
 };
 
@@ -139,7 +139,7 @@ impl<B: Bindings> BuildTargetPlatform<B> {
     fn get_logical_processor_information_raw(
         &self,
         relationship: LOGICAL_PROCESSOR_RELATIONSHIP,
-    ) -> Box<[u8]> {
+    ) -> NativeBuffer<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX> {
         loop {
             let mut required_length: u32 = 0;
 
@@ -158,14 +158,18 @@ impl<B: Bindings> BuildTargetPlatform<B> {
                 "GetLogicalProcessorInformationEx size probe failed with unexpected error code {e}",
             );
 
-            let mut buffer: Vec<u8> = Vec::with_capacity(required_length as usize);
+            let required_length_usize = NonZeroUsize::new(required_length as usize).expect(
+                "GetLogicalProcessorInformationEx size probe said 0 bytes are needed - impossible",
+            );
+            let mut buffer =
+                NativeBuffer::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>::new(required_length_usize);
             let mut final_length = required_length;
 
             // SAFETY: Pointers must outlive the call (true - local variables live beyond call).
             let real_result = unsafe {
                 self.bindings.get_logical_processor_information_ex(
                     relationship,
-                    Some(buffer.as_mut_ptr().cast()),
+                    Some(buffer.as_ptr().as_ptr()),
                     &raw mut final_length,
                 )
             };
@@ -188,7 +192,7 @@ impl<B: Bindings> BuildTargetPlatform<B> {
                 buffer.set_len(final_length as usize);
             }
 
-            return buffer.into_boxed_slice();
+            return buffer;
         }
     }
 
@@ -201,7 +205,7 @@ impl<B: Bindings> BuildTargetPlatform<B> {
         let core_relationships_raw =
             self.get_logical_processor_information_raw(RelationProcessorCore);
 
-        // We create a list of processor index to efficiency class. Then we simply take all
+        // We create a map of processor index to efficiency class. Then we simply take all
         // processors with the max efficiency class (whatever the numeric value) - those are the
         // performance processors.
 

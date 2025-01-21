@@ -5,6 +5,7 @@ use std::{
     marker::PhantomData,
     mem::{self, MaybeUninit},
     num::NonZeroUsize,
+    ops::Range,
     ptr::NonNull,
 };
 
@@ -16,14 +17,27 @@ pub(super) struct NativeBuffer<T: Sized> {
     ptr: NonNull<u8>,
     layout: Layout,
 
+    // How many bytes of data have been used from the buffer's (layout-defined) capacity.
+    len: usize,
+
     _phantom: PhantomData<T>,
 }
 
 impl<T: Sized> NativeBuffer<T> {
     pub fn new(size_bytes: NonZeroUsize) -> Self {
+        // Sometimes Windows will ask for less memory than technically required to fit a T.
+        // While this is "okay" as long as Rust never tries to read that extra memory (e.g.
+        // because the larger union members are not used), it is still feels a bit dirty, so
+        // we round up to the minimum size required to fit one T to avoid any accidents.
+        // In cases where we have multiple T in the buffer, the risk of "reading off the edge"
+        // (albeit requiring invalid code) still remains.
         let min_size = mem::size_of::<T>();
 
-        assert!(size_bytes.get() >= min_size);
+        let size_bytes = if size_bytes.get() < min_size {
+            NonZeroUsize::new(min_size).expect("zero-sized T is not supported")
+        } else {
+            size_bytes
+        };
 
         let layout = Layout::from_size_align(size_bytes.get(), mem::align_of::<T>())
             .expect("called with arguments that yielded an invalid memory layout");
@@ -36,6 +50,7 @@ impl<T: Sized> NativeBuffer<T> {
         Self {
             ptr,
             layout,
+            len: 0,
             _phantom: PhantomData,
         }
     }
@@ -56,14 +71,22 @@ impl<T: Sized> NativeBuffer<T> {
                 .expect("cannot create NativeBuffer from zero-sized type"),
         );
         buffer.emplace(value);
+
+        // SAFETY: We just wrote a T into it, so obviously there is a T worth of data in there.
+        unsafe {
+            buffer.set_len(mem::size_of::<T>());
+        }
+
         buffer
     }
 
     pub fn from_vec(vec: Vec<T>) -> Self {
-        let buffer = Self::new(
+        let mut buffer = Self::new(
             NonZeroUsize::new(mem::size_of::<T>() * vec.len())
                 .expect("cannot create NativeBuffer from zero-sized type"),
         );
+
+        let count = vec.len();
 
         let mut dest = buffer.ptr.cast::<T>();
         for item in vec {
@@ -77,16 +100,44 @@ impl<T: Sized> NativeBuffer<T> {
             dest = unsafe { dest.add(1) };
         }
 
+        // SAFETY: We just wrote N*T into it, so obviously there is N*T worth of data in there.
+        unsafe {
+            buffer.set_len(mem::size_of::<T>() * count);
+        }
+
         buffer
     }
 
-    /// Length of the buffer in bytes.
-    pub fn len(&self) -> usize {
+    /// Capacity of the buffer, in bytes.
+    pub fn capacity(&self) -> usize {
         self.layout.size()
+    }
+
+    /// Length of the data in the buffer, in bytes.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Sets the length of the data in the buffer, in bytes.
+    ///
+    /// # Safety
+    ///
+    /// The caller guarantees that the indicated number of bytes has been initialized.
+    pub unsafe fn set_len(&mut self, len: usize) {
+        assert!(len <= self.capacity());
+        self.len = len;
     }
 
     pub fn as_ptr(&self) -> NonNull<T> {
         self.ptr.cast()
+    }
+
+    pub fn as_ptr_range(&self) -> Range<*const T> {
+        let start = self.ptr.as_ptr().cast_const().cast();
+        // SAFETY: We have been promised that there are `self.len` bytes of data in the buffer.
+        let end = unsafe { self.ptr.as_ptr().cast_const().byte_add(self.len).cast() };
+
+        start..end
     }
 
     pub fn as_mut(&mut self) -> &mut MaybeUninit<T> {
