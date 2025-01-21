@@ -757,19 +757,22 @@ mod tests {
     ) {
         let max_group_count = group_active_counts.len() as u16;
 
-        // We do not care how many times the "get count" type functions are called.
-        // TODO: It might be desirable to call them only once? Avoid de-sync possibility.
+        // The "get maximum" we expect the platform to always report the same numbers for, so we
+        // do not care how many times they are called. The "get active" we only want to call once
+        // per processor group to avoid multiple calls into the platform getting different results.
 
         // Note that "get active group count" is not actually used - the code probes all groups
         // and just checks number of processors in group to identify if the group is active.
         mock.expect_get_maximum_processor_group_count()
             .return_const(max_group_count);
 
-        mock.expect_get_active_processor_count().returning({
-            let group_active_counts = Arc::clone(group_active_counts);
+        mock.expect_get_active_processor_count()
+            .times(group_max_counts.len())
+            .returning({
+                let group_active_counts = Arc::clone(group_active_counts);
 
-            move |group_number| group_active_counts[group_number as usize] as u32
-        });
+                move |group_number| group_active_counts[group_number as usize] as u32
+            });
 
         mock.expect_get_maximum_processor_count().returning({
             let group_max_counts = Arc::clone(group_max_counts);
