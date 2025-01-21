@@ -18,7 +18,7 @@ use crate::pal::{
     EfficiencyClass, Platform, ProcessorGlobalIndex, ProcessorImpl,
 };
 
-/// Singleton instance of `BuildTargetPlatform`, used by public API surface types
+/// Singleton instance of `BuildTargetPlatform`, used by public API types
 /// to hook up to the correct PAL implementation.
 pub(crate) static BUILD_TARGET_PLATFORM: BuildTargetPlatform =
     BuildTargetPlatform::new(&BuildTargetBindings);
@@ -50,9 +50,9 @@ impl<B: Bindings> Platform for BuildTargetPlatform<B> {
         // 2. Set the affinity mask to disallow execution on all other processors.
         //
         // The order does not super matter because setting a thread as non-affine to all processors
-        // seems to, in practice, simply allow it to be executed on all of them. Therefore we can
-        // implement this as a single "clear all + set desired" pass without worrying about
-        // any potential intermediate state where everything is cleared.
+        // seems to, in practice, simply allow it to be executed on all of them (or at least on
+        // some of them). Therefore we can implement this as a single "clear all + set desired"
+        // pass without worrying about any potential intermediate state where everything is cleared.
 
         // This is a pseudo handle and does not need to be closed.
         let current_thread = self.bindings.get_current_thread();

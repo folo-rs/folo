@@ -15,7 +15,7 @@ use crate::pal::{
 // https://github.com/cloudhead/nonempty/issues/68
 extern crate alloc;
 
-/// Singleton instance of `BuildTargetPlatform`, used by public API surface types
+/// Singleton instance of `BuildTargetPlatform`, used by public API types
 /// to hook up to the correct PAL implementation.
 pub(crate) static BUILD_TARGET_PLATFORM: BuildTargetPlatform =
     BuildTargetPlatform::new(&BuildTargetBindings);
