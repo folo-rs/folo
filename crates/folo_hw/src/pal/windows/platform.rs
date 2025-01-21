@@ -402,6 +402,7 @@ mod tests {
 
     use itertools::Itertools;
     use mockall::Sequence;
+    use windows::Win32::Foundation::{BOOL, HANDLE};
 
     use crate::pal::{
         windows::{MockBindings, NativeBuffer, ProcessorIndexInGroup},
@@ -1007,5 +1008,109 @@ mod tests {
 
                 Ok(())
             });
+    }
+
+    #[test]
+    fn test_pin_current_thread_to_single_processor() {
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
+            let mut mock = MockBindings::new();
+            simulate_processor_layout(&mut mock, [1], [1], [0], [vec![0]]);
+            mock.expect_get_current_thread()
+                .return_const_st(HANDLE::default());
+            mock.expect_set_thread_group_affinity()
+                .withf(|thread, affinity, _| {
+                    *thread == HANDLE::default()
+                        && unsafe { (**affinity).Group == 0 && (**affinity).Mask == 1 }
+                })
+                .return_const(BOOL::from(true));
+            mock
+        });
+
+        let platform = BuildTargetPlatform::new(&*BINDINGS);
+        let processors = platform.get_all_processors();
+        platform.pin_current_thread_to(&processors);
+    }
+
+    #[test]
+    fn test_pin_current_thread_to_multiple_processors() {
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
+            let mut mock = MockBindings::new();
+            simulate_processor_layout(&mut mock, [2], [2], [0], [vec![0, 0]]);
+            mock.expect_get_current_thread()
+                .return_const_st(HANDLE::default());
+            mock.expect_set_thread_group_affinity()
+                .withf(|thread, affinity, _| {
+                    *thread == HANDLE::default()
+                        && unsafe { (**affinity).Group == 0 && (**affinity).Mask == 3 }
+                })
+                .return_const(BOOL::from(true));
+            mock
+        });
+
+        let platform = BuildTargetPlatform::new(&*BINDINGS);
+        let processors = platform.get_all_processors();
+        platform.pin_current_thread_to(&processors);
+    }
+
+    #[test]
+    fn test_pin_current_thread_to_multiple_groups() {
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
+            let mut mock = MockBindings::new();
+            simulate_processor_layout(&mut mock, [1, 1], [1, 1], [0, 1], [vec![0], vec![0]]);
+            mock.expect_get_current_thread()
+                .return_const_st(HANDLE::default());
+            mock.expect_set_thread_group_affinity()
+                .withf(|thread, affinity, _| {
+                    *thread == HANDLE::default()
+                        && unsafe { (**affinity).Group == 0 && (**affinity).Mask == 1 }
+                })
+                .return_const(BOOL::from(true));
+            mock.expect_set_thread_group_affinity()
+                .withf(|thread, affinity, _| {
+                    *thread == HANDLE::default()
+                        && unsafe { (**affinity).Group == 1 && (**affinity).Mask == 1 }
+                })
+                .return_const(BOOL::from(true));
+            mock
+        });
+
+        let platform = BuildTargetPlatform::new(&*BINDINGS);
+        let processors = platform.get_all_processors();
+        platform.pin_current_thread_to(&processors);
+    }
+
+    #[test]
+    fn test_pin_current_thread_to_efficiency_processors() {
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
+            let mut mock = MockBindings::new();
+            // Group 0 -> [Performance, Efficiency], Group 1 -> [Efficiency, Performance]
+            simulate_processor_layout(&mut mock, [2, 2], [2, 2], [0, 1], [vec![1, 0], vec![0, 1]]);
+            mock.expect_get_current_thread()
+                .return_const_st(HANDLE::default());
+            mock.expect_set_thread_group_affinity()
+                .withf(|thread, affinity, _| {
+                    *thread == HANDLE::default()
+                        && unsafe { (**affinity).Group == 0 && (**affinity).Mask == 2 }
+                })
+                .return_const(BOOL::from(true));
+            mock.expect_set_thread_group_affinity()
+                .withf(|thread, affinity, _| {
+                    *thread == HANDLE::default()
+                        && unsafe { (**affinity).Group == 1 && (**affinity).Mask == 1 }
+                })
+                .return_const(BOOL::from(true));
+            mock
+        });
+
+        let platform = BuildTargetPlatform::new(&*BINDINGS);
+        let processors = platform.get_all_processors();
+        let efficiency_processors = NonEmpty::from_vec(
+            processors
+                .iter()
+                .filter(|p| p.efficiency_class == EfficiencyClass::Efficiency)
+                .collect_vec(),
+        )
+        .unwrap();
+        platform.pin_current_thread_to(&efficiency_processors);
     }
 }

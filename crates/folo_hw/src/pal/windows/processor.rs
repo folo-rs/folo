@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::pal::{
     windows::{ProcessorGroupIndex, ProcessorIndexInGroup},
-    EfficiencyClass, MemoryRegionIndex, AbstractProcessor, ProcessorGlobalIndex,
+    AbstractProcessor, EfficiencyClass, MemoryRegionIndex, ProcessorGlobalIndex,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -57,5 +57,11 @@ impl AbstractProcessor for ProcessorImpl {
 
     fn efficiency_class(&self) -> EfficiencyClass {
         self.efficiency_class
+    }
+}
+
+impl AsRef<ProcessorImpl> for ProcessorImpl {
+    fn as_ref(&self) -> &ProcessorImpl {
+        self
     }
 }
