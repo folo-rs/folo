@@ -3,6 +3,7 @@ use std::fmt::Debug;
 /// Bindings for FFI calls into external libraries (either provided by operating system or not).
 ///
 /// All PAL FFI calls must go through this trait, enabling them to be mocked.
+#[cfg_attr(test, mockall::automock)]
 pub(crate) trait Bindings: Debug + Send + Sync + 'static {}
 
 /// FFI bindings that target the real operating system that the build is targeting.

@@ -65,3 +65,15 @@ impl AsRef<ProcessorImpl> for ProcessorImpl {
         self
     }
 }
+
+impl PartialOrd for ProcessorImpl {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ProcessorImpl {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.global_index.cmp(&other.global_index)
+    }
+}

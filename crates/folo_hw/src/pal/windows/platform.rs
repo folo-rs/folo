@@ -387,6 +387,10 @@ impl<B: Bindings> BuildTargetPlatform<B> {
             }
         }
 
+        // We must return the processors sorted by global index. While the above logic may
+        // already ensure this as a side-effect, we will sort here explicitly to be sure.
+        processors.sort();
+
         NonEmpty::from_vec(processors).expect(
             "we are returning all processors on the system - obviously there must be at least one",
         )
@@ -445,6 +449,21 @@ mod tests {
         assert_eq!(p0.group_index, 0);
         assert_eq!(p0.index_in_group, 0);
         assert_eq!(p0.memory_region_index, 0);
+
+        let p1 = &processors[1];
+        assert_eq!(p1.group_index, 0);
+        assert_eq!(p1.index_in_group, 1);
+        assert_eq!(p1.memory_region_index, 0);
+
+        let p2 = &processors[2];
+        assert_eq!(p2.group_index, 0);
+        assert_eq!(p2.index_in_group, 2);
+        assert_eq!(p2.memory_region_index, 0);
+
+        let p3 = &processors[3];
+        assert_eq!(p3.group_index, 0);
+        assert_eq!(p3.index_in_group, 3);
+        assert_eq!(p3.memory_region_index, 0);
     }
 
     #[test]

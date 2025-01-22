@@ -1,14 +1,10 @@
-use std::{
-    fs::{self, read_to_string},
-    num::NonZeroU32,
-    ops::Range,
-};
+use std::num::NonZeroU32;
 
 use itertools::Itertools;
 use nonempty::{nonempty, NonEmpty};
 
 use crate::pal::{
-    linux::{Bindings, BuildTargetBindings},
+    linux::{cpulist, Bindings, BuildTargetBindings, BuildTargetFilesystem, Filesystem},
     EfficiencyClass, MemoryRegionIndex, Platform, ProcessorGlobalIndex, ProcessorImpl,
 };
 
@@ -18,18 +14,22 @@ extern crate alloc;
 /// Singleton instance of `BuildTargetPlatform`, used by public API types
 /// to hook up to the correct PAL implementation.
 pub(crate) static BUILD_TARGET_PLATFORM: BuildTargetPlatform =
-    BuildTargetPlatform::new(&BuildTargetBindings);
+    BuildTargetPlatform::new(&BuildTargetBindings, &BuildTargetFilesystem);
 
 /// The platform that matches the crate's build target.
 ///
 /// You would only use a different platform in unit tests that need to mock the platform.
 /// Even then, whenever possible, unit tests should use the real platform for maximum realism.
 #[derive(Debug)]
-pub(crate) struct BuildTargetPlatform<B: Bindings = BuildTargetBindings> {
+pub(crate) struct BuildTargetPlatform<
+    B: Bindings = BuildTargetBindings,
+    FS: Filesystem = BuildTargetFilesystem,
+> {
     bindings: &'static B,
+    fs: &'static FS,
 }
 
-impl<B: Bindings> Platform for BuildTargetPlatform<B> {
+impl<B: Bindings, FS: Filesystem> Platform for BuildTargetPlatform<B, FS> {
     type Processor = ProcessorImpl;
 
     fn get_all_processors(&self) -> NonEmpty<Self::Processor> {
@@ -44,9 +44,9 @@ impl<B: Bindings> Platform for BuildTargetPlatform<B> {
     }
 }
 
-impl<B: Bindings> BuildTargetPlatform<B> {
-    pub(crate) const fn new(bindings: &'static B) -> Self {
-        Self { bindings }
+impl<B: Bindings, FS: Filesystem> BuildTargetPlatform<B, FS> {
+    pub(crate) const fn new(bindings: &'static B, fs: &'static FS) -> Self {
+        Self { bindings, fs }
     }
 
     fn get_all(&self) -> NonEmpty<ProcessorImpl> {
@@ -68,8 +68,11 @@ impl<B: Bindings> BuildTargetPlatform<B> {
         let numa_nodes = self.get_numa_nodes();
 
         // If we did not get any NUMA node info, construct an imaginary NUMA node containing all.
-        let numa_nodes = numa_nodes
-            .unwrap_or_else(|| nonempty![nonempty![0..cpu_infos.len() as ProcessorGlobalIndex]]);
+        let numa_nodes = numa_nodes.unwrap_or_else(|| {
+            let all_processor_indexes = (0..cpu_infos.len() as ProcessorGlobalIndex).collect_vec();
+            nonempty![NonEmpty::from_vec(all_processor_indexes)
+                .expect("must have at least one processor")]
+        });
 
         // We identify efficiency cores by comparing the frequency of each processor to the maximum
         // frequency of all processors. If the frequency is less than the maximum, we consider it an
@@ -80,15 +83,16 @@ impl<B: Bindings> BuildTargetPlatform<B> {
             .max()
             .expect("must have at least one processor in NonEmpty");
 
-        cpu_infos.map(|info| {
+        let mut processors = cpu_infos.map(|info| {
             let memory_region = numa_nodes
                 .iter()
                 .enumerate()
-                .find_map(|(node, cpulist)| {
-                    cpulist
-                        .iter()
-                        .find(|range| range.contains(&info.index))
-                        .map(|_| node)
+                .find_map(|(node, node_processors)| {
+                    if node_processors.contains(&info.index) {
+                        return Some(node);
+                    }
+
+                    None
                 })
                 .expect("processor not found in any NUMA node");
 
@@ -100,20 +104,26 @@ impl<B: Bindings> BuildTargetPlatform<B> {
 
             ProcessorImpl {
                 index: info.index,
-                memory_region: memory_region as MemoryRegionIndex,
+                memory_region_index: memory_region as MemoryRegionIndex,
                 efficiency_class,
             }
-        })
+        });
+
+        // We must return the processors sorted by global index. While the above logic may
+        // already ensure this as a side-effect, we will sort here explicitly to be sure.
+        processors.sort();
+
+        processors
     }
 
     fn get_cpuinfo(&self) -> NonEmpty<CpuInfo> {
-        let cpuinfo = read_to_string("/proc/cpuinfo")
-            .expect("operating without /proc/cpuinfo is not supported");
+        let cpuinfo = self.fs.get_cpuinfo_contents();
         let lines = cpuinfo.lines();
 
         // Process groups of lines delimited by empty lines.
         NonEmpty::from_vec(
             lines
+                .map(|line| line.trim())
                 .chunk_by(|l| l.is_empty())
                 .into_iter()
                 .filter_map(|(is_empty, lines)| {
@@ -159,21 +169,11 @@ impl<B: Bindings> BuildTargetPlatform<B> {
     }
 
     // May return None if everything is in a single NUMA node.
+    //
     // Otherwise, returns a list of NUMA nodes, where each entry is a list of processor
-    // index ranges that belong to that node. For example:
-    // 0: 0-7,16-23,55,67
-    // 1: 8-15,24-31,56,68
-    fn get_numa_nodes(&self) -> Option<NonEmpty<NonEmpty<Range<ProcessorGlobalIndex>>>> {
-        if !fs::exists("/sys/devices/system/node")
-            .ok()
-            .unwrap_or_default()
-        {
-            return None;
-        }
-
-        let node_count = fs::read_to_string("/sys/devices/system/node/nr_online_nodes").expect(
-            "failed to probe system for NUMA node configuration - cannot continue execution",
-        );
+    // indexes that belong to that node.
+    fn get_numa_nodes(&self) -> Option<NonEmpty<NonEmpty<ProcessorGlobalIndex>>> {
+        let node_count = self.fs.get_numa_nr_online_nodes_contents()?;
 
         let node_count = node_count
             .parse::<NonZeroU32>()
@@ -183,13 +183,8 @@ impl<B: Bindings> BuildTargetPlatform<B> {
             NonEmpty::from_vec(
                 (0..node_count.get())
                     .map(|node| {
-                        let cpulist = read_to_string(format!(
-                            "/sys/devices/system/node/node{}/cpulist",
-                            node
-                        ))
-                        .expect("failed to read cpulist file for NUMA node");
-
-                        parse_cpulist(&cpulist)
+                        let cpulist = self.fs.get_numa_node_cpulist_contents(node);
+                        cpulist::parse(&cpulist)
                     })
                     .collect_vec(),
             )
@@ -209,26 +204,87 @@ struct CpuInfo {
     frequency_mhz: u32,
 }
 
-// 0-7,16-23,55,67
-// note: this fails to support the stride operator and is overall a very basic parser
-fn parse_cpulist(cpulist: &str) -> NonEmpty<Range<ProcessorGlobalIndex>> {
-    let parts = cpulist.split(',');
+#[cfg(test)]
+mod tests {
+    use std::sync::LazyLock;
 
-    NonEmpty::from_vec(parts.map(|entry| {
-        if let Ok(number) = entry.parse::<ProcessorGlobalIndex>() {
-            number..number + 1
-        } else {
-            let (start, end) = entry
-                .split_once('-')
-                .map(|(start, end)| {
-                    (
-                        start.parse::<ProcessorGlobalIndex>().expect("invalid index in cpulist range"),
-                        end.parse::<ProcessorGlobalIndex>().expect("invalid index in cpulist range"),
-                    )
-                })
-                .expect("invalid cpulist entry; expected a single number or a range and this is neither");
+    use crate::pal::linux::{MockBindings, MockFilesystem};
 
-            start..end + 1
-        }
-    }).collect_vec()).expect("invalid cpulist; must have at least one entry")
+    use super::*;
+
+    #[test]
+    fn get_all_processors_smoke_test() {
+        // We imagine a simple system with 2 physical cores, 4 logical processors, all in a
+        // single processor group and a single memory region. Welcome to 2010!
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(MockBindings::new);
+        static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
+            let mut fs = MockFilesystem::new();
+
+            fs.expect_get_cpuinfo_contents().times(1).return_const(
+                "
+processor       : 0
+cpu MHz         : 3400.123
+whatever        : 123
+other           : ignored
+
+processor       : 1
+cpu MHz         : 3400.123
+whatever        : 123
+other           : ignored
+
+processor       : 2
+cpu MHz         : 3400.123
+
+processor       : 3
+cpu MHz         : 3400.123
+something       : does not matter
+                "
+                .to_string(),
+            );
+
+            fs.expect_get_numa_nr_online_nodes_contents()
+                .times(1)
+                .return_const("1".to_string());
+
+            fs.expect_get_numa_node_cpulist_contents()
+                .withf(|node| *node == 0)
+                .times(1)
+                .return_const("0,1,2-3".to_string());
+
+            fs
+        });
+
+        let platform = BuildTargetPlatform::new(&*BINDINGS, &*FILESYSTEM);
+
+        let processors = platform.get_all_processors();
+
+        // We expect to see 4 logical processors. This API does not care about the physical cores.
+        assert_eq!(processors.len(), 4);
+
+        // All processors must be in the same memory region.
+        assert_eq!(
+            1,
+            processors
+                .iter()
+                .map(|p| p.memory_region_index)
+                .dedup()
+                .count()
+        );
+
+        let p0 = &processors[0];
+        assert_eq!(p0.index, 0);
+        assert_eq!(p0.memory_region_index, 0);
+
+        let p1 = &processors[1];
+        assert_eq!(p1.index, 1);
+        assert_eq!(p1.memory_region_index, 0);
+
+        let p2 = &processors[2];
+        assert_eq!(p2.index, 2);
+        assert_eq!(p2.memory_region_index, 0);
+
+        let p3 = &processors[3];
+        assert_eq!(p3.index, 3);
+        assert_eq!(p3.memory_region_index, 0);
+    }
 }

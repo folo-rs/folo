@@ -36,6 +36,9 @@ pub(crate) trait AbstractProcessor:
 pub(crate) trait Platform: Debug + Send + Sync + 'static {
     type Processor: AbstractProcessor;
 
+    /// Returns all currently available processors.
+    /// 
+    /// The returned collection of processors is sorted by the processor global index.
     fn get_all_processors(&self) -> NonEmpty<Self::Processor>;
 
     fn pin_current_thread_to<P>(&self, processors: &NonEmpty<P>)
