@@ -9,13 +9,19 @@ use std::{fmt::Debug, fs};
 #[cfg_attr(test, mockall::automock)]
 pub(crate) trait Filesystem: Debug + Send + Sync + 'static {
     /// Get the contents of the /proc/cpuinfo file.
+    /// 
+    /// This is a plaintext file with "key    : value" pairs, blocks separated by empty lines.
     fn get_cpuinfo_contents(&self) -> String;
 
-    /// Get the contents of the /sys/devices/system/node/nr_online_nodes file or `None` if it does
+    /// Get the contents of the /sys/devices/system/node/online file or `None` if it does
     /// not exist.
-    fn get_numa_nr_online_nodes_contents(&self) -> Option<String>;
+    /// 
+    /// This is a cpulist format file ("0,1,2-4,5-10:2" style list).
+    fn get_numa_node_online_contents(&self) -> Option<String>;
 
     /// Get the contents of the /sys/devices/system/node/node{}/cpulist file.
+    /// 
+    /// This is a cpulist format file ("0,1,2-4,5-10:2" style list).
     fn get_numa_node_cpulist_contents(&self, node_index: u32) -> String;
 }
 
@@ -32,8 +38,8 @@ impl Filesystem for BuildTargetFilesystem {
             .expect("failed to read /proc/cpuinfo - cannot continue execution")
     }
 
-    fn get_numa_nr_online_nodes_contents(&self) -> Option<String> {
-        fs::read_to_string("/sys/devices/system/node/nr_online_nodes").ok()
+    fn get_numa_node_online_contents(&self) -> Option<String> {
+        fs::read_to_string("/sys/devices/system/node/online").ok()
     }
 
     fn get_numa_node_cpulist_contents(&self, node_index: u32) -> String {

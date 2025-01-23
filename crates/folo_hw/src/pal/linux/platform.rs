@@ -1,7 +1,7 @@
-use std::num::NonZeroU32;
+use std::collections::HashMap;
 
 use itertools::Itertools;
-use nonempty::{nonempty, NonEmpty};
+use nonempty::NonEmpty;
 
 use crate::pal::{
     linux::{cpulist, Bindings, BuildTargetBindings, BuildTargetFilesystem, Filesystem},
@@ -70,8 +70,9 @@ impl<B: Bindings, FS: Filesystem> BuildTargetPlatform<B, FS> {
         // If we did not get any NUMA node info, construct an imaginary NUMA node containing all.
         let numa_nodes = numa_nodes.unwrap_or_else(|| {
             let all_processor_indexes = (0..cpu_infos.len() as ProcessorGlobalIndex).collect_vec();
-            nonempty![NonEmpty::from_vec(all_processor_indexes)
-                .expect("must have at least one processor")]
+            let all_processor_indexes = NonEmpty::from_vec(all_processor_indexes)
+                .expect("must have at least one processor");
+            [(0, all_processor_indexes)].into_iter().collect()
         });
 
         // We identify efficiency cores by comparing the frequency of each processor to the maximum
@@ -86,10 +87,9 @@ impl<B: Bindings, FS: Filesystem> BuildTargetPlatform<B, FS> {
         let mut processors = cpu_infos.map(|info| {
             let memory_region = numa_nodes
                 .iter()
-                .enumerate()
                 .find_map(|(node, node_processors)| {
                     if node_processors.contains(&info.index) {
-                        return Some(node);
+                        return Some(*node);
                     }
 
                     None
@@ -104,7 +104,7 @@ impl<B: Bindings, FS: Filesystem> BuildTargetPlatform<B, FS> {
 
             ProcessorImpl {
                 index: info.index,
-                memory_region_index: memory_region as MemoryRegionIndex,
+                memory_region_index: memory_region,
                 efficiency_class,
             }
         });
@@ -172,23 +172,21 @@ impl<B: Bindings, FS: Filesystem> BuildTargetPlatform<B, FS> {
     //
     // Otherwise, returns a list of NUMA nodes, where each entry is a list of processor
     // indexes that belong to that node.
-    fn get_numa_nodes(&self) -> Option<NonEmpty<NonEmpty<ProcessorGlobalIndex>>> {
-        let node_count = self.fs.get_numa_nr_online_nodes_contents()?;
+    fn get_numa_nodes(&self) -> Option<HashMap<MemoryRegionIndex, NonEmpty<ProcessorGlobalIndex>>> {
+        let node_indexes = cpulist::parse(&self.fs.get_numa_node_online_contents()?);
 
-        let node_count = node_count
-            .parse::<NonZeroU32>()
-            .expect("NUMA node count was not a number");
+        if node_indexes.is_empty() {
+            return None;
+        }
 
         Some(
-            NonEmpty::from_vec(
-                (0..node_count.get())
-                    .map(|node| {
-                        let cpulist = self.fs.get_numa_node_cpulist_contents(node);
-                        cpulist::parse(&cpulist)
-                    })
-                    .collect_vec(),
-            )
-            .expect("we already verified that node count is non-zero"),
+            node_indexes
+                .into_iter()
+                .map(|node| {
+                    let cpulist = self.fs.get_numa_node_cpulist_contents(node);
+                    (node, cpulist::parse(&cpulist))
+                })
+                .collect(),
         )
     }
 }
@@ -220,7 +218,12 @@ mod tests {
         static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
             let mut fs = MockFilesystem::new();
 
-            simulate_processor_layout(&mut fs, [0, 1, 2, 3], [0, 0, 0, 0], [99.9, 99.9, 99.9, 99.9]);
+            simulate_processor_layout(
+                &mut fs,
+                [0, 1, 2, 3],
+                [0, 0, 0, 0],
+                [99.9, 99.9, 99.9, 99.9],
+            );
 
             fs
         });
@@ -260,19 +263,164 @@ mod tests {
     }
 
     #[test]
-    fn test_two_numa_nodes_efficiency_performance() {}
+    fn test_two_numa_nodes_efficiency_performance() {
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(MockBindings::new);
+        static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
+            let mut fs = MockFilesystem::new();
+            // Two nodes, each with 2 processors:
+            // Node 0 -> [Performance, Efficiency], Node 1 -> [Efficiency, Performance].
+            simulate_processor_layout(
+                &mut fs,
+                [0, 1, 2, 3],
+                [0, 0, 1, 1],
+                [3400.0, 2000.0, 2000.0, 3400.0],
+            );
+            fs
+        });
+
+        let platform = BuildTargetPlatform::new(&*BINDINGS, &*FILESYSTEM);
+        let processors = platform.get_all_processors();
+        assert_eq!(processors.len(), 4);
+
+        // Node 0
+        let p0 = &processors[0];
+        assert_eq!(p0.index, 0);
+        assert_eq!(p0.memory_region_index, 0);
+        assert_eq!(p0.efficiency_class, EfficiencyClass::Performance);
+
+        let p1 = &processors[1];
+        assert_eq!(p1.index, 1);
+        assert_eq!(p1.memory_region_index, 0);
+        assert_eq!(p1.efficiency_class, EfficiencyClass::Efficiency);
+
+        // Node 1
+        let p2 = &processors[2];
+        assert_eq!(p2.index, 2);
+        assert_eq!(p2.memory_region_index, 1);
+        assert_eq!(p2.efficiency_class, EfficiencyClass::Efficiency);
+
+        let p3 = &processors[3];
+        assert_eq!(p3.index, 3);
+        assert_eq!(p3.memory_region_index, 1);
+        assert_eq!(p3.efficiency_class, EfficiencyClass::Performance);
+    }
 
     #[test]
-    fn test_one_big_numa_two_small_nodes() {}
+    fn test_one_big_numa_two_small_nodes() {
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(MockBindings::new);
+        static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
+            let mut fs = MockFilesystem::new();
+            // Three nodes: node 0 -> 4 Performance, node 1 -> 2 Efficiency, node 2 -> 2 Efficiency
+            simulate_processor_layout(
+                &mut fs,
+                [0, 1, 2, 3, 4, 5, 6, 7],
+                [0, 0, 0, 0, 1, 1, 2, 2],
+                [
+                    3400.0, 3400.0, 3400.0, 3400.0, 2000.0, 2000.0, 2000.0, 2000.0,
+                ],
+            );
+            fs
+        });
+
+        let platform = BuildTargetPlatform::new(&*BINDINGS, &*FILESYSTEM);
+        let processors = platform.get_all_processors();
+        assert_eq!(processors.len(), 8);
+
+        // First 4 in node 0 => Performance
+        for i in 0..4 {
+            let p = &processors[i];
+            assert_eq!(p.index, i as ProcessorGlobalIndex);
+            assert_eq!(p.memory_region_index, 0);
+            assert_eq!(p.efficiency_class, EfficiencyClass::Performance);
+        }
+        // Next 2 in node 1 => Efficiency
+        for i in 4..6 {
+            let p = &processors[i];
+            assert_eq!(p.index, i as ProcessorGlobalIndex);
+            assert_eq!(p.memory_region_index, 1);
+            assert_eq!(p.efficiency_class, EfficiencyClass::Efficiency);
+        }
+        // Last 2 in node 2 => Efficiency
+        for i in 6..8 {
+            let p = &processors[i];
+            assert_eq!(p.index, i as ProcessorGlobalIndex);
+            assert_eq!(p.memory_region_index, 2);
+            assert_eq!(p.efficiency_class, EfficiencyClass::Efficiency);
+        }
+    }
 
     #[test]
-    fn test_one_active_one_inactive_numa_node() {}
+    fn test_one_active_one_inactive_numa_node() {
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(MockBindings::new);
+        static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
+            let mut fs = MockFilesystem::new();
+            // Node 0 -> inactive, Node 1 -> [Performance, Efficiency, Performance]
+            simulate_processor_layout(&mut fs, [3, 4, 5], [1, 1, 1], [3400.0, 2000.0, 3400.0]);
+            fs
+        });
+
+        let platform = BuildTargetPlatform::new(&*BINDINGS, &*FILESYSTEM);
+        let processors = platform.get_all_processors();
+        assert_eq!(processors.len(), 3);
+
+        // Node 1 => [Perf, Eff, Perf]
+        let p0 = &processors[0];
+        assert_eq!(p0.index, 3);
+        assert_eq!(p0.memory_region_index, 1);
+        assert_eq!(p0.efficiency_class, EfficiencyClass::Performance);
+
+        let p1 = &processors[1];
+        assert_eq!(p1.index, 4);
+        assert_eq!(p1.memory_region_index, 1);
+        assert_eq!(p1.efficiency_class, EfficiencyClass::Efficiency);
+
+        let p2 = &processors[2];
+        assert_eq!(p2.index, 5);
+        assert_eq!(p2.memory_region_index, 1);
+        assert_eq!(p2.efficiency_class, EfficiencyClass::Performance);
+    }
 
     #[test]
-    fn test_two_numa_nodes_some_inactive_processors() {}
+    fn test_two_numa_nodes_some_inactive_processors() {
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(MockBindings::new);
+        static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
+            let mut fs = MockFilesystem::new();
+            // Node 0 -> Efficiency, Node 1 -> Performance, with gaps in indexes
+            simulate_processor_layout(
+                &mut fs,
+                [0, 2, 4, 6],
+                [0, 0, 1, 1],
+                [2000.0, 2000.0, 3400.0, 3400.0],
+            );
+            fs
+        });
 
-    #[test]
-    fn test_one_multi_group_numa_node_one_small() {}
+        let platform = BuildTargetPlatform::new(&*BINDINGS, &*FILESYSTEM);
+        let processors = platform.get_all_processors();
+        assert_eq!(processors.len(), 4);
+
+        // Node 0 => [Eff, Eff]
+        let p0 = &processors[0];
+        assert_eq!(p0.index, 0);
+        assert_eq!(p0.memory_region_index, 0);
+        assert_eq!(p0.efficiency_class, EfficiencyClass::Efficiency);
+
+        let p1 = &processors[1];
+        assert_eq!(p1.index, 2);
+        assert_eq!(p1.memory_region_index, 0);
+        assert_eq!(p1.efficiency_class, EfficiencyClass::Efficiency);
+
+        // Node 1 => [Perf, Perf]
+        let p2 = &processors[2];
+        assert_eq!(p2.index, 4);
+        assert_eq!(p2.memory_region_index, 1);
+        assert_eq!(p2.efficiency_class, EfficiencyClass::Performance);
+
+        let p3 = &processors[3];
+        assert_eq!(p3.index, 6);
+        assert_eq!(p3.memory_region_index, 1);
+        assert_eq!(p3.efficiency_class, EfficiencyClass::Performance);
+    }
 
     /// Configures mock bindings and filesystem to simulate a particular type of processor layout.
     ///
@@ -298,7 +446,10 @@ mod tests {
             cpuinfo.push('\n');
         }
 
-        let node_count = memory_region_index.iter().unique().count();
+        let node_indexes =
+            NonEmpty::from_vec(memory_region_index.iter().copied().unique().collect_vec())
+                .expect("simulating zero nodes is not supported");
+        let node_indexes_cpulist = cpulist::emit(node_indexes);
 
         let processors_per_node = memory_region_index
             .iter()
@@ -310,9 +461,9 @@ mod tests {
             .times(1)
             .return_const(cpuinfo);
 
-        fs.expect_get_numa_nr_online_nodes_contents()
+        fs.expect_get_numa_node_online_contents()
             .times(1)
-            .return_const(node_count.to_string());
+            .return_const(Some(node_indexes_cpulist));
 
         for (node, processors) in processors_per_node {
             let cpulist = processors

@@ -554,31 +554,31 @@ mod tests {
     fn test_one_active_one_inactive_numa_node() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
-            // Group 0 -> [Performance, Efficiency, Performance], Group 1 -> inactive
-            simulate_processor_layout(&mut mock, [3, 0], [3, 2], [0, 1], [vec![1, 0, 1], vec![]]);
+            // Group 0 -> inactive, Group 1 -> [Performance, Efficiency, Performance]
+            simulate_processor_layout(&mut mock, [0, 3], [2, 3], [0, 1], [vec![], vec![1, 0, 1]]);
             mock
         });
         let platform = BuildTargetPlatform::new(&*BINDINGS);
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 3);
 
-        // Group 0 => [Perf, Eff, Perf]
+        // Group 1 => [Perf, Eff, Perf]
         let p0 = &processors[0];
-        assert_eq!(p0.group_index, 0);
+        assert_eq!(p0.group_index, 1);
         assert_eq!(p0.index_in_group, 0);
-        assert_eq!(p0.memory_region_index, 0);
+        assert_eq!(p0.memory_region_index, 1);
         assert_eq!(p0.efficiency_class, EfficiencyClass::Performance);
 
         let p1 = &processors[1];
-        assert_eq!(p1.group_index, 0);
+        assert_eq!(p1.group_index, 1);
         assert_eq!(p1.index_in_group, 1);
-        assert_eq!(p1.memory_region_index, 0);
+        assert_eq!(p1.memory_region_index, 1);
         assert_eq!(p1.efficiency_class, EfficiencyClass::Efficiency);
 
         let p2 = &processors[2];
-        assert_eq!(p2.group_index, 0);
+        assert_eq!(p2.group_index, 1);
         assert_eq!(p2.index_in_group, 2);
-        assert_eq!(p2.memory_region_index, 0);
+        assert_eq!(p2.memory_region_index, 1);
         assert_eq!(p2.efficiency_class, EfficiencyClass::Performance);
     }
 

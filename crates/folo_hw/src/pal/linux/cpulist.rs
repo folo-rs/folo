@@ -70,6 +70,17 @@ pub(crate) fn parse(cpulist: &str) -> NonEmpty<ProcessorGlobalIndex> {
     .expect("cpulist cannot be empty")
 }
 
+/// Generates a cpulist that can be parsed by `parse()`.
+#[cfg(test)]
+pub(crate) fn emit(items: NonEmpty<ProcessorGlobalIndex>) -> String {
+    items
+        .iter()
+        .unique()
+        .sorted_unstable()
+        .map(|&item| item.to_string())
+        .join(",")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,7 +88,7 @@ mod tests {
     use nonempty::nonempty;
 
     #[test]
-    fn smoke_test() {
+    fn parse_smoke_test() {
         assert_eq!(parse("555"), nonempty![555]);
 
         assert_eq!(parse("0,1,2,3"), nonempty![0, 1, 2, 3]);
@@ -96,6 +107,33 @@ mod tests {
         assert_eq!(
             parse("0,1,2-4,5-9:2,6-10:2"),
             nonempty![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        );
+    }
+
+    #[test]
+    fn emit_smoke_test() {
+        assert_eq!(emit(nonempty![555]), "555");
+
+        assert_eq!(emit(nonempty![0, 1, 2, 3]), "0,1,2,3");
+
+        assert_eq!(emit(nonempty![1, 2, 3]), "1,2,3");
+
+        assert_eq!(emit(nonempty![0, 1, 2, 3, 4, 5, 6]), "0,1,2,3,4,5,6");
+
+        assert_eq!(emit(nonempty![0]), "0");
+
+        assert_eq!(emit(nonempty![0, 1, 3]), "0,1,3");
+
+        assert_eq!(
+            emit(nonempty![0, 3, 5, 6, 8, 9, 11, 14]),
+            "0,3,5,6,8,9,11,14"
+        );
+
+        assert_eq!(emit(nonempty![0]), "0");
+
+        assert_eq!(
+            emit(nonempty![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+            "0,1,2,3,4,5,6,7,8,9,10"
         );
     }
 
