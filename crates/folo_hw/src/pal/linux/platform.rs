@@ -220,36 +220,7 @@ mod tests {
         static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
             let mut fs = MockFilesystem::new();
 
-            fs.expect_get_cpuinfo_contents().times(1).return_const(
-                "
-processor       : 0
-cpu MHz         : 3400.123
-whatever        : 123
-other           : ignored
-
-processor       : 1
-cpu MHz         : 3400.123
-whatever        : 123
-other           : ignored
-
-processor       : 2
-cpu MHz         : 3400.123
-
-processor       : 3
-cpu MHz         : 3400.123
-something       : does not matter
-                "
-                .to_string(),
-            );
-
-            fs.expect_get_numa_nr_online_nodes_contents()
-                .times(1)
-                .return_const("1".to_string());
-
-            fs.expect_get_numa_node_cpulist_contents()
-                .withf(|node| *node == 0)
-                .times(1)
-                .return_const("0,1,2-3".to_string());
+            simulate_processor_layout(&mut fs, [0, 1, 2, 3], [0, 0, 0, 0], [99.9, 99.9, 99.9, 99.9]);
 
             fs
         });
@@ -286,5 +257,74 @@ something       : does not matter
         let p3 = &processors[3];
         assert_eq!(p3.index, 3);
         assert_eq!(p3.memory_region_index, 0);
+    }
+
+    #[test]
+    fn test_two_numa_nodes_efficiency_performance() {}
+
+    #[test]
+    fn test_one_big_numa_two_small_nodes() {}
+
+    #[test]
+    fn test_one_active_one_inactive_numa_node() {}
+
+    #[test]
+    fn test_two_numa_nodes_some_inactive_processors() {}
+
+    #[test]
+    fn test_one_multi_group_numa_node_one_small() {}
+
+    /// Configures mock bindings and filesystem to simulate a particular type of processor layout.
+    ///
+    /// The simulation is valid for one call to get_all_processors() only.
+    fn simulate_processor_layout<const PROCESSOR_COUNT: usize>(
+        fs: &mut MockFilesystem,
+        processor_index: [ProcessorGlobalIndex; PROCESSOR_COUNT],
+        memory_region_index: [MemoryRegionIndex; PROCESSOR_COUNT],
+        frequencies_per_processor: [f64; PROCESSOR_COUNT],
+    ) {
+        // We assume that active/max difference implies gaps in processor indexes may exist.
+        // Lack of machine to test it on limits support for that scenario right now.
+
+        let mut cpuinfo = String::new();
+
+        for (processor_index, frequency) in
+            processor_index.iter().zip(frequencies_per_processor.iter())
+        {
+            cpuinfo.push_str(&format!("processor       : {processor_index}\n"));
+            cpuinfo.push_str(&format!("cpu MHz         : {frequency}\n"));
+            cpuinfo.push_str("whatever        : 123\n");
+            cpuinfo.push_str("other           : ignored\n");
+            cpuinfo.push('\n');
+        }
+
+        let node_count = memory_region_index.iter().unique().count();
+
+        let processors_per_node = memory_region_index
+            .iter()
+            .copied()
+            .zip(processor_index.iter().copied())
+            .into_group_map();
+
+        fs.expect_get_cpuinfo_contents()
+            .times(1)
+            .return_const(cpuinfo);
+
+        fs.expect_get_numa_nr_online_nodes_contents()
+            .times(1)
+            .return_const(node_count.to_string());
+
+        for (node, processors) in processors_per_node {
+            let cpulist = processors
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+
+            fs.expect_get_numa_node_cpulist_contents()
+                .withf(move |n| *n == node)
+                .times(1)
+                .return_const(cpulist);
+        }
     }
 }
