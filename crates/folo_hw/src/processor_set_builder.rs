@@ -59,9 +59,7 @@ impl ProcessorSetBuilder {
         I: IntoIterator<Item = &'a Processor>,
     {
         Self {
-            core: self
-                .core
-                .except(processors.into_iter().map(|p| p.as_ref())),
+            core: self.core.except(processors.into_iter().map(|p| p.as_ref())),
         }
     }
 
@@ -97,6 +95,7 @@ impl From<ProcessorSetBuilderCore<pal::BuildTargetPlatform>> for ProcessorSetBui
     }
 }
 
+#[cfg(not(all(miri, unix)))] // The Linux PAL requires filesystem access but Miri does not support that.
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Barrier};

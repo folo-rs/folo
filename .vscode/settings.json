@@ -1,5 +1,8 @@
 {
     "cSpell.words": [
         "Folo"
+    ],
+    "rust-analyzer.cargo.cfgs": [
+        "debug_assertions"
     ]
 }
