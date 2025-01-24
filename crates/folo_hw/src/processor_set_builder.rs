@@ -95,7 +95,7 @@ impl From<ProcessorSetBuilderCore<pal::BuildTargetPlatform>> for ProcessorSetBui
     }
 }
 
-#[cfg(not(all(miri, unix)))] // The Linux PAL requires filesystem access but Miri does not support that.
+#[cfg(not(miri))] // Talking to the operating system is not possible under Miri.
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Barrier};

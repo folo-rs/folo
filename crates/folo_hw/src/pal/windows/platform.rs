@@ -1,4 +1,4 @@
-use std::{collections::HashMap, num::NonZeroUsize};
+use std::{collections::HashMap, mem::offset_of, num::NonZeroUsize};
 
 use itertools::Itertools;
 use nonempty::NonEmpty;
@@ -297,8 +297,10 @@ impl<B: Bindings> BuildTargetPlatform<B> {
         let end = raw_range.end.cast();
 
         while next < end {
+            let current = next;
+
             // SAFETY: We just process the data in the form the OS promises to give it to us.
-            let info = unsafe { &*next };
+            let info = unsafe { &*current };
 
             // SAFETY: We just process the data in the form the OS promises to give it to us.
             next = unsafe { next.byte_add(info.Size as usize) };
@@ -315,17 +317,19 @@ impl<B: Bindings> BuildTargetPlatform<B> {
             // In the struct definition, this is a 1-element array because Rust has no notion
             // of dynamic-size arrays. We use pointer arithmetic to access the real array elements.
             //
-            // INSANITY: this & is crucial here because otherwise the compiler will give us a pointer
-            // to some temporary value on the stack that does not actually contain the correct data.
-            // This is because without the &, the Rust compiler will happily try to copy out the value
-            // of GroupMasks and use that. This would be a guaranteed problem if GroupCount>1 since the
-            // compiler did not know it would have to copy more than one element. However, for some
-            // unclear reason it is also a problem with GroupCount==1 because the compiler apparently
-            // copies out some garbage onto the stack instead of the correct value. Reason unknown.
-            // Just make sure to keep the & here and anywhere else unions are used by reference/ptr.
+            // NOTE: that we need to start from scratch with the original pointer here!
+            // Pointer -> shared ref -> pointer conversions are not guaranteed to return the
+            // original pointer, so if we get rid of a pointer once, we cannot get it back!
             //
             // SAFETY: RelationNumaNodeEx guarantees that this union member is present.
-            let mut group_mask_array = unsafe { &details.Anonymous.GroupMasks }.as_ptr();
+            let mut group_mask_array = unsafe {
+                current
+                    .byte_add(offset_of!(
+                        SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
+                        Anonymous.NumaNode.Anonymous.GroupMask
+                    ))
+                    .cast::<GROUP_AFFINITY>()
+            };
 
             for _ in 0..details.GroupCount {
                 // SAFETY: The OS promises us that this array contains `GroupCount` elements.
@@ -400,7 +404,7 @@ impl<B: Bindings> BuildTargetPlatform<B> {
 #[cfg(test)]
 mod tests {
     use std::{
-        mem,
+        mem::{self, offset_of},
         sync::{Arc, LazyLock},
     };
 
@@ -857,10 +861,20 @@ mod tests {
                 response_numa.GroupCount = group_indexes.len() as u16;
 
                 // The type definition just has an array of 1 here (not correct), so we write
-                // through pointers to fill each array element.
-                //
+                // through pointers to fill each array element. We have to do this dance of starting
+                // out borrow from the root of the document we are returning to prove to the
+                // compiler and Miri that we have the rights to write beyond the 1-element array.
+                let document = &raw mut response;
+
                 // SAFETY: We define GroupCount above so this dereference is valid.
-                let mut group_mask = unsafe { &raw mut response_numa.Anonymous.GroupMask };
+                let mut group_mask = unsafe {
+                    document
+                        .byte_add(offset_of!(
+                            ExpandedLogicalProcessorInformation,
+                            root.Anonymous.NumaNode.Anonymous.GroupMask
+                        ))
+                        .cast::<GROUP_AFFINITY>()
+                };
 
                 for group_index in group_indexes {
                     // Make a usize here with the number of bits set to the number of active processors.
