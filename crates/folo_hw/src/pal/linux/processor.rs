@@ -45,3 +45,9 @@ impl Ord for ProcessorImpl {
         self.index.cmp(&other.index)
     }
 }
+
+impl AsRef<ProcessorImpl> for ProcessorImpl {
+    fn as_ref(&self) -> &ProcessorImpl {
+        self
+    }
+}

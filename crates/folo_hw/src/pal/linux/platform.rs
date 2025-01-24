@@ -46,6 +46,8 @@ impl<B: Bindings, FS: Filesystem> Platform for BuildTargetPlatform<B, FS> {
         for processor in processors.iter() {
             // SAFETY: No safety requirements.
             unsafe {
+                // TODO: This can go out of bounds with giant CPU set, we need to use dynamically
+                // allocated CPU sets instead of relying on the fixed-size one in libc.
                 libc::CPU_SET(processor.as_ref().index as usize, &mut cpu_set);
             }
         }
@@ -489,5 +491,144 @@ mod tests {
                 .times(1)
                 .return_const(cpulist);
         }
+    }
+
+    #[test]
+    fn test_pin_current_thread_to_single_processor() {
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
+            let mut mock = MockBindings::new();
+
+            let expected_set = cpuset_from([0]);
+
+            mock.expect_sched_setaffinity_current()
+                .withf(move |cpu_set| {
+                    // SAFETY: No safety requirements.
+                    unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
+                })
+                .times(1)
+                .returning(|_| Ok(()));
+            mock
+        });
+        static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
+            let mut fs = MockFilesystem::new();
+            simulate_processor_layout(&mut fs, [0], [0], [2000.0]);
+            fs
+        });
+
+        let platform = BuildTargetPlatform::new(&*BINDINGS, &*FILESYSTEM);
+        let processors = platform.get_all_processors();
+        platform.pin_current_thread_to(&processors);
+    }
+
+    #[test]
+    fn test_pin_current_thread_to_multiple_processors() {
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
+            let mut mock = MockBindings::new();
+
+            let expected_set = cpuset_from([0, 1]);
+
+            mock.expect_sched_setaffinity_current()
+                .withf(move |cpu_set| {
+                    // SAFETY: No safety requirements.
+                    unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
+                })
+                .times(1)
+                .returning(|_| Ok(()));
+            mock
+        });
+        static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
+            let mut fs = MockFilesystem::new();
+            simulate_processor_layout(&mut fs, [0, 1], [0, 0], [2000.0, 2000.0]);
+            fs
+        });
+
+        let platform = BuildTargetPlatform::new(&*BINDINGS, &*FILESYSTEM);
+        let processors = platform.get_all_processors();
+        platform.pin_current_thread_to(&processors);
+    }
+
+    #[test]
+    fn test_pin_current_thread_to_multiple_memory_regions() {
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
+            let mut mock = MockBindings::new();
+
+            let expected_set = cpuset_from([0, 1]);
+
+            mock.expect_sched_setaffinity_current()
+                .withf(move |cpu_set| {
+                    // SAFETY: No safety requirements.
+                    unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
+                })
+                .times(1)
+                .returning(|_| Ok(()));
+            mock
+        });
+        static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
+            let mut fs = MockFilesystem::new();
+            simulate_processor_layout(&mut fs, [0, 1], [0, 1], [2000.0, 2000.0]);
+            fs
+        });
+
+        let platform = BuildTargetPlatform::new(&*BINDINGS, &*FILESYSTEM);
+        let processors = platform.get_all_processors();
+        platform.pin_current_thread_to(&processors);
+    }
+
+    #[test]
+    fn test_pin_current_thread_to_efficiency_processors() {
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
+            let mut mock = MockBindings::new();
+
+            let expected_set = cpuset_from([1, 2]);
+
+            mock.expect_sched_setaffinity_current()
+                .withf(move |cpu_set| {
+                    // SAFETY: No safety requirements.
+                    unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
+                })
+                .times(1)
+                .returning(|_| Ok(()));
+            mock
+        });
+        static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
+            let mut fs = MockFilesystem::new();
+            // Node 0 -> [Performance, Efficiency], Node 1 -> [Efficiency, Performance]
+            simulate_processor_layout(
+                &mut fs,
+                [0, 1, 2, 3],
+                [0, 0, 2, 2],
+                [3400.0, 2000.0, 2000.0, 3400.0],
+            );
+            fs
+        });
+
+        let platform = BuildTargetPlatform::new(&*BINDINGS, &*FILESYSTEM);
+        let processors = platform.get_all_processors();
+        let efficiency_processors = NonEmpty::from_vec(
+            processors
+                .iter()
+                .filter(|p| p.efficiency_class == EfficiencyClass::Efficiency)
+                .collect_vec(),
+        )
+        .unwrap();
+        platform.pin_current_thread_to(&efficiency_processors);
+    }
+
+    fn cpuset_from<const PROCESSOR_COUNT: usize>(
+        processors: [ProcessorGlobalIndex; PROCESSOR_COUNT],
+    ) -> libc::cpu_set_t {
+        // SAFETY: Zero-initialized CPU set is correct.
+        let mut cpu_set: libc::cpu_set_t = unsafe { mem::zeroed() };
+
+        for processor in processors {
+            // SAFETY: No safety requirements.
+            unsafe {
+                // TODO: This can go out of bounds with giant CPU set, we need to use dynamically
+                // allocated CPU sets instead of relying on the fixed-size one in libc.
+                libc::CPU_SET(processor as usize, &mut cpu_set);
+            }
+        }
+
+        cpu_set
     }
 }
