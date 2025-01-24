@@ -1,10 +1,10 @@
-use std::{collections::HashMap, mem, thread};
+use std::{collections::HashMap, mem};
 
 use itertools::Itertools;
 use nonempty::NonEmpty;
 
 use crate::pal::{
-    linux::{cpulist, processor, Bindings, BuildTargetBindings, BuildTargetFilesystem, Filesystem},
+    linux::{cpulist, Bindings, BuildTargetBindings, BuildTargetFilesystem, Filesystem},
     EfficiencyClass, MemoryRegionIndex, Platform, ProcessorGlobalIndex, ProcessorImpl,
 };
 
