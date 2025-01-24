@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, mem, thread};
 
 use itertools::Itertools;
 use nonempty::NonEmpty;
 
 use crate::pal::{
-    linux::{cpulist, Bindings, BuildTargetBindings, BuildTargetFilesystem, Filesystem},
+    linux::{cpulist, processor, Bindings, BuildTargetBindings, BuildTargetFilesystem, Filesystem},
     EfficiencyClass, MemoryRegionIndex, Platform, ProcessorGlobalIndex, ProcessorImpl,
 };
 
@@ -40,7 +40,19 @@ impl<B: Bindings, FS: Filesystem> Platform for BuildTargetPlatform<B, FS> {
     where
         P: AsRef<Self::Processor>,
     {
-        todo!()
+        // SAFETY: Zero-initialized cpu_set_t is a valid value.
+        let mut cpu_set: libc::cpu_set_t = unsafe { mem::zeroed() };
+
+        for processor in processors.iter() {
+            // SAFETY: No safety requirements.
+            unsafe {
+                libc::CPU_SET(processor.as_ref().index as usize, &mut cpu_set);
+            }
+        }
+
+        self.bindings
+            .sched_setaffinity_current(&cpu_set)
+            .expect("failed to configure thread affinity");
     }
 }
 
