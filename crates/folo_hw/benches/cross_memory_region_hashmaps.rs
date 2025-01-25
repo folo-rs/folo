@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use criterion::{criterion_group, criterion_main, BatchSize, Criterion, SamplingMode};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use folo_hw::ProcessorSet;
 
 criterion_group!(benches, entrypoint);
@@ -19,11 +19,9 @@ const TWO_PROCESSORS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("cross_memory_region_hashmaps");
 
-    // This stuff takes forever, so be patient.
-    //group.sample_size(10);
-    //group.sampling_mode(SamplingMode::Flat);
-    //group.warm_up_time(Duration::from_secs(10));
-    group.measurement_time(Duration::from_secs(120));
+    // Cleaning the cache takes a lot of time and overall this is pretty inconsistent between runs,
+    // so let's take some time to ensure we get good data.
+    group.measurement_time(Duration::from_secs(300));
 
     if let Some(far_processor_pair) = ProcessorSet::builder()
         .performance_processors_only()
