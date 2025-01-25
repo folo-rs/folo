@@ -29,3 +29,7 @@ mockall = "0.13"
 [[bench]]
 name = "cross_memory_region_channels"
 harness = false
+
+[[bench]]
+name = "cross_memory_region_hashmaps"
+harness = false

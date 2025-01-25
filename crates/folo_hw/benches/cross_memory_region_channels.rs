@@ -21,7 +21,7 @@ fn entrypoint(c: &mut Criterion) {
         .different_memory_regions()
         .take(TWO_PROCESSORS)
     {
-        group.bench_function("different_region_channels", |b| {
+        group.bench_function("different_memory_regions", |b| {
             b.iter_batched(
                 || BenchmarkRun::new(&far_processor_pair),
                 |run| run.wait(),
