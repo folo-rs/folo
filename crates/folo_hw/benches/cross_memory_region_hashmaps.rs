@@ -20,8 +20,8 @@ fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("cross_memory_region_hashmaps");
 
     // Cleaning the cache takes a lot of time and overall this is pretty inconsistent between runs,
-    // so let's take some time to ensure we get good data.
-    group.measurement_time(Duration::from_secs(300));
+    // perhaps due to scheduling interference, so let's take some time to ensure we get good data.
+    group.measurement_time(Duration::from_secs(100));
 
     if let Some(far_processor_pair) = ProcessorSet::builder()
         .performance_processors_only()

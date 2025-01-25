@@ -2,7 +2,7 @@ use std::{
     mem,
     num::NonZeroUsize,
     sync::{mpsc, Arc, Barrier, Mutex},
-    thread::JoinHandle,
+    thread::JoinHandle, time::Duration,
 };
 
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
@@ -15,6 +15,10 @@ const TWO_PROCESSORS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("cross_memory_region_channels");
+
+    // Cleaning the cache takes a lot of time and overall this is pretty inconsistent between runs,
+    // perhaps due to scheduling interference, so let's take some time to ensure we get good data.
+    group.measurement_time(Duration::from_secs(100));
 
     if let Some(far_processor_pair) = ProcessorSet::builder()
         .performance_processors_only()
