@@ -36,5 +36,9 @@ name = "cross_memory_region_hashmaps"
 harness = false
 
 [[bench]]
-name = "cross_memory_region_fzmaps"
+name = "cross_memory_region_fzmaps_hash"
+harness = false
+
+[[bench]]
+name = "cross_memory_region_fzmaps_scalar"
 harness = false
