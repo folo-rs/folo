@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion, SamplingMode};
 use folo_hw::ProcessorSet;
 
 criterion_group!(benches, entrypoint);
@@ -19,7 +19,10 @@ const TWO_PROCESSORS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("cross_memory_region_hashmaps");
 
-    // The cache cleaning takes a long time so let's be patient.
+    // This stuff takes forever, so be patient.
+    //group.sample_size(10);
+    //group.sampling_mode(SamplingMode::Flat);
+    //group.warm_up_time(Duration::from_secs(10));
     group.measurement_time(Duration::from_secs(120));
 
     if let Some(far_processor_pair) = ProcessorSet::builder()
@@ -60,7 +63,12 @@ fn entrypoint(c: &mut Criterion) {
 }
 
 type Payload = HashMap<u64, u64>;
-const PAYLOAD_SIZE_U64: usize = 32 * 1024 * 1024;
+
+// The size of this has some interplay with CPU cache sizes etc, with different cache effects to be
+// expected on different hardware. We anyway expect the critical parts of the data structure to end
+// up in L3 cache (there is gigabytes of it!) so a large size here is unlikely to benefit us much
+// in terms of allowing us to observe memory access effects. Indeed, smaller might be better?
+const PAYLOAD_SIZE_U64: usize = 1024 * 1024; // 1M u64 = 8 MB of useful payload
 
 // TODO: Avoid hanging forever is barrier is not released.
 
