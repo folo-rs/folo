@@ -85,7 +85,7 @@ type Payload = HashMap<u64, u64>;
 // expected on different hardware. We anyway expect the critical parts of the data structure to end
 // up in L3 cache (there is gigabytes of it!) so a large size here is unlikely to benefit us much
 // in terms of allowing us to observe memory access effects. Indeed, smaller might be better?
-const PAYLOAD_SIZE_U64: usize = 128 * 1024; // 128K x u64 = 1 MB of useful payload, cache-friendly
+const PAYLOAD_SIZE_U64: usize = 3 * 128 * 1024; // 3 x 128K x u64 = 3 MB of useful payload, cache-friendly
 
 // TODO: Avoid hanging forever is barrier is not released.
 
