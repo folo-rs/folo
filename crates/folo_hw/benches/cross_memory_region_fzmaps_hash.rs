@@ -18,7 +18,7 @@ criterion_main!(benches);
 const TWO_PROCESSORS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 fn entrypoint(c: &mut Criterion) {
-    let mut group = c.benchmark_group("cross_memory_region_fzmaps");
+    let mut group = c.benchmark_group("cross_memory_region_fzmaps_hash");
 
     // Cleaning the cache takes a lot of time and overall this is pretty inconsistent between runs,
     // perhaps due to scheduling interference, so let's take some time to ensure we get good data.
