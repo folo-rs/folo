@@ -20,7 +20,7 @@ fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("cross_memory_region_hashmaps");
 
     // The cache cleaning takes a long time so let's be patient.
-    group.measurement_time(Duration::from_secs(60));
+    group.measurement_time(Duration::from_secs(120));
 
     if let Some(far_processor_pair) = ProcessorSet::builder()
         .performance_processors_only()
@@ -60,7 +60,7 @@ fn entrypoint(c: &mut Criterion) {
 }
 
 type Payload = HashMap<u64, u64>;
-const PAYLOAD_SIZE_U64: usize = 1024 * 1024;
+const PAYLOAD_SIZE_U64: usize = 8 * 1024 * 1024;
 
 // TODO: Avoid hanging forever is barrier is not released.
 
