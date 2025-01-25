@@ -60,7 +60,7 @@ fn entrypoint(c: &mut Criterion) {
 }
 
 type Payload = HashMap<u64, u64>;
-const PAYLOAD_SIZE_U64: usize = 8 * 1024 * 1024;
+const PAYLOAD_SIZE_U64: usize = 32 * 1024 * 1024;
 
 // TODO: Avoid hanging forever is barrier is not released.
 
