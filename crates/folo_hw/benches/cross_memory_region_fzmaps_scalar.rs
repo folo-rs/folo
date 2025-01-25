@@ -9,7 +9,7 @@ use std::{
 
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use folo_hw::ProcessorSet;
-use frozen_collections::{FzHashMap, FzScalarMap, MapQuery};
+use frozen_collections::{FzScalarMap, MapQuery};
 use itertools::Itertools;
 
 criterion_group!(benches, entrypoint);
