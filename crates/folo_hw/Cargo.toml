@@ -24,6 +24,7 @@ windows = { version = "0.58", features = [
 
 [dev-dependencies]
 criterion = { version = "0.5" }
+frozen-collections = "0.3"
 mockall = "0.13"
 
 [[bench]]
@@ -32,4 +33,8 @@ harness = false
 
 [[bench]]
 name = "cross_memory_region_hashmaps"
+harness = false
+
+[[bench]]
+name = "cross_memory_region_fzmaps"
 harness = false
