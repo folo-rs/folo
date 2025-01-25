@@ -3,8 +3,9 @@ use std::{
     hint::black_box,
     mem,
     num::NonZeroUsize,
-    sync::{mpsc, Arc, Barrier, Mutex},
-    thread::JoinHandle, time::Duration,
+    sync::{mpsc, Arc, Barrier, LazyLock, Mutex},
+    thread::JoinHandle,
+    time::Duration,
 };
 
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
@@ -18,11 +19,8 @@ const TWO_PROCESSORS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("cross_memory_region_hashmaps");
 
-    // It takes forever to do the cache cleaning, so to avoid the benchmark taking 30 minutes, we
-    // must reduce the sample size. Even then it takes a long time.
-    group.sample_size(10);
-    group.warm_up_time(Duration::from_secs(30));
-    group.measurement_time(Duration::from_secs(300));
+    // The cache cleaning takes a long time so let's be patient.
+    group.measurement_time(Duration::from_secs(60));
 
     if let Some(far_processor_pair) = ProcessorSet::builder()
         .performance_processors_only()
@@ -62,7 +60,7 @@ fn entrypoint(c: &mut Criterion) {
 }
 
 type Payload = HashMap<u64, u64>;
-const PAYLOAD_SIZE_U64: usize = 16 * 1024 * 1024;
+const PAYLOAD_SIZE_U64: usize = 1024 * 1024;
 
 // TODO: Avoid hanging forever is barrier is not released.
 
@@ -175,6 +173,11 @@ fn process_payload(payload: &Payload) -> u64 {
     sum
 }
 
+const CACHE_CLEANER_LEN_BYTES: usize = 2000 * 1024 * 1024;
+const CACHE_CLEANER_LEN_U64: usize = CACHE_CLEANER_LEN_BYTES / mem::size_of::<u64>();
+static CACHE_CLEANER: LazyLock<Vec<u64>> =
+    LazyLock::new(|| vec![0x0102030401020304; CACHE_CLEANER_LEN_U64]);
+
 /// As the whole point of this benchmark is to demonstrate that there is a difference when accessing
 /// memory, we need to ensure that memory actually gets accessed - that the data is not simply
 /// cached locally. This function will perform a large memory copy operation, which hopefully
@@ -182,12 +185,24 @@ fn process_payload(payload: &Payload) -> u64 {
 fn clean_caches() -> u64 {
     // Big servers (which are our target) can have gigabytes of L3 cache! We need to crunch through
     // a lot of data to exercise it all and fill the entire CPU cache with garbage.
-    const PAYLOAD_LEN_BYTES: usize = 2000 * 1024 * 1024;
-    const PAYLOAD_LEN_U64: usize = PAYLOAD_LEN_BYTES / mem::size_of::<u64>();
 
-    let mut payload = vec![80u64; PAYLOAD_LEN_U64];
-    payload.iter_mut().for_each(|x| *x = x.wrapping_add(1));
+    // A memory copy should do the trick?
+    let mut copied_cleaner = Vec::with_capacity(CACHE_CLEANER_LEN_U64);
+
+    let source = CACHE_CLEANER.as_ptr();
+    let destination = copied_cleaner.as_mut_ptr();
+
+    // SAFETY: We reserved memory for the destination, are using the right length,
+    // and they do not overlap. All is well.
+    unsafe {
+        std::ptr::copy_nonoverlapping(source, destination, CACHE_CLEANER_LEN_U64);
+    }
+
+    // SAFETY: Yeah, we just initialized it.
+    unsafe {
+        copied_cleaner.set_len(CACHE_CLEANER_LEN_U64);
+    }
 
     // Paranoia to make sure the compiler doesn't optimize all our valuable work away.
-    payload[52251] + payload[6353532]
+    copied_cleaner[52251] + copied_cleaner[6353532]
 }
