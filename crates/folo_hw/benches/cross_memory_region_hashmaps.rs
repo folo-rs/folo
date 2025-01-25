@@ -198,7 +198,10 @@ fn process_payload(payload: &Payload) -> u64 {
     sum
 }
 
-const CACHE_CLEANER_LEN_BYTES: usize = 2000 * 1024 * 1024;
+// Large servers can make hundreds of MBs of L3 cache available to a single core, though it
+// depends on the specific model and hardware configuration. We try a sufficiently large cache
+// thrashing here to have a good chance of evicting the data we are interested in from the cache.
+const CACHE_CLEANER_LEN_BYTES: usize = 128 * 1024 * 1024;
 const CACHE_CLEANER_LEN_U64: usize = CACHE_CLEANER_LEN_BYTES / mem::size_of::<u64>();
 static CACHE_CLEANER: LazyLock<Vec<u64>> =
     LazyLock::new(|| vec![0x0102030401020304; CACHE_CLEANER_LEN_U64]);
@@ -208,9 +211,6 @@ static CACHE_CLEANER: LazyLock<Vec<u64>> =
 /// cached locally. This function will perform a large memory copy operation, which hopefully
 /// trashes any cache that may be present.
 fn clean_caches() -> u64 {
-    // Big servers (which are our target) can have gigabytes of L3 cache! We need to crunch through
-    // a lot of data to exercise it all and fill the entire CPU cache with garbage.
-
     // A memory copy should do the trick?
     let mut copied_cleaner = Vec::with_capacity(CACHE_CLEANER_LEN_U64);
 
