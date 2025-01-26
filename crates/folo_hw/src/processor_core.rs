@@ -5,7 +5,10 @@ use std::{
 
 use derive_more::derive::AsRef;
 
-use crate::pal::{EfficiencyClass, MemoryRegionIndex, Platform, AbstractProcessor, ProcessorGlobalIndex};
+use crate::{
+    pal::{AbstractProcessor, Platform},
+    EfficiencyClass, MemoryRegionId, ProcessorId,
+};
 
 #[derive(AsRef, Debug)]
 pub(crate) struct ProcessorCore<PAL: Platform> {
@@ -20,12 +23,12 @@ impl<PAL: Platform> ProcessorCore<PAL> {
         Self { inner, pal }
     }
 
-    pub(crate) fn index(&self) -> ProcessorGlobalIndex {
-        self.inner.index()
+    pub(crate) fn id(&self) -> ProcessorId {
+        self.inner.id()
     }
 
-    pub(crate) fn memory_region(&self) -> MemoryRegionIndex {
-        self.inner.memory_region()
+    pub(crate) fn memory_region_id(&self) -> MemoryRegionId {
+        self.inner.memory_region_id()
     }
 
     pub(crate) fn efficiency_class(&self) -> EfficiencyClass {
@@ -80,8 +83,8 @@ mod tests {
         let processor = ProcessorCore::new(pal_processor, &*PAL);
 
         // Getters appear to get the expected values.
-        assert_eq!(processor.index(), 42);
-        assert_eq!(processor.memory_region(), 13);
+        assert_eq!(processor.id(), 42);
+        assert_eq!(processor.memory_region_id(), 13);
         assert_eq!(processor.efficiency_class(), EfficiencyClass::Efficiency);
 
         // A clone is a legit clone.

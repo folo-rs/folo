@@ -90,7 +90,10 @@ mod tests {
         Arc, LazyLock,
     };
 
-    use crate::pal::{EfficiencyClass, FakeProcessor, MockPlatform};
+    use crate::{
+        pal::{FakeProcessor, MockPlatform},
+        EfficiencyClass,
+    };
 
     use super::*;
 
@@ -144,13 +147,13 @@ mod tests {
         let mut processor_iter = processor_set.processors();
 
         let p1 = processor_iter.next().unwrap();
-        assert_eq!(p1.index(), 0);
-        assert_eq!(p1.memory_region(), 0);
+        assert_eq!(p1.id(), 0);
+        assert_eq!(p1.memory_region_id(), 0);
         assert_eq!(p1.efficiency_class(), EfficiencyClass::Efficiency);
 
         let p2 = processor_iter.next().unwrap();
-        assert_eq!(p2.index(), 1);
-        assert_eq!(p2.memory_region(), 0);
+        assert_eq!(p2.id(), 1);
+        assert_eq!(p2.memory_region_id(), 0);
         assert_eq!(p2.efficiency_class(), EfficiencyClass::Performance);
 
         assert!(processor_iter.next().is_none());

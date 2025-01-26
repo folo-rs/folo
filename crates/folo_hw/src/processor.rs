@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use derive_more::derive::AsRef;
 
-use crate::{pal, ProcessorCore};
+use crate::{pal, EfficiencyClass, MemoryRegionId, ProcessorCore, ProcessorId};
 
 // This is a specialization of *Core type for the build target platform. It is the only
 // specialization available via the crate's public API surface - other specializations
@@ -17,8 +17,20 @@ pub struct Processor {
 }
 
 impl Processor {
-    pub(crate) fn new(inner: ProcessorCore<pal::BuildTargetPlatform>) -> Self {
-        Self { core: inner }
+    pub(crate) fn new(core: ProcessorCore<pal::BuildTargetPlatform>) -> Self {
+        Self { core }
+    }
+
+    pub fn id(&self) -> ProcessorId {
+        self.core.id()
+    }
+
+    pub fn memory_region_id(&self) -> MemoryRegionId {
+        self.core.memory_region_id()
+    }
+
+    pub fn efficiency_class(&self) -> EfficiencyClass {
+        self.core.efficiency_class()
     }
 }
 

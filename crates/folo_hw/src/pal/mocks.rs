@@ -2,26 +2,29 @@ use derive_more::derive::Display;
 use mockall::mock;
 use nonempty::NonEmpty;
 
-use crate::pal::{EfficiencyClass, MemoryRegionIndex, Platform, AbstractProcessor, ProcessorGlobalIndex};
+use crate::{
+    pal::{AbstractProcessor, Platform},
+    EfficiencyClass, MemoryRegionId, ProcessorId,
+};
 
 #[derive(Clone, Copy, Debug, Display, Eq, Hash, PartialEq)]
 #[display("FakeProcessor({index} in node {memory_region}, {efficiency_class:?})")]
 pub(crate) struct FakeProcessor {
-    pub(crate) index: ProcessorGlobalIndex,
-    pub(crate) memory_region: MemoryRegionIndex,
+    pub(crate) index: ProcessorId,
+    pub(crate) memory_region: MemoryRegionId,
     pub(crate) efficiency_class: EfficiencyClass,
 }
 
 impl AbstractProcessor for FakeProcessor {
-    fn index(&self) -> ProcessorGlobalIndex {
+    fn id(&self) -> ProcessorId {
         self.index
     }
 
-    fn memory_region(&self) -> super::MemoryRegionIndex {
+    fn memory_region_id(&self) -> MemoryRegionId {
         self.memory_region
     }
 
-    fn efficiency_class(&self) -> super::EfficiencyClass {
+    fn efficiency_class(&self) -> EfficiencyClass {
         self.efficiency_class
     }
 }

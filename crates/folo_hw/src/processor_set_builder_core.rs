@@ -12,8 +12,7 @@ use rand::{
 };
 
 use crate::{
-    pal::{EfficiencyClass, MemoryRegionIndex, Platform, ProcessorGlobalIndex},
-    ProcessorCore, ProcessorSetCore,
+    pal::Platform, EfficiencyClass, MemoryRegionId, ProcessorCore, ProcessorId, ProcessorSetCore,
 };
 
 #[derive(Debug)]
@@ -21,7 +20,7 @@ pub(crate) struct ProcessorSetBuilderCore<PAL: Platform> {
     processor_type_selector: ProcessorTypeSelector,
     memory_region_selector: MemoryRegionSelector,
 
-    except_indexes: HashSet<ProcessorGlobalIndex>,
+    except_indexes: HashSet<ProcessorId>,
 
     pal: &'static PAL,
 }
@@ -59,7 +58,7 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
     pub fn filter(mut self, predicate: impl Fn(&ProcessorCore<PAL>) -> bool) -> Self {
         for processor in self.all_processors() {
             if !predicate(&processor) {
-                self.except_indexes.insert(processor.index());
+                self.except_indexes.insert(processor.id());
             }
         }
 
@@ -72,7 +71,7 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
         <PAL as Platform>::Processor: 'a,
     {
         for processor in processors {
-            self.except_indexes.insert(processor.index());
+            self.except_indexes.insert(processor.id());
         }
 
         self
@@ -230,11 +229,11 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
 
     // Returns candidates grouped by memory region, with each returned memory region having at
     // least one candidate processor.
-    fn candidates_by_memory_region(&self) -> HashMap<MemoryRegionIndex, Vec<ProcessorCore<PAL>>> {
+    fn candidates_by_memory_region(&self) -> HashMap<MemoryRegionId, Vec<ProcessorCore<PAL>>> {
         self.all_processors()
             .into_iter()
             .filter_map(move |p| {
-                if self.except_indexes.contains(&p.index()) {
+                if self.except_indexes.contains(&p.id()) {
                     return None;
                 }
 
@@ -252,7 +251,7 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
                     return None;
                 }
 
-                Some((p.memory_region(), p))
+                Some((p.memory_region_id(), p))
             })
             .into_group_map()
     }
@@ -387,7 +386,7 @@ mod tests {
         let builder = ProcessorSetBuilderCore::new(&*PAL);
         let set = builder.efficiency_processors_only().take_all().unwrap();
         assert_eq!(set.len(), 1);
-        assert_eq!(set.processors().next().unwrap().index(), 0);
+        assert_eq!(set.processors().next().unwrap().id(), 0);
     }
 
     #[test]
@@ -417,7 +416,7 @@ mod tests {
         let builder = ProcessorSetBuilderCore::new(&*PAL);
         let set = builder.efficiency_processors_only().take_all().unwrap();
         assert_eq!(set.len(), 1);
-        assert_eq!(set.processors().next().unwrap().index(), 0);
+        assert_eq!(set.processors().next().unwrap().id(), 0);
     }
 
     #[test]
@@ -531,16 +530,12 @@ mod tests {
 
         let builder = ProcessorSetBuilderCore::new(&*PAL);
 
-        let except_set = builder
-            .clone()
-            .filter(|p| p.index() == 0)
-            .take_all()
-            .unwrap();
+        let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
         assert_eq!(except_set.len(), 1);
 
         let set = builder.except(except_set.processors()).take_all().unwrap();
         assert_eq!(set.len(), 1);
-        assert_eq!(set.processors().next().unwrap().index(), 1);
+        assert_eq!(set.processors().next().unwrap().id(), 1);
     }
 
     #[test]
@@ -568,16 +563,12 @@ mod tests {
         });
 
         let builder = ProcessorSetBuilderCore::new(&*PAL);
-        let except_set = builder
-            .clone()
-            .filter(|p| p.index() == 0)
-            .take_all()
-            .unwrap();
+        let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
         assert_eq!(except_set.len(), 1);
 
         let set = builder.except(except_set.processors()).take_all().unwrap();
         assert_eq!(set.len(), 1);
-        assert_eq!(set.processors().next().unwrap().index(), 1);
+        assert_eq!(set.processors().next().unwrap().id(), 1);
     }
 
     #[test]
@@ -605,9 +596,9 @@ mod tests {
         });
 
         let builder = ProcessorSetBuilderCore::new(&*PAL);
-        let set = builder.filter(|p| p.index() == 1).take_all().unwrap();
+        let set = builder.filter(|p| p.id() == 1).take_all().unwrap();
         assert_eq!(set.len(), 1);
-        assert_eq!(set.processors().next().unwrap().index(), 1);
+        assert_eq!(set.processors().next().unwrap().id(), 1);
     }
 
     #[test]
@@ -635,9 +626,9 @@ mod tests {
         });
 
         let builder = ProcessorSetBuilderCore::new(&*PAL);
-        let set = builder.filter(|p| p.index() == 1).take_all().unwrap();
+        let set = builder.filter(|p| p.id() == 1).take_all().unwrap();
         assert_eq!(set.len(), 1);
-        assert_eq!(set.processors().next().unwrap().index(), 1);
+        assert_eq!(set.processors().next().unwrap().id(), 1);
     }
 
     #[test]
@@ -786,11 +777,7 @@ mod tests {
         });
 
         let builder = ProcessorSetBuilderCore::new(&*PAL);
-        let except_set = builder
-            .clone()
-            .filter(|p| p.index() == 0)
-            .take_all()
-            .unwrap();
+        let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
         let set = builder
             .efficiency_processors_only()
             .except(except_set.processors())
@@ -798,7 +785,7 @@ mod tests {
             .take_all()
             .unwrap();
         assert_eq!(set.len(), 1);
-        assert_eq!(set.processors().next().unwrap().index(), 2);
+        assert_eq!(set.processors().next().unwrap().id(), 2);
     }
 
     #[test]
@@ -833,8 +820,8 @@ mod tests {
         let builder = ProcessorSetBuilderCore::new(&*PAL);
         let set = builder.same_memory_region().take(TWO_USIZE).unwrap();
         assert_eq!(set.len(), 2);
-        assert!(set.processors().any(|p| p.index() == 1));
-        assert!(set.processors().any(|p| p.index() == 2));
+        assert!(set.processors().any(|p| p.id() == 1));
+        assert!(set.processors().any(|p| p.id() == 2));
     }
 
     #[test]
@@ -878,8 +865,8 @@ mod tests {
             .take_all()
             .unwrap();
         assert_eq!(set.len(), 2);
-        assert!(set.processors().any(|p| p.index() == 0));
-        assert!(set.processors().any(|p| p.index() == 2));
+        assert!(set.processors().any(|p| p.id() == 0));
+        assert!(set.processors().any(|p| p.id() == 2));
     }
 
     #[test]

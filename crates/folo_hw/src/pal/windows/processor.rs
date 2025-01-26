@@ -1,8 +1,11 @@
 use std::fmt::Display;
 
-use crate::pal::{
-    windows::{ProcessorGroupIndex, ProcessorIndexInGroup},
-    AbstractProcessor, EfficiencyClass, MemoryRegionIndex, ProcessorGlobalIndex,
+use crate::{
+    pal::{
+        windows::{ProcessorGroupIndex, ProcessorIndexInGroup},
+        AbstractProcessor,
+    },
+    EfficiencyClass, MemoryRegionId, ProcessorId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -11,9 +14,9 @@ pub(crate) struct ProcessorImpl {
     pub(super) index_in_group: ProcessorIndexInGroup,
 
     // Cumulative index when counting across all groups.
-    pub(super) global_index: ProcessorGlobalIndex,
+    pub(super) id: ProcessorId,
 
-    pub(super) memory_region_index: MemoryRegionIndex,
+    pub(super) memory_region_id: MemoryRegionId,
 
     pub(super) efficiency_class: EfficiencyClass,
 }
@@ -22,15 +25,15 @@ impl ProcessorImpl {
     pub(super) fn new(
         group_index: ProcessorGroupIndex,
         index_in_group: ProcessorIndexInGroup,
-        global_index: ProcessorGlobalIndex,
-        memory_region_index: MemoryRegionIndex,
+        id: ProcessorId,
+        memory_region_id: MemoryRegionId,
         efficiency_class: EfficiencyClass,
     ) -> Self {
         Self {
             group_index,
             index_in_group,
-            global_index,
-            memory_region_index,
+            id,
+            memory_region_id,
             efficiency_class,
         }
     }
@@ -41,18 +44,18 @@ impl Display for ProcessorImpl {
         write!(
             f,
             "processor {} [{}-{}]",
-            self.global_index, self.group_index, self.index_in_group
+            self.id, self.group_index, self.index_in_group
         )
     }
 }
 
 impl AbstractProcessor for ProcessorImpl {
-    fn index(&self) -> ProcessorGlobalIndex {
-        self.global_index
+    fn id(&self) -> ProcessorId {
+        self.id
     }
 
-    fn memory_region(&self) -> MemoryRegionIndex {
-        self.memory_region_index
+    fn memory_region_id(&self) -> MemoryRegionId {
+        self.memory_region_id
     }
 
     fn efficiency_class(&self) -> EfficiencyClass {
@@ -74,6 +77,6 @@ impl PartialOrd for ProcessorImpl {
 
 impl Ord for ProcessorImpl {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.global_index.cmp(&other.global_index)
+        self.id.cmp(&other.id)
     }
 }
