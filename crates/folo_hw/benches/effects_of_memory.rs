@@ -24,10 +24,6 @@ criterion_main!(benches);
 const ONE_PROCESSOR: NonZeroUsize = NonZeroUsize::new(1).unwrap();
 
 fn entrypoint(c: &mut Criterion) {
-    // These benchmarks can be pretty slow and clearing processor caches adds extra overhead
-    // between iterations, so to get stable and consistent data it is worth taking some time.
-    c.measurement_time(Duration::from_secs(100));
-
     let mut g = c.benchmark_group("channel_exchange");
     
     execute_run::<ChannelExchange>(&mut g, WorkDistribution::MemoryRegionPairs);
@@ -63,6 +59,10 @@ fn execute_run<P: Payload>(g: &mut BenchmarkGroup<'_, WallTime>, distribution: W
         eprintln!("Skipping {distribution} - system hardware topology is not compatible.");
         return;
     }
+
+    // These benchmarks can be pretty slow and clearing processor caches adds extra overhead
+    // between iterations, so to get stable and consistent data it is worth taking some time.
+    g.measurement_time(Duration::from_secs(100));
 
     g.bench_function(distribution.to_string(), |b| {
         b.iter_batched(
