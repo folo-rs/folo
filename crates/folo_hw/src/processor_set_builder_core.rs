@@ -35,27 +35,27 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
         }
     }
 
-    pub fn performance_processors_only(mut self) -> Self {
+    pub(crate) fn performance_processors_only(mut self) -> Self {
         self.processor_type_selector = ProcessorTypeSelector::Performance;
         self
     }
 
-    pub fn efficiency_processors_only(mut self) -> Self {
+    pub(crate) fn efficiency_processors_only(mut self) -> Self {
         self.processor_type_selector = ProcessorTypeSelector::Efficiency;
         self
     }
 
-    pub fn different_memory_regions(mut self) -> Self {
+    pub(crate) fn different_memory_regions(mut self) -> Self {
         self.memory_region_selector = MemoryRegionSelector::RequireDifferent;
         self
     }
 
-    pub fn same_memory_region(mut self) -> Self {
+    pub(crate) fn same_memory_region(mut self) -> Self {
         self.memory_region_selector = MemoryRegionSelector::RequireSame;
         self
     }
 
-    pub fn filter(mut self, predicate: impl Fn(&ProcessorCore<PAL>) -> bool) -> Self {
+    pub(crate) fn filter(mut self, predicate: impl Fn(&ProcessorCore<PAL>) -> bool) -> Self {
         for processor in self.all_processors() {
             if !predicate(&processor) {
                 self.except_indexes.insert(processor.id());
@@ -65,7 +65,7 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
         self
     }
 
-    pub fn except<'a, I>(mut self, processors: I) -> Self
+    pub(crate) fn except<'a, I>(mut self, processors: I) -> Self
     where
         I: IntoIterator<Item = &'a ProcessorCore<PAL>>,
         <PAL as Platform>::Processor: 'a,
@@ -77,7 +77,7 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
         self
     }
 
-    pub fn take(self, count: NonZeroUsize) -> Option<ProcessorSetCore<PAL>> {
+    pub(crate) fn take(self, count: NonZeroUsize) -> Option<ProcessorSetCore<PAL>> {
         let candidates = self.candidates_by_memory_region();
 
         if candidates.is_empty() {
@@ -177,7 +177,7 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
         ))
     }
 
-    pub fn take_all(self) -> Option<ProcessorSetCore<PAL>> {
+    pub(crate) fn take_all(self) -> Option<ProcessorSetCore<PAL>> {
         let candidates = self.candidates_by_memory_region();
 
         if candidates.is_empty() {

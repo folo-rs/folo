@@ -23,19 +23,19 @@ impl<PAL: Platform> ProcessorSetCore<PAL> {
         Self { processors, pal }
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.processors.len()
     }
 
-    pub fn processors(&self) -> impl Iterator<Item = &ProcessorCore<PAL>> + '_ {
+    pub(crate) fn processors(&self) -> impl Iterator<Item = &ProcessorCore<PAL>> + '_ {
         self.processors.iter()
     }
 
-    pub fn pin_current_thread_to(&self) {
+    pub(crate) fn pin_current_thread_to(&self) {
         self.pal.pin_current_thread_to(&self.processors);
     }
 
-    pub fn spawn_threads<E, R>(&self, entrypoint: E) -> Box<[thread::JoinHandle<R>]>
+    pub(crate) fn spawn_threads<E, R>(&self, entrypoint: E) -> Box<[thread::JoinHandle<R>]>
     where
         E: Fn(ProcessorCore<PAL>) -> R + Send + Clone + 'static,
         R: Send + 'static,
@@ -55,7 +55,7 @@ impl<PAL: Platform> ProcessorSetCore<PAL> {
             .into_boxed_slice()
     }
 
-    pub fn spawn_thread<E, R>(&self, entrypoint: E) -> thread::JoinHandle<R>
+    pub(crate) fn spawn_thread<E, R>(&self, entrypoint: E) -> thread::JoinHandle<R>
     where
         E: Fn(Self) -> R + Send + 'static,
         R: Send + 'static,

@@ -2,11 +2,16 @@ use std::{fmt::Debug, num::NonZeroUsize};
 
 use crate::{pal, Processor, ProcessorSet, ProcessorSetBuilderCore};
 
-// This is a specialization of *Core type for the build target platform. It is the only
+// This is a specialization of the *Core type for the build target platform. It is the only
 // specialization available via the crate's public API surface - other specializations
 // exist only for unit testing purposes where the platform is mocked, in which case the
 // *Core type is used directly instead of using a newtype wrapper like we have here.
 
+/// Builds a [`ProcessorSet`] based on specified criteria. The default criteria include all
+/// available processors.
+///
+/// You can obtain a builder via [`ProcessorSet::builder()`] or from an existing processor set
+/// via [`ProcessorSet::to_builder()`].
 #[derive(Clone, Debug)]
 pub struct ProcessorSetBuilder {
     core: ProcessorSetBuilderCore<pal::BuildTargetPlatform>,
@@ -19,31 +24,47 @@ impl ProcessorSetBuilder {
         }
     }
 
+    /// Requires that all processors in the set be marked as [performance processors][1].
+    ///
+    /// [1]: EfficiencyClass::Performance
     pub fn performance_processors_only(self) -> Self {
         Self {
             core: self.core.performance_processors_only(),
         }
     }
 
+    /// Requires that all processors in the set be marked as [efficiency processors][1].
+    ///
+    /// [1]: EfficiencyClass::Efficiency
     pub fn efficiency_processors_only(self) -> Self {
         Self {
             core: self.core.efficiency_processors_only(),
         }
     }
 
+    /// Requires that all processors in the set be from different memory regions, selecting a
+    /// maximum of 1 processor from each memory region.
     pub fn different_memory_regions(self) -> Self {
         Self {
             core: self.core.different_memory_regions(),
         }
     }
 
+    /// Requires that all processors in the set be from the same memory region.
     pub fn same_memory_region(self) -> Self {
         Self {
             core: self.core.same_memory_region(),
         }
     }
 
-    /// Uses a predicate to identify processors that are valid candidates for the set.
+    /// Uses a predicate to identify processors that are valid candidates for building the
+    /// processor set, with a return value of `bool` indicating that a processor is a valid
+    /// candidate for selection into the set.
+    ///
+    /// The candidates are passed to this function without necessarily first considering all other
+    /// conditions - even if this predicate returns `true`, the processor may end up being filtered
+    /// out by other conditions. Conversely, some candidates may already be filtered out before
+    /// being passed to this predicate.
     pub fn filter(self, predicate: impl Fn(&Processor) -> bool) -> Self {
         Self {
             core: self
@@ -52,8 +73,7 @@ impl ProcessorSetBuilder {
         }
     }
 
-    /// Removes processors from the set of candidates. Useful to help ensure that different
-    /// workloads get placed on different processors.
+    /// Removes specific processors from the set of candidates.
     pub fn except<'a, I>(self, processors: I) -> Self
     where
         I: IntoIterator<Item = &'a Processor>,
@@ -63,19 +83,22 @@ impl ProcessorSetBuilder {
         }
     }
 
-    /// Picks a specific number of processors from the set of candidates and returns a
-    /// processor set with the requested number of processors that match specified criteria.
+    /// Creates a processor set with a specific number of processors that match the
+    /// configured criteria.
     ///
-    /// Returns `None` if there were not enough matching processors to satisfy the request.
+    /// If multiple candidate sets are a match, returns an arbitrary one of them. For example, if
+    /// there are six valid candidate processors then `take(4)` may return any four of them.
+    ///
+    /// Returns `None` if there were not enough candidate processors to satisfy the request.
     pub fn take(self, count: NonZeroUsize) -> Option<ProcessorSet> {
         self.core.take(count).map(|p| p.into())
     }
 
-    /// Returns a processor set with all processors that match the specified criteria.
+    /// Returns a processor set with all processors that match the configured criteria.
     ///
-    /// If multiple mutually exclusive sets are a match, returns an arbitrary one of them.
+    /// If multiple alternative non-empty sets are a match, returns an arbitrary one of them.
     /// For example, if specifying only a "same memory region" constraint, it will return all
-    /// the processors in an arbitrary (potentially even random) memory region.
+    /// the processors in an arbitrary memory region with at least one qualifying processor.
     ///
     /// Returns `None` if there were no matching processors to satisfy the request.
     pub fn take_all(self) -> Option<ProcessorSet> {

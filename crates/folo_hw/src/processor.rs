@@ -4,7 +4,7 @@ use derive_more::derive::AsRef;
 
 use crate::{pal, EfficiencyClass, MemoryRegionId, ProcessorCore, ProcessorId};
 
-// This is a specialization of *Core type for the build target platform. It is the only
+// This is a specialization of the *Core type for the build target platform. It is the only
 // specialization available via the crate's public API surface - other specializations
 // exist only for unit testing purposes where the platform is mocked, in which case the
 // *Core type is used directly instead of using a newtype wrapper like we have here.
