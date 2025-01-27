@@ -107,6 +107,8 @@ fn get_processor_pairs(distribution: WorkDistribution) -> Option<Vec<ProcessorSe
 
     match distribution {
         WorkDistribution::MemoryRegionPairs => {
+            println!("Selecting one processor from each of {worker_pair_count} memory regions.");
+
             // We start by picking the first one of each pair.
             let first_processors = candidates
                 .to_builder()
@@ -132,6 +134,7 @@ fn get_processor_pairs(distribution: WorkDistribution) -> Option<Vec<ProcessorSe
 
             if partners.len() != worker_pair_count.get() {
                 // Some memory region did not have enough processors.
+                eprintln!("Some memory region only had a single processor.");
                 return None;
             }
 
