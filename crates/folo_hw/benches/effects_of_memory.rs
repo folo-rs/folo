@@ -87,8 +87,7 @@ fn calculate_worker_pair_count() -> NonZeroUsize {
             .iter()
             .map(|p| p.memory_region_id())
             .unique()
-            .count()
-            * 2,
+            .count(),
     )
     .expect("there must be at least one memory region")
 }
