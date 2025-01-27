@@ -106,6 +106,12 @@ fn get_processor_pairs(distribution: WorkDistribution) -> Option<Vec<ProcessorSe
 
     match distribution {
         WorkDistribution::MemoryRegionPairs => {
+            // If there is only one pair, this means there is only one memory region, in which
+            // case this distribution mode is meaningless and we will not execute.
+            if worker_pair_count.get() == 1 {
+                return None;
+            }
+
             // We start by picking the first one of each pair.
             let first_processors = candidates
                 .to_builder()
