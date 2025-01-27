@@ -3,7 +3,7 @@ use std::{sync::LazyLock, thread};
 use itertools::Itertools;
 use nonempty::{nonempty, NonEmpty};
 
-use crate::{pal, processor, Processor, ProcessorSetBuilder, ProcessorSetCore};
+use crate::{pal, Processor, ProcessorSetBuilder, ProcessorSetCore};
 
 // https://github.com/cloudhead/nonempty/issues/68
 extern crate alloc;

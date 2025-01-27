@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     hint::black_box,
     mem,
     num::NonZeroUsize,
@@ -12,6 +12,7 @@ use criterion::{
 };
 use derive_more::derive::Display;
 use folo_hw::ProcessorSet;
+use frozen_collections::{FzHashMap, FzScalarMap, MapQuery};
 use itertools::Itertools;
 use nonempty::nonempty;
 
@@ -27,6 +28,27 @@ fn entrypoint(c: &mut Criterion) {
 
     execute_run::<ChannelExchange>(&mut g, WorkDistribution::MemoryRegionPairs);
     execute_run::<ChannelExchange>(&mut g, WorkDistribution::SameMemoryRegion);
+
+    g.finish();
+    let mut g = c.benchmark_group("hashmap_read");
+
+    execute_run::<HashMapRead>(&mut g, WorkDistribution::MemoryRegionPairs);
+    execute_run::<HashMapRead>(&mut g, WorkDistribution::SameMemoryRegion);
+    execute_run::<HashMapRead>(&mut g, WorkDistribution::SameProcessor);
+
+    g.finish();
+    let mut g = c.benchmark_group("fz_hashmap_read");
+
+    execute_run::<FzHashMapRead>(&mut g, WorkDistribution::MemoryRegionPairs);
+    execute_run::<FzHashMapRead>(&mut g, WorkDistribution::SameMemoryRegion);
+    execute_run::<FzHashMapRead>(&mut g, WorkDistribution::SameProcessor);
+
+    g.finish();
+    let mut g = c.benchmark_group("fz_scalarmap_read");
+
+    execute_run::<FzScalarMapRead>(&mut g, WorkDistribution::MemoryRegionPairs);
+    execute_run::<FzScalarMapRead>(&mut g, WorkDistribution::SameMemoryRegion);
+    execute_run::<FzScalarMapRead>(&mut g, WorkDistribution::SameProcessor);
 
     g.finish();
 }
@@ -401,5 +423,103 @@ impl Payload for ChannelExchange {
         }
 
         MESSAGE_PUMP_ITERATION_COUNT as u64
+    }
+}
+
+// The logic behind this sizing is that we want to show "meaningful" numbers that actually show
+// off the memory-access-friendliness of the different map data structures instead of just making
+// it a benchmark of "how fast is reading 100s of MB from main memory". This means the data set
+// should be small enough to be cacheable - we care about how fast it gets into the local caches
+// and how well the data structure structures its memory accesses, to give the different data
+// structures the opportunity to compete instead of just making it about how fast the
+// "picking of entries from cold memory" part itself takes (which is trivial to measure but also
+// better to measure with hardware manufacturer provided tools - pure memory throughput is easy).
+const MAP_ENTRY_COUNT: usize = 128 * 1024; // 128K x u64 = 1 MB of useful payload, cache-friendly
+
+/// The first worker generates a hashmap; the other reads all elements from it.
+#[derive(Debug, Default)]
+struct HashMapRead {
+    map: HashMap<u64, u64>,
+}
+
+impl Payload for HashMapRead {
+    fn new_pair() -> (Self, Self) {
+        (Self::default(), Self::default())
+    }
+
+    fn prepare(&mut self) {
+        for i in 0..MAP_ENTRY_COUNT {
+            self.map.insert(i as u64, (i * 2) as u64);
+        }
+    }
+
+    fn process(self) -> u64 {
+        let mut sum: u64 = 0;
+
+        for k in 0..MAP_ENTRY_COUNT {
+            sum = sum.wrapping_add(*self.map.get(&(k as u64)).unwrap_or(&0));
+        }
+
+        sum
+    }
+}
+
+/// The first worker generates a frozen hashmap; the other reads all elements from it.
+#[derive(Debug, Default)]
+struct FzHashMapRead {
+    map: FzHashMap<u64, u64>,
+}
+
+impl Payload for FzHashMapRead {
+    fn new_pair() -> (Self, Self) {
+        (Self::default(), Self::default())
+    }
+
+    fn prepare(&mut self) {
+        let entries = (0..MAP_ENTRY_COUNT)
+            .map(|i| (i as u64, (i * 2) as u64))
+            .collect_vec();
+
+        self.map = FzHashMap::new(entries);
+    }
+
+    fn process(self) -> u64 {
+        let mut sum: u64 = 0;
+
+        for k in 0..MAP_ENTRY_COUNT {
+            sum = sum.wrapping_add(*self.map.get(&(k as u64)).unwrap_or(&0));
+        }
+
+        sum
+    }
+}
+
+/// The first worker generates a frozen scalar map; the other reads all elements from it.
+#[derive(Debug, Default)]
+struct FzScalarMapRead {
+    map: FzScalarMap<u64, u64>,
+}
+
+impl Payload for FzScalarMapRead {
+    fn new_pair() -> (Self, Self) {
+        (Self::default(), Self::default())
+    }
+
+    fn prepare(&mut self) {
+        let entries = (0..MAP_ENTRY_COUNT)
+            .map(|i| (i as u64, (i * 2) as u64))
+            .collect_vec();
+
+        self.map = FzScalarMap::new(entries);
+    }
+
+    fn process(self) -> u64 {
+        let mut sum: u64 = 0;
+
+        for k in 0..MAP_ENTRY_COUNT {
+            sum = sum.wrapping_add(*self.map.get(&(k as u64)).unwrap_or(&0));
+        }
+
+        sum
     }
 }
