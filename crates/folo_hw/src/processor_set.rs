@@ -3,7 +3,7 @@ use std::{sync::LazyLock, thread};
 use itertools::Itertools;
 use nonempty::{nonempty, NonEmpty};
 
-use crate::{pal, Processor, ProcessorSetBuilder, ProcessorSetCore};
+use crate::{pal, processor, Processor, ProcessorSetBuilder, ProcessorSetCore};
 
 // https://github.com/cloudhead/nonempty/issues/68
 extern crate alloc;
@@ -57,6 +57,13 @@ impl ProcessorSet {
 
     fn new(inner: ProcessorSetCore<pal::BuildTargetPlatform>) -> Self {
         Self { core: inner }
+    }
+
+    pub fn from_processors(processors: NonEmpty<Processor>) -> Self {
+        Self::new(ProcessorSetCore::new(
+            processors.map(|p| p.core),
+            &pal::BUILD_TARGET_PLATFORM,
+        ))
     }
 
     #[expect(clippy::len_without_is_empty)] // Never empty by definition.

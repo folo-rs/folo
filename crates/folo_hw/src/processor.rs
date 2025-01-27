@@ -13,7 +13,7 @@ use crate::{pal, EfficiencyClass, MemoryRegionId, ProcessorCore, ProcessorId};
 #[derive(AsRef, Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Processor {
     #[as_ref(ProcessorCore<pal::BuildTargetPlatform>, pal::ProcessorImpl)]
-    core: ProcessorCore<pal::BuildTargetPlatform>,
+    pub(crate) core: ProcessorCore<pal::BuildTargetPlatform>,
 }
 
 impl Processor {

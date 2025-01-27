@@ -42,3 +42,7 @@ harness = false
 [[bench]]
 name = "cross_memory_region_fzmaps_scalar"
 harness = false
+
+[[bench]]
+name = "effects_of_memory"
+harness = false
