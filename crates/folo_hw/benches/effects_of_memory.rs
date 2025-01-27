@@ -4,7 +4,7 @@ use std::{
     mem,
     num::NonZeroUsize,
     sync::{mpsc, Arc, Barrier, LazyLock, Mutex},
-    thread::JoinHandle,
+    thread::JoinHandle, time::Duration,
 };
 
 use criterion::{
@@ -24,8 +24,12 @@ criterion_main!(benches);
 const ONE_PROCESSOR: NonZeroUsize = NonZeroUsize::new(1).unwrap();
 
 fn entrypoint(c: &mut Criterion) {
-    let mut g = c.benchmark_group("channel_exchange");
+    // These benchmarks can be pretty slow and clearing processor caches adds extra overhead
+    // between iterations, so to get stable and consistent data it is worth taking some time.
+    c.measurement_time(Duration::from_secs(100));
 
+    let mut g = c.benchmark_group("channel_exchange");
+    
     execute_run::<ChannelExchange>(&mut g, WorkDistribution::MemoryRegionPairs);
     execute_run::<ChannelExchange>(&mut g, WorkDistribution::SameMemoryRegion);
 
