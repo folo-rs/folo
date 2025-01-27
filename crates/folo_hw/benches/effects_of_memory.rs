@@ -62,7 +62,7 @@ fn execute_run<P: Payload>(g: &mut BenchmarkGroup<'_, WallTime>, distribution: W
 
     // These benchmarks can be pretty slow and clearing processor caches adds extra overhead
     // between iterations, so to get stable and consistent data it is worth taking some time.
-    g.measurement_time(Duration::from_secs(100));
+    g.measurement_time(Duration::from_secs(60));
 
     g.bench_function(distribution.to_string(), |b| {
         b.iter_batched(
