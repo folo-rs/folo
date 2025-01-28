@@ -16,7 +16,7 @@ use folo_hw::ProcessorSet;
 use frozen_collections::{FzHashMap, FzScalarMap, MapQuery};
 use itertools::Itertools;
 use nonempty::nonempty;
-use spin::{barrier::Barrier, Loop};
+use spin::{barrier::Barrier, relax::Loop};
 
 // https://github.com/cloudhead/nonempty/issues/68
 extern crate alloc;
