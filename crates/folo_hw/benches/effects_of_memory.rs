@@ -26,6 +26,7 @@ criterion_main!(benches);
 // TODO: Do not hang forever if worker panics. We need timeouts on barriers!
 
 const ONE_PROCESSOR: NonZeroUsize = NonZeroUsize::new(1).unwrap();
+const TWO_PROCESSORS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 fn entrypoint(c: &mut Criterion) {
     let mut g = c.benchmark_group("channel_exchange");
@@ -187,33 +188,40 @@ fn get_processor_set_pairs(
             )
         }
         WorkDistribution::PinnedSameMemoryRegion => {
-            // Now the key question here is... which memory region do we pick?
-            // We are going to assume it does not matter - the links between
-            // memory regions can be bottlenecks but within one memory region
-            // everything should still be norminal.
-            Some(
-                candidates
+            // We remove processors that have already been picked, so each pair
+            // gets two unique processors from the same memory region.
+            let mut remaining_candidates = candidates.clone();
+
+            let mut result = Vec::with_capacity(worker_pair_count.get());
+
+            for _ in 0..worker_pair_count.get() {
+                let pair = remaining_candidates
                     .to_builder()
                     .same_memory_region()
-                    .take(
-                        NonZeroUsize::new(worker_pair_count.get() * 2)
-                            .expect("* 2 cannot make a number zero"),
-                    )?
-                    .processors()
-                    .into_iter()
-                    .chunks(2)
-                    .into_iter()
-                    .map(|pair| {
-                        let pair = pair.collect_vec();
-                        assert_eq!(pair.len(), 2);
+                    .take(TWO_PROCESSORS)?;
 
-                        let set1: ProcessorSet = pair[0].into();
-                        let set2: ProcessorSet = pair[1].into();
+                remaining_candidates = match remaining_candidates
+                    .to_builder()
+                    .except(&pair.processors())
+                    .take_all()
+                {
+                    Some(remaining) => remaining,
+                    None => {
+                        // We ran out of processors before we could finish.
+                        return None;
+                    }
+                };
 
-                        (set1, set2)
-                    })
-                    .collect_vec(),
-            )
+                let pair = pair.processors();
+                assert_eq!(pair.len(), 2);
+
+                let set1: ProcessorSet = pair[0].into();
+                let set2: ProcessorSet = pair[1].into();
+
+                result.push((set1, set2));
+            }
+
+            Some(result)
         }
         WorkDistribution::PinnedSelf => {
             // Here we do not care at all which processors are selected - work is
@@ -298,44 +306,49 @@ fn get_processor_set_pairs(
             )
         }
         WorkDistribution::UnpinnedSameMemoryRegion => {
-            // Now the key question here is... which memory region do we pick?
-            // We are going to assume it does not matter - the links between
-            // memory regions can be bottlenecks but within one memory region
-            // everything should still be norminal.
-            Some(
-                candidates
+            // We remove processors that have already been picked, so each pair
+            // gets two processors' worth of processor time from the same memory region.
+            // We do not pin them but we do ensure there are enough processors to "fit"
+            // all the worker pairs into the memory region, without oversubscribing.
+            let mut remaining_candidates = candidates.clone();
+
+            let mut result = Vec::with_capacity(worker_pair_count.get());
+
+            for _ in 0..worker_pair_count.get() {
+                let pair = remaining_candidates
                     .to_builder()
                     .same_memory_region()
-                    // We first take the "expected" count to select a suitable memory region
-                    // with enough processors. However, we eventually discard this set entirely.
-                    .take(
-                        NonZeroUsize::new(worker_pair_count.get() * 2)
-                            .expect("* 2 cannot make a number zero"),
-                    )?
-                    .processors()
-                    .into_iter()
-                    .chunks(2)
-                    .into_iter()
-                    .map(|pair| {
-                        let pair = pair.collect_vec();
-                        assert_eq!(pair.len(), 2);
+                    .take(TWO_PROCESSORS)?;
 
-                        // For each pair we re-select all the processors in the same memory region
-                        // and use this entire set for both workers. The original pair was just to
-                        // point to the memory region and is now discarded.
+                remaining_candidates = match remaining_candidates
+                    .to_builder()
+                    .except(&pair.processors())
+                    .take_all()
+                {
+                    Some(remaining) => remaining,
+                    None => {
+                        // We ran out of processors before we could finish.
+                        return None;
+                    }
+                };
 
-                        let real_set = candidates
-                            .to_builder()
-                            .filter(|c| c.memory_region_id() == pair[0].memory_region_id())
-                            .take_all()
-                            .expect(
-                                "must have at least one processor in every active memory region",
-                            );
+                let pair = pair.processors();
+                assert_eq!(pair.len(), 2);
 
-                        (real_set.clone(), real_set)
-                    })
-                    .collect_vec(),
-            )
+                // For each pair we re-select all the processors in the same memory region
+                // and use this entire set for both workers. The original pair was just to
+                // point to the memory region and is now discarded.
+
+                let real_set = remaining_candidates
+                    .to_builder()
+                    .filter(|c| c.memory_region_id() == pair[0].memory_region_id())
+                    .take_all()
+                    .expect("must have at least one processor in every active memory region");
+
+                result.push((real_set.clone(), real_set));
+            }
+
+            Some(result)
         }
         WorkDistribution::UnpinnedSelf => {
             // All processors are valid candidates here.
@@ -496,8 +509,9 @@ enum WorkDistribution {
     /// This option can only be used if there are at least two memory regions.
     PinnedMemoryRegionPairs,
 
-    /// All pairs of workers are spawned in the same memory region. Each pair will work
-    /// together, organizing work between the two members.
+    /// Each worker in a pair is spawned in the same memory region. Each pair will work
+    /// together, organizing work between the two members. Different pairs may be in different
+    /// memory regions.
     ///
     /// Each worker is pinned to a specific processor.
     ///
