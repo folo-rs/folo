@@ -26,7 +26,6 @@ windows = { version = "0.58", features = [
 criterion = "0.5"
 frozen-collections = "0.3"
 mockall = "0.13"
-spin = { version = "0.9", features = ["barrier"] }
 
 [[bench]]
 name = "effects_of_memory"

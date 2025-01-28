@@ -3,7 +3,7 @@ use std::{
     hint::black_box,
     mem,
     num::NonZeroUsize,
-    sync::{mpsc, Arc, LazyLock, Mutex},
+    sync::{mpsc, Arc, Barrier, LazyLock, Mutex},
     thread::JoinHandle,
     time::Duration,
 };
@@ -16,7 +16,6 @@ use folo_hw::ProcessorSet;
 use frozen_collections::{FzHashMap, FzScalarMap, MapQuery};
 use itertools::Itertools;
 use nonempty::nonempty;
-use spin::{barrier::Barrier, Spin};
 
 // https://github.com/cloudhead/nonempty/issues/68
 extern crate alloc;
@@ -362,9 +361,10 @@ fn get_processor_set_pairs(
     }
 }
 
+#[derive(Debug)]
 struct BenchmarkRun {
     // Waited 3 times, once be each worker thread and once by runner thread.
-    completed: Arc<Barrier<Spin>>,
+    completed: Arc<Barrier>,
 
     join_handles: Box<[JoinHandle<()>]>,
 }
@@ -376,8 +376,8 @@ impl BenchmarkRun {
     ) -> Self {
         // Once by current thread + once by each worker in each pair.
         // All workers will start when all workers and the main thread are ready.
-        let ready_signal = Arc::new(Barrier::<Spin>::new(1 + 2 * processor_set_pairs.len()));
-        let completed_signal = Arc::new(Barrier::<Spin>::new(1 + 2 * processor_set_pairs.len()));
+        let ready_signal = Arc::new(Barrier::new(1 + 2 * processor_set_pairs.len()));
+        let completed_signal = Arc::new(Barrier::new(1 + 2 * processor_set_pairs.len()));
 
         let mut join_handles = Vec::with_capacity(2 * processor_set_pairs.len());
 
@@ -437,8 +437,8 @@ impl BenchmarkRun {
     #[expect(clippy::type_complexity)] // True but whatever, do not care about it here.
     fn spawn_worker<P: Payload>(
         processor_set: &ProcessorSet,
-        ready_signal: Arc<Barrier<Spin>>,
-        completed_signal: Arc<Barrier<Spin>>,
+        ready_signal: Arc<Barrier>,
+        completed_signal: Arc<Barrier>,
         payload_bag: Arc<Mutex<Vec<(mpsc::Sender<P>, mpsc::Receiver<P>, P)>>>,
     ) -> JoinHandle<()> {
         processor_set.spawn_thread({
