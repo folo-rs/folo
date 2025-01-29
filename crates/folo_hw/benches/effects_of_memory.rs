@@ -12,8 +12,10 @@ use criterion::{
     criterion_group, criterion_main, measurement::WallTime, BatchSize, BenchmarkGroup, Criterion,
 };
 use derive_more::derive::Display;
+use fake_headers::Headers;
 use folo_hw::ProcessorSet;
 use frozen_collections::{FzHashMap, FzScalarMap, MapQuery};
+use http::{HeaderMap, HeaderName, HeaderValue};
 use itertools::Itertools;
 use nonempty::nonempty;
 
@@ -65,6 +67,16 @@ fn entrypoint(c: &mut Criterion) {
     execute_run::<FzScalarMapRead>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
     execute_run::<FzScalarMapRead>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
     execute_run::<FzScalarMapRead>(&mut g, WorkDistribution::UnpinnedSelf);
+
+    g.finish();
+    let mut g = c.benchmark_group("http_headers_parse");
+
+    execute_run::<HttpHeadersParse>(&mut g, WorkDistribution::PinnedMemoryRegionPairs);
+    execute_run::<HttpHeadersParse>(&mut g, WorkDistribution::PinnedSameMemoryRegion);
+    execute_run::<HttpHeadersParse>(&mut g, WorkDistribution::PinnedSelf);
+    execute_run::<HttpHeadersParse>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
+    execute_run::<HttpHeadersParse>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
+    execute_run::<HttpHeadersParse>(&mut g, WorkDistribution::UnpinnedSelf);
 
     g.finish();
 }
@@ -727,5 +739,57 @@ impl Payload for FzScalarMapRead {
         }
 
         sum
+    }
+}
+
+const HEADERS_COUNT: usize = 10_000;
+
+#[derive(Debug, Default)]
+struct HttpHeadersParse {
+    serialized: Vec<Vec<u8>>,
+}
+
+impl Payload for HttpHeadersParse {
+    fn new_pair() -> (Self, Self) {
+        (Self::default(), Self::default())
+    }
+
+    fn prepare(&mut self) {
+        self.serialized = (0..HEADERS_COUNT)
+            .map(|_| {
+                let headers = Headers::default().generate();
+
+                let mut result = String::new();
+
+                for (key, value) in headers {
+                    result.push_str(&format!("{key}: {value}\r\n"));
+                }
+
+                result.into_bytes()
+            })
+            .collect_vec();
+    }
+
+    fn process(self) -> u64 {
+        let mut result = 0;
+
+        for serialized in self.serialized {
+            let serialized_str = String::from_utf8(serialized).unwrap();
+
+            let mut headers = HeaderMap::new();
+            for line in serialized_str.lines() {
+                if let Some((key, value)) = line.split_once(':') {
+                    let key = key.trim();
+                    let value = value.trim();
+                    let header_name = HeaderName::from_bytes(key.as_bytes()).unwrap();
+                    let header_value = HeaderValue::from_str(value).unwrap();
+                    headers.insert(header_name, header_value);
+                }
+            }
+
+            result += headers.len() as u64;
+        }
+
+        result
     }
 }

@@ -24,7 +24,9 @@ windows = { version = "0.58", features = [
 
 [dev-dependencies]
 criterion = "0.5"
+fake_headers = "0.0"
 frozen-collections = "0.3"
+http = "1"
 mockall = "0.13"
 
 [[bench]]
