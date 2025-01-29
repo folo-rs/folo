@@ -489,7 +489,7 @@ impl BenchmarkRun {
                 ready_signal.wait();
 
                 for payload in &mut payloads {
-                    let _ = black_box(payload.process());
+                    payload.process();
                 }
 
                 completed_signal.wait();
@@ -526,10 +526,7 @@ trait Payload: Sized + Send + 'static {
     /// Processes the payload but does not consume it. The iteration is complete when this returns
     /// for all payloads. The payloads are dropped later, to ensure that the benchmark time is not
     /// affected by the time it takes to drop the payload and release the memory.
-    ///
-    /// The return value is meaningless, just there to deter optimizations
-    /// that the compiler might be inclined to make if it saw no data coming out.
-    fn process(&mut self) -> u64;
+    fn process(&mut self);
 }
 
 #[derive(Copy, Clone, Debug, Display, Eq, PartialEq)]
@@ -665,7 +662,7 @@ impl Payload for ChannelExchange {
         }
     }
 
-    fn process(&mut self) -> u64 {
+    fn process(&mut self) {
         const MESSAGE_PUMP_ITERATION_COUNT: usize = 500_000;
 
         for _ in 0..MESSAGE_PUMP_ITERATION_COUNT {
@@ -675,8 +672,6 @@ impl Payload for ChannelExchange {
             // exited and cleaned up, so the message will never be received - which is fine).
             _ = self.tx.send(payload);
         }
-
-        MESSAGE_PUMP_ITERATION_COUNT as u64
     }
 }
 
@@ -707,14 +702,10 @@ impl Payload for HashMapRead {
         }
     }
 
-    fn process(&mut self) -> u64 {
-        let mut sum: u64 = 0;
-
+    fn process(&mut self) {
         for k in 0..MAP_ENTRY_COUNT {
-            sum = sum.wrapping_add(*self.map.get(&(k as u64)).unwrap_or(&0));
+            black_box(self.map.get(&(k as u64)));
         }
-
-        sum
     }
 }
 
@@ -737,14 +728,10 @@ impl Payload for FzHashMapRead {
         self.map = FzHashMap::new(entries);
     }
 
-    fn process(&mut self) -> u64 {
-        let mut sum: u64 = 0;
-
+    fn process(&mut self) {
         for k in 0..MAP_ENTRY_COUNT {
-            sum = sum.wrapping_add(*self.map.get(&(k as u64)).unwrap_or(&0));
+            black_box(self.map.get(&(k as u64)));
         }
-
-        sum
     }
 }
 
@@ -767,14 +754,10 @@ impl Payload for FzScalarMapRead {
         self.map = FzScalarMap::new(entries);
     }
 
-    fn process(&mut self) -> u64 {
-        let mut sum: u64 = 0;
-
+    fn process(&mut self) {
         for k in 0..MAP_ENTRY_COUNT {
-            sum = sum.wrapping_add(*self.map.get(&(k as u64)).unwrap_or(&0));
+            black_box(self.map.get(&(k as u64)));
         }
-
-        sum
     }
 }
 
@@ -813,11 +796,10 @@ impl Payload for HttpHeadersParse {
     /// benchmark. The actual parsing is trivial in comparison.
     ///
     /// Value: low.
-    fn process(&mut self) -> u64 {
-        let mut result = 0;
-
+    fn process(&mut self) {
         for serialized in self.serialized.take().unwrap() {
-            let serialized_str = String::from_utf8(serialized).unwrap();
+            // SAFETY: We serialized proper utf-8, it is fine.
+            let serialized_str = unsafe { String::from_utf8_unchecked(serialized) };
 
             let mut headers = HeaderMap::new();
             for line in serialized_str.lines() {
@@ -830,9 +812,7 @@ impl Payload for HttpHeadersParse {
                 }
             }
 
-            result += headers.len() as u64;
+            black_box(headers);
         }
-
-        result
     }
 }
