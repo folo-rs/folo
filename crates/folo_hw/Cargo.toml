@@ -23,7 +23,8 @@ windows = { version = "0.58", features = [
 ] }
 
 [dev-dependencies]
-criterion = "0.5"
+# Using Git reference here because the published crate is out of date and lacks proper graph support.
+criterion = { git = "https://github.com/bheisler/criterion.rs.git" }
 fake_headers = "0.0"
 frozen-collections = "0.3"
 http = "1"
