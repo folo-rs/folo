@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     hint::black_box,
-    mem,
+    mem::{self, MaybeUninit},
     num::NonZeroUsize,
     sync::{mpsc, Arc, Barrier, LazyLock, Mutex},
     thread::JoinHandle,
@@ -564,6 +564,10 @@ enum WorkDistribution {
 // thrashing here to have a good chance of evicting the data we are interested in from the cache.
 const CACHE_CLEANER_LEN_BYTES: usize = 128 * 1024 * 1024;
 const CACHE_CLEANER_LEN_U64: usize = CACHE_CLEANER_LEN_BYTES / mem::size_of::<u64>();
+// We copy the memory in small pieces to avoid having to do a big temporary allocation, which
+// would just slow down the benchmark. The processor does not really care where it is moving the
+// bytes to, we do not need to keep these bytes around for long.
+const CACHE_CLEANER_CHUNK_LEN_BYTES: usize = 128 * 1024;
 static CACHE_CLEANER: LazyLock<Vec<u64>> =
     LazyLock::new(|| vec![0x0102030401020304; CACHE_CLEANER_LEN_U64]);
 
@@ -572,25 +576,30 @@ static CACHE_CLEANER: LazyLock<Vec<u64>> =
 /// cached locally. This function will perform a large memory copy operation, which hopefully
 /// trashes any cache that may be present.
 fn clean_caches() -> u64 {
-    // A memory copy should do the trick?
-    let mut copied_cleaner = Vec::with_capacity(CACHE_CLEANER_LEN_U64);
+    // A memory copy should do the trick? Stack-allocate the memory to avoid heap overhead here.
+    let mut buffer = [MaybeUninit::<u8>::uninit(); CACHE_CLEANER_CHUNK_LEN_BYTES];
 
-    let source = CACHE_CLEANER.as_ptr();
-    let destination = copied_cleaner.as_mut_ptr();
+    let mut bytes_remaining = CACHE_CLEANER_LEN_BYTES;
 
-    // SAFETY: We reserved memory for the destination, are using the right length,
-    // and they do not overlap. All is well.
-    unsafe {
-        std::ptr::copy_nonoverlapping(source, destination, CACHE_CLEANER_LEN_U64);
-    }
+    let mut source = CACHE_CLEANER.as_ptr();
+    let destination = buffer.as_mut_ptr().cast();
 
-    // SAFETY: Yeah, we just initialized it.
-    unsafe {
-        copied_cleaner.set_len(CACHE_CLEANER_LEN_U64);
+    while bytes_remaining > 0 {
+        let chunk_len = bytes_remaining.min(CACHE_CLEANER_CHUNK_LEN_BYTES);
+
+        // SAFETY: We reserved memory for the destination, are using the right length,
+        // and they do not overlap. All is well.
+        unsafe {
+            std::ptr::copy_nonoverlapping(source, destination, chunk_len);
+        }
+
+        bytes_remaining -= chunk_len;
+        // SAFETY: The math checks out.
+        source = unsafe { source.byte_add(chunk_len) };
     }
 
     // Paranoia to make sure the compiler doesn't optimize all our valuable work away.
-    copied_cleaner[52251] + copied_cleaner[6353532]
+    source as u64
 }
 
 /// The two paired workers exchange messages with each other, sending back whatever is received.
@@ -770,6 +779,11 @@ impl Payload for HttpHeadersParse {
             .collect_vec();
     }
 
+    /// Memory allocation appears to dominate this scenario - it needs to allocate a bunch of
+    /// fresh memory for the headers and header strings, which just makes this a memory allocation
+    /// benchmark. The actual parsing is trivial in comparison.
+    /// 
+    /// Value: low.
     fn process(self) -> u64 {
         let mut result = 0;
 
