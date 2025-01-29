@@ -3,9 +3,12 @@ use std::{collections::HashMap, mem};
 use itertools::Itertools;
 use nonempty::NonEmpty;
 
-use crate::pal::{
-    linux::{cpulist, Bindings, BuildTargetBindings, BuildTargetFilesystem, Filesystem},
-    EfficiencyClass, MemoryRegionIndex, Platform, ProcessorGlobalIndex, ProcessorImpl,
+use crate::{
+    pal::{
+        linux::{cpulist, Bindings, BuildTargetBindings, BuildTargetFilesystem, Filesystem},
+        Platform, ProcessorImpl,
+    },
+    EfficiencyClass, MemoryRegionId, ProcessorId,
 };
 
 // https://github.com/cloudhead/nonempty/issues/68
@@ -48,7 +51,7 @@ impl<B: Bindings, FS: Filesystem> Platform for BuildTargetPlatform<B, FS> {
             unsafe {
                 // TODO: This can go out of bounds with giant CPU set, we need to use dynamically
                 // allocated CPU sets instead of relying on the fixed-size one in libc.
-                libc::CPU_SET(processor.as_ref().index as usize, &mut cpu_set);
+                libc::CPU_SET(processor.as_ref().id as usize, &mut cpu_set);
             }
         }
 
@@ -83,7 +86,7 @@ impl<B: Bindings, FS: Filesystem> BuildTargetPlatform<B, FS> {
 
         // If we did not get any NUMA node info, construct an imaginary NUMA node containing all.
         let numa_nodes = numa_nodes.unwrap_or_else(|| {
-            let all_processor_indexes = (0..cpu_infos.len() as ProcessorGlobalIndex).collect_vec();
+            let all_processor_indexes = (0..cpu_infos.len() as ProcessorId).collect_vec();
             let all_processor_indexes = NonEmpty::from_vec(all_processor_indexes)
                 .expect("must have at least one processor");
             [(0, all_processor_indexes)].into_iter().collect()
@@ -117,8 +120,8 @@ impl<B: Bindings, FS: Filesystem> BuildTargetPlatform<B, FS> {
             };
 
             ProcessorImpl {
-                index: info.index,
-                memory_region_index: memory_region,
+                id: info.index,
+                memory_region_id: memory_region,
                 efficiency_class,
             }
         });
@@ -163,7 +166,7 @@ impl<B: Bindings, FS: Filesystem> BuildTargetPlatform<B, FS> {
                             .expect("/proc/cpuinfo line was not a key:value pair");
 
                         match key {
-                            "processor" => index = value.parse::<ProcessorGlobalIndex>().ok(),
+                            "processor" => index = value.parse::<ProcessorId>().ok(),
                             "cpu MHz" => {
                                 frequency_mhz = value.parse::<f32>().map(|f| f.round() as u32).ok()
                             }
@@ -186,7 +189,7 @@ impl<B: Bindings, FS: Filesystem> BuildTargetPlatform<B, FS> {
     //
     // Otherwise, returns a list of NUMA nodes, where each entry is a list of processor
     // indexes that belong to that node.
-    fn get_numa_nodes(&self) -> Option<HashMap<MemoryRegionIndex, NonEmpty<ProcessorGlobalIndex>>> {
+    fn get_numa_nodes(&self) -> Option<HashMap<MemoryRegionId, NonEmpty<ProcessorId>>> {
         let node_indexes = cpulist::parse(&self.fs.get_numa_node_online_contents()?);
 
         if node_indexes.is_empty() {
@@ -208,7 +211,7 @@ impl<B: Bindings, FS: Filesystem> BuildTargetPlatform<B, FS> {
 // One result from /proc/cpuinfo.
 #[derive(Debug)]
 struct CpuInfo {
-    index: ProcessorGlobalIndex,
+    index: ProcessorId,
 
     /// CPU frequency, rounded to nearest integer. We use this to identify efficiency versus
     /// performance cores, where the processors with max frequency are considered performance
@@ -254,26 +257,26 @@ mod tests {
             1,
             processors
                 .iter()
-                .map(|p| p.memory_region_index)
+                .map(|p| p.memory_region_id)
                 .dedup()
                 .count()
         );
 
         let p0 = &processors[0];
-        assert_eq!(p0.index, 0);
-        assert_eq!(p0.memory_region_index, 0);
+        assert_eq!(p0.id, 0);
+        assert_eq!(p0.memory_region_id, 0);
 
         let p1 = &processors[1];
-        assert_eq!(p1.index, 1);
-        assert_eq!(p1.memory_region_index, 0);
+        assert_eq!(p1.id, 1);
+        assert_eq!(p1.memory_region_id, 0);
 
         let p2 = &processors[2];
-        assert_eq!(p2.index, 2);
-        assert_eq!(p2.memory_region_index, 0);
+        assert_eq!(p2.id, 2);
+        assert_eq!(p2.memory_region_id, 0);
 
         let p3 = &processors[3];
-        assert_eq!(p3.index, 3);
-        assert_eq!(p3.memory_region_index, 0);
+        assert_eq!(p3.id, 3);
+        assert_eq!(p3.memory_region_id, 0);
     }
 
     #[test]
@@ -298,24 +301,24 @@ mod tests {
 
         // Node 0
         let p0 = &processors[0];
-        assert_eq!(p0.index, 0);
-        assert_eq!(p0.memory_region_index, 0);
+        assert_eq!(p0.id, 0);
+        assert_eq!(p0.memory_region_id, 0);
         assert_eq!(p0.efficiency_class, EfficiencyClass::Performance);
 
         let p1 = &processors[1];
-        assert_eq!(p1.index, 1);
-        assert_eq!(p1.memory_region_index, 0);
+        assert_eq!(p1.id, 1);
+        assert_eq!(p1.memory_region_id, 0);
         assert_eq!(p1.efficiency_class, EfficiencyClass::Efficiency);
 
         // Node 1
         let p2 = &processors[2];
-        assert_eq!(p2.index, 2);
-        assert_eq!(p2.memory_region_index, 1);
+        assert_eq!(p2.id, 2);
+        assert_eq!(p2.memory_region_id, 1);
         assert_eq!(p2.efficiency_class, EfficiencyClass::Efficiency);
 
         let p3 = &processors[3];
-        assert_eq!(p3.index, 3);
-        assert_eq!(p3.memory_region_index, 1);
+        assert_eq!(p3.id, 3);
+        assert_eq!(p3.memory_region_id, 1);
         assert_eq!(p3.efficiency_class, EfficiencyClass::Performance);
     }
 
@@ -343,22 +346,22 @@ mod tests {
         // First 4 in node 0 => Performance
         for i in 0..4 {
             let p = &processors[i];
-            assert_eq!(p.index, i as ProcessorGlobalIndex);
-            assert_eq!(p.memory_region_index, 0);
+            assert_eq!(p.id, i as ProcessorId);
+            assert_eq!(p.memory_region_id, 0);
             assert_eq!(p.efficiency_class, EfficiencyClass::Performance);
         }
         // Next 2 in node 1 => Efficiency
         for i in 4..6 {
             let p = &processors[i];
-            assert_eq!(p.index, i as ProcessorGlobalIndex);
-            assert_eq!(p.memory_region_index, 1);
+            assert_eq!(p.id, i as ProcessorId);
+            assert_eq!(p.memory_region_id, 1);
             assert_eq!(p.efficiency_class, EfficiencyClass::Efficiency);
         }
         // Last 2 in node 2 => Efficiency
         for i in 6..8 {
             let p = &processors[i];
-            assert_eq!(p.index, i as ProcessorGlobalIndex);
-            assert_eq!(p.memory_region_index, 2);
+            assert_eq!(p.id, i as ProcessorId);
+            assert_eq!(p.memory_region_id, 2);
             assert_eq!(p.efficiency_class, EfficiencyClass::Efficiency);
         }
     }
@@ -379,18 +382,18 @@ mod tests {
 
         // Node 1 => [Perf, Eff, Perf]
         let p0 = &processors[0];
-        assert_eq!(p0.index, 3);
-        assert_eq!(p0.memory_region_index, 1);
+        assert_eq!(p0.id, 3);
+        assert_eq!(p0.memory_region_id, 1);
         assert_eq!(p0.efficiency_class, EfficiencyClass::Performance);
 
         let p1 = &processors[1];
-        assert_eq!(p1.index, 4);
-        assert_eq!(p1.memory_region_index, 1);
+        assert_eq!(p1.id, 4);
+        assert_eq!(p1.memory_region_id, 1);
         assert_eq!(p1.efficiency_class, EfficiencyClass::Efficiency);
 
         let p2 = &processors[2];
-        assert_eq!(p2.index, 5);
-        assert_eq!(p2.memory_region_index, 1);
+        assert_eq!(p2.id, 5);
+        assert_eq!(p2.memory_region_id, 1);
         assert_eq!(p2.efficiency_class, EfficiencyClass::Performance);
     }
 
@@ -415,24 +418,24 @@ mod tests {
 
         // Node 0 => [Eff, Eff]
         let p0 = &processors[0];
-        assert_eq!(p0.index, 0);
-        assert_eq!(p0.memory_region_index, 0);
+        assert_eq!(p0.id, 0);
+        assert_eq!(p0.memory_region_id, 0);
         assert_eq!(p0.efficiency_class, EfficiencyClass::Efficiency);
 
         let p1 = &processors[1];
-        assert_eq!(p1.index, 2);
-        assert_eq!(p1.memory_region_index, 0);
+        assert_eq!(p1.id, 2);
+        assert_eq!(p1.memory_region_id, 0);
         assert_eq!(p1.efficiency_class, EfficiencyClass::Efficiency);
 
         // Node 1 => [Perf, Perf]
         let p2 = &processors[2];
-        assert_eq!(p2.index, 4);
-        assert_eq!(p2.memory_region_index, 1);
+        assert_eq!(p2.id, 4);
+        assert_eq!(p2.memory_region_id, 1);
         assert_eq!(p2.efficiency_class, EfficiencyClass::Performance);
 
         let p3 = &processors[3];
-        assert_eq!(p3.index, 6);
-        assert_eq!(p3.memory_region_index, 1);
+        assert_eq!(p3.id, 6);
+        assert_eq!(p3.memory_region_id, 1);
         assert_eq!(p3.efficiency_class, EfficiencyClass::Performance);
     }
 
@@ -441,8 +444,8 @@ mod tests {
     /// The simulation is valid for one call to get_all_processors() only.
     fn simulate_processor_layout<const PROCESSOR_COUNT: usize>(
         fs: &mut MockFilesystem,
-        processor_index: [ProcessorGlobalIndex; PROCESSOR_COUNT],
-        memory_region_index: [MemoryRegionIndex; PROCESSOR_COUNT],
+        processor_index: [ProcessorId; PROCESSOR_COUNT],
+        memory_region_index: [MemoryRegionId; PROCESSOR_COUNT],
         frequencies_per_processor: [f64; PROCESSOR_COUNT],
     ) {
         // We assume that active/max difference implies gaps in processor indexes may exist.
@@ -615,7 +618,7 @@ mod tests {
     }
 
     fn cpuset_from<const PROCESSOR_COUNT: usize>(
-        processors: [ProcessorGlobalIndex; PROCESSOR_COUNT],
+        processors: [ProcessorId; PROCESSOR_COUNT],
     ) -> libc::cpu_set_t {
         // SAFETY: Zero-initialized CPU set is correct.
         let mut cpu_set: libc::cpu_set_t = unsafe { mem::zeroed() };

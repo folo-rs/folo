@@ -1,7 +1,7 @@
 use itertools::Itertools;
 use nonempty::NonEmpty;
 
-use crate::pal::ProcessorGlobalIndex;
+use crate::ProcessorId;
 
 // https://github.com/cloudhead/nonempty/issues/68
 extern crate alloc;
@@ -16,7 +16,7 @@ extern crate alloc;
 /// Whitespace is not allowed in the input.
 ///
 /// Returns the numeric indexes in ascending sorted order. Removes duplicates if any exist.
-pub(crate) fn parse(cpulist: &str) -> NonEmpty<ProcessorGlobalIndex> {
+pub(crate) fn parse(cpulist: &str) -> NonEmpty<ProcessorId> {
     NonEmpty::from_vec(
         cpulist
             .split(',')
@@ -24,7 +24,7 @@ pub(crate) fn parse(cpulist: &str) -> NonEmpty<ProcessorGlobalIndex> {
                 if let Some((range_start, range_end_inc)) = part.split_once('-') {
                     // This is a range, with optional stride.
                     let range_start = range_start
-                        .parse::<ProcessorGlobalIndex>()
+                        .parse::<ProcessorId>()
                         .expect("failed to parse cpulist range start as integer");
 
                     // If no stride is specified, we just default to 1 and pretend it was specified.
@@ -32,16 +32,16 @@ pub(crate) fn parse(cpulist: &str) -> NonEmpty<ProcessorGlobalIndex> {
                         if let Some((range_end_inc, stride)) = range_end_inc.split_once(':') {
                             (
                                 range_end_inc
-                                    .parse::<ProcessorGlobalIndex>()
+                                    .parse::<ProcessorId>()
                                     .expect("failed to parse cpulist range end as integer"),
                                 stride
-                                    .parse::<ProcessorGlobalIndex>()
+                                    .parse::<ProcessorId>()
                                     .expect("failed to parse cpulist range stride as integer"),
                             )
                         } else {
                             (
                                 range_end_inc
-                                    .parse::<ProcessorGlobalIndex>()
+                                    .parse::<ProcessorId>()
                                     .expect("failed to parse cpulist range end as integer"),
                                 1,
                             )
@@ -59,7 +59,7 @@ pub(crate) fn parse(cpulist: &str) -> NonEmpty<ProcessorGlobalIndex> {
                 } else {
                     // This is a plain number.
                     vec![part
-                        .parse::<ProcessorGlobalIndex>()
+                        .parse::<ProcessorId>()
                         .expect("failed to parse cpulist single entry as integer")]
                 }
             })
@@ -72,7 +72,7 @@ pub(crate) fn parse(cpulist: &str) -> NonEmpty<ProcessorGlobalIndex> {
 
 /// Generates a cpulist that can be parsed by `parse()`.
 #[cfg(test)]
-pub(crate) fn emit(items: NonEmpty<ProcessorGlobalIndex>) -> String {
+pub(crate) fn emit(items: NonEmpty<ProcessorId>) -> String {
     items
         .iter()
         .unique()
