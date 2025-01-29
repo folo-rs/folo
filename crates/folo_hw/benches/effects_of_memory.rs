@@ -33,55 +33,58 @@ const TWO_PROCESSORS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 fn entrypoint(c: &mut Criterion) {
     let mut g = c.benchmark_group("channel_exchange");
 
-    execute_run::<ChannelExchange>(&mut g, WorkDistribution::PinnedMemoryRegionPairs);
-    execute_run::<ChannelExchange>(&mut g, WorkDistribution::PinnedSameMemoryRegion);
-    execute_run::<ChannelExchange>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
-    execute_run::<ChannelExchange>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
+    execute_run::<ChannelExchange, 1>(&mut g, WorkDistribution::PinnedMemoryRegionPairs);
+    execute_run::<ChannelExchange, 1>(&mut g, WorkDistribution::PinnedSameMemoryRegion);
+    execute_run::<ChannelExchange, 1>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
+    execute_run::<ChannelExchange, 1>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
 
     g.finish();
     let mut g = c.benchmark_group("hashmap_read");
 
-    execute_run::<HashMapRead>(&mut g, WorkDistribution::PinnedMemoryRegionPairs);
-    execute_run::<HashMapRead>(&mut g, WorkDistribution::PinnedSameMemoryRegion);
-    execute_run::<HashMapRead>(&mut g, WorkDistribution::PinnedSelf);
-    execute_run::<HashMapRead>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
-    execute_run::<HashMapRead>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
-    execute_run::<HashMapRead>(&mut g, WorkDistribution::UnpinnedSelf);
+    execute_run::<HashMapRead, 50>(&mut g, WorkDistribution::PinnedMemoryRegionPairs);
+    execute_run::<HashMapRead, 50>(&mut g, WorkDistribution::PinnedSameMemoryRegion);
+    execute_run::<HashMapRead, 50>(&mut g, WorkDistribution::PinnedSelf);
+    execute_run::<HashMapRead, 50>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
+    execute_run::<HashMapRead, 50>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
+    execute_run::<HashMapRead, 50>(&mut g, WorkDistribution::UnpinnedSelf);
 
     g.finish();
     let mut g = c.benchmark_group("fz_hashmap_read");
 
-    execute_run::<FzHashMapRead>(&mut g, WorkDistribution::PinnedMemoryRegionPairs);
-    execute_run::<FzHashMapRead>(&mut g, WorkDistribution::PinnedSameMemoryRegion);
-    execute_run::<FzHashMapRead>(&mut g, WorkDistribution::PinnedSelf);
-    execute_run::<FzHashMapRead>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
-    execute_run::<FzHashMapRead>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
-    execute_run::<FzHashMapRead>(&mut g, WorkDistribution::UnpinnedSelf);
+    execute_run::<FzHashMapRead, 50>(&mut g, WorkDistribution::PinnedMemoryRegionPairs);
+    execute_run::<FzHashMapRead, 50>(&mut g, WorkDistribution::PinnedSameMemoryRegion);
+    execute_run::<FzHashMapRead, 50>(&mut g, WorkDistribution::PinnedSelf);
+    execute_run::<FzHashMapRead, 50>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
+    execute_run::<FzHashMapRead, 50>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
+    execute_run::<FzHashMapRead, 50>(&mut g, WorkDistribution::UnpinnedSelf);
 
     g.finish();
     let mut g = c.benchmark_group("fz_scalarmap_read");
 
-    execute_run::<FzScalarMapRead>(&mut g, WorkDistribution::PinnedMemoryRegionPairs);
-    execute_run::<FzScalarMapRead>(&mut g, WorkDistribution::PinnedSameMemoryRegion);
-    execute_run::<FzScalarMapRead>(&mut g, WorkDistribution::PinnedSelf);
-    execute_run::<FzScalarMapRead>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
-    execute_run::<FzScalarMapRead>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
-    execute_run::<FzScalarMapRead>(&mut g, WorkDistribution::UnpinnedSelf);
+    execute_run::<FzScalarMapRead, 50>(&mut g, WorkDistribution::PinnedMemoryRegionPairs);
+    execute_run::<FzScalarMapRead, 50>(&mut g, WorkDistribution::PinnedSameMemoryRegion);
+    execute_run::<FzScalarMapRead, 50>(&mut g, WorkDistribution::PinnedSelf);
+    execute_run::<FzScalarMapRead, 50>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
+    execute_run::<FzScalarMapRead, 50>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
+    execute_run::<FzScalarMapRead, 50>(&mut g, WorkDistribution::UnpinnedSelf);
 
     g.finish();
     let mut g = c.benchmark_group("http_headers_parse");
 
-    execute_run::<HttpHeadersParse>(&mut g, WorkDistribution::PinnedMemoryRegionPairs);
-    execute_run::<HttpHeadersParse>(&mut g, WorkDistribution::PinnedSameMemoryRegion);
-    execute_run::<HttpHeadersParse>(&mut g, WorkDistribution::PinnedSelf);
-    execute_run::<HttpHeadersParse>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
-    execute_run::<HttpHeadersParse>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
-    execute_run::<HttpHeadersParse>(&mut g, WorkDistribution::UnpinnedSelf);
+    execute_run::<HttpHeadersParse, 1>(&mut g, WorkDistribution::PinnedMemoryRegionPairs);
+    execute_run::<HttpHeadersParse, 1>(&mut g, WorkDistribution::PinnedSameMemoryRegion);
+    execute_run::<HttpHeadersParse, 1>(&mut g, WorkDistribution::PinnedSelf);
+    execute_run::<HttpHeadersParse, 1>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
+    execute_run::<HttpHeadersParse, 1>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
+    execute_run::<HttpHeadersParse, 1>(&mut g, WorkDistribution::UnpinnedSelf);
 
     g.finish();
 }
 
-fn execute_run<P: Payload>(g: &mut BenchmarkGroup<'_, WallTime>, distribution: WorkDistribution) {
+fn execute_run<P: Payload, const PAYLOAD_MULTIPLIER: usize>(
+    g: &mut BenchmarkGroup<'_, WallTime>,
+    distribution: WorkDistribution,
+) {
     // Probe whether we even have enough processors for this run. If not, just skip.
     if get_processor_set_pairs(distribution).is_none() {
         eprintln!("Skipping {distribution} - system hardware topology is not compatible.");
@@ -98,9 +101,15 @@ fn execute_run<P: Payload>(g: &mut BenchmarkGroup<'_, WallTime>, distribution: W
                 let processor_set_pairs = get_processor_set_pairs(distribution)
                     .expect("we already validated that we have the right topology");
 
-                BenchmarkRun::new::<P>(&processor_set_pairs, distribution)
+                BenchmarkRun::new::<P, PAYLOAD_MULTIPLIER>(&processor_set_pairs, distribution)
             },
-            |run| run.wait(),
+            // We explicitly return the run back to the benchmark infrastructure to ensure that any
+            // time spent in dropping the payload (between completed_signal and worker thread joins)
+            // is not counted into the benchmark time itself.
+            |run| {
+                run.wait();
+                run
+            },
             BatchSize::PerIteration,
         );
     });
@@ -382,7 +391,12 @@ struct BenchmarkRun {
 }
 
 impl BenchmarkRun {
-    fn new<P: Payload>(
+    /// Some benchmark scenarios can be a bit fast but cannot be "naturally" sized up because they
+    /// need to meet some criteria like fitting in CPU caches. `PAYLOAD_MULTIPLIER > 1` will simply
+    /// execute the benchmark multiple times in sequence to collect more data, with a different
+    /// payload each time but on the same workers. The expectation is that each payload is
+    /// independent and does not require cache cleaning between payloads for meaningful results.
+    fn new<P: Payload, const PAYLOAD_MULTIPLIER: usize>(
         processor_set_pairs: &[(ProcessorSet, ProcessorSet)],
         distribution: WorkDistribution,
     ) -> Self {
@@ -396,12 +410,12 @@ impl BenchmarkRun {
         for processor_set_pair in processor_set_pairs {
             let (processor_set_1, processor_set_2) = processor_set_pair;
 
-            let (payload1, payload2) = P::new_pair();
+            let (payloads1, payloads2) = (0..PAYLOAD_MULTIPLIER).map(|_| P::new_pair()).unzip();
 
             // We use these to deliver a prepared payload to the worker meant to process it.
             // Depending on the mode, we either wire up the channels to themselves or each other.
-            let (c1_tx, c1_rx) = mpsc::channel::<P>();
-            let (c2_tx, c2_rx) = mpsc::channel::<P>();
+            let (c1_tx, c1_rx) = mpsc::channel::<Vec<P>>();
+            let (c2_tx, c2_rx) = mpsc::channel::<Vec<P>>();
 
             let ((tx1, rx1), (tx2, rx2)) = match distribution {
                 WorkDistribution::PinnedMemoryRegionPairs
@@ -418,7 +432,10 @@ impl BenchmarkRun {
             };
 
             // We stuff everything in a bag. Whichever thread starts first takes the first group.
-            let bag = Arc::new(Mutex::new(vec![(tx1, rx1, payload1), (tx2, rx2, payload2)]));
+            let bag = Arc::new(Mutex::new(vec![
+                (tx1, rx1, payloads1),
+                (tx2, rx2, payloads2),
+            ]));
 
             join_handles.push(BenchmarkRun::spawn_worker(
                 processor_set_1,
@@ -451,27 +468,35 @@ impl BenchmarkRun {
         processor_set: &ProcessorSet,
         ready_signal: Arc<Barrier>,
         completed_signal: Arc<Barrier>,
-        payload_bag: Arc<Mutex<Vec<(mpsc::Sender<P>, mpsc::Receiver<P>, P)>>>,
+        payload_bag: Arc<Mutex<Vec<(mpsc::Sender<Vec<P>>, mpsc::Receiver<Vec<P>>, Vec<P>)>>>,
     ) -> JoinHandle<()> {
         processor_set.spawn_thread({
             move |_| {
-                let (payload_tx, payload_rx, mut payload) =
+                let (payloads_tx, payloads_rx, mut payloads) =
                     payload_bag.lock().unwrap().pop().unwrap();
 
-                payload.prepare();
+                for payload in &mut payloads {
+                    payload.prepare();
+                }
 
                 // Potentially trade payloads with the other worker in the pair.
                 // This may or may not go anywhere - it might just send back to itself.
-                payload_tx.send(payload).unwrap();
-                let payload = payload_rx.recv().unwrap();
+                payloads_tx.send(payloads).unwrap();
+                let mut payloads = payloads_rx.recv().unwrap();
 
                 _ = black_box(clean_caches());
 
                 ready_signal.wait();
 
-                let _ = black_box(payload.process());
+                for payload in &mut payloads {
+                    let _ = black_box(payload.process());
+                }
 
                 completed_signal.wait();
+
+                // The payloads are dropped at the end, after the benchmark time span
+                // measurement ends due to all threads reaching completed_signal.
+                drop(payloads);
             }
         })
     }
@@ -498,11 +523,13 @@ trait Payload: Sized + Send + 'static {
     /// for each other, to showcase what happens when the work is transferred further along).
     fn prepare(&mut self);
 
-    /// Processes the payload, consuming it. The iteration is complete when this returns.
+    /// Processes the payload but does not consume it. The iteration is complete when this returns
+    /// for all payloads. The payloads are dropped later, to ensure that the benchmark time is not
+    /// affected by the time it takes to drop the payload and release the memory.
     ///
     /// The return value is meaningless, just there to deter optimizations
     /// that the compiler might be inclined to make if it saw no data coming out.
-    fn process(self) -> u64;
+    fn process(&mut self) -> u64;
 }
 
 #[derive(Copy, Clone, Debug, Display, Eq, PartialEq)]
@@ -638,7 +665,7 @@ impl Payload for ChannelExchange {
         }
     }
 
-    fn process(self) -> u64 {
+    fn process(&mut self) -> u64 {
         const MESSAGE_PUMP_ITERATION_COUNT: usize = 500_000;
 
         for _ in 0..MESSAGE_PUMP_ITERATION_COUNT {
@@ -680,7 +707,7 @@ impl Payload for HashMapRead {
         }
     }
 
-    fn process(self) -> u64 {
+    fn process(&mut self) -> u64 {
         let mut sum: u64 = 0;
 
         for k in 0..MAP_ENTRY_COUNT {
@@ -710,7 +737,7 @@ impl Payload for FzHashMapRead {
         self.map = FzHashMap::new(entries);
     }
 
-    fn process(self) -> u64 {
+    fn process(&mut self) -> u64 {
         let mut sum: u64 = 0;
 
         for k in 0..MAP_ENTRY_COUNT {
@@ -740,7 +767,7 @@ impl Payload for FzScalarMapRead {
         self.map = FzScalarMap::new(entries);
     }
 
-    fn process(self) -> u64 {
+    fn process(&mut self) -> u64 {
         let mut sum: u64 = 0;
 
         for k in 0..MAP_ENTRY_COUNT {
@@ -755,7 +782,7 @@ const HEADERS_COUNT: usize = 10_000;
 
 #[derive(Debug, Default)]
 struct HttpHeadersParse {
-    serialized: Vec<Vec<u8>>,
+    serialized: Option<Vec<Vec<u8>>>,
 }
 
 impl Payload for HttpHeadersParse {
@@ -764,30 +791,32 @@ impl Payload for HttpHeadersParse {
     }
 
     fn prepare(&mut self) {
-        self.serialized = (0..HEADERS_COUNT)
-            .map(|_| {
-                let headers = Headers::default().generate();
+        self.serialized = Some(
+            (0..HEADERS_COUNT)
+                .map(|_| {
+                    let headers = Headers::default().generate();
 
-                let mut result = String::new();
+                    let mut result = String::new();
 
-                for (key, value) in headers {
-                    result.push_str(&format!("{key}: {value}\r\n"));
-                }
+                    for (key, value) in headers {
+                        result.push_str(&format!("{key}: {value}\r\n"));
+                    }
 
-                result.into_bytes()
-            })
-            .collect_vec();
+                    result.into_bytes()
+                })
+                .collect_vec(),
+        );
     }
 
     /// Memory allocation appears to dominate this scenario - it needs to allocate a bunch of
     /// fresh memory for the headers and header strings, which just makes this a memory allocation
     /// benchmark. The actual parsing is trivial in comparison.
-    /// 
+    ///
     /// Value: low.
-    fn process(self) -> u64 {
+    fn process(&mut self) -> u64 {
         let mut result = 0;
 
-        for serialized in self.serialized {
+        for serialized in self.serialized.take().unwrap() {
             let serialized_str = String::from_utf8(serialized).unwrap();
 
             let mut headers = HeaderMap::new();
