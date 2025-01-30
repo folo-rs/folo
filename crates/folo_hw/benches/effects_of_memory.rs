@@ -113,7 +113,9 @@ fn execute_run<P: Payload, const PAYLOAD_MULTIPLIER: usize>(
                 .map(|p| p.id().to_string())
                 .join(", ");
 
-            println!("Sample distribution {distribution}: ({processor_set_1}) with ({processor_set_2})");
+            println!(
+                "Sample distribution {distribution}: ({processor_set_1}) with ({processor_set_2})"
+            );
         }
     }
 
@@ -618,6 +620,7 @@ const CACHE_CLEANER_LEN_U64: usize = CACHE_CLEANER_LEN_BYTES / mem::size_of::<u6
 // would just slow down the benchmark. The processor does not really care where it is moving the
 // bytes to, we do not need to keep these bytes around for long.
 const CACHE_CLEANER_CHUNK_LEN_BYTES: usize = 128 * 1024;
+const CACHE_CLEANER_CHUNK_LEN_U64: usize = CACHE_CLEANER_CHUNK_LEN_BYTES / mem::size_of::<u64>();
 static CACHE_CLEANER: LazyLock<Vec<u64>> =
     LazyLock::new(|| vec![0x0102030401020304; CACHE_CLEANER_LEN_U64]);
 
@@ -625,27 +628,27 @@ static CACHE_CLEANER: LazyLock<Vec<u64>> =
 /// memory, we need to ensure that memory actually gets accessed - that the data is not simply
 /// cached locally. This function will perform a large memory copy operation, which hopefully
 /// trashes any cache that may be present.
-fn clean_caches() -> u64 {
+pub fn clean_caches() -> u64 {
     // A memory copy should do the trick? Stack-allocate the memory to avoid heap overhead here.
-    let mut buffer = [MaybeUninit::<u8>::uninit(); CACHE_CLEANER_CHUNK_LEN_BYTES];
+    let mut buffer = [MaybeUninit::<u64>::uninit(); CACHE_CLEANER_CHUNK_LEN_U64];
 
-    let mut bytes_remaining = CACHE_CLEANER_LEN_BYTES;
+    let mut u64_remaining = CACHE_CLEANER_LEN_U64;
 
     let mut source = CACHE_CLEANER.as_ptr();
     let destination = buffer.as_mut_ptr().cast();
 
-    while bytes_remaining > 0 {
-        let chunk_len = bytes_remaining.min(CACHE_CLEANER_CHUNK_LEN_BYTES);
+    while u64_remaining > 0 {
+        let chunk_len_u64 = u64_remaining.min(CACHE_CLEANER_CHUNK_LEN_U64);
 
         // SAFETY: We reserved memory for the destination, are using the right length,
         // and they do not overlap. All is well.
         unsafe {
-            std::ptr::copy_nonoverlapping(source, destination, chunk_len);
+            std::ptr::copy_nonoverlapping(source, destination, chunk_len_u64);
         }
 
-        bytes_remaining -= chunk_len;
-        // SAFETY: The math checks out.
-        source = unsafe { source.byte_add(chunk_len) };
+        u64_remaining -= chunk_len_u64;
+        // SAFETY: The math checks out. We are operating in u64 everywhere.
+        source = unsafe { source.add(chunk_len_u64) };
     }
 
     // Paranoia to make sure the compiler doesn't optimize all our valuable work away.
