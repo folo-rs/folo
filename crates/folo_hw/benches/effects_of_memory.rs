@@ -52,12 +52,12 @@ fn entrypoint(c: &mut Criterion) {
     g.finish();
     let mut g = c.benchmark_group("fz_hashmap_read");
 
-    execute_run::<FzHashMapRead, 50>(&mut g, WorkDistribution::PinnedMemoryRegionPairs);
-    execute_run::<FzHashMapRead, 50>(&mut g, WorkDistribution::PinnedSameMemoryRegion);
-    execute_run::<FzHashMapRead, 50>(&mut g, WorkDistribution::PinnedSelf);
-    execute_run::<FzHashMapRead, 50>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
-    execute_run::<FzHashMapRead, 50>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
-    execute_run::<FzHashMapRead, 50>(&mut g, WorkDistribution::UnpinnedSelf);
+    execute_run::<FzHashMapRead, 10>(&mut g, WorkDistribution::PinnedMemoryRegionPairs);
+    execute_run::<FzHashMapRead, 10>(&mut g, WorkDistribution::PinnedSameMemoryRegion);
+    execute_run::<FzHashMapRead, 10>(&mut g, WorkDistribution::PinnedSelf);
+    execute_run::<FzHashMapRead, 10>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
+    execute_run::<FzHashMapRead, 10>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
+    execute_run::<FzHashMapRead, 10>(&mut g, WorkDistribution::UnpinnedSelf);
 
     g.finish();
     let mut g = c.benchmark_group("fz_scalarmap_read");
