@@ -114,7 +114,7 @@ fn execute_run<P: Payload, const PAYLOAD_MULTIPLIER: usize>(
     // between iterations, so to get stable and consistent data it is worth taking some time.
     g.measurement_time(Duration::from_secs(60));
 
-    g.bench_function(format!("{distribution} (x{PAYLOAD_MULTIPLIER})"), |b| {
+    g.bench_function(format!("{distribution}_(x{PAYLOAD_MULTIPLIER})"), |b| {
         b.iter_batched(
             || {
                 let processor_set_pairs = get_processor_set_pairs(distribution)
