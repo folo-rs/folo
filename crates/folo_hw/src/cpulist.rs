@@ -1,12 +1,16 @@
-use itertools::Itertools;
+use itertools::{FoldWhile, Itertools};
 use nonempty::NonEmpty;
+
+use std::collections::VecDeque;
 
 use crate::ProcessorId;
 
 // https://github.com/cloudhead/nonempty/issues/68
 extern crate alloc;
 
-/// Parses a cpulist string in "0,1,2-4,5-9:2,6-10:2" format.
+// TODO: Package this better in some more useful and generalized way.
+
+/// Parses a cpulist string in "0,1,2-4,5-9:2,6-10:2" format, typically used in Linux tooling.
 ///
 /// The string is a comma-separated list of ranges, where each range is either:
 /// * a single number
@@ -16,7 +20,7 @@ extern crate alloc;
 /// Whitespace is not allowed in the input.
 ///
 /// Returns the numeric indexes in ascending sorted order. Removes duplicates if any exist.
-pub(crate) fn parse(cpulist: &str) -> NonEmpty<ProcessorId> {
+pub fn parse(cpulist: &str) -> NonEmpty<ProcessorId> {
     NonEmpty::from_vec(
         cpulist
             .split(',')
@@ -71,14 +75,66 @@ pub(crate) fn parse(cpulist: &str) -> NonEmpty<ProcessorId> {
 }
 
 /// Generates a cpulist that can be parsed by `parse()`.
-#[cfg(test)]
-pub(crate) fn emit(items: NonEmpty<ProcessorId>) -> String {
-    items
+pub fn emit(items: NonEmpty<ProcessorId>) -> String {
+    // Sorted remaining processor IDs that we have not yet grouped.
+
+    let mut remaining = items
         .iter()
         .unique()
         .sorted_unstable()
-        .map(|&item| item.to_string())
-        .join(",")
+        .collect::<VecDeque<_>>();
+
+    // We want to coalesce consecutive numbers into groups (ranges).
+    // Each group is (start ID, len).
+    let mut groups: Vec<(ProcessorId, u32)> = Vec::new();
+
+    while !remaining.is_empty() {
+        let group = remaining.iter().fold_while(
+            None,
+            |acc: Option<(ProcessorId, u32)>, p: &&ProcessorId| {
+                if let Some((start, len)) = acc {
+                    if start + len == **p {
+                        // This processor ID is part of the current group.
+                        FoldWhile::Continue(Some((start, len + 1)))
+                    } else {
+                        // This processor ID is not part of the current group.
+                        FoldWhile::Done(Some((start, len)))
+                    }
+                } else {
+                    // Start a new group.
+                    FoldWhile::Continue(Some((**p, 1)))
+                }
+            },
+        );
+
+        let (start, len) = group
+            .into_inner()
+            .expect("must be Some if we still have remaining items");
+
+        groups.push((start, len));
+
+        for _ in 0..len {
+            remaining.pop_front();
+        }
+    }
+
+    let mut result = String::new();
+
+    for (start, len) in groups {
+        if !result.is_empty() {
+            result.push(',');
+        }
+
+        if len == 1 {
+            result.push_str(&start.to_string());
+        } else if len == 2 {
+            result.push_str(&format!("{},{}", start, start + 1));
+        } else {
+            result.push_str(&format!("{}-{}", start, start + len - 1));
+        }
+    }
+
+    result
 }
 
 #[cfg(test)]
@@ -114,11 +170,18 @@ mod tests {
     fn emit_smoke_test() {
         assert_eq!(emit(nonempty![555]), "555");
 
-        assert_eq!(emit(nonempty![0, 1, 2, 3]), "0,1,2,3");
+        assert_eq!(emit(nonempty![555, 666]), "555,666");
 
-        assert_eq!(emit(nonempty![1, 2, 3]), "1,2,3");
+        assert_eq!(emit(nonempty![0, 1, 2, 3]), "0-3");
 
-        assert_eq!(emit(nonempty![0, 1, 2, 3, 4, 5, 6]), "0,1,2,3,4,5,6");
+        assert_eq!(
+            emit(nonempty![0, 1, 2, 3, 6, 7, 8, 11, 12, 13]),
+            "0-3,6-8,11-13"
+        );
+
+        assert_eq!(emit(nonempty![1, 2, 3]), "1-3");
+
+        assert_eq!(emit(nonempty![0, 1, 2, 3, 4, 5, 6]), "0-6");
 
         assert_eq!(emit(nonempty![0]), "0");
 
@@ -131,10 +194,7 @@ mod tests {
 
         assert_eq!(emit(nonempty![0]), "0");
 
-        assert_eq!(
-            emit(nonempty![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
-            "0,1,2,3,4,5,6,7,8,9,10"
-        );
+        assert_eq!(emit(nonempty![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]), "0-10");
     }
 
     #[test]

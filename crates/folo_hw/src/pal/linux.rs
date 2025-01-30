@@ -1,5 +1,4 @@
 mod bindings;
-mod cpulist;
 mod filesystem;
 mod platform;
 mod processor;

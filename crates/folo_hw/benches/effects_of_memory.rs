@@ -14,7 +14,7 @@ use criterion::{
 };
 use derive_more::derive::Display;
 use fake_headers::Headers;
-use folo_hw::ProcessorSet;
+use folo_hw::{cpulist, ProcessorSet};
 use frozen_collections::{FzHashMap, FzScalarMap, MapQuery};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use itertools::Itertools;
@@ -99,23 +99,14 @@ fn execute_run<P: Payload, const PAYLOAD_MULTIPLIER: usize>(
             return;
         };
 
+        // Print a reference of what sort of processors are selected for this scenario.
+        // Just to help a human reader get a feel for what is configured.
+        // This selection is discarded - each iteration will make a new selection.
         for (processor_set_1, processor_set_2) in sample_processor_selection {
-            // Comma-separated lists of the members of each processor set:
-            let processor_set_1 = processor_set_1
-                .processors()
-                .iter()
-                .map(|p| p.id().to_string())
-                .join(", ");
+            let cpulist1 = cpulist::emit(processor_set_1.processors().map(|p| p.id()));
+            let cpulist2 = cpulist::emit(processor_set_2.processors().map(|p| p.id()));
 
-            let processor_set_2 = processor_set_2
-                .processors()
-                .iter()
-                .map(|p| p.id().to_string())
-                .join(", ");
-
-            println!(
-                "Sample distribution {distribution}: ({processor_set_1}) with ({processor_set_2})"
-            );
+            println!("{distribution} reference selection: ({cpulist1}) & ({cpulist2})");
         }
     }
 
@@ -388,7 +379,7 @@ fn get_processor_set_pairs(
                 // and use this entire set for both workers. The original pair was just to
                 // point to the memory region and is now discarded.
 
-                let real_set = remaining_candidates
+                let real_set = candidates
                     .to_builder()
                     .filter(|c| c.memory_region_id() == pair[0].memory_region_id())
                     .take_all()

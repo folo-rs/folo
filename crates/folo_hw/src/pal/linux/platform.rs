@@ -4,8 +4,9 @@ use itertools::Itertools;
 use nonempty::NonEmpty;
 
 use crate::{
+    cpulist,
     pal::{
-        linux::{cpulist, Bindings, BuildTargetBindings, BuildTargetFilesystem, Filesystem},
+        linux::{Bindings, BuildTargetBindings, BuildTargetFilesystem, Filesystem},
         Platform, ProcessorImpl,
     },
     EfficiencyClass, MemoryRegionId, ProcessorId,
