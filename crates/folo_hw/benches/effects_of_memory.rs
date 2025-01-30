@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
+    env,
     hint::black_box,
     mem::{self, MaybeUninit},
     num::NonZeroUsize,
@@ -81,14 +82,39 @@ fn entrypoint(c: &mut Criterion) {
     g.finish();
 }
 
+fn is_fake_run() -> bool {
+    env::args().any(|a| a == "--test" || a == "--list")
+}
+
 fn execute_run<P: Payload, const PAYLOAD_MULTIPLIER: usize>(
     g: &mut BenchmarkGroup<'_, WallTime>,
     distribution: WorkDistribution,
 ) {
-    // Probe whether we even have enough processors for this run. If not, just skip.
-    if get_processor_set_pairs(distribution).is_none() {
-        eprintln!("Skipping {distribution} - system hardware topology is not compatible.");
-        return;
+    // Writing to stderr during listing/testing leads to test runner errors because it expects
+    // a special protocol to be spoken, so we only emit this output during actual execution.
+    if !is_fake_run() {
+        // Probe whether we even have enough processors for this run. If not, just skip.
+        let Some(sample_processor_selection) = get_processor_set_pairs(distribution) else {
+            println!("Skipping {distribution} - system hardware topology is not compatible.");
+            return;
+        };
+
+        for (processor_set_1, processor_set_2) in sample_processor_selection {
+            // Comma-separated lists of the members of each processor set:
+            let processor_set_1 = processor_set_1
+                .processors()
+                .iter()
+                .map(|p| p.id().to_string())
+                .join(", ");
+
+            let processor_set_2 = processor_set_2
+                .processors()
+                .iter()
+                .map(|p| p.id().to_string())
+                .join(", ");
+
+            println!("Sample distribution {distribution}: ({processor_set_1}) with ({processor_set_2})");
+        }
     }
 
     // These benchmarks can be pretty slow and clearing processor caches adds extra overhead
