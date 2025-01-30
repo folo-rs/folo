@@ -333,23 +333,16 @@ fn get_processor_set_pairs(
             partners.push_back(recycled_processor_set);
 
             // Great success! Almost. We still need to package them up as pairs of ProcessorSets.
-            Some(
-                first_processors
-                    .processors()
-                    .iter()
-                    .zip(partners)
-                    .map(|(&p1, p2_set)| {
-                        let set1 = ProcessorSet::from_processors(nonempty![p1]);
-                        (set1, p2_set)
-                    })
-                    .collect_vec(),
-            )
+            Some(first_processor_sets.into_iter().zip(partners).collect_vec())
         }
         WorkDistribution::UnpinnedSameMemoryRegion => {
             // We remove processors that have already been picked, so each pair
             // gets two processors' worth of processor time from the same memory region.
             // We do not pin them but we do ensure there are enough processors to "fit"
             // all the worker pairs into the memory region, without oversubscribing.
+            //
+            // We do not care which memory region the pairs are in, merely that
+            // both pair members are in the same memory region.
             let mut remaining_candidates = candidates.clone();
 
             let mut result = Vec::with_capacity(worker_pair_count.get());
