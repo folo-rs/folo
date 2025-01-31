@@ -39,6 +39,12 @@ const TWO_PROCESSORS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 /// internal data structures like bucket indexes may still be accessed consistently from cache.
 const SMALL_MAP_ENTRY_COUNT: usize = 128 * 1024; // 128K x u64 = 1 MB of useful payload, cache-friendly
 
+/// A large data set is unlikely to fit into processor caches, even into large L3 caches, and will
+/// likely require trips to main memory for repeated access.
+/// 
+/// This only matters for non-read-only benchmarks (as the first read is always from main memory).
+const LARGE_MAP_ENTRY_COUNT: usize = 256 * 128 * 1024; // 64 MB, not very cache-friendly.
+
 fn entrypoint(c: &mut Criterion) {
     let mut g = c.benchmark_group("channel_exchange");
 
@@ -225,6 +231,28 @@ fn entrypoint(c: &mut Criterion) {
         WorkDistribution::UnpinnedSameMemoryRegion,
     );
     execute_run::<SccMapShared<SMALL_MAP_ENTRY_COUNT>, 1>(&mut g, WorkDistribution::UnpinnedSelf);
+
+    g.finish();
+    let mut g = c.benchmark_group("scc_map_shared_large");
+
+    execute_run::<SccMapShared<LARGE_MAP_ENTRY_COUNT>, 1>(
+        &mut g,
+        WorkDistribution::PinnedMemoryRegionPairs,
+    );
+    execute_run::<SccMapShared<LARGE_MAP_ENTRY_COUNT>, 1>(
+        &mut g,
+        WorkDistribution::PinnedSameMemoryRegion,
+    );
+    execute_run::<SccMapShared<LARGE_MAP_ENTRY_COUNT>, 1>(&mut g, WorkDistribution::PinnedSelf);
+    execute_run::<SccMapShared<LARGE_MAP_ENTRY_COUNT>, 1>(
+        &mut g,
+        WorkDistribution::UnpinnedMemoryRegionPairs,
+    );
+    execute_run::<SccMapShared<LARGE_MAP_ENTRY_COUNT>, 1>(
+        &mut g,
+        WorkDistribution::UnpinnedSameMemoryRegion,
+    );
+    execute_run::<SccMapShared<LARGE_MAP_ENTRY_COUNT>, 1>(&mut g, WorkDistribution::UnpinnedSelf);
 
     g.finish();
 }
