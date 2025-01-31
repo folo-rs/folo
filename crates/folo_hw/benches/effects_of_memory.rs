@@ -810,11 +810,6 @@ impl Payload for HttpHeadersParse {
         );
     }
 
-    /// Memory allocation appears to dominate this scenario - it needs to allocate a bunch of
-    /// fresh memory for the headers and header strings, which just makes this a memory allocation
-    /// benchmark. The actual parsing is trivial in comparison.
-    ///
-    /// Value: low.
     fn process(&mut self) {
         for serialized in self.serialized.take().unwrap() {
             // SAFETY: We serialized proper utf-8, it is fine.
