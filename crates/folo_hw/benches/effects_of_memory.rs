@@ -4,7 +4,7 @@ use std::{
     hint::black_box,
     mem::{self, MaybeUninit},
     num::NonZeroUsize,
-    sync::{mpsc, Arc, Barrier, LazyLock, Mutex},
+    sync::{mpsc, Arc, Barrier, LazyLock, Mutex, RwLock},
     thread::JoinHandle,
     time::Duration,
 };
@@ -31,6 +31,14 @@ criterion_main!(benches);
 const ONE_PROCESSOR: NonZeroUsize = NonZeroUsize::new(1).unwrap();
 const TWO_PROCESSORS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
+/// A "small" data set is likely to fit into processor caches, demonstrating the effect of memory
+/// access on typically cached data).
+///
+/// Benchmarks with "_read" in their name only read the data once, so the majority of their data
+/// will only be read from main memory once and never again, making cache effects minimal, though
+/// internal data structures like bucket indexes may still be accessed consistently from cache.
+const SMALL_MAP_ENTRY_COUNT: usize = 128 * 1024; // 128K x u64 = 1 MB of useful payload, cache-friendly
+
 fn entrypoint(c: &mut Criterion) {
     let mut g = c.benchmark_group("channel_exchange");
 
@@ -40,34 +48,101 @@ fn entrypoint(c: &mut Criterion) {
     execute_run::<ChannelExchange, 1>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
 
     g.finish();
-    let mut g = c.benchmark_group("hashmap_read");
+    let mut g = c.benchmark_group("hashmap_small_read");
 
-    execute_run::<HashMapRead, 10>(&mut g, WorkDistribution::PinnedMemoryRegionPairs);
-    execute_run::<HashMapRead, 10>(&mut g, WorkDistribution::PinnedSameMemoryRegion);
-    execute_run::<HashMapRead, 10>(&mut g, WorkDistribution::PinnedSelf);
-    execute_run::<HashMapRead, 10>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
-    execute_run::<HashMapRead, 10>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
-    execute_run::<HashMapRead, 10>(&mut g, WorkDistribution::UnpinnedSelf);
+    execute_run::<HashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::PinnedMemoryRegionPairs,
+    );
+    execute_run::<HashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::PinnedSameMemoryRegion,
+    );
+    execute_run::<HashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(&mut g, WorkDistribution::PinnedSelf);
+    execute_run::<HashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::UnpinnedMemoryRegionPairs,
+    );
+    execute_run::<HashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::UnpinnedSameMemoryRegion,
+    );
+    execute_run::<HashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(&mut g, WorkDistribution::UnpinnedSelf);
 
     g.finish();
-    let mut g = c.benchmark_group("fz_hashmap_read");
+    let mut g = c.benchmark_group("hashmap_small_shared_read");
 
-    execute_run::<FzHashMapRead, 10>(&mut g, WorkDistribution::PinnedMemoryRegionPairs);
-    execute_run::<FzHashMapRead, 10>(&mut g, WorkDistribution::PinnedSameMemoryRegion);
-    execute_run::<FzHashMapRead, 10>(&mut g, WorkDistribution::PinnedSelf);
-    execute_run::<FzHashMapRead, 10>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
-    execute_run::<FzHashMapRead, 10>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
-    execute_run::<FzHashMapRead, 10>(&mut g, WorkDistribution::UnpinnedSelf);
+    execute_run::<HashMapSharedRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::PinnedMemoryRegionPairs,
+    );
+    execute_run::<HashMapSharedRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::PinnedSameMemoryRegion,
+    );
+    execute_run::<HashMapSharedRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::PinnedSelf,
+    );
+    execute_run::<HashMapSharedRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::UnpinnedMemoryRegionPairs,
+    );
+    execute_run::<HashMapSharedRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::UnpinnedSameMemoryRegion,
+    );
+    execute_run::<HashMapSharedRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::UnpinnedSelf,
+    );
 
     g.finish();
-    let mut g = c.benchmark_group("fz_scalarmap_read");
+    let mut g = c.benchmark_group("fz_hashmap_small_read");
 
-    execute_run::<FzScalarMapRead, 50>(&mut g, WorkDistribution::PinnedMemoryRegionPairs);
-    execute_run::<FzScalarMapRead, 50>(&mut g, WorkDistribution::PinnedSameMemoryRegion);
-    execute_run::<FzScalarMapRead, 50>(&mut g, WorkDistribution::PinnedSelf);
-    execute_run::<FzScalarMapRead, 50>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
-    execute_run::<FzScalarMapRead, 50>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
-    execute_run::<FzScalarMapRead, 50>(&mut g, WorkDistribution::UnpinnedSelf);
+    execute_run::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::PinnedMemoryRegionPairs,
+    );
+    execute_run::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::PinnedSameMemoryRegion,
+    );
+    execute_run::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(&mut g, WorkDistribution::PinnedSelf);
+    execute_run::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::UnpinnedMemoryRegionPairs,
+    );
+    execute_run::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::UnpinnedSameMemoryRegion,
+    );
+    execute_run::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(&mut g, WorkDistribution::UnpinnedSelf);
+
+    g.finish();
+    let mut g = c.benchmark_group("fz_scalarmap_small_read");
+
+    execute_run::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT>, 50>(
+        &mut g,
+        WorkDistribution::PinnedMemoryRegionPairs,
+    );
+    execute_run::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT>, 50>(
+        &mut g,
+        WorkDistribution::PinnedSameMemoryRegion,
+    );
+    execute_run::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT>, 50>(&mut g, WorkDistribution::PinnedSelf);
+    execute_run::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT>, 50>(
+        &mut g,
+        WorkDistribution::UnpinnedMemoryRegionPairs,
+    );
+    execute_run::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT>, 50>(
+        &mut g,
+        WorkDistribution::UnpinnedSameMemoryRegion,
+    );
+    execute_run::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT>, 50>(
+        &mut g,
+        WorkDistribution::UnpinnedSelf,
+    );
 
     g.finish();
     let mut g = c.benchmark_group("http_headers_parse");
@@ -78,6 +153,78 @@ fn entrypoint(c: &mut Criterion) {
     execute_run::<HttpHeadersParse, 1>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
     execute_run::<HttpHeadersParse, 1>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
     execute_run::<HttpHeadersParse, 1>(&mut g, WorkDistribution::UnpinnedSelf);
+
+    g.finish();
+    let mut g = c.benchmark_group("scc_map_small_read");
+
+    execute_run::<SccMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::PinnedMemoryRegionPairs,
+    );
+    execute_run::<SccMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::PinnedSameMemoryRegion,
+    );
+    execute_run::<SccMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(&mut g, WorkDistribution::PinnedSelf);
+    execute_run::<SccMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::UnpinnedMemoryRegionPairs,
+    );
+    execute_run::<SccMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::UnpinnedSameMemoryRegion,
+    );
+    execute_run::<SccMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(&mut g, WorkDistribution::UnpinnedSelf);
+
+    g.finish();
+    let mut g = c.benchmark_group("scc_map_shared_small_read");
+
+    execute_run::<SccMapSharedRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::PinnedMemoryRegionPairs,
+    );
+    execute_run::<SccMapSharedRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::PinnedSameMemoryRegion,
+    );
+    execute_run::<SccMapSharedRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::PinnedSelf,
+    );
+    execute_run::<SccMapSharedRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::UnpinnedMemoryRegionPairs,
+    );
+    execute_run::<SccMapSharedRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::UnpinnedSameMemoryRegion,
+    );
+    execute_run::<SccMapSharedRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::UnpinnedSelf,
+    );
+
+    g.finish();
+    let mut g = c.benchmark_group("scc_map_shared_small");
+
+    execute_run::<SccMapShared<SMALL_MAP_ENTRY_COUNT>, 1>(
+        &mut g,
+        WorkDistribution::PinnedMemoryRegionPairs,
+    );
+    execute_run::<SccMapShared<SMALL_MAP_ENTRY_COUNT>, 1>(
+        &mut g,
+        WorkDistribution::PinnedSameMemoryRegion,
+    );
+    execute_run::<SccMapShared<SMALL_MAP_ENTRY_COUNT>, 1>(&mut g, WorkDistribution::PinnedSelf);
+    execute_run::<SccMapShared<SMALL_MAP_ENTRY_COUNT>, 1>(
+        &mut g,
+        WorkDistribution::UnpinnedMemoryRegionPairs,
+    );
+    execute_run::<SccMapShared<SMALL_MAP_ENTRY_COUNT>, 1>(
+        &mut g,
+        WorkDistribution::UnpinnedSameMemoryRegion,
+    );
+    execute_run::<SccMapShared<SMALL_MAP_ENTRY_COUNT>, 1>(&mut g, WorkDistribution::UnpinnedSelf);
 
     g.finish();
 }
@@ -694,28 +841,20 @@ impl Payload for ChannelExchange {
     }
 }
 
-// The logic behind this sizing is that we want to show "meaningful" numbers that actually show
-// off the memory-access-friendliness of the different map data structures instead of just making
-// it a benchmark of "how fast is reading 100s of MB from main memory". This means the data set
-// should be small enough to be cacheable - we care about how fast it gets into the local caches
-// and how well the data structure structures its memory accesses, to give the different data
-// structures the opportunity to compete instead of just making it about how fast the
-// "picking of entries from cold memory" part itself takes (which is trivial to measure but also
-// better to measure with hardware manufacturer provided tools - pure memory throughput is easy).
-const MAP_ENTRY_COUNT: usize = 128 * 1024; // 128K x u64 = 1 MB of useful payload, cache-friendly
-
 /// The first worker generates a hashmap; the other reads all elements from it.
 #[derive(Debug, Default)]
-struct HashMapRead {
+struct HashMapRead<const MAP_ENTRY_COUNT: usize> {
     map: HashMap<u64, u64>,
 }
 
-impl Payload for HashMapRead {
+impl<const MAP_ENTRY_COUNT: usize> Payload for HashMapRead<MAP_ENTRY_COUNT> {
     fn new_pair() -> (Self, Self) {
         (Self::default(), Self::default())
     }
 
     fn prepare(&mut self) {
+        self.map = HashMap::with_capacity(MAP_ENTRY_COUNT);
+
         for i in 0..MAP_ENTRY_COUNT {
             self.map.insert(i as u64, (i * 2) as u64);
         }
@@ -728,13 +867,59 @@ impl Payload for HashMapRead {
     }
 }
 
+/// The workers read the same shared map once.
+#[derive(Debug, Default)]
+struct HashMapSharedRead<const MAP_ENTRY_COUNT: usize> {
+    map: Arc<RwLock<HashMap<u64, u64>>>,
+
+    // Only needs to be filled by one of the workers, where is is true.
+    is_filler: bool,
+}
+
+impl<const MAP_ENTRY_COUNT: usize> Payload for HashMapSharedRead<MAP_ENTRY_COUNT> {
+    fn new_pair() -> (Self, Self) {
+        let map = Arc::new(RwLock::new(HashMap::with_capacity(MAP_ENTRY_COUNT)));
+
+        let worker1 = Self {
+            map: Arc::clone(&map),
+            is_filler: true,
+        };
+        let worker2 = Self {
+            map,
+            is_filler: false,
+        };
+
+        (worker1, worker2)
+    }
+
+    fn prepare(&mut self) {
+        if !self.is_filler {
+            return;
+        }
+
+        let mut map = self.map.write().unwrap();
+
+        for i in 0..MAP_ENTRY_COUNT {
+            map.insert(i as u64, (i * 2) as u64);
+        }
+    }
+
+    fn process(&mut self) {
+        let map = self.map.read().unwrap();
+
+        for k in 0..MAP_ENTRY_COUNT {
+            black_box(map.get(&(k as u64)));
+        }
+    }
+}
+
 /// The first worker generates a frozen hashmap; the other reads all elements from it.
 #[derive(Debug, Default)]
-struct FzHashMapRead {
+struct FzHashMapRead<const MAP_ENTRY_COUNT: usize> {
     map: FzHashMap<u64, u64>,
 }
 
-impl Payload for FzHashMapRead {
+impl<const MAP_ENTRY_COUNT: usize> Payload for FzHashMapRead<MAP_ENTRY_COUNT> {
     fn new_pair() -> (Self, Self) {
         (Self::default(), Self::default())
     }
@@ -756,11 +941,11 @@ impl Payload for FzHashMapRead {
 
 /// The first worker generates a frozen scalar map; the other reads all elements from it.
 #[derive(Debug, Default)]
-struct FzScalarMapRead {
+struct FzScalarMapRead<const MAP_ENTRY_COUNT: usize> {
     map: FzScalarMap<u64, u64>,
 }
 
-impl Payload for FzScalarMapRead {
+impl<const MAP_ENTRY_COUNT: usize> Payload for FzScalarMapRead<MAP_ENTRY_COUNT> {
     fn new_pair() -> (Self, Self) {
         (Self::default(), Self::default())
     }
@@ -776,6 +961,131 @@ impl Payload for FzScalarMapRead {
     fn process(&mut self) {
         for k in 0..MAP_ENTRY_COUNT {
             black_box(self.map.get(&(k as u64)));
+        }
+    }
+}
+
+/// The first worker generates an SCC map; the other reads all elements from it.
+#[derive(Debug, Default)]
+struct SccMapRead<const MAP_ENTRY_COUNT: usize> {
+    map: scc::HashMap<u64, u64>,
+}
+
+impl<const MAP_ENTRY_COUNT: usize> Payload for SccMapRead<MAP_ENTRY_COUNT> {
+    fn new_pair() -> (Self, Self) {
+        (Self::default(), Self::default())
+    }
+
+    fn prepare(&mut self) {
+        self.map = scc::HashMap::with_capacity(MAP_ENTRY_COUNT);
+
+        for i in 0..MAP_ENTRY_COUNT {
+            self.map.insert(i as u64, (i * 2) as u64).unwrap();
+        }
+    }
+
+    fn process(&mut self) {
+        for k in 0..MAP_ENTRY_COUNT {
+            black_box(self.map.get(&(k as u64)));
+        }
+    }
+}
+
+/// Two workers read the same shared map once.
+#[derive(Debug, Default)]
+struct SccMapSharedRead<const MAP_ENTRY_COUNT: usize> {
+    map: Arc<scc::HashMap<u64, u64>>,
+
+    // Only needs to be filled by one of the workers, where is is true.
+    is_filler: bool,
+}
+
+impl<const MAP_ENTRY_COUNT: usize> Payload for SccMapSharedRead<MAP_ENTRY_COUNT> {
+    fn new_pair() -> (Self, Self) {
+        let map = Arc::new(scc::HashMap::with_capacity(MAP_ENTRY_COUNT));
+
+        let worker1 = Self {
+            map: Arc::clone(&map),
+            is_filler: true,
+        };
+        let worker2 = Self {
+            map,
+            is_filler: false,
+        };
+
+        (worker1, worker2)
+    }
+
+    fn prepare(&mut self) {
+        if !self.is_filler {
+            return;
+        }
+
+        for i in 0..MAP_ENTRY_COUNT {
+            self.map.insert(i as u64, (i * 2) as u64).unwrap();
+        }
+    }
+
+    fn process(&mut self) {
+        for k in 0..MAP_ENTRY_COUNT {
+            black_box(self.map.get(&(k as u64)));
+        }
+    }
+}
+
+/// Two workers increment entries in the same shared map, one worker from high to low, the other
+/// from low to high, to avoid conflicting on the same keys. We want to see data effects, not lock
+/// contention.
+#[derive(Debug, Default)]
+struct SccMapShared<const MAP_ENTRY_COUNT: usize> {
+    map: Arc<scc::HashMap<u64, u64>>,
+
+    // Determines whether it does the initial fill and which direction it iterates.
+    is_worker_1: bool,
+}
+
+impl<const MAP_ENTRY_COUNT: usize> SccMapShared<MAP_ENTRY_COUNT> {
+    fn increment(&self, key: u64) {
+        let mut value = black_box(self.map.get(&key).unwrap());
+        *value += 1;
+    }
+}
+
+impl<const MAP_ENTRY_COUNT: usize> Payload for SccMapShared<MAP_ENTRY_COUNT> {
+    fn new_pair() -> (Self, Self) {
+        let map = Arc::new(scc::HashMap::with_capacity(MAP_ENTRY_COUNT));
+
+        let worker1 = Self {
+            map: Arc::clone(&map),
+            is_worker_1: true,
+        };
+        let worker2 = Self {
+            map,
+            is_worker_1: false,
+        };
+
+        (worker1, worker2)
+    }
+
+    fn prepare(&mut self) {
+        if !self.is_worker_1 {
+            return;
+        }
+
+        for i in 0..MAP_ENTRY_COUNT {
+            self.map.insert(i as u64, (i * 2) as u64).unwrap();
+        }
+    }
+
+    fn process(&mut self) {
+        if self.is_worker_1 {
+            for key in 0..MAP_ENTRY_COUNT as u64 {
+                self.increment(key);
+            }
+        } else {
+            for key in (0..MAP_ENTRY_COUNT as u64).rev() {
+                self.increment(key);
+            }
         }
     }
 }

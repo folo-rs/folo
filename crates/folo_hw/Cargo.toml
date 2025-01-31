@@ -29,6 +29,7 @@ fake_headers = "0.0"
 frozen-collections = "0.3"
 http = "1"
 mockall = "0.13"
+scc = "2"
 
 [[bench]]
 name = "effects_of_memory"
