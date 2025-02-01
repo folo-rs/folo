@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fmt::Debug,
     num::NonZeroUsize,
 };
@@ -118,28 +118,33 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
                 // We will start decrementing it to zero.
                 let count = count.get();
 
-                // We shuffle the memory regions and just take random processors from the first
-                // one remaining until the count has been satisfied.
-                let mut remaining_memory_regions = candidates.keys().copied().collect::<Vec<_>>();
+                // We shuffle the memory regions and sort them by size, so if there are memory
+                // regions with different numbers of candidates we will prefer the ones with more,
+                // although we will consider all memory regions with at least 'count' candidates
+                // as equal in sort order to avoid needlessly preferring giant memory regions.
+                let mut remaining_memory_regions = candidates.keys().copied().collect_vec();
+                remaining_memory_regions.shuffle(&mut thread_rng());
+                remaining_memory_regions.sort_unstable_by_key(|x| {
+                    candidates
+                        .get(x)
+                        .expect("region must exist - we just got it from there")
+                        .len()
+                        // Clamp the length to `count` to treat all larger regions equally.
+                        .min(count)
+                });
+                // We want to start with the largest memory regions first.
+                remaining_memory_regions.reverse();
+
+                let mut remaining_memory_regions = VecDeque::from(remaining_memory_regions);
+
                 let mut processors: Vec<ProcessorCore<PAL>> = Vec::with_capacity(count);
 
                 while processors.len() < count {
-                    if remaining_memory_regions.is_empty() {
-                        // Not enough candidates remaining to satisfy request.
-                        return None;
-                    }
+                    let memory_region = remaining_memory_regions.pop_front()?;
 
-                    let (i, memory_region) = remaining_memory_regions
-                        .iter()
-                        .enumerate()
-                        .choose(&mut rand::thread_rng())
-                        .expect("we picked a random existing index - element must exist");
-
-                    let processors_in_region = candidates.get(memory_region).expect(
-                        "we picked an existing key for an existing HashSet - the values must exist",
+                    let processors_in_region = candidates.get(&memory_region).expect(
+                        "we picked an existing key from an existing HashSet - the values must exist",
                     );
-
-                    remaining_memory_regions.remove(i);
 
                     // There might not be enough to fill the request, which is fine.
                     let choose_count = count.min(processors_in_region.len());
@@ -407,8 +412,9 @@ mod tests {
     // https://github.com/cloudhead/nonempty/issues/68
     extern crate alloc;
 
-    const TWO_USIZE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(2) };
-    const THREE_USIZE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(3) };
+    const TWO_USIZE: NonZeroUsize = NonZeroUsize::new(2).unwrap();
+    const THREE_USIZE: NonZeroUsize = NonZeroUsize::new(3).unwrap();
+    const FOUR_USIZE: NonZeroUsize = NonZeroUsize::new(4).unwrap();
 
     #[test]
     fn smoke_test() {
@@ -442,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn test_efficiency_class_filter_take() {
+    fn efficiency_class_filter_take() {
         static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
             let mut mock = MockPlatform::new();
 
@@ -472,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn test_efficiency_class_filter_take_all() {
+    fn efficiency_class_filter_take_all() {
         static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
             let mut mock = MockPlatform::new();
 
@@ -502,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn test_take_n_processors() {
+    fn take_n_processors() {
         static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
             let mut mock = MockPlatform::new();
 
@@ -536,7 +542,7 @@ mod tests {
     }
 
     #[test]
-    fn test_take_n_not_enough_processors() {
+    fn take_n_not_enough_processors() {
         static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
             let mut mock = MockPlatform::new();
 
@@ -565,7 +571,7 @@ mod tests {
     }
 
     #[test]
-    fn test_take_all_not_enough_processors() {
+    fn take_all_not_enough_processors() {
         static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
             let mut mock = MockPlatform::new();
 
@@ -587,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn test_except_filter_take() {
+    fn except_filter_take() {
         static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
             let mut mock = MockPlatform::new();
 
@@ -621,7 +627,7 @@ mod tests {
     }
 
     #[test]
-    fn test_except_filter_take_all() {
+    fn except_filter_take_all() {
         static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
             let mut mock = MockPlatform::new();
 
@@ -654,7 +660,7 @@ mod tests {
     }
 
     #[test]
-    fn test_custom_filter_take() {
+    fn custom_filter_take() {
         static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
             let mut mock = MockPlatform::new();
 
@@ -684,7 +690,7 @@ mod tests {
     }
 
     #[test]
-    fn test_custom_filter_take_all() {
+    fn custom_filter_take_all() {
         static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
             let mut mock = MockPlatform::new();
 
@@ -714,7 +720,7 @@ mod tests {
     }
 
     #[test]
-    fn test_same_memory_region_filter_take() {
+    fn same_memory_region_filter_take() {
         static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
             let mut mock = MockPlatform::new();
 
@@ -743,7 +749,7 @@ mod tests {
     }
 
     #[test]
-    fn test_same_memory_region_filter_take_all() {
+    fn same_memory_region_filter_take_all() {
         static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
             let mut mock = MockPlatform::new();
 
@@ -772,7 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn test_different_memory_region_filter_take() {
+    fn different_memory_region_filter_take() {
         static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
             let mut mock = MockPlatform::new();
 
@@ -801,7 +807,7 @@ mod tests {
     }
 
     #[test]
-    fn test_different_memory_region_filter_take_all() {
+    fn different_memory_region_filter_take_all() {
         static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
             let mut mock = MockPlatform::new();
 
@@ -830,7 +836,7 @@ mod tests {
     }
 
     #[test]
-    fn test_filter_combinations() {
+    fn filter_combinations() {
         static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
             let mut mock = MockPlatform::new();
 
@@ -871,7 +877,7 @@ mod tests {
     }
 
     #[test]
-    fn test_same_memory_region_take_two_processors() {
+    fn same_memory_region_take_two_processors() {
         static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
             let mut mock = MockPlatform::new();
 
@@ -907,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn test_different_memory_region_and_efficiency_class_filters() {
+    fn different_memory_region_and_efficiency_class_filters() {
         static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
             let mut mock = MockPlatform::new();
 
@@ -952,7 +958,7 @@ mod tests {
     }
 
     #[test]
-    fn test_performance_processors_but_all_efficiency() {
+    fn performance_processors_but_all_efficiency() {
         static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
             let mut mock = MockPlatform::new();
             let pal_processors = nonempty![FakeProcessor {
@@ -971,7 +977,7 @@ mod tests {
     }
 
     #[test]
-    fn test_require_different_single_region() {
+    fn require_different_single_region() {
         static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
             let mut mock = MockPlatform::new();
             let pal_processors = nonempty![FakeProcessor {
@@ -989,6 +995,263 @@ mod tests {
         assert!(
             set.is_none(),
             "Should fail because there's not enough distinct memory regions."
+        );
+    }
+
+    #[test]
+    fn prefer_different_memory_regions_take_all() {
+        static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
+            let mut mock = MockPlatform::new();
+
+            let pal_processors = nonempty![
+                FakeProcessor {
+                    index: 0,
+                    memory_region: 0,
+                    efficiency_class: EfficiencyClass::Efficiency,
+                },
+                FakeProcessor {
+                    index: 1,
+                    memory_region: 1,
+                    efficiency_class: EfficiencyClass::Performance,
+                },
+                FakeProcessor {
+                    index: 2,
+                    memory_region: 1,
+                    efficiency_class: EfficiencyClass::Efficiency,
+                }
+            ];
+
+            mock.expect_get_all_processors_core()
+                .return_const(pal_processors);
+
+            mock
+        });
+
+        let builder = ProcessorSetBuilderCore::new(&*PAL);
+        let set = builder
+            .prefer_different_memory_regions()
+            .take_all()
+            .unwrap();
+        assert_eq!(set.len(), 3);
+    }
+
+    #[test]
+    fn prefer_different_memory_regions_take_n() {
+        static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
+            let mut mock = MockPlatform::new();
+
+            let pal_processors = nonempty![
+                FakeProcessor {
+                    index: 0,
+                    memory_region: 0,
+                    efficiency_class: EfficiencyClass::Efficiency,
+                },
+                FakeProcessor {
+                    index: 1,
+                    memory_region: 1,
+                    efficiency_class: EfficiencyClass::Performance,
+                },
+                FakeProcessor {
+                    index: 2,
+                    memory_region: 1,
+                    efficiency_class: EfficiencyClass::Efficiency,
+                },
+                FakeProcessor {
+                    index: 3,
+                    memory_region: 2,
+                    efficiency_class: EfficiencyClass::Performance,
+                }
+            ];
+
+            mock.expect_get_all_processors_core()
+                .return_const(pal_processors);
+
+            mock
+        });
+
+        let builder = ProcessorSetBuilderCore::new(&*PAL);
+        let set = builder
+            .prefer_different_memory_regions()
+            .take(TWO_USIZE)
+            .unwrap();
+        assert_eq!(set.len(), 2);
+        let regions: HashSet<_> = set.processors().map(|p| p.memory_region_id()).collect();
+        assert_eq!(regions.len(), 2);
+    }
+
+    #[test]
+    fn prefer_same_memory_regions_take_n() {
+        static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
+            let mut mock = MockPlatform::new();
+
+            let pal_processors = nonempty![
+                FakeProcessor {
+                    index: 0,
+                    memory_region: 0,
+                    efficiency_class: EfficiencyClass::Efficiency,
+                },
+                FakeProcessor {
+                    index: 1,
+                    memory_region: 1,
+                    efficiency_class: EfficiencyClass::Performance,
+                },
+                FakeProcessor {
+                    index: 2,
+                    memory_region: 1,
+                    efficiency_class: EfficiencyClass::Efficiency,
+                },
+                FakeProcessor {
+                    index: 3,
+                    memory_region: 2,
+                    efficiency_class: EfficiencyClass::Performance,
+                }
+            ];
+
+            mock.expect_get_all_processors_core()
+                .return_const(pal_processors);
+
+            mock
+        });
+
+        let builder = ProcessorSetBuilderCore::new(&*PAL);
+        let set = builder.prefer_same_memory_region().take(TWO_USIZE).unwrap();
+        assert_eq!(set.len(), 2);
+        let regions: HashSet<_> = set.processors().map(|p| p.memory_region_id()).collect();
+        assert_eq!(regions.len(), 1);
+    }
+
+    #[test]
+    fn prefer_different_memory_regions_take_n_not_enough() {
+        static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
+            let mut mock = MockPlatform::new();
+
+            let pal_processors = nonempty![
+                FakeProcessor {
+                    index: 0,
+                    memory_region: 0,
+                    efficiency_class: EfficiencyClass::Efficiency,
+                },
+                FakeProcessor {
+                    index: 1,
+                    memory_region: 1,
+                    efficiency_class: EfficiencyClass::Performance,
+                },
+                FakeProcessor {
+                    index: 2,
+                    memory_region: 1,
+                    efficiency_class: EfficiencyClass::Efficiency,
+                },
+                FakeProcessor {
+                    index: 3,
+                    memory_region: 2,
+                    efficiency_class: EfficiencyClass::Performance,
+                }
+            ];
+
+            mock.expect_get_all_processors_core()
+                .return_const(pal_processors);
+
+            mock
+        });
+
+        let builder = ProcessorSetBuilderCore::new(&*PAL);
+        let set = builder
+            .prefer_different_memory_regions()
+            .take(FOUR_USIZE)
+            .unwrap();
+        assert_eq!(set.len(), 4);
+    }
+
+    #[test]
+    fn prefer_same_memory_regions_take_n_not_enough() {
+        static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
+            let mut mock = MockPlatform::new();
+
+            let pal_processors = nonempty![
+                FakeProcessor {
+                    index: 0,
+                    memory_region: 0,
+                    efficiency_class: EfficiencyClass::Efficiency,
+                },
+                FakeProcessor {
+                    index: 1,
+                    memory_region: 1,
+                    efficiency_class: EfficiencyClass::Performance,
+                },
+                FakeProcessor {
+                    index: 2,
+                    memory_region: 1,
+                    efficiency_class: EfficiencyClass::Efficiency,
+                },
+                FakeProcessor {
+                    index: 3,
+                    memory_region: 2,
+                    efficiency_class: EfficiencyClass::Performance,
+                }
+            ];
+
+            mock.expect_get_all_processors_core()
+                .return_const(pal_processors);
+
+            mock
+        });
+
+        let builder = ProcessorSetBuilderCore::new(&*PAL);
+        let set = builder
+            .prefer_same_memory_region()
+            .take(THREE_USIZE)
+            .unwrap();
+        assert_eq!(set.len(), 3);
+        let regions: HashSet<_> = set.processors().map(|p| p.memory_region_id()).collect();
+        assert_eq!(
+            2,
+            regions.len(),
+            "should have picked to minimize memory regions (biggest first)"
+        );
+    }
+
+    #[test]
+    fn prefer_same_memory_regions_take_n_picks_best_fit() {
+        static PAL: LazyLock<MockPlatform> = LazyLock::new(|| {
+            let mut mock = MockPlatform::new();
+
+            let pal_processors = nonempty![
+                FakeProcessor {
+                    index: 0,
+                    memory_region: 0,
+                    efficiency_class: EfficiencyClass::Efficiency,
+                },
+                FakeProcessor {
+                    index: 1,
+                    memory_region: 1,
+                    efficiency_class: EfficiencyClass::Performance,
+                },
+                FakeProcessor {
+                    index: 2,
+                    memory_region: 1,
+                    efficiency_class: EfficiencyClass::Efficiency,
+                },
+                FakeProcessor {
+                    index: 3,
+                    memory_region: 2,
+                    efficiency_class: EfficiencyClass::Performance,
+                }
+            ];
+
+            mock.expect_get_all_processors_core()
+                .return_const(pal_processors);
+
+            mock
+        });
+
+        let builder = ProcessorSetBuilderCore::new(&*PAL);
+        let set = builder.prefer_same_memory_region().take(TWO_USIZE).unwrap();
+        assert_eq!(set.len(), 2);
+        let regions: HashSet<_> = set.processors().map(|p| p.memory_region_id()).collect();
+        assert_eq!(
+            1,
+            regions.len(),
+            "should have picked from memory region 1 which  can accommodate the preference"
         );
     }
 }
