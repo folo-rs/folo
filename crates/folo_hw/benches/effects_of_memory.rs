@@ -43,7 +43,7 @@ const SMALL_MAP_ENTRY_COUNT: usize = 128 * 1024; // 128K x u64 = 1 MB of useful 
 /// likely require trips to main memory for repeated access.
 /// 
 /// This only matters for non-read-only benchmarks (as the first read is always from main memory).
-const LARGE_MAP_ENTRY_COUNT: usize = 256 * 128 * 1024; // 64 MB, not very cache-friendly.
+const LARGE_MAP_ENTRY_COUNT: usize = 256 * 128 * 1024; // 256 MB, not very cache-friendly.
 
 fn entrypoint(c: &mut Criterion) {
     let mut g = c.benchmark_group("channel_exchange");
