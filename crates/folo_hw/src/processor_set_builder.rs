@@ -57,6 +57,24 @@ impl ProcessorSetBuilder {
         }
     }
 
+    /// Declares a preference that all processors in the set be from different memory regions,
+    /// though will select multiple processors from the same memory region as needed to satisfy
+    /// the requested processor count (while keeping the spread maximal).
+    pub fn prefer_different_memory_regions(self) -> Self {
+        Self {
+            core: self.core.prefer_different_memory_regions(),
+        }
+    }
+
+    /// Declares a preference that all processors in the set be from the same memory region,
+    /// though will select processors from different memory regions as needed to satisfy the
+    /// requested processor count (while keeping the spread minimal).
+    pub fn prefer_same_memory_region(self) -> Self {
+        Self {
+            core: self.core.prefer_same_memory_region(),
+        }
+    }
+
     /// Uses a predicate to identify processors that are valid candidates for building the
     /// processor set, with a return value of `bool` indicating that a processor is a valid
     /// candidate for selection into the set.

@@ -29,7 +29,7 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
     pub(crate) fn new(pal: &'static PAL) -> Self {
         Self {
             processor_type_selector: ProcessorTypeSelector::Any,
-            memory_region_selector: MemoryRegionSelector::PreferSame,
+            memory_region_selector: MemoryRegionSelector::Any,
             except_indexes: HashSet::new(),
             pal,
         }
@@ -50,8 +50,18 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
         self
     }
 
+    pub(crate) fn prefer_different_memory_regions(mut self) -> Self {
+        self.memory_region_selector = MemoryRegionSelector::PreferDifferent;
+        self
+    }
+
     pub(crate) fn same_memory_region(mut self) -> Self {
         self.memory_region_selector = MemoryRegionSelector::RequireSame;
+        self
+    }
+
+    pub(crate) fn prefer_same_memory_region(mut self) -> Self {
+        self.memory_region_selector = MemoryRegionSelector::PreferSame;
         self
     }
 
@@ -86,6 +96,24 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
         }
 
         let processors = match self.memory_region_selector {
+            MemoryRegionSelector::Any => {
+                // We do not care about memory regions, so merge into one big happy family and
+                // pick a random `count` processors from it. As long as there is enough!
+                let all_processors = candidates
+                    .values()
+                    .flat_map(|x| x.iter().copied())
+                    .collect::<Vec<_>>();
+
+                if all_processors.len() < count.get() {
+                    // Not enough processors to satisfy request.
+                    return None;
+                }
+
+                all_processors
+                    .choose_multiple(&mut thread_rng(), count.get())
+                    .copied()
+                    .collect_vec()
+            }
             MemoryRegionSelector::PreferSame => {
                 // We will start decrementing it to zero.
                 let count = count.get();
@@ -128,7 +156,7 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
             MemoryRegionSelector::RequireSame => {
                 // We filter out memory regions that do not have enough candidates and pick a
                 // random one from the remaining, then picking a random `count` processors.
-                let remaining_memory_regions = candidates
+                let qualifying_memory_regions = candidates
                     .iter()
                     .filter_map(|(region, processors)| {
                         if processors.len() < count.get() {
@@ -139,7 +167,7 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
                     })
                     .collect_vec();
 
-                let memory_region = remaining_memory_regions.choose(&mut rand::thread_rng())?;
+                let memory_region = qualifying_memory_regions.choose(&mut rand::thread_rng())?;
 
                 let processors = candidates.get(memory_region).expect(
                     "we picked an existing key for an existing HashSet - the values must exist",
@@ -149,6 +177,42 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
                     .choose_multiple(&mut rand::thread_rng(), count.get())
                     .copied()
                     .collect_vec()
+            }
+            MemoryRegionSelector::PreferDifferent => {
+                // We iterate through the memory regions and prefer one from each, looping through
+                // memory regions that still have processors until we have as many as requested.
+
+                // We will start removing processors are memory regions that are used up.
+                let mut candidates = candidates;
+
+                let mut processors = Vec::with_capacity(count.get());
+
+                while processors.len() < count.get() {
+                    if candidates.is_empty() {
+                        // Not enough candidates remaining to satisfy request.
+                        return None;
+                    }
+
+                    for remaining_processors in candidates.values_mut() {
+                        let (index, &processor) = remaining_processors
+                            .iter()
+                            .enumerate()
+                            .choose(&mut thread_rng())?;
+
+                        remaining_processors.remove(index);
+
+                        processors.push(processor);
+
+                        if processors.len() == count.get() {
+                            break;
+                        }
+                    }
+
+                    // Remove any memory regions that have been depleted.
+                    candidates.retain(|_, remaining_processors| !remaining_processors.is_empty());
+                }
+
+                processors
             }
             MemoryRegionSelector::RequireDifferent => {
                 // We pick random `count` memory regions and a random processor from each.
@@ -186,8 +250,11 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
         }
 
         let processors = match self.memory_region_selector {
-            MemoryRegionSelector::PreferSame => {
-                // We return all processors in all memory regions.
+            MemoryRegionSelector::Any
+            | MemoryRegionSelector::PreferSame
+            | MemoryRegionSelector::PreferDifferent => {
+                // We return all processors in all memory regions because we have no strong
+                // filtering criterium we must follow - all are fine, so we return all.
                 candidates
                     .values()
                     .flat_map(|x| x.iter().copied())
@@ -195,7 +262,9 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
             }
             MemoryRegionSelector::RequireSame => {
                 // We return all processors in a random memory region.
-                // The candidate set only contains memory regions with at least 1 processor.
+                // The candidate set only contains memory regions with at least 1 processor, so
+                // we know that all candidate memory regions are valid and we were not given a
+                // count, so even 1 processor is enough to satisfy the "all" criterion.
                 let memory_region = candidates
                     .keys()
                     .choose(&mut rand::thread_rng())
@@ -209,7 +278,8 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
             }
             MemoryRegionSelector::RequireDifferent => {
                 // We return a random processor from each memory region.
-                // The candidate set only contains memory regions with at least 1 processor.
+                // The candidate set only contains memory regions with at least 1 processor, so
+                // we know that all candidate memory regions have enough to satisfy our needs.
                 let processors = candidates.values().map(|processors| {
                     processors
                         .choose(&mut rand::thread_rng())
@@ -227,8 +297,12 @@ impl<PAL: Platform> ProcessorSetBuilderCore<PAL> {
         ))
     }
 
-    // Returns candidates grouped by memory region, with each returned memory region having at
-    // least one candidate processor.
+    /// Executes the first stage filters to kick out processors purely based on their individual
+    /// characteristics. Whatever pass this filter are valid candidates for selection as long
+    /// as the next stage of filtering (the memory region logic) permits it.
+    ///
+    /// Returns candidates grouped by memory region, with each returned memory region having at
+    /// least one candidate processor.
     fn candidates_by_memory_region(&self) -> HashMap<MemoryRegionId, Vec<ProcessorCore<PAL>>> {
         self.all_processors()
             .into_iter()
@@ -278,11 +352,9 @@ impl<PAL: Platform> Clone for ProcessorSetBuilderCore<PAL> {
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 enum MemoryRegionSelector {
-    /// The default - processors are picked by default from the same memory region but if there
-    /// are not enough processors in the same region, processors from different regions may be
-    /// used to satisfy the request.
+    /// The default - memory regions are not considered in processor selection.
     #[default]
-    PreferSame,
+    Any,
 
     /// Processors are all from the same memory region. If there are not enough processors in any
     /// memory region, the request will fail.
@@ -291,6 +363,16 @@ enum MemoryRegionSelector {
     /// Processors are all from the different memory regions. If there are not enough memory
     /// regions, the request will fail.
     RequireDifferent,
+
+    /// Processors are ideally all from the same memory region. If there are not enough processors
+    /// in a single memory region, more memory regions will be added to the candidate set as needed,
+    /// but still keeping it to as few as possible.
+    PreferSame,
+
+    /// Processors are ideally all from the different memory regions. If there are not enough memory
+    /// regions, multiple processors from the same memory region will be returned, but still keeping
+    /// to as many different memory regions as possible to spread the processors out.
+    PreferDifferent,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
