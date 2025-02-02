@@ -18,7 +18,8 @@ use folo_hw::{cpulist, ProcessorSet};
 use frozen_collections::{FzHashMap, FzScalarMap, MapQuery};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use itertools::Itertools;
-use nonempty::nonempty;
+use nonempty::{nonempty, NonEmpty};
+use rand::{seq::SliceRandom, thread_rng};
 
 // https://github.com/cloudhead/nonempty/issues/68
 extern crate alloc;
@@ -29,7 +30,6 @@ criterion_main!(benches);
 // TODO: Do not hang forever if worker panics. We need timeouts on barriers!
 
 const ONE_PROCESSOR: NonZeroUsize = NonZeroUsize::new(1).unwrap();
-const TWO_PROCESSORS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 /// A "small" data set is likely to fit into processor caches, demonstrating the effect of memory
 /// access on typically cached data).
@@ -41,7 +41,7 @@ const SMALL_MAP_ENTRY_COUNT: usize = 128 * 1024; // 128K x u64 = 1 MB of useful 
 
 /// A large data set is unlikely to fit into processor caches, even into large L3 caches, and will
 /// likely require trips to main memory for repeated access.
-/// 
+///
 /// This only matters for non-read-only benchmarks (as the first read is always from main memory).
 const LARGE_MAP_ENTRY_COUNT: usize = 128 * 128 * 1024; // 128 MB, not very cache-friendly.
 
@@ -50,6 +50,7 @@ fn entrypoint(c: &mut Criterion) {
 
     execute_run::<ChannelExchange, 1>(&mut g, WorkDistribution::PinnedMemoryRegionPairs);
     execute_run::<ChannelExchange, 1>(&mut g, WorkDistribution::PinnedSameMemoryRegion);
+    execute_run::<ChannelExchange, 1>(&mut g, WorkDistribution::PinnedSameProcessor);
     execute_run::<ChannelExchange, 1>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
     execute_run::<ChannelExchange, 1>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
 
@@ -63,6 +64,10 @@ fn entrypoint(c: &mut Criterion) {
     execute_run::<HashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
         &mut g,
         WorkDistribution::PinnedSameMemoryRegion,
+    );
+    execute_run::<HashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::PinnedSameProcessor,
     );
     execute_run::<HashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(&mut g, WorkDistribution::PinnedSelf);
     execute_run::<HashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
@@ -85,6 +90,10 @@ fn entrypoint(c: &mut Criterion) {
     execute_run::<HashMapSharedRead<SMALL_MAP_ENTRY_COUNT>, 10>(
         &mut g,
         WorkDistribution::PinnedSameMemoryRegion,
+    );
+    execute_run::<HashMapSharedRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::PinnedSameProcessor,
     );
     execute_run::<HashMapSharedRead<SMALL_MAP_ENTRY_COUNT>, 10>(
         &mut g,
@@ -114,6 +123,10 @@ fn entrypoint(c: &mut Criterion) {
         &mut g,
         WorkDistribution::PinnedSameMemoryRegion,
     );
+    execute_run::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::PinnedSameProcessor,
+    );
     execute_run::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(&mut g, WorkDistribution::PinnedSelf);
     execute_run::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
         &mut g,
@@ -136,6 +149,10 @@ fn entrypoint(c: &mut Criterion) {
         &mut g,
         WorkDistribution::PinnedSameMemoryRegion,
     );
+    execute_run::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT>, 50>(
+        &mut g,
+        WorkDistribution::PinnedSameProcessor,
+    );
     execute_run::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT>, 50>(&mut g, WorkDistribution::PinnedSelf);
     execute_run::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT>, 50>(
         &mut g,
@@ -155,6 +172,7 @@ fn entrypoint(c: &mut Criterion) {
 
     execute_run::<HttpHeadersParse, 1>(&mut g, WorkDistribution::PinnedMemoryRegionPairs);
     execute_run::<HttpHeadersParse, 1>(&mut g, WorkDistribution::PinnedSameMemoryRegion);
+    execute_run::<HttpHeadersParse, 1>(&mut g, WorkDistribution::PinnedSameProcessor);
     execute_run::<HttpHeadersParse, 1>(&mut g, WorkDistribution::PinnedSelf);
     execute_run::<HttpHeadersParse, 1>(&mut g, WorkDistribution::UnpinnedMemoryRegionPairs);
     execute_run::<HttpHeadersParse, 1>(&mut g, WorkDistribution::UnpinnedSameMemoryRegion);
@@ -170,6 +188,10 @@ fn entrypoint(c: &mut Criterion) {
     execute_run::<SccMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
         &mut g,
         WorkDistribution::PinnedSameMemoryRegion,
+    );
+    execute_run::<SccMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::PinnedSameProcessor,
     );
     execute_run::<SccMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(&mut g, WorkDistribution::PinnedSelf);
     execute_run::<SccMapRead<SMALL_MAP_ENTRY_COUNT>, 10>(
@@ -192,6 +214,10 @@ fn entrypoint(c: &mut Criterion) {
     execute_run::<SccMapSharedRead<SMALL_MAP_ENTRY_COUNT>, 10>(
         &mut g,
         WorkDistribution::PinnedSameMemoryRegion,
+    );
+    execute_run::<SccMapSharedRead<SMALL_MAP_ENTRY_COUNT>, 10>(
+        &mut g,
+        WorkDistribution::PinnedSameProcessor,
     );
     execute_run::<SccMapSharedRead<SMALL_MAP_ENTRY_COUNT>, 10>(
         &mut g,
@@ -221,6 +247,10 @@ fn entrypoint(c: &mut Criterion) {
         &mut g,
         WorkDistribution::PinnedSameMemoryRegion,
     );
+    execute_run::<SccMapShared<SMALL_MAP_ENTRY_COUNT>, 1>(
+        &mut g,
+        WorkDistribution::PinnedSameProcessor,
+    );
     execute_run::<SccMapShared<SMALL_MAP_ENTRY_COUNT>, 1>(&mut g, WorkDistribution::PinnedSelf);
     execute_run::<SccMapShared<SMALL_MAP_ENTRY_COUNT>, 1>(
         &mut g,
@@ -242,6 +272,10 @@ fn entrypoint(c: &mut Criterion) {
     execute_run::<SccMapShared<LARGE_MAP_ENTRY_COUNT>, 1>(
         &mut g,
         WorkDistribution::PinnedSameMemoryRegion,
+    );
+    execute_run::<SccMapShared<LARGE_MAP_ENTRY_COUNT>, 1>(
+        &mut g,
+        WorkDistribution::PinnedSameProcessor,
     );
     execute_run::<SccMapShared<LARGE_MAP_ENTRY_COUNT>, 1>(&mut g, WorkDistribution::PinnedSelf);
     execute_run::<SccMapShared<LARGE_MAP_ENTRY_COUNT>, 1>(
@@ -353,13 +387,13 @@ fn get_processor_set_pairs(
 
     match distribution {
         WorkDistribution::PinnedMemoryRegionPairs => {
-            // If there is only one pair, this means there is only one memory region, in which
-            // case this distribution mode is meaningless and we will not execute.
+            // If there is only one pair requested, this means there is only one memory region,
+            // in which case this distribution mode is meaningless and we will not execute.
             if worker_pair_count.get() == 1 {
                 return None;
             }
 
-            // We start by picking the first one of each pair.
+            // We start by picking the first item in each pair.
             let first_processors = candidates
                 .to_builder()
                 .different_memory_regions()
@@ -409,44 +443,52 @@ fn get_processor_set_pairs(
             )
         }
         WorkDistribution::PinnedSameMemoryRegion => {
-            // We remove processors that have already been picked, so each pair
-            // gets two unique processors from the same memory region.
-            let mut remaining_candidates = candidates.clone();
+            // We start by picking the first item in each pair. We still distribute the pairs
+            // across all memory regions to even out the load and any hardware differences, even
+            // though we do not actually care about crossing memory regions during operation.
+            let first_processors = candidates
+                .to_builder()
+                .different_memory_regions()
+                .take(worker_pair_count)?;
 
-            let mut result = Vec::with_capacity(worker_pair_count.get());
+            // This must logically match our pair count because we have one pair per memory region
+            // and expect to get one processor from each memory region with performance processors.
+            assert_eq!(first_processors.len(), worker_pair_count.get());
 
-            for _ in 0..worker_pair_count.get() {
-                let pair = remaining_candidates
-                    .to_builder()
-                    .same_memory_region()
-                    .take(TWO_PROCESSORS)?;
+            // Now we need to find a partner for each of the processors.
+            let partners = first_processors
+                .processors()
+                .iter()
+                .filter_map(|p| {
+                    candidates
+                        .to_builder()
+                        .except([p])
+                        .filter(|c| c.memory_region_id() == p.memory_region_id())
+                        .take(ONE_PROCESSOR)
+                })
+                .collect::<VecDeque<_>>();
 
-                remaining_candidates = match remaining_candidates
-                    .to_builder()
-                    .except(&pair.processors())
-                    .take_all()
-                {
-                    Some(remaining) => remaining,
-                    None => {
-                        // We ran out of processors before we could finish.
-                        return None;
-                    }
-                };
-
-                let pair = pair.processors();
-                assert_eq!(pair.len(), 2);
-
-                let set1: ProcessorSet = pair[0].into();
-                let set2: ProcessorSet = pair[1].into();
-
-                result.push((set1, set2));
+            if partners.len() != worker_pair_count.get() {
+                // Some memory region did not have enough processors.
+                return None;
             }
 
-            Some(result)
+            // Great success! Almost. We still need to package them up as pairs of ProcessorSets.
+            Some(
+                first_processors
+                    .processors()
+                    .iter()
+                    .zip(partners)
+                    .map(|(&p1, p2_set)| {
+                        let set1 = ProcessorSet::from_processors(nonempty![p1]);
+                        (set1, p2_set)
+                    })
+                    .collect_vec(),
+            )
         }
         WorkDistribution::PinnedSelf => {
             // Here we do not care at all which processors are selected - work is
-            // local on every processor, so just pick whatever.
+            // local on every processor, so just pick arbitrary pairs.
             Some(
                 candidates
                     .to_builder()
@@ -464,6 +506,25 @@ fn get_processor_set_pairs(
 
                         let set1: ProcessorSet = pair[0].into();
                         let set2: ProcessorSet = pair[1].into();
+
+                        (set1, set2)
+                    })
+                    .collect_vec(),
+            )
+        }
+        WorkDistribution::PinnedSameProcessor => {
+            // Here we do not care at all which processors are selected - work is
+            // local on every processor, so just pick arbitrary processors and use
+            // the same processor for both members of the pair.
+            Some(
+                candidates
+                    .to_builder()
+                    .take(worker_pair_count)?
+                    .processors()
+                    .into_iter()
+                    .map(|p| {
+                        let set1: ProcessorSet = p.into();
+                        let set2: ProcessorSet = p.into();
 
                         (set1, set2)
                     })
@@ -517,52 +578,102 @@ fn get_processor_set_pairs(
             Some(first_processor_sets.into_iter().zip(partners).collect_vec())
         }
         WorkDistribution::UnpinnedSameMemoryRegion => {
-            // We remove processors that have already been picked, so each pair
-            // gets two processors' worth of processor time from the same memory region.
-            // We do not pin them but we do ensure there are enough processors to "fit"
-            // all the worker pairs into the memory region, without oversubscribing.
-            //
-            // We do not care which memory region the pairs are in, merely that
-            // both pair members are in the same memory region.
-            let mut remaining_candidates = candidates.clone();
+            // We start by picking the first item in each pair. We still distribute the pairs
+            // across all memory regions to even out the load and any hardware differences, even
+            // though we do not actually care about crossing memory regions during operation.
+            let first_processors = candidates
+                .to_builder()
+                .different_memory_regions()
+                .take(worker_pair_count)?;
 
-            let mut result = Vec::with_capacity(worker_pair_count.get());
+            // This must logically match our pair count because we have one pair per memory region
+            // and expect to get one processor from each memory region with performance processors.
+            assert_eq!(first_processors.len(), worker_pair_count.get());
 
-            for _ in 0..worker_pair_count.get() {
-                let pair = remaining_candidates
-                    .to_builder()
-                    .same_memory_region()
-                    .take(TWO_PROCESSORS)?;
+            // Now we need to find a partner for each of the processors.
+            let partners = first_processors
+                .processors()
+                .iter()
+                .filter_map(|p| {
+                    candidates
+                        .to_builder()
+                        .except([p])
+                        .filter(|c| c.memory_region_id() == p.memory_region_id())
+                        .take(ONE_PROCESSOR)
+                })
+                .collect::<VecDeque<_>>();
 
-                remaining_candidates = match remaining_candidates
-                    .to_builder()
-                    .except(&pair.processors())
-                    .take_all()
-                {
-                    Some(remaining) => remaining,
-                    None => {
-                        // We ran out of processors before we could finish.
-                        return None;
-                    }
-                };
-
-                let pair = pair.processors();
-                assert_eq!(pair.len(), 2);
-
-                // For each pair we re-select all the processors in the same memory region
-                // and use this entire set for both workers. The original pair was just to
-                // point to the memory region and is now discarded.
-
-                let real_set = candidates
-                    .to_builder()
-                    .filter(|c| c.memory_region_id() == pair[0].memory_region_id())
-                    .take_all()
-                    .expect("must have at least one processor in every active memory region");
-
-                result.push((real_set.clone(), real_set));
+            if partners.len() != worker_pair_count.get() {
+                // Some memory region did not have enough processors.
+                return None;
             }
 
-            Some(result)
+            // We now have pairs of processors from the same memory region. We need to expand the
+            // sets to cover more, to implement the "unpinned" part of the distribution. However,
+            // we also need to ensure that the processor sets in one pair are different because
+            // any overlap would allow the platform to schedule the workers on the same processor,
+            // which might distort results if the work is not compute-bound (such as giving a magic
+            // speedup due to the processor's cache).
+            let first_processors = first_processors.processors();
+            let partner_processors = partners.into_iter().map(|set| *set.processors().first());
+            let pairs_single = first_processors
+                .into_iter()
+                .zip(partner_processors)
+                .collect_vec();
+
+            Some(
+                pairs_single
+                    .into_iter()
+                    .map(|(p1, p2)| {
+                        let remaining = candidates
+                            .to_builder()
+                            .except(&[p1, p2])
+                            .filter(|c| c.memory_region_id() == p1.memory_region_id())
+                            .take_all();
+
+                        // Without caring for how many there are, give half to each member of the pair.
+                        match remaining {
+                            None => {
+                                // Nothing else left - that's fine.
+                                (
+                                    ProcessorSet::from_processors(nonempty![p1]),
+                                    ProcessorSet::from_processors(nonempty![p2]),
+                                )
+                            }
+                            Some(remaining) => {
+                                let mut remaining_processors =
+                                    remaining.processors().into_iter().collect_vec();
+                                remaining_processors.shuffle(&mut thread_rng());
+                                let (p1_more, p2_more) =
+                                    remaining_processors.split_at(remaining_processors.len() / 2);
+
+                                (
+                                    ProcessorSet::from_processors(
+                                        NonEmpty::from_vec(
+                                            [p1].into_iter()
+                                                .chain(p1_more.iter().copied())
+                                                .collect_vec(),
+                                        )
+                                        .expect(
+                                            "we know we have at least one processor for each pair",
+                                        ),
+                                    ),
+                                    ProcessorSet::from_processors(
+                                        NonEmpty::from_vec(
+                                            [p2].into_iter()
+                                                .chain(p2_more.iter().copied())
+                                                .collect_vec(),
+                                        )
+                                        .expect(
+                                            "we know we have at least one processor for each pair",
+                                        ),
+                                    ),
+                                )
+                            }
+                        }
+                    })
+                    .collect_vec(),
+            )
         }
         WorkDistribution::UnpinnedSelf => {
             // All processors are valid candidates here.
@@ -613,6 +724,7 @@ impl BenchmarkRun {
             let ((tx1, rx1), (tx2, rx2)) = match distribution {
                 WorkDistribution::PinnedMemoryRegionPairs
                 | WorkDistribution::PinnedSameMemoryRegion
+                | WorkDistribution::PinnedSameProcessor
                 | WorkDistribution::UnpinnedMemoryRegionPairs
                 | WorkDistribution::UnpinnedSameMemoryRegion => {
                     // Pair 1 will send to pair 2 and vice versa.
@@ -748,6 +860,12 @@ enum WorkDistribution {
     /// `PinnedMemoryRegionPairs`, for optimal comparability. There will be a minimum of one pair.
     PinnedSameMemoryRegion,
 
+    /// Both workers are spawned on the same processor, picked arbitrarily.
+    ///
+    /// The number of pairs will match the number that would have been used with
+    /// `PinnedMemoryRegionPairs`, for optimal comparability. There will be a minimum of one pair.
+    PinnedSameProcessor,
+
     /// All workers are spawned without regard to memory region or processor, randomly picking
     /// processors for each iteration.
     ///
@@ -761,8 +879,9 @@ enum WorkDistribution {
     /// We still have the same total number of workers to keep total system load equivalent.
     UnpinnedMemoryRegionPairs,
 
-    /// Like `PinnedSameMemoryRegion` but each worker is allowed to float among all the processors
-    /// in the memory region, based on the operating system's scheduling decisions.
+    /// Like `PinnedSameMemoryRegion` but each worker is allowed to float among half the processors
+    /// in the memory region, based on the operating system's scheduling decisions. Each member of
+    /// the pair gets one half of the processors in the memory region.
     ///
     /// We still have the same total number of workers to keep total system load equivalent.
     UnpinnedSameMemoryRegion,
