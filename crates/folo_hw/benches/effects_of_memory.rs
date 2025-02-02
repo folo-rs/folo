@@ -38,13 +38,13 @@ const ONE_PROCESSOR: NonZeroUsize = NonZeroUsize::new(1).unwrap();
 /// Benchmarks with "_read" in their name only read the data once, so the majority of their data
 /// will only be read from main memory once and never again, making cache effects minimal, though
 /// internal data structures like bucket indexes may still be accessed consistently from cache.
-const SMALL_MAP_ENTRY_COUNT: usize = 128 * 1024; // 128K x u64 = 1 MB of useful payload, cache-friendly
+const SMALL_MAP_ENTRY_COUNT: usize = 64 * 1024; // x u64 = 512 KB of useful payload, cache-friendly
 
 /// A large data set is unlikely to fit into processor caches, even into large L3 caches, and will
 /// likely require trips to main memory for repeated access.
 ///
 /// This only matters for non-read-only benchmarks (as the first read is always from main memory).
-const LARGE_MAP_ENTRY_COUNT: usize = 128 * 128 * 1024; // 128 MB, not very cache-friendly.
+const LARGE_MAP_ENTRY_COUNT: usize = 128 * 128 * 1024; // x u64 -> 128 MB, not very cache-friendly.
 
 fn entrypoint(c: &mut Criterion) {
     execute_runs::<ChannelExchange, 1>(
@@ -58,7 +58,7 @@ fn entrypoint(c: &mut Criterion) {
         ],
     );
 
-    execute_runs::<HashMapReadOnce<SMALL_MAP_ENTRY_COUNT>, 10>(
+    execute_runs::<HashMapRead<SMALL_MAP_ENTRY_COUNT, 1>, 10>(
         c,
         &[
             WorkDistribution::PinnedMemoryRegionPairs,
@@ -71,7 +71,7 @@ fn entrypoint(c: &mut Criterion) {
         ],
     );
 
-    execute_runs::<HashMapBothReadOnce<SMALL_MAP_ENTRY_COUNT>, 10>(
+    execute_runs::<HashMapRead<SMALL_MAP_ENTRY_COUNT, 2>, 10>(
         c,
         &[
             WorkDistribution::PinnedMemoryRegionPairs,
@@ -84,7 +84,29 @@ fn entrypoint(c: &mut Criterion) {
         ],
     );
 
-    execute_runs::<FzHashMapReadOnce<SMALL_MAP_ENTRY_COUNT>, 10>(
+    execute_runs::<HashMapBothRead<SMALL_MAP_ENTRY_COUNT, 1>, 10>(
+        c,
+        &[
+            WorkDistribution::PinnedMemoryRegionPairs,
+            WorkDistribution::PinnedSameMemoryRegion,
+            WorkDistribution::PinnedSameProcessor,
+            WorkDistribution::UnpinnedMemoryRegionPairs,
+            WorkDistribution::UnpinnedSameMemoryRegion,
+        ],
+    );
+
+    execute_runs::<HashMapBothRead<SMALL_MAP_ENTRY_COUNT, 2>, 10>(
+        c,
+        &[
+            WorkDistribution::PinnedMemoryRegionPairs,
+            WorkDistribution::PinnedSameMemoryRegion,
+            WorkDistribution::PinnedSameProcessor,
+            WorkDistribution::UnpinnedMemoryRegionPairs,
+            WorkDistribution::UnpinnedSameMemoryRegion,
+        ],
+    );
+
+    execute_runs::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT, 1>, 10>(
         c,
         &[
             WorkDistribution::PinnedMemoryRegionPairs,
@@ -97,7 +119,33 @@ fn entrypoint(c: &mut Criterion) {
         ],
     );
 
-    execute_runs::<FzScalarMapReadOnce<SMALL_MAP_ENTRY_COUNT>, 50>(
+    execute_runs::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT, 2>, 10>(
+        c,
+        &[
+            WorkDistribution::PinnedMemoryRegionPairs,
+            WorkDistribution::PinnedSameMemoryRegion,
+            WorkDistribution::PinnedSameProcessor,
+            WorkDistribution::PinnedSelf,
+            WorkDistribution::UnpinnedMemoryRegionPairs,
+            WorkDistribution::UnpinnedSameMemoryRegion,
+            WorkDistribution::UnpinnedSelf,
+        ],
+    );
+
+    execute_runs::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT, 1>, 50>(
+        c,
+        &[
+            WorkDistribution::PinnedMemoryRegionPairs,
+            WorkDistribution::PinnedSameMemoryRegion,
+            WorkDistribution::PinnedSameProcessor,
+            WorkDistribution::PinnedSelf,
+            WorkDistribution::UnpinnedMemoryRegionPairs,
+            WorkDistribution::UnpinnedSameMemoryRegion,
+            WorkDistribution::UnpinnedSelf,
+        ],
+    );
+
+    execute_runs::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT, 2>, 50>(
         c,
         &[
             WorkDistribution::PinnedMemoryRegionPairs,
@@ -123,7 +171,7 @@ fn entrypoint(c: &mut Criterion) {
         ],
     );
 
-    execute_runs::<SccMapReadOnce<SMALL_MAP_ENTRY_COUNT>, 10>(
+    execute_runs::<SccMapRead<SMALL_MAP_ENTRY_COUNT, 1>, 10>(
         c,
         &[
             WorkDistribution::PinnedMemoryRegionPairs,
@@ -136,7 +184,7 @@ fn entrypoint(c: &mut Criterion) {
         ],
     );
 
-    execute_runs::<SccMapBothReadOnce<SMALL_MAP_ENTRY_COUNT>, 10>(
+    execute_runs::<SccMapRead<SMALL_MAP_ENTRY_COUNT, 2>, 10>(
         c,
         &[
             WorkDistribution::PinnedMemoryRegionPairs,
@@ -149,29 +197,69 @@ fn entrypoint(c: &mut Criterion) {
         ],
     );
 
-    execute_runs::<SccMapSharedReadWrite<SMALL_MAP_ENTRY_COUNT>, 1>(
+    execute_runs::<SccMapBothRead<SMALL_MAP_ENTRY_COUNT, 1>, 10>(
         c,
         &[
             WorkDistribution::PinnedMemoryRegionPairs,
             WorkDistribution::PinnedSameMemoryRegion,
             WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::PinnedSelf,
             WorkDistribution::UnpinnedMemoryRegionPairs,
             WorkDistribution::UnpinnedSameMemoryRegion,
-            WorkDistribution::UnpinnedSelf,
         ],
     );
 
-    execute_runs::<SccMapSharedReadWrite<LARGE_MAP_ENTRY_COUNT>, 1>(
+    execute_runs::<SccMapBothRead<SMALL_MAP_ENTRY_COUNT, 2>, 10>(
         c,
         &[
             WorkDistribution::PinnedMemoryRegionPairs,
             WorkDistribution::PinnedSameMemoryRegion,
             WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::PinnedSelf,
             WorkDistribution::UnpinnedMemoryRegionPairs,
             WorkDistribution::UnpinnedSameMemoryRegion,
-            WorkDistribution::UnpinnedSelf,
+        ],
+    );
+
+    execute_runs::<SccMapSharedReadWrite<SMALL_MAP_ENTRY_COUNT, 1>, 1>(
+        c,
+        &[
+            WorkDistribution::PinnedMemoryRegionPairs,
+            WorkDistribution::PinnedSameMemoryRegion,
+            WorkDistribution::PinnedSameProcessor,
+            WorkDistribution::UnpinnedMemoryRegionPairs,
+            WorkDistribution::UnpinnedSameMemoryRegion,
+        ],
+    );
+
+    execute_runs::<SccMapSharedReadWrite<SMALL_MAP_ENTRY_COUNT, 2>, 1>(
+        c,
+        &[
+            WorkDistribution::PinnedMemoryRegionPairs,
+            WorkDistribution::PinnedSameMemoryRegion,
+            WorkDistribution::PinnedSameProcessor,
+            WorkDistribution::UnpinnedMemoryRegionPairs,
+            WorkDistribution::UnpinnedSameMemoryRegion,
+        ],
+    );
+
+    execute_runs::<SccMapSharedReadWrite<LARGE_MAP_ENTRY_COUNT, 1>, 1>(
+        c,
+        &[
+            WorkDistribution::PinnedMemoryRegionPairs,
+            WorkDistribution::PinnedSameMemoryRegion,
+            WorkDistribution::PinnedSameProcessor,
+            WorkDistribution::UnpinnedMemoryRegionPairs,
+            WorkDistribution::UnpinnedSameMemoryRegion,
+        ],
+    );
+
+    execute_runs::<SccMapSharedReadWrite<LARGE_MAP_ENTRY_COUNT, 2>, 1>(
+        c,
+        &[
+            WorkDistribution::PinnedMemoryRegionPairs,
+            WorkDistribution::PinnedSameMemoryRegion,
+            WorkDistribution::PinnedSameProcessor,
+            WorkDistribution::UnpinnedMemoryRegionPairs,
+            WorkDistribution::UnpinnedSameMemoryRegion,
         ],
     );
 }
@@ -598,6 +686,8 @@ impl BenchmarkRun {
     /// execute the benchmark multiple times in sequence to collect more data, with a different
     /// payload each time but on the same workers. The expectation is that each payload is
     /// independent and does not require cache cleaning between payloads for meaningful results.
+    /// This is just useful if a single payload is a very small number (single digit milliseconds)
+    /// and we cannot just increase the payload size because it is sized to fit into cache etc.
     fn new<P: Payload, const PAYLOAD_MULTIPLIER: usize>(
         processor_set_pairs: &[(ProcessorSet, ProcessorSet)],
         distribution: WorkDistribution,
@@ -886,13 +976,16 @@ impl Payload for ChannelExchange {
     }
 }
 
-/// The first worker generates a hashmap; the other reads all elements from it once.
+/// The first worker generates a hashmap with MAP_ENTRY_COUNT entries.
+/// The other worker reads all elements from it REPEAT_COUNT times.
 #[derive(Debug, Default)]
-struct HashMapReadOnce<const MAP_ENTRY_COUNT: usize> {
+struct HashMapRead<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: HashMap<u64, u64>,
 }
 
-impl<const MAP_ENTRY_COUNT: usize> Payload for HashMapReadOnce<MAP_ENTRY_COUNT> {
+impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
+    for HashMapRead<MAP_ENTRY_COUNT, REPEAT_COUNT>
+{
     fn new_pair() -> (Self, Self) {
         (Self::default(), Self::default())
     }
@@ -906,22 +999,27 @@ impl<const MAP_ENTRY_COUNT: usize> Payload for HashMapReadOnce<MAP_ENTRY_COUNT> 
     }
 
     fn process(&mut self) {
-        for k in 0..MAP_ENTRY_COUNT {
-            black_box(self.map.get(&(k as u64)));
+        for _ in 0..REPEAT_COUNT {
+            for k in 0..MAP_ENTRY_COUNT {
+                black_box(self.map.get(&(k as u64)));
+            }
         }
     }
 }
 
-/// The first worker generates a hashmap; both workers read all elements from it once.
+/// The first worker generates a hashmap with MAP_ENTRY_COUNT entries.
+/// Both workers read all elements from it REPEAT_COUNT times.
 #[derive(Debug, Default)]
-struct HashMapBothReadOnce<const MAP_ENTRY_COUNT: usize> {
+struct HashMapBothRead<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: Arc<RwLock<HashMap<u64, u64>>>,
 
     // Only needs to be filled by one of the workers, where is is true.
     is_filler: bool,
 }
 
-impl<const MAP_ENTRY_COUNT: usize> Payload for HashMapBothReadOnce<MAP_ENTRY_COUNT> {
+impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
+    for HashMapBothRead<MAP_ENTRY_COUNT, REPEAT_COUNT>
+{
     fn new_pair() -> (Self, Self) {
         let map = Arc::new(RwLock::new(HashMap::with_capacity(MAP_ENTRY_COUNT)));
 
@@ -952,19 +1050,24 @@ impl<const MAP_ENTRY_COUNT: usize> Payload for HashMapBothReadOnce<MAP_ENTRY_COU
     fn process(&mut self) {
         let map = self.map.read().unwrap();
 
-        for k in 0..MAP_ENTRY_COUNT {
-            black_box(map.get(&(k as u64)));
+        for _ in 0..REPEAT_COUNT {
+            for k in 0..MAP_ENTRY_COUNT {
+                black_box(map.get(&(k as u64)));
+            }
         }
     }
 }
 
-/// The first worker generates a frozen hashmap; the other reads all elements from it once.
+/// The first worker generates a frozen hashmap with MAP_ENTRY_COUNT entries.
+/// The second worker reads all elements from it REPEAT_COUNT times.
 #[derive(Debug, Default)]
-struct FzHashMapReadOnce<const MAP_ENTRY_COUNT: usize> {
+struct FzHashMapRead<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: FzHashMap<u64, u64>,
 }
 
-impl<const MAP_ENTRY_COUNT: usize> Payload for FzHashMapReadOnce<MAP_ENTRY_COUNT> {
+impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
+    for FzHashMapRead<MAP_ENTRY_COUNT, REPEAT_COUNT>
+{
     fn new_pair() -> (Self, Self) {
         (Self::default(), Self::default())
     }
@@ -978,19 +1081,24 @@ impl<const MAP_ENTRY_COUNT: usize> Payload for FzHashMapReadOnce<MAP_ENTRY_COUNT
     }
 
     fn process(&mut self) {
-        for k in 0..MAP_ENTRY_COUNT {
-            black_box(self.map.get(&(k as u64)));
+        for _ in 0..REPEAT_COUNT {
+            for k in 0..MAP_ENTRY_COUNT {
+                black_box(self.map.get(&(k as u64)));
+            }
         }
     }
 }
 
-/// The first worker generates a frozen scalar map; the other reads all elements from it once.
+/// The first worker generates a frozen scalar map with MAP_ENTRY_COUNT entries.
+/// The second worker reads all elements from it REPEAT_COUNT times.
 #[derive(Debug, Default)]
-struct FzScalarMapReadOnce<const MAP_ENTRY_COUNT: usize> {
+struct FzScalarMapRead<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: FzScalarMap<u64, u64>,
 }
 
-impl<const MAP_ENTRY_COUNT: usize> Payload for FzScalarMapReadOnce<MAP_ENTRY_COUNT> {
+impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
+    for FzScalarMapRead<MAP_ENTRY_COUNT, REPEAT_COUNT>
+{
     fn new_pair() -> (Self, Self) {
         (Self::default(), Self::default())
     }
@@ -1004,19 +1112,24 @@ impl<const MAP_ENTRY_COUNT: usize> Payload for FzScalarMapReadOnce<MAP_ENTRY_COU
     }
 
     fn process(&mut self) {
-        for k in 0..MAP_ENTRY_COUNT {
-            black_box(self.map.get(&(k as u64)));
+        for _ in 0..REPEAT_COUNT {
+            for k in 0..MAP_ENTRY_COUNT {
+                black_box(self.map.get(&(k as u64)));
+            }
         }
     }
 }
 
-/// The first worker generates an SCC map; the other reads all elements from it once.
+/// The first worker generates an SCC hashmap with MAP_ENTRY_COUNT entries.
+/// The second worker reads all elements from it REPEAT_COUNT times.
 #[derive(Debug, Default)]
-struct SccMapReadOnce<const MAP_ENTRY_COUNT: usize> {
+struct SccMapRead<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: scc::HashMap<u64, u64>,
 }
 
-impl<const MAP_ENTRY_COUNT: usize> Payload for SccMapReadOnce<MAP_ENTRY_COUNT> {
+impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
+    for SccMapRead<MAP_ENTRY_COUNT, REPEAT_COUNT>
+{
     fn new_pair() -> (Self, Self) {
         (Self::default(), Self::default())
     }
@@ -1030,22 +1143,27 @@ impl<const MAP_ENTRY_COUNT: usize> Payload for SccMapReadOnce<MAP_ENTRY_COUNT> {
     }
 
     fn process(&mut self) {
-        for k in 0..MAP_ENTRY_COUNT {
-            black_box(self.map.get(&(k as u64)));
+        for _ in 0..REPEAT_COUNT {
+            for k in 0..MAP_ENTRY_COUNT {
+                black_box(self.map.get(&(k as u64)));
+            }
         }
     }
 }
 
-/// Two workers read the same shared map once.
+/// The first worker generates an SCC hashmap with MAP_ENTRY_COUNT entries.
+/// Both workers read all elements from it REPEAT_COUNT times.
 #[derive(Debug, Default)]
-struct SccMapBothReadOnce<const MAP_ENTRY_COUNT: usize> {
+struct SccMapBothRead<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: Arc<scc::HashMap<u64, u64>>,
 
     // Only needs to be filled by one of the workers, where is is true.
     is_filler: bool,
 }
 
-impl<const MAP_ENTRY_COUNT: usize> Payload for SccMapBothReadOnce<MAP_ENTRY_COUNT> {
+impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
+    for SccMapBothRead<MAP_ENTRY_COUNT, REPEAT_COUNT>
+{
     fn new_pair() -> (Self, Self) {
         let map = Arc::new(scc::HashMap::with_capacity(MAP_ENTRY_COUNT));
 
@@ -1072,31 +1190,38 @@ impl<const MAP_ENTRY_COUNT: usize> Payload for SccMapBothReadOnce<MAP_ENTRY_COUN
     }
 
     fn process(&mut self) {
-        for k in 0..MAP_ENTRY_COUNT {
-            black_box(self.map.get(&(k as u64)));
+        for _ in 0..REPEAT_COUNT {
+            for k in 0..MAP_ENTRY_COUNT {
+                black_box(self.map.get(&(k as u64)));
+            }
         }
     }
 }
 
-/// Two workers increment entries in the same shared map, one worker from high to low, the other
+/// The first worker generates an SCC hashmap with MAP_ENTRY_COUNT entries.
+/// Both workers increment entries in the same shared map, one worker from high to low, the other
 /// from low to high, to avoid conflicting on the same keys. We want to see data effects, not lock
-/// contention.
+/// contention. The increment loop is repeated REPEAT_COUNT times.
 #[derive(Debug, Default)]
-struct SccMapSharedReadWrite<const MAP_ENTRY_COUNT: usize> {
+struct SccMapSharedReadWrite<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: Arc<scc::HashMap<u64, u64>>,
 
     // Determines whether it does the initial fill and which direction it iterates.
     is_worker_1: bool,
 }
 
-impl<const MAP_ENTRY_COUNT: usize> SccMapSharedReadWrite<MAP_ENTRY_COUNT> {
+impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize>
+    SccMapSharedReadWrite<MAP_ENTRY_COUNT, REPEAT_COUNT>
+{
     fn increment(&self, key: u64) {
         let mut value = black_box(self.map.get(&key).unwrap());
         *value += 1;
     }
 }
 
-impl<const MAP_ENTRY_COUNT: usize> Payload for SccMapSharedReadWrite<MAP_ENTRY_COUNT> {
+impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
+    for SccMapSharedReadWrite<MAP_ENTRY_COUNT, REPEAT_COUNT>
+{
     fn new_pair() -> (Self, Self) {
         let map = Arc::new(scc::HashMap::with_capacity(MAP_ENTRY_COUNT));
 
@@ -1123,13 +1248,15 @@ impl<const MAP_ENTRY_COUNT: usize> Payload for SccMapSharedReadWrite<MAP_ENTRY_C
     }
 
     fn process(&mut self) {
-        if self.is_worker_1 {
-            for key in 0..MAP_ENTRY_COUNT as u64 {
-                self.increment(key);
-            }
-        } else {
-            for key in (0..MAP_ENTRY_COUNT as u64).rev() {
-                self.increment(key);
+        for _ in 0..REPEAT_COUNT {
+            if self.is_worker_1 {
+                for key in 0..MAP_ENTRY_COUNT as u64 {
+                    self.increment(key);
+                }
+            } else {
+                for key in (0..MAP_ENTRY_COUNT as u64).rev() {
+                    self.increment(key);
+                }
             }
         }
     }
