@@ -18,7 +18,7 @@ use crate::{
         windows::{Bindings, BuildTargetBindings, NativeBuffer, ProcessorGroupIndex},
         Platform, ProcessorImpl,
     },
-    EfficiencyClass, ProcessorId,
+    EfficiencyClass, MemoryRegionId, ProcessorId,
 };
 
 /// Singleton instance of `BuildTargetPlatform`, used by public API types
@@ -238,28 +238,10 @@ impl<B: Bindings> BuildTargetPlatform<B> {
             // There may be 1 or more bits set in the mask because one core might have multiple logical
             // processors via SMT (hyperthreading). We just iterate over all the bits to check them
             // individually without worrying about SMT logic.
-            let group_index: ProcessorGroupIndex = details.GroupMask[0].Group;
-
-            let processors_in_group = group_max_sizes[group_index as usize] as u32;
-
-            // Minimum effort approach for WOW64 support - we only see the first 32 in a group.
-            let processors_in_group = processors_in_group.min(usize::BITS);
-
-            let mask = details.GroupMask[0].Mask;
-
-            for index_in_group in 0..processors_in_group {
-                if mask & (1 << index_in_group) == 0 {
-                    continue;
-                }
-
-                let group_start_offset: ProcessorId = group_max_sizes
-                    .iter()
-                    .take(group_index as usize)
-                    .map(|x| *x as ProcessorId)
-                    .sum();
-
-                let global_index: ProcessorId = group_start_offset + index_in_group;
-                processor_to_efficiency_class.insert(global_index, details.EfficiencyClass);
+            for processor_id in
+                Self::affinity_mask_to_processor_ids(&details.GroupMask[0], group_max_sizes)
+            {
+                processor_to_efficiency_class.insert(processor_id, details.EfficiencyClass);
             }
         }
 
@@ -284,14 +266,14 @@ impl<B: Bindings> BuildTargetPlatform<B> {
             .into_boxed_slice()
     }
 
-    fn get_all(&self) -> NonEmpty<ProcessorImpl> {
+    fn get_memory_regions_by_processor(
+        &self,
+        group_max_sizes: &[u8],
+    ) -> HashMap<ProcessorId, MemoryRegionId> {
         let memory_region_relationships_raw =
             self.get_logical_processor_information_raw(RelationNumaNodeEx);
 
-        // This is the data we want to extract - a mapping of which processor group belongs to
-        // which NUMA node. Implicitly, each group can only belong to one NUMA node, though multiple
-        // groups may belong to the same NUMA node.
-        let mut processor_group_to_numa_node = HashMap::new();
+        let mut result = HashMap::new();
 
         // The structures returned by the OS are dynamically sized so we only have various
         // disgusting options for parsing/processing them. Pointer wrangling is the most readable.
@@ -336,11 +318,12 @@ impl<B: Bindings> BuildTargetPlatform<B> {
 
             for _ in 0..details.GroupCount {
                 // SAFETY: The OS promises us that this array contains `GroupCount` elements.
-                let group_number = unsafe { *group_mask_array }.Group;
+                let affinity = unsafe { *group_mask_array };
 
-                // We do not care about the mask itself because all group members are implicitly
-                // part of the same NUMA node - that's how groups are constructed by the OS.
-                processor_group_to_numa_node.insert(group_number, numa_node_number);
+                for processor_id in Self::affinity_mask_to_processor_ids(&affinity, group_max_sizes)
+                {
+                    result.insert(processor_id, numa_node_number);
+                }
 
                 // SAFETY: The OS promises us that this array contains `GroupCount` elements.
                 // It is fine to move past the end if we never access it (because the loop ends).
@@ -348,10 +331,49 @@ impl<B: Bindings> BuildTargetPlatform<B> {
             }
         }
 
+        result
+    }
+
+    fn affinity_mask_to_processor_ids(
+        affinity: &GROUP_AFFINITY,
+        group_max_sizes: &[u8],
+    ) -> Vec<ProcessorId> {
+        let mut result = Vec::with_capacity(64);
+
+        let group_index: ProcessorGroupIndex = affinity.Group;
+
+        let processors_in_group = group_max_sizes[group_index as usize] as u32;
+
+        // Minimum effort approach for WOW64 support - we only see the first 32 in a group.
+        let processors_in_group = processors_in_group.min(usize::BITS);
+
+        let mask = affinity.Mask;
+
+        for index_in_group in 0..processors_in_group {
+            if mask & (1 << index_in_group) == 0 {
+                continue;
+            }
+
+            let group_start_offset: ProcessorId = group_max_sizes
+                .iter()
+                .take(group_index as usize)
+                .map(|x| *x as ProcessorId)
+                .sum();
+
+            let global_index: ProcessorId = group_start_offset + index_in_group;
+            result.push(global_index);
+        }
+
+        result
+    }
+
+    fn get_all(&self) -> NonEmpty<ProcessorImpl> {
         let processor_group_max_sizes = self.get_processor_group_max_sizes();
         let processor_group_active_sizes = self.get_processor_group_active_sizes();
         let performance_processors =
             self.get_performance_processor_global_indexes(&processor_group_max_sizes);
+        let processors_by_memory_region =
+            self.get_memory_regions_by_processor(&processor_group_max_sizes);
 
         let mut processors =
             Vec::with_capacity(processor_group_max_sizes.iter().map(|&s| s as usize).sum());
@@ -370,11 +392,9 @@ impl<B: Bindings> BuildTargetPlatform<B> {
                 let global_index = next_global_index;
                 next_global_index += 1;
 
-                let memory_region_index = *processor_group_to_numa_node
-                .get(&(group_index as u16))
-                .expect(
-                "a processor group exists that the OS did not provide a memory region mapping for",
-            );
+                let memory_region_index = *processors_by_memory_region
+                    .get(&global_index)
+                    .expect("every processor must have a memory region");
 
                 let efficiency_class = if performance_processors.contains(&global_index) {
                     EfficiencyClass::Performance
@@ -413,6 +433,7 @@ mod tests {
 
     use itertools::Itertools;
     use mockall::Sequence;
+    use static_assertions::assert_eq_size;
     use windows::Win32::Foundation::{BOOL, HANDLE};
 
     use crate::{
@@ -429,7 +450,7 @@ mod tests {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
 
-            simulate_processor_layout(&mut mock, [4], [4], [0], [vec![0, 0, 0, 0]]);
+            simulate_processor_layout(&mut mock, [4], [4], [vec![0, 0, 0, 0]], [vec![0, 0, 0, 0]]);
 
             mock
         });
@@ -479,7 +500,13 @@ mod tests {
             let mut mock = MockBindings::new();
             // Two groups, each with 2 active processors:
             // Group 0 -> [Performance, Efficiency], Group 1 -> [Efficiency, Performance].
-            simulate_processor_layout(&mut mock, [2, 2], [2, 2], [0, 1], [vec![1, 0], vec![0, 1]]);
+            simulate_processor_layout(
+                &mut mock,
+                [2, 2],
+                [2, 2],
+                [vec![1, 0], vec![0, 1]],
+                [vec![0, 0], vec![1, 1]],
+            );
             mock
         });
         let platform = BuildTargetPlatform::new(&*BINDINGS);
@@ -522,8 +549,8 @@ mod tests {
                 &mut mock,
                 [4, 2, 2],
                 [4, 2, 2],
-                [0, 1, 2],
                 [vec![1, 1, 1, 1], vec![0, 0], vec![0, 0]],
+                [vec![0, 0, 0, 0], vec![1, 1], vec![2, 2]],
             );
             mock
         });
@@ -562,7 +589,13 @@ mod tests {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
             // Group 0 -> inactive, Group 1 -> [Performance, Efficiency, Performance]
-            simulate_processor_layout(&mut mock, [0, 3], [2, 3], [0, 1], [vec![], vec![1, 0, 1]]);
+            simulate_processor_layout(
+                &mut mock,
+                [0, 3],
+                [2, 3],
+                [vec![], vec![1, 0, 1]],
+                [vec![], vec![1, 1, 1]],
+            );
             mock
         });
         let platform = BuildTargetPlatform::new(&*BINDINGS);
@@ -594,7 +627,13 @@ mod tests {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
             // Group 0 -> Efficiency, Group 1 -> Performance
-            simulate_processor_layout(&mut mock, [2, 2], [4, 4], [0, 1], [vec![0, 0], vec![1, 1]]);
+            simulate_processor_layout(
+                &mut mock,
+                [2, 2],
+                [4, 4],
+                [vec![0, 0], vec![1, 1]],
+                [vec![0, 0], vec![1, 1]],
+            );
             mock
         });
         let platform = BuildTargetPlatform::new(&*BINDINGS);
@@ -637,8 +676,8 @@ mod tests {
                 &mut mock,
                 [2, 2, 1],
                 [2, 2, 1],
-                [0, 0, 1],
                 [vec![1, 1], vec![0, 0], vec![1]],
+                [vec![0, 0], vec![0, 0], vec![1]],
             );
             mock
         });
@@ -741,12 +780,13 @@ mod tests {
         // Presumably. Lack of machine to actually test this on limits our ability to be sure.
         group_active_counts: [ProcessorIndexInGroup; GROUP_COUNT],
         group_max_counts: [ProcessorIndexInGroup; GROUP_COUNT],
-        group_memory_regions: [MemoryRegionId; GROUP_COUNT],
         // Only for the active processors in each group.
         efficiency_ratings_per_group: [Vec<u8>; GROUP_COUNT],
+        // Only for the active processors in each group.
+        memory_regions_per_group: [Vec<MemoryRegionId>; GROUP_COUNT],
     ) {
         assert_eq!(group_active_counts.len(), group_max_counts.len());
-        assert_eq!(group_active_counts.len(), group_memory_regions.len());
+        assert_eq!(group_active_counts.len(), memory_regions_per_group.len());
         assert_eq!(
             group_active_counts.len(),
             efficiency_ratings_per_group.len()
@@ -764,16 +804,21 @@ mod tests {
         // Copy the data because we need to keep referencing it in the mock.
         let group_active_counts = Arc::new(group_active_counts.to_vec());
         let group_max_counts = Arc::new(group_max_counts.to_vec());
-        let group_memory_regions = Arc::new(group_memory_regions.to_vec());
         let efficiency_ratings_per_group = Arc::new(
             efficiency_ratings_per_group
                 .iter()
                 .map(|x| x.to_vec())
                 .collect_vec(),
         );
+        let memory_regions_per_group = Arc::new(
+            memory_regions_per_group
+                .iter()
+                .map(|x| x.to_vec())
+                .collect_vec(),
+        );
 
         simulate_get_counts(mock, &group_active_counts, &group_max_counts);
-        simulate_get_numa_relations(mock, &group_memory_regions, &group_active_counts);
+        simulate_get_numa_relations(mock, &memory_regions_per_group);
         simulate_get_core_info(mock, &group_active_counts, &efficiency_ratings_per_group);
     }
 
@@ -810,9 +855,13 @@ mod tests {
 
     fn simulate_get_numa_relations(
         mock: &mut MockBindings,
-        group_memory_regions: &Arc<Vec<u32>>,
-        group_active_counts: &Arc<Vec<ProcessorIndexInGroup>>,
+        // Active processors only.
+        active_processor_memory_regions_per_group: &Arc<Vec<Vec<MemoryRegionId>>>,
     ) {
+        // The mask logic is weird on 32-bit, so we have not bothered to implement/test it.
+        // We do not today care about correctly operating in 32-bit builds.
+        assert_eq_size!(u64, usize);
+
         // NB! WARNING! size_of<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>() is not correct! This is
         // because there is a dynamically-sized array in there that in the Rust bindings is just
         // hardcoded to size 1. The real size in memory may be greater than size_of()!
@@ -831,10 +880,17 @@ mod tests {
         // There will be a call to get the groups that are members of each NUMA node.
         // The NUMA response is structured by memory region, not by processor group.
         // Therefore we need to also structure our data this way.
-        let memory_regions_to_group_indexes = group_memory_regions
+        let memory_regions_to_group_indexes = active_processor_memory_regions_per_group
             .iter()
             .enumerate()
-            .map(|(group_index, memory_region_index)| (memory_region_index, group_index))
+            .flat_map(|(group_index, active_processor_memory_regions)| {
+                active_processor_memory_regions
+                    .iter()
+                    .map(move |memory_region_index| {
+                        (*memory_region_index, group_index as ProcessorGroupIndex)
+                    })
+                    .unique()
+            })
             .into_group_map();
 
         let memory_region_count = memory_regions_to_group_indexes.len();
@@ -860,7 +916,7 @@ mod tests {
                 // SAFETY: We define RelationNumaNode above so this dereference is valid.
                 let response_numa = unsafe { &mut response.root.Anonymous.NumaNode };
 
-                response_numa.NodeNumber = *memory_region_index;
+                response_numa.NodeNumber = memory_region_index;
                 response_numa.GroupCount = group_indexes.len() as u16;
 
                 // The type definition just has an array of 1 here (not correct), so we write
@@ -880,14 +936,23 @@ mod tests {
                 };
 
                 for group_index in group_indexes {
-                    // Make a usize here with the number of bits set to the number of active processors.
-                    let mask = (1 << group_active_counts[group_index]) - 1;
+                    let mut mask: u64 = 0;
+
+                    for (index_in_group, memory_region_id) in
+                        active_processor_memory_regions_per_group[group_index as usize]
+                            .iter()
+                            .enumerate()
+                    {
+                        if *memory_region_id != memory_region_index {
+                            continue;
+                        }
+
+                        mask |= 1 << index_in_group;
+                    }
 
                     let group_data = GROUP_AFFINITY {
-                        Group: group_index as u16,
-                        // The mask has a bit set for each processor that exists in the group.
-                        // We only set the bits for the processors that are active.
-                        Mask: mask,
+                        Group: group_index,
+                        Mask: mask as usize,
                         ..Default::default()
                     };
 
@@ -959,7 +1024,8 @@ mod tests {
     fn simulate_get_core_info(
         mock: &mut MockBindings,
         group_active_counts: &Arc<Vec<ProcessorIndexInGroup>>,
-        efficiency_ratings_per_group: &Arc<Vec<Vec<u8>>>,
+        // Active processors only.
+        active_processor_efficiency_ratings_per_group: &Arc<Vec<Vec<u8>>>,
     ) {
         // Next we define the "get core info" simulation, used to access metadata of each processor.
         // Specifically, this provides the efficiency class. The other info is currently unused.
@@ -973,7 +1039,8 @@ mod tests {
             .enumerate()
             .flat_map(|(group_index, group_active_count)| {
                 (0..*group_active_count).map({
-                    let efficiency_ratings_per_group = Arc::clone(efficiency_ratings_per_group);
+                    let efficiency_ratings_per_group =
+                        Arc::clone(active_processor_efficiency_ratings_per_group);
 
                     move |index_in_group| {
                         let mut entry = SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX {
@@ -1050,7 +1117,7 @@ mod tests {
     fn test_pin_current_thread_to_single_processor() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
-            simulate_processor_layout(&mut mock, [1], [1], [0], [vec![0]]);
+            simulate_processor_layout(&mut mock, [1], [1], [vec![0]], [vec![0]]);
             mock.expect_get_current_thread()
                 .return_const_st(HANDLE::default());
             mock.expect_set_thread_group_affinity()
@@ -1071,7 +1138,7 @@ mod tests {
     fn test_pin_current_thread_to_multiple_processors() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
-            simulate_processor_layout(&mut mock, [2], [2], [0], [vec![0, 0]]);
+            simulate_processor_layout(&mut mock, [2], [2], [vec![0, 0]], [vec![0, 0]]);
             mock.expect_get_current_thread()
                 .return_const_st(HANDLE::default());
             mock.expect_set_thread_group_affinity()
@@ -1092,7 +1159,13 @@ mod tests {
     fn test_pin_current_thread_to_multiple_groups() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
-            simulate_processor_layout(&mut mock, [1, 1], [1, 1], [0, 1], [vec![0], vec![0]]);
+            simulate_processor_layout(
+                &mut mock,
+                [1, 1],
+                [1, 1],
+                [vec![0], vec![0]],
+                [vec![0], vec![1]],
+            );
             mock.expect_get_current_thread()
                 .return_const_st(HANDLE::default());
             mock.expect_set_thread_group_affinity()
@@ -1120,7 +1193,13 @@ mod tests {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
             // Group 0 -> [Performance, Efficiency], Group 1 -> [Efficiency, Performance]
-            simulate_processor_layout(&mut mock, [2, 2], [2, 2], [0, 1], [vec![1, 0], vec![0, 1]]);
+            simulate_processor_layout(
+                &mut mock,
+                [2, 2],
+                [2, 2],
+                [vec![1, 0], vec![0, 1]],
+                [vec![0, 0], vec![1, 1]],
+            );
             mock.expect_get_current_thread()
                 .return_const_st(HANDLE::default());
             mock.expect_set_thread_group_affinity()

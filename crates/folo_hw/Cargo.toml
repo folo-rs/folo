@@ -30,6 +30,7 @@ frozen-collections = "0.3"
 http = "1"
 mockall = "0.13"
 scc = "2"
+static_assertions = "1"
 
 [[bench]]
 name = "effects_of_memory"
