@@ -281,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn test_two_numa_nodes_efficiency_performance() {
+    fn two_numa_nodes_efficiency_performance() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(MockBindings::new);
         static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
             let mut fs = MockFilesystem::new();
@@ -324,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn test_one_big_numa_two_small_nodes() {
+    fn one_big_numa_two_small_nodes() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(MockBindings::new);
         static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
             let mut fs = MockFilesystem::new();
@@ -368,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn test_one_active_one_inactive_numa_node() {
+    fn one_active_one_inactive_numa_node() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(MockBindings::new);
         static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
             let mut fs = MockFilesystem::new();
@@ -399,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn test_two_numa_nodes_some_inactive_processors() {
+    fn two_numa_nodes_some_inactive_processors() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(MockBindings::new);
         static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
             let mut fs = MockFilesystem::new();
@@ -498,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pin_current_thread_to_single_processor() {
+    fn pin_current_thread_to_single_processor() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
 
@@ -525,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pin_current_thread_to_multiple_processors() {
+    fn pin_current_thread_to_multiple_processors() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
 
@@ -552,7 +552,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pin_current_thread_to_multiple_memory_regions() {
+    fn pin_current_thread_to_multiple_memory_regions() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
 
@@ -579,7 +579,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pin_current_thread_to_efficiency_processors() {
+    fn pin_current_thread_to_efficiency_processors() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
 

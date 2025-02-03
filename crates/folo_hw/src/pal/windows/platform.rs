@@ -495,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn test_two_numa_nodes_efficiency_performance() {
+    fn two_numa_nodes_efficiency_performance() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
             // Two groups, each with 2 active processors:
@@ -541,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn test_one_big_numa_two_small_nodes() {
+    fn one_big_numa_two_small_nodes() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
             // Three groups: group 0 -> 4 Performance, group 1 -> 2 Efficiency, group 2 -> 2 Efficiency
@@ -585,7 +585,7 @@ mod tests {
     }
 
     #[test]
-    fn test_one_active_one_inactive_numa_node() {
+    fn one_active_one_inactive_numa_node() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
             // Group 0 -> inactive, Group 1 -> [Performance, Efficiency, Performance]
@@ -623,7 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn test_two_numa_nodes_some_inactive_processors() {
+    fn two_numa_nodes_some_inactive_processors() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
             // Group 0 -> Efficiency, Group 1 -> Performance
@@ -668,7 +668,7 @@ mod tests {
     }
 
     #[test]
-    fn test_one_multi_group_numa_node_one_small() {
+    fn one_multi_group_numa_node_one_small() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
             // Group 0 -> [Perf, Perf], Group 1 -> [Eff, Eff], Group 2 -> [Perf]
@@ -710,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insufficient_buffer_retry() {
+    fn insufficient_buffer_retry() {
         use mockall::Sequence;
 
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
@@ -1114,7 +1114,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pin_current_thread_to_single_processor() {
+    fn pin_current_thread_to_single_processor() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
             simulate_processor_layout(&mut mock, [1], [1], [vec![0]], [vec![0]]);
@@ -1135,7 +1135,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pin_current_thread_to_multiple_processors() {
+    fn pin_current_thread_to_multiple_processors() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
             simulate_processor_layout(&mut mock, [2], [2], [vec![0, 0]], [vec![0, 0]]);
@@ -1156,7 +1156,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pin_current_thread_to_multiple_groups() {
+    fn pin_current_thread_to_multiple_groups() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
             simulate_processor_layout(
@@ -1189,7 +1189,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pin_current_thread_to_efficiency_processors() {
+    fn pin_current_thread_to_efficiency_processors() {
         static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
             let mut mock = MockBindings::new();
             // Group 0 -> [Performance, Efficiency], Group 1 -> [Efficiency, Performance]
@@ -1227,5 +1227,31 @@ mod tests {
         )
         .unwrap();
         platform.pin_current_thread_to(&efficiency_processors);
+    }
+
+    #[test]
+    fn single_group_multiple_memory_regions() {
+        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
+            let mut mock = MockBindings::new();
+            // Group 0 -> [MemoryRegion 0, MemoryRegion 1, MemoryRegion 0, MemoryRegion 1]
+            simulate_processor_layout(
+                &mut mock,
+                [4],
+                [4],
+                [vec![0, 0, 0, 0]],
+                [vec![0, 1, 0, 1]],
+            );
+            mock
+        });
+
+        let platform = BuildTargetPlatform::new(&*BINDINGS);
+        let processors = platform.get_all_processors();
+        assert_eq!(processors.len(), 4);
+
+        // Check memory regions
+        assert_eq!(processors[0].memory_region_id, 0);
+        assert_eq!(processors[1].memory_region_id, 1);
+        assert_eq!(processors[2].memory_region_id, 0);
+        assert_eq!(processors[3].memory_region_id, 1);
     }
 }
