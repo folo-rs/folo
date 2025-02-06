@@ -11,7 +11,7 @@ use std::{
 };
 
 use criterion::{
-    criterion_group, criterion_main, measurement::WallTime, BatchSize, BenchmarkGroup, Criterion,
+    criterion_group, criterion_main, measurement::WallTime, BatchSize, BenchmarkGroup, Criterion, SamplingMode,
 };
 use derive_more::derive::Display;
 use fake_headers::Headers;
@@ -274,6 +274,14 @@ fn execute_runs<P: Payload, const PAYLOAD_MULTIPLIER: usize>(
 ) {
     let mut g = c.benchmark_group(type_name::<P>());
 
+    // These benchmarks can be pretty slow and clearing processor caches adds extra overhead
+    // between iterations, so to get stable and consistent data it is worth taking some time.
+    g.measurement_time(Duration::from_secs(60));
+
+    // Unclear what exactly this does but the docs say for long-running benchmarks Flat is good.
+    // All our benchmarks are extremely long-running, so okay, let's believe it.
+    g.sampling_mode(SamplingMode::Flat);
+
     for &distribution in distributions {
         execute_run::<P, PAYLOAD_MULTIPLIER>(&mut g, distribution);
     }
@@ -304,10 +312,6 @@ fn execute_run<P: Payload, const PAYLOAD_MULTIPLIER: usize>(
             println!("{distribution} reference selection: ({cpulist1}) & ({cpulist2})");
         }
     }
-
-    // These benchmarks can be pretty slow and clearing processor caches adds extra overhead
-    // between iterations, so to get stable and consistent data it is worth taking some time.
-    g.measurement_time(Duration::from_secs(60));
 
     let name = if PAYLOAD_MULTIPLIER == 1 {
         format!("{distribution}")
