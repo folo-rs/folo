@@ -35,7 +35,7 @@ impl Bindings for BuildTargetBindings {
     }
 }
 
-/// Enum to hide the different binding implementations behind a single wrapper type.
+/// Enum to hide the real/mock choice behind a single wrapper type.
 #[derive(Clone, Debug)]
 pub(super) enum BindingsImpl {
     Real(&'static BuildTargetBindings),
