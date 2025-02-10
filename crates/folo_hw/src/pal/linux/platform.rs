@@ -6,7 +6,10 @@ use nonempty::NonEmpty;
 use crate::{
     cpulist,
     pal::{
-        linux::{Bindings, BuildTargetBindings, BuildTargetFilesystem, Filesystem},
+        linux::{
+            filesystem::FilesystemImpl, Bindings, BindingsImpl, BuildTargetBindings,
+            BuildTargetFilesystem, Filesystem,
+        },
         Platform, ProcessorImpl,
     },
     EfficiencyClass, MemoryRegionId, ProcessorId,
@@ -17,23 +20,22 @@ extern crate alloc;
 
 /// Singleton instance of `BuildTargetPlatform`, used by public API types
 /// to hook up to the correct PAL implementation.
-pub(crate) static BUILD_TARGET_PLATFORM: BuildTargetPlatform =
-    BuildTargetPlatform::new(&BuildTargetBindings, &BuildTargetFilesystem);
+pub(crate) static BUILD_TARGET_PLATFORM: BuildTargetPlatform = BuildTargetPlatform::new(
+    BindingsImpl::Real(&BuildTargetBindings),
+    FilesystemImpl::Real(&BuildTargetFilesystem),
+);
 
 /// The platform that matches the crate's build target.
 ///
 /// You would only use a different platform in unit tests that need to mock the platform.
 /// Even then, whenever possible, unit tests should use the real platform for maximum realism.
 #[derive(Debug)]
-pub(crate) struct BuildTargetPlatform<
-    B: Bindings = BuildTargetBindings,
-    FS: Filesystem = BuildTargetFilesystem,
-> {
-    bindings: &'static B,
-    fs: &'static FS,
+pub(crate) struct BuildTargetPlatform {
+    bindings: BindingsImpl,
+    fs: FilesystemImpl,
 }
 
-impl<B: Bindings, FS: Filesystem> Platform for BuildTargetPlatform<B, FS> {
+impl Platform for BuildTargetPlatform {
     type Processor = ProcessorImpl;
 
     fn get_all_processors(&self) -> NonEmpty<Self::Processor> {
@@ -62,8 +64,8 @@ impl<B: Bindings, FS: Filesystem> Platform for BuildTargetPlatform<B, FS> {
     }
 }
 
-impl<B: Bindings, FS: Filesystem> BuildTargetPlatform<B, FS> {
-    pub(crate) const fn new(bindings: &'static B, fs: &'static FS) -> Self {
+impl BuildTargetPlatform {
+    pub(super) const fn new(bindings: BindingsImpl, fs: FilesystemImpl) -> Self {
         Self { bindings, fs }
     }
 
@@ -222,7 +224,7 @@ struct CpuInfo {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::LazyLock;
+    use std::sync::Arc;
 
     use crate::pal::linux::{MockBindings, MockFilesystem};
 
@@ -232,21 +234,19 @@ mod tests {
     fn get_all_processors_smoke_test() {
         // We imagine a simple system with 2 physical cores, 4 logical processors, all in a
         // single processor group and a single memory region. Welcome to 2010!
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(MockBindings::new);
-        static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
-            let mut fs = MockFilesystem::new();
+        let mut fs = MockFilesystem::new();
 
-            simulate_processor_layout(
-                &mut fs,
-                [0, 1, 2, 3],
-                [0, 0, 0, 0],
-                [99.9, 99.9, 99.9, 99.9],
-            );
+        simulate_processor_layout(
+            &mut fs,
+            [0, 1, 2, 3],
+            [0, 0, 0, 0],
+            [99.9, 99.9, 99.9, 99.9],
+        );
 
-            fs
-        });
-
-        let platform = BuildTargetPlatform::new(&*BINDINGS, &*FILESYSTEM);
+        let platform = BuildTargetPlatform::new(
+            BindingsImpl::Mock(Arc::new(MockBindings::new())),
+            FilesystemImpl::Mock(Arc::new(fs)),
+        );
 
         let processors = platform.get_all_processors();
 
@@ -282,21 +282,20 @@ mod tests {
 
     #[test]
     fn two_numa_nodes_efficiency_performance() {
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(MockBindings::new);
-        static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
-            let mut fs = MockFilesystem::new();
-            // Two nodes, each with 2 processors:
-            // Node 0 -> [Performance, Efficiency], Node 1 -> [Efficiency, Performance].
-            simulate_processor_layout(
-                &mut fs,
-                [0, 1, 2, 3],
-                [0, 0, 1, 1],
-                [3400.0, 2000.0, 2000.0, 3400.0],
-            );
-            fs
-        });
+        let mut fs = MockFilesystem::new();
+        // Two nodes, each with 2 processors:
+        // Node 0 -> [Performance, Efficiency], Node 1 -> [Efficiency, Performance].
+        simulate_processor_layout(
+            &mut fs,
+            [0, 1, 2, 3],
+            [0, 0, 1, 1],
+            [3400.0, 2000.0, 2000.0, 3400.0],
+        );
 
-        let platform = BuildTargetPlatform::new(&*BINDINGS, &*FILESYSTEM);
+        let platform = BuildTargetPlatform::new(
+            BindingsImpl::Mock(Arc::new(MockBindings::new())),
+            FilesystemImpl::Mock(Arc::new(fs)),
+        );
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 4);
 
@@ -325,22 +324,21 @@ mod tests {
 
     #[test]
     fn one_big_numa_two_small_nodes() {
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(MockBindings::new);
-        static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
-            let mut fs = MockFilesystem::new();
-            // Three nodes: node 0 -> 4 Performance, node 1 -> 2 Efficiency, node 2 -> 2 Efficiency
-            simulate_processor_layout(
-                &mut fs,
-                [0, 1, 2, 3, 4, 5, 6, 7],
-                [0, 0, 0, 0, 1, 1, 2, 2],
-                [
-                    3400.0, 3400.0, 3400.0, 3400.0, 2000.0, 2000.0, 2000.0, 2000.0,
-                ],
-            );
-            fs
-        });
+        let mut fs = MockFilesystem::new();
+        // Three nodes: node 0 -> 4 Performance, node 1 -> 2 Efficiency, node 2 -> 2 Efficiency
+        simulate_processor_layout(
+            &mut fs,
+            [0, 1, 2, 3, 4, 5, 6, 7],
+            [0, 0, 0, 0, 1, 1, 2, 2],
+            [
+                3400.0, 3400.0, 3400.0, 3400.0, 2000.0, 2000.0, 2000.0, 2000.0,
+            ],
+        );
 
-        let platform = BuildTargetPlatform::new(&*BINDINGS, &*FILESYSTEM);
+        let platform = BuildTargetPlatform::new(
+            BindingsImpl::Mock(Arc::new(MockBindings::new())),
+            FilesystemImpl::Mock(Arc::new(fs)),
+        );
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 8);
 
@@ -369,15 +367,14 @@ mod tests {
 
     #[test]
     fn one_active_one_inactive_numa_node() {
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(MockBindings::new);
-        static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
-            let mut fs = MockFilesystem::new();
-            // Node 0 -> inactive, Node 1 -> [Performance, Efficiency, Performance]
-            simulate_processor_layout(&mut fs, [3, 4, 5], [1, 1, 1], [3400.0, 2000.0, 3400.0]);
-            fs
-        });
+        let mut fs = MockFilesystem::new();
+        // Node 0 -> inactive, Node 1 -> [Performance, Efficiency, Performance]
+        simulate_processor_layout(&mut fs, [3, 4, 5], [1, 1, 1], [3400.0, 2000.0, 3400.0]);
 
-        let platform = BuildTargetPlatform::new(&*BINDINGS, &*FILESYSTEM);
+        let platform = BuildTargetPlatform::new(
+            BindingsImpl::Mock(Arc::new(MockBindings::new())),
+            FilesystemImpl::Mock(Arc::new(fs)),
+        );
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 3);
 
@@ -400,20 +397,19 @@ mod tests {
 
     #[test]
     fn two_numa_nodes_some_inactive_processors() {
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(MockBindings::new);
-        static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
-            let mut fs = MockFilesystem::new();
-            // Node 0 -> Efficiency, Node 1 -> Performance, with gaps in indexes
-            simulate_processor_layout(
-                &mut fs,
-                [0, 2, 4, 6],
-                [0, 0, 1, 1],
-                [2000.0, 2000.0, 3400.0, 3400.0],
-            );
-            fs
-        });
+        let mut fs = MockFilesystem::new();
+        // Node 0 -> Efficiency, Node 1 -> Performance, with gaps in indexes
+        simulate_processor_layout(
+            &mut fs,
+            [0, 2, 4, 6],
+            [0, 0, 1, 1],
+            [2000.0, 2000.0, 3400.0, 3400.0],
+        );
 
-        let platform = BuildTargetPlatform::new(&*BINDINGS, &*FILESYSTEM);
+        let platform = BuildTargetPlatform::new(
+            BindingsImpl::Mock(Arc::new(MockBindings::new())),
+            FilesystemImpl::Mock(Arc::new(fs)),
+        );
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 4);
 
@@ -499,114 +495,110 @@ mod tests {
 
     #[test]
     fn pin_current_thread_to_single_processor() {
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
-            let mut mock = MockBindings::new();
+        let mut bindings = MockBindings::new();
 
-            let expected_set = cpuset_from([0]);
+        let expected_set = cpuset_from([0]);
 
-            mock.expect_sched_setaffinity_current()
-                .withf(move |cpu_set| {
-                    // SAFETY: No safety requirements.
-                    unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
-                })
-                .times(1)
-                .returning(|_| Ok(()));
-            mock
-        });
-        static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
-            let mut fs = MockFilesystem::new();
-            simulate_processor_layout(&mut fs, [0], [0], [2000.0]);
-            fs
-        });
+        bindings
+            .expect_sched_setaffinity_current()
+            .withf(move |cpu_set| {
+                // SAFETY: No safety requirements.
+                unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
+            })
+            .times(1)
+            .returning(|_| Ok(()));
 
-        let platform = BuildTargetPlatform::new(&*BINDINGS, &*FILESYSTEM);
+        let mut fs = MockFilesystem::new();
+        simulate_processor_layout(&mut fs, [0], [0], [2000.0]);
+
+        let platform = BuildTargetPlatform::new(
+            BindingsImpl::Mock(Arc::new(bindings)),
+            FilesystemImpl::Mock(Arc::new(fs)),
+        );
         let processors = platform.get_all_processors();
         platform.pin_current_thread_to(&processors);
     }
 
     #[test]
     fn pin_current_thread_to_multiple_processors() {
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
-            let mut mock = MockBindings::new();
+        let mut bindings = MockBindings::new();
 
-            let expected_set = cpuset_from([0, 1]);
+        let expected_set = cpuset_from([0, 1]);
 
-            mock.expect_sched_setaffinity_current()
-                .withf(move |cpu_set| {
-                    // SAFETY: No safety requirements.
-                    unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
-                })
-                .times(1)
-                .returning(|_| Ok(()));
-            mock
-        });
-        static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
-            let mut fs = MockFilesystem::new();
-            simulate_processor_layout(&mut fs, [0, 1], [0, 0], [2000.0, 2000.0]);
-            fs
-        });
+        bindings
+            .expect_sched_setaffinity_current()
+            .withf(move |cpu_set| {
+                // SAFETY: No safety requirements.
+                unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
+            })
+            .times(1)
+            .returning(|_| Ok(()));
 
-        let platform = BuildTargetPlatform::new(&*BINDINGS, &*FILESYSTEM);
+        let mut fs = MockFilesystem::new();
+        simulate_processor_layout(&mut fs, [0, 1], [0, 0], [2000.0, 2000.0]);
+
+        let platform = BuildTargetPlatform::new(
+            BindingsImpl::Mock(Arc::new(bindings)),
+            FilesystemImpl::Mock(Arc::new(fs)),
+        );
         let processors = platform.get_all_processors();
         platform.pin_current_thread_to(&processors);
     }
 
     #[test]
     fn pin_current_thread_to_multiple_memory_regions() {
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
-            let mut mock = MockBindings::new();
+        let mut bindings = MockBindings::new();
 
-            let expected_set = cpuset_from([0, 1]);
+        let expected_set = cpuset_from([0, 1]);
 
-            mock.expect_sched_setaffinity_current()
-                .withf(move |cpu_set| {
-                    // SAFETY: No safety requirements.
-                    unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
-                })
-                .times(1)
-                .returning(|_| Ok(()));
-            mock
-        });
-        static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
-            let mut fs = MockFilesystem::new();
-            simulate_processor_layout(&mut fs, [0, 1], [0, 1], [2000.0, 2000.0]);
-            fs
-        });
+        bindings
+            .expect_sched_setaffinity_current()
+            .withf(move |cpu_set| {
+                // SAFETY: No safety requirements.
+                unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
+            })
+            .times(1)
+            .returning(|_| Ok(()));
 
-        let platform = BuildTargetPlatform::new(&*BINDINGS, &*FILESYSTEM);
+        let mut fs = MockFilesystem::new();
+        simulate_processor_layout(&mut fs, [0, 1], [0, 1], [2000.0, 2000.0]);
+
+        let platform = BuildTargetPlatform::new(
+            BindingsImpl::Mock(Arc::new(bindings)),
+            FilesystemImpl::Mock(Arc::new(fs)),
+        );
         let processors = platform.get_all_processors();
         platform.pin_current_thread_to(&processors);
     }
 
     #[test]
     fn pin_current_thread_to_efficiency_processors() {
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
-            let mut mock = MockBindings::new();
+        let mut bindings = MockBindings::new();
 
-            let expected_set = cpuset_from([1, 2]);
+        let expected_set = cpuset_from([1, 2]);
 
-            mock.expect_sched_setaffinity_current()
-                .withf(move |cpu_set| {
-                    // SAFETY: No safety requirements.
-                    unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
-                })
-                .times(1)
-                .returning(|_| Ok(()));
-            mock
-        });
-        static FILESYSTEM: LazyLock<MockFilesystem> = LazyLock::new(|| {
-            let mut fs = MockFilesystem::new();
-            // Node 0 -> [Performance, Efficiency], Node 1 -> [Efficiency, Performance]
-            simulate_processor_layout(
-                &mut fs,
-                [0, 1, 2, 3],
-                [0, 0, 2, 2],
-                [3400.0, 2000.0, 2000.0, 3400.0],
-            );
-            fs
-        });
+        bindings
+            .expect_sched_setaffinity_current()
+            .withf(move |cpu_set| {
+                // SAFETY: No safety requirements.
+                unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
+            })
+            .times(1)
+            .returning(|_| Ok(()));
 
-        let platform = BuildTargetPlatform::new(&*BINDINGS, &*FILESYSTEM);
+        let mut fs = MockFilesystem::new();
+        // Node 0 -> [Performance, Efficiency], Node 1 -> [Efficiency, Performance]
+        simulate_processor_layout(
+            &mut fs,
+            [0, 1, 2, 3],
+            [0, 0, 2, 2],
+            [3400.0, 2000.0, 2000.0, 3400.0],
+        );
+
+        let platform = BuildTargetPlatform::new(
+            BindingsImpl::Mock(Arc::new(bindings)),
+            FilesystemImpl::Mock(Arc::new(fs)),
+        );
         let processors = platform.get_all_processors();
         let efficiency_processors = NonEmpty::from_vec(
             processors

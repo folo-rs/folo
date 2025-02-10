@@ -15,7 +15,7 @@ use windows::{
 
 use crate::{
     pal::{
-        windows::{Bindings, BuildTargetBindings, NativeBuffer, ProcessorGroupIndex},
+        windows::{Bindings, BindingsImpl, BuildTargetBindings, NativeBuffer, ProcessorGroupIndex},
         Platform, ProcessorImpl,
     },
     EfficiencyClass, MemoryRegionId, ProcessorId,
@@ -24,18 +24,18 @@ use crate::{
 /// Singleton instance of `BuildTargetPlatform`, used by public API types
 /// to hook up to the correct PAL implementation.
 pub(crate) static BUILD_TARGET_PLATFORM: BuildTargetPlatform =
-    BuildTargetPlatform::new(&BuildTargetBindings);
+    BuildTargetPlatform::new(BindingsImpl::Real(&BuildTargetBindings));
 
 /// The platform that matches the crate's build target.
 ///
 /// You would only use a different platform in unit tests that need to mock the platform.
 /// Even then, whenever possible, unit tests should use the real platform for maximum realism.
 #[derive(Debug)]
-pub(crate) struct BuildTargetPlatform<B: Bindings = BuildTargetBindings> {
-    bindings: &'static B,
+pub(crate) struct BuildTargetPlatform {
+    bindings: BindingsImpl,
 }
 
-impl<B: Bindings> Platform for BuildTargetPlatform<B> {
+impl Platform for BuildTargetPlatform {
     type Processor = ProcessorImpl;
 
     fn get_all_processors(&self) -> NonEmpty<Self::Processor> {
@@ -93,8 +93,8 @@ impl<B: Bindings> Platform for BuildTargetPlatform<B> {
     }
 }
 
-impl<B: Bindings> BuildTargetPlatform<B> {
-    pub(crate) const fn new(bindings: &'static B) -> Self {
+impl BuildTargetPlatform {
+    pub(super) const fn new(bindings: BindingsImpl) -> Self {
         Self { bindings }
     }
 
@@ -428,7 +428,7 @@ impl<B: Bindings> BuildTargetPlatform<B> {
 mod tests {
     use std::{
         mem::{self, offset_of},
-        sync::{Arc, LazyLock},
+        sync::Arc,
     };
 
     use itertools::Itertools;
@@ -447,15 +447,16 @@ mod tests {
     fn get_all_processors_smoke_test() {
         // We imagine a simple system with 2 physical cores, 4 logical processors, all in a
         // single processor group and a single memory region. Welcome to 2010!
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
-            let mut mock = MockBindings::new();
+        let mut bindings = MockBindings::new();
+        simulate_processor_layout(
+            &mut bindings,
+            [4],
+            [4],
+            [vec![0, 0, 0, 0]],
+            [vec![0, 0, 0, 0]],
+        );
 
-            simulate_processor_layout(&mut mock, [4], [4], [vec![0, 0, 0, 0]], [vec![0, 0, 0, 0]]);
-
-            mock
-        });
-
-        let platform = BuildTargetPlatform::new(&*BINDINGS);
+        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
 
         let processors = platform.get_all_processors();
 
@@ -496,20 +497,18 @@ mod tests {
 
     #[test]
     fn two_numa_nodes_efficiency_performance() {
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
-            let mut mock = MockBindings::new();
-            // Two groups, each with 2 active processors:
-            // Group 0 -> [Performance, Efficiency], Group 1 -> [Efficiency, Performance].
-            simulate_processor_layout(
-                &mut mock,
-                [2, 2],
-                [2, 2],
-                [vec![1, 0], vec![0, 1]],
-                [vec![0, 0], vec![1, 1]],
-            );
-            mock
-        });
-        let platform = BuildTargetPlatform::new(&*BINDINGS);
+        let mut bindings = MockBindings::new();
+        // Two groups, each with 2 active processors:
+        // Group 0 -> [Performance, Efficiency], Group 1 -> [Efficiency, Performance].
+        simulate_processor_layout(
+            &mut bindings,
+            [2, 2],
+            [2, 2],
+            [vec![1, 0], vec![0, 1]],
+            [vec![0, 0], vec![1, 1]],
+        );
+
+        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 4);
 
@@ -542,19 +541,17 @@ mod tests {
 
     #[test]
     fn one_big_numa_two_small_nodes() {
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
-            let mut mock = MockBindings::new();
-            // Three groups: group 0 -> 4 Performance, group 1 -> 2 Efficiency, group 2 -> 2 Efficiency
-            simulate_processor_layout(
-                &mut mock,
-                [4, 2, 2],
-                [4, 2, 2],
-                [vec![1, 1, 1, 1], vec![0, 0], vec![0, 0]],
-                [vec![0, 0, 0, 0], vec![1, 1], vec![2, 2]],
-            );
-            mock
-        });
-        let platform = BuildTargetPlatform::new(&*BINDINGS);
+        let mut bindings = MockBindings::new();
+        // Three groups: group 0 -> 4 Performance, group 1 -> 2 Efficiency, group 2 -> 2 Efficiency
+        simulate_processor_layout(
+            &mut bindings,
+            [4, 2, 2],
+            [4, 2, 2],
+            [vec![1, 1, 1, 1], vec![0, 0], vec![0, 0]],
+            [vec![0, 0, 0, 0], vec![1, 1], vec![2, 2]],
+        );
+
+        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 8);
 
@@ -586,19 +583,17 @@ mod tests {
 
     #[test]
     fn one_active_one_inactive_numa_node() {
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
-            let mut mock = MockBindings::new();
-            // Group 0 -> inactive, Group 1 -> [Performance, Efficiency, Performance]
-            simulate_processor_layout(
-                &mut mock,
-                [0, 3],
-                [2, 3],
-                [vec![], vec![1, 0, 1]],
-                [vec![], vec![1, 1, 1]],
-            );
-            mock
-        });
-        let platform = BuildTargetPlatform::new(&*BINDINGS);
+        let mut bindings = MockBindings::new();
+        // Group 0 -> inactive, Group 1 -> [Performance, Efficiency, Performance]
+        simulate_processor_layout(
+            &mut bindings,
+            [0, 3],
+            [2, 3],
+            [vec![], vec![1, 0, 1]],
+            [vec![], vec![1, 1, 1]],
+        );
+
+        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 3);
 
@@ -624,19 +619,17 @@ mod tests {
 
     #[test]
     fn two_numa_nodes_some_inactive_processors() {
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
-            let mut mock = MockBindings::new();
-            // Group 0 -> Efficiency, Group 1 -> Performance
-            simulate_processor_layout(
-                &mut mock,
-                [2, 2],
-                [4, 4],
-                [vec![0, 0], vec![1, 1]],
-                [vec![0, 0], vec![1, 1]],
-            );
-            mock
-        });
-        let platform = BuildTargetPlatform::new(&*BINDINGS);
+        let mut bindings = MockBindings::new();
+        // Group 0 -> Efficiency, Group 1 -> Performance
+        simulate_processor_layout(
+            &mut bindings,
+            [2, 2],
+            [4, 4],
+            [vec![0, 0], vec![1, 1]],
+            [vec![0, 0], vec![1, 1]],
+        );
+
+        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 4);
 
@@ -669,19 +662,17 @@ mod tests {
 
     #[test]
     fn one_multi_group_numa_node_one_small() {
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
-            let mut mock = MockBindings::new();
-            // Group 0 -> [Perf, Perf], Group 1 -> [Eff, Eff], Group 2 -> [Perf]
-            simulate_processor_layout(
-                &mut mock,
-                [2, 2, 1],
-                [2, 2, 1],
-                [vec![1, 1], vec![0, 0], vec![1]],
-                [vec![0, 0], vec![0, 0], vec![1]],
-            );
-            mock
-        });
-        let platform = BuildTargetPlatform::new(&*BINDINGS);
+        let mut bindings = MockBindings::new();
+        // Group 0 -> [Perf, Perf], Group 1 -> [Eff, Eff], Group 2 -> [Perf]
+        simulate_processor_layout(
+            &mut bindings,
+            [2, 2, 1],
+            [2, 2, 1],
+            [vec![1, 1], vec![0, 0], vec![1]],
+            [vec![0, 0], vec![0, 0], vec![1]],
+        );
+
+        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 5);
 
@@ -713,60 +704,60 @@ mod tests {
     fn insufficient_buffer_retry() {
         use mockall::Sequence;
 
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
-            let mut mock = MockBindings::new();
-            let mut seq = Sequence::new();
+        let mut bindings = MockBindings::new();
+        let mut seq = Sequence::new();
 
-            // First iteration, probe (None) => size=64 => insufficient buffer
-            mock.expect_get_logical_processor_information_ex()
-                .times(1)
-                .in_sequence(&mut seq)
-                .withf(|rel, buf, _| rel == &RelationProcessorCore && buf.is_none())
-                .returning(|_, _, returned_length| {
-                    unsafe { *returned_length = 64 };
-                    Err(windows::core::Error::from_hresult(
-                        ERROR_INSUFFICIENT_BUFFER.to_hresult(),
-                    ))
-                });
+        // First iteration, probe (None) => size=64 => insufficient buffer
+        bindings
+            .expect_get_logical_processor_information_ex()
+            .times(1)
+            .in_sequence(&mut seq)
+            .withf(|rel, buf, _| rel == &RelationProcessorCore && buf.is_none())
+            .returning(|_, _, returned_length| {
+                unsafe { *returned_length = 64 };
+                Err(windows::core::Error::from_hresult(
+                    ERROR_INSUFFICIENT_BUFFER.to_hresult(),
+                ))
+            });
 
-            // First iteration, real call (Some(64)) => still insufficient => size=96
-            mock.expect_get_logical_processor_information_ex()
-                .times(1)
-                .in_sequence(&mut seq)
-                .withf(|rel, buf, _| rel == &RelationProcessorCore && buf.is_some())
-                .returning(|_, _, returned_length| {
-                    unsafe { *returned_length = 96 };
-                    Err(windows::core::Error::from_hresult(
-                        ERROR_INSUFFICIENT_BUFFER.to_hresult(),
-                    ))
-                });
+        // First iteration, real call (Some(64)) => still insufficient => size=96
+        bindings
+            .expect_get_logical_processor_information_ex()
+            .times(1)
+            .in_sequence(&mut seq)
+            .withf(|rel, buf, _| rel == &RelationProcessorCore && buf.is_some())
+            .returning(|_, _, returned_length| {
+                unsafe { *returned_length = 96 };
+                Err(windows::core::Error::from_hresult(
+                    ERROR_INSUFFICIENT_BUFFER.to_hresult(),
+                ))
+            });
 
-            // Second iteration, probe (None) => size=128 => insufficient
-            mock.expect_get_logical_processor_information_ex()
-                .times(1)
-                .in_sequence(&mut seq)
-                .withf(|rel, buf, _| rel == &RelationProcessorCore && buf.is_none())
-                .returning(|_, _, returned_length| {
-                    unsafe { *returned_length = 128 };
-                    Err(windows::core::Error::from_hresult(
-                        ERROR_INSUFFICIENT_BUFFER.to_hresult(),
-                    ))
-                });
+        // Second iteration, probe (None) => size=128 => insufficient
+        bindings
+            .expect_get_logical_processor_information_ex()
+            .times(1)
+            .in_sequence(&mut seq)
+            .withf(|rel, buf, _| rel == &RelationProcessorCore && buf.is_none())
+            .returning(|_, _, returned_length| {
+                unsafe { *returned_length = 128 };
+                Err(windows::core::Error::from_hresult(
+                    ERROR_INSUFFICIENT_BUFFER.to_hresult(),
+                ))
+            });
 
-            // Second iteration, real call (Some(128)) => success
-            mock.expect_get_logical_processor_information_ex()
-                .times(1)
-                .in_sequence(&mut seq)
-                .withf(|rel, buf, _| rel == &RelationProcessorCore && buf.is_some())
-                .returning(|_, _, returned_length| {
-                    unsafe { *returned_length = 128 };
-                    Ok(())
-                });
+        // Second iteration, real call (Some(128)) => success
+        bindings
+            .expect_get_logical_processor_information_ex()
+            .times(1)
+            .in_sequence(&mut seq)
+            .withf(|rel, buf, _| rel == &RelationProcessorCore && buf.is_some())
+            .returning(|_, _, returned_length| {
+                unsafe { *returned_length = 128 };
+                Ok(())
+            });
 
-            mock
-        });
-
-        let platform = BuildTargetPlatform::new(&*BINDINGS);
+        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
         let buffer = platform.get_logical_processor_information_raw(RelationProcessorCore);
         assert!(!buffer.is_empty(), "Expected final buffer to be filled");
     }
@@ -775,7 +766,7 @@ mod tests {
     ///
     /// The simulation is valid for one call to get_all_processors() only.
     fn simulate_processor_layout<const GROUP_COUNT: usize>(
-        mock: &mut MockBindings,
+        bindings: &mut MockBindings,
         // If entry is 0 the group is not considered active. Such groups have to be at the end.
         // Presumably. Lack of machine to actually test this on limits our ability to be sure.
         group_active_counts: [ProcessorIndexInGroup; GROUP_COUNT],
@@ -817,13 +808,17 @@ mod tests {
                 .collect_vec(),
         );
 
-        simulate_get_counts(mock, &group_active_counts, &group_max_counts);
-        simulate_get_numa_relations(mock, &memory_regions_per_group);
-        simulate_get_core_info(mock, &group_active_counts, &efficiency_ratings_per_group);
+        simulate_get_counts(bindings, &group_active_counts, &group_max_counts);
+        simulate_get_numa_relations(bindings, &memory_regions_per_group);
+        simulate_get_core_info(
+            bindings,
+            &group_active_counts,
+            &efficiency_ratings_per_group,
+        );
     }
 
     fn simulate_get_counts(
-        mock: &mut MockBindings,
+        bindings: &mut MockBindings,
         group_active_counts: &Arc<Vec<ProcessorIndexInGroup>>,
         group_max_counts: &Arc<Vec<ProcessorIndexInGroup>>,
     ) {
@@ -835,10 +830,12 @@ mod tests {
 
         // Note that "get active group count" is not actually used - the code probes all groups
         // and just checks number of processors in group to identify if the group is active.
-        mock.expect_get_maximum_processor_group_count()
+        bindings
+            .expect_get_maximum_processor_group_count()
             .return_const(max_group_count);
 
-        mock.expect_get_active_processor_count()
+        bindings
+            .expect_get_active_processor_count()
             .times(group_max_counts.len())
             .returning({
                 let group_active_counts = Arc::clone(group_active_counts);
@@ -846,7 +843,7 @@ mod tests {
                 move |group_number| group_active_counts[group_number as usize] as u32
             });
 
-        mock.expect_get_maximum_processor_count().returning({
+        bindings.expect_get_maximum_processor_count().returning({
             let group_max_counts = Arc::clone(group_max_counts);
 
             move |group_number| group_max_counts[group_number as usize] as u32
@@ -854,7 +851,7 @@ mod tests {
     }
 
     fn simulate_get_numa_relations(
-        mock: &mut MockBindings,
+        bindings: &mut MockBindings,
         // Active processors only.
         active_processor_memory_regions_per_group: &Arc<Vec<Vec<MemoryRegionId>>>,
     ) {
@@ -977,7 +974,8 @@ mod tests {
         let mut seq = Sequence::new();
 
         // This will actually be two calls, one for the size probe and one for the real data.
-        mock.expect_get_logical_processor_information_ex()
+        bindings
+            .expect_get_logical_processor_information_ex()
             .times(1)
             .in_sequence(&mut seq)
             .withf(|relationship_type, buffer, _| {
@@ -994,7 +992,8 @@ mod tests {
                 )))
             });
 
-        mock.expect_get_logical_processor_information_ex()
+        bindings
+            .expect_get_logical_processor_information_ex()
             .times(1)
             .in_sequence(&mut seq)
             .withf(|relationship_type, buffer, _| {
@@ -1022,7 +1021,7 @@ mod tests {
     }
 
     fn simulate_get_core_info(
-        mock: &mut MockBindings,
+        bindings: &mut MockBindings,
         group_active_counts: &Arc<Vec<ProcessorIndexInGroup>>,
         // Active processors only.
         active_processor_efficiency_ratings_per_group: &Arc<Vec<Vec<u8>>>,
@@ -1072,7 +1071,8 @@ mod tests {
         let mut seq = Sequence::new();
 
         // This will actually be two calls, one for the size probe and one for the real data.
-        mock.expect_get_logical_processor_information_ex()
+        bindings
+            .expect_get_logical_processor_information_ex()
             .times(1)
             .in_sequence(&mut seq)
             .withf(|relationship_type, buffer, _| {
@@ -1089,7 +1089,8 @@ mod tests {
                 )))
             });
 
-        mock.expect_get_logical_processor_information_ex()
+        bindings
+            .expect_get_logical_processor_information_ex()
             .times(1)
             .in_sequence(&mut seq)
             .withf(|relationship_type, buffer, _| {
@@ -1115,109 +1116,107 @@ mod tests {
 
     #[test]
     fn pin_current_thread_to_single_processor() {
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
-            let mut mock = MockBindings::new();
-            simulate_processor_layout(&mut mock, [1], [1], [vec![0]], [vec![0]]);
-            mock.expect_get_current_thread()
-                .return_const_st(HANDLE::default());
-            mock.expect_set_thread_group_affinity()
-                .withf(|thread, affinity, _| {
-                    *thread == HANDLE::default()
-                        && unsafe { (**affinity).Group == 0 && (**affinity).Mask == 1 }
-                })
-                .return_const(BOOL::from(true));
-            mock
-        });
+        let mut bindings = MockBindings::new();
+        simulate_processor_layout(&mut bindings, [1], [1], [vec![0]], [vec![0]]);
+        bindings
+            .expect_get_current_thread()
+            .return_const_st(HANDLE::default());
+        bindings
+            .expect_set_thread_group_affinity()
+            .withf(|thread, affinity, _| {
+                *thread == HANDLE::default()
+                    && unsafe { (**affinity).Group == 0 && (**affinity).Mask == 1 }
+            })
+            .return_const(BOOL::from(true));
 
-        let platform = BuildTargetPlatform::new(&*BINDINGS);
+        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
         let processors = platform.get_all_processors();
         platform.pin_current_thread_to(&processors);
     }
 
     #[test]
     fn pin_current_thread_to_multiple_processors() {
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
-            let mut mock = MockBindings::new();
-            simulate_processor_layout(&mut mock, [2], [2], [vec![0, 0]], [vec![0, 0]]);
-            mock.expect_get_current_thread()
-                .return_const_st(HANDLE::default());
-            mock.expect_set_thread_group_affinity()
-                .withf(|thread, affinity, _| {
-                    *thread == HANDLE::default()
-                        && unsafe { (**affinity).Group == 0 && (**affinity).Mask == 3 }
-                })
-                .return_const(BOOL::from(true));
-            mock
-        });
+        let mut bindings = MockBindings::new();
+        simulate_processor_layout(&mut bindings, [2], [2], [vec![0, 0]], [vec![0, 0]]);
+        bindings
+            .expect_get_current_thread()
+            .return_const_st(HANDLE::default());
+        bindings
+            .expect_set_thread_group_affinity()
+            .withf(|thread, affinity, _| {
+                *thread == HANDLE::default()
+                    && unsafe { (**affinity).Group == 0 && (**affinity).Mask == 3 }
+            })
+            .return_const(BOOL::from(true));
 
-        let platform = BuildTargetPlatform::new(&*BINDINGS);
+        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
         let processors = platform.get_all_processors();
         platform.pin_current_thread_to(&processors);
     }
 
     #[test]
     fn pin_current_thread_to_multiple_groups() {
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
-            let mut mock = MockBindings::new();
-            simulate_processor_layout(
-                &mut mock,
-                [1, 1],
-                [1, 1],
-                [vec![0], vec![0]],
-                [vec![0], vec![1]],
-            );
-            mock.expect_get_current_thread()
-                .return_const_st(HANDLE::default());
-            mock.expect_set_thread_group_affinity()
-                .withf(|thread, affinity, _| {
-                    *thread == HANDLE::default()
-                        && unsafe { (**affinity).Group == 0 && (**affinity).Mask == 1 }
-                })
-                .return_const(BOOL::from(true));
-            mock.expect_set_thread_group_affinity()
-                .withf(|thread, affinity, _| {
-                    *thread == HANDLE::default()
-                        && unsafe { (**affinity).Group == 1 && (**affinity).Mask == 1 }
-                })
-                .return_const(BOOL::from(true));
-            mock
-        });
+        let mut bindings = MockBindings::new();
+        simulate_processor_layout(
+            &mut bindings,
+            [1, 1],
+            [1, 1],
+            [vec![0], vec![0]],
+            [vec![0], vec![1]],
+        );
+        bindings
+            .expect_get_current_thread()
+            .return_const_st(HANDLE::default());
+        bindings
+            .expect_set_thread_group_affinity()
+            .withf(|thread, affinity, _| {
+                *thread == HANDLE::default()
+                    && unsafe { (**affinity).Group == 0 && (**affinity).Mask == 1 }
+            })
+            .return_const(BOOL::from(true));
+        bindings
+            .expect_set_thread_group_affinity()
+            .withf(|thread, affinity, _| {
+                *thread == HANDLE::default()
+                    && unsafe { (**affinity).Group == 1 && (**affinity).Mask == 1 }
+            })
+            .return_const(BOOL::from(true));
 
-        let platform = BuildTargetPlatform::new(&*BINDINGS);
+        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
         let processors = platform.get_all_processors();
         platform.pin_current_thread_to(&processors);
     }
 
     #[test]
     fn pin_current_thread_to_efficiency_processors() {
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
-            let mut mock = MockBindings::new();
-            // Group 0 -> [Performance, Efficiency], Group 1 -> [Efficiency, Performance]
-            simulate_processor_layout(
-                &mut mock,
-                [2, 2],
-                [2, 2],
-                [vec![1, 0], vec![0, 1]],
-                [vec![0, 0], vec![1, 1]],
-            );
-            mock.expect_get_current_thread()
-                .return_const_st(HANDLE::default());
-            mock.expect_set_thread_group_affinity()
-                .withf(|thread, affinity, _| {
-                    *thread == HANDLE::default()
-                        && unsafe { (**affinity).Group == 0 && (**affinity).Mask == 2 }
-                })
-                .return_const(BOOL::from(true));
-            mock.expect_set_thread_group_affinity()
-                .withf(|thread, affinity, _| {
-                    *thread == HANDLE::default()
-                        && unsafe { (**affinity).Group == 1 && (**affinity).Mask == 1 }
-                })
-                .return_const(BOOL::from(true));
-            mock
-        });
+        let mut bindings = MockBindings::new();
+        // Group 0 -> [Performance, Efficiency], Group 1 -> [Efficiency, Performance]
+        simulate_processor_layout(
+            &mut bindings,
+            [2, 2],
+            [2, 2],
+            [vec![1, 0], vec![0, 1]],
+            [vec![0, 0], vec![1, 1]],
+        );
+        bindings
+            .expect_get_current_thread()
+            .return_const_st(HANDLE::default());
+        bindings
+            .expect_set_thread_group_affinity()
+            .withf(|thread, affinity, _| {
+                *thread == HANDLE::default()
+                    && unsafe { (**affinity).Group == 0 && (**affinity).Mask == 2 }
+            })
+            .return_const(BOOL::from(true));
+        bindings
+            .expect_set_thread_group_affinity()
+            .withf(|thread, affinity, _| {
+                *thread == HANDLE::default()
+                    && unsafe { (**affinity).Group == 1 && (**affinity).Mask == 1 }
+            })
+            .return_const(BOOL::from(true));
 
-        let platform = BuildTargetPlatform::new(&*BINDINGS);
+        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
         let processors = platform.get_all_processors();
         let efficiency_processors = NonEmpty::from_vec(
             processors
@@ -1231,20 +1230,17 @@ mod tests {
 
     #[test]
     fn single_group_multiple_memory_regions() {
-        static BINDINGS: LazyLock<MockBindings> = LazyLock::new(|| {
-            let mut mock = MockBindings::new();
-            // Group 0 -> [MemoryRegion 0, MemoryRegion 1, MemoryRegion 0, MemoryRegion 1]
-            simulate_processor_layout(
-                &mut mock,
-                [4],
-                [4],
-                [vec![0, 0, 0, 0]],
-                [vec![0, 1, 0, 1]],
-            );
-            mock
-        });
+        let mut bindings = MockBindings::new();
+        // Group 0 -> [MemoryRegion 0, MemoryRegion 1, MemoryRegion 0, MemoryRegion 1]
+        simulate_processor_layout(
+            &mut bindings,
+            [4],
+            [4],
+            [vec![0, 0, 0, 0]],
+            [vec![0, 1, 0, 1]],
+        );
 
-        let platform = BuildTargetPlatform::new(&*BINDINGS);
+        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 4);
 

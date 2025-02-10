@@ -1,5 +1,8 @@
 use std::{fmt::Debug, io, mem};
 
+#[cfg(test)]
+use std::sync::Arc;
+
 use libc::cpu_set_t;
 
 /// Bindings for FFI calls into external libraries (either provided by operating system or not).
@@ -28,6 +31,25 @@ impl Bindings for BuildTargetBindings {
             Ok(())
         } else {
             Err(io::Error::from_raw_os_error(result))
+        }
+    }
+}
+
+/// Enum to hide the different binding implementations behind a single wrapper type.
+#[derive(Clone, Debug)]
+pub(super) enum BindingsImpl {
+    Real(&'static BuildTargetBindings),
+
+    #[cfg(test)]
+    Mock(Arc<MockBindings>),
+}
+
+impl Bindings for BindingsImpl {
+    fn sched_setaffinity_current(&self, cpuset: &cpu_set_t) -> Result<(), io::Error> {
+        match self {
+            BindingsImpl::Real(bindings) => bindings.sched_setaffinity_current(cpuset),
+            #[cfg(test)]
+            BindingsImpl::Mock(mock) => mock.sched_setaffinity_current(cpuset),
         }
     }
 }
