@@ -15,7 +15,7 @@ use windows::{
 
 use crate::{
     pal::{
-        windows::{Bindings, BindingsImpl, BuildTargetBindings, NativeBuffer, ProcessorGroupIndex},
+        windows::{Bindings, BindingsFacade, NativeBuffer, ProcessorGroupIndex},
         Platform, ProcessorImpl,
     },
     EfficiencyClass, MemoryRegionId, ProcessorId,
@@ -24,7 +24,7 @@ use crate::{
 /// Singleton instance of `BuildTargetPlatform`, used by public API types
 /// to hook up to the correct PAL implementation.
 pub(crate) static BUILD_TARGET_PLATFORM: BuildTargetPlatform =
-    BuildTargetPlatform::new(BindingsImpl::Real(&BuildTargetBindings));
+    BuildTargetPlatform::new(BindingsFacade::real());
 
 /// The platform that matches the crate's build target.
 ///
@@ -32,7 +32,7 @@ pub(crate) static BUILD_TARGET_PLATFORM: BuildTargetPlatform =
 /// Even then, whenever possible, unit tests should use the real platform for maximum realism.
 #[derive(Debug)]
 pub(crate) struct BuildTargetPlatform {
-    bindings: BindingsImpl,
+    bindings: BindingsFacade,
 }
 
 impl Platform for BuildTargetPlatform {
@@ -94,7 +94,7 @@ impl Platform for BuildTargetPlatform {
 }
 
 impl BuildTargetPlatform {
-    pub(super) const fn new(bindings: BindingsImpl) -> Self {
+    pub(super) const fn new(bindings: BindingsFacade) -> Self {
         Self { bindings }
     }
 
@@ -456,7 +456,7 @@ mod tests {
             [vec![0, 0, 0, 0]],
         );
 
-        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
 
         let processors = platform.get_all_processors();
 
@@ -508,7 +508,7 @@ mod tests {
             [vec![0, 0], vec![1, 1]],
         );
 
-        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 4);
 
@@ -551,7 +551,7 @@ mod tests {
             [vec![0, 0, 0, 0], vec![1, 1], vec![2, 2]],
         );
 
-        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 8);
 
@@ -593,7 +593,7 @@ mod tests {
             [vec![], vec![1, 1, 1]],
         );
 
-        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 3);
 
@@ -629,7 +629,7 @@ mod tests {
             [vec![0, 0], vec![1, 1]],
         );
 
-        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 4);
 
@@ -672,7 +672,7 @@ mod tests {
             [vec![0, 0], vec![0, 0], vec![1]],
         );
 
-        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 5);
 
@@ -757,7 +757,7 @@ mod tests {
                 Ok(())
             });
 
-        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
         let buffer = platform.get_logical_processor_information_raw(RelationProcessorCore);
         assert!(!buffer.is_empty(), "Expected final buffer to be filled");
     }
@@ -1129,7 +1129,7 @@ mod tests {
             })
             .return_const(BOOL::from(true));
 
-        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
         let processors = platform.get_all_processors();
         platform.pin_current_thread_to(&processors);
     }
@@ -1149,7 +1149,7 @@ mod tests {
             })
             .return_const(BOOL::from(true));
 
-        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
         let processors = platform.get_all_processors();
         platform.pin_current_thread_to(&processors);
     }
@@ -1182,7 +1182,7 @@ mod tests {
             })
             .return_const(BOOL::from(true));
 
-        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
         let processors = platform.get_all_processors();
         platform.pin_current_thread_to(&processors);
     }
@@ -1216,7 +1216,7 @@ mod tests {
             })
             .return_const(BOOL::from(true));
 
-        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
         let processors = platform.get_all_processors();
         let efficiency_processors = NonEmpty::from_vec(
             processors
@@ -1240,7 +1240,7 @@ mod tests {
             [vec![0, 1, 0, 1]],
         );
 
-        let platform = BuildTargetPlatform::new(BindingsImpl::Mock(Arc::new(bindings)));
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 4);
 
