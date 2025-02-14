@@ -59,7 +59,7 @@ impl ProcessorSet {
     /// Returns a [`ProcessorSetBuilder`] that is narrowed down to all processors in the current
     /// set, to be used to further narrow down the set to a specific subset.
     pub fn to_builder(&self) -> ProcessorSetBuilder {
-        todo!()
+        ProcessorSetBuilder::new().filter(|p| self.processors.contains(p))
     }
 
     pub(crate) fn new(processors: NonEmpty<Processor>, pal: PlatformFacade) -> Self {
