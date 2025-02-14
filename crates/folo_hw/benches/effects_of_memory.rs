@@ -11,7 +11,8 @@ use std::{
 };
 
 use criterion::{
-    criterion_group, criterion_main, measurement::WallTime, BatchSize, BenchmarkGroup, Criterion, SamplingMode,
+    criterion_group, criterion_main, measurement::WallTime, BatchSize, BenchmarkGroup, Criterion,
+    SamplingMode,
 };
 use derive_more::derive::Display;
 use fake_headers::Headers;
@@ -306,8 +307,8 @@ fn execute_run<P: Payload, const PAYLOAD_MULTIPLIER: usize>(
         // Just to help a human reader get a feel for what is configured.
         // This selection is discarded - each iteration will make a new selection.
         for (processor_set_1, processor_set_2) in sample_processor_selection {
-            let cpulist1 = cpulist::emit(processor_set_1.processors().map(|p| p.id()));
-            let cpulist2 = cpulist::emit(processor_set_2.processors().map(|p| p.id()));
+            let cpulist1 = cpulist::emit(processor_set_1.processors().clone().map(|p| p.id()));
+            let cpulist2 = cpulist::emit(processor_set_2.processors().clone().map(|p| p.id()));
 
             println!("{distribution} reference selection: ({cpulist1}) & ({cpulist2})");
         }
@@ -424,8 +425,9 @@ fn get_processor_set_pairs(
                 first_processors
                     .processors()
                     .iter()
+                    .cloned()
                     .zip(partners)
-                    .map(|(&p1, p2_set)| {
+                    .map(|(p1, p2_set)| {
                         let set1 = ProcessorSet::from_processors(nonempty![p1]);
                         (set1, p2_set)
                     })
@@ -468,8 +470,9 @@ fn get_processor_set_pairs(
                 first_processors
                     .processors()
                     .iter()
+                    .cloned()
                     .zip(partners)
-                    .map(|(&p1, p2_set)| {
+                    .map(|(p1, p2_set)| {
                         let set1 = ProcessorSet::from_processors(nonempty![p1]);
                         (set1, p2_set)
                     })
@@ -488,14 +491,18 @@ fn get_processor_set_pairs(
                     )?
                     .processors()
                     .into_iter()
+                    .cloned()
                     .chunks(2)
                     .into_iter()
                     .map(|pair| {
-                        let pair = pair.collect_vec();
+                        let mut pair = pair.collect_vec();
                         assert_eq!(pair.len(), 2);
 
-                        let set1: ProcessorSet = pair[0].into();
-                        let set2: ProcessorSet = pair[1].into();
+                        let p1 = pair.pop().expect("we asserted there are two");
+                        let p2 = pair.pop().expect("we asserted there are two");
+
+                        let set1: ProcessorSet = p1.into();
+                        let set2: ProcessorSet = p2.into();
 
                         (set1, set2)
                     })
@@ -513,8 +520,8 @@ fn get_processor_set_pairs(
                     .processors()
                     .into_iter()
                     .map(|p| {
-                        let set1: ProcessorSet = p.into();
-                        let set2: ProcessorSet = p.into();
+                        let set1: ProcessorSet = p.clone().into();
+                        let set2: ProcessorSet = p.clone().into();
 
                         (set1, set2)
                     })
@@ -605,9 +612,12 @@ fn get_processor_set_pairs(
             // which might distort results if the work is not compute-bound (such as giving a magic
             // speedup due to the processor's cache).
             let first_processors = first_processors.processors();
-            let partner_processors = partners.into_iter().map(|set| *set.processors().first());
+            let partner_processors = partners
+                .into_iter()
+                .map(|set| set.processors().first().clone());
             let pairs_single = first_processors
                 .into_iter()
+                .cloned()
                 .zip(partner_processors)
                 .collect_vec();
 
@@ -617,7 +627,7 @@ fn get_processor_set_pairs(
                     .map(|(p1, p2)| {
                         let remaining = candidates
                             .to_builder()
-                            .except(&[p1, p2])
+                            .except([&p1, &p2])
                             .filter(|c| c.memory_region_id() == p1.memory_region_id())
                             .take_all();
 
@@ -632,7 +642,7 @@ fn get_processor_set_pairs(
                             }
                             Some(remaining) => {
                                 let mut remaining_processors =
-                                    remaining.processors().into_iter().collect_vec();
+                                    remaining.processors().into_iter().cloned().collect_vec();
                                 remaining_processors.shuffle(&mut thread_rng());
                                 let (p1_more, p2_more) =
                                     remaining_processors.split_at(remaining_processors.len() / 2);
@@ -641,7 +651,7 @@ fn get_processor_set_pairs(
                                     ProcessorSet::from_processors(
                                         NonEmpty::from_vec(
                                             [p1].into_iter()
-                                                .chain(p1_more.iter().copied())
+                                                .chain(p1_more.iter().cloned())
                                                 .collect_vec(),
                                         )
                                         .expect(
@@ -651,7 +661,7 @@ fn get_processor_set_pairs(
                                     ProcessorSet::from_processors(
                                         NonEmpty::from_vec(
                                             [p2].into_iter()
-                                                .chain(p2_more.iter().copied())
+                                                .chain(p2_more.iter().cloned())
                                                 .collect_vec(),
                                         )
                                         .expect(

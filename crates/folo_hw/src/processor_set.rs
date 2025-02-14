@@ -1,9 +1,11 @@
 use std::{sync::LazyLock, thread};
 
-use itertools::Itertools;
-use nonempty::{nonempty, NonEmpty};
+use nonempty::NonEmpty;
 
-use crate::{pal, Processor, ProcessorSetBuilder, ProcessorSetCore};
+use crate::{
+    pal::{Platform, PlatformFacade},
+    Processor, ProcessorSetBuilder,
+};
 
 // https://github.com/cloudhead/nonempty/issues/68
 extern crate alloc;
@@ -13,11 +15,6 @@ static ALL_PROCESSORS: LazyLock<ProcessorSet> = LazyLock::new(|| {
         .take_all()
         .expect("there must be at least one processor - how could this code run if not")
 });
-
-// This is a specialization of the *Core type for the build target platform. It is the only
-// specialization available via the crate's public API surface - other specializations
-// exist only for unit testing purposes where the platform is mocked, in which case the
-// *Core type is used directly instead of using a newtype wrapper like we have here.
 
 /// One or more processors present on the system and available for use.
 ///
@@ -40,7 +37,8 @@ static ALL_PROCESSORS: LazyLock<ProcessorSet> = LazyLock::new(|| {
 /// member of any set.
 #[derive(Clone, Debug)]
 pub struct ProcessorSet {
-    core: ProcessorSetCore<pal::BuildTargetPlatform>,
+    processors: NonEmpty<Processor>,
+    pal: PlatformFacade,
 }
 
 impl ProcessorSet {
@@ -61,38 +59,34 @@ impl ProcessorSet {
     /// Returns a [`ProcessorSetBuilder`] that is narrowed down to all processors in the current
     /// set, to be used to further narrow down the set to a specific subset.
     pub fn to_builder(&self) -> ProcessorSetBuilder {
-        self.core.to_builder().into()
+        todo!()
     }
 
-    fn new(inner: ProcessorSetCore<pal::BuildTargetPlatform>) -> Self {
-        Self { core: inner }
+    pub(crate) fn new(processors: NonEmpty<Processor>, pal: PlatformFacade) -> Self {
+        Self { processors, pal }
     }
 
     /// Returns a [`ProcessorSet`] containing the provided processors.
     pub fn from_processors(processors: NonEmpty<Processor>) -> Self {
-        Self::new(ProcessorSetCore::new(
-            processors.map(|p| p.core),
-            &pal::BUILD_TARGET_PLATFORM,
-        ))
+        let pal = processors.first().pal.clone();
+        Self::new(processors, pal)
+    }
+
+    /// Returns a [`ProcessorSet`] containing a single processor.
+    pub fn from_processor(processor: Processor) -> Self {
+        let pal = processor.pal.clone();
+        Self::new(NonEmpty::singleton(processor), pal)
     }
 
     /// Returns the number of processors in the set. A processor set is never empty.
     #[expect(clippy::len_without_is_empty)] // Never empty by definition.
     pub fn len(&self) -> usize {
-        self.core.len()
+        self.processors.len()
     }
 
-    /// Returns a collection containing all the processors in the set.
-    pub fn processors(&self) -> NonEmpty<Processor> {
-        // We return a converted copy of the list because it is relatively cheap to do this
-        // conversion and we do not expect this to be on any hot path.
-        NonEmpty::from_vec(
-            self.core
-                .processors()
-                .map(|p| Into::<Processor>::into(*p))
-                .collect_vec(),
-        )
-        .expect("processor sets contain at least one processor by definition")
+    /// Returns a reference to a collection containing all the processors in the set.
+    pub fn processors(&self) -> &NonEmpty<Processor> {
+        &self.processors
     }
 
     /// Modifies the affinity of the current thread to execute
@@ -104,7 +98,7 @@ impl ProcessorSet {
     /// An arbitrary processor may be preferentially used, with others used only when the preferred
     /// processor is otherwise busy.
     pub fn pin_current_thread_to(&self) {
-        self.core.pin_current_thread_to();
+        self.pal.pin_current_thread_to(&self.processors);
     }
 
     /// Spawns one thread for each processor in the set, pinned to that processor,
@@ -117,7 +111,20 @@ impl ProcessorSet {
         E: Fn(Processor) -> R + Send + Clone + 'static,
         R: Send + 'static,
     {
-        self.core.spawn_threads(move |p| entrypoint(p.into()))
+        self.processors()
+            .iter()
+            .map(|p| {
+                let p = p.clone();
+                let entrypoint = entrypoint.clone();
+
+                thread::spawn(move || {
+                    let set = Self::from(p.clone());
+                    set.pin_current_thread_to();
+                    entrypoint(p)
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
     }
 
     /// Spawns a single thread pinned to the set. The thread will only be scheduled to execute on
@@ -133,19 +140,149 @@ impl ProcessorSet {
         E: Fn(ProcessorSet) -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.core.spawn_thread(move |p| entrypoint(p.into()))
+        let set = self.clone();
+        thread::spawn(move || {
+            set.pin_current_thread_to();
+            entrypoint(set)
+        })
     }
 }
 
 impl From<Processor> for ProcessorSet {
     fn from(value: Processor) -> Self {
-        let processor_core = *value.as_ref();
-        ProcessorSetCore::new(nonempty![processor_core], &pal::BUILD_TARGET_PLATFORM).into()
+        Self::from_processor(value)
     }
 }
 
-impl From<ProcessorSetCore<pal::BuildTargetPlatform>> for ProcessorSet {
-    fn from(value: ProcessorSetCore<pal::BuildTargetPlatform>) -> Self {
-        Self::new(value)
+impl From<NonEmpty<Processor>> for ProcessorSet {
+    fn from(value: NonEmpty<Processor>) -> Self {
+        Self::from_processors(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    use nonempty::nonempty;
+
+    use crate::{
+        pal::{FakeProcessor, MockPlatform},
+        EfficiencyClass,
+    };
+
+    use super::*;
+
+    #[test]
+    fn smoke_test() {
+        let mut platform = MockPlatform::new();
+
+        // Pin current thread to entire set.
+        platform
+            .expect_pin_current_thread_to_core()
+            .withf(|p| p.len() == 2)
+            .return_const(());
+
+        // Pin spawned single thread to entire set.
+        platform
+            .expect_pin_current_thread_to_core()
+            .withf(|p| p.len() == 2)
+            .return_const(());
+
+        // Pin spawned two threads, each to one processor.
+        platform
+            .expect_pin_current_thread_to_core()
+            .withf(|p| p.len() == 1)
+            .return_const(());
+
+        platform
+            .expect_pin_current_thread_to_core()
+            .withf(|p| p.len() == 1)
+            .return_const(());
+
+        let platform = PlatformFacade::from_mock(platform);
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let processors = pal_processors.map({
+            let platform = platform.clone();
+            move |p| Processor::new(p.into(), platform.clone())
+        });
+
+        let processor_set = ProcessorSet::new(processors, platform);
+
+        // Getters appear to get the expected values.
+        assert_eq!(processor_set.len(), 2);
+
+        // Iterator iterates through the expected stuff.
+        let mut processor_iter = processor_set.processors().iter();
+
+        let p1 = processor_iter.next().unwrap();
+        assert_eq!(p1.id(), 0);
+        assert_eq!(p1.memory_region_id(), 0);
+        assert_eq!(p1.efficiency_class(), EfficiencyClass::Efficiency);
+
+        let p2 = processor_iter.next().unwrap();
+        assert_eq!(p2.id(), 1);
+        assert_eq!(p2.memory_region_id(), 0);
+        assert_eq!(p2.efficiency_class(), EfficiencyClass::Performance);
+
+        assert!(processor_iter.next().is_none());
+
+        // Pin calls into PAL to execute the pinning.
+        processor_set.pin_current_thread_to();
+
+        // spawn_thread() spawns and pins a single thread.
+        let threads_spawned = Arc::new(AtomicUsize::new(0));
+
+        processor_set
+            .spawn_thread({
+                let threads_spawned = Arc::clone(&threads_spawned);
+                move |processor_set| {
+                    // Verify that we appear to have been given the expected processor set.
+                    assert_eq!(processor_set.len(), 2);
+
+                    threads_spawned.fetch_add(1, Ordering::Relaxed);
+                }
+            })
+            .join()
+            .unwrap();
+
+        assert_eq!(threads_spawned.load(Ordering::Relaxed), 1);
+
+        // spawn_threads() spawns multiple threads and pins each.
+        let threads_spawned = Arc::new(AtomicUsize::new(0));
+
+        processor_set
+            .spawn_threads({
+                let threads_spawned = Arc::clone(&threads_spawned);
+                move |_| {
+                    threads_spawned.fetch_add(1, Ordering::Relaxed);
+                }
+            })
+            .into_vec()
+            .into_iter()
+            .for_each(|h| h.join().unwrap());
+
+        assert_eq!(threads_spawned.load(Ordering::Relaxed), 2);
+
+        // A clone appears to contain the same stuff.
+        let cloned_processor_set = processor_set.clone();
+
+        assert_eq!(cloned_processor_set.len(), 2);
     }
 }

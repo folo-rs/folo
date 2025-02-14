@@ -3,7 +3,7 @@ use mockall::mock;
 use nonempty::NonEmpty;
 
 use crate::{
-    pal::{AbstractProcessor, Platform},
+    pal::{AbstractProcessor, Platform, ProcessorFacade},
     EfficiencyClass, MemoryRegionId, ProcessorId,
 };
 
@@ -35,21 +35,19 @@ impl AbstractProcessor for FakeProcessor {
 mock! {
     #[derive(Debug)]
     pub Platform {
-        pub fn get_all_processors_core(&self) -> NonEmpty<FakeProcessor>;
-        pub fn pin_current_thread_to_core(&self, processors: Vec<FakeProcessor>);
+        pub fn get_all_processors_core(&self) -> NonEmpty<ProcessorFacade>;
+        pub fn pin_current_thread_to_core(&self, processors: Vec<ProcessorFacade>);
     }
 }
 
 impl Platform for MockPlatform {
-    type Processor = FakeProcessor;
-
-    fn get_all_processors(&self) -> NonEmpty<FakeProcessor> {
+    fn get_all_processors(&self) -> NonEmpty<ProcessorFacade> {
         self.get_all_processors_core()
     }
 
     fn pin_current_thread_to<P>(&self, processors: &NonEmpty<P>)
     where
-        P: AsRef<FakeProcessor>,
+        P: AsRef<ProcessorFacade>,
     {
         let processors = processors.iter().map(|p| *p.as_ref()).collect();
         self.pin_current_thread_to_core(processors);

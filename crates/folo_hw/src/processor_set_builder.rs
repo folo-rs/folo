@@ -1,11 +1,20 @@
-use std::{fmt::Debug, num::NonZeroUsize};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    fmt::Debug,
+    num::NonZeroUsize,
+};
 
-use crate::{pal, Processor, ProcessorSet, ProcessorSetBuilderCore};
+use itertools::Itertools;
+use nonempty::NonEmpty;
+use rand::{
+    seq::{IteratorRandom, SliceRandom},
+    thread_rng,
+};
 
-// This is a specialization of the *Core type for the build target platform. It is the only
-// specialization available via the crate's public API surface - other specializations
-// exist only for unit testing purposes where the platform is mocked, in which case the
-// *Core type is used directly instead of using a newtype wrapper like we have here.
+use crate::{
+    pal::{Platform, PlatformFacade},
+    EfficiencyClass, MemoryRegionId, Processor, ProcessorId, ProcessorSet,
+};
 
 /// Builds a [`ProcessorSet`] based on specified criteria. The default criteria include all
 /// available processors.
@@ -14,65 +23,71 @@ use crate::{pal, Processor, ProcessorSet, ProcessorSetBuilderCore};
 /// via [`ProcessorSet::to_builder()`].
 #[derive(Clone, Debug)]
 pub struct ProcessorSetBuilder {
-    core: ProcessorSetBuilderCore<pal::BuildTargetPlatform>,
+    processor_type_selector: ProcessorTypeSelector,
+    memory_region_selector: MemoryRegionSelector,
+
+    except_indexes: HashSet<ProcessorId>,
+
+    pal: PlatformFacade,
 }
 
 impl ProcessorSetBuilder {
     pub fn new() -> Self {
+        Self::with_platform(PlatformFacade::real())
+    }
+
+    pub(crate) fn with_platform(pal: PlatformFacade) -> Self {
         Self {
-            core: ProcessorSetBuilderCore::new(&pal::BUILD_TARGET_PLATFORM),
+            processor_type_selector: ProcessorTypeSelector::Any,
+            memory_region_selector: MemoryRegionSelector::Any,
+            except_indexes: HashSet::new(),
+            pal,
         }
     }
 
     /// Requires that all processors in the set be marked as [performance processors][1].
     ///
     /// [1]: EfficiencyClass::Performance
-    pub fn performance_processors_only(self) -> Self {
-        Self {
-            core: self.core.performance_processors_only(),
-        }
+    pub fn performance_processors_only(mut self) -> Self {
+        self.processor_type_selector = ProcessorTypeSelector::Performance;
+        self
     }
 
     /// Requires that all processors in the set be marked as [efficiency processors][1].
     ///
     /// [1]: EfficiencyClass::Efficiency
-    pub fn efficiency_processors_only(self) -> Self {
-        Self {
-            core: self.core.efficiency_processors_only(),
-        }
+    pub fn efficiency_processors_only(mut self) -> Self {
+        self.processor_type_selector = ProcessorTypeSelector::Efficiency;
+        self
     }
 
     /// Requires that all processors in the set be from different memory regions, selecting a
     /// maximum of 1 processor from each memory region.
-    pub fn different_memory_regions(self) -> Self {
-        Self {
-            core: self.core.different_memory_regions(),
-        }
+    pub fn different_memory_regions(mut self) -> Self {
+        self.memory_region_selector = MemoryRegionSelector::RequireDifferent;
+        self
     }
 
     /// Requires that all processors in the set be from the same memory region.
-    pub fn same_memory_region(self) -> Self {
-        Self {
-            core: self.core.same_memory_region(),
-        }
+    pub fn same_memory_region(mut self) -> Self {
+        self.memory_region_selector = MemoryRegionSelector::RequireSame;
+        self
     }
 
     /// Declares a preference that all processors in the set be from different memory regions,
     /// though will select multiple processors from the same memory region as needed to satisfy
     /// the requested processor count (while keeping the spread maximal).
-    pub fn prefer_different_memory_regions(self) -> Self {
-        Self {
-            core: self.core.prefer_different_memory_regions(),
-        }
+    pub fn prefer_different_memory_regions(mut self) -> Self {
+        self.memory_region_selector = MemoryRegionSelector::PreferDifferent;
+        self
     }
 
     /// Declares a preference that all processors in the set be from the same memory region,
     /// though will select processors from different memory regions as needed to satisfy the
     /// requested processor count (while keeping the spread minimal).
-    pub fn prefer_same_memory_region(self) -> Self {
-        Self {
-            core: self.core.prefer_same_memory_region(),
-        }
+    pub fn prefer_same_memory_region(mut self) -> Self {
+        self.memory_region_selector = MemoryRegionSelector::PreferSame;
+        self
     }
 
     /// Uses a predicate to identify processors that are valid candidates for building the
@@ -83,22 +98,26 @@ impl ProcessorSetBuilder {
     /// conditions - even if this predicate returns `true`, the processor may end up being filtered
     /// out by other conditions. Conversely, some candidates may already be filtered out before
     /// being passed to this predicate.
-    pub fn filter(self, predicate: impl Fn(&Processor) -> bool) -> Self {
-        Self {
-            core: self
-                .core
-                .filter(|p| predicate(&Into::<Processor>::into(*p))),
+    pub fn filter(mut self, predicate: impl Fn(&Processor) -> bool) -> Self {
+        for processor in self.all_processors() {
+            if !predicate(&processor) {
+                self.except_indexes.insert(processor.id());
+            }
         }
+
+        self
     }
 
     /// Removes specific processors from the set of candidates.
-    pub fn except<'a, I>(self, processors: I) -> Self
+    pub fn except<'a, I>(mut self, processors: I) -> Self
     where
         I: IntoIterator<Item = &'a Processor>,
     {
-        Self {
-            core: self.core.except(processors.into_iter().map(|p| p.as_ref())),
+        for processor in processors {
+            self.except_indexes.insert(processor.id());
         }
+
+        self
     }
 
     /// Creates a processor set with a specific number of processors that match the
@@ -109,7 +128,161 @@ impl ProcessorSetBuilder {
     ///
     /// Returns `None` if there were not enough candidate processors to satisfy the request.
     pub fn take(self, count: NonZeroUsize) -> Option<ProcessorSet> {
-        self.core.take(count).map(|p| p.into())
+        let candidates = self.candidates_by_memory_region();
+
+        if candidates.is_empty() {
+            // No candidates to choose from - everything was filtered out.
+            return None;
+        }
+
+        let processors = match self.memory_region_selector {
+            MemoryRegionSelector::Any => {
+                // We do not care about memory regions, so merge into one big happy family and
+                // pick a random `count` processors from it. As long as there is enough!
+                let all_processors = candidates
+                    .values()
+                    .flat_map(|x| x.iter().cloned())
+                    .collect::<Vec<_>>();
+
+                if all_processors.len() < count.get() {
+                    // Not enough processors to satisfy request.
+                    return None;
+                }
+
+                all_processors
+                    .choose_multiple(&mut thread_rng(), count.get())
+                    .cloned()
+                    .collect_vec()
+            }
+            MemoryRegionSelector::PreferSame => {
+                // We will start decrementing it to zero.
+                let count = count.get();
+
+                // We shuffle the memory regions and sort them by size, so if there are memory
+                // regions with different numbers of candidates we will prefer the ones with more,
+                // although we will consider all memory regions with at least 'count' candidates
+                // as equal in sort order to avoid needlessly preferring giant memory regions.
+                let mut remaining_memory_regions = candidates.keys().copied().collect_vec();
+                remaining_memory_regions.shuffle(&mut thread_rng());
+                remaining_memory_regions.sort_unstable_by_key(|x| {
+                    candidates
+                        .get(x)
+                        .expect("region must exist - we just got it from there")
+                        .len()
+                        // Clamp the length to `count` to treat all larger regions equally.
+                        .min(count)
+                });
+                // We want to start with the largest memory regions first.
+                remaining_memory_regions.reverse();
+
+                let mut remaining_memory_regions = VecDeque::from(remaining_memory_regions);
+
+                let mut processors: Vec<Processor> = Vec::with_capacity(count);
+
+                while processors.len() < count {
+                    let memory_region = remaining_memory_regions.pop_front()?;
+
+                    let processors_in_region = candidates.get(&memory_region).expect(
+                        "we picked an existing key from an existing HashSet - the values must exist",
+                    );
+
+                    // There might not be enough to fill the request, which is fine.
+                    let choose_count = count.min(processors_in_region.len());
+
+                    let region_processors = processors_in_region
+                        .choose_multiple(&mut rand::thread_rng(), choose_count)
+                        .cloned();
+
+                    processors.extend(region_processors);
+                }
+
+                processors
+            }
+            MemoryRegionSelector::RequireSame => {
+                // We filter out memory regions that do not have enough candidates and pick a
+                // random one from the remaining, then picking a random `count` processors.
+                let qualifying_memory_regions = candidates
+                    .iter()
+                    .filter_map(|(region, processors)| {
+                        if processors.len() < count.get() {
+                            return None;
+                        }
+
+                        Some(region)
+                    })
+                    .collect_vec();
+
+                let memory_region = qualifying_memory_regions.choose(&mut rand::thread_rng())?;
+
+                let processors = candidates.get(memory_region).expect(
+                    "we picked an existing key for an existing HashSet - the values must exist",
+                );
+
+                processors
+                    .choose_multiple(&mut rand::thread_rng(), count.get())
+                    .cloned()
+                    .collect_vec()
+            }
+            MemoryRegionSelector::PreferDifferent => {
+                // We iterate through the memory regions and prefer one from each, looping through
+                // memory regions that still have processors until we have as many as requested.
+
+                // We will start removing processors are memory regions that are used up.
+                let mut candidates = candidates;
+
+                let mut processors = Vec::with_capacity(count.get());
+
+                while processors.len() < count.get() {
+                    if candidates.is_empty() {
+                        // Not enough candidates remaining to satisfy request.
+                        return None;
+                    }
+
+                    for remaining_processors in candidates.values_mut() {
+                        let (index, processor) = remaining_processors
+                            .iter()
+                            .enumerate()
+                            .choose(&mut thread_rng())?;
+
+                        let processor = processor.clone();
+
+                        remaining_processors.remove(index);
+
+                        processors.push(processor);
+
+                        if processors.len() == count.get() {
+                            break;
+                        }
+                    }
+
+                    // Remove any memory regions that have been depleted.
+                    candidates.retain(|_, remaining_processors| !remaining_processors.is_empty());
+                }
+
+                processors
+            }
+            MemoryRegionSelector::RequireDifferent => {
+                // We pick random `count` memory regions and a random processor from each.
+
+                if candidates.len() < count.get() {
+                    // Not enough memory regions to satisfy request.
+                    return None;
+                }
+
+                candidates
+                    .iter()
+                    .choose_multiple(&mut thread_rng(), count.get())
+                    .into_iter()
+                    .map(|(_, processors)| {
+                        processors.iter().choose(&mut thread_rng()).cloned().expect(
+                            "we are picking one item from a non-empty list - item must exist",
+                        )
+                    })
+                    .collect_vec()
+            }
+        };
+
+        Some(ProcessorSet::new(NonEmpty::from_vec(processors)?, self.pal))
     }
 
     /// Returns a processor set with all processors that match the configured criteria.
@@ -120,7 +293,97 @@ impl ProcessorSetBuilder {
     ///
     /// Returns `None` if there were no matching processors to satisfy the request.
     pub fn take_all(self) -> Option<ProcessorSet> {
-        self.core.take_all().map(|p| p.into())
+        let candidates = self.candidates_by_memory_region();
+
+        if candidates.is_empty() {
+            // No candidates to choose from - everything was filtered out.
+            return None;
+        }
+
+        let processors = match self.memory_region_selector {
+            MemoryRegionSelector::Any
+            | MemoryRegionSelector::PreferSame
+            | MemoryRegionSelector::PreferDifferent => {
+                // We return all processors in all memory regions because we have no strong
+                // filtering criterium we must follow - all are fine, so we return all.
+                candidates
+                    .values()
+                    .flat_map(|x| x.iter().cloned())
+                    .collect()
+            }
+            MemoryRegionSelector::RequireSame => {
+                // We return all processors in a random memory region.
+                // The candidate set only contains memory regions with at least 1 processor, so
+                // we know that all candidate memory regions are valid and we were not given a
+                // count, so even 1 processor is enough to satisfy the "all" criterion.
+                let memory_region = candidates
+                    .keys()
+                    .choose(&mut rand::thread_rng())
+                    .expect("we picked a random existing index - element must exist");
+
+                let processors = candidates.get(memory_region).expect(
+                    "we picked an existing key for an existing HashSet - the values must exist",
+                );
+
+                processors.to_vec()
+            }
+            MemoryRegionSelector::RequireDifferent => {
+                // We return a random processor from each memory region.
+                // The candidate set only contains memory regions with at least 1 processor, so
+                // we know that all candidate memory regions have enough to satisfy our needs.
+                let processors = candidates.values().map(|processors| {
+                    processors
+                        .choose(&mut rand::thread_rng())
+                        .cloned()
+                        .expect("we picked a random item from a non-empty list - item must exist")
+                });
+
+                processors.collect()
+            }
+        };
+
+        Some(ProcessorSet::new(NonEmpty::from_vec(processors)?, self.pal))
+    }
+
+    /// Executes the first stage filters to kick out processors purely based on their individual
+    /// characteristics. Whatever pass this filter are valid candidates for selection as long
+    /// as the next stage of filtering (the memory region logic) permits it.
+    ///
+    /// Returns candidates grouped by memory region, with each returned memory region having at
+    /// least one candidate processor.
+    fn candidates_by_memory_region(&self) -> HashMap<MemoryRegionId, Vec<Processor>> {
+        self.all_processors()
+            .into_iter()
+            .filter_map(move |p| {
+                if self.except_indexes.contains(&p.id()) {
+                    return None;
+                }
+
+                let is_acceptable_type = match self.processor_type_selector {
+                    ProcessorTypeSelector::Any => true,
+                    ProcessorTypeSelector::Performance => {
+                        p.efficiency_class() == EfficiencyClass::Performance
+                    }
+                    ProcessorTypeSelector::Efficiency => {
+                        p.efficiency_class() == EfficiencyClass::Efficiency
+                    }
+                };
+
+                if !is_acceptable_type {
+                    return None;
+                }
+
+                Some((p.memory_region_id(), p))
+            })
+            .into_group_map()
+    }
+
+    fn all_processors(&self) -> NonEmpty<Processor> {
+        // Cheap conversion, reasonable to do it inline since we do not expect
+        // processor set logic to be on the hot path anyway.
+        self.pal
+            .get_all_processors()
+            .map(|p| Processor::new(p, self.pal.clone()))
     }
 }
 
@@ -130,15 +393,53 @@ impl Default for ProcessorSetBuilder {
     }
 }
 
-impl From<ProcessorSetBuilderCore<pal::BuildTargetPlatform>> for ProcessorSetBuilder {
-    fn from(inner: ProcessorSetBuilderCore<pal::BuildTargetPlatform>) -> Self {
-        Self { core: inner }
-    }
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+enum MemoryRegionSelector {
+    /// The default - memory regions are not considered in processor selection.
+    #[default]
+    Any,
+
+    /// Processors are all from the same memory region. If there are not enough processors in any
+    /// memory region, the request will fail.
+    RequireSame,
+
+    /// Processors are all from the different memory regions. If there are not enough memory
+    /// regions, the request will fail.
+    RequireDifferent,
+
+    /// Processors are ideally all from the same memory region. If there are not enough processors
+    /// in a single memory region, more memory regions will be added to the candidate set as needed,
+    /// but still keeping it to as few as possible.
+    PreferSame,
+
+    /// Processors are ideally all from the different memory regions. If there are not enough memory
+    /// regions, multiple processors from the same memory region will be returned, but still keeping
+    /// to as many different memory regions as possible to spread the processors out.
+    PreferDifferent,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+enum ProcessorTypeSelector {
+    /// The default - all processors are valid candidates.
+    #[default]
+    Any,
+
+    /// Only performance processors (faster, energy-hungry) are valid candidates.
+    ///
+    /// Every system is guaranteed to have at least one performance processor.
+    /// If all processors are of the same performance class,
+    /// they are all considered to be performance processors.
+    Performance,
+
+    /// Only efficiency processors (slower, energy-efficient) are valid candidates.
+    ///
+    /// There is no guarantee that any efficiency processors are present on the system.
+    Efficiency,
 }
 
 #[cfg(not(miri))] // Talking to the operating system is not possible under Miri.
 #[cfg(test)]
-mod tests {
+mod tests_real {
     use std::sync::{Arc, Barrier};
 
     use super::*;
@@ -247,8 +548,859 @@ mod tests {
     fn except_all() {
         // If we exclude all processors, there should be nothing left.
         assert!(ProcessorSet::builder()
-            .except(&ProcessorSet::all().processors())
+            .except(ProcessorSet::all().processors().iter())
             .take_all()
             .is_none());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroUsize;
+
+    use crate::pal::{FakeProcessor, MockPlatform, ProcessorFacade};
+    use nonempty::nonempty;
+
+    use super::*;
+
+    // https://github.com/cloudhead/nonempty/issues/68
+    extern crate alloc;
+
+    const TWO_USIZE: NonZeroUsize = NonZeroUsize::new(2).unwrap();
+    const THREE_USIZE: NonZeroUsize = NonZeroUsize::new(3).unwrap();
+    const FOUR_USIZE: NonZeroUsize = NonZeroUsize::new(4).unwrap();
+
+    #[test]
+    fn smoke_test() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+
+        // Simplest possible test, verify that we see all the processors.
+        let set = builder.take_all().unwrap();
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn efficiency_class_filter_take() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder.efficiency_processors_only().take_all().unwrap();
+        assert_eq!(set.len(), 1);
+        assert_eq!(set.processors().first().id(), 0);
+    }
+
+    #[test]
+    fn efficiency_class_filter_take_all() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder.efficiency_processors_only().take_all().unwrap();
+        assert_eq!(set.len(), 1);
+        assert_eq!(set.processors().first().id(), 0);
+    }
+
+    #[test]
+    fn take_n_processors() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Performance,
+            },
+            FakeProcessor {
+                index: 2,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder.take(TWO_USIZE).unwrap();
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn take_n_not_enough_processors() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder.take(THREE_USIZE);
+        assert!(set.is_none());
+    }
+
+    #[test]
+    fn take_all_not_enough_processors() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![FakeProcessor {
+            index: 0,
+            memory_region: 0,
+            efficiency_class: EfficiencyClass::Efficiency,
+        }];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder.performance_processors_only().take_all();
+        assert!(set.is_none());
+    }
+
+    #[test]
+    fn except_filter_take() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+
+        let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
+        assert_eq!(except_set.len(), 1);
+
+        let set = builder.except(except_set.processors()).take_all().unwrap();
+        assert_eq!(set.len(), 1);
+        assert_eq!(set.processors().first().id(), 1);
+    }
+
+    #[test]
+    fn except_filter_take_all() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
+        assert_eq!(except_set.len(), 1);
+
+        let set = builder.except(except_set.processors()).take_all().unwrap();
+        assert_eq!(set.len(), 1);
+        assert_eq!(set.processors().first().id(), 1);
+    }
+
+    #[test]
+    fn custom_filter_take() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder.filter(|p| p.id() == 1).take_all().unwrap();
+        assert_eq!(set.len(), 1);
+        assert_eq!(set.processors().first().id(), 1);
+    }
+
+    #[test]
+    fn custom_filter_take_all() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder.filter(|p| p.id() == 1).take_all().unwrap();
+        assert_eq!(set.len(), 1);
+        assert_eq!(set.processors().first().id(), 1);
+    }
+
+    #[test]
+    fn same_memory_region_filter_take() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder.same_memory_region().take_all().unwrap();
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn same_memory_region_filter_take_all() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder.same_memory_region().take_all().unwrap();
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn different_memory_region_filter_take() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder.different_memory_regions().take_all().unwrap();
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn different_memory_region_filter_take_all() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder.different_memory_regions().take_all().unwrap();
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn filter_combinations() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Performance,
+            },
+            FakeProcessor {
+                index: 2,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Efficiency,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
+        let set = builder
+            .efficiency_processors_only()
+            .except(except_set.processors())
+            .different_memory_regions()
+            .take_all()
+            .unwrap();
+        assert_eq!(set.len(), 1);
+        assert_eq!(set.processors().first().id(), 2);
+    }
+
+    #[test]
+    fn same_memory_region_take_two_processors() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Performance,
+            },
+            FakeProcessor {
+                index: 2,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Efficiency,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder.same_memory_region().take(TWO_USIZE).unwrap();
+        assert_eq!(set.len(), 2);
+        assert!(set.processors().iter().any(|p| p.id() == 1));
+        assert!(set.processors().iter().any(|p| p.id() == 2));
+    }
+
+    #[test]
+    fn different_memory_region_and_efficiency_class_filters() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Performance,
+            },
+            FakeProcessor {
+                index: 2,
+                memory_region: 2,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 3,
+                memory_region: 3,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder
+            .different_memory_regions()
+            .efficiency_processors_only()
+            .take_all()
+            .unwrap();
+        assert_eq!(set.len(), 2);
+        assert!(set.processors().iter().any(|p| p.id() == 0));
+        assert!(set.processors().iter().any(|p| p.id() == 2));
+    }
+
+    #[test]
+    fn performance_processors_but_all_efficiency() {
+        let mut platform = MockPlatform::new();
+        let pal_processors = nonempty![FakeProcessor {
+            index: 0,
+            memory_region: 0,
+            efficiency_class: EfficiencyClass::Efficiency,
+        }];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder.performance_processors_only().take_all();
+        assert!(set.is_none(), "No performance processors should be found.");
+    }
+
+    #[test]
+    fn require_different_single_region() {
+        let mut platform = MockPlatform::new();
+        let pal_processors = nonempty![FakeProcessor {
+            index: 0,
+            memory_region: 0,
+            efficiency_class: EfficiencyClass::Efficiency,
+        }];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder.different_memory_regions().take(TWO_USIZE);
+        assert!(
+            set.is_none(),
+            "Should fail because there's not enough distinct memory regions."
+        );
+    }
+
+    #[test]
+    fn prefer_different_memory_regions_take_all() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Performance,
+            },
+            FakeProcessor {
+                index: 2,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Efficiency,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder
+            .prefer_different_memory_regions()
+            .take_all()
+            .unwrap();
+        assert_eq!(set.len(), 3);
+    }
+
+    #[test]
+    fn prefer_different_memory_regions_take_n() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Performance,
+            },
+            FakeProcessor {
+                index: 2,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 3,
+                memory_region: 2,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder
+            .prefer_different_memory_regions()
+            .take(TWO_USIZE)
+            .unwrap();
+        assert_eq!(set.len(), 2);
+        let regions: HashSet<_> = set
+            .processors()
+            .iter()
+            .map(|p| p.memory_region_id())
+            .collect();
+        assert_eq!(regions.len(), 2);
+    }
+
+    #[test]
+    fn prefer_same_memory_regions_take_n() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Performance,
+            },
+            FakeProcessor {
+                index: 2,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 3,
+                memory_region: 2,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder.prefer_same_memory_region().take(TWO_USIZE).unwrap();
+        assert_eq!(set.len(), 2);
+        let regions: HashSet<_> = set
+            .processors()
+            .iter()
+            .map(|p| p.memory_region_id())
+            .collect();
+        assert_eq!(regions.len(), 1);
+    }
+
+    #[test]
+    fn prefer_different_memory_regions_take_n_not_enough() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Performance,
+            },
+            FakeProcessor {
+                index: 2,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 3,
+                memory_region: 2,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder
+            .prefer_different_memory_regions()
+            .take(FOUR_USIZE)
+            .unwrap();
+        assert_eq!(set.len(), 4);
+    }
+
+    #[test]
+    fn prefer_same_memory_regions_take_n_not_enough() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Performance,
+            },
+            FakeProcessor {
+                index: 2,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 3,
+                memory_region: 2,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder
+            .prefer_same_memory_region()
+            .take(THREE_USIZE)
+            .unwrap();
+        assert_eq!(set.len(), 3);
+        let regions: HashSet<_> = set
+            .processors()
+            .iter()
+            .map(|p| p.memory_region_id())
+            .collect();
+        assert_eq!(
+            2,
+            regions.len(),
+            "should have picked to minimize memory regions (biggest first)"
+        );
+    }
+
+    #[test]
+    fn prefer_same_memory_regions_take_n_picks_best_fit() {
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Performance,
+            },
+            FakeProcessor {
+                index: 2,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 3,
+                memory_region: 2,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let set = builder.prefer_same_memory_region().take(TWO_USIZE).unwrap();
+        assert_eq!(set.len(), 2);
+        let regions: HashSet<_> = set
+            .processors()
+            .iter()
+            .map(|p| p.memory_region_id())
+            .collect();
+        assert_eq!(
+            1,
+            regions.len(),
+            "should have picked from memory region 1 which  can accommodate the preference"
+        );
     }
 }
