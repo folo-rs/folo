@@ -55,6 +55,10 @@ impl Platform for BuildTargetPlatform {
             .sched_setaffinity_current(&cpu_set)
             .expect("failed to configure thread affinity");
     }
+    
+    fn current_processor_id(&self) -> ProcessorId {
+        self.bindings.sched_getcpu() as ProcessorId
+    }
 }
 
 impl BuildTargetPlatform {

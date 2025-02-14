@@ -44,6 +44,14 @@ impl Platform for PlatformFacade {
             PlatformFacade::Mock(p) => p.pin_current_thread_to(processors),
         }
     }
+
+    fn current_processor_id(&self) -> crate::ProcessorId {
+        match self {
+            PlatformFacade::Real(p) => p.current_processor_id(),
+            #[cfg(test)]
+            PlatformFacade::Mock(p) => p.current_processor_id(),
+        }
+    }
 }
 
 impl From<&'static BuildTargetPlatform> for PlatformFacade {

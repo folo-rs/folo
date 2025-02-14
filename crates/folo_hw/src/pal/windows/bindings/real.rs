@@ -5,13 +5,14 @@ use windows::{
     Win32::{
         Foundation::{BOOL, HANDLE},
         System::{
+            Kernel::PROCESSOR_NUMBER,
             SystemInformation::{
                 GetLogicalProcessorInformationEx, GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP,
                 SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
             },
             Threading::{
-                GetActiveProcessorCount, GetCurrentThread, GetMaximumProcessorCount,
-                GetMaximumProcessorGroupCount, SetThreadGroupAffinity,
+                GetActiveProcessorCount, GetCurrentProcessorNumberEx, GetCurrentThread,
+                GetMaximumProcessorCount, GetMaximumProcessorGroupCount, SetThreadGroupAffinity,
             },
         },
     },
@@ -45,6 +46,11 @@ impl Bindings for BuildTargetBindings {
     fn get_current_thread(&self) -> HANDLE {
         // SAFETY: No safety requirements.
         unsafe { GetCurrentThread() }
+    }
+
+    fn get_current_processor_number_ex(&self) -> PROCESSOR_NUMBER {
+        // SAFETY: No safety requirements.
+        unsafe { GetCurrentProcessorNumberEx() }
     }
 
     unsafe fn set_thread_group_affinity(

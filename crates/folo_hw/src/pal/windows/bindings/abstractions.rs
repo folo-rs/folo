@@ -4,6 +4,7 @@ use windows::{
     core::Result,
     Win32::{
         Foundation::{BOOL, HANDLE},
+        System::Kernel::PROCESSOR_NUMBER,
         System::SystemInformation::{
             GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP, SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
         },
@@ -21,6 +22,8 @@ pub(crate) trait Bindings: Debug + Send + Sync + 'static {
     fn get_maximum_processor_group_count(&self) -> u16;
 
     fn get_current_thread(&self) -> HANDLE;
+
+    fn get_current_processor_number_ex(&self) -> PROCESSOR_NUMBER;
 
     unsafe fn set_thread_group_affinity(
         &self,

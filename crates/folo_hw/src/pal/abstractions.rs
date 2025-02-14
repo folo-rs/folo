@@ -25,4 +25,7 @@ pub(crate) trait Platform: Debug + Send + Sync + 'static {
     fn pin_current_thread_to<P>(&self, processors: &NonEmpty<P>)
     where
         P: AsRef<ProcessorFacade>;
+
+    /// Gets the ID of the processor currently executing this thread.
+    fn current_processor_id(&self) -> ProcessorId;
 }

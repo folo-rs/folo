@@ -23,4 +23,9 @@ impl Bindings for BuildTargetBindings {
             Err(io::Error::from_raw_os_error(result))
         }
     }
+
+    fn sched_getcpu(&self) -> i32 {
+        // SAFETY: No safety requirements.
+        unsafe { libc::sched_getcpu() }
+    }
 }

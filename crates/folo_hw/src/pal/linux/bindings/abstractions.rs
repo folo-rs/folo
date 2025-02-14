@@ -9,4 +9,6 @@ use libc::cpu_set_t;
 pub(crate) trait Bindings: Debug + Send + Sync + 'static {
     // sched_setaffinity() for the current thread
     fn sched_setaffinity_current(&self, cpuset: &cpu_set_t) -> Result<(), io::Error>;
+
+    fn sched_getcpu(&self) -> i32;
 }

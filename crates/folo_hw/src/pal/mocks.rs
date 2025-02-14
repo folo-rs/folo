@@ -37,6 +37,7 @@ mock! {
     pub Platform {
         pub fn get_all_processors_core(&self) -> NonEmpty<ProcessorFacade>;
         pub fn pin_current_thread_to_core(&self, processors: Vec<ProcessorFacade>);
+        pub fn current_processor_id(&self) -> ProcessorId;
     }
 }
 
@@ -51,5 +52,9 @@ impl Platform for MockPlatform {
     {
         let processors = processors.iter().map(|p| *p.as_ref()).collect();
         self.pin_current_thread_to_core(processors);
+    }
+
+    fn current_processor_id(&self) -> ProcessorId {
+        self.current_processor_id()
     }
 }

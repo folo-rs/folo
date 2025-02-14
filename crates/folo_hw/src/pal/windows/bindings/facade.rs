@@ -7,8 +7,12 @@ use windows::{
     core::Result,
     Win32::{
         Foundation::{BOOL, HANDLE},
-        System::SystemInformation::{
-            GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP, SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
+        System::{
+            Kernel::PROCESSOR_NUMBER,
+            SystemInformation::{
+                GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP,
+                SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
+            },
         },
     },
 };
@@ -68,6 +72,14 @@ impl Bindings for BindingsFacade {
             BindingsFacade::Real(bindings) => bindings.get_current_thread(),
             #[cfg(test)]
             BindingsFacade::Mock(bindings) => bindings.get_current_thread(),
+        }
+    }
+
+    fn get_current_processor_number_ex(&self) -> PROCESSOR_NUMBER {
+        match self {
+            BindingsFacade::Real(bindings) => bindings.get_current_processor_number_ex(),
+            #[cfg(test)]
+            BindingsFacade::Mock(bindings) => bindings.get_current_processor_number_ex(),
         }
     }
 

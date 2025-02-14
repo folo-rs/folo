@@ -38,4 +38,12 @@ impl Bindings for BindingsFacade {
             BindingsFacade::Mock(mock) => mock.sched_setaffinity_current(cpuset),
         }
     }
+
+    fn sched_getcpu(&self) -> i32 {
+        match self {
+            BindingsFacade::Real(bindings) => bindings.sched_getcpu(),
+            #[cfg(test)]
+            BindingsFacade::Mock(mock) => mock.sched_getcpu(),
+        }
+    }
 }

@@ -89,6 +89,23 @@ impl Platform for BuildTargetPlatform {
             .expect("SetThreadGroupAffinity failed unexpectedly");
         }
     }
+
+    fn current_processor_id(&self) -> ProcessorId {
+        let group_max_sizes = self.get_processor_group_max_sizes();
+
+        let current_processor = self.bindings.get_current_processor_number_ex();
+
+        let group_start_offset: ProcessorId = group_max_sizes
+            .iter()
+            .take(current_processor.Group as usize)
+            .map(|x| *x as ProcessorId)
+            .sum();
+
+        let global_index: ProcessorId =
+            group_start_offset + current_processor.Number as ProcessorId;
+
+        global_index
+    }
 }
 
 impl BuildTargetPlatform {
