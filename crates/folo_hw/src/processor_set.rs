@@ -1,10 +1,11 @@
 use std::{sync::LazyLock, thread};
 
+use itertools::Itertools;
 use nonempty::NonEmpty;
 
 use crate::{
     pal::{Platform, PlatformFacade},
-    Processor, ProcessorSetBuilder,
+    Processor, ProcessorSetBuilder, CURRENT_TRACKER,
 };
 
 // https://github.com/cloudhead/nonempty/issues/68
@@ -99,6 +100,35 @@ impl ProcessorSet {
     /// processor is otherwise busy.
     pub fn pin_current_thread_to(&self) {
         self.pal.pin_current_thread_to(&self.processors);
+
+        // TODO: Shift tracker to a dependency so we can properly test the set-tracker interactions.
+        if self.processors.len() == 1 {
+            // If there is only one processor, both the processor and memory region are known.
+            let processor = self.processors.first();
+
+            CURRENT_TRACKER.with_borrow_mut(|tracker| {
+                tracker.update_pin_status(Some(processor.id()), Some(processor.memory_region_id()));
+            })
+        } else if self
+            .processors
+            .iter()
+            .map(|p| p.memory_region_id())
+            .unique()
+            .count()
+            == 1
+        {
+            // All processors are in the same memory region, so we can at least track that.
+            let memory_region_id = self.processors.first().memory_region_id();
+
+            CURRENT_TRACKER.with_borrow_mut(|tracker| {
+                tracker.update_pin_status(None, Some(memory_region_id));
+            })
+        } else {
+            // We got nothing, have to resolve from scratch every time the data is asked for.
+            CURRENT_TRACKER.with_borrow_mut(|tracker| {
+                tracker.update_pin_status(None, None);
+            })
+        }
     }
 
     /// Spawns one thread for each processor in the set, pinned to that processor,

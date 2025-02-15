@@ -15,6 +15,16 @@ pub(crate) struct FakeProcessor {
     pub(crate) efficiency_class: EfficiencyClass,
 }
 
+impl FakeProcessor {
+    pub(crate) fn with_index(index: ProcessorId) -> Self {
+        Self {
+            index,
+            memory_region: 0,
+            efficiency_class: EfficiencyClass::Performance,
+        }
+    }
+}
+
 impl AbstractProcessor for FakeProcessor {
     fn id(&self) -> ProcessorId {
         self.index
