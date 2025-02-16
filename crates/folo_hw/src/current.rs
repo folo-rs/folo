@@ -23,7 +23,7 @@ thread_local! {
 ///
 /// To avoid this problem, you have to use pinned threads, assigned to execute on either a specific
 /// processor or set of processors that the desired quality you care about (e.g. memory region).
-pub(crate) struct CurrentTracker {
+pub struct CurrentTracker {
     pinned_processor_id: Option<ProcessorId>,
     pinned_memory_region_id: Option<MemoryRegionId>,
 
@@ -59,7 +59,7 @@ impl CurrentTracker {
         }
     }
 
-    pub(crate) fn current_processor(&self) -> &Processor {
+    pub fn current_processor(&self) -> &Processor {
         let processor_id = self.current_processor_id();
 
         let processor = self.all_processors.get(processor_id as usize);
@@ -77,12 +77,12 @@ impl CurrentTracker {
         }
     }
 
-    pub(crate) fn current_processor_id(&self) -> ProcessorId {
+    pub fn current_processor_id(&self) -> ProcessorId {
         self.pinned_processor_id
             .unwrap_or_else(|| self.pal.current_processor_id())
     }
 
-    pub(crate) fn current_memory_region_id(&self) -> MemoryRegionId {
+    pub fn current_memory_region_id(&self) -> MemoryRegionId {
         self.pinned_memory_region_id
             .unwrap_or_else(|| self.current_processor().memory_region_id())
     }
