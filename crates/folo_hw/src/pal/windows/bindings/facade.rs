@@ -120,4 +120,12 @@ impl Bindings for BindingsFacade {
             ),
         }
     }
+
+    fn get_numa_highest_node_number(&self) -> u32 {
+        match self {
+            BindingsFacade::Real(bindings) => bindings.get_numa_highest_node_number(),
+            #[cfg(test)]
+            BindingsFacade::Mock(bindings) => bindings.get_numa_highest_node_number(),
+        }
+    }
 }

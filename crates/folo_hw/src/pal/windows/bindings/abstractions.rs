@@ -25,6 +25,8 @@ pub(crate) trait Bindings: Debug + Send + Sync + 'static {
 
     fn get_current_processor_number_ex(&self) -> PROCESSOR_NUMBER;
 
+    fn get_numa_highest_node_number(&self) -> u32;
+
     unsafe fn set_thread_group_affinity(
         &self,
         thread: HANDLE,

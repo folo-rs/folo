@@ -59,6 +59,16 @@ impl Platform for BuildTargetPlatform {
     fn current_processor_id(&self) -> ProcessorId {
         self.bindings.sched_getcpu() as ProcessorId
     }
+    
+    fn max_processor_id(&self) -> ProcessorId {
+        // TODO: This information should be cached.
+        todo!()
+    }
+    
+    fn max_memory_region_id(&self) -> MemoryRegionId {
+        // TODO: This information should be cached.
+        todo!()
+    }
 }
 
 impl BuildTargetPlatform {

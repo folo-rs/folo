@@ -12,7 +12,8 @@ use windows::{
             },
             Threading::{
                 GetActiveProcessorCount, GetCurrentProcessorNumberEx, GetCurrentThread,
-                GetMaximumProcessorCount, GetMaximumProcessorGroupCount, SetThreadGroupAffinity,
+                GetMaximumProcessorCount, GetMaximumProcessorGroupCount, GetNumaHighestNodeNumber,
+                SetThreadGroupAffinity,
             },
         },
     },
@@ -69,5 +70,15 @@ impl Bindings for BuildTargetBindings {
         returned_length: *mut u32,
     ) -> Result<()> {
         GetLogicalProcessorInformationEx(relationship_type, buffer, returned_length)
+    }
+
+    fn get_numa_highest_node_number(&self) -> u32 {
+        let mut result: u32 = 0;
+
+        // SAFETY: No safety requirements beyond passing valid input.
+        unsafe { GetNumaHighestNodeNumber(&raw mut result) }
+            .expect("platform refused to inform us about memory region count");
+
+        result
     }
 }

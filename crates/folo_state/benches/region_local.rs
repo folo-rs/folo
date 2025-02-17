@@ -73,6 +73,7 @@ fn entrypoint(c: &mut Criterion) {
     });
 
     // TODO: Get & get+set from different memory regions.
+    // TODO: Get & get+set from pinned processors.
 
     group.finish();
 }

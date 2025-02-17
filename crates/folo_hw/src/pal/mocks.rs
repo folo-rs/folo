@@ -48,6 +48,8 @@ mock! {
         pub fn get_all_processors_core(&self) -> NonEmpty<ProcessorFacade>;
         pub fn pin_current_thread_to_core(&self, processors: Vec<ProcessorFacade>);
         pub fn current_processor_id(&self) -> ProcessorId;
+        pub fn max_processor_id(&self) -> ProcessorId;
+        pub fn max_memory_region_id(&self) -> MemoryRegionId;
     }
 }
 
@@ -66,5 +68,13 @@ impl Platform for MockPlatform {
 
     fn current_processor_id(&self) -> ProcessorId {
         self.current_processor_id()
+    }
+
+    fn max_processor_id(&self) -> ProcessorId {
+        self.max_processor_id()
+    }
+
+    fn max_memory_region_id(&self) -> MemoryRegionId {
+        self.max_memory_region_id()
     }
 }

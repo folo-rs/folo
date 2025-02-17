@@ -9,6 +9,9 @@ use std::fmt::Debug;
 #[cfg_attr(test, mockall::automock)]
 pub(crate) trait Filesystem: Debug + Send + Sync + 'static {
     /// Get the contents of the /proc/cpuinfo file.
+    /// 
+    /// NB! This file also includes offline processors. To check if a processor is online, you must
+    /// look in /sys/devices/system/cpu/cpu*/online (which has either 0 and 1 as content).
     ///
     /// This is a plaintext file with "key    : value" pairs, blocks separated by empty lines.
     fn get_cpuinfo_contents(&self) -> String;

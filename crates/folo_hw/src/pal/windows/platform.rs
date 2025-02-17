@@ -1,4 +1,4 @@
-use std::{collections::HashMap, mem::offset_of, num::NonZeroUsize};
+use std::{collections::HashMap, mem::offset_of, num::NonZeroUsize, sync::OnceLock};
 
 use itertools::Itertools;
 use nonempty::NonEmpty;
@@ -15,7 +15,9 @@ use windows::{
 
 use crate::{
     pal::{
-        windows::{Bindings, BindingsFacade, NativeBuffer, ProcessorGroupIndex},
+        windows::{
+            Bindings, BindingsFacade, NativeBuffer, ProcessorGroupIndex, ProcessorIndexInGroup,
+        },
         Platform, ProcessorFacade, ProcessorImpl,
     },
     EfficiencyClass, MemoryRegionId, ProcessorId,
@@ -33,6 +35,13 @@ pub(crate) static BUILD_TARGET_PLATFORM: BuildTargetPlatform =
 #[derive(Debug)]
 pub(crate) struct BuildTargetPlatform {
     bindings: BindingsFacade,
+
+    // TODO: This caching is a problem due to the synchronization - we should instead do this
+    // per-thread, so we do not require synchronization. This is still suboptimal here, even if
+    // slightly better than recalculating the values every time.
+    group_max_count: OnceLock<ProcessorGroupIndex>,
+    group_max_sizes: OnceLock<Box<[ProcessorIndexInGroup]>>,
+    group_start_offsets: OnceLock<Box<[ProcessorId]>>,
 }
 
 impl Platform for BuildTargetPlatform {
@@ -91,53 +100,90 @@ impl Platform for BuildTargetPlatform {
     }
 
     fn current_processor_id(&self) -> ProcessorId {
-        let group_max_sizes = self.get_processor_group_max_sizes();
-
         let current_processor = self.bindings.get_current_processor_number_ex();
 
-        let group_start_offset: ProcessorId = group_max_sizes
+        let group_start_offsets = self.get_processor_group_start_offsets();
+
+        let group_start_offset = *group_start_offsets
+            .get(current_processor.Group as usize)
+            .expect("platform indicated a processor group that the platform said does not exist");
+
+        group_start_offset + current_processor.Number as ProcessorId
+    }
+
+    fn max_processor_id(&self) -> ProcessorId {
+        let group_max_sizes = self.get_processor_group_max_sizes();
+        group_max_sizes
             .iter()
-            .take(current_processor.Group as usize)
-            .map(|x| *x as ProcessorId)
-            .sum();
+            .map(|&s| s as ProcessorId)
+            .sum::<ProcessorId>()
+            - 1
+    }
 
-        let global_index: ProcessorId =
-            group_start_offset + current_processor.Number as ProcessorId;
-
-        global_index
+    fn max_memory_region_id(&self) -> MemoryRegionId {
+        self.bindings.get_numa_highest_node_number()
     }
 }
 
 impl BuildTargetPlatform {
     pub(super) const fn new(bindings: BindingsFacade) -> Self {
-        Self { bindings }
+        Self {
+            bindings,
+            group_max_count: OnceLock::new(),
+            group_max_sizes: OnceLock::new(),
+            group_start_offsets: OnceLock::new(),
+        }
+    }
+
+    fn get_processor_group_max_count(&self) -> ProcessorGroupIndex {
+        *self
+            .group_max_count
+            .get_or_init(|| self.bindings.get_maximum_processor_group_count())
     }
 
     /// Returns the max number of processors in each processor group.
     /// This is used to calculate the global index of a processor.
-    fn get_processor_group_max_sizes(&self) -> Box<[u8]> {
-        let group_count = self.bindings.get_maximum_processor_group_count();
+    fn get_processor_group_max_sizes(&self) -> &[u8] {
+        self.group_max_sizes.get_or_init(|| {
+            let group_count = self.get_processor_group_max_count();
 
-        let mut group_sizes = Vec::with_capacity(group_count as usize);
+            let mut group_sizes = Vec::with_capacity(group_count as usize);
 
-        for group_index in 0..group_count {
-            let processor_count = self.bindings.get_maximum_processor_count(group_index);
+            for group_index in 0..group_count {
+                let processor_count = self.bindings.get_maximum_processor_count(group_index);
 
-            // The OS says there are up to 64, so this is guaranteed but let's be explicit.
-            assert!(processor_count <= u8::MAX as u32);
-            let processor_count = processor_count as u8;
+                // The OS says there are up to 64, so this is guaranteed but let's be explicit.
+                assert!(processor_count <= u8::MAX as u32);
+                let processor_count = processor_count as u8;
 
-            group_sizes.push(processor_count);
-        }
+                group_sizes.push(processor_count);
+            }
 
-        group_sizes.into_boxed_slice()
+            group_sizes.into_boxed_slice()
+        })
+    }
+
+    fn get_processor_group_start_offsets(&self) -> &[ProcessorId] {
+        self.group_start_offsets.get_or_init(|| {
+            let group_sizes = self.get_processor_group_max_sizes();
+
+            let mut group_offsets = Vec::with_capacity(group_sizes.len());
+
+            let mut group_start_offset: ProcessorId = 0;
+            for &size in group_sizes.iter() {
+                group_offsets.push(group_start_offset);
+                group_start_offset += size as ProcessorId;
+            }
+
+            group_offsets.into_boxed_slice()
+        })
     }
 
     /// Returns the active number of processors in each processor group.
     /// This is used to identify which processors actually exist.
     fn get_processor_group_active_sizes(&self) -> Box<[u8]> {
         // We always consider all groups, even if they have 0 processors.
-        let group_count = self.bindings.get_maximum_processor_group_count();
+        let group_count = self.get_processor_group_max_count();
 
         let mut group_sizes = Vec::with_capacity(group_count as usize);
 
@@ -386,9 +432,9 @@ impl BuildTargetPlatform {
         let processor_group_max_sizes = self.get_processor_group_max_sizes();
         let processor_group_active_sizes = self.get_processor_group_active_sizes();
         let performance_processors =
-            self.get_performance_processor_global_indexes(&processor_group_max_sizes);
+            self.get_performance_processor_global_indexes(processor_group_max_sizes);
         let processors_by_memory_region =
-            self.get_memory_regions_by_processor(&processor_group_max_sizes);
+            self.get_memory_regions_by_processor(processor_group_max_sizes);
 
         let mut processors =
             Vec::with_capacity(processor_group_max_sizes.iter().map(|&s| s as usize).sum());

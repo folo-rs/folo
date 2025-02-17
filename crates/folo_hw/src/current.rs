@@ -9,7 +9,7 @@ thread_local! {
     /// Thread-local default instance of the current processor tracker.
     ///
     /// This is what gets updated with new information whenever the current thread is pinned.
-    pub static CURRENT_TRACKER: RefCell<CurrentTracker> = RefCell::new(CurrentTracker::new(PlatformFacade::real()));
+    pub(crate) static CURRENT_TRACKER: RefCell<CurrentTracker> = RefCell::new(CurrentTracker::new(PlatformFacade::real()));
 }
 
 /// Tracks/identifies the current processor and related metadata.
@@ -57,6 +57,14 @@ impl CurrentTracker {
             pinned_processor_id: None,
             pinned_memory_region_id: None,
         }
+    }
+
+    /// Executes a closure with the latest information from the current processor tracker.
+    pub fn with_current<F, R>(f: F) -> R
+    where
+        F: FnOnce(&Self) -> R,
+    {
+        CURRENT_TRACKER.with(|current| f(&current.borrow()))
     }
 
     pub fn current_processor(&self) -> &Processor {
