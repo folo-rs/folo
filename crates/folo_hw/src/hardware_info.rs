@@ -8,7 +8,9 @@ use crate::{
 static CURRENT: LazyLock<HardwareInfo> =
     LazyLock::new(|| HardwareInfo::new(PlatformFacade::real()));
 
-/// Reports basic information about the system hardware.
+/// Reports non-changing information about the system hardware.
+/// 
+/// To inspect changing information, use [`HardwareTracker`][crate:HardwareTracker].
 #[derive(Debug)]
 pub struct HardwareInfo {
     max_processor_id: ProcessorId,

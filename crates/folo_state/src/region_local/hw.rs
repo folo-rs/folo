@@ -1,4 +1,4 @@
-use folo_hw::{CurrentTracker, MemoryRegionId};
+use folo_hw::{HardwareTracker, MemoryRegionId};
 
 /// Abstraction over the hardware metadata that region-local storage requires.
 /// This allows us to substitute mock hardware metadata in tests.
@@ -12,7 +12,7 @@ pub(crate) struct HardwareImpl;
 
 impl Hardware for HardwareImpl {
     fn current_memory_region_id(&self) -> MemoryRegionId {
-        CurrentTracker::with_current(|tracker| tracker.current_memory_region_id())
+        HardwareTracker::with_current(|tracker| tracker.current_memory_region_id())
     }
 }
 

@@ -6,44 +6,45 @@ use crate::{
 };
 
 thread_local! {
-    /// Thread-local default instance of the current processor tracker.
-    ///
-    /// This is what gets updated with new information whenever the current thread is pinned.
-    pub(crate) static CURRENT_TRACKER: RefCell<CurrentTracker> = RefCell::new(CurrentTracker::new(PlatformFacade::real()));
+    /// Thread-local default instance of the hardware tracker.
+    /// 
+    /// Each thread has its own hardware tracker, as some of the information will be thread-
+    /// specific. This also helps avoid the need for synchronization when accessing the tracker.
+    pub(crate) static CURRENT_TRACKER: RefCell<HardwareTracker> = RefCell::new(HardwareTracker::new(PlatformFacade::real()));
 }
 
-/// Tracks/identifies the current processor and related metadata.
-///
-/// The meaning of "current" is deceptively simple: the current processor is whatever processor
-/// is executing the code at the moment the "get current" logic is called.
+/// Tracks changing hardware information over time.
+/// 
+/// # Current processor
+/// 
+/// Some of the data is related to the current processor.  The meaning of "current" is deceptively
+/// simple: the current processor is whatever processor is executing the code at the moment the
+/// "get current processor" logic is called.
 ///
 /// Now, most threads can move between processors, so the current processor can change over time.
 /// This means that there is a certain "time of check to time of use" discrepancy that can occur.
 /// This is unavoidable if your threads are floating - just live with it.
 ///
 /// To avoid this problem, you have to use pinned threads, assigned to execute on either a specific
-/// processor or set of processors that the desired quality you care about (e.g. memory region).
-pub struct CurrentTracker {
+/// processor or set of processors that the desired quality you care about (e.g. memory region). You
+/// can pin the current thread to one or more processors via
+/// [ProcessorSet::pin_current_thread_to][crate::ProcessorSet::pin_current_thread_to].
+pub struct HardwareTracker {
     pinned_processor_id: Option<ProcessorId>,
     pinned_memory_region_id: Option<MemoryRegionId>,
 
     // Processors indexed by the processor ID.
     // In theory, there can be gaps in the sequence of processors, which is why these are Option.
-    // Processors can appear during execution (even beyond the end of this list), as well, so in
-    // theory it is possible that we end up in one of the gaps when looking for a processor.
-    all_processors: Vec<Option<Processor>>,
+    // The PAL guarantees that no processors will appear after the end of this list, though.
+    all_processors: Box<[Option<Processor>]>,
 
     pal: PlatformFacade,
 }
 
-impl CurrentTracker {
+impl HardwareTracker {
     pub(crate) fn new(pal: PlatformFacade) -> Self {
         let all_pal_processors = pal.get_all_processors();
-        let max_processor_id = all_pal_processors
-            .iter()
-            .map(|p| p.id())
-            .max()
-            .expect("the system must have at least one processor for code to execute");
+        let max_processor_id = pal.max_processor_id();
 
         let mut all_processors = vec![None; max_processor_id as usize + 1];
 
@@ -53,13 +54,13 @@ impl CurrentTracker {
 
         Self {
             pal,
-            all_processors,
+            all_processors: all_processors.into_boxed_slice(),
             pinned_processor_id: None,
             pinned_memory_region_id: None,
         }
     }
 
-    /// Executes a closure with the latest information from the current processor tracker.
+    /// Executes a closure with the latest information from the hardware tracker.
     pub fn with_current<F, R>(f: F) -> R
     where
         F: FnOnce(&Self) -> R,
@@ -67,12 +68,18 @@ impl CurrentTracker {
         CURRENT_TRACKER.with(|current| f(&current.borrow()))
     }
 
+    /// Obtains a reference to the current processor.
+    /// 
+    /// If all you need is the processor ID or memory region ID, you may get better performance
+    /// if you query [`current_processor_id()`] or [`current_memory_region_id()`].
     pub fn current_processor(&self) -> &Processor {
         let processor_id = self.current_processor_id();
 
-        let processor = self.all_processors.get(processor_id as usize);
+        // SAFETY: The PAL guarantees that the processor ID is within the range of known processors
+        // because it informs us of the maximum processor ID and we ensure we allocate enough slots.
+        let processor = unsafe { self.all_processors.get_unchecked(processor_id as usize) };
 
-        if let Some(Some(processor)) = processor {
+        if let Some(processor) = processor {
             processor
         } else {
             // The current processor is one we do not know! Aaaah, something must have changed
@@ -97,6 +104,12 @@ impl CurrentTracker {
 
     /// Notifies the tracker that the current thread has been pinned or unpinned and that,
     /// for `Some` arguments, future requests may be answered with the provided values.
+    /// 
+    /// # Compatibility
+    /// 
+    /// We assume here that there is no miscreant that is going to change the thread affinity
+    /// manually after it is pinned using this library's API. If that happens, our information
+    /// may become out of date.
     pub(crate) fn update_pin_status(
         &mut self,
         processor_id: Option<ProcessorId>,
@@ -129,7 +142,7 @@ mod tests {
 
     #[test]
     fn real_does_not_panic() {
-        let tracker = CurrentTracker::new(PlatformFacade::real());
+        let tracker = HardwareTracker::new(PlatformFacade::real());
 
         // We do not care what it returns (because we are operating in arbitrary thread which can
         // float among all processors); all we care about is that it does not panic.
@@ -164,7 +177,7 @@ mod tests {
             .in_sequence(&mut seq)
             .return_const(1_u32);
 
-        let tracker = CurrentTracker::new(PlatformFacade::from_mock(platform));
+        let tracker = HardwareTracker::new(PlatformFacade::from_mock(platform));
 
         assert_eq!(0, tracker.current_processor_id());
         assert_eq!(1, tracker.current_processor_id());
@@ -185,7 +198,7 @@ mod tests {
         // We do not expect the tracker to ever ask the platform for the current processor
         // because we directly tell it what processor the current thread has been pinned to.
 
-        let mut tracker = CurrentTracker::new(PlatformFacade::from_mock(platform));
+        let mut tracker = HardwareTracker::new(PlatformFacade::from_mock(platform));
 
         tracker.update_pin_status(Some(0), Some(0));
 
@@ -236,7 +249,7 @@ mod tests {
             .in_sequence(&mut seq)
             .return_const(3_u32);
 
-        let tracker = CurrentTracker::new(PlatformFacade::from_mock(platform));
+        let tracker = HardwareTracker::new(PlatformFacade::from_mock(platform));
 
         let processor = tracker.current_processor();
         assert_eq!(0, processor.id());
@@ -290,7 +303,7 @@ mod tests {
             .in_sequence(&mut seq)
             .return_const(1_u32);
 
-        let mut tracker = CurrentTracker::new(PlatformFacade::from_mock(platform));
+        let mut tracker = HardwareTracker::new(PlatformFacade::from_mock(platform));
 
         // We start in a pinned mode and expect the pinned-to knowledge to be used.
         tracker.update_pin_status(Some(0), Some(0));
@@ -351,7 +364,7 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let mut tracker = CurrentTracker::new(PlatformFacade::from_mock(platform));
+        let mut tracker = HardwareTracker::new(PlatformFacade::from_mock(platform));
 
         tracker.update_pin_status(Some(0), None);
     }
