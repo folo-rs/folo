@@ -1,4 +1,4 @@
-use std::{collections::HashMap, mem};
+use std::{collections::HashMap, mem, sync::OnceLock};
 
 use itertools::Itertools;
 use nonempty::NonEmpty;
@@ -28,11 +28,19 @@ pub(crate) static BUILD_TARGET_PLATFORM: BuildTargetPlatform =
 pub(crate) struct BuildTargetPlatform {
     bindings: BindingsFacade,
     fs: FilesystemFacade,
+
+    // Including inactive.
+    all_processors: OnceLock<NonEmpty<ProcessorImpl>>,
+    max_processor_id: OnceLock<ProcessorId>,
+    max_memory_region_id: OnceLock<MemoryRegionId>,
+
+    // Only active.
+    all_active_processors: OnceLock<NonEmpty<ProcessorFacade>>,
 }
 
 impl Platform for BuildTargetPlatform {
     fn get_all_processors(&self) -> NonEmpty<ProcessorFacade> {
-        self.get_all()
+        self.get_active_processors().clone()
     }
 
     fn pin_current_thread_to<P>(&self, processors: &NonEmpty<P>)
@@ -45,8 +53,8 @@ impl Platform for BuildTargetPlatform {
         for processor in processors.iter() {
             // SAFETY: No safety requirements.
             unsafe {
-                // TODO: This can go out of bounds with giant CPU set, we need to use dynamically
-                // allocated CPU sets instead of relying on the fixed-size one in libc.
+                // TODO: This can go out of bounds with giant CPU set (1000+), we would need to use
+                // dynamically allocated CPU sets instead of relying on the fixed-size one in libc.
                 libc::CPU_SET(processor.as_ref().as_real().id as usize, &mut cpu_set);
             }
         }
@@ -55,28 +63,71 @@ impl Platform for BuildTargetPlatform {
             .sched_setaffinity_current(&cpu_set)
             .expect("failed to configure thread affinity");
     }
-    
+
     fn current_processor_id(&self) -> ProcessorId {
         self.bindings.sched_getcpu() as ProcessorId
     }
-    
+
     fn max_processor_id(&self) -> ProcessorId {
-        // TODO: This information should be cached.
-        todo!()
+        self.get_max_processor_id()
     }
-    
+
     fn max_memory_region_id(&self) -> MemoryRegionId {
-        // TODO: This information should be cached.
-        todo!()
+        self.get_max_memory_region_id()
     }
 }
 
 impl BuildTargetPlatform {
     pub(super) const fn new(bindings: BindingsFacade, fs: FilesystemFacade) -> Self {
-        Self { bindings, fs }
+        Self {
+            bindings,
+            fs,
+            all_processors: OnceLock::new(),
+            all_active_processors: OnceLock::new(),
+            max_processor_id: OnceLock::new(),
+            max_memory_region_id: OnceLock::new(),
+        }
     }
 
-    fn get_all(&self) -> NonEmpty<ProcessorFacade> {
+    fn get_all_processors_impl(&self) -> &NonEmpty<ProcessorImpl> {
+        self.all_processors
+            .get_or_init(|| self.load_all_processors())
+    }
+
+    fn get_active_processors(&self) -> &NonEmpty<ProcessorFacade> {
+        self.all_active_processors.get_or_init(|| {
+            NonEmpty::from_vec(
+                self.get_all_processors_impl()
+                    .iter()
+                    .filter(|p| p.is_active)
+                    .cloned()
+                    .map(ProcessorFacade::Real)
+                    .collect_vec())
+                    .expect("found 0 active processors - impossible because this code is running on an active processor")
+        })
+    }
+
+    fn get_max_memory_region_id(&self) -> MemoryRegionId {
+        *self.max_memory_region_id.get_or_init(|| {
+            self.get_all_processors_impl()
+                .iter()
+                .map(|p| p.memory_region_id)
+                .max()
+                .expect("NonEmpty always has at least one item")
+        })
+    }
+
+    fn get_max_processor_id(&self) -> ProcessorId {
+        *self.max_processor_id.get_or_init(|| {
+            self.get_all_processors_impl()
+                .iter()
+                .map(|p| p.id)
+                .max()
+                .expect("NonEmpty always has at least one item")
+        })
+    }
+
+    fn load_all_processors(&self) -> NonEmpty<ProcessorImpl> {
         // There are two main ways to get processor information on Linux:
         // 1. Use various APIs to get the information as objects.
         // 2. Parse files in the /sys and /proc virtual filesystem.
@@ -87,9 +138,10 @@ impl BuildTargetPlatform {
         //
         // To keep things simple, we will go with the latter.
         //
-        // We need to combine two sources of information.
+        // We need to combine three sources of information.
         // 1. /proc/cpuinfo gives us the set of processors available.
         // 2. /sys/devices/system/node/node*/cpulist gives us the processors in each NUMA node.
+        // 3. /sys/devices/system/cpu/cpu*/online says whether a processor is online.
         // Note: /sys/devices/system/node may be missing if there is only one NUMA node.
         let cpu_infos = self.get_cpuinfo();
         let numa_nodes = self.get_numa_nodes();
@@ -129,10 +181,13 @@ impl BuildTargetPlatform {
                 EfficiencyClass::Performance
             };
 
+            let is_online = self.fs.get_cpu_online_contents(info.index) == "1";
+
             ProcessorImpl {
                 id: info.index,
                 memory_region_id: memory_region,
                 efficiency_class,
+                is_active: is_online,
             }
         });
 
@@ -140,7 +195,7 @@ impl BuildTargetPlatform {
         // already ensure this as a side-effect, we will sort here explicitly to be sure.
         processors.sort();
 
-        processors.map(ProcessorFacade::Real)
+        processors
     }
 
     fn get_cpuinfo(&self) -> NonEmpty<CpuInfo> {
@@ -200,11 +255,7 @@ impl BuildTargetPlatform {
     // Otherwise, returns a list of NUMA nodes, where each entry is a list of processor
     // indexes that belong to that node.
     fn get_numa_nodes(&self) -> Option<HashMap<MemoryRegionId, NonEmpty<ProcessorId>>> {
-        let node_indexes = cpulist::parse(&self.fs.get_numa_node_online_contents()?);
-
-        if node_indexes.is_empty() {
-            return None;
-        }
+        let node_indexes = cpulist::parse(&self.fs.get_numa_node_possible_contents()?);
 
         Some(
             node_indexes
@@ -244,6 +295,7 @@ mod tests {
         simulate_processor_layout(
             &mut fs,
             [0, 1, 2, 3],
+            [true, true, true, true],
             [0, 0, 0, 0],
             [99.9, 99.9, 99.9, 99.9],
         );
@@ -293,6 +345,7 @@ mod tests {
         simulate_processor_layout(
             &mut fs,
             [0, 1, 2, 3],
+            [true, true, true, true],
             [0, 0, 1, 1],
             [3400.0, 2000.0, 2000.0, 3400.0],
         );
@@ -334,6 +387,7 @@ mod tests {
         simulate_processor_layout(
             &mut fs,
             [0, 1, 2, 3, 4, 5, 6, 7],
+            [true, true, true, true, true, true, true, true],
             [0, 0, 0, 0, 1, 1, 2, 2],
             [
                 3400.0, 3400.0, 3400.0, 3400.0, 2000.0, 2000.0, 2000.0, 2000.0,
@@ -374,7 +428,13 @@ mod tests {
     fn one_active_one_inactive_numa_node() {
         let mut fs = MockFilesystem::new();
         // Node 0 -> inactive, Node 1 -> [Performance, Efficiency, Performance]
-        simulate_processor_layout(&mut fs, [3, 4, 5], [1, 1, 1], [3400.0, 2000.0, 3400.0]);
+        simulate_processor_layout(
+            &mut fs,
+            [0, 1, 2, 3, 4, 5],
+            [false, false, false, true, true, true],
+            [0, 0, 0, 1, 1, 1],
+            [3400.0, 2000.0, 3400.0, 3400.0, 2000.0, 3400.0],
+        );
 
         let platform = BuildTargetPlatform::new(
             BindingsFacade::from_mock(MockBindings::new()),
@@ -406,9 +466,12 @@ mod tests {
         // Node 0 -> Efficiency, Node 1 -> Performance, with gaps in indexes
         simulate_processor_layout(
             &mut fs,
-            [0, 2, 4, 6],
-            [0, 0, 1, 1],
-            [2000.0, 2000.0, 3400.0, 3400.0],
+            [0, 1, 2, 3, 4, 5, 6, 7],
+            [true, false, true, false, true, false, true, false],
+            [0, 0, 0, 0, 1, 1, 1, 1],
+            [
+                2000.0, 2000.0, 2000.0, 2000.0, 3400.0, 3400.0, 3400.0, 3400.0,
+            ],
         );
 
         let platform = BuildTargetPlatform::new(
@@ -443,15 +506,15 @@ mod tests {
 
     /// Configures mock bindings and filesystem to simulate a particular type of processor layout.
     ///
-    /// The simulation is valid for one call to get_all_processors() only.
+    /// The simulation is valid for one call to get_all_processors_impl().
     fn simulate_processor_layout<const PROCESSOR_COUNT: usize>(
         fs: &mut MockFilesystem,
         processor_index: [ProcessorId; PROCESSOR_COUNT],
+        processor_is_active: [bool; PROCESSOR_COUNT],
         memory_region_index: [MemoryRegionId; PROCESSOR_COUNT],
         frequencies_per_processor: [f64; PROCESSOR_COUNT],
     ) {
-        // We assume that active/max difference implies gaps in processor indexes may exist.
-        // Lack of machine to test it on limits support for that scenario right now.
+        // Remember that the cpuinfo list will return all processors, including inactive ones.
 
         let mut cpuinfo = String::new();
 
@@ -480,9 +543,17 @@ mod tests {
             .times(1)
             .return_const(cpuinfo);
 
-        fs.expect_get_numa_node_online_contents()
+        fs.expect_get_numa_node_possible_contents()
             .times(1)
             .return_const(Some(node_indexes_cpulist));
+
+        for processor_id in processor_index {
+            let is_online = processor_is_active[processor_id as usize];
+            fs.expect_get_cpu_online_contents()
+                .withf(move |p| *p == processor_id)
+                .times(1)
+                .return_const(if is_online { "1" } else { "0" });
+        }
 
         for (node, processors) in processors_per_node {
             let cpulist = processors
@@ -514,7 +585,7 @@ mod tests {
             .returning(|_| Ok(()));
 
         let mut fs = MockFilesystem::new();
-        simulate_processor_layout(&mut fs, [0], [0], [2000.0]);
+        simulate_processor_layout(&mut fs, [0], [true], [0], [2000.0]);
 
         let platform = BuildTargetPlatform::new(
             BindingsFacade::from_mock(bindings),
@@ -540,7 +611,7 @@ mod tests {
             .returning(|_| Ok(()));
 
         let mut fs = MockFilesystem::new();
-        simulate_processor_layout(&mut fs, [0, 1], [0, 0], [2000.0, 2000.0]);
+        simulate_processor_layout(&mut fs, [0, 1], [true, true], [0, 0], [2000.0, 2000.0]);
 
         let platform = BuildTargetPlatform::new(
             BindingsFacade::from_mock(bindings),
@@ -566,7 +637,7 @@ mod tests {
             .returning(|_| Ok(()));
 
         let mut fs = MockFilesystem::new();
-        simulate_processor_layout(&mut fs, [0, 1], [0, 1], [2000.0, 2000.0]);
+        simulate_processor_layout(&mut fs, [0, 1], [true, true], [0, 1], [2000.0, 2000.0]);
 
         let platform = BuildTargetPlatform::new(
             BindingsFacade::from_mock(bindings),
@@ -596,6 +667,7 @@ mod tests {
         simulate_processor_layout(
             &mut fs,
             [0, 1, 2, 3],
+            [true, true, true, true],
             [0, 0, 2, 2],
             [3400.0, 2000.0, 2000.0, 3400.0],
         );

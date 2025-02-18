@@ -16,14 +16,22 @@ pub(crate) trait Filesystem: Debug + Send + Sync + 'static {
     /// This is a plaintext file with "key    : value" pairs, blocks separated by empty lines.
     fn get_cpuinfo_contents(&self) -> String;
 
-    /// Get the contents of the /sys/devices/system/node/online file or `None` if it does
+    /// Get the contents of the /sys/devices/system/node/possible file or `None` if it does
     /// not exist.
+    /// 
+    /// This list all NUMA nodes that could possibly exist in the system, even those that are
+    /// offline.
     ///
     /// This is a cpulist format file ("0,1,2-4,5-10:2" style list).
-    fn get_numa_node_online_contents(&self) -> Option<String>;
+    fn get_numa_node_possible_contents(&self) -> Option<String>;
 
     /// Get the contents of the /sys/devices/system/node/node{}/cpulist file.
     ///
     /// This is a cpulist format file ("0,1,2-4,5-10:2" style list).
     fn get_numa_node_cpulist_contents(&self, node_index: u32) -> String;
+
+    /// Gets the contents of the /sys/devices/system/cpu/cpu{}/online file.
+    /// 
+    /// This is a single line file with either 0 or 1 as content.
+    fn get_cpu_online_contents(&self, cpu_index: u32) -> String;
 }

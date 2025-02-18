@@ -8,6 +8,8 @@ pub(crate) struct ProcessorImpl {
     pub(super) id: ProcessorId,
     pub(super) memory_region_id: MemoryRegionId,
     pub(super) efficiency_class: EfficiencyClass,
+
+    pub(super) is_active: bool,
 }
 
 impl Display for ProcessorImpl {

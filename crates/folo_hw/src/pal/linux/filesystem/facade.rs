@@ -37,14 +37,6 @@ impl Filesystem for FilesystemFacade {
         }
     }
 
-    fn get_numa_node_online_contents(&self) -> Option<String> {
-        match self {
-            FilesystemFacade::Real(filesystem) => filesystem.get_numa_node_online_contents(),
-            #[cfg(test)]
-            FilesystemFacade::Mock(mock) => mock.get_numa_node_online_contents(),
-        }
-    }
-
     fn get_numa_node_cpulist_contents(&self, node_index: u32) -> String {
         match self {
             FilesystemFacade::Real(filesystem) => {
@@ -52,6 +44,22 @@ impl Filesystem for FilesystemFacade {
             }
             #[cfg(test)]
             FilesystemFacade::Mock(mock) => mock.get_numa_node_cpulist_contents(node_index),
+        }
+    }
+
+    fn get_cpu_online_contents(&self, cpu_index: u32) -> String {
+        match self {
+            FilesystemFacade::Real(filesystem) => filesystem.get_cpu_online_contents(cpu_index),
+            #[cfg(test)]
+            FilesystemFacade::Mock(mock) => mock.get_cpu_online_contents(cpu_index),
+        }
+    }
+
+    fn get_numa_node_possible_contents(&self) -> Option<String> {
+        match self {
+            FilesystemFacade::Real(filesystem) => filesystem.get_numa_node_possible_contents(),
+            #[cfg(test)]
+            FilesystemFacade::Mock(mock) => mock.get_numa_node_possible_contents(),
         }
     }
 }
