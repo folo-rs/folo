@@ -34,30 +34,53 @@ async fn handle_request(
     Ok(response)
 }
 
-#[tokio::main]
+#[tokio::main(worker_threads = 1)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-    // We spawn a new task for the TCP dispatcher, to get it off the entrypoint thread, because
-    // there are rumors that the entrypoint thread is a special thread and may behave differently.
-    // This dispatcher task spawns handlers for each received connection.
-    _ = tokio::spawn(dispatch_connections()).await?;
+    // Logging to stdout will happen on background thread to avoid synchronous slowdowns.
+    let (non_blocking_stdout, _guard) = tracing_appender::non_blocking(std::io::stdout());
+    tracing_subscriber::fmt()
+        //.with_max_level(tracing::Level::TRACE)
+        .with_writer(non_blocking_stdout)
+        .init();
 
-    Ok(())
-}
+    // We use the entrypoint task as the TCP dispatcher in Tokio, spawning handlers for each
+    // received connection.
+    let server = TcpListener::bind("0.0.0.0:1234").await?;
 
-async fn dispatch_connections() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-    let listen_addr = "0.0.0.0:1234";
-    let tcp_listener = TcpListener::bind(listen_addr).await?;
-    println!("Listening on http://{listen_addr}");
+    let cores = core_affinity::get_core_ids()
+        .unwrap()
+        .into_iter()
+        //.filter(|x| x.id == 8 || x.id == 9)
+        .collect::<Vec<_>>();
+
+    core_affinity::set_for_current(cores[0]);
+
+    let tokio_runtimes = cores
+        .iter()
+        .skip(1)
+        .cloned()
+        .map(|core_id| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .on_thread_start(move || {
+                    core_affinity::set_for_current(core_id);
+                })
+                .build()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    let mut runtime_index = 0;
 
     loop {
-        let (stream, _) = match tcp_listener.accept().await {
-            Ok(x) => x,
-            Err(_) => {
-                continue;
-            }
-        };
+        let (connection, _) = server.accept().await?;
 
-        tokio::spawn(accept_connection(stream));
+        if runtime_index == 0 {
+            tokio::spawn(accept_connection(connection));
+        } else {
+            tokio_runtimes[runtime_index].spawn(accept_connection(connection));
+        }
+        runtime_index = (runtime_index + 1) % tokio_runtimes.len();
     }
 }
 
