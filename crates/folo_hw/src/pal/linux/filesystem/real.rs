@@ -27,8 +27,7 @@ impl Filesystem for BuildTargetFilesystem {
         .expect("failed to read NUMA node cpulist - cannot continue execution")
     }
 
-    fn get_cpu_online_contents(&self, cpu_index: u32) -> String {
-        fs::read_to_string(format!("/sys/devices/system/cpu/cpu{}/online", cpu_index))
-            .expect("failed to read CPU online status - cannot continue execution")
+    fn get_cpu_online_contents(&self, cpu_index: u32) -> Option<String> {
+        fs::read_to_string(format!("/sys/devices/system/cpu/cpu{}/online", cpu_index)).ok()
     }
 }

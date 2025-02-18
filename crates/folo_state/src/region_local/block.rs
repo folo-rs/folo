@@ -2,7 +2,10 @@ use std::sync::RwLock;
 
 use folo_hw::MemoryRegionId;
 
-use crate::region_local::hw::{Hardware, HardwareFacade};
+use crate::region_local::{
+    hw_info_client::{HardwareInfoClient, HardwareInfoClientFacade},
+    hw_tracker_client::{HardwareTrackerClient, HardwareTrackerClientFacade},
+};
 
 /// The backing type behind variables in a `region_local!` block. On read, returns a copy of the
 /// value stored in the same memory region as the processor currently executing the code.
@@ -54,25 +57,27 @@ where
     T: Clone + 'static,
 {
     state: RwLock<State<T>>,
-    hardware: HardwareFacade,
+
+    hardware_info: HardwareInfoClientFacade,
+    hardware_tracker: HardwareTrackerClientFacade,
 }
 
 #[derive(Debug)]
-struct State<T> {
-    // Can grow if we find a memory region that we have not seen before.
-    region_values: Vec<Option<Box<T>>>,
+enum State<T> {
+    // The instance has been created but not yet initialized, all we have is the initial value.
+    Created {
+        initial_value: T,
+    },
 
-    // Consumed on first read, when we assign it to the current memory region.
-    // Discarded on first write, if a write occurs before a read.
-    initial_value: Option<T>,
+    // The instance has been initialized, we have one slot per memory region.
+    Initialized {
+        region_values: Box<[Option<Box<T>>]>,
+    },
 }
 
 impl<T> State<T> {
     const fn new(initial_value: T) -> Self {
-        Self {
-            region_values: Vec::new(),
-            initial_value: Some(initial_value),
-        }
+        Self::Created { initial_value }
     }
 }
 
@@ -85,13 +90,22 @@ where
     /// at any time.
     #[doc(hidden)]
     pub const fn new(value: T) -> Self {
-        Self::with_hardware(value, HardwareFacade::real())
+        Self::with_clients(
+            value,
+            HardwareInfoClientFacade::real(),
+            HardwareTrackerClientFacade::real(),
+        )
     }
 
-    pub(crate) const fn with_hardware(value: T, hardware: HardwareFacade) -> Self {
+    pub(crate) const fn with_clients(
+        value: T,
+        hardware_info: HardwareInfoClientFacade,
+        hardware_tracker: HardwareTrackerClientFacade,
+    ) -> Self {
         Self {
             state: RwLock::new(State::new(value)),
-            hardware,
+            hardware_info,
+            hardware_tracker,
         }
     }
 
@@ -103,7 +117,7 @@ where
         // Optimize: can we do better than RwLock?
         // Optimize: region_values itself may be stored outside the current memory region...
 
-        let memory_region_id = self.hardware.current_memory_region_id();
+        let memory_region_id = self.hardware_tracker.current_memory_region_id();
         self.with_in_region(memory_region_id, f)
     }
 
@@ -112,7 +126,7 @@ where
             // Optimistic case - a value already exists for this memory region.
             let state = self.state.read().expect(ERR_POISONED_LOCK);
 
-            if let Some(Some(value)) = state.region_values.get(memory_region_id as usize) {
+            if let Some(value) = Self::try_read_core(memory_region_id, &*state) {
                 return f(value);
             }
         }
@@ -122,15 +136,11 @@ where
             let mut state = self.state.write().expect(ERR_POISONED_LOCK);
 
             // It could be that something already assigned the value, so check again first.
-            if let Some(Some(value)) = state.region_values.get(memory_region_id as usize) {
+            if let Some(value) = Self::try_read_core(memory_region_id, &*state) {
                 return f(value);
             }
 
-            // If there is an initial value, we use that. Otherwise, we take the first value
-            // that we find in the region_values vector (they are all the same value).
-            let value = Self::create_local_value(&mut state);
-
-            Self::write_value(memory_region_id, &mut state, value);
+            self.initialize_slot(memory_region_id, &mut *state);
 
             // We release the write lock here to avoid holding it while calling the closure.
         }
@@ -140,17 +150,45 @@ where
         self.with_in_region(memory_region_id, f)
     }
 
-    fn create_local_value(state: &mut State<T>) -> Box<T> {
-        if let Some(value) = state.initial_value.take() {
-            Box::new(value)
-        } else {
-            let value = state
-                .region_values
-                .iter()
-                .find_map(|v| v.as_ref())
-                .expect("if the initial value has been used up, we must have at least one value in region_values");
+    fn try_read_core(memory_region_id: MemoryRegionId, state: &State<T>) -> Option<&T> {
+        match state {
+            State::Created { .. } => {}
+            State::Initialized { region_values } => {
+                // This bounds check could only fail if the platform
+                // lied about the maximum memory region ID.
+                let slot = region_values.get(memory_region_id as usize);
 
-            value.clone()
+                if let Some(Some(value)) = slot {
+                    return Some(value);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn initialize_slot(&self, memory_region_id: MemoryRegionId, state: &mut State<T>) {
+        // If the state is not yet initialized, we initialize it now, consuming the initial
+        // value. Otherwise, we simply clone the initial value from the first filled slot.
+        // The values in the slots are all the same, so it does not matter which we pick.
+
+        match state {
+            State::Created { initial_value } => {
+                let mut region_values =
+                    vec![None; self.hardware_info.max_memory_region_id() as usize + 1];
+                region_values[memory_region_id as usize] = Some(Box::new(initial_value.clone()));
+
+                *state = State::Initialized {
+                    region_values: region_values.into_boxed_slice(),
+                }
+            }
+            State::Initialized { region_values } => {
+                let boxed_value = region_values.iter().find_map(|v| v.as_ref()).expect(
+                    "if we are initialized, we must have at least one value in region_values",
+                );
+
+                region_values[memory_region_id as usize] = Some(boxed_value.clone());
+            }
         }
     }
 
@@ -158,23 +196,26 @@ where
     ///
     /// The update will be applied to all memory regions in an eventually consistent manner.
     pub fn set(&self, value: T) {
-        let memory_region_id = self.hardware.current_memory_region_id();
+        let memory_region_id = self.hardware_tracker.current_memory_region_id();
 
         let mut state = self.state.write().expect(ERR_POISONED_LOCK);
 
-        state.initial_value = None;
-        state.region_values.clear();
-
-        Self::write_value(memory_region_id, &mut state, Box::new(value));
-    }
-
-    fn write_value(memory_region_id: MemoryRegionId, state: &mut State<T>, value: Box<T>) {
-        // Ensure that we have enough space in the region_values vector.
-        while state.region_values.len() <= memory_region_id as usize {
-            state.region_values.push(None);
+        match &mut *state {
+            State::Created { initial_value } => {
+                *initial_value = value;
+            }
+            State::Initialized { region_values } => {
+                for (index, slot) in region_values.iter_mut().enumerate() {
+                    if index == memory_region_id as usize {
+                        // The current memory region can get a clone immediately.
+                        *slot = Some(Box::new(value.clone()));
+                    } else {
+                        // Other memory regions will copy on read.
+                        *slot = None;
+                    }
+                }
+            }
         }
-
-        state.region_values[memory_region_id as usize] = Some(value);
     }
 }
 
@@ -211,7 +252,9 @@ mod tests {
     use std::ptr;
 
     use crate::region_local;
-    use crate::region_local::hw::MockHardware;
+    use crate::region_local::{
+        hw_info_client::MockHardwareInfoClient, hw_tracker_client::MockHardwareTrackerClient,
+    };
 
     use super::*;
 
@@ -234,24 +277,33 @@ mod tests {
 
     #[test]
     fn different_regions_have_different_clones() {
-        let mut hardware = MockHardware::new();
+        let mut hardware_tracker = MockHardwareTrackerClient::new();
 
-        hardware
+        hardware_tracker
             .expect_current_memory_region_id()
             .times(1)
             .return_const(0 as MemoryRegionId);
-        hardware
+        hardware_tracker
             .expect_current_memory_region_id()
             .times(1)
             .return_const(1 as MemoryRegionId);
-        hardware
+        hardware_tracker
             .expect_current_memory_region_id()
             .times(1)
             .return_const(9 as MemoryRegionId);
 
-        let hardware = HardwareFacade::from_mock(hardware);
+        let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
 
-        let local = RegionLocalKey::with_hardware("foo".to_string(), hardware);
+        let mut hardware_info = MockHardwareInfoClient::new();
+
+        hardware_info
+            .expect_max_memory_region_id()
+            .return_const(9 as MemoryRegionId);
+
+        let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
+
+        let local =
+            RegionLocalKey::with_clients("foo".to_string(), hardware_info, hardware_tracker);
 
         let value1 = local.with(ptr::from_ref);
         let value2 = local.with(ptr::from_ref);
@@ -263,24 +315,32 @@ mod tests {
 
     #[test]
     fn initial_value_propagates_to_all_regions() {
-        let mut hardware = MockHardware::new();
+        let mut hardware_tracker = MockHardwareTrackerClient::new();
 
-        hardware
+        hardware_tracker
             .expect_current_memory_region_id()
             .times(1)
             .return_const(0 as MemoryRegionId);
-        hardware
+        hardware_tracker
             .expect_current_memory_region_id()
             .times(1)
             .return_const(1 as MemoryRegionId);
-        hardware
+        hardware_tracker
             .expect_current_memory_region_id()
             .times(1)
             .return_const(9 as MemoryRegionId);
 
-        let hardware = HardwareFacade::from_mock(hardware);
+        let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
 
-        let local = RegionLocalKey::with_hardware(42, hardware);
+        let mut hardware_info = MockHardwareInfoClient::new();
+
+        hardware_info
+            .expect_max_memory_region_id()
+            .return_const(9 as MemoryRegionId);
+
+        let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
+
+        let local = RegionLocalKey::with_clients(42, hardware_info, hardware_tracker);
 
         assert_eq!(local.get(), 42);
         assert_eq!(local.get(), 42);
@@ -289,31 +349,39 @@ mod tests {
 
     #[test]
     fn update_propagates_to_all_regions() {
-        let mut hardware = MockHardware::new();
+        let mut hardware_tracker = MockHardwareTrackerClient::new();
 
         // Initial read + write.
-        hardware
+        hardware_tracker
             .expect_current_memory_region_id()
             .times(2)
             .return_const(5 as MemoryRegionId);
 
         // Reads to verify.
-        hardware
+        hardware_tracker
             .expect_current_memory_region_id()
             .times(1)
             .return_const(0 as MemoryRegionId);
-        hardware
+        hardware_tracker
             .expect_current_memory_region_id()
             .times(1)
             .return_const(1 as MemoryRegionId);
-        hardware
+        hardware_tracker
             .expect_current_memory_region_id()
             .times(1)
             .return_const(9 as MemoryRegionId);
 
-        let hardware = HardwareFacade::from_mock(hardware);
+        let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
 
-        let local = RegionLocalKey::with_hardware(42, hardware);
+        let mut hardware_info = MockHardwareInfoClient::new();
+
+        hardware_info
+            .expect_max_memory_region_id()
+            .return_const(9 as MemoryRegionId);
+
+        let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
+
+        let local = RegionLocalKey::with_clients(42, hardware_info, hardware_tracker);
 
         assert_eq!(local.get(), 42);
         local.set(43);
@@ -325,31 +393,39 @@ mod tests {
 
     #[test]
     fn immediate_set_propagates_to_all_regions() {
-        let mut hardware = MockHardware::new();
+        let mut hardware_tracker = MockHardwareTrackerClient::new();
 
         // Initial write.
-        hardware
+        hardware_tracker
             .expect_current_memory_region_id()
             .times(1)
             .return_const(5 as MemoryRegionId);
 
         // Reads to verify.
-        hardware
+        hardware_tracker
             .expect_current_memory_region_id()
             .times(1)
             .return_const(0 as MemoryRegionId);
-        hardware
+        hardware_tracker
             .expect_current_memory_region_id()
             .times(1)
             .return_const(1 as MemoryRegionId);
-        hardware
+        hardware_tracker
             .expect_current_memory_region_id()
             .times(1)
             .return_const(9 as MemoryRegionId);
 
-        let hardware = HardwareFacade::from_mock(hardware);
+        let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
 
-        let local = RegionLocalKey::with_hardware(42, hardware);
+        let mut hardware_info = MockHardwareInfoClient::new();
+
+        hardware_info
+            .expect_max_memory_region_id()
+            .return_const(9 as MemoryRegionId);
+
+        let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
+
+        let local = RegionLocalKey::with_clients(42, hardware_info, hardware_tracker);
 
         local.set(43);
 

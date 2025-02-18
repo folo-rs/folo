@@ -181,7 +181,11 @@ impl BuildTargetPlatform {
                 EfficiencyClass::Performance
             };
 
-            let is_online = self.fs.get_cpu_online_contents(info.index) == "1";
+            let is_online = match self.fs.get_cpu_online_contents(info.index) {
+                Some(s) => s == "1",
+                // Some Linux flavors do not report this, so just assume online by default.
+                None => true,
+            };
 
             ProcessorImpl {
                 id: info.index,
@@ -552,7 +556,11 @@ mod tests {
             fs.expect_get_cpu_online_contents()
                 .withf(move |p| *p == processor_id)
                 .times(1)
-                .return_const(if is_online { "1" } else { "0" });
+                .return_const(if is_online {
+                    Some("1".to_string())
+                } else {
+                    Some("0".to_string())
+                });
         }
 
         for (node, processors) in processors_per_node {

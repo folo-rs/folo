@@ -47,7 +47,7 @@ impl Filesystem for FilesystemFacade {
         }
     }
 
-    fn get_cpu_online_contents(&self, cpu_index: u32) -> String {
+    fn get_cpu_online_contents(&self, cpu_index: u32) -> Option<String> {
         match self {
             FilesystemFacade::Real(filesystem) => filesystem.get_cpu_online_contents(cpu_index),
             #[cfg(test)]
