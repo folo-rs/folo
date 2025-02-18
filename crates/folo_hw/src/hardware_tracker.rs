@@ -7,16 +7,16 @@ use crate::{
 
 thread_local! {
     /// Thread-local default instance of the hardware tracker.
-    /// 
+    ///
     /// Each thread has its own hardware tracker, as some of the information will be thread-
     /// specific. This also helps avoid the need for synchronization when accessing the tracker.
     pub(crate) static CURRENT_TRACKER: RefCell<HardwareTracker> = RefCell::new(HardwareTracker::new(PlatformFacade::real()));
 }
 
 /// Tracks changing hardware information over time.
-/// 
+///
 /// # Current processor
-/// 
+///
 /// Some of the data is related to the current processor.  The meaning of "current" is deceptively
 /// simple: the current processor is whatever processor is executing the code at the moment the
 /// "get current processor" logic is called.
@@ -69,17 +69,17 @@ impl HardwareTracker {
     }
 
     /// Obtains a reference to the current processor.
-    /// 
+    ///
     /// If all you need is the processor ID or memory region ID, you may get better performance
     /// if you query [`current_processor_id()`] or [`current_memory_region_id()`].
     pub fn current_processor(&self) -> &Processor {
         let processor_id = self.current_processor_id();
 
-        // SAFETY: The PAL guarantees that the processor ID is within the range of known processors
-        // because it informs us of the maximum processor ID and we ensure we allocate enough slots.
-        let processor = unsafe { self.all_processors.get_unchecked(processor_id as usize) };
+        // This should never go OOB unless the PAL lied to us.
+        // Still, we do the bounds check just to be good citizens.
+        let processor = self.all_processors.get(processor_id as usize);
 
-        if let Some(processor) = processor {
+        if let Some(Some(processor)) = processor {
             processor
         } else {
             // The current processor is one we do not know! Aaaah, something must have changed
@@ -104,9 +104,9 @@ impl HardwareTracker {
 
     /// Notifies the tracker that the current thread has been pinned or unpinned and that,
     /// for `Some` arguments, future requests may be answered with the provided values.
-    /// 
+    ///
     /// # Compatibility
-    /// 
+    ///
     /// We assume here that there is no miscreant that is going to change the thread affinity
     /// manually after it is pinned using this library's API. If that happens, our information
     /// may become out of date.
@@ -159,6 +159,11 @@ mod tests {
         let pal_processors = pal_processors.map(ProcessorFacade::Fake);
 
         platform
+            .expect_max_processor_id()
+            .times(1)
+            .return_const(1_u32);
+
+        platform
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
@@ -192,6 +197,11 @@ mod tests {
         let pal_processors = pal_processors.map(ProcessorFacade::Fake);
 
         platform
+            .expect_max_processor_id()
+            .times(1)
+            .return_const(1_u32);
+
+        platform
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
@@ -211,9 +221,15 @@ mod tests {
         let mut platform = MockPlatform::new();
 
         // We have processors 0 and 2, leaving a gap at index 1.
+        // There is also a ghost processor at index 3.
         let pal_processors = nonempty![FakeProcessor::with_index(0), FakeProcessor::with_index(2),];
 
         let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_max_processor_id()
+            .times(1)
+            .return_const(3_u32);
 
         platform
             .expect_get_all_processors_core()
@@ -280,10 +296,15 @@ mod tests {
                 index: 1,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance
-            }
+            } // Ghost at index 2.
         ];
 
         let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_max_processor_id()
+            .times(1)
+            .return_const(2_u32);
 
         platform
             .expect_get_all_processors_core()
@@ -318,21 +339,21 @@ mod tests {
         assert_eq!(1, tracker.current_memory_region_id());
 
         // Even when pinned to a ghost processor, everything is fine.
-        tracker.update_pin_status(Some(100), Some(100));
+        tracker.update_pin_status(Some(2), Some(2));
 
-        assert_eq!(100, tracker.current_processor_id());
-        assert_eq!(100, tracker.current_memory_region_id());
+        assert_eq!(2, tracker.current_processor_id());
+        assert_eq!(2, tracker.current_memory_region_id());
         // It must return something (anything), even for ghosts we are pinned to.
         _ = tracker.current_processor();
 
         // We are now unpinned from the processor but remain pinned to a memory region.
         // We expect requesting the processor to query the platform, but not if we just
         // request the memory region ID.
-        tracker.update_pin_status(None, Some(100));
+        tracker.update_pin_status(None, Some(2));
 
         let processor = tracker.current_processor();
         assert_eq!(0, processor.id());
-        assert_eq!(100, tracker.current_memory_region_id());
+        assert_eq!(2, tracker.current_memory_region_id());
 
         // Note that this is a second query to the platform.
         assert_eq!(0, tracker.current_processor_id());
@@ -359,6 +380,11 @@ mod tests {
         let pal_processors = nonempty![FakeProcessor::with_index(0)];
 
         let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_max_processor_id()
+            .times(1)
+            .return_const(0_u32);
 
         platform
             .expect_get_all_processors_core()
