@@ -18,7 +18,7 @@ async fn handle_request(
 ) -> Result<Response<BoxBody<Bytes, Infallible>>, Infallible> {
     let response = Response::builder()
         .header(CONTENT_TYPE, "text/plain")
-        .body(Full::new(Bytes::from_static(b"Hello, world!\n")).boxed())
+        .body(Full::new(Bytes::from_static(&[b'x'; 20480])).boxed())
         .expect("values provided to the builder should be valid");
 
     Ok(response)
