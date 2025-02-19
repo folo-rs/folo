@@ -21,6 +21,30 @@ use crate::{
 ///
 /// You can obtain a builder via [`ProcessorSet::builder()`] or from an existing processor set
 /// via [`ProcessorSet::to_builder()`].
+/// 
+/// # Process-scoped processor affinity
+/// 
+/// Operating systems provide various ways to start processes with a specific processor affinity,
+/// such as via the `start /affinity 0x1` command on Windows, the `taskset 0x1` command on Linux
+/// or via the cgroups mechanism.
+/// 
+/// Some of these techniques only specify a default processor affinity, while others are hard
+/// constraints.
+/// 
+/// Due to limitations in the design of the underlying platform APIs, how `ProcessorSetBuilder`
+/// interacts with these constraints depends on the operating system and the specific way in which
+/// the constraint was defined. We do not guarantee that any specific process-level affinity
+/// configuration on any specific operating system is or is not considered a constraint.
+/// 
+/// Typical behavior resembles the following:
+/// 
+/// * On Linux, process-scoped affinity is treated as a hard constraint - only processors allowed by
+///   the affinity configuration are considered available for use.
+/// * On Windows, process-scoped affinity is ignored and all processors present on the system are
+///   considered available for use.
+/// 
+/// For maximum compatibility, do not rely on external configuration to limit the processors in use
+/// and assume that `ProcessorSetBuilder` may see all processors present on the system.
 #[derive(Clone, Debug)]
 pub struct ProcessorSetBuilder {
     processor_type_selector: ProcessorTypeSelector,
