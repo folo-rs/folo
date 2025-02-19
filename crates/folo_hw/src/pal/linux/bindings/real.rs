@@ -20,7 +20,7 @@ impl Bindings for BuildTargetBindings {
         if result == 0 {
             Ok(())
         } else {
-            Err(io::Error::from_raw_os_error(errno()))
+            Err(io::Error::last_os_error())
         }
     }
 
@@ -28,9 +28,4 @@ impl Bindings for BuildTargetBindings {
         // SAFETY: No safety requirements.
         unsafe { libc::sched_getcpu() }
     }
-}
-
-fn errno() -> i32 {
-    // SAFETY: No safety requirements.
-    unsafe { *libc::__errno_location() }
 }
