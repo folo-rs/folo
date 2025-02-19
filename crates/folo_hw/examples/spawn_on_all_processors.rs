@@ -8,4 +8,6 @@ fn main() {
     for thread in threads {
         thread.join().unwrap();
     }
+    
+    println!("All threads have finished.");
 }
