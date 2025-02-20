@@ -18,15 +18,18 @@ pub(crate) trait Platform: Debug + Send + Sync + 'static {
     /// Gets the ID of the processor currently executing this thread.
     fn current_processor_id(&self) -> ProcessorId;
 
+    /// Gets the IDs of all processors that the current thread is allowed to execute on
+    fn current_thread_processors(&self) -> NonEmpty<ProcessorId>;
+
     /// Gets the maximum (inclusive) processor ID of any processor that could possibly
     /// be present on the system (including processors that are not currently active).
-    /// 
+    ///
     /// This value is a constant and will not change over time.
     fn max_processor_id(&self) -> ProcessorId;
 
     /// Gets the maximum (inclusive) memory region ID of any memory region that could possibly
     /// be present on the system (including memory regions that are not currently active).
-    /// 
+    ///
     /// This value is a constant and will not change over time.
     fn max_memory_region_id(&self) -> MemoryRegionId;
 }

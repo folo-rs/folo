@@ -21,30 +21,46 @@ use crate::{
 ///
 /// You can obtain a builder via [`ProcessorSet::builder()`] or from an existing processor set
 /// via [`ProcessorSet::to_builder()`].
-/// 
+///
 /// # Process-scoped processor affinity
-/// 
+///
 /// Operating systems provide various ways to start processes with a specific processor affinity,
 /// such as via the `start /affinity 0x1` command on Windows, the `taskset 0x1` command on Linux
 /// or via the cgroups mechanism.
-/// 
+///
 /// Some of these techniques only specify a default processor affinity, while others are hard
 /// constraints.
-/// 
+///
 /// Due to limitations in the design of the underlying platform APIs, how `ProcessorSetBuilder`
 /// interacts with these constraints depends on the operating system and the specific way in which
 /// the constraint was defined. We do not guarantee that any specific process-level affinity
 /// configuration on any specific operating system is or is not considered a constraint.
-/// 
+///
 /// Typical behavior resembles the following:
-/// 
+///
 /// * On Linux, process-scoped affinity is treated as a hard constraint - only processors allowed by
 ///   the affinity configuration are considered available for use.
 /// * On Windows, process-scoped affinity is ignored and all processors present on the system are
 ///   considered available for use.
-/// 
+///
 /// For maximum compatibility, do not rely on external configuration to limit the processors in use
 /// and assume that `ProcessorSetBuilder` may see all processors present on the system.
+///
+/// If your code is running in a thread where you can be certain that processor affinity has not
+/// been customized, you can inherit the allowed processor set from the current thread to get a set
+/// of processors that matches the defaults the platform would prefer the process to use.
+///
+/// # Inheriting processor affinity from current thread
+///
+/// By default, the processor affinity of the current thread is ignored when building a processor
+/// set, as this type may be used from a thread with a different processor affinity than the threads
+/// one wants to configure.
+///
+/// However, if you do wish to inherit the processor affinity from the current thread, you may do
+/// so by calling [`.where_available_for_current_thread()`][1] on the builder. This filters out all
+/// processors that the current thread is not configured to execute on.
+///
+/// [1]: ProcessorSetBuilder::where_available_for_current_thread
 #[derive(Clone, Debug)]
 pub struct ProcessorSetBuilder {
     processor_type_selector: ProcessorTypeSelector,
@@ -139,6 +155,23 @@ impl ProcessorSetBuilder {
     {
         for processor in processors {
             self.except_indexes.insert(processor.id());
+        }
+
+        self
+    }
+
+    /// Removes processors from the set of candidates if they are not available for use by the
+    /// current thread.
+    ///
+    /// This is a convenient way to identify the set of processors the platform prefers a process
+    /// to use when called from a non-customized thread such as the `main()` entrypoint.
+    pub fn where_available_for_current_thread(mut self) -> Self {
+        let current_thread_processors = self.pal.current_thread_processors();
+
+        for processor in self.all_processors() {
+            if !current_thread_processors.contains(&processor.id()) {
+                self.except_indexes.insert(processor.id());
+            }
         }
 
         self

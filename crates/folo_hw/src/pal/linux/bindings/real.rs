@@ -28,4 +28,20 @@ impl Bindings for BuildTargetBindings {
         // SAFETY: No safety requirements.
         unsafe { libc::sched_getcpu() }
     }
+
+    fn sched_getaffinity_current(&self) -> Result<cpu_set_t, io::Error> {
+        // SAFETY: All zeroes is a valid cpu_set_t.
+        let mut cpuset: cpu_set_t = unsafe { mem::zeroed() };
+
+        // 0 means current thread.
+        // SAFETY: No safety requirements beyond passing valid arguments.
+        let result =
+            unsafe { libc::sched_getaffinity(0, mem::size_of::<cpu_set_t>(), &raw mut cpuset) };
+
+        if result == 0 {
+            Ok(cpuset)
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
 }

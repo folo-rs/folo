@@ -68,6 +68,14 @@ impl Platform for PlatformFacade {
             PlatformFacade::Mock(p) => p.max_memory_region_id(),
         }
     }
+
+    fn current_thread_processors(&self) -> nonempty::NonEmpty<crate::ProcessorId> {
+        match self {
+            PlatformFacade::Real(p) => p.current_thread_processors(),
+            #[cfg(test)]
+            PlatformFacade::Mock(p) => p.current_thread_processors(),
+        }
+    }
 }
 
 impl From<&'static BuildTargetPlatform> for PlatformFacade {

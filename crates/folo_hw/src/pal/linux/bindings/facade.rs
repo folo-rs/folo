@@ -46,4 +46,12 @@ impl Bindings for BindingsFacade {
             BindingsFacade::Mock(mock) => mock.sched_getcpu(),
         }
     }
+
+    fn sched_getaffinity_current(&self) -> Result<cpu_set_t, io::Error> {
+        match self {
+            BindingsFacade::Real(bindings) => bindings.sched_getaffinity_current(),
+            #[cfg(test)]
+            BindingsFacade::Mock(mock) => mock.sched_getaffinity_current(),
+        }
+    }
 }

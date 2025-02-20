@@ -75,6 +75,21 @@ impl Platform for BuildTargetPlatform {
     fn max_memory_region_id(&self) -> MemoryRegionId {
         self.get_max_memory_region_id()
     }
+
+    fn current_thread_processors(&self) -> NonEmpty<ProcessorId> {
+        let max_processor_id = self.get_max_processor_id();
+
+        let affinity = self
+            .bindings
+            .sched_getaffinity_current()
+            .expect("failed to get current thread processor affinity");
+
+        NonEmpty::from_vec(
+            (0..=max_processor_id)
+                .filter(|processor_id| unsafe { libc::CPU_ISSET(*processor_id as usize, &affinity) })
+                .collect_vec())
+                .expect("current thread has no processors in its affinity mask - impossible because this code is running on an active processor")
+    }
 }
 
 impl BuildTargetPlatform {

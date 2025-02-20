@@ -10,5 +10,8 @@ pub(crate) trait Bindings: Debug + Send + Sync + 'static {
     // sched_setaffinity() for the current thread
     fn sched_setaffinity_current(&self, cpuset: &cpu_set_t) -> Result<(), io::Error>;
 
+    // sched_getaffinity() for the current thread
+    fn sched_getaffinity_current(&self) -> Result<cpu_set_t, io::Error>;
+
     fn sched_getcpu(&self) -> i32;
 }
