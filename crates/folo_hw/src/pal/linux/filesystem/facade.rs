@@ -62,4 +62,12 @@ impl Filesystem for FilesystemFacade {
             FilesystemFacade::Mock(mock) => mock.get_numa_node_possible_contents(),
         }
     }
+
+    fn get_proc_self_status_contents(&self) -> String {
+        match self {
+            FilesystemFacade::Real(filesystem) => filesystem.get_proc_self_status_contents(),
+            #[cfg(test)]
+            FilesystemFacade::Mock(mock) => mock.get_proc_self_status_contents(),
+        }
+    }
 }

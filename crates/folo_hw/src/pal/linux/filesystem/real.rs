@@ -30,4 +30,9 @@ impl Filesystem for BuildTargetFilesystem {
     fn get_cpu_online_contents(&self, cpu_index: u32) -> Option<String> {
         fs::read_to_string(format!("/sys/devices/system/cpu/cpu{}/online", cpu_index)).ok()
     }
+
+    fn get_proc_self_status_contents(&self) -> String {
+        fs::read_to_string("/proc/self/status")
+            .expect("failed to read /proc/self/status - cannot continue execution")
+    }
 }

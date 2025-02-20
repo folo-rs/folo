@@ -9,7 +9,7 @@ use std::fmt::Debug;
 #[cfg_attr(test, mockall::automock)]
 pub(crate) trait Filesystem: Debug + Send + Sync + 'static {
     /// Get the contents of the /proc/cpuinfo file.
-    /// 
+    ///
     /// NB! This file also includes offline processors. To check if a processor is online, you must
     /// look in /sys/devices/system/cpu/cpu*/online (which has either 0 and 1 as content).
     ///
@@ -18,7 +18,7 @@ pub(crate) trait Filesystem: Debug + Send + Sync + 'static {
 
     /// Get the contents of the /sys/devices/system/node/possible file or `None` if it does
     /// not exist.
-    /// 
+    ///
     /// This list all NUMA nodes that could possibly exist in the system, even those that are
     /// offline.
     ///
@@ -31,8 +31,13 @@ pub(crate) trait Filesystem: Debug + Send + Sync + 'static {
     fn get_numa_node_cpulist_contents(&self, node_index: u32) -> String;
 
     /// Gets the contents of the /sys/devices/system/cpu/cpu{}/online file.
-    /// 
+    ///
     /// This is a single line file with either 0 or 1 as content.
     /// This file may be absent on some Linux flavors, in which case we assume every CPU is online.
     fn get_cpu_online_contents(&self, cpu_index: u32) -> Option<String>;
+
+    /// Gets the contents of the /prod/{pid}/status file for the current process.
+    ///
+    /// This is a plaintext file with "key:     value" pairs.
+    fn get_proc_self_status_contents(&self) -> String;
 }

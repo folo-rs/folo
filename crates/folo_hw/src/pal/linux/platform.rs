@@ -138,20 +138,27 @@ impl BuildTargetPlatform {
         //
         // To keep things simple, we will go with the latter.
         //
-        // We need to combine three sources of information.
+        // We need to combine multiple sources of information.
         // 1. /proc/cpuinfo gives us the set of processors available.
         // 2. /sys/devices/system/node/node*/cpulist gives us the processors in each NUMA node.
         // 3. /sys/devices/system/cpu/cpu*/online says whether a processor is online.
+        // 4. /proc/self/status gives us the set of processors allowed for the current process.
         // Note: /sys/devices/system/node may be missing if there is only one NUMA node.
         let cpu_infos = self.get_cpuinfo();
         let numa_nodes = self.get_numa_nodes();
+        let allowed_processors = self.get_processors_allowed_for_current_process();
+
+        // Just filter out disallowed processors right away.
+        let cpu_infos = NonEmpty::from_vec(cpu_infos
+            .into_iter()
+            .filter(|info| allowed_processors.contains(&info.index))
+            .collect_vec()).expect("found no allowed processors after filtering out forbidden processors - so how is this code even executing?");
 
         // If we did not get any NUMA node info, construct an imaginary NUMA node containing all.
         let numa_nodes = numa_nodes.unwrap_or_else(|| {
-            let all_processor_indexes = (0..cpu_infos.len() as ProcessorId).collect_vec();
-            let all_processor_indexes = NonEmpty::from_vec(all_processor_indexes)
-                .expect("must have at least one processor");
-            [(0, all_processor_indexes)].into_iter().collect()
+            [(0, cpu_infos.clone().map(|info| info.index))]
+                .into_iter()
+                .collect()
         });
 
         // We identify efficiency cores by comparing the frequency of each processor to the maximum
@@ -254,6 +261,54 @@ impl BuildTargetPlatform {
         .expect("must have at least one processor in /proc/cpuinfo to function")
     }
 
+    fn get_processors_allowed_for_current_process(&self) -> NonEmpty<ProcessorId> {
+        // On Linux, mechanisms like cgroups may limit what processors we are allowed to use.
+        // Attempting to pin a thread to forbidden processors will fail. We want to avoid even
+        // showing such processors, so we filter them out. The allowed list is in /proc/.../status.
+
+        let status = self.fs.get_proc_self_status_contents();
+        let lines = status.lines();
+
+        let cpus_allowed_list = lines
+            .into_iter()
+            .map(|line| line.trim())
+            .filter_map(|line| {
+                if line.is_empty() {
+                    // There do not seem to be empty lines in this file but just in case.
+                    return None;
+                }
+
+                // Example content:
+                // Speculation_Store_Bypass:       thread vulnerable
+                // SpeculationIndirectBranch:      conditional enabled
+                // Cpus_allowed:   ffffffff
+                // Cpus_allowed_list:      0-31
+                // Mems_allowed:   1
+                // Mems_allowed_list:      0
+                // voluntary_ctxt_switches:        3
+                // nonvoluntary_ctxt_switches:     0
+
+                let (key, value) = line
+                    .split_once(':')
+                    .map(|(key, value)| (key.trim(), value.trim()))
+                    .expect("/proc/self/status line was not a key:value pair");
+
+                if key == "Cpus_allowed_list" {
+                    return Some(value);
+                }
+
+                None
+            })
+            .take(1)
+            .collect_vec();
+
+        let cpus_allowed_list = cpus_allowed_list
+            .first()
+            .expect("Cpus_allowed_list not found in /proc/self/status");
+
+        cpulist::parse(cpus_allowed_list)
+    }
+
     // May return None if everything is in a single NUMA node.
     //
     // Otherwise, returns a list of NUMA nodes, where each entry is a list of processor
@@ -274,7 +329,7 @@ impl BuildTargetPlatform {
 }
 
 // One result from /proc/cpuinfo.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct CpuInfo {
     index: ProcessorId,
 
@@ -299,7 +354,8 @@ mod tests {
         simulate_processor_layout(
             &mut fs,
             [0, 1, 2, 3],
-            [true, true, true, true],
+            None,
+            None,
             [0, 0, 0, 0],
             [99.9, 99.9, 99.9, 99.9],
         );
@@ -342,6 +398,95 @@ mod tests {
     }
 
     #[test]
+    fn forbidden_processors_are_ignored() {
+        let mut fs = MockFilesystem::new();
+
+        simulate_processor_layout(
+            &mut fs,
+            [0, 1, 2, 3],
+            None,
+            // We expect processor 2 to be absent from our results.
+            Some([true, true, false, true]),
+            [0, 0, 0, 0],
+            [99.9, 99.9, 99.9, 99.9],
+        );
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        let processors = platform.get_all_processors();
+
+        assert_eq!(processors.len(), 3);
+
+        // All processors must be in the same memory region.
+        assert_eq!(
+            1,
+            processors
+                .iter()
+                .map(|p| p.as_real().memory_region_id)
+                .dedup()
+                .count()
+        );
+
+        let p0 = &processors[0];
+        assert_eq!(p0.as_real().id, 0);
+        assert_eq!(p0.as_real().memory_region_id, 0);
+
+        let p1 = &processors[1];
+        assert_eq!(p1.as_real().id, 1);
+        assert_eq!(p1.as_real().memory_region_id, 0);
+
+        let p2 = &processors[2];
+        assert_eq!(p2.as_real().id, 3);
+        assert_eq!(p2.as_real().memory_region_id, 0);
+    }
+
+    #[test]
+    fn forbidden_memory_regions_are_ignored() {
+        let mut fs = MockFilesystem::new();
+
+        simulate_processor_layout(
+            &mut fs,
+            [0, 1, 2, 3],
+            None,
+            // Processors 2 and 3 are part of a memory region with 0 allowed processors.
+            // We expect this memory region to be completely absent from any sort of results.
+            Some([true, true, false, false]),
+            [0, 0, 1, 1],
+            [99.9, 99.9, 99.9, 99.9],
+        );
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        let processors = platform.get_all_processors();
+
+        assert_eq!(processors.len(), 2);
+
+        // All processors must be in the same memory region.
+        assert_eq!(
+            1,
+            processors
+                .iter()
+                .map(|p| p.as_real().memory_region_id)
+                .dedup()
+                .count()
+        );
+
+        let p0 = &processors[0];
+        assert_eq!(p0.as_real().id, 0);
+        assert_eq!(p0.as_real().memory_region_id, 0);
+
+        let p1 = &processors[1];
+        assert_eq!(p1.as_real().id, 1);
+        assert_eq!(p1.as_real().memory_region_id, 0);
+    }
+
+    #[test]
     fn two_numa_nodes_efficiency_performance() {
         let mut fs = MockFilesystem::new();
         // Two nodes, each with 2 processors:
@@ -349,7 +494,8 @@ mod tests {
         simulate_processor_layout(
             &mut fs,
             [0, 1, 2, 3],
-            [true, true, true, true],
+            None,
+            None,
             [0, 0, 1, 1],
             [3400.0, 2000.0, 2000.0, 3400.0],
         );
@@ -391,7 +537,8 @@ mod tests {
         simulate_processor_layout(
             &mut fs,
             [0, 1, 2, 3, 4, 5, 6, 7],
-            [true, true, true, true, true, true, true, true],
+            None,
+            None,
             [0, 0, 0, 0, 1, 1, 2, 2],
             [
                 3400.0, 3400.0, 3400.0, 3400.0, 2000.0, 2000.0, 2000.0, 2000.0,
@@ -435,7 +582,8 @@ mod tests {
         simulate_processor_layout(
             &mut fs,
             [0, 1, 2, 3, 4, 5],
-            [false, false, false, true, true, true],
+            Some([false, false, false, true, true, true]),
+            None,
             [0, 0, 0, 1, 1, 1],
             [3400.0, 2000.0, 3400.0, 3400.0, 2000.0, 3400.0],
         );
@@ -471,7 +619,8 @@ mod tests {
         simulate_processor_layout(
             &mut fs,
             [0, 1, 2, 3, 4, 5, 6, 7],
-            [true, false, true, false, true, false, true, false],
+            Some([true, false, true, false, true, false, true, false]),
+            None,
             [0, 0, 0, 0, 1, 1, 1, 1],
             [
                 2000.0, 2000.0, 2000.0, 2000.0, 3400.0, 3400.0, 3400.0, 3400.0,
@@ -514,10 +663,16 @@ mod tests {
     fn simulate_processor_layout<const PROCESSOR_COUNT: usize>(
         fs: &mut MockFilesystem,
         processor_index: [ProcessorId; PROCESSOR_COUNT],
-        processor_is_active: [bool; PROCESSOR_COUNT],
+        // If None, all are active.
+        processor_is_active: Option<[bool; PROCESSOR_COUNT]>,
+        // If None, all are allowed.
+        processor_is_allowed: Option<[bool; PROCESSOR_COUNT]>,
         memory_region_index: [MemoryRegionId; PROCESSOR_COUNT],
         frequencies_per_processor: [f64; PROCESSOR_COUNT],
     ) {
+        let processor_is_active = processor_is_active.unwrap_or([true; PROCESSOR_COUNT]);
+        let processor_is_allowed = processor_is_allowed.unwrap_or([true; PROCESSOR_COUNT]);
+
         // Remember that the cpuinfo list will return all processors, including inactive ones.
 
         let mut cpuinfo = String::new();
@@ -551,7 +706,12 @@ mod tests {
             .times(1)
             .return_const(Some(node_indexes_cpulist));
 
-        for processor_id in processor_index {
+        for (index, processor_id) in processor_index.iter().copied().enumerate() {
+            if !processor_is_allowed[index] {
+                // Forbidden processors are not probed.
+                continue;
+            }
+
             let is_online = processor_is_active[processor_id as usize];
             fs.expect_get_cpu_online_contents()
                 .withf(move |p| *p == processor_id)
@@ -575,6 +735,25 @@ mod tests {
                 .times(1)
                 .return_const(cpulist);
         }
+
+        let allowed_processors = NonEmpty::from_vec(processor_index
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(index, processor_id)| {
+                if processor_is_allowed[index] {
+                    Some(processor_id)
+                } else {
+                    None
+                }
+            })
+            .collect_vec()).expect("simulated configuration allows zero processors - this is not valid, as some processor must be present to execute the code under test");
+
+        let allowed_cpus = cpulist::emit(allowed_processors);
+
+        fs.expect_get_proc_self_status_contents()
+            .times(1)
+            .return_const(format!("Cpus_allowed_list: {allowed_cpus}"));
     }
 
     #[test]
@@ -593,7 +772,7 @@ mod tests {
             .returning(|_| Ok(()));
 
         let mut fs = MockFilesystem::new();
-        simulate_processor_layout(&mut fs, [0], [true], [0], [2000.0]);
+        simulate_processor_layout(&mut fs, [0], None, None, [0], [2000.0]);
 
         let platform = BuildTargetPlatform::new(
             BindingsFacade::from_mock(bindings),
@@ -619,7 +798,7 @@ mod tests {
             .returning(|_| Ok(()));
 
         let mut fs = MockFilesystem::new();
-        simulate_processor_layout(&mut fs, [0, 1], [true, true], [0, 0], [2000.0, 2000.0]);
+        simulate_processor_layout(&mut fs, [0, 1], None, None, [0, 0], [2000.0, 2000.0]);
 
         let platform = BuildTargetPlatform::new(
             BindingsFacade::from_mock(bindings),
@@ -645,7 +824,7 @@ mod tests {
             .returning(|_| Ok(()));
 
         let mut fs = MockFilesystem::new();
-        simulate_processor_layout(&mut fs, [0, 1], [true, true], [0, 1], [2000.0, 2000.0]);
+        simulate_processor_layout(&mut fs, [0, 1], None, None, [0, 1], [2000.0, 2000.0]);
 
         let platform = BuildTargetPlatform::new(
             BindingsFacade::from_mock(bindings),
@@ -675,7 +854,8 @@ mod tests {
         simulate_processor_layout(
             &mut fs,
             [0, 1, 2, 3],
-            [true, true, true, true],
+            None,
+            None,
             [0, 0, 2, 2],
             [3400.0, 2000.0, 2000.0, 3400.0],
         );
