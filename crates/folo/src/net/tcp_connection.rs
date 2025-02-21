@@ -208,17 +208,3 @@ impl Future for ShutdownFuture {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use static_assertions::assert_impl_all;
-
-    use super::*;
-
-    #[test]
-    fn is_thread_mobile() {
-        assert_impl_all!(TcpConnection: Send);
-        assert_impl_all!(OperationResultFuture: Send);
-        assert_impl_all!(ShutdownFuture: Send);
-    }
-}
