@@ -1,7 +1,5 @@
 use crate::constants::GENERAL_MILLISECONDS_BUCKETS;
-use crate::io::{
-    self, CompletionPort, IoPrimitive, IoWaker, IO_DEQUEUE_BATCH_SIZE, WAKE_UP_COMPLETION_KEY,
-};
+use crate::io::{CompletionPort, IoWaker, IO_DEQUEUE_BATCH_SIZE, WAKE_UP_COMPLETION_KEY};
 use crate::metrics::{Event, EventBuilder, Magnitude};
 use std::mem::{self, MaybeUninit};
 use windows::core::HRESULT;
