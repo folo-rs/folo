@@ -28,6 +28,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         task.await;
     }
 
+    event!(Level::INFO, message = "file can completed",);
+
     Ok(())
 }
 

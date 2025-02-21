@@ -13,6 +13,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         .set_len(FILE_SIZE as u64)
         .unwrap();
 
+    event!(Level::INFO, message = "file read started",);
+
     for _ in 0..1 {
         match folo::fs::read(FILE_PATH).await {
             Ok(contents) => {
