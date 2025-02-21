@@ -1,5 +1,5 @@
 use crate::io::Buffer;
-use crate::mem::isolation::Isolated;
+use crate::mem::isolation::Shared;
 use thiserror::Error;
 
 /// An error for an I/O operation that was attempted on a data buffer. Contains not only the error
@@ -10,11 +10,11 @@ use thiserror::Error;
 #[error("I/O operation failed: {inner}")]
 pub struct OperationError {
     pub inner: crate::io::Error,
-    pub buffer: Buffer<Isolated>,
+    pub buffer: Buffer<Shared>,
 }
 
 impl OperationError {
-    pub fn new(inner: crate::io::Error, buffer: Buffer<Isolated>) -> Self {
+    pub fn new(inner: crate::io::Error, buffer: Buffer<Shared>) -> Self {
         Self { inner, buffer }
     }
 
@@ -22,19 +22,19 @@ impl OperationError {
         self.inner
     }
 
-    pub fn into_inner_and_buffer(self) -> (crate::io::Error, Buffer<Isolated>) {
+    pub fn into_inner_and_buffer(self) -> (crate::io::Error, Buffer<Shared>) {
         (self.inner, self.buffer)
     }
 }
 
-pub type OperationResult = std::result::Result<Buffer<Isolated>, OperationError>;
+pub type OperationResult = std::result::Result<Buffer<Shared>, OperationError>;
 
 pub trait OperationResultExt {
-    fn into_inner(self) -> crate::io::Result<Buffer<Isolated>>;
+    fn into_inner(self) -> crate::io::Result<Buffer<Shared>>;
 }
 
 impl OperationResultExt for OperationResult {
-    fn into_inner(self) -> crate::io::Result<Buffer<Isolated>> {
+    fn into_inner(self) -> crate::io::Result<Buffer<Shared>> {
         match self {
             Ok(buffer) => Ok(buffer),
             Err(OperationError { inner, .. }) => Err(inner),

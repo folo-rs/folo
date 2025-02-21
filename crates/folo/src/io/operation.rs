@@ -1,7 +1,7 @@
 use crate::{
     constants::{GENERAL_BYTES_BUCKETS, GENERAL_MILLISECONDS_BUCKETS},
     io::{self, Buffer, OperationResult},
-    mem::{isolation::Isolated, DropPolicy, PinnedSlabChain},
+    mem::{isolation::Shared, DropPolicy, PinnedSlabChain},
     metrics::{Event, EventBuilder, Magnitude},
     time::UltraLowPrecisionInstant,
 };
@@ -68,7 +68,7 @@ impl OperationStore {
     /// make into a new one of these operations. The caller provides a buffer for any input/output
     /// data, which the operation takes ownership of. Once the operation has completed, the buffer
     /// is returned to the caller for reading, reuse or disposal.
-    pub fn new_operation(&self, buffer: Buffer<Isolated>) -> Operation {
+    pub fn new_operation(&self, buffer: Buffer<Shared>) -> Operation {
         OPERATIONS_ALLOCATED.with(Event::observe_unit);
 
         let mut items = self.items.borrow_mut();
@@ -267,7 +267,7 @@ struct OperationCore {
     /// The caller-provided buffer containing the data affected by the operation. The Buffer type
     /// guarantees that this is pinned and will not move. Once the operation is complete, we return
     /// the buffer to the caller and set this to None.
-    buffer: Option<Buffer<Isolated>>,
+    buffer: Option<Buffer<Shared>>,
 
     /// Used to operate the control node, which requires us to know our own key.
     key: OperationKey,
@@ -290,7 +290,7 @@ struct OperationCore {
 }
 
 impl OperationCore {
-    pub fn new(key: OperationKey, mut buffer: Buffer<Isolated>) -> Self {
+    pub fn new(key: OperationKey, mut buffer: Buffer<Shared>) -> Self {
         let (result_tx, result_rx) = oneshot::channel();
 
         // IOCP cannot deal with bigger slices of data than u32::MAX, so limit the active range.

@@ -1,6 +1,6 @@
 use crate::{
     io::{self, Buffer},
-    mem::isolation::Isolated,
+    mem::isolation::Shared,
     rt::{current_async_agent, spawn_sync, SynchronousTaskType},
     windows::OwnedHandle,
 };
@@ -71,7 +71,7 @@ pub async fn read_large_buffer(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
         let mut buffer = Vec::<u8>::with_capacity(file_size as usize);
         #[allow(clippy::uninit_vec)] // They are just bytes destined for overwriting, meaningless.
         buffer.set_len(buffer.capacity());
-        let mut buffer = Buffer::<Isolated>::from_boxed_slice(buffer.into_boxed_slice());
+        let mut buffer = Buffer::<Shared>::from_boxed_slice(buffer.into_boxed_slice());
 
         let mut bytes_read = 0;
 
@@ -117,8 +117,8 @@ pub async fn read_large_buffer(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
 async fn read_buffer_from_file(
     file_handle: Rc<OwnedHandle<HANDLE>>,
     offset: usize,
-    mut buffer: Buffer<Isolated>,
-) -> io::Result<Buffer<Isolated>> {
+    mut buffer: Buffer<Shared>,
+) -> io::Result<Buffer<Shared>> {
     if buffer.len() > MAX_READ_SIZE_BYTES {
         buffer.set_len(MAX_READ_SIZE_BYTES);
     }

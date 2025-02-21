@@ -4,7 +4,7 @@ use crate::io::{
     operation::{Operation, OperationStore},
     Buffer, CompletionPort, IoPrimitive, IoWaker, IO_DEQUEUE_BATCH_SIZE, WAKE_UP_COMPLETION_KEY,
 };
-use crate::mem::isolation::Isolated;
+use crate::mem::isolation::Shared;
 use crate::metrics::{Event, EventBuilder, Magnitude};
 use std::mem::{self, MaybeUninit};
 use windows::core::HRESULT;
@@ -75,7 +75,7 @@ impl Driver {
     /// 3. Await the result of `begin()`. You will receive back an `io::Result` with the buffer on
     ///    success. In case of error, the buffer will be provided via `io::Error::OperationFailed`
     ///    so you can reuse it if you wish. An empty buffer on reads signals end of stream.
-    pub(crate) fn new_operation(&mut self, buffer: Buffer<Isolated>) -> Operation {
+    pub(crate) fn new_operation(&mut self, buffer: Buffer<Shared>) -> Operation {
         self.operation_store.new_operation(buffer)
     }
 

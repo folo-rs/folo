@@ -1,11 +1,10 @@
 use crate::{
     io::{self, Buffer, OperationResultFuture},
-    mem::isolation::Isolated,
+    mem::isolation::Shared,
     net::winsock,
     rt::{current_async_agent, current_runtime, RemoteJoinHandle, SynchronousTaskType},
     windows::OwnedHandle,
 };
-use negative_impl::negative_impl;
 use pin_project::pin_project;
 use std::{future::Future, sync::Arc, task::Poll};
 use windows::{
@@ -28,7 +27,7 @@ impl TcpConnection {
     ///
     /// You should not call this multiple times concurrently because there is no guarantee that the
     /// continuations will be called in a particular order.
-    pub fn receive(&mut self, buffer: Buffer<Isolated>) -> OperationResultFuture {
+    pub fn receive(&mut self, buffer: Buffer<Shared>) -> OperationResultFuture {
         socket_receive(Arc::clone(&self.socket), buffer)
     }
 
@@ -38,7 +37,7 @@ impl TcpConnection {
     ///
     /// You may call this multiple times concurrently. The buffers will be sent in the order they
     /// are submitted.
-    pub fn send(&mut self, buffer: Buffer<Isolated>) -> OperationResultFuture {
+    pub fn send(&mut self, buffer: Buffer<Shared>) -> OperationResultFuture {
         socket_send(Arc::clone(&self.socket), buffer)
     }
 
@@ -52,14 +51,9 @@ impl TcpConnection {
     }
 }
 
-#[negative_impl]
-impl !Send for TcpConnection {}
-#[negative_impl]
-impl !Sync for TcpConnection {}
-
 fn socket_receive(
     socket: Arc<OwnedHandle<SOCKET>>,
-    buffer: Buffer<Isolated>,
+    buffer: Buffer<Shared>,
 ) -> OperationResultFuture {
     // SAFETY: We are required to pass the OVERLAPPED pointer to the completion routine. We do.
     unsafe {
@@ -86,10 +80,7 @@ fn socket_receive(
     }
 }
 
-fn socket_send(
-    socket: Arc<OwnedHandle<SOCKET>>,
-    buffer: Buffer<Isolated>,
-) -> OperationResultFuture {
+fn socket_send(socket: Arc<OwnedHandle<SOCKET>>, buffer: Buffer<Shared>) -> OperationResultFuture {
     // SAFETY: We are required to pass the OVERLAPPED pointer to the completion routine. We do.
     unsafe {
         current_async_agent::with_io(|io| io.new_operation(buffer)).begin(
@@ -186,7 +177,7 @@ impl Future for ShutdownFuture {
                     };
 
                     let receive_future =
-                        socket_receive(Arc::clone(this.socket), Buffer::<Isolated>::from_pool());
+                        socket_receive(Arc::clone(this.socket), Buffer::<Shared>::from_pool());
 
                     *this.state = ShutdownState::WaitingForEndOfStream(receive_future);
                     // We fall through to the next state here.
@@ -218,7 +209,16 @@ impl Future for ShutdownFuture {
     }
 }
 
-#[negative_impl]
-impl !Send for ShutdownFuture {}
-#[negative_impl]
-impl !Sync for ShutdownFuture {}
+#[cfg(test)]
+mod tests {
+    use static_assertions::assert_impl_all;
+
+    use super::*;
+
+    #[test]
+    fn is_thread_mobile() {
+        assert_impl_all!(TcpConnection: Send);
+        assert_impl_all!(OperationResultFuture: Send);
+        assert_impl_all!(ShutdownFuture: Send);
+    }
+}

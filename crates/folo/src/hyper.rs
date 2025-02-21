@@ -1,6 +1,6 @@
 use crate::{
     io::{Buffer, OperationResultFuture},
-    mem::isolation::Isolated,
+    mem::isolation::Shared,
     net::{ShutdownFuture, TcpConnection},
     rt,
     time::{Clock, Delay},
@@ -112,7 +112,7 @@ impl Read for FoloIo {
             // we are still using them (if something drops the parent future polling us). Therefore,
             // we first read into Folo buffers (which are always safe) and only if the future is
             // still alive after the I/O operation do we copy the data into Hyper buffers.
-            let mut buffer = Buffer::<Isolated>::from_pool();
+            let mut buffer = Buffer::<Shared>::from_pool();
 
             // Make sure we do not try to read more than Hyper can accommodate.
             // SAFETY: We are reponsible for not uninitializing bytes. Yeah okay.
@@ -155,7 +155,7 @@ impl Write for FoloIo {
             // Hyper buffers are not memory-safe to use directly because they may be dropped while
             // we are still using them (if something drops the parent future polling us). Therefore,
             // we copy the data into Folo buffers here (which are always safe)
-            let mut buffer = Buffer::<Isolated>::from_pool();
+            let mut buffer = Buffer::<Shared>::from_pool();
 
             let len_to_copy = buffer.len().min(buf.len());
             buffer.set_len(len_to_copy);
