@@ -41,7 +41,7 @@ hyper = { version = "1.4.1", features = [
     "server",
 ], optional = true }
 negative-impl = "0"
-oneshot = { version = "0", features = ["async"] }
+oneshot = { git = "https://github.com/sandersaares/oneshot.git", branch = "u/sasaares/handle-unparking", features = ["async"] }
 paste = "1"
 pin-project = "1"
 scopeguard = "1"
