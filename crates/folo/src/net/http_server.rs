@@ -210,7 +210,7 @@ impl HttpServerSession {
 
         // SAFETY: We must clean up resources later. We do that in Drop.
         http_sys::to_io_result(unsafe {
-            HttpCreateServerSession(version, &mut session_id as *mut _, 0)
+            HttpCreateServerSession(version, &mut session_id as *mut _, None)
         })?;
 
         let server_session_guard = guard((), |_| {
@@ -222,7 +222,7 @@ impl HttpServerSession {
 
         // SAFETY: We must clean up resources later. We do that in Drop.
         http_sys::to_io_result(unsafe {
-            HttpCreateUrlGroup(session_id, &mut url_group_id as *mut _, 0)
+            HttpCreateUrlGroup(session_id, &mut url_group_id as *mut _, None)
         })?;
 
         let url_group_guard = guard((), |_| {
@@ -241,13 +241,13 @@ impl HttpServerSession {
                 url_group_id,
                 PCWSTR::from_raw(url_prefix_wide.as_ptr()),
                 0,
-                0,
+                None,
             )
         })?;
 
         let mut request_queue_handle: HANDLE = HANDLE::default();
         http_sys::to_io_result(unsafe {
-            HttpCreateRequestQueue(version, None, None, 0, &mut request_queue_handle as *mut _)
+            HttpCreateRequestQueue(version, None, None, None, &mut request_queue_handle as *mut _)
         })?;
 
         let request_queue_guard = guard((), |_| {
@@ -263,7 +263,7 @@ impl HttpServerSession {
                 HttpServerQueueLengthProperty,
                 &queue_length as *const _ as *const _,
                 mem::size_of::<u32>() as u32,
-                0,
+                None,
                 None,
             )
         })?;

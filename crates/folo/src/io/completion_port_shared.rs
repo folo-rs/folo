@@ -38,7 +38,7 @@ impl CompletionPortShared {
         let handle = unsafe {
             OwnedHandle::new(CreateIoCompletionPort(
                 INVALID_HANDLE_VALUE,
-                HANDLE::default(),
+                None,
                 // Ignored as we are not binding a handle to the port.
                 0,
                 // The port may be read by one thread per processor (which also happens to be
@@ -59,7 +59,7 @@ impl CompletionPortShared {
         // We have to assume the user provided a valid handle (but if not, it will just be an
         // error result). We ignore the return value because it is our own handle on success.
         unsafe {
-            CreateIoCompletionPort(handle, *self.handle, 0, 1)?;
+            CreateIoCompletionPort(handle, Some(*self.handle), 0, 1)?;
         }
 
         // Why FILE_SKIP_SET_EVENT_ON_HANDLE: https://devblogs.microsoft.com/oldnewthing/20200221-00/?p=103466/

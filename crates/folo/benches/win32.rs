@@ -4,7 +4,7 @@ use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use windows::{
     core::Owned,
     Win32::{
-        Foundation::{HANDLE, INVALID_HANDLE_VALUE},
+        Foundation::INVALID_HANDLE_VALUE,
         System::{
             SystemInformation::GetTickCount64,
             IO::{
@@ -24,9 +24,7 @@ fn win32_io(c: &mut Criterion) {
     group.bench_function("post_queued_completion_status", |b| {
         b.iter_batched_ref(
             || unsafe {
-                Owned::new(
-                    CreateIoCompletionPort(INVALID_HANDLE_VALUE, HANDLE::default(), 0, 1).unwrap(),
-                )
+                Owned::new(CreateIoCompletionPort(INVALID_HANDLE_VALUE, None, 0, 1).unwrap())
             },
             |completion_port| unsafe {
                 PostQueuedCompletionStatus(**completion_port, 0, 0, None).unwrap()
@@ -38,9 +36,7 @@ fn win32_io(c: &mut Criterion) {
     group.bench_function("get_queued_completion_status_ex_empty", |b| {
         b.iter_batched_ref(
             || unsafe {
-                Owned::new(
-                    CreateIoCompletionPort(INVALID_HANDLE_VALUE, HANDLE::default(), 0, 1).unwrap(),
-                )
+                Owned::new(CreateIoCompletionPort(INVALID_HANDLE_VALUE, None, 0, 1).unwrap())
             },
             |completion_port| unsafe {
                 let mut completed = vec![OVERLAPPED_ENTRY::default(); 1024];
@@ -62,9 +58,8 @@ fn win32_io(c: &mut Criterion) {
     group.bench_function("get_queued_completion_status_ex_partial", |b| {
         b.iter_batched_ref(
             || unsafe {
-                let completion_port = Owned::new(
-                    CreateIoCompletionPort(INVALID_HANDLE_VALUE, HANDLE::default(), 0, 1).unwrap(),
-                );
+                let completion_port =
+                    Owned::new(CreateIoCompletionPort(INVALID_HANDLE_VALUE, None, 0, 1).unwrap());
 
                 for _ in 0..512 {
                     PostQueuedCompletionStatus(*completion_port, 0, 0, None).unwrap()
@@ -94,9 +89,8 @@ fn win32_io(c: &mut Criterion) {
     group.bench_function("get_queued_completion_status_ex_overfull", |b| {
         b.iter_batched_ref(
             || unsafe {
-                let completion_port = Owned::new(
-                    CreateIoCompletionPort(INVALID_HANDLE_VALUE, HANDLE::default(), 0, 1).unwrap(),
-                );
+                let completion_port =
+                    Owned::new(CreateIoCompletionPort(INVALID_HANDLE_VALUE, None, 0, 1).unwrap());
 
                 for _ in 0..2000 {
                     PostQueuedCompletionStatus(*completion_port, 0, 0, None).unwrap()

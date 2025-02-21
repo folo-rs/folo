@@ -100,7 +100,7 @@ impl HttpContext {
                         None,
                         Some(immediate_bytes_transferred as *mut _),
                         None,
-                        0,
+                        None,
                         Some(overlapped),
                         None,
                     ))
@@ -149,7 +149,7 @@ impl HttpContext {
                         Some(&chunks),
                         Some(immediate_bytes_transferred as *mut _),
                         None,
-                        0,
+                        None,
                         Some(overlapped),
                         None,
                     ))

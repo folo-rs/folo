@@ -48,7 +48,7 @@ scopeguard = "1"
 thiserror = "1"
 tonic = { version = "0.12.2", features = ["transport"] }
 tracing = "0"
-windows = { version = "0.58", features = [
+windows = { version = "0.59", features = [
     "Win32_Networking_HttpServer",
     "Win32_Networking_WinSock",
     "Win32_Security",
