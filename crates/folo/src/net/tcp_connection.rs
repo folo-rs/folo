@@ -1,5 +1,5 @@
 use crate::{
-    io::{self, Buffer, OperationResultFuture},
+    io::{self, Buffer, OperationResultSharedFuture},
     mem::isolation::Shared,
     net::winsock,
     rt::{current_async_agent, current_runtime, RemoteJoinHandle, SynchronousTaskType},
@@ -27,7 +27,7 @@ impl TcpConnection {
     ///
     /// You should not call this multiple times concurrently because there is no guarantee that the
     /// continuations will be called in a particular order.
-    pub fn receive(&mut self, buffer: Buffer<Shared>) -> OperationResultFuture {
+    pub fn receive(&mut self, buffer: Buffer<Shared>) -> OperationResultSharedFuture {
         socket_receive(Arc::clone(&self.socket), buffer)
     }
 
@@ -37,7 +37,7 @@ impl TcpConnection {
     ///
     /// You may call this multiple times concurrently. The buffers will be sent in the order they
     /// are submitted.
-    pub fn send(&mut self, buffer: Buffer<Shared>) -> OperationResultFuture {
+    pub fn send(&mut self, buffer: Buffer<Shared>) -> OperationResultSharedFuture {
         socket_send(Arc::clone(&self.socket), buffer)
     }
 
@@ -54,10 +54,10 @@ impl TcpConnection {
 fn socket_receive(
     socket: Arc<OwnedHandle<SOCKET>>,
     buffer: Buffer<Shared>,
-) -> OperationResultFuture {
+) -> OperationResultSharedFuture {
     // SAFETY: We are required to pass the OVERLAPPED pointer to the completion routine. We do.
     unsafe {
-        current_async_agent::with_io(|io| io.new_operation(buffer)).begin(
+        current_async_agent::with_io_shared(|io| io.new_operation(buffer)).begin(
             move |buffer, overlapped, immediate_bytes_transferred| {
                 let wsabuf = WSABUF {
                     len: buffer.len() as u32,
@@ -80,10 +80,13 @@ fn socket_receive(
     }
 }
 
-fn socket_send(socket: Arc<OwnedHandle<SOCKET>>, buffer: Buffer<Shared>) -> OperationResultFuture {
+fn socket_send(
+    socket: Arc<OwnedHandle<SOCKET>>,
+    buffer: Buffer<Shared>,
+) -> OperationResultSharedFuture {
     // SAFETY: We are required to pass the OVERLAPPED pointer to the completion routine. We do.
     unsafe {
-        current_async_agent::with_io(|io| io.new_operation(buffer)).begin(
+        current_async_agent::with_io_shared(|io| io.new_operation(buffer)).begin(
             move |buffer, overlapped, immediate_bytes_transferred| {
                 let wsabuf = WSABUF {
                     len: buffer.len() as u32,
@@ -124,7 +127,7 @@ enum ShutdownState {
     //    Actually getting some data here is an error - this indicates that the caller did not
     //    fully process incoming data before calling shutdown. Potentially valid for some types
     //    of connections (e.g. an infinite stream of values) but not typical for web APIs.
-    WaitingForEndOfStream(#[pin] OperationResultFuture),
+    WaitingForEndOfStream(#[pin] OperationResultSharedFuture),
 
     // 3) Done! Once we get the EOF, we can be sure that the peer has received all of our data
     //    and our FIN has been acknowledged, so no more activity can occur on the wire

@@ -1,10 +1,7 @@
 use crate::constants::GENERAL_MILLISECONDS_BUCKETS;
 use crate::io::{
-    self,
-    operation::{Operation, OperationStore},
-    Buffer, CompletionPort, IoPrimitive, IoWaker, IO_DEQUEUE_BATCH_SIZE, WAKE_UP_COMPLETION_KEY,
+    self, CompletionPort, IoPrimitive, IoWaker, IO_DEQUEUE_BATCH_SIZE, WAKE_UP_COMPLETION_KEY,
 };
-use crate::mem::isolation::Shared;
 use crate::metrics::{Event, EventBuilder, Magnitude};
 use std::mem::{self, MaybeUninit};
 use windows::core::HRESULT;
@@ -23,14 +20,6 @@ use windows::Win32::{
 #[derive(Debug)]
 pub(crate) struct Driver {
     completion_port: CompletionPort,
-
-    // These are the I/O operations that are currently in flight with the OS but for which the
-    // result has not been processed yet. Items are added when operations are started and they are
-    // removed when the completion notification has been fully processed and the originator of the
-    // operation notified to pick up their results.
-    //
-    // This does not store the read/write buffers, only the operation metadata.
-    operation_store: OperationStore,
 }
 
 impl Driver {
@@ -40,43 +29,13 @@ impl Driver {
     pub(crate) unsafe fn new() -> Self {
         Self {
             completion_port: CompletionPort::new(),
-            operation_store: OperationStore::new(),
         }
     }
 
     /// Whether the driver has entered a state where it is safe to drop it. This requires that all
     /// ongoing I/O operations be completed and the completion notification received.
     pub fn is_inert(&self) -> bool {
-        self.operation_store.is_empty()
-    }
-
-    /// Binds an I/O primitive to the completion port of this driver, provided a handle to the I/O
-    /// primitive in question (file handle, socket, ...). This must be called once for every I/O
-    /// primitive used with this I/O driver.
-    pub(crate) fn bind_io_primitive(
-        &self,
-        handle: &(impl Into<IoPrimitive> + Copy),
-    ) -> io::Result<()> {
-        self.completion_port.bind(handle)
-    }
-
-    /// Starts preparing for a new I/O operation on some primitive bound to this driver. The caller
-    /// must provide the buffer to pick up the data from or to deliver the data to.
-    ///
-    /// The typical workflow is:
-    ///
-    /// 1. Call `new_operation()` and pass it a buffer to start the preparations to operate on the
-    ///    buffer. You will get an `Operation` that you can configure (e.g. to set the offset).
-    ///    Often, you will not need to do any preparation and can just proceed to the next step.
-    /// 2. Call `Operation::begin()` to start the operation once all preparation is complete.
-    ///    You will need to provide a callback through which you provider the buffer + OVERLAPPED
-    ///    metadata object + immediate completion byte count to the native I/O function of an I/O
-    ///    primitive bound to this driver.
-    /// 3. Await the result of `begin()`. You will receive back an `io::Result` with the buffer on
-    ///    success. In case of error, the buffer will be provided via `io::Error::OperationFailed`
-    ///    so you can reuse it if you wish. An empty buffer on reads signals end of stream.
-    pub(crate) fn new_operation(&mut self, buffer: Buffer<Shared>) -> Operation {
-        self.operation_store.new_operation(buffer)
+        true
     }
 
     /// Obtains a waker that can be used to wake up the I/O driver from another thread when it
@@ -145,7 +104,7 @@ impl Driver {
                     continue;
                 }
 
-                self.operation_store.complete_operation(overlapped_entry);
+                panic!("the isolated driver is only used for wake-up signaling")
             }
         }
     }

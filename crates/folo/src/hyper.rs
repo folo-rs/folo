@@ -1,5 +1,5 @@
 use crate::{
-    io::{Buffer, OperationResultFuture},
+    io::{Buffer, OperationResultSharedFuture},
     mem::isolation::Shared,
     net::{ShutdownFuture, TcpConnection},
     rt,
@@ -42,10 +42,10 @@ pub struct FoloIo {
     connection: TcpConnection,
 
     #[pin]
-    active_read: Option<OperationResultFuture>,
+    active_read: Option<OperationResultSharedFuture>,
 
     #[pin]
-    active_write: Option<OperationResultFuture>,
+    active_write: Option<OperationResultSharedFuture>,
 
     #[pin]
     active_shutdown: Option<ShutdownFuture>,

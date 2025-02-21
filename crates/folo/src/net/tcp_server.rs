@@ -347,7 +347,7 @@ where
 
             // We spawn it on the same async worker that caught the connection.
             _ = spawn(async move {
-                current_async_agent::with_io(|io| {
+                current_async_agent::with_io_shared(|io| {
                     io.bind_io_primitive(&**connection_socket).unwrap()
                 });
 

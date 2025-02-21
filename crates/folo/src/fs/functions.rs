@@ -4,7 +4,7 @@ use crate::{
     rt::{current_async_agent, spawn_sync, SynchronousTaskType},
     windows::OwnedHandle,
 };
-use std::{ffi::CString, path::Path, rc::Rc};
+use std::{ffi::CString, path::Path, sync::Arc};
 use windows::{
     core::PCSTR,
     Win32::{
@@ -60,9 +60,9 @@ pub async fn read_large_buffer(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
 
         // Now that we have it on our async worker thread, any further activities can use Rc
         // to share the lifetime between tasks because we know they will not leave this thread.
-        let file_handle = Rc::new(file_handle);
+        let file_handle = Arc::new(file_handle);
 
-        current_async_agent::with_io(|io| io.bind_io_primitive(&**file_handle))?;
+        current_async_agent::with_io_shared(|io| io.bind_io_primitive(&**file_handle))?;
 
         // We create a boxed slice of the correct size to use as the target of the read operation.
         // We must use a boxed slice because we need to pass ownership of the buffer to the I/O
@@ -82,7 +82,7 @@ pub async fn read_large_buffer(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
         loop {
             // We ask the OS to read the entire file. It is within its rights to give us only a
             // part of what we asked for, so we need to be prepared to loop no matter what.
-            buffer = read_buffer_from_file(Rc::clone(&file_handle), bytes_read, buffer).await?;
+            buffer = read_buffer_from_file(Arc::clone(&file_handle), bytes_read, buffer).await?;
             bytes_read += buffer.len();
 
             if buffer.is_empty() {
@@ -115,7 +115,7 @@ pub async fn read_large_buffer(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
 /// Returns the buffer in every case, with the action region of the buffer set to the data read.
 /// A zero-sized active region indicates end of file.
 async fn read_buffer_from_file(
-    file_handle: Rc<OwnedHandle<HANDLE>>,
+    file_handle: Arc<OwnedHandle<HANDLE>>,
     offset: usize,
     mut buffer: Buffer<Shared>,
 ) -> io::Result<Buffer<Shared>> {
@@ -123,7 +123,7 @@ async fn read_buffer_from_file(
         buffer.set_len(MAX_READ_SIZE_BYTES);
     }
 
-    let mut operation = current_async_agent::with_io(|io| io.new_operation(buffer));
+    let mut operation = current_async_agent::with_io_shared(|io| io.new_operation(buffer));
     operation.set_offset(offset);
 
     // SAFETY: For safe usage of the I/O driver API, we are required to pass the `overlapped`
@@ -143,7 +143,7 @@ async fn read_buffer_from_file(
             .await
     } {
         Ok(buffer) => Ok(buffer),
-        Err(io::OperationError {
+        Err(io::OperationErrorShared {
             inner: io::Error::Windows(external),
             buffer,
         }) if external.code() == STATUS_END_OF_FILE.into() => Ok(buffer),

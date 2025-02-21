@@ -1,5 +1,5 @@
 use folo::{
-    io::{self, Buffer, OperationResultExt},
+    io::{self, Buffer, OperationResultSharedExt},
     mem::isolation::Shared,
     net::{TcpConnection, TcpServerBuilder},
     time::{Clock, Delay},
