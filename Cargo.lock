@@ -474,7 +474,6 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "windows",
- "windows-result",
  "xxhash-rust",
 ]
 

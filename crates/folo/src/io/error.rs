@@ -13,7 +13,7 @@ pub enum Error {
     Winsock { code: i32, detail: WSA_ERROR },
 
     #[error(transparent)]
-    Windows(#[from] windows_result::Error),
+    Windows(#[from] windows::core::Error),
 
     #[error(transparent)]
     StdIo(#[from] std::io::Error),

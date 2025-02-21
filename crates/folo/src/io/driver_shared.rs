@@ -7,11 +7,11 @@ use crate::io::{
 use crate::mem::isolation::Shared;
 use crate::metrics::{Event, EventBuilder, Magnitude};
 use std::mem::{self, MaybeUninit};
+use windows::core::HRESULT;
 use windows::Win32::{
     Foundation::WAIT_TIMEOUT,
     System::IO::{GetQueuedCompletionStatusEx, OVERLAPPED_ENTRY},
 };
-use windows_result::HRESULT;
 
 /// Processes multithreaded I/O completion operations as part of the async worker loop.
 ///

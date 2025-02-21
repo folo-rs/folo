@@ -7,6 +7,6 @@ pub fn to_io_result(http_sys_result: u32) -> io::Result<()> {
         Ok(())
     } else {
         // http.sys does not SetLastError, instead we must translate the result code directly.
-        Err(windows_result::Error::from_hresult(WIN32_ERROR(http_sys_result).into()).into())
+        Err(windows::core::Error::from_hresult(WIN32_ERROR(http_sys_result).into()).into())
     }
 }
