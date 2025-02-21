@@ -23,7 +23,7 @@ default = ["hyper"]
 
 [dependencies]
 core_affinity = "0"
-criterion = { version = "0", optional = true }
+criterion = { git = "https://github.com/bheisler/criterion.rs.git", optional = true }
 crossbeam = "0"
 folo_decl_macros = { path = "../folo_decl_macros", version = "0.1.0-main" }
 folo_proc_macros = { path = "../folo_proc_macros", version = "0.1.0-main" }
@@ -64,7 +64,7 @@ xxhash-rust = { version = "0", features = ["xxh3"] }
 
 [dev-dependencies]
 bytes = "1.7.1"
-criterion = { version = "0", features = ["async_tokio"] }
+criterion = { git = "https://github.com/bheisler/criterion.rs.git", features = ["async_tokio"] }
 folo_testing = { path = "../folo_testing", version = "0.1.0-main" }
 http = "1.0"
 http-body = "1.0.0"
