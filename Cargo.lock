@@ -1005,8 +1005,9 @@ checksum = "945462a4b81e43c4e3ba96bd7b49d834c6f61198356aa858733bc4acf3cbe62e"
 
 [[package]]
 name = "oneshot"
-version = "0.1.10"
-source = "git+https://github.com/sandersaares/oneshot.git?branch=u%2Fsasaares%2Fhandle-unparking#82513ac572341955ecc6e588b1f98719ee3ae9ff"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4ce411919553d3f9fa53a0880544cda985a112117a0444d5ff1e870a893d6ea"
 
 [[package]]
 name = "oorandom"
