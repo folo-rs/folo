@@ -8,7 +8,6 @@ fn main() {
 
 #[cfg(windows)]
 mod windows {
-
     //! The mechanism used in Windows to enforce limits on processes is Job Objects. Processes are
     //! assigned to jobs, and jobs can be constrained to only use a limited set of processors.
     //!
