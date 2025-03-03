@@ -6,7 +6,7 @@ use std::sync::Arc;
 use windows::{
     core::Result,
     Win32::{
-        Foundation::{BOOL, HANDLE},
+        Foundation::HANDLE,
         System::{
             Kernel::PROCESSOR_NUMBER,
             SystemInformation::{
@@ -83,23 +83,6 @@ impl Bindings for BindingsFacade {
         }
     }
 
-    unsafe fn set_thread_group_affinity(
-        &self,
-        thread: HANDLE,
-        group_affinity: *const GROUP_AFFINITY,
-        previous_group_affinity: Option<*mut GROUP_AFFINITY>,
-    ) -> BOOL {
-        match self {
-            BindingsFacade::Real(bindings) => {
-                bindings.set_thread_group_affinity(thread, group_affinity, previous_group_affinity)
-            }
-            #[cfg(test)]
-            BindingsFacade::Mock(bindings) => {
-                bindings.set_thread_group_affinity(thread, group_affinity, previous_group_affinity)
-            }
-        }
-    }
-
     unsafe fn get_logical_processor_information_ex(
         &self,
         relationship_type: LOGICAL_PROCESSOR_RELATIONSHIP,
@@ -126,6 +109,26 @@ impl Bindings for BindingsFacade {
             BindingsFacade::Real(bindings) => bindings.get_numa_highest_node_number(),
             #[cfg(test)]
             BindingsFacade::Mock(bindings) => bindings.get_numa_highest_node_number(),
+        }
+    }
+
+    fn get_current_thread_group_affinity(&self) -> GROUP_AFFINITY {
+        match self {
+            BindingsFacade::Real(bindings) => bindings.get_current_thread_group_affinity(),
+            #[cfg(test)]
+            BindingsFacade::Mock(bindings) => bindings.get_current_thread_group_affinity(),
+        }
+    }
+
+    fn set_current_thread_group_affinity(&self, group_affinity: &GROUP_AFFINITY) {
+        match self {
+            BindingsFacade::Real(bindings) => {
+                bindings.set_current_thread_group_affinity(group_affinity)
+            }
+            #[cfg(test)]
+            BindingsFacade::Mock(bindings) => {
+                bindings.set_current_thread_group_affinity(group_affinity)
+            }
         }
     }
 }

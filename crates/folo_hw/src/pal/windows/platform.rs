@@ -64,9 +64,6 @@ impl Platform for BuildTargetPlatform {
         // some of them). Therefore we can implement this as a single "clear all + set desired"
         // pass without worrying about any potential intermediate state where everything is cleared.
 
-        // This is a pseudo handle and does not need to be closed.
-        let current_thread = self.bindings.get_current_thread();
-
         let processor_group_sizes = self.get_processor_group_max_sizes();
 
         for group_index in 0..processor_group_sizes.len() {
@@ -84,18 +81,7 @@ impl Platform for BuildTargetPlatform {
                 affinity.Mask |= 1 << processor.as_ref().as_real().index_in_group;
             }
 
-            // We do not expect this to ever fail - these flags should be settable
-            // for all processor groups at all times for the current thread, even if
-            // the hardware dynamically changes (the affinity masks are still valid, after all,
-            // even if they point to non-existing processors).
-            //
-            // SAFETY: We need to ensure the affinity mask pointer remains valid for the duration
-            // of the call. We do - it is backed by a local variable that lives to end of scope.
-            unsafe {
-                self.bindings
-                    .set_thread_group_affinity(current_thread, &affinity, None)
-            }
-            .expect("SetThreadGroupAffinity failed unexpectedly");
+            self.bindings.set_current_thread_group_affinity(&affinity);
         }
     }
 
@@ -122,6 +108,31 @@ impl Platform for BuildTargetPlatform {
 
     fn max_memory_region_id(&self) -> MemoryRegionId {
         self.bindings.get_numa_highest_node_number()
+    }
+
+    fn current_thread_processors(&self) -> NonEmpty<ProcessorId> {
+        let group_max_sizes = self.get_processor_group_max_sizes();
+        let group_start_offsets = self.get_processor_group_start_offsets();
+
+        let mut result = Vec::new();
+
+        for (group_index, group_size) in group_max_sizes.iter().enumerate() {
+            let group_start_offset = group_start_offsets[group_index];
+
+            let affinity_mask = self.bindings.get_current_thread_group_affinity();
+
+            for index_in_group in 0..*group_size {
+                if affinity_mask.Mask & (1 << index_in_group) == 0 {
+                    continue;
+                }
+
+                let global_index = group_start_offset + index_in_group as ProcessorId;
+
+                result.push(global_index);
+            }
+        }
+
+        NonEmpty::from_vec(result).expect("we are returning the set of processors assigned to the current thread - obviously there must be at least one because the thread is executing")
     }
 }
 
@@ -495,7 +506,7 @@ mod tests {
     use itertools::Itertools;
     use mockall::Sequence;
     use static_assertions::assert_eq_size;
-    use windows::Win32::Foundation::{BOOL, HANDLE};
+    use windows::Win32::Foundation::HANDLE;
 
     use crate::{
         pal::windows::{MockBindings, NativeBuffer, ProcessorIndexInGroup},
@@ -1192,12 +1203,9 @@ mod tests {
             .expect_get_current_thread()
             .return_const_st(HANDLE::default());
         bindings
-            .expect_set_thread_group_affinity()
-            .withf(|thread, affinity, _| {
-                *thread == HANDLE::default()
-                    && unsafe { (**affinity).Group == 0 && (**affinity).Mask == 1 }
-            })
-            .return_const(BOOL::from(true));
+            .expect_set_current_thread_group_affinity()
+            .withf(|affinity| affinity.Group == 0 && affinity.Mask == 1)
+            .return_const(());
 
         let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
         let processors = platform.get_all_processors();
@@ -1212,12 +1220,9 @@ mod tests {
             .expect_get_current_thread()
             .return_const_st(HANDLE::default());
         bindings
-            .expect_set_thread_group_affinity()
-            .withf(|thread, affinity, _| {
-                *thread == HANDLE::default()
-                    && unsafe { (**affinity).Group == 0 && (**affinity).Mask == 3 }
-            })
-            .return_const(BOOL::from(true));
+            .expect_set_current_thread_group_affinity()
+            .withf(|affinity| affinity.Group == 0 && affinity.Mask == 3)
+            .return_const(());
 
         let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
         let processors = platform.get_all_processors();
@@ -1238,19 +1243,13 @@ mod tests {
             .expect_get_current_thread()
             .return_const_st(HANDLE::default());
         bindings
-            .expect_set_thread_group_affinity()
-            .withf(|thread, affinity, _| {
-                *thread == HANDLE::default()
-                    && unsafe { (**affinity).Group == 0 && (**affinity).Mask == 1 }
-            })
-            .return_const(BOOL::from(true));
+            .expect_set_current_thread_group_affinity()
+            .withf(|affinity| affinity.Group == 0 && affinity.Mask == 1)
+            .return_const(());
         bindings
-            .expect_set_thread_group_affinity()
-            .withf(|thread, affinity, _| {
-                *thread == HANDLE::default()
-                    && unsafe { (**affinity).Group == 1 && (**affinity).Mask == 1 }
-            })
-            .return_const(BOOL::from(true));
+            .expect_set_current_thread_group_affinity()
+            .withf(|affinity| affinity.Group == 1 && affinity.Mask == 1)
+            .return_const(());
 
         let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
         let processors = platform.get_all_processors();
@@ -1272,19 +1271,13 @@ mod tests {
             .expect_get_current_thread()
             .return_const_st(HANDLE::default());
         bindings
-            .expect_set_thread_group_affinity()
-            .withf(|thread, affinity, _| {
-                *thread == HANDLE::default()
-                    && unsafe { (**affinity).Group == 0 && (**affinity).Mask == 2 }
-            })
-            .return_const(BOOL::from(true));
+            .expect_set_current_thread_group_affinity()
+            .withf(|affinity| affinity.Group == 0 && affinity.Mask == 2)
+            .return_const(());
         bindings
-            .expect_set_thread_group_affinity()
-            .withf(|thread, affinity, _| {
-                *thread == HANDLE::default()
-                    && unsafe { (**affinity).Group == 1 && (**affinity).Mask == 1 }
-            })
-            .return_const(BOOL::from(true));
+            .expect_set_current_thread_group_affinity()
+            .withf(|affinity| affinity.Group == 1 && affinity.Mask == 1)
+            .return_const(());
 
         let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
         let processors = platform.get_all_processors();
@@ -1320,4 +1313,35 @@ mod tests {
         assert_eq!(processors[2].as_real().memory_region_id, 0);
         assert_eq!(processors[3].as_real().memory_region_id, 1);
     }
+
+    // ERROR: Broken logic.
+    // #[test]
+    // fn current_thread_processors_smoke_test() {
+    //     let mut bindings = MockBindings::new();
+
+    //     simulate_processor_layout(
+    //         &mut bindings,
+    //         [2, 1],
+    //         [2, 1],
+    //         [vec![1, 1], vec![0]],
+    //         [vec![0, 0], vec![0]],
+    //     );
+
+    //     let mask1_group0 = 1 & 2;
+    //     let mask1_group1 = 0;
+
+    //     let mask2_group0 = 0;
+    //     let mask2_group1 = 1;
+
+    //     bindings.expect_get_current_thread_group_affinity()
+    //         .return_once(move |_| {
+    //             GROUP_AFFINITY {
+    //                 Group: 0,
+    //                 Mask: mask1_group0,
+    //                 ..Default::default()
+    //             }
+    //         });
+
+    //     let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
+    // }
 }

@@ -907,4 +907,46 @@ mod tests {
 
         cpu_set
     }
+
+    #[test]
+    fn current_thread_processors_smoke_test() {
+        let mut bindings = MockBindings::new();
+
+        let expected_set_1 = cpuset_from([0, 1]);
+        let expected_set_2 = cpuset_from([2]);
+
+        bindings
+            .expect_sched_getaffinity_current()
+            .times(1)
+            .returning(move || Ok(expected_set_1));
+
+        bindings
+            .expect_sched_getaffinity_current()
+            .times(1)
+            .returning(move || Ok(expected_set_2));
+
+        let mut fs = MockFilesystem::new();
+        simulate_processor_layout(
+            &mut fs,
+            [0, 1, 2],
+            None,
+            None,
+            [0, 0, 0],
+            [2000.0, 2000.0, 1000.0],
+        );
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(bindings),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        let current_thread_processors = platform.current_thread_processors();
+        assert_eq!(current_thread_processors.len(), 2);
+        assert_eq!(current_thread_processors[0], 0);
+        assert_eq!(current_thread_processors[1], 1);
+
+        let current_thread_processors = platform.current_thread_processors();
+        assert_eq!(current_thread_processors.len(), 1);
+        assert_eq!(current_thread_processors[0], 2);
+    }
 }

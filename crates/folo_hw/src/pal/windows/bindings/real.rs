@@ -1,9 +1,9 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, ptr};
 
 use windows::{
     core::Result,
     Win32::{
-        Foundation::{BOOL, HANDLE},
+        Foundation::HANDLE,
         System::{
             Kernel::PROCESSOR_NUMBER,
             SystemInformation::{
@@ -13,7 +13,7 @@ use windows::{
             Threading::{
                 GetActiveProcessorCount, GetCurrentProcessorNumberEx, GetCurrentThread,
                 GetMaximumProcessorCount, GetMaximumProcessorGroupCount, GetNumaHighestNodeNumber,
-                SetThreadGroupAffinity,
+                GetThreadGroupAffinity, SetThreadGroupAffinity,
             },
         },
     },
@@ -54,15 +54,6 @@ impl Bindings for BuildTargetBindings {
         unsafe { GetCurrentProcessorNumberEx() }
     }
 
-    unsafe fn set_thread_group_affinity(
-        &self,
-        thread: HANDLE,
-        group_affinity: *const GROUP_AFFINITY,
-        previous_group_affinity: Option<*mut GROUP_AFFINITY>,
-    ) -> BOOL {
-        SetThreadGroupAffinity(thread, group_affinity, previous_group_affinity)
-    }
-
     unsafe fn get_logical_processor_information_ex(
         &self,
         relationship_type: LOGICAL_PROCESSOR_RELATIONSHIP,
@@ -80,5 +71,34 @@ impl Bindings for BuildTargetBindings {
             .expect("platform refused to inform us about memory region count");
 
         result
+    }
+
+    fn get_current_thread_group_affinity(&self) -> GROUP_AFFINITY {
+        let mut affinity = GROUP_AFFINITY::default();
+
+        // SAFETY: No safety requirements beyond passing valid input.
+        unsafe {
+            GetThreadGroupAffinity(self.get_current_thread(), &raw mut affinity)
+                .expect("platform refused to provide the current thread processor affinity");
+        }
+
+        affinity
+    }
+
+    fn set_current_thread_group_affinity(&self, group_affinity: &GROUP_AFFINITY) {
+        // We do not expect this to ever fail - these flags should be settable
+        // for all processor groups at all times for the current thread, even if
+        // the hardware dynamically changes (the affinity masks are still valid, after all,
+        // even if they point to non-existing processors).
+
+        // SAFETY: No safety requirements beyond passing valid input.
+        unsafe {
+            SetThreadGroupAffinity(
+                self.get_current_thread(),
+                ptr::from_ref(group_affinity),
+                None,
+            )
+            .expect("platform refused to accept a new current thread processor affinity");
+        }
     }
 }

@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use windows::{
     core::Result,
     Win32::{
-        Foundation::{BOOL, HANDLE},
+        Foundation::HANDLE,
         System::Kernel::PROCESSOR_NUMBER,
         System::SystemInformation::{
             GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP, SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
@@ -21,18 +21,15 @@ pub(crate) trait Bindings: Debug + Send + Sync + 'static {
 
     fn get_maximum_processor_group_count(&self) -> u16;
 
+    /// This is a pseudo handle and does not need to be closed.
     fn get_current_thread(&self) -> HANDLE;
 
     fn get_current_processor_number_ex(&self) -> PROCESSOR_NUMBER;
 
     fn get_numa_highest_node_number(&self) -> u32;
 
-    unsafe fn set_thread_group_affinity(
-        &self,
-        thread: HANDLE,
-        group_affinity: *const GROUP_AFFINITY,
-        previous_group_affinity: Option<*mut GROUP_AFFINITY>,
-    ) -> BOOL;
+    fn set_current_thread_group_affinity(&self, group_affinity: &GROUP_AFFINITY);
+    fn get_current_thread_group_affinity(&self) -> GROUP_AFFINITY;
 
     unsafe fn get_logical_processor_information_ex(
         &self,
