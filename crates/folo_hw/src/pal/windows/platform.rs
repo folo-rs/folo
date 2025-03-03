@@ -53,20 +53,11 @@ impl Platform for BuildTargetPlatform {
     where
         P: AsRef<ProcessorFacade>,
     {
-        // TODO: Figure out the details on how to handle multi-member sets in terms of fairness.
+        let group_count = self.get_processor_group_max_count();
 
-        // We need to do two things here, for each processor group:
-        // 1. Set the affinity mask to allow execution on the indicated processors.
-        // 2. Set the affinity mask to disallow execution on all other processors.
-        //
-        // The order does not super matter because setting a thread as non-affine to all processors
-        // seems to, in practice, simply allow it to be executed on all of them (or at least on
-        // some of them). Therefore we can implement this as a single "clear all + set desired"
-        // pass without worrying about any potential intermediate state where everything is cleared.
+        let mut affinity_masks = Vec::with_capacity(group_count as usize);
 
-        let processor_group_sizes = self.get_processor_group_max_sizes();
-
-        for group_index in 0..processor_group_sizes.len() {
+        for group_index in 0..group_count {
             let mut affinity = GROUP_AFFINITY {
                 Group: group_index as ProcessorGroupIndex,
                 Mask: 0,
@@ -81,8 +72,11 @@ impl Platform for BuildTargetPlatform {
                 affinity.Mask |= 1 << processor.as_ref().as_real().index_in_group;
             }
 
-            self.bindings.set_current_thread_group_affinity(&affinity);
+            affinity_masks.push(affinity);
         }
+
+        self.bindings
+            .set_current_thread_cpu_set_masks(&affinity_masks);
     }
 
     fn current_processor_id(&self) -> ProcessorId {
@@ -111,18 +105,32 @@ impl Platform for BuildTargetPlatform {
     }
 
     fn current_thread_processors(&self) -> NonEmpty<ProcessorId> {
+        let mut current_thread_affinities = self.bindings.get_current_thread_cpu_set_masks();
+
+        // A thread may have no masks defined, in which case it will inherit from the process.
+        // Note that the process mask is ignored if a thread mask is set.
+        if current_thread_affinities.is_empty() {
+            current_thread_affinities = self.bindings.get_current_process_default_cpu_set_masks();
+        }
+
+        // A process may also have no mask defined! In this case, all processors are available.
+        if current_thread_affinities.is_empty() {
+            return NonEmpty::from_vec((0..=self.max_processor_id()).collect_vec())
+                .expect("range over non-empty set cannot result in empty result");
+        }
+
         let group_max_sizes = self.get_processor_group_max_sizes();
         let group_start_offsets = self.get_processor_group_start_offsets();
 
-        let mut result = Vec::new();
+        let mut result = Vec::with_capacity(self.max_processor_id() as usize + 1);
 
         for (group_index, group_size) in group_max_sizes.iter().enumerate() {
             let group_start_offset = group_start_offsets[group_index];
 
-            let affinity_mask = self.bindings.get_current_thread_group_affinity();
+            let affinity_mask = current_thread_affinities[group_index].Mask;
 
             for index_in_group in 0..*group_size {
-                if affinity_mask.Mask & (1 << index_in_group) == 0 {
+                if affinity_mask & (1 << index_in_group) == 0 {
                     continue;
                 }
 
@@ -506,7 +514,6 @@ mod tests {
     use itertools::Itertools;
     use mockall::Sequence;
     use static_assertions::assert_eq_size;
-    use windows::Win32::Foundation::HANDLE;
 
     use crate::{
         pal::windows::{MockBindings, NativeBuffer, ProcessorIndexInGroup},
@@ -1200,11 +1207,10 @@ mod tests {
         let mut bindings = MockBindings::new();
         simulate_processor_layout(&mut bindings, [1], [1], [vec![0]], [vec![0]]);
         bindings
-            .expect_get_current_thread()
-            .return_const_st(HANDLE::default());
-        bindings
-            .expect_set_current_thread_group_affinity()
-            .withf(|affinity| affinity.Group == 0 && affinity.Mask == 1)
+            .expect_set_current_thread_cpu_set_masks()
+            .withf(|affinities| {
+                affinities.len() == 1 && affinities[0].Group == 0 && affinities[0].Mask == 1
+            })
             .return_const(());
 
         let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
@@ -1217,11 +1223,10 @@ mod tests {
         let mut bindings = MockBindings::new();
         simulate_processor_layout(&mut bindings, [2], [2], [vec![0, 0]], [vec![0, 0]]);
         bindings
-            .expect_get_current_thread()
-            .return_const_st(HANDLE::default());
-        bindings
-            .expect_set_current_thread_group_affinity()
-            .withf(|affinity| affinity.Group == 0 && affinity.Mask == 3)
+            .expect_set_current_thread_cpu_set_masks()
+            .withf(|affinities| {
+                affinities.len() == 1 && affinities[0].Group == 0 && affinities[0].Mask == 3
+            })
             .return_const(());
 
         let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
@@ -1240,15 +1245,14 @@ mod tests {
             [vec![0], vec![1]],
         );
         bindings
-            .expect_get_current_thread()
-            .return_const_st(HANDLE::default());
-        bindings
-            .expect_set_current_thread_group_affinity()
-            .withf(|affinity| affinity.Group == 0 && affinity.Mask == 1)
-            .return_const(());
-        bindings
-            .expect_set_current_thread_group_affinity()
-            .withf(|affinity| affinity.Group == 1 && affinity.Mask == 1)
+            .expect_set_current_thread_cpu_set_masks()
+            .withf(|affinities| {
+                affinities.len() == 2
+                    && affinities[0].Group == 0
+                    && affinities[0].Mask == 1
+                    && affinities[1].Group == 1
+                    && affinities[1].Mask == 1
+            })
             .return_const(());
 
         let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
@@ -1268,15 +1272,14 @@ mod tests {
             [vec![0, 0], vec![1, 1]],
         );
         bindings
-            .expect_get_current_thread()
-            .return_const_st(HANDLE::default());
-        bindings
-            .expect_set_current_thread_group_affinity()
-            .withf(|affinity| affinity.Group == 0 && affinity.Mask == 2)
-            .return_const(());
-        bindings
-            .expect_set_current_thread_group_affinity()
-            .withf(|affinity| affinity.Group == 1 && affinity.Mask == 1)
+            .expect_set_current_thread_cpu_set_masks()
+            .withf(|affinities| {
+                affinities.len() == 2
+                    && affinities[0].Group == 0
+                    && affinities[0].Mask == 2
+                    && affinities[1].Group == 1
+                    && affinities[1].Mask == 1
+            })
             .return_const(());
 
         let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
@@ -1314,34 +1317,144 @@ mod tests {
         assert_eq!(processors[3].as_real().memory_region_id, 1);
     }
 
-    // ERROR: Broken logic.
-    // #[test]
-    // fn current_thread_processors_smoke_test() {
-    //     let mut bindings = MockBindings::new();
+    #[test]
+    fn current_thread_processors_if_no_affinity_set() {
+        let mut bindings = MockBindings::new();
 
-    //     simulate_processor_layout(
-    //         &mut bindings,
-    //         [2, 1],
-    //         [2, 1],
-    //         [vec![1, 1], vec![0]],
-    //         [vec![0, 0], vec![0]],
-    //     );
+        // We are only obtaining processor IDs here, so we never actually perform a "get processors"
+        // call, therefore we cannot use our "simulate_processor_layout" helper because that exists
+        // specifically to facilitate the "get processors" API call.
+        bindings
+            .expect_get_maximum_processor_group_count()
+            .times(1)
+            .return_const(2 as ProcessorGroupIndex);
+        bindings
+            .expect_get_maximum_processor_count()
+            .times(1)
+            .withf(|group| *group == 0)
+            .return_const(2 as ProcessorId);
+        bindings
+            .expect_get_maximum_processor_count()
+            .times(1)
+            .withf(|group| *group == 1)
+            .return_const(1 as ProcessorId);
 
-    //     let mask1_group0 = 1 & 2;
-    //     let mask1_group1 = 0;
+        bindings
+            .expect_get_current_thread_cpu_set_masks()
+            .return_once(Vec::new);
+        bindings
+            .expect_get_current_process_default_cpu_set_masks()
+            .return_once(Vec::new);
 
-    //     let mask2_group0 = 0;
-    //     let mask2_group1 = 1;
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
 
-    //     bindings.expect_get_current_thread_group_affinity()
-    //         .return_once(move |_| {
-    //             GROUP_AFFINITY {
-    //                 Group: 0,
-    //                 Mask: mask1_group0,
-    //                 ..Default::default()
-    //             }
-    //         });
+        let processor_ids = platform.current_thread_processors();
+        assert_eq!(processor_ids.len(), 3);
 
-    //     let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
-    // }
+        assert!(processor_ids.contains(&0));
+        assert!(processor_ids.contains(&1));
+        assert!(processor_ids.contains(&2));
+    }
+
+    #[test]
+    fn current_thread_processors_if_process_affinity_set() {
+        let mut bindings = MockBindings::new();
+
+        // We are only obtaining processor IDs here, so we never actually perform a "get processors"
+        // call, therefore we cannot use our "simulate_processor_layout" helper because that exists
+        // specifically to facilitate the "get processors" API call.
+        bindings
+            .expect_get_maximum_processor_group_count()
+            .times(1)
+            .return_const(2 as ProcessorGroupIndex);
+        bindings
+            .expect_get_maximum_processor_count()
+            .times(1)
+            .withf(|group| *group == 0)
+            .return_const(2 as ProcessorId);
+        bindings
+            .expect_get_maximum_processor_count()
+            .times(1)
+            .withf(|group| *group == 1)
+            .return_const(1 as ProcessorId);
+
+        // Process affinity is only queried if thread affinity contains nothing.
+        bindings
+            .expect_get_current_thread_cpu_set_masks()
+            .return_once(Vec::new);
+        bindings
+            .expect_get_current_process_default_cpu_set_masks()
+            .return_once(|| {
+                vec![
+                    GROUP_AFFINITY {
+                        Group: 0,
+                        Mask: 1,
+                        ..Default::default()
+                    },
+                    GROUP_AFFINITY {
+                        Group: 0,
+                        Mask: 1,
+                        ..Default::default()
+                    },
+                ]
+            });
+
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
+
+        let processor_ids = platform.current_thread_processors();
+        assert_eq!(processor_ids.len(), 2);
+
+        assert!(processor_ids.contains(&0));
+        assert!(processor_ids.contains(&2));
+    }
+
+    #[test]
+    fn current_thread_processors_if_thread_affinity_set() {
+        let mut bindings = MockBindings::new();
+
+        // We are only obtaining processor IDs here, so we never actually perform a "get processors"
+        // call, therefore we cannot use our "simulate_processor_layout" helper because that exists
+        // specifically to facilitate the "get processors" API call.
+        bindings
+            .expect_get_maximum_processor_group_count()
+            .times(1)
+            .return_const(2 as ProcessorGroupIndex);
+        bindings
+            .expect_get_maximum_processor_count()
+            .times(1)
+            .withf(|group| *group == 0)
+            .return_const(2 as ProcessorId);
+        bindings
+            .expect_get_maximum_processor_count()
+            .times(1)
+            .withf(|group| *group == 1)
+            .return_const(1 as ProcessorId);
+
+        // Note that we do not define any expectation that process affinity is queried - if a thread
+        // affinity is set, process affinity is ignored and should not even be queried.
+        bindings
+            .expect_get_current_thread_cpu_set_masks()
+            .return_once(|| {
+                vec![
+                    GROUP_AFFINITY {
+                        Group: 0,
+                        Mask: 1,
+                        ..Default::default()
+                    },
+                    GROUP_AFFINITY {
+                        Group: 0,
+                        Mask: 1,
+                        ..Default::default()
+                    },
+                ]
+            });
+
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
+
+        let processor_ids = platform.current_thread_processors();
+        assert_eq!(processor_ids.len(), 2);
+
+        assert!(processor_ids.contains(&0));
+        assert!(processor_ids.contains(&2));
+    }
 }

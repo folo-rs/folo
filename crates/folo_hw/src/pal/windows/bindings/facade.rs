@@ -5,14 +5,10 @@ use std::sync::Arc;
 
 use windows::{
     core::Result,
-    Win32::{
-        Foundation::HANDLE,
-        System::{
-            Kernel::PROCESSOR_NUMBER,
-            SystemInformation::{
-                GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP,
-                SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
-            },
+    Win32::System::{
+        Kernel::PROCESSOR_NUMBER,
+        SystemInformation::{
+            GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP, SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
         },
     },
 };
@@ -67,14 +63,6 @@ impl Bindings for BindingsFacade {
         }
     }
 
-    fn get_current_thread(&self) -> HANDLE {
-        match self {
-            BindingsFacade::Real(bindings) => bindings.get_current_thread(),
-            #[cfg(test)]
-            BindingsFacade::Mock(bindings) => bindings.get_current_thread(),
-        }
-    }
-
     fn get_current_processor_number_ex(&self) -> PROCESSOR_NUMBER {
         match self {
             BindingsFacade::Real(bindings) => bindings.get_current_processor_number_ex(),
@@ -112,23 +100,27 @@ impl Bindings for BindingsFacade {
         }
     }
 
-    fn get_current_thread_group_affinity(&self) -> GROUP_AFFINITY {
+    fn get_current_process_default_cpu_set_masks(&self) -> Vec<GROUP_AFFINITY> {
         match self {
-            BindingsFacade::Real(bindings) => bindings.get_current_thread_group_affinity(),
+            BindingsFacade::Real(bindings) => bindings.get_current_process_default_cpu_set_masks(),
             #[cfg(test)]
-            BindingsFacade::Mock(bindings) => bindings.get_current_thread_group_affinity(),
+            BindingsFacade::Mock(bindings) => bindings.get_current_process_default_cpu_set_masks(),
         }
     }
 
-    fn set_current_thread_group_affinity(&self, group_affinity: &GROUP_AFFINITY) {
+    fn get_current_thread_cpu_set_masks(&self) -> Vec<GROUP_AFFINITY> {
         match self {
-            BindingsFacade::Real(bindings) => {
-                bindings.set_current_thread_group_affinity(group_affinity)
-            }
+            BindingsFacade::Real(bindings) => bindings.get_current_thread_cpu_set_masks(),
             #[cfg(test)]
-            BindingsFacade::Mock(bindings) => {
-                bindings.set_current_thread_group_affinity(group_affinity)
-            }
+            BindingsFacade::Mock(bindings) => bindings.get_current_thread_cpu_set_masks(),
+        }
+    }
+
+    fn set_current_thread_cpu_set_masks(&self, masks: &[GROUP_AFFINITY]) {
+        match self {
+            BindingsFacade::Real(bindings) => bindings.set_current_thread_cpu_set_masks(masks),
+            #[cfg(test)]
+            BindingsFacade::Mock(bindings) => bindings.set_current_thread_cpu_set_masks(masks),
         }
     }
 }

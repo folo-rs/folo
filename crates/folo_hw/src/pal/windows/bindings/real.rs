@@ -1,20 +1,18 @@
-use std::{fmt::Debug, ptr};
+use std::fmt::Debug;
 
 use windows::{
     core::Result,
-    Win32::{
-        Foundation::HANDLE,
-        System::{
-            Kernel::PROCESSOR_NUMBER,
-            SystemInformation::{
-                GetLogicalProcessorInformationEx, GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP,
-                SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
-            },
-            Threading::{
-                GetActiveProcessorCount, GetCurrentProcessorNumberEx, GetCurrentThread,
-                GetMaximumProcessorCount, GetMaximumProcessorGroupCount, GetNumaHighestNodeNumber,
-                GetThreadGroupAffinity, SetThreadGroupAffinity,
-            },
+    Win32::System::{
+        Kernel::PROCESSOR_NUMBER,
+        SystemInformation::{
+            GetLogicalProcessorInformationEx, GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP,
+            SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
+        },
+        Threading::{
+            GetActiveProcessorCount, GetCurrentProcess, GetCurrentProcessorNumberEx,
+            GetCurrentThread, GetMaximumProcessorCount, GetMaximumProcessorGroupCount,
+            GetNumaHighestNodeNumber, GetProcessDefaultCpuSetMasks, GetThreadSelectedCpuSetMasks,
+            SetThreadSelectedCpuSetMasks,
         },
     },
 };
@@ -44,11 +42,6 @@ impl Bindings for BuildTargetBindings {
         unsafe { GetMaximumProcessorGroupCount() }
     }
 
-    fn get_current_thread(&self) -> HANDLE {
-        // SAFETY: No safety requirements.
-        unsafe { GetCurrentThread() }
-    }
-
     fn get_current_processor_number_ex(&self) -> PROCESSOR_NUMBER {
         // SAFETY: No safety requirements.
         unsafe { GetCurrentProcessorNumberEx() }
@@ -73,32 +66,70 @@ impl Bindings for BuildTargetBindings {
         result
     }
 
-    fn get_current_thread_group_affinity(&self) -> GROUP_AFFINITY {
-        let mut affinity = GROUP_AFFINITY::default();
+    fn get_current_process_default_cpu_set_masks(&self) -> Vec<GROUP_AFFINITY> {
+        // SAFETY: No safety requirements. Does not require closing the handle.
+        let current_process = unsafe { GetCurrentProcess() };
+
+        // TODO: We should cache this, asking this info from the OS can be expensive.
+        // TODO: Should we kick this upstream? Though rather annoying low level API for that...
+        let max_group_count = self.get_maximum_processor_group_count();
+
+        // The required capacity cannot be greater than the maximum number of processor groups.
+        let mut buffer = vec![GROUP_AFFINITY::default(); max_group_count as usize];
+
+        // How many masks from our buffer were actually used. NB! This can be 0 if there is no
+        // default CPU set mask applied to the process (which implies all processors are available).
+        let mut required_mask_count = 0;
 
         // SAFETY: No safety requirements beyond passing valid input.
         unsafe {
-            GetThreadGroupAffinity(self.get_current_thread(), &raw mut affinity)
-                .expect("platform refused to provide the current thread processor affinity");
+            GetProcessDefaultCpuSetMasks(
+                current_process,
+                Some(&mut buffer),
+                &raw mut required_mask_count,
+            )
         }
+        .expect("platform refused to provide the current process default processor affinity");
 
-        affinity
+        buffer.truncate(required_mask_count as usize);
+        buffer
     }
 
-    fn set_current_thread_group_affinity(&self, group_affinity: &GROUP_AFFINITY) {
-        // We do not expect this to ever fail - these flags should be settable
-        // for all processor groups at all times for the current thread, even if
-        // the hardware dynamically changes (the affinity masks are still valid, after all,
-        // even if they point to non-existing processors).
+    fn get_current_thread_cpu_set_masks(&self) -> Vec<GROUP_AFFINITY> {
+        // SAFETY: No safety requirements. Does not require closing the handle.
+        let current_thread = unsafe { GetCurrentThread() };
+
+        // TODO: We should cache this, asking this info from the OS can be expensive.
+        // TODO: Should we kick this upstream? Though rather annoying low level API for that...
+        let max_group_count = self.get_maximum_processor_group_count();
+
+        // The required capacity cannot be greater than the maximum number of processor groups.
+        let mut buffer = vec![GROUP_AFFINITY::default(); max_group_count as usize];
+
+        // How many masks from our buffer were actually used. NB! This can be 0 if there is no
+        // default CPU set mask applied to the process (which implies all processors are available).
+        let mut required_mask_count = 0;
 
         // SAFETY: No safety requirements beyond passing valid input.
         unsafe {
-            SetThreadGroupAffinity(
-                self.get_current_thread(),
-                ptr::from_ref(group_affinity),
-                None,
+            GetThreadSelectedCpuSetMasks(
+                current_thread,
+                Some(&mut buffer),
+                &raw mut required_mask_count,
             )
-            .expect("platform refused to accept a new current thread processor affinity");
         }
+        .expect("platform refused to provide the current process default processor affinity");
+
+        buffer.truncate(required_mask_count as usize);
+        buffer
+    }
+
+    fn set_current_thread_cpu_set_masks(&self, masks: &[GROUP_AFFINITY]) {
+        // SAFETY: No safety requirements. Does not require closing the handle.
+        let current_thread = unsafe { GetCurrentThread() };
+
+        // SAFETY: No safety requirements beyond passing valid input.
+        unsafe { SetThreadSelectedCpuSetMasks(current_thread, Some(masks)) }
+            .expect("platform refused to accept a new current thread processor affinity");
     }
 }
