@@ -1,18 +1,22 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, mem, ptr};
 
 use windows::{
     core::Result,
-    Win32::System::{
-        Kernel::PROCESSOR_NUMBER,
-        SystemInformation::{
-            GetLogicalProcessorInformationEx, GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP,
-            SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
-        },
-        Threading::{
-            GetActiveProcessorCount, GetCurrentProcess, GetCurrentProcessorNumberEx,
-            GetCurrentThread, GetMaximumProcessorCount, GetMaximumProcessorGroupCount,
-            GetNumaHighestNodeNumber, GetProcessDefaultCpuSetMasks, GetThreadSelectedCpuSetMasks,
-            SetThreadSelectedCpuSetMasks,
+    Win32::{
+        Foundation::{BOOL, HANDLE},
+        System::{
+            JobObjects::{IsProcessInJob, JobObjectGroupInformationEx, QueryInformationJobObject},
+            Kernel::PROCESSOR_NUMBER,
+            SystemInformation::{
+                GetLogicalProcessorInformationEx, GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP,
+                SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
+            },
+            Threading::{
+                GetActiveProcessorCount, GetCurrentProcess, GetCurrentProcessorNumberEx,
+                GetCurrentThread, GetMaximumProcessorCount, GetMaximumProcessorGroupCount,
+                GetNumaHighestNodeNumber, GetProcessDefaultCpuSetMasks,
+                GetThreadSelectedCpuSetMasks, SetThreadSelectedCpuSetMasks,
+            },
         },
     },
 };
@@ -131,5 +135,44 @@ impl Bindings for BuildTargetBindings {
         // SAFETY: No safety requirements beyond passing valid input.
         unsafe { SetThreadSelectedCpuSetMasks(current_thread, Some(masks)) }
             .expect("platform refused to accept a new current thread processor affinity");
+    }
+
+    fn get_current_job_cpu_set_masks(&self) -> Vec<GROUP_AFFINITY> {
+        // SAFETY: No safety requirements. Does not require closing the handle.
+        let current_process = unsafe { GetCurrentProcess() };
+
+        let mut result: BOOL = BOOL::default();
+
+        // SAFETY: No safety requirements beyond passing valid inputs.
+        unsafe {
+            IsProcessInJob(current_process, HANDLE(ptr::null_mut()), &raw mut result).expect(
+                "platform refused to confirm or deny whether the current process is part of a job",
+            )
+        }
+
+        if !result.as_bool() {
+            // If not part of a job, no limits apply.
+            return Vec::new();
+        }
+
+        let mut buffer =
+            vec![GROUP_AFFINITY::default(); self.get_maximum_processor_group_count() as usize];
+
+        let mut bytes_written: u32 = 0;
+
+        // SAFETY: No safety requirements beyond passing valid inputs.
+        unsafe {
+            QueryInformationJobObject(
+                HANDLE(ptr::null_mut()),
+                JobObjectGroupInformationEx,
+                buffer.as_mut_ptr().cast(),
+                buffer.len() as u32 * mem::size_of::<GROUP_AFFINITY>() as u32,
+                Some(&raw mut bytes_written),
+            )
+        }
+        .expect("platform refused to provide the process's current job processor affinity");
+
+        buffer.truncate((bytes_written / mem::size_of::<GROUP_AFFINITY>() as u32) as usize);
+        buffer
     }
 }

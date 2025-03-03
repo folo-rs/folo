@@ -123,4 +123,12 @@ impl Bindings for BindingsFacade {
             BindingsFacade::Mock(bindings) => bindings.set_current_thread_cpu_set_masks(masks),
         }
     }
+
+    fn get_current_job_cpu_set_masks(&self) -> Vec<GROUP_AFFINITY> {
+        match self {
+            BindingsFacade::Real(bindings) => bindings.get_current_job_cpu_set_masks(),
+            #[cfg(test)]
+            BindingsFacade::Mock(bindings) => bindings.get_current_job_cpu_set_masks(),
+        }
+    }
 }

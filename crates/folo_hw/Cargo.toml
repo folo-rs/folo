@@ -31,7 +31,14 @@ frozen-collections = "0.3"
 http = "1"
 mockall = "0.13"
 scc = "2"
+scopeguard = "1.2.0"
 static_assertions = "1"
+
+[target.'cfg(windows)'.dev-dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Security",
+    "Win32_System_JobObjects",
+] }
 
 [[bench]]
 name = "effects_of_memory"

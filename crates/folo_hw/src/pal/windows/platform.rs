@@ -127,7 +127,15 @@ impl Platform for BuildTargetPlatform {
         for (group_index, group_size) in group_max_sizes.iter().enumerate() {
             let group_start_offset = group_start_offsets[group_index];
 
-            let affinity_mask = current_thread_affinities[group_index].Mask;
+            let Some(affinity_mask) = current_thread_affinities.iter().find_map(|a| {
+                if a.Group == group_index as ProcessorGroupIndex {
+                    Some(a.Mask)
+                } else {
+                    None
+                }
+            }) else {
+                continue;
+            };
 
             for index_in_group in 0..*group_size {
                 if affinity_mask & (1 << index_in_group) == 0 {
@@ -454,9 +462,9 @@ impl BuildTargetPlatform {
             self.get_performance_processor_global_indexes(processor_group_max_sizes);
         let processors_by_memory_region =
             self.get_memory_regions_by_processor(processor_group_max_sizes);
+        let allowed_processors = self.processors_allowed_by_job_constraints();
 
-        let mut processors =
-            Vec::with_capacity(processor_group_max_sizes.iter().map(|&s| s as usize).sum());
+        let mut processors = Vec::with_capacity(allowed_processors.len());
 
         for group_index in 0..processor_group_max_sizes.len() {
             // The next global index is recalculated at the beginning of every processor group
@@ -471,6 +479,10 @@ impl BuildTargetPlatform {
             for index_in_group in 0..processor_group_active_sizes[group_index] {
                 let global_index = next_global_index;
                 next_global_index += 1;
+
+                if !allowed_processors.contains(&global_index) {
+                    continue;
+                }
 
                 let memory_region_index = *processors_by_memory_region
                     .get(&global_index)
@@ -501,6 +513,48 @@ impl BuildTargetPlatform {
         NonEmpty::from_vec(processors).expect(
             "we are returning all processors on the system - obviously there must be at least one",
         ).map(ProcessorFacade::Real)
+    }
+
+    /// The job object (if it exists) defines hard limits for what processors we are allowed to use.
+    /// If there is no limit defined, we allow all processors and return all processor IDs.
+    fn processors_allowed_by_job_constraints(&self) -> NonEmpty<ProcessorId> {
+        let job_affinity_masks = self.bindings.get_current_job_cpu_set_masks();
+
+        if job_affinity_masks.is_empty() {
+            return NonEmpty::from_vec((0..=self.max_processor_id()).collect_vec())
+                .expect("range over non-empty set cannot result in empty result");
+        }
+
+        let group_max_sizes = self.get_processor_group_max_sizes();
+        let group_start_offsets = self.get_processor_group_start_offsets();
+
+        let mut result = Vec::with_capacity(self.max_processor_id() as usize + 1);
+
+        for (group_index, group_size) in group_max_sizes.iter().enumerate() {
+            let group_start_offset = group_start_offsets[group_index];
+
+            let Some(affinity_mask) = job_affinity_masks.iter().find_map(|a| {
+                if a.Group == group_index as ProcessorGroupIndex {
+                    Some(a.Mask)
+                } else {
+                    None
+                }
+            }) else {
+                continue;
+            };
+
+            for index_in_group in 0..*group_size {
+                if affinity_mask & (1 << index_in_group) == 0 {
+                    continue;
+                }
+
+                let global_index = group_start_offset + index_in_group as ProcessorId;
+
+                result.push(global_index);
+            }
+        }
+
+        NonEmpty::from_vec(result).expect("we are returning the set of processors assigned to the current thread - obviously there must be at least one because the thread is executing")
     }
 }
 
@@ -533,6 +587,7 @@ mod tests {
             [4],
             [vec![0, 0, 0, 0]],
             [vec![0, 0, 0, 0]],
+            None, // All processors are allowed by job constraints.
         );
 
         let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
@@ -592,6 +647,7 @@ mod tests {
             [2, 2],
             [vec![1, 0], vec![0, 1]],
             [vec![0, 0], vec![1, 1]],
+            None, // All processors are allowed by job constraints.
         );
 
         let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
@@ -635,6 +691,7 @@ mod tests {
             [4, 2, 2],
             [vec![1, 1, 1, 1], vec![0, 0], vec![0, 0]],
             [vec![0, 0, 0, 0], vec![1, 1], vec![2, 2]],
+            None, // All processors are allowed by job constraints.
         );
 
         let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
@@ -677,6 +734,7 @@ mod tests {
             [2, 3],
             [vec![], vec![1, 0, 1]],
             [vec![], vec![1, 1, 1]],
+            None, // All processors are allowed by job constraints.
         );
 
         let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
@@ -713,6 +771,7 @@ mod tests {
             [4, 4],
             [vec![0, 0], vec![1, 1]],
             [vec![0, 0], vec![1, 1]],
+            None, // All processors are allowed by job constraints.
         );
 
         let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
@@ -756,6 +815,7 @@ mod tests {
             [2, 2, 1],
             [vec![1, 1], vec![0, 0], vec![1]],
             [vec![0, 0], vec![0, 0], vec![1]],
+            None, // All processors are allowed by job constraints.
         );
 
         let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
@@ -786,6 +846,41 @@ mod tests {
                 assert_eq!(p.efficiency_class, EfficiencyClass::Performance);
             }
         }
+    }
+
+    #[test]
+    fn job_limits_applied() {
+        let mut bindings = MockBindings::new();
+        // Three groups, 3x2 processors. Job constraints limit us to 2+1+0.
+        simulate_processor_layout(
+            &mut bindings,
+            [2, 2, 2],
+            [2, 2, 2],
+            [vec![1, 1], vec![1, 1], vec![1, 1]],
+            [vec![0, 0], vec![0, 0], vec![0, 0]],
+            Some([vec![true, true], vec![true, false], vec![false, false]]),
+        );
+
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
+        let processors = platform.get_all_processors();
+        assert_eq!(processors.len(), 3);
+
+        // Group 0
+        let p0 = &processors[0];
+        assert_eq!(p0.as_real().group_index, 0);
+        assert_eq!(p0.as_real().index_in_group, 0);
+        assert_eq!(p0.as_real().memory_region_id, 0);
+
+        let p1 = &processors[1];
+        assert_eq!(p1.as_real().group_index, 0);
+        assert_eq!(p1.as_real().index_in_group, 1);
+        assert_eq!(p1.as_real().memory_region_id, 0);
+
+        // Group 1
+        let p2 = &processors[2];
+        assert_eq!(p2.as_real().group_index, 1);
+        assert_eq!(p2.as_real().index_in_group, 0);
+        assert_eq!(p2.as_real().memory_region_id, 0);
     }
 
     #[test]
@@ -863,6 +958,8 @@ mod tests {
         efficiency_ratings_per_group: [Vec<u8>; GROUP_COUNT],
         // Only for the active processors in each group.
         memory_regions_per_group: [Vec<MemoryRegionId>; GROUP_COUNT],
+        // Only for the active processors in each group. If None, all are allowed.
+        job_affinitized_processors_per_group: Option<[Vec<bool>; GROUP_COUNT]>,
     ) {
         assert_eq!(group_active_counts.len(), group_max_counts.len());
         assert_eq!(group_active_counts.len(), memory_regions_per_group.len());
@@ -903,6 +1000,29 @@ mod tests {
             &group_active_counts,
             &efficiency_ratings_per_group,
         );
+
+        // Transform the booleans to IDs.
+        let job_affinitized_processors_per_group =
+            job_affinitized_processors_per_group.map(|groups| {
+                groups
+                    .into_iter()
+                    .map(|processor_bools| {
+                        processor_bools
+                            .into_iter()
+                            .enumerate()
+                            .filter_map(|(index_in_group, is_allowed)| {
+                                if is_allowed {
+                                    Some(index_in_group as ProcessorIndexInGroup)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect_vec()
+                    })
+                    .collect_vec()
+            });
+
+        simulate_job_constraints(bindings, job_affinitized_processors_per_group);
     }
 
     fn simulate_get_counts(
@@ -1202,10 +1322,57 @@ mod tests {
             });
     }
 
+    fn simulate_job_constraints(
+        bindings: &mut MockBindings,
+        affinities_per_group: Option<Vec<Vec<ProcessorIndexInGroup>>>,
+    ) {
+        match affinities_per_group {
+            Some(groups) => {
+                let group_affinities = groups
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(group_index, group_processors)| {
+                        if group_processors.is_empty() {
+                            None
+                        } else {
+                            let mut affinity = GROUP_AFFINITY {
+                                Group: group_index as ProcessorGroupIndex,
+                                Mask: 0,
+                                ..Default::default()
+                            };
+
+                            for processor_index in group_processors {
+                                affinity.Mask |= 1 << processor_index;
+                            }
+
+                            Some(affinity)
+                        }
+                    })
+                    .collect_vec();
+
+                bindings
+                    .expect_get_current_job_cpu_set_masks()
+                    .return_once(|| group_affinities);
+            }
+            None => {
+                bindings
+                    .expect_get_current_job_cpu_set_masks()
+                    .return_once(Vec::new);
+            }
+        }
+    }
+
     #[test]
     fn pin_current_thread_to_single_processor() {
         let mut bindings = MockBindings::new();
-        simulate_processor_layout(&mut bindings, [1], [1], [vec![0]], [vec![0]]);
+        simulate_processor_layout(
+            &mut bindings,
+            [1],
+            [1],
+            [vec![0]],
+            [vec![0]],
+            None, // All processors are allowed by job constraints.
+        );
         bindings
             .expect_set_current_thread_cpu_set_masks()
             .withf(|affinities| {
@@ -1221,7 +1388,14 @@ mod tests {
     #[test]
     fn pin_current_thread_to_multiple_processors() {
         let mut bindings = MockBindings::new();
-        simulate_processor_layout(&mut bindings, [2], [2], [vec![0, 0]], [vec![0, 0]]);
+        simulate_processor_layout(
+            &mut bindings,
+            [2],
+            [2],
+            [vec![0, 0]],
+            [vec![0, 0]],
+            None, // All processors are allowed by job constraints.
+        );
         bindings
             .expect_set_current_thread_cpu_set_masks()
             .withf(|affinities| {
@@ -1243,6 +1417,7 @@ mod tests {
             [1, 1],
             [vec![0], vec![0]],
             [vec![0], vec![1]],
+            None, // All processors are allowed by job constraints.
         );
         bindings
             .expect_set_current_thread_cpu_set_masks()
@@ -1270,6 +1445,7 @@ mod tests {
             [2, 2],
             [vec![1, 0], vec![0, 1]],
             [vec![0, 0], vec![1, 1]],
+            None, // All processors are allowed by job constraints.
         );
         bindings
             .expect_set_current_thread_cpu_set_masks()
@@ -1304,6 +1480,7 @@ mod tests {
             [4],
             [vec![0, 0, 0, 0]],
             [vec![0, 1, 0, 1]],
+            None, // All processors are allowed by job constraints.
         );
 
         let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
@@ -1392,7 +1569,7 @@ mod tests {
                         ..Default::default()
                     },
                     GROUP_AFFINITY {
-                        Group: 0,
+                        Group: 1,
                         Mask: 1,
                         ..Default::default()
                     },
@@ -1442,7 +1619,7 @@ mod tests {
                         ..Default::default()
                     },
                     GROUP_AFFINITY {
-                        Group: 0,
+                        Group: 1,
                         Mask: 1,
                         ..Default::default()
                     },

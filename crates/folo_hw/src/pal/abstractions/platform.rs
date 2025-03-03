@@ -18,7 +18,10 @@ pub(crate) trait Platform: Debug + Send + Sync + 'static {
     /// Gets the ID of the processor currently executing this thread.
     fn current_processor_id(&self) -> ProcessorId;
 
-    /// Gets the IDs of all processors that the current thread is allowed to execute on
+    /// Gets the IDs of all processors that the current thread is allowed to execute on.
+    ///
+    /// Note: this may be a superset of get_all_processors() - the final filtering is performed
+    /// by the latter, to avoid double-filtering in different parts of the workflow.
     fn current_thread_processors(&self) -> NonEmpty<ProcessorId>;
 
     /// Gets the maximum (inclusive) processor ID of any processor that could possibly

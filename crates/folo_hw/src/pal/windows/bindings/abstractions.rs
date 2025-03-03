@@ -34,4 +34,7 @@ pub(crate) trait Bindings: Debug + Send + Sync + 'static {
         buffer: Option<*mut SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>,
         returned_length: *mut u32,
     ) -> Result<()>;
+
+    // JobObjectGroupInformationEx; may return empty list if not affinitized.
+    fn get_current_job_cpu_set_masks(&self) -> Vec<GROUP_AFFINITY>;
 }
