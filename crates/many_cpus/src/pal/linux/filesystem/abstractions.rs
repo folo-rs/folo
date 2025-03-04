@@ -32,7 +32,7 @@ pub(crate) trait Filesystem: Debug + Send + Sync + 'static {
 
     /// Gets the contents of the /sys/devices/system/cpu/cpu{}/online file.
     ///
-    /// This is a single line file with either 0 or 1 as content.
+    /// This is a single line file with either 0 or 1 as content (+ newline).
     /// This file may be absent on some Linux flavors, in which case we assume every CPU is online.
     fn get_cpu_online_contents(&self, cpu_index: u32) -> Option<String>;
 
