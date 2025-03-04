@@ -4,12 +4,11 @@ use itertools::Itertools;
 use nonempty::NonEmpty;
 
 use crate::{
-    cpulist,
+    EfficiencyClass, MemoryRegionId, ProcessorId, cpulist,
     pal::{
-        linux::{filesystem::FilesystemFacade, Bindings, BindingsFacade, Filesystem},
         Platform, ProcessorFacade, ProcessorImpl,
+        linux::{Bindings, BindingsFacade, Filesystem, filesystem::FilesystemFacade},
     },
-    EfficiencyClass, MemoryRegionId, ProcessorId,
 };
 
 // https://github.com/cloudhead/nonempty/issues/68
@@ -204,8 +203,9 @@ impl BuildTargetPlatform {
             };
 
             let is_online = match self.fs.get_cpu_online_contents(info.index) {
-                Some(s) => s == "1",
+                Some(s) => s.trim() == "1",
                 // Some Linux flavors do not report this, so just assume online by default.
+                // Sometimes this is also omitted for a specific processor because... it just is.
                 None => true,
             };
 
