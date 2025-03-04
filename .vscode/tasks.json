@@ -1,0 +1,73 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "process",
+            "command": "just",
+            "args": [
+                "build",
+            ],
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "label": "just: build"
+        },
+        {
+            "type": "process",
+            "command": "just",
+            "args": [
+                "test",
+            ],
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "label": "just: test"
+        },
+        {
+            "type": "process",
+            "command": "just",
+            "args": [
+                "test-docs",
+            ],
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "group": {
+                "kind": "test"
+            },
+            "label": "just: test-docs"
+        },
+        {
+            "type": "process",
+            "command": "just",
+            "args": [
+                "docs"
+            ],
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "group": "none",
+            "label": "just: docs"
+        },
+        {
+            "type": "process",
+            "command": "just",
+            "args": [
+                "bench"
+            ],
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "group": "none",
+            "label": "just: bench"
+        },
+    ]
+}

@@ -1,0 +1,5 @@
+[profile.default]
+# The leak detector is just bad and calls everything a leaky test because it relies on timing
+# coincidences to do its job. It is not an accurate nor valuable feature and we would rather
+# disable it but there is no off button so let's just set a high timeout that avoids it complaining.
+leak-timeout = "10s"

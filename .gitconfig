@@ -1,0 +1,7 @@
+[core]
+# No automatic conversions. All text files are normalized to LF (see .gitattributes for logic).
+# We explicitly set this in .gitattribute, so this is a no-op but two of a good thing never hurts.
+autocrlf = false
+
+# Scream if files do not match what .gitattributes requires.
+safecrlf = true
