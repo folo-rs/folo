@@ -1,12 +1,12 @@
 [workspace]
 members = ["crates/*"]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
 authors = ["Sander Saares <sander@saares.eu>"]
-edition = "2021"
+edition = "2024"
 license = "MIT"
-rust-version = "1.84"
+rust-version = "1.85"
 version = "0.1.0"
 
 [profile.release]

@@ -4,13 +4,13 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use windows::{
-    core::Result,
     Win32::System::{
         Kernel::PROCESSOR_NUMBER,
         SystemInformation::{
             GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP, SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
         },
     },
+    core::Result,
 };
 
 #[cfg(test)]
@@ -77,18 +77,20 @@ impl Bindings for BindingsFacade {
         buffer: Option<*mut SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>,
         returned_length: *mut u32,
     ) -> Result<()> {
-        match self {
-            BindingsFacade::Real(bindings) => bindings.get_logical_processor_information_ex(
-                relationship_type,
-                buffer,
-                returned_length,
-            ),
-            #[cfg(test)]
-            BindingsFacade::Mock(bindings) => bindings.get_logical_processor_information_ex(
-                relationship_type,
-                buffer,
-                returned_length,
-            ),
+        unsafe {
+            match self {
+                BindingsFacade::Real(bindings) => bindings.get_logical_processor_information_ex(
+                    relationship_type,
+                    buffer,
+                    returned_length,
+                ),
+                #[cfg(test)]
+                BindingsFacade::Mock(bindings) => bindings.get_logical_processor_information_ex(
+                    relationship_type,
+                    buffer,
+                    returned_length,
+                ),
+            }
         }
     }
 

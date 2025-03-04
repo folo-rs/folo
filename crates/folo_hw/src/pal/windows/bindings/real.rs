@@ -1,14 +1,13 @@
 use std::{fmt::Debug, mem, ptr};
 
 use windows::{
-    core::Result,
     Win32::{
         Foundation::{BOOL, HANDLE},
         System::{
             JobObjects::{IsProcessInJob, JobObjectGroupInformationEx, QueryInformationJobObject},
             Kernel::PROCESSOR_NUMBER,
             SystemInformation::{
-                GetLogicalProcessorInformationEx, GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP,
+                GROUP_AFFINITY, GetLogicalProcessorInformationEx, LOGICAL_PROCESSOR_RELATIONSHIP,
                 SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
             },
             Threading::{
@@ -19,6 +18,7 @@ use windows::{
             },
         },
     },
+    core::Result,
 };
 
 use crate::pal::windows::Bindings;
@@ -57,7 +57,8 @@ impl Bindings for BuildTargetBindings {
         buffer: Option<*mut SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>,
         returned_length: *mut u32,
     ) -> Result<()> {
-        GetLogicalProcessorInformationEx(relationship_type, buffer, returned_length)
+        // SAFETY: Forwarding safety requirements to caller.
+        unsafe { GetLogicalProcessorInformationEx(relationship_type, buffer, returned_length) }
     }
 
     fn get_numa_highest_node_number(&self) -> u32 {
