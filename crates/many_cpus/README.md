@@ -155,20 +155,20 @@ This crate treats platform constraints as follows:
   this crate. The mechanisms for this are `cgroups` on Linux and job objects on Windows.
 * Soft limits on which processors are allowed are ignored by default - specifying a processor
   affinity via `taskset` on Linux, `start.exe /affinity 0xff` on Windows or similar mechanisms
-  does not affect the set of processors this crate will use.
+  does not affect the set of processors this crate will use (though see next chapter).
 
-Note that limits on how much processor **time** may be used are ignored - they are still enforced
-by the platform (which will force idle periods to keep the process within the limits) but have no
-effect on which actual processors are available for use. For example, if you configure a processor
-time limit of 10 seconds per second on a 20-processor system, then at full utilization this crate
-would use all 20 processors but for a maximum of 0.5 seconds of each second (leaving them idle for
-the other 0.5 seconds).
+Note that limits on **processor time** are ignored - they are still enforced by the platform (which
+will force idle periods to keep the process within the limits) but have no effect on which actual
+processors are available for use. For example, if you configure a processor time limit of 10 seconds
+per second of real time on a 20-processor system, then at full utilization this crate may use all 20
+processors but only for a maximum of 0.5 seconds of each second (leaving the processors idle for
+the remaining 0.5 seconds, potentially smeared around in smaller units over the whole second).
 
 # Example: inheriting soft limits on allowed processors
 
 While the crate does not by default obey soft limits, you can opt in to these limits by inheriting
-the allowed processor set in the `main()` entrypoint thread, which defaults to the soft limits set
-by the platform (`examples/spawn_on_inherited_processors.rs`):
+the allowed processor set in the `main()` entrypoint thread
+(`examples/spawn_on_inherited_processors.rs`):
 
 ```rust
 use std::{thread, time::Duration};
