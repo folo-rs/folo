@@ -7,7 +7,8 @@ authors = ["Sander Saares <sander@saares.eu>"]
 edition = "2024"
 license = "MIT"
 rust-version = "1.85"
-version = "0.1.0"
+version = "0.0.1"
 
 [profile.release]
+# This ensures we have high quality data with full symbols when profiling.
 debug = "full"

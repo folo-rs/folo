@@ -1,13 +1,14 @@
-# folo_hw
+# Folo
 
-Hardware aware programming patterns for Rust apps.
+Mechanisms for high-performance hardware-aware programming in Rust.
 
-# Dynamic changes in hardware configuration
+# Contents
 
-The crate does not support detecting and responding to changes in the hardware environment at
-runtime. For example, if the set of active processors changes at runtime (e.g. due to a change in
-hardware resources or OS configuration) then this change might not be visible to the crate and
-some threads may be executed on unexpected processors.
+This is an umbrella project that covers some largely independent crates:
+
+| Crate | Description |
+|-------|-------------|
+| TODO  | TODO        |
 
 # Development environment setup
 
