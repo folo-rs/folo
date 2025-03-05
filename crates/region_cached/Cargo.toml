@@ -11,10 +11,12 @@ version.workspace = true
 many_cpus = { path = "../many_cpus" }
 
 [dev-dependencies]
+axum = "0.8"
 # Using Git reference here because the published crate is out of date and lacks proper graph support.
 criterion = { git = "https://github.com/bheisler/criterion.rs.git" }
 mockall = "0.13"
 static_assertions = "1"
+tokio = { version = "1.43", features = ["full"] }
 
 
 [[bench]]

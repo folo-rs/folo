@@ -76,18 +76,20 @@ where
 enum State<T> {
     // The instance has been created but not yet initialized, all we have is the initial value.
     Created {
-        initial_value: T,
+        initializer: fn() -> T,
     },
 
     // The instance has been initialized, we have one slot per memory region.
     Initialized {
+        // We cannot avoid region_values being across-region accessed but the Box at least ensures
+        // that the T inside lives in the correct memory region (assuming the allocator cooperates).
         region_values: Box<[Option<Box<T>>]>,
     },
 }
 
 impl<T> State<T> {
-    const fn new(initial_value: T) -> Self {
-        Self::Created { initial_value }
+    const fn new(initializer: fn() -> T) -> Self {
+        Self::Created { initializer }
     }
 }
 
@@ -99,21 +101,21 @@ where
     /// should not be used directly. It is not part of the public API and may be removed or changed
     /// at any time.
     #[doc(hidden)]
-    pub const fn new(value: T) -> Self {
+    pub const fn new(initializer: fn() -> T) -> Self {
         Self::with_clients(
-            value,
+            initializer,
             HardwareInfoClientFacade::real(),
             HardwareTrackerClientFacade::real(),
         )
     }
 
     pub(crate) const fn with_clients(
-        value: T,
+        initializer: fn() -> T,
         hardware_info: HardwareInfoClientFacade,
         hardware_tracker: HardwareTrackerClientFacade,
     ) -> Self {
         Self {
-            state: RwLock::new(State::new(value)),
+            state: RwLock::new(State::new(initializer)),
             hardware_info,
             hardware_tracker,
         }
@@ -189,14 +191,12 @@ where
         // There is some theoretical optimization opportunity here by picking the slot that is
         // closest to the current memory region - this may decrease the cost of the clone.
 
-        // TODO: Do we really need the boxes?
         match state {
-            State::Created { initial_value } => {
+            State::Created { initializer } => {
                 let mut region_values =
                     vec![None; self.hardware_info.max_memory_region_id() as usize + 1];
 
-                // TODO: Can we avoid cloning the initial value here?
-                region_values[memory_region_id as usize] = Some(Box::new(initial_value.clone()));
+                region_values[memory_region_id as usize] = Some(Box::new(initializer()));
 
                 *state = State::Initialized {
                     region_values: region_values.into_boxed_slice(),
@@ -226,9 +226,13 @@ where
         // is a single thread doing writes (conflicting writes may still require locks).
         let mut state = self.state.write().expect(ERR_POISONED_LOCK);
 
+        // TODO: This can perform an unnecessary clone of the initial value
+        // that we just throw away immediately - optimize it away.
+        self.initialize_slot(memory_region_id, &mut state);
+
         match &mut *state {
-            State::Created { initial_value } => {
-                *initial_value = value;
+            State::Created { .. } => {
+                unreachable!("initialize_slot should have transitioned the state away from this");
             }
             State::Initialized { region_values } => {
                 for (index, slot) in region_values.iter_mut().enumerate() {
@@ -276,7 +280,7 @@ macro_rules! region_cached {
 
     ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $e:expr) => {
         $(#[$attr])* $vis static $NAME: $crate::RegionCachedKey<$t> =
-            $crate::RegionCachedKey::new($e);
+            $crate::RegionCachedKey::new(move || $e);
     };
 }
 
@@ -336,7 +340,7 @@ mod tests {
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
         let local =
-            RegionCachedKey::with_clients("foo".to_string(), hardware_info, hardware_tracker);
+            RegionCachedKey::with_clients(|| "foo".to_string(), hardware_info, hardware_tracker);
 
         let value1 = local.with(ptr::from_ref);
         let value2 = local.with(ptr::from_ref);
@@ -373,7 +377,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionCachedKey::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionCachedKey::with_clients(|| 42, hardware_info, hardware_tracker);
 
         assert_eq!(local.get(), 42);
         assert_eq!(local.get(), 42);
@@ -414,7 +418,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionCachedKey::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionCachedKey::with_clients(|| 42, hardware_info, hardware_tracker);
 
         assert_eq!(local.get(), 42);
         local.set(43);
@@ -458,7 +462,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionCachedKey::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionCachedKey::with_clients(|| 42, hardware_info, hardware_tracker);
 
         local.set(43);
 

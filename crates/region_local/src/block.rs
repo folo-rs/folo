@@ -215,6 +215,11 @@ where
     pub fn set(&self, value: T) {
         let memory_region_id = self.hardware_tracker.current_memory_region_id();
 
+        // In the current implementation, we just take a write lock and update the value.
+        // This is suboptimal - ideally, we would allow other threads to read the old value
+        // while we are doing our write. TODO: Avoid taking an exclusive lock for the write.
+        // Potentially we can (or may have to) condition this optimization to be lock-free if there
+        // is a single thread doing writes (conflicting writes may still require locks).
         let mut state = self.state.write().expect(ERR_POISONED_LOCK);
 
         // TODO: This can perform an unnecessary clone of the initial value
