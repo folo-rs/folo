@@ -7,60 +7,9 @@ use crate::{
     hw_tracker_client::{HardwareTrackerClient, HardwareTrackerClientFacade},
 };
 
-/// The backing type behind static variables in a `region_cached!` block. On read, returns a clone
-/// of the value stored in the same memory region as the processor currently executing the code.
+/// The backing type behind static variables in a `region_cached!` block.
 ///
-/// You can think of region-cached static variables as an additional level of caching between the
-/// processor's L3 caches and main memory - it uses the capacity of main memory but guarantees
-/// the best performance as far as accessing main memory is concerned. Contrast to reading arbitrary
-/// data from main memory, which may be in far-away memory regions that are slower to access.
-///
-/// # Consistency guarantees
-///
-/// Writes are partly synchronized and eventually consistent, with an undefined order of resolving
-/// writes from different threads. Writes from the same thread become visible sequentially on all
-/// threads, with the last write from the writing thread winning from among other writes from the
-/// same thread.
-///
-/// Writes are immediately visible from the originating thread, with the caveats that:
-/// 1. Eventually consistent writes from other threads may be applied at any time, such as between
-///    a write and an immediately following read.
-/// 2. A thread, if not pinned, may migrate to a new memory region between the write and read
-///    operations, which invalidates any causal link between the two operations.
-///
-/// In general, you can only have firm expectations about the sequencing of data produced by read
-/// operations if the writes are always performed from a single thread.
-///
-/// # Example
-///
-/// This type is used via the `region_cached!` macro, which works in a very similar manner to the
-/// `thread_local!` macro. Within the macro block, define one or more static variables and their
-/// initial values, then read the value via `.with()` or update the value via `.set()`.
-///
-/// ```
-/// use region_cached::region_cached;
-///
-/// region_cached! {
-///     static FAVORITE_COLOR: String = "blue".to_string();
-/// }
-///
-/// fn foo() {
-///     FAVORITE_COLOR.with(|color| {
-///         println!("My favorite color is {color}");
-///     });
-///
-///     FAVORITE_COLOR.set("red".to_string());
-/// }
-/// ```
-///
-/// # Cross-region visibility
-///
-/// This type makes the value visible across memory regions, simply enhancing a static variable
-/// with same-region caching to ensure high performance during read and write operations.
-///
-/// The `region_local` crate provides a similar mechanism but limits the visibility of values to
-/// only a single memory region - updates do not propagate across region boundaries. This may be
-/// a useful alternative if you want unique values per memory region.
+/// Refer to [crate-level documentation][crate] for more information.
 #[derive(Debug)]
 pub struct RegionCachedKey<T>
 where
@@ -268,7 +217,7 @@ where
 
 const ERR_POISONED_LOCK: &str = "poisoned lock - safe execution no longer possible";
 
-/// See [RegionCachedKey].
+/// Refer to [crate-level documentation][crate] for more information.
 #[macro_export]
 macro_rules! region_cached {
     () => {};
