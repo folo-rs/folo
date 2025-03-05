@@ -77,22 +77,22 @@ where
 enum State<T> {
     // The instance has been created but not yet initialized, all we have is the initial value.
     Created {
-        initial_value: T,
+        initializer: fn() -> T,
     },
 
     // The instance has been initialized, we have one slot per memory region.
     Initialized {
-        // We keep the initial value around so that we can initialize each memory
+        // We keep the initializer around so that we can initialize each memory
         // region with the initial value on first read.
-        initial_value: T,
+        initializer: fn() -> T,
 
         region_values: Box<[Option<Box<T>>]>,
     },
 }
 
 impl<T> State<T> {
-    const fn new(initial_value: T) -> Self {
-        Self::Created { initial_value }
+    const fn new(initializer: fn() -> T) -> Self {
+        Self::Created { initializer }
     }
 }
 
@@ -104,21 +104,21 @@ where
     /// should not be used directly. It is not part of the public API and may be removed or changed
     /// at any time.
     #[doc(hidden)]
-    pub const fn new(value: T) -> Self {
+    pub const fn new(initializer: fn() -> T) -> Self {
         Self::with_clients(
-            value,
+            initializer,
             HardwareInfoClientFacade::real(),
             HardwareTrackerClientFacade::real(),
         )
     }
 
     pub(crate) const fn with_clients(
-        value: T,
+        initializer: fn() -> T,
         hardware_info: HardwareInfoClientFacade,
         hardware_tracker: HardwareTrackerClientFacade,
     ) -> Self {
         Self {
-            state: RwLock::new(State::new(value)),
+            state: RwLock::new(State::new(initializer)),
             hardware_info,
             hardware_tracker,
         }
@@ -189,22 +189,21 @@ where
 
         // TODO: Do we really need the boxes?
         match state {
-            State::Created { initial_value } => {
+            State::Created { initializer } => {
                 let mut region_values =
                     vec![None; self.hardware_info.max_memory_region_id() as usize + 1];
-                region_values[memory_region_id as usize] = Some(Box::new(initial_value.clone()));
+                region_values[memory_region_id as usize] = Some(Box::new(initializer()));
 
                 *state = State::Initialized {
-                    // TODO: can we avoid cloning the initial value here?
-                    initial_value: initial_value.clone(),
+                    initializer: *initializer,
                     region_values: region_values.into_boxed_slice(),
                 }
             }
             State::Initialized {
-                initial_value,
+                initializer,
                 region_values,
             } => {
-                region_values[memory_region_id as usize] = Some(Box::new(initial_value.clone()));
+                region_values[memory_region_id as usize] = Some(Box::new(initializer()));
             }
         }
     }
@@ -261,13 +260,14 @@ macro_rules! region_local {
 
     ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $e:expr) => {
         $(#[$attr])* $vis static $NAME: $crate::RegionLocalKey<$t> =
-            $crate::RegionLocalKey::new($e);
+            $crate::RegionLocalKey::new(move || $e);
     };
 }
 
 #[cfg(test)]
 mod tests {
     use std::ptr;
+    use std::sync::Arc;
 
     use crate::region_local;
     use crate::{
@@ -290,6 +290,15 @@ mod tests {
 
         FAVORITE_COLOR.with(|color| {
             assert_eq!(*color, "red");
+        });
+    }
+
+    #[test]
+    fn with_non_const_initial_value() {
+        region_local!(static FAVORITE_COLOR: Arc<String> = Arc::new("blue".to_string()));
+
+        FAVORITE_COLOR.with(|color| {
+            assert_eq!(**color, "blue");
         });
     }
 
@@ -321,7 +330,7 @@ mod tests {
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
         let local =
-            RegionLocalKey::with_clients("foo".to_string(), hardware_info, hardware_tracker);
+            RegionLocalKey::with_clients(|| "foo".to_string(), hardware_info, hardware_tracker);
 
         let value1 = local.with(ptr::from_ref);
         let value2 = local.with(ptr::from_ref);
@@ -358,7 +367,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocalKey::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionLocalKey::with_clients(|| 42, hardware_info, hardware_tracker);
 
         assert_eq!(local.get(), 42);
         assert_eq!(local.get(), 42);
@@ -399,7 +408,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocalKey::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionLocalKey::with_clients(|| 42, hardware_info, hardware_tracker);
 
         assert_eq!(local.get(), 42);
         local.set(43);
@@ -444,7 +453,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocalKey::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionLocalKey::with_clients(|| 42, hardware_info, hardware_tracker);
 
         local.set(43);
         assert_eq!(local.get(), 43);

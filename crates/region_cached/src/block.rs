@@ -287,6 +287,7 @@ macro_rules! region_cached {
 #[cfg(test)]
 mod tests {
     use std::ptr;
+    use std::sync::Arc;
 
     use crate::region_cached;
     use crate::{
@@ -309,6 +310,15 @@ mod tests {
 
         FAVORITE_COLOR.with(|color| {
             assert_eq!(*color, "red");
+        });
+    }
+
+    #[test]
+    fn with_non_const_initial_value() {
+        region_cached!(static FAVORITE_COLOR: Arc<String> = Arc::new("blue".to_string()));
+
+        FAVORITE_COLOR.with(|color| {
+            assert_eq!(**color, "blue");
         });
     }
 
