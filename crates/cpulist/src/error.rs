@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+/// Errors that can occur when processing cpulist strings.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
