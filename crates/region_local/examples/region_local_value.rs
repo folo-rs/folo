@@ -9,7 +9,6 @@ region_local!(static LAST_UPDATE: u128 = 0);
 
 #[tokio::main]
 async fn main() {
-    // The main beneficial impact will arise only on systems with multiple memory regions.
     let memory_region_count = HardwareInfo::current().max_memory_region_count();
     println!("the current system has {memory_region_count} memory regions");
 

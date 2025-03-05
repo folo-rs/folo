@@ -5,6 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 // A global variable whose latest value is cached in each memory region for fast local read access.
 // Writes to this variable are eventually consistent across all memory regions.
+//
+// Note: to keep the example simple, the value of this variable is of a trivial size and unlikely
+// to actually benefit from region-local caching as it easily fits into local processor caches.
 region_cached!(static LAST_UPDATE: u128 = 0);
 
 #[tokio::main]
