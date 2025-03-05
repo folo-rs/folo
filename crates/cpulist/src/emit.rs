@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use crate::Item;
 
-/// Generates a cpulist in a format that can be parsed by [`parse()`][crate::parse].
+/// Generates a [cpulist][crate] in a format that can be parsed by [`parse()`][crate::parse].
 ///
 /// The exact emitted representation is unspecified and may change across versions of this crate.
 /// All we promise is that it is a recognizable cpulist and can be parsed by this crate.

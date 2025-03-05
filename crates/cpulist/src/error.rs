@@ -11,4 +11,6 @@ pub enum Error {
     },
 }
 
-pub type Result<T> = std::result::Result<T, crate::Error>;
+/// A specialized `Result` type for cpulist operations, returning the crate's
+/// [`Error`][crate::Error] type as the error value.
+pub(crate) type Result<T> = std::result::Result<T, crate::Error>;
