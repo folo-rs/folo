@@ -2,15 +2,15 @@ use std::sync::RwLock;
 
 use many_cpus::MemoryRegionId;
 
-use crate::region_local::{
+use crate::{
     hw_info_client::{HardwareInfoClient, HardwareInfoClientFacade},
     hw_tracker_client::{HardwareTrackerClient, HardwareTrackerClientFacade},
 };
 
-/// The backing type behind variables in a `region_local!` block. On read, returns a copy of the
-/// value stored in the same memory region as the processor currently executing the code.
+/// The backing type behind static variables in a `region_cached!` block. On read, returns a clone
+/// of the value stored in the same memory region as the processor currently executing the code.
 ///
-/// You can think of region-local variables as an additional level of caching between the
+/// You can think of region-cached static variables as an additional level of caching between the
 /// processor's L3 caches and main memory - it uses the capacity of main memory but guarantees
 /// the best performance as far as accessing main memory is concerned. Contrast to reading arbitrary
 /// data from main memory, which may be in far-away memory regions that are slower to access.
@@ -18,28 +18,29 @@ use crate::region_local::{
 /// # Consistency guarantees
 ///
 /// Writes are partly synchronized and eventually consistent, with an undefined order of resolving
-/// simultaneous writes. Writes from the same thread are resolved sequentially, with the last write
-/// from that thread winning from among other writes from that thread.
+/// writes from different threads. Writes from the same thread become visible sequentially on all
+/// threads, with the last write from the writing thread winning from among other writes from the
+/// same thread.
 ///
 /// Writes are immediately visible from the originating thread, with the caveats that:
 /// 1. Eventually consistent writes from other threads may be applied at any time, such as between
 ///    a write and an immediately following read.
-/// 2. A thread may migrate to a new memory region between the write and read operations, which
-///    invalidates any causal link between the two operations.
+/// 2. A thread, if not pinned, may migrate to a new memory region between the write and read
+///    operations, which invalidates any causal link between the two operations.
 ///
-/// In general, you can only have firm expectations about the data seen by a sequence of reads if
-/// the writes are always performed from a single thread.
+/// In general, you can only have firm expectations about the sequencing of data produced by read
+/// operations if the writes are always performed from a single thread.
 ///
 /// # Example
 ///
-/// This type is used via the `region_local!` macro, which works in a very similar manner to the
-/// `thread_local!` macro. Within the macro block, define one or more static variables, then read
-/// via `.with()` or update the value via `.set()`.
+/// This type is used via the `region_cached!` macro, which works in a very similar manner to the
+/// `thread_local!` macro. Within the macro block, define one or more static variables and their
+/// initial values, then read the value via `.with()` or update the value via `.set()`.
 ///
 /// ```
-/// use folo_state::region_local;
+/// use region_cached::region_cached;
 ///
-/// region_local! {
+/// region_cached! {
 ///     static FAVORITE_COLOR: String = "blue".to_string();
 /// }
 ///
@@ -51,8 +52,17 @@ use crate::region_local::{
 ///     FAVORITE_COLOR.set("red".to_string());
 /// }
 /// ```
+///
+/// # Cross-region visibility
+///
+/// This type makes the value visible across memory regions, simply enhancing a static variable
+/// with same-region caching to ensure high performance during read and write operations.
+///
+/// The `region_local` crate provides a similar mechanism but limits the visibility of values to
+/// only a single memory region - updates do not propagate across region boundaries. This may be
+/// a useful alternative if you want unique values per memory region.
 #[derive(Debug)]
-pub struct RegionLocalKey<T>
+pub struct RegionCachedKey<T>
 where
     T: Clone + 'static,
 {
@@ -81,11 +91,11 @@ impl<T> State<T> {
     }
 }
 
-impl<T> RegionLocalKey<T>
+impl<T> RegionCachedKey<T>
 where
     T: Clone + 'static,
 {
-    /// Note: this function exists to serve the inner workings of the `region_local!` macro and
+    /// Note: this function exists to serve the inner workings of the `region_cached!` macro and
     /// should not be used directly. It is not part of the public API and may be removed or changed
     /// at any time.
     #[doc(hidden)]
@@ -117,6 +127,8 @@ where
         // Optimize: can we do better than RwLock?
         // Optimize: region_values itself may be stored outside the current memory region...
 
+        // We fix the memory region ID at this point. It may be that the thread migrates to a
+        // different memory region during the rest of this function - we do not care about that.
         let memory_region_id = self.hardware_tracker.current_memory_region_id();
         self.with_in_region(memory_region_id, f)
     }
@@ -146,7 +158,9 @@ where
         }
 
         // If we got here, we did a write, so recurse back to go back to the optimistic case
-        // and read the value that we just wrote, because optimism is now guaranteed to win.
+        // and read the value that we just wrote, because optimism is now guaranteed to win
+        // unless a concurrent write has reset the state again (in which case we keep trying).
+        // TODO: Unbounded recursion is not desirable, refactor this to not use recursion.
         self.with_in_region(memory_region_id, f)
     }
 
@@ -170,12 +184,18 @@ where
     fn initialize_slot(&self, memory_region_id: MemoryRegionId, state: &mut State<T>) {
         // If the state is not yet initialized, we initialize it now, consuming the initial
         // value. Otherwise, we simply clone the initial value from the first filled slot.
-        // The values in the slots are all the same, so it does not matter which we pick.
+        //
+        // The values in the slots are all the same, so it does not strictly matter which we pick.
+        // There is some theoretical optimization opportunity here by picking the slot that is
+        // closest to the current memory region - this may decrease the cost of the clone.
 
+        // TODO: Do we really need the boxes?
         match state {
             State::Created { initial_value } => {
                 let mut region_values =
                     vec![None; self.hardware_info.max_memory_region_id() as usize + 1];
+
+                // TODO: Can we avoid cloning the initial value here?
                 region_values[memory_region_id as usize] = Some(Box::new(initial_value.clone()));
 
                 *state = State::Initialized {
@@ -195,9 +215,15 @@ where
     /// Updates the stored value.
     ///
     /// The update will be applied to all memory regions in an eventually consistent manner.
+    /// It will be immediately visible in the current memory region.
     pub fn set(&self, value: T) {
         let memory_region_id = self.hardware_tracker.current_memory_region_id();
 
+        // In the current implementation, we just take a write lock and update the value.
+        // This is suboptimal - ideally, we would allow other threads to read the old value
+        // while we are doing our write. TODO: Avoid taking an exclusive lock for the write.
+        // Potentially we can (or may have to) condition this optimization to be lock-free if there
+        // is a single thread doing writes (conflicting writes may still require locks).
         let mut state = self.state.write().expect(ERR_POISONED_LOCK);
 
         match &mut *state {
@@ -208,6 +234,13 @@ where
                 for (index, slot) in region_values.iter_mut().enumerate() {
                     if index == memory_region_id as usize {
                         // The current memory region can get a clone immediately.
+                        //
+                        // NB! We always do a clone because we have no idea what the contents
+                        // of the value are (potentially the contents are stored in the wrong
+                        // memory region, e.g. a `Vec` is a pointer to a buffer and we want to
+                        // force a clone of the buffer here, not just the pointer).
+                        // NB! The compiler is, of course, allowed to optimize away spurious clones.
+                        // TODO: Is that a real thing it actually does? If so, can we stop it?
                         *slot = Some(Box::new(value.clone()));
                     } else {
                         // Other memory regions will copy on read.
@@ -219,7 +252,7 @@ where
     }
 }
 
-impl<T> RegionLocalKey<T>
+impl<T> RegionCachedKey<T>
 where
     T: Clone + Copy + 'static,
 {
@@ -231,19 +264,19 @@ where
 
 const ERR_POISONED_LOCK: &str = "poisoned lock - safe execution no longer possible";
 
-/// See [RegionLocalKey].
+/// See [RegionCachedKey].
 #[macro_export]
-macro_rules! region_local {
+macro_rules! region_cached {
     () => {};
 
     ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $e:expr; $($rest:tt)*) => (
-        $crate::region_local!($(#[$attr])* $vis static $NAME: $t = $e);
-        $crate::region_local!($($rest)*);
+        $crate::region_cached!($(#[$attr])* $vis static $NAME: $t = $e);
+        $crate::region_cached!($($rest)*);
     );
 
     ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $e:expr) => {
-        $(#[$attr])* $vis static $NAME: $crate::RegionLocalKey<$t> =
-            $crate::RegionLocalKey::new($e);
+        $(#[$attr])* $vis static $NAME: $crate::RegionCachedKey<$t> =
+            $crate::RegionCachedKey::new($e);
     };
 }
 
@@ -251,8 +284,8 @@ macro_rules! region_local {
 mod tests {
     use std::ptr;
 
-    use crate::region_local;
-    use crate::region_local::{
+    use crate::region_cached;
+    use crate::{
         hw_info_client::MockHardwareInfoClient, hw_tracker_client::MockHardwareTrackerClient,
     };
 
@@ -260,7 +293,7 @@ mod tests {
 
     #[test]
     fn real_smoke_test() {
-        region_local! {
+        region_cached! {
             static FAVORITE_COLOR: &str = "blue";
         }
 
@@ -303,7 +336,7 @@ mod tests {
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
         let local =
-            RegionLocalKey::with_clients("foo".to_string(), hardware_info, hardware_tracker);
+            RegionCachedKey::with_clients("foo".to_string(), hardware_info, hardware_tracker);
 
         let value1 = local.with(ptr::from_ref);
         let value2 = local.with(ptr::from_ref);
@@ -340,7 +373,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocalKey::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionCachedKey::with_clients(42, hardware_info, hardware_tracker);
 
         assert_eq!(local.get(), 42);
         assert_eq!(local.get(), 42);
@@ -381,7 +414,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocalKey::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionCachedKey::with_clients(42, hardware_info, hardware_tracker);
 
         assert_eq!(local.get(), 42);
         local.set(43);
@@ -425,7 +458,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocalKey::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionCachedKey::with_clients(42, hardware_info, hardware_tracker);
 
         local.set(43);
 

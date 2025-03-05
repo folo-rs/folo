@@ -1,6 +1,6 @@
 [package]
-name = "region_local"
-description = "Region-local static variables that maintain a unique value in each memory region, facilitating high data locality on many-processor systems."
+name = "region_cached"
+description = "Region-cached static variables that store intermediate clones of values in the local memory region, facilitating high data locality on many-processor systems."
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -18,5 +18,5 @@ static_assertions = "1"
 
 
 [[bench]]
-name = "region_local"
+name = "region_cached"
 harness = false
