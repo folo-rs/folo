@@ -19,7 +19,7 @@ use fake_headers::Headers;
 use frozen_collections::{FzHashMap, FzScalarMap, MapQuery};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use itertools::Itertools;
-use many_cpus::{ProcessorSet, cpulist};
+use many_cpus::ProcessorSet;
 use nonempty::{NonEmpty, nonempty};
 use rand::{seq::SliceRandom, thread_rng};
 
@@ -307,8 +307,20 @@ fn execute_run<P: Payload, const PAYLOAD_MULTIPLIER: usize>(
         // Just to help a human reader get a feel for what is configured.
         // This selection is discarded - each iteration will make a new selection.
         for (processor_set_1, processor_set_2) in sample_processor_selection {
-            let cpulist1 = cpulist::emit(processor_set_1.processors().clone().map(|p| p.id()));
-            let cpulist2 = cpulist::emit(processor_set_2.processors().clone().map(|p| p.id()));
+            let cpulist1 = cpulist::emit(
+                &processor_set_1
+                    .processors()
+                    .iter()
+                    .map(|p| p.id())
+                    .collect_vec(),
+            );
+            let cpulist2 = cpulist::emit(
+                &processor_set_2
+                    .processors()
+                    .iter()
+                    .map(|p| p.id())
+                    .collect_vec(),
+            );
 
             println!("{distribution} reference selection: ({cpulist1}) & ({cpulist2})");
         }

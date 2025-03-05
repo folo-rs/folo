@@ -4,7 +4,7 @@ use itertools::Itertools;
 use nonempty::NonEmpty;
 
 use crate::{
-    EfficiencyClass, MemoryRegionId, ProcessorId, cpulist,
+    EfficiencyClass, MemoryRegionId, ProcessorId,
     pal::{
         Platform, ProcessorFacade, ProcessorImpl,
         linux::{Bindings, BindingsFacade, Filesystem, filesystem::FilesystemFacade},
@@ -321,7 +321,13 @@ impl BuildTargetPlatform {
             .first()
             .expect("Cpus_allowed_list not found in /proc/self/status");
 
-        cpulist::parse(cpus_allowed_list)
+        NonEmpty::from_vec(
+            cpulist::parse(cpus_allowed_list)
+                .expect("platform provided invalid cpulist in Cpus_allowed_list"),
+        )
+        .expect(
+            "platform provided empty cpulist in Cpus_allowed_list - at least one must be allowed",
+        )
     }
 
     // May return None if everything is in a single NUMA node.
@@ -329,14 +335,20 @@ impl BuildTargetPlatform {
     // Otherwise, returns a list of NUMA nodes, where each entry is a list of processor
     // indexes that belong to that node.
     fn get_numa_nodes(&self) -> Option<HashMap<MemoryRegionId, NonEmpty<ProcessorId>>> {
-        let node_indexes = cpulist::parse(&self.fs.get_numa_node_possible_contents()?);
+        let node_indexes = cpulist::parse(&self.fs.get_numa_node_possible_contents()?)
+            .expect("platform provided invalid cpulist for list of NUMA nodes");
 
         Some(
             node_indexes
                 .into_iter()
                 .map(|node| {
-                    let cpulist = self.fs.get_numa_node_cpulist_contents(node);
-                    (node, cpulist::parse(&cpulist))
+                    let cpulist_str = self.fs.get_numa_node_cpulist_contents(node);
+                    let cpulist = NonEmpty::from_vec(
+                        cpulist::parse(&cpulist_str)
+                            .expect("platform provided invalid cpulist for NUMA node members"))
+                        .expect("platform provided empty cpulist for NUMA node members - at least one processor must be present to make a NUMA node");
+
+                    (node, cpulist)
                 })
                 .collect(),
         )
@@ -705,7 +717,7 @@ mod tests {
         let node_indexes =
             NonEmpty::from_vec(memory_region_index.iter().copied().unique().collect_vec())
                 .expect("simulating zero nodes is not supported");
-        let node_indexes_cpulist = cpulist::emit(node_indexes);
+        let node_indexes_cpulist = cpulist::emit(&node_indexes);
 
         let processors_per_node = memory_region_index
             .iter()
@@ -764,7 +776,7 @@ mod tests {
             })
             .collect_vec()).expect("simulated configuration allows zero processors - this is not valid, as some processor must be present to execute the code under test");
 
-        let allowed_cpus = cpulist::emit(allowed_processors);
+        let allowed_cpus = cpulist::emit(&allowed_processors);
 
         fs.expect_get_proc_self_status_contents()
             .times(1)

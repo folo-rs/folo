@@ -1,0 +1,16 @@
+[package]
+name = "cpulist"
+description = "Parse and emit the Linux 'cpulist' data format used to list processors, memory regions and similar entities"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+itertools = "0.14"
+thiserror = "2.0"
+
+[dev-dependencies]

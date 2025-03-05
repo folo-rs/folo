@@ -16,6 +16,7 @@ nonempty = "0.11"
 rand = "0.8"
 
 [target.'cfg(unix)'.dependencies]
+cpulist = { path = "../cpulist" }
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
@@ -27,6 +28,7 @@ windows = { version = "0.58", features = [
 ] }
 
 [dev-dependencies]
+cpulist = { path = "../cpulist" }
 # Using Git reference here because the published crate is out of date and lacks proper graph support.
 criterion = { git = "https://github.com/bheisler/criterion.rs.git" }
 fake_headers = "0.0"

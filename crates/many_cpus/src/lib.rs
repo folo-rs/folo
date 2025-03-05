@@ -17,5 +17,3 @@ pub use processor_set::*;
 pub use processor_set_builder::*;
 
 pub(crate) mod pal;
-
-pub mod cpulist;
