@@ -28,6 +28,8 @@ This crate provides the `region_cached!` macro that enhances static variables wi
 caching behavior and provides interior mutability via eventually consistent writes.
 
 ```rust
+use region_cached::region_cached;
+
 region_cached!(static FILTER_KEYS: Vec<String> = vec![
     "error".to_string(),
     "panic".to_string()

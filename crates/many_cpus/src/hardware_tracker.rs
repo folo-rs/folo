@@ -144,6 +144,7 @@ mod tests {
     // https://github.com/cloudhead/nonempty/issues/68
     extern crate alloc;
 
+    #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]
     fn real_does_not_panic() {
         let tracker = HardwareTracker::new(PlatformFacade::real());

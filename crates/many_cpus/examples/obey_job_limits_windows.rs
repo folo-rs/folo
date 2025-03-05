@@ -33,21 +33,21 @@ mod windows {
     use scopeguard::defer;
     use std::{mem, ptr, thread, time::Duration};
     use windows::{
-        core::{Result, PCWSTR, PWSTR},
         Win32::{
             Foundation::CloseHandle,
             System::{
                 JobObjects::{
-                    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-                    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-                    JOB_OBJECT_LIMIT_AFFINITY,
+                    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_AFFINITY,
+                    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+                    SetInformationJobObject,
                 },
                 Threading::{
-                    CreateProcessW, GetCurrentProcess, GetProcessAffinityMask, ResumeThread,
-                    CREATE_SUSPENDED, PROCESS_INFORMATION, STARTUPINFOW,
+                    CREATE_SUSPENDED, CreateProcessW, GetCurrentProcess, GetProcessAffinityMask,
+                    PROCESS_INFORMATION, ResumeThread, STARTUPINFOW,
                 },
             },
         },
+        core::{PCWSTR, PWSTR, Result},
     };
 
     pub fn main() -> Result<()> {
@@ -67,8 +67,8 @@ mod windows {
         if process_processor_count <= 2 {
             // This process has been limited - it is the stage 2 of the example.
             println!(
-            "This process is allowed to use {process_processor_count} of {processors_present_on_system} processors. Success!"
-        );
+                "This process is allowed to use {process_processor_count} of {processors_present_on_system} processors. Success!"
+            );
 
             // Verify that the ProcessorSet also only sees the two we have been assigned.
             let processor_count = ProcessorSet::all().len();
@@ -77,8 +77,8 @@ mod windows {
             thread::sleep(Duration::from_secs(10)); // Keep it alive to observe
         } else {
             println!(
-            "This process is not limited to specific processors. Creating restricted instance of process...",
-        );
+                "This process is not limited to specific processors. Creating restricted instance of process...",
+            );
             restart_with_job_limits()?;
         }
 

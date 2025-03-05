@@ -120,7 +120,10 @@ fn main() {
             "Thread executing on processor {current_processor_id} in memory region {current_memory_region_id}"
         );
 
+# #[cfg(doc)] // Skip the sleep when testing.
         thread::sleep(Duration::from_secs(1));
+# #[cfg(not(doc))] // Break after first iteration when testing.
+# break;
     }
 }
 ```
@@ -209,6 +212,7 @@ fn main() {
 
     // Give some time to exit, as on Windows using "start" will create a new window that would
     // otherwise disappear instantly, making it hard to see what happened.
+# #[cfg(doc)] // Skip the sleep when testing.
     thread::sleep(Duration::from_secs(10));
 }
 ```

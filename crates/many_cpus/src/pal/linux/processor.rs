@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::{pal::AbstractProcessor, EfficiencyClass, MemoryRegionId, ProcessorId};
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, pal::AbstractProcessor};
 
 /// A processor present on the system and available to the current process.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

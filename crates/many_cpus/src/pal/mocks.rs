@@ -3,8 +3,8 @@ use mockall::mock;
 use nonempty::NonEmpty;
 
 use crate::{
-    pal::{AbstractProcessor, Platform, ProcessorFacade},
     EfficiencyClass, MemoryRegionId, ProcessorId,
+    pal::{AbstractProcessor, Platform, ProcessorFacade},
 };
 
 #[derive(Clone, Copy, Debug, Display, Eq, Hash, PartialEq)]

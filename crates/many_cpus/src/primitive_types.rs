@@ -14,7 +14,7 @@ pub type MemoryRegionId = u32;
 
 /// Differentiates processors by their efficiency class, allowing work requiring high
 /// performance to be placed on the most performant processors at the expense of energy usage.
-/// 
+///
 /// This is a relative measurement - the most performant processors in a system are always
 /// considered performance processors, with less performant ones considered efficiency processors.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

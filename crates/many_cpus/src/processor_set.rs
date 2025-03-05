@@ -4,8 +4,8 @@ use itertools::Itertools;
 use nonempty::NonEmpty;
 
 use crate::{
+    CURRENT_TRACKER, Processor, ProcessorSetBuilder,
     pal::{Platform, PlatformFacade},
-    Processor, ProcessorSetBuilder, CURRENT_TRACKER,
 };
 
 // https://github.com/cloudhead/nonempty/issues/68
@@ -193,19 +193,20 @@ impl From<NonEmpty<Processor>> for ProcessorSet {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
 
     use nonempty::nonempty;
 
     use crate::{
-        pal::{FakeProcessor, MockPlatform},
         EfficiencyClass,
+        pal::{FakeProcessor, MockPlatform},
     };
 
     use super::*;
 
+    #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]
     fn smoke_test() {
         let mut platform = MockPlatform::new();

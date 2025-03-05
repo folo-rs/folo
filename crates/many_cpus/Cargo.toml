@@ -1,9 +1,11 @@
 [package]
 name = "many_cpus"
-description = "Hardware-aware work scheduling and data locality on many-processor systems."
+description = "Efficiently schedule work and inspect the hardware environment on many-processor systems"
+
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 

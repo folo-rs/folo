@@ -7,61 +7,9 @@ use crate::{
     hw_tracker_client::{HardwareTrackerClient, HardwareTrackerClientFacade},
 };
 
-/// The backing type behind variables in a `region_local!` block. On read, always obtains the value
-/// from storage in the current memory region, and on write updates the value stored in the current
-/// memory region.
+/// The backing type behind variables in a `region_local!` block.
 ///
-/// Operating on region-local memory can provider greater performance than operating on global
-/// memory, as long as you can afford the memory spent on keeping a separate clone of the value
-/// for each memory region.
-///
-/// # Consistency guarantees
-///
-/// Writes are partly synchronized and eventually consistent, with an undefined order of resolving
-/// writes from different threads. Writes from the same thread become visible sequentially on all
-/// threads executing in the same memory region, with the last write from the writing thread winning
-/// from among other writes from the same thread.
-///
-/// Writes are immediately visible from the originating thread, with the caveats that:
-/// 1. Eventually consistent writes from other threads may be applied at any time, such as between
-///    a write and an immediately following read.
-/// 2. A thread, if not pinned, may migrate to a new memory region between the write and read
-///    operations, which invalidates any link between the two operations and will read the
-///    value from the new memory region.
-///
-/// In general, you can only have firm expectations about the sequencing of data produced by read
-/// operations if the writes are always performed from a single thread and only when you pin the
-/// reading threads to processors of a single memory region.
-///
-/// # Example
-///
-/// This type is used via the `region_local!` macro, which works in a very similar manner to the
-/// `thread_local!` macro. Within the macro block, define one or more static variables, then read
-/// via `.with()` or update the value via `.set()` - all operations act only on data in the current
-/// memory region.
-///
-/// ```
-/// use region_local::region_local;
-///
-/// region_local! {
-///     static FAVORITE_COLOR: String = "blue".to_string();
-/// }
-///
-/// fn foo() {
-///     FAVORITE_COLOR.with(|color| {
-///         println!("My favorite color is {color}");
-///     });
-///
-///     FAVORITE_COLOR.set("red".to_string());
-/// }
-/// ```
-///
-/// # Cross-region visibility
-///
-/// The `region_cached` crate provides a similar mechanism that also publishes the value to all
-/// memory regions instead of keeping it region-local. This may be a useful alternative if you do
-/// not need to have separate variables per memory region but still want the efficiency benefits
-/// of reading from local memory.
+/// Refer to [crate-level documentation][crate] for more information.
 #[derive(Debug)]
 pub struct RegionLocalKey<T>
 where
@@ -248,7 +196,7 @@ where
 
 const ERR_POISONED_LOCK: &str = "poisoned lock - safe execution no longer possible";
 
-/// See [RegionLocalKey].
+/// Refer to [crate-level documentation][crate] for more information.
 #[macro_export]
 macro_rules! region_local {
     () => {};
@@ -276,6 +224,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]
     fn real_smoke_test() {
         region_local! {
@@ -293,6 +242,7 @@ mod tests {
         });
     }
 
+    #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]
     fn with_non_const_initial_value() {
         region_local!(static FAVORITE_COLOR: Arc<String> = Arc::new("blue".to_string()));

@@ -245,6 +245,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]
     fn real_smoke_test() {
         region_cached! {
@@ -262,6 +263,7 @@ mod tests {
         });
     }
 
+    #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]
     fn with_non_const_initial_value() {
         region_cached!(static FAVORITE_COLOR: Arc<String> = Arc::new("blue".to_string()));

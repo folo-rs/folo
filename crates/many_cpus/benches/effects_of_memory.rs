@@ -5,22 +5,22 @@ use std::{
     hint::black_box,
     mem::{self, MaybeUninit},
     num::NonZeroUsize,
-    sync::{mpsc, Arc, Barrier, LazyLock, Mutex, RwLock},
+    sync::{Arc, Barrier, LazyLock, Mutex, RwLock, mpsc},
     thread::JoinHandle,
     time::Duration,
 };
 
 use criterion::{
-    criterion_group, criterion_main, measurement::WallTime, BatchSize, BenchmarkGroup, Criterion,
-    SamplingMode,
+    BatchSize, BenchmarkGroup, Criterion, SamplingMode, criterion_group, criterion_main,
+    measurement::WallTime,
 };
 use derive_more::derive::Display;
 use fake_headers::Headers;
-use many_cpus::{cpulist, ProcessorSet};
 use frozen_collections::{FzHashMap, FzScalarMap, MapQuery};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use itertools::Itertools;
-use nonempty::{nonempty, NonEmpty};
+use many_cpus::{ProcessorSet, cpulist};
+use nonempty::{NonEmpty, nonempty};
 use rand::{seq::SliceRandom, thread_rng};
 
 // https://github.com/cloudhead/nonempty/issues/68

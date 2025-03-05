@@ -62,9 +62,10 @@ pub fn parse(cpulist: &str) -> NonEmpty<ProcessorId> {
                         .collect_vec()
                 } else {
                     // This is a plain number.
-                    vec![part
-                        .parse::<ProcessorId>()
-                        .expect("failed to parse cpulist single entry as integer")]
+                    vec![
+                        part.parse::<ProcessorId>()
+                            .expect("failed to parse cpulist single entry as integer"),
+                    ]
                 }
             })
             .sorted()

@@ -1,9 +1,11 @@
 [package]
 name = "region_local"
-description = "Region-local static variables that maintain a unique value in each memory region, facilitating high data locality on many-processor systems."
+description = "Isolate variable storage per memory region, similar to `thread_local!`"
+
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 

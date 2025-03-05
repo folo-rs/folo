@@ -6,6 +6,7 @@ resolver = "3"
 authors = ["Sander Saares <sander@saares.eu>"]
 edition = "2024"
 license = "MIT"
+repository = "https://github.com/folo-rs/folo"
 rust-version = "1.85"
 version = "0.0.1"
 

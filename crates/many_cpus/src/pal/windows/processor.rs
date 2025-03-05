@@ -1,11 +1,11 @@
 use std::fmt::Display;
 
 use crate::{
-    pal::{
-        windows::{ProcessorGroupIndex, ProcessorIndexInGroup},
-        AbstractProcessor,
-    },
     EfficiencyClass, MemoryRegionId, ProcessorId,
+    pal::{
+        AbstractProcessor,
+        windows::{ProcessorGroupIndex, ProcessorIndexInGroup},
+    },
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

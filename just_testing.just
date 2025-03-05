@@ -3,7 +3,6 @@ bench:
 
 miri:
     cargo +nightly miri nextest run
-    cargo +nightly miri nextest run
 
 test:
     cargo nextest run --workspace --all-targets --all-features

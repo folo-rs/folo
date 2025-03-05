@@ -12,8 +12,8 @@ use rand::{
 };
 
 use crate::{
-    pal::{Platform, PlatformFacade},
     EfficiencyClass, MemoryRegionId, Processor, ProcessorId, ProcessorSet,
+    pal::{Platform, PlatformFacade},
 };
 
 /// Builds a [`ProcessorSet`] based on specified criteria. The default criteria include all
@@ -595,19 +595,23 @@ mod tests_real {
     #[test]
     fn filter_out_all() {
         // If we filter out all processors, there should be nothing left.
-        assert!(ProcessorSet::builder()
-            .filter(|_| false)
-            .take_all()
-            .is_none());
+        assert!(
+            ProcessorSet::builder()
+                .filter(|_| false)
+                .take_all()
+                .is_none()
+        );
     }
 
     #[test]
     fn except_all() {
         // If we exclude all processors, there should be nothing left.
-        assert!(ProcessorSet::builder()
-            .except(ProcessorSet::all().processors().iter())
-            .take_all()
-            .is_none());
+        assert!(
+            ProcessorSet::builder()
+                .except(ProcessorSet::all().processors().iter())
+                .take_all()
+                .is_none()
+        );
     }
 }
 

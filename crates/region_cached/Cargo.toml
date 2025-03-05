@@ -1,9 +1,11 @@
 [package]
 name = "region_cached"
-description = "Region-cached static variables that store intermediate clones of values in the local memory region, facilitating high data locality on many-processor systems."
+description = "Add a layer of cache between L3 and main memory"
+
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
