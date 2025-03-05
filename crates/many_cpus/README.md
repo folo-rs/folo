@@ -1,6 +1,6 @@
 # many_cpus
 
-Working on many-processor systems (e.g. 100+ logical processors) can require you to pay extra
+Working on many-processor systems with 100+ logical processors can require you to pay extra
 attention to the specifics of the hardware to make optimal use of available compute capacity
 and extract the most performance out of the system.
 
@@ -8,23 +8,24 @@ and extract the most performance out of the system.
 
 Modern operating systems try to distribute work fairly between all processors. Typical Rust
 sync and async task runtimes like Rayon and Tokio likewise try to be efficient in occupying all
-processors with work, even work between processors if one risks becoming idle. This is okay but
-we can do better.
+processors with work, even moving work between processors if one risks becoming idle. This is fine
+but we can do better.
 
-Taking direct over the placement of work on specific processors can yield superior performance
-by taking advantage of factors under the service author's control, which are not known to general-
-purpose tasking runtimes.
+Taking direct control over the placement of work on specific processors can yield superior
+performance by taking advantage of factors under the service author's control, which are not known
+to general-purpose tasking runtimes:
 
-Most service apps exist to process requests or execute jobs - the work being done is  related to a
-small data set. We can keep the data associated with a specific (HTTP/gRPC/...) request on a single
-processor to ensure optimal data locality - the data related to the request is likely to be in the
-caches of that processor, speeding up all operations related to that request by avoiding expensive
-memory accesses.
-
-Even when data is shared across processors, performance differences exist between different pairs
-of processors because different processors can be connected to different physical memory modules.
-Access to non-cached data is optimal when that data is in the same memory region as the current
-processor (i.e. on the physical memory modules directly wired to the current processor).
+1. A key insight we can use is that most service apps exist to process requests or execute jobs - each
+unit of work being done is related to a specific data set. We can ensure we only process the data
+associated with a specific HTTP/gRPC request on a single processor to ensure optimal data locality.
+This means the data related to the request is likely to be in the caches of that processor, speeding
+up all operations related to that request by avoiding expensive memory accesses.
+1. Even when data is intentionally shared across processors (e.g. because one processor is not capable
+enough to do the work and parallelization is required), performance differences exist between
+different pairs of processors because different processors can be connected to different physical
+memory modules. Access to non-cached data is optimal when that data is in the same memory region
+as the current processor (i.e. on the physical memory modules directly wired to the current
+processor).
 
 # How does this crate help?
 
@@ -33,13 +34,14 @@ memory regions, ensuring that work assigned to those threads remains on the same
 data shared between threads is local to the same memory region, enabling you to achieve high data
 locality and processor cache efficiency.
 
-In addition to thread spawning, this crate enables app logic to observe what processor and memory
-region the current thread is executing in, even if the thread is not bound to a specific processor.
-This can be a building block for efficiency improvements even outside directly controlled work
-scheduling.
+In addition to thread spawning, this crate enables app logic to observe what processor the current
+thread is executing on and in which memory region this processor is located, even if the thread is
+not bound to a specific processor. This can be a building block for efficiency improvements even
+outside directly controlled work scheduling.
 
-Other crates from the Folo project build upon this hardware-awareness functionality to provide
-higher-level primitives such as thread pools, work schedulers, region-local cells and more.
+Other crates from the [Folo project](https://github.com/folo-rs/folo) build upon this hardware-
+awareness functionality to provide higher-level primitives such as thread pools, work schedulers,
+region-local cells and more.
 
 # Quick start: spawn threads on specific processors
 
@@ -68,10 +70,9 @@ fn main() {
 # Quick start: define processor selection criteria
 
 Depending on the specific circumstances, you may want to filter the set of processors. For example,
-you may want to use only two processors but ensure that they are high-performance processors (as
-opposed to power-efficient slow processors) that are connected to the same physical memory modules
-so they can cooperatively perform some processing on a shared data set
-(`examples/spawn_on_selected_processors.rs`):
+you may want to use only two processors but ensure that they are high-performance processors that
+are connected to the same physical memory modules so they can cooperatively perform some processing
+on a shared data set (`examples/spawn_on_selected_processors.rs`):
 
 ```rust
 use std::num::NonZero;
@@ -85,7 +86,7 @@ fn main() {
         .same_memory_region()
         .performance_processors_only()
         .take(PROCESSOR_COUNT)
-        .expect("could not find required number of processors that match the selection criteria");
+        .expect("could not find required processors on this system");
 
     let all_threads = selected_processors.spawn_threads(|processor| {
         println!("Spawned thread on processor {}", processor.id());
@@ -146,16 +147,17 @@ hardware resources or OS configuration) then this change may not be visible to t
 
 # External constraints
 
-The platform may define constraints that prohibit the application from using all the available
+The operating system may define constraints that prohibit the application from using all the available
 processors (e.g. when the app is containerized and provided limited hardware resources).
 
 This crate treats platform constraints as follows:
 
 * Hard limits on which processors are allowed are respected - forbidden processors are invisible to
-  this crate. The mechanisms for this are `cgroups` on Linux and job objects on Windows.
+  this crate. The mechanisms for defining such limits are cgroups on Linux and job objects on Windows.
 * Soft limits on which processors are allowed are ignored by default - specifying a processor
   affinity via `taskset` on Linux, `start.exe /affinity 0xff` on Windows or similar mechanisms
-  does not affect the set of processors this crate will use (though see next chapter).
+  does not affect the set of processors this crate will use by default, though you can opt in to
+  this (see next chapter).
 
 Note that limits on **processor time** are ignored - they are still enforced by the platform (which
 will force idle periods to keep the process within the limits) but have no effect on which actual
@@ -176,7 +178,7 @@ use std::{thread, time::Duration};
 use many_cpus::ProcessorSet;
 
 fn main() {
-    // The set of processors used here can be adjusted via platform commands.
+    // The set of processors used here can be adjusted via OS mechanisms.
     //
     // For example, to select only processors 0 and 1:
     // Linux: taskset 0x3 target/debug/examples/spawn_on_inherited_processors

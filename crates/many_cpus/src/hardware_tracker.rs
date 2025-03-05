@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 
 use crate::{
-    pal::{AbstractProcessor, Platform, PlatformFacade},
     MemoryRegionId, Processor, ProcessorId,
+    pal::{AbstractProcessor, Platform, PlatformFacade},
 };
 
 thread_local! {
@@ -29,6 +29,7 @@ thread_local! {
 /// processor or set of processors that the desired quality you care about (e.g. memory region). You
 /// can pin the current thread to one or more processors via
 /// [ProcessorSet::pin_current_thread_to][crate::ProcessorSet::pin_current_thread_to].
+#[derive(Debug)]
 pub struct HardwareTracker {
     pinned_processor_id: Option<ProcessorId>,
     pinned_memory_region_id: Option<MemoryRegionId>,
@@ -71,7 +72,10 @@ impl HardwareTracker {
     /// Obtains a reference to the current processor.
     ///
     /// If all you need is the processor ID or memory region ID, you may get better performance
-    /// if you query [`current_processor_id()`] or [`current_memory_region_id()`].
+    /// if you query [`current_processor_id()`][1] or [`current_memory_region_id()`][2].
+    ///
+    /// [1]: HardwareTracker::current_processor_id
+    /// [2]: HardwareTracker::current_memory_region_id
     pub fn current_processor(&self) -> &Processor {
         let processor_id = self.current_processor_id();
 
@@ -131,8 +135,8 @@ mod tests {
     use nonempty::nonempty;
 
     use crate::{
-        pal::{FakeProcessor, MockPlatform, ProcessorFacade},
         EfficiencyClass,
+        pal::{FakeProcessor, MockPlatform, ProcessorFacade},
     };
 
     use super::*;

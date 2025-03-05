@@ -10,7 +10,7 @@ static CURRENT: LazyLock<HardwareInfo> =
 
 /// Reports non-changing information about the system hardware.
 /// 
-/// To inspect changing information, use [`HardwareTracker`][crate:HardwareTracker].
+/// To inspect changing information, use [`HardwareTracker`][crate::HardwareTracker].
 #[derive(Debug)]
 pub struct HardwareInfo {
     max_processor_id: ProcessorId,
