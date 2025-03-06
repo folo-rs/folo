@@ -36,9 +36,10 @@ functionality. They only indirectly contribute to the Folo mission, so are liste
 
 There are also some development-only crates in this repo, which are not published:
 
-| Crate                                                               | Description                                                                      |
-|---------------------------------------------------------------------|----------------------------------------------------------------------------------|
-| [`many_cpus_benchmarking`](crates/many_cpus_benchmarking/README.md) | Criterion benchmark harness to easily compare different processor configurations |
+| Crate                                                               | Description                                                                        |
+|---------------------------------------------------------------------|------------------------------------------------------------------------------------|
+| [`benchmarks`](crates/benchmarks)                                   | Random pile of benchmarks to explore relevant scenarios and guide Folo development |
+| [`many_cpus_benchmarking`](crates/many_cpus_benchmarking/README.md) | Criterion benchmark harness to easily compare different processor configurations   |
 
 # Development environment setup
 

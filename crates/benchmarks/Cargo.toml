@@ -1,0 +1,19 @@
+[package]
+name = "benchmarks"
+description = "Random pile of benchmarks to explore relevant scenarios and guide Folo development"
+publish = false
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+# Using Git reference here because the published crate is out of date and lacks proper graph support.
+criterion = { git = "https://github.com/bheisler/criterion.rs.git" }
+
+[[bench]]
+name = "variable_access"
+harness = false
