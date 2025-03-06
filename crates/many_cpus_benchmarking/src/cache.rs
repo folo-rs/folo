@@ -1,5 +1,6 @@
 use std::{
     cell::RefCell,
+    hint::black_box,
     mem::{self},
     ptr,
     sync::LazyLock,
@@ -36,6 +37,15 @@ pub(crate) fn clean_caches() {
     unsafe {
         ptr::copy_nonoverlapping(source_ptr, destination_ptr, CACHE_CLEANER_LEN_U64);
     }
+
+    // SAFETY: We just filled these bytes, it is all good.
+    CACHE_CLEANER_DESTINATION.with_borrow_mut(|destination| unsafe {
+        destination.set_len(CACHE_CLEANER_LEN_U64);
+    });
+
+    // Read from the destination to prevent the compiler from optimizing the copy away.
+    // SAFETY: The pointer is valid, we just used it.
+    let _ = black_box(unsafe { destination_ptr.read() });
 }
 
 #[cfg(test)]

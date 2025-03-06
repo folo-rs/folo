@@ -1,4 +1,4 @@
-use std::ptr;
+use std::{hint::black_box, ptr};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus_benchmarking::{Payload, WorkDistribution, execute_runs};
@@ -42,5 +42,13 @@ impl Payload for CopyBytes {
         unsafe {
             ptr::copy_nonoverlapping(from.as_ptr(), to.as_mut_ptr(), COPY_BYTES_LEN);
         }
+
+        // SAFETY: We just filled these bytes, it is all good.
+        unsafe {
+            to.set_len(COPY_BYTES_LEN);
+        }
+
+        // Read from the destination to prevent the compiler from optimizing the copy away.
+        let _ = black_box(to[0]);
     }
 }
