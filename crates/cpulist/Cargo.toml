@@ -1,6 +1,7 @@
 [package]
 name = "cpulist"
 description = "Parse and emit the Linux 'cpulist' data format used to list processors, memory regions and similar entities"
+publish = true
 
 authors.workspace = true
 edition.workspace = true

@@ -1,6 +1,6 @@
 [package]
-name = "region_cached"
-description = "Add a layer of cache between L3 and main memory"
+name = "many_cpus_benchmarking"
+description = "Criterion benchmark harness to easily compare different processor configurations"
 publish = true
 
 authors.workspace = true
@@ -11,17 +11,15 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-many_cpus = { path = "../many_cpus" }
-
-[dev-dependencies]
-axum = "0.8"
+cpulist = { path = "../cpulist" }
 # Using Git reference here because the published crate is out of date and lacks proper graph support.
 criterion = { git = "https://github.com/bheisler/criterion.rs.git" }
-mockall = "0.13"
-static_assertions = "1"
-tokio = { version = "1.43", features = ["full"] }
-
+derive_more = { version = "2.0", features = ["display"] }
+itertools = "0.14"
+many_cpus = { path = "../many_cpus" }
+nonempty = "0.11"
+rand = "0.9"
 
 [[bench]]
-name = "region_cached"
+name = "many_cpus_harness_demo"
 harness = false

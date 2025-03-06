@@ -1,6 +1,7 @@
 [package]
 name = "region_local"
 description = "Isolate variable storage per memory region, similar to `thread_local!`"
+publish = true
 
 authors.workspace = true
 edition.workspace = true

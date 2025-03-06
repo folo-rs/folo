@@ -1,6 +1,7 @@
 [package]
 name = "many_cpus"
 description = "Efficiently schedule work and inspect the hardware environment on many-processor systems"
+publish = true
 
 authors.workspace = true
 edition.workspace = true
