@@ -1,14 +1,14 @@
 # many_cpus_benchmarking
 
-Criterion benchmark harness designed to compare different modes of distributing work in a many-
-processor system with multiple memory regions. This helps highlight the performance impact of
+Criterion benchmark harness designed to compare different modes of distributing work in a
+many-processor system with multiple memory regions. This helps highlight the performance impact of
 cross-memory-region data transfers, cross-processor data transfers and multi-threaded logic.
 
 # Execution model
 
-The benchmark harness selects **pairs of processors** that will execute multiple iterations of a
-benchmark scenario, preparing and processing **payloads**. The end result is the total duration
-spent by each pair (counting whichever pair member takes longest to process the payload).
+The benchmark harness selects **pairs of processors** that will execute each iteration of a
+benchmark scenario, preparing and processing **payloads**. The iteration time is the maximum
+duration of any worker (whichever worker takes longest to process the payload it is given).
 
 The criteria for processor pairs selection is determined by the specified [`WorkDistribution`],
 with the final selection randomized for each iteration if there are multiple equally valid candidate
@@ -17,7 +17,7 @@ processor pairs.
 # Usage
 
 For each benchmark scenario, define a type that implements the [`Payload`] trait. Executing a
-benchmark scenario consists will undergo the following major steps:
+benchmark scenario consists of the following major steps:
 
 1. For each processor pair, [a payload pair is created][3].
 1. Each payload is moved to its assigned processor and [prepared][4]. This is where the payload data
@@ -30,10 +30,11 @@ The reference to "foreign" data here implies that if the two workers are in diff
 regions, the data is likely to be present in a different memory region than used by the processor
 used to process the payload.
 
-This is because physical memory pages are allocated in the memory region that initializes any heap-
-allocated memory (in the "prepare" step), so despite the payload later being moved to a different
-worker's thread, any heap-allocated data referenced by the payload remains where it is, potentially
-in physical memory modules that are not directly connected to the current processor.
+This is because physical memory pages of heap-allocated objects are allocated in the memory region
+of the processor that initializes the memory (in the "prepare" step), so despite the payload later
+being moved to a different worker's thread, any heap-allocated data referenced by the payload
+remains where it is, which may be in physical memory modules that are not directly connected to
+the processor that will process the payload.
 
 # Example
 
@@ -45,11 +46,11 @@ const COPY_BYTES_LEN: usize = 64 * 1024 * 1024;
 
 /// Sample benchmark scenario that copies bytes between the two paired payloads.
 ///
-/// The source buffers are allocated in the "prepare" step to make them local to each worker.
+/// The source buffers are allocated in the "prepare" step and become local to the "prepare" worker.
 /// The destination buffers are allocated in the "process" step. The end result is that we copy
-/// from remote memory to local memory (and also perform a local allocation).
+/// from remote memory (allocated in the "prepare" step) to local memory in the "process" step.
 ///
-/// There is no deep meaning behind this, just a sample benchmark that showcases comparing
+/// There is no deep meaning behind this scenario, just a sample benchmark that showcases comparing
 /// different work distribution modes to identify performance differences from hardware-awareness.
 #[derive(Debug, Default)]
 struct CopyBytes {
@@ -73,6 +74,14 @@ impl Payload for CopyBytes {
         unsafe {
             ptr::copy_nonoverlapping(from.as_ptr(), to.as_mut_ptr(), COPY_BYTES_LEN);
         }
+
+        // SAFETY: We just filled these bytes, it is all good.
+        unsafe {
+            to.set_len(COPY_BYTES_LEN);
+        }
+
+        // Read from the destination to prevent the compiler from optimizing the copy away.
+        _ = black_box(to[0]);
     }
 }
 ```

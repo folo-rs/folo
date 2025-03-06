@@ -14,11 +14,11 @@ const COPY_BYTES_LEN: usize = 64 * 1024 * 1024;
 
 /// Sample benchmark scenario that copies bytes between the two paired payloads.
 ///
-/// The source buffers are allocated in the "prepare" step to make them local to each worker.
+/// The source buffers are allocated in the "prepare" step and become local to the "prepare" worker.
 /// The destination buffers are allocated in the "process" step. The end result is that we copy
-/// from remote memory to local memory (and also perform a local allocation).
+/// from remote memory (allocated in the "prepare" step) to local memory in the "process" step.
 ///
-/// There is no deep meaning behind this, just a sample benchmark that showcases comparing
+/// There is no deep meaning behind this scenario, just a sample benchmark that showcases comparing
 /// different work distribution modes to identify performance differences from hardware-awareness.
 #[derive(Debug, Default)]
 struct CopyBytes {
@@ -49,6 +49,6 @@ impl Payload for CopyBytes {
         }
 
         // Read from the destination to prevent the compiler from optimizing the copy away.
-        let _ = black_box(to[0]);
+        _ = black_box(to[0]);
     }
 }
