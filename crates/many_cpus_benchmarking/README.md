@@ -88,7 +88,7 @@ fn entrypoint(c: &mut Criterion) {
 
 Example output (in `target/criterion/report` after benchmarking):
 
-<img src="https://github.com/folo-rs/folo/crates/many_cpus_benchmarking/images/work_distribution_comparison.png">
+<img src="https://media.githubusercontent.com/media/folo-rs/folo/refs/heads/main/crates/many_cpus_benchmarking/images/work_distribution_comparison.png">
 
 # Payload multiplier
 
