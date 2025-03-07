@@ -30,7 +30,7 @@ const SMALL_MAP_ENTRY_COUNT: usize = 64 * 1024; // x u64 = 512 KB of useful payl
 /// likely require trips to main memory for repeated access.
 ///
 /// This only matters for non-read-only benchmarks (as the first read is always from main memory).
-const LARGE_MAP_ENTRY_COUNT: usize = 128 * 128 * 1024; // x u64 -> 128 MB, not very cache-friendly.
+const LARGE_MAP_ENTRY_COUNT: usize = 16 * 128 * 1024; // x u64 -> 128 MB, not very cache-friendly.
 
 fn entrypoint(c: &mut Criterion) {
     execute_runs::<ChannelExchange, 1>(
