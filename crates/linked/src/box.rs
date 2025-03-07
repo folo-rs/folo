@@ -13,9 +13,9 @@ use std::ops::{Deref, DerefMut};
 ///
 /// # Usage
 ///
-/// Use it like a regular `Box<T>` that also happens to support the linked objects API
-/// via the [`link!` macro][crate::link] and offers the API surface for handle-facilitated
-/// transfer across threads via `.handle()`.
+/// Use it like a regular `Box<T>` that also happens to support the linked objects mechanisms via
+/// the [`linked::variable!`][crate::variable] or [`linked::variable_ref!`][crate::variable_ref]
+/// macros and offers the API surface for handle-based transfer across threads via `.handle()`.
 ///
 /// # Implementation
 ///

@@ -206,11 +206,11 @@ a trait object of a trait `Xyz` that `T` implements, as `dyn Xyz`. This is a com
 in Rust but with the linked objects pattern there is a choice you must make:
 
 * If the linked objects are **always** to be accessed via trait objects, wrap the instances in
-  [`linked::Box`][Box], returning such a box already in the constructor.
+  [`linked::Box`], returning such a box already in the constructor.
 * If the linked objects are **sometimes** to be accessed via trait objects, you can on-demand
   wrap them into a [`Box<dyn Xyz>`][std::boxed::Box].
 
-The difference is that [`linked::Box`][Box] preserves the linked object functionality - you can
+The difference is that [`linked::Box`] preserves the linked object functionality - you can
 clone the box, obtain a [`Handle<linked::Box<dyn Xyz>>`][Handle] to transfer the box to another
 thread and store such a box in a static variable in a [linked::variable!][crate::variable] or
 [linked::variable_ref!][crate::variable_ref] block. However, when you use a

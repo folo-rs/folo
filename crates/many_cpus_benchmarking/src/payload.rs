@@ -12,7 +12,7 @@
 /// 1. The payload pair is exchanged between the two paired workers.
 /// 1. The `process()` method is called to process the data received from the other pair member.
 /// 1. The payload pair is dropped.
-/// 
+///
 /// Note that some [work distribution modes][crate::WorkDistribution] (named `*Self`) may skip
 /// the payload exchange step.
 pub trait Payload: Sized + Send + 'static {

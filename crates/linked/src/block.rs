@@ -130,7 +130,7 @@ where
     }
 }
 
-/// Declares the static variables within the macro body as containing [linked objects][folo::linked].
+/// Declares the static variables within the macro body as containing [linked objects][crate].
 /// Call `.get()` on the static variable to obtain a new linked instance of the type within. All
 /// instances obtained from the same variable are linked to each other, on any thread.
 ///

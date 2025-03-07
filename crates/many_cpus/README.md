@@ -16,16 +16,16 @@ performance by taking advantage of factors under the service author's control, w
 to general-purpose tasking runtimes:
 
 1. A key insight we can use is that most service apps exist to process requests or execute jobs - each
-unit of work being done is related to a specific data set. We can ensure we only process the data
-associated with a specific HTTP/gRPC request on a single processor to ensure optimal data locality.
-This means the data related to the request is likely to be in the caches of that processor, speeding
-up all operations related to that request by avoiding expensive memory accesses.
+   unit of work being done is related to a specific data set. We can ensure we only process the data
+   associated with a specific HTTP/gRPC request on a single processor to ensure optimal data locality.
+   This means the data related to the request is likely to be in the caches of that processor, speeding
+   up all operations related to that request by avoiding expensive memory accesses.
 1. Even when data is intentionally shared across processors (e.g. because one processor is not capable
-enough to do the work and parallelization is required), performance differences exist between
-different pairs of processors because different processors can be connected to different physical
-memory modules. Access to non-cached data is optimal when that data is in the same memory region
-as the current processor (i.e. on the physical memory modules directly wired to the current
-processor).
+   enough to do the work and parallelization is required), performance differences exist between
+   different pairs of processors because different processors can be connected to different physical
+   memory modules. Access to non-cached data is optimal when that data is in the same memory region
+   as the current processor (i.e. on the physical memory modules directly wired to the current
+   processor).
 
 # How does this crate help?
 
@@ -51,20 +51,18 @@ The simplest scenario is when you want to start a thread on every processor
 ```rust
 use many_cpus::ProcessorSet;
 
-fn main() {
-    let all_threads = ProcessorSet::all().spawn_threads(|processor| {
-        println!("Spawned thread on processor {}", processor.id());
+let all_threads = ProcessorSet::all().spawn_threads(|processor| {
+    println!("Spawned thread on processor {}", processor.id());
 
-        // In a real service, you would start some work handler here, e.g. to read
-        // and process messages from a channel or to spawn a web handler.
-    });
+    // In a real service, you would start some work handler here, e.g. to read
+    // and process messages from a channel or to spawn a web handler.
+});
 
-    for thread in all_threads {
-        thread.join().unwrap();
-    }
-
-    println!("All threads have finished.");
+for thread in all_threads {
+    thread.join().unwrap();
 }
+
+println!("All threads have finished.");
 ```
 
 # Quick start: define processor selection criteria
@@ -81,26 +79,24 @@ use many_cpus::ProcessorSet;
 
 const PROCESSOR_COUNT: NonZero<usize> = NonZero::new(2).unwrap();
 
-fn main() {
-    let selected_processors = ProcessorSet::builder()
-        .same_memory_region()
-        .performance_processors_only()
-        .take(PROCESSOR_COUNT)
-        .expect("could not find required processors on this system");
+let selected_processors = ProcessorSet::builder()
+    .same_memory_region()
+    .performance_processors_only()
+    .take(PROCESSOR_COUNT)
+    .expect("could not find required processors on this system");
 
-    let all_threads = selected_processors.spawn_threads(|processor| {
-        println!("Spawned thread on processor {}", processor.id());
+let all_threads = selected_processors.spawn_threads(|processor| {
+    println!("Spawned thread on processor {}", processor.id());
 
-        // In a real service, you would start some work handler here, e.g. to read
-        // and process messages from a channel or to spawn a web handler.
-    });
+    // In a real service, you would start some work handler here, e.g. to read
+    // and process messages from a channel or to spawn a web handler.
+});
 
-    for thread in all_threads {
-        thread.join().unwrap();
-    }
-
-    println!("All threads have finished.");
+for thread in all_threads {
+    thread.join().unwrap();
 }
+
+println!("All threads have finished.");
 ```
 
 # Quick start: inspect the hardware environment
@@ -111,20 +107,18 @@ Functions are provided to easily inspect the current hardware environment
 ```rust
 use std::{thread, time::Duration};
 
-fn main() {
-    loop {
-        let current_processor_id = many_cpus::current_processor_id();
-        let current_memory_region_id = many_cpus::current_memory_region_id();
+loop {
+    let current_processor_id = many_cpus::current_processor_id();
+    let current_memory_region_id = many_cpus::current_memory_region_id();
 
-        println!(
-            "Thread executing on processor {current_processor_id} in memory region {current_memory_region_id}"
-        );
+    println!(
+        "Thread executing on processor {current_processor_id} in memory region {current_memory_region_id}"
+    );
 
 # #[cfg(doc)] // Skip the sleep when testing.
-        thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_secs(1));
 # #[cfg(not(doc))] // Break after first iteration when testing.
 # break;
-    }
 }
 ```
 
@@ -180,39 +174,37 @@ use std::{thread, time::Duration};
 
 use many_cpus::ProcessorSet;
 
-fn main() {
-    // The set of processors used here can be adjusted via OS mechanisms.
-    //
-    // For example, to select only processors 0 and 1:
-    // Linux: taskset 0x3 target/debug/examples/spawn_on_inherited_processors
-    // Windows: start /affinity 0x3 target/debug/examples/spawn_on_inherited_processors.exe
+// The set of processors used here can be adjusted via OS mechanisms.
+//
+// For example, to select only processors 0 and 1:
+// Linux: taskset 0x3 target/debug/examples/spawn_on_inherited_processors
+// Windows: start /affinity 0x3 target/debug/examples/spawn_on_inherited_processors.exe
 
-    let inherited_processors = ProcessorSet::builder()
-        .where_available_for_current_thread()
-        .take_all()
-        .expect("found no processors usable by the current thread - impossible because the thread is currently running on one");
+let inherited_processors = ProcessorSet::builder()
+    .where_available_for_current_thread()
+    .take_all()
+    .expect("found no processors usable by the current thread - impossible because the thread is currently running on one");
 
-    println!(
-        "The current thread has inherited an affinity to {} processors.",
-        inherited_processors.len()
-    );
+println!(
+    "The current thread has inherited an affinity to {} processors.",
+    inherited_processors.len()
+);
 
-    let all_threads = inherited_processors.spawn_threads(|processor| {
-        println!("Spawned thread on processor {}", processor.id());
+let all_threads = inherited_processors.spawn_threads(|processor| {
+    println!("Spawned thread on processor {}", processor.id());
 
-        // In a real service, you would start some work handler here, e.g. to read
-        // and process messages from a channel or to spawn a web handler.
-    });
+    // In a real service, you would start some work handler here, e.g. to read
+    // and process messages from a channel or to spawn a web handler.
+});
 
-    for thread in all_threads {
-        thread.join().unwrap();
-    }
-
-    println!("All threads have finished. Exiting in 10 seconds.");
-
-    // Give some time to exit, as on Windows using "start" will create a new window that would
-    // otherwise disappear instantly, making it hard to see what happened.
-# #[cfg(doc)] // Skip the sleep when testing.
-    thread::sleep(Duration::from_secs(10));
+for thread in all_threads {
+    thread.join().unwrap();
 }
+
+println!("All threads have finished. Exiting in 10 seconds.");
+
+// Give some time to exit, as on Windows using "start" will create a new window that would
+// otherwise disappear instantly, making it hard to see what happened.
+# #[cfg(doc)] // Skip the sleep when testing.
+thread::sleep(Duration::from_secs(10));
 ```

@@ -3,7 +3,7 @@
 
 use std::{rc::Rc, thread::LocalKey};
 
-/// Helper type used to implement the logic behind [`linked::variable_ref!`][variable_ref].
+/// Helper type used to implement the logic behind [`linked::variable_ref!`][crate::variable_ref].
 #[derive(Debug)]
 pub struct VariableByRc<T>
 where

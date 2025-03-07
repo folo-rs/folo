@@ -1,11 +1,23 @@
-bench:
-    cargo bench --all-features
+[group('testing')]
+bench TARGET="":
+    #!{{ shebang }}
+    $target_selector = @()
 
+    if ("{{ TARGET }}" -ne "") {
+        $target_selector += "--bench"
+        $target_selector += "{{ TARGET }}"
+    }
+
+    cargo bench {{ target_package }} --all-features $target_selector
+
+[group('testing')]
 miri:
-    cargo +nightly miri nextest run
+    cargo +nightly miri nextest run {{ target_package }}
 
-test:
-    cargo nextest run --workspace --all-targets --all-features
+[group('testing')]
+test FILTER="":
+    cargo nextest run {{ target_package }} --all-targets --all-features {{ FILTER }}
 
-test-docs:
-    cargo test --workspace --all-features --doc
+[group('testing')]
+test-docs FILTER="":
+    cargo test {{ target_package }} --all-features --doc {{ FILTER }}

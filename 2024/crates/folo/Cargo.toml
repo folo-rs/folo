@@ -21,6 +21,9 @@ hyper = ["dep:hyper"]
 # Default features
 default = ["hyper"]
 
+[package.metadata.cargo-machete]
+ignored = ["paste"]
+
 [dependencies]
 core_affinity = "0"
 criterion = { git = "https://github.com/bheisler/criterion.rs.git", optional = true }

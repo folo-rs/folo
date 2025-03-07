@@ -1,11 +1,19 @@
+[group('basics')]
 build PROFILE='dev':
-    cargo build --workspace --profile {{ PROFILE }} --all-features --all-targets
+    cargo build {{ target_package }} --profile {{ PROFILE }} --all-features --all-targets
 
+[group('basics')]
 clean:
     cargo clean
 
+[group('basics')]
 docs:
-    cargo doc --workspace --no-deps --all-features
+    #!{{ shebang }}
+    $env:RUSTDOCFLAGS = "-D warnings"
+    cargo doc {{ target_package }} --no-deps --all-features
 
+[group('basics')]
 docs-open:
-    cargo doc --workspace --no-deps --all-features --open
+    #!{{ shebang }}
+    $env:RUSTDOCFLAGS = "-D warnings"
+    cargo doc {{ target_package }} --no-deps --all-features --open
