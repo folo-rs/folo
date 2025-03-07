@@ -35,6 +35,7 @@ Validation:
 1. Execute from task palette (F1):
     * `Tasks: Run Build Task`
     * `Tasks: Run Test Task`
+1. Execute `just validate-local` in terminal.
 
 # Development environment setup (Linux)
 
@@ -42,6 +43,7 @@ Prerequisites:
 
 * Ubuntu 24 installed in WSL
 * `sudo apt install -y git git-lfs build-essential cmake gcc make curl`
+* [PowerShell 7](https://learn.microsoft.com/en-us/powershell/scripting/install/install-ubuntu?view=powershell-7.5)
 * Rust development tools for version listed in `rust-toolchain.toml`
 * `rustup toolchain install nightly`
 * `cargo install just`
@@ -61,3 +63,4 @@ Validation:
 1. Execute from task palette (F1):
     * `Tasks: Run Build Task`
     * `Tasks: Run Test Task`
+1. Execute `just validate-local` in terminal.
