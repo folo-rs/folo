@@ -1,0 +1,3 @@
+[workspace]
+# TEMP: it currently complains for some unclear reason.
+allow_dirty = true
