@@ -3,8 +3,8 @@ check PROFILE='dev':
     cargo check {{ target_package }} --profile {{ PROFILE }} --all-features --all-targets
 
 [group('checks')]
-clippy:
-    cargo clippy {{ target_package }} --all-targets --all-features --locked -- -D warnings
+clippy PROFILE='dev':
+    cargo clippy {{ target_package }} --profile {{ PROFILE }} --all-targets --all-features --locked -- -D warnings
 
 [group('quality')]
 format:
@@ -23,5 +23,27 @@ machete:
     cargo machete --skip-target-dir
 
 # Full validation of everything, as you would do in a build pipeline before a release.
+# We assume this is executed on Windows, and will also perform the full validation on Linux.
 [group('quality')]
-validate: machete format-check clippy check test test-docs docs miri
+validate: validate-local validate-linux
+
+# Performs the part of the `validate` recipe that must run on Linux, when commanded from Windows.
+[group('quality')]
+validate-linux:
+    wsl -e bash -l -c "just validate-local"
+
+# Full validation of everything, as you would do in a build pipeline before a release.
+# Performs validation on the current platform, whatever that may be.
+[group('quality')]
+validate-local:
+    just machete
+    just format-check
+    just clippy dev
+    just check dev
+    just test
+    just test-docs
+    just docs
+    just miri
+    just clippy release
+    just check release
+    just build release
