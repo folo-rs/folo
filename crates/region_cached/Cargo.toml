@@ -2,13 +2,13 @@
 name = "region_cached"
 description = "Add a layer of cache between L3 and main memory"
 publish = true
+version = "0.0.1"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-version.workspace = true
 
 [dependencies]
 many_cpus = { path = "../many_cpus" }

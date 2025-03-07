@@ -2,13 +2,18 @@
 name = "linked"
 description = "Create families of linked objects that can collaborate across threads while being internally single-threaded"
 publish = true
+version = "0.0.1"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-version.workspace = true
+
+[package.metadata.release]
+# All the `linked*` crates are published under the same version, as they are
+# all the "logically same" crate, just separated for cargotechnical reasons.
+shared-version = "linked"
 
 [dependencies]
 hash_hasher = { workspace = true }

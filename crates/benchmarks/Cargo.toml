@@ -2,13 +2,13 @@
 name = "benchmarks"
 description = "Random pile of benchmarks to explore relevant scenarios and guide Folo development"
 publish = false
+version = "0.0.1-never"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-version.workspace = true
 
 [dependencies]
 many_cpus_benchmarking = { path = "../many_cpus_benchmarking" }

@@ -31,16 +31,16 @@ This is an umbrella project that covers multiple largely independent crates:
 Some auxiliary crates are also published because the primary crates above require their
 functionality. They only indirectly contribute to the Folo mission, so are listed separately:
 
-| Crate                                 | Description                                              |
-|---------------------------------------|----------------------------------------------------------|
-| [`cpulist`](crates/cpulist/README.md) | Utilities for parsing and emitting Linux cpulist strings |
+| Crate                                                               | Description                                                                      |
+|---------------------------------------------------------------------|----------------------------------------------------------------------------------|
+| [`cpulist`](crates/cpulist/README.md)                               | Utilities for parsing and emitting Linux cpulist strings                         |
+| [`many_cpus_benchmarking`](crates/many_cpus_benchmarking/README.md) | Criterion benchmark harness to easily compare different processor configurations |
 
 There are also some development-only crates in this repo, which are not published:
 
-| Crate                                                               | Description                                                                        |
-|---------------------------------------------------------------------|------------------------------------------------------------------------------------|
-| [`benchmarks`](crates/benchmarks)                                   | Random pile of benchmarks to explore relevant scenarios and guide Folo development |
-| [`many_cpus_benchmarking`](crates/many_cpus_benchmarking/README.md) | Criterion benchmark harness to easily compare different processor configurations   |
+| Crate                             | Description                                                                        |
+|-----------------------------------|------------------------------------------------------------------------------------|
+| [`benchmarks`](crates/benchmarks) | Random pile of benchmarks to explore relevant scenarios and guide Folo development |
 
 # Development environment setup
 
