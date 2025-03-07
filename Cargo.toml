@@ -13,3 +13,21 @@ version = "0.0.1"
 [profile.release]
 # This ensures we have high quality data with full symbols when profiling.
 debug = "full"
+
+[workspace.dependencies]
+axum = "0.8"
+# Using Git reference here because the published crate is out of date and lacks proper graph support.
+criterion = { git = "https://github.com/bheisler/criterion.rs.git" }
+derive_more = { version = "2.0" }
+fake_headers = "0.0"
+frozen-collections = "0.3"
+http = "1.2"
+itertools = "0.14"
+many_cpus_benchmarking = { path = "../many_cpus_benchmarking" }
+mockall = "0.13"
+nonempty = "0.11"
+rand = "0.9"
+scc = "2.3"
+static_assertions = "1"
+thiserror = "2.0"
+tokio = { version = "1.43", features = ["full"] }

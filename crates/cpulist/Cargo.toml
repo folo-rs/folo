@@ -11,7 +11,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-itertools = "0.14"
-thiserror = "2.0"
+itertools = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
