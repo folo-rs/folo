@@ -15,6 +15,15 @@ version = "0.0.1"
 debug = "full"
 
 [workspace.dependencies]
+# The packages we publish.
+cpulist = { version = "0.0.1", path = "crates/cpulist" }
+linked = { version = "0.0.1", path = "crates/linked" }
+linked_macros = { version = "0.0.1", path = "crates/linked_macros" }
+linked_macros_impl = { version = "0.0.1", path = "crates/linked_macros_impl" }
+many_cpus = { version = "0.0.1", path = "crates/many_cpus" }
+many_cpus_benchmarking = { version = "0.0.1", path = "../many_cpus_benchmarking" }
+
+# The packages we consume.
 axum = "0.8"
 # Using Git reference here because the published crate is out of date and lacks proper graph support.
 criterion = { git = "https://github.com/bheisler/criterion.rs.git" }
@@ -25,7 +34,7 @@ frozen-collections = "0.3"
 hash_hasher = "2.0"
 http = "1.2"
 itertools = "0.14"
-many_cpus_benchmarking = { path = "../many_cpus_benchmarking" }
+libc = "0.2"
 mockall = "0.13"
 negative-impl = "0.1"
 nonempty = "0.11"
@@ -34,8 +43,10 @@ proc-macro2 = "1.0"
 quote = "1.0"
 rand = "0.9"
 scc = "2.3"
+scopeguard = "1.2"
 seq-macro = "0.3"
 static_assertions = "1"
 syn = "2.0"
 thiserror = "2.0"
 tokio = "1.43"
+windows = "0.58"

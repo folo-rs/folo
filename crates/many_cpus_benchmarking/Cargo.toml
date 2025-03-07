@@ -11,8 +11,8 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-cpulist = { path = "../cpulist" }
-many_cpus = { path = "../many_cpus" }
+cpulist = { workspace = true }
+many_cpus = { workspace = true }
 
 criterion = { workspace = true }
 derive_more = { workspace = true, features = ["display"] }

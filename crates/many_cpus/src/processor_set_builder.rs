@@ -6,10 +6,8 @@ use std::{
 
 use itertools::Itertools;
 use nonempty::NonEmpty;
-use rand::{
-    seq::{IteratorRandom, SliceRandom},
-    thread_rng,
-};
+use rand::prelude::*;
+use rand::rng;
 
 use crate::{
     EfficiencyClass, MemoryRegionId, Processor, ProcessorId, ProcessorSet,
@@ -207,7 +205,7 @@ impl ProcessorSetBuilder {
                 }
 
                 all_processors
-                    .choose_multiple(&mut thread_rng(), count.get())
+                    .choose_multiple(&mut rng(), count.get())
                     .cloned()
                     .collect_vec()
             }
@@ -220,7 +218,7 @@ impl ProcessorSetBuilder {
                 // although we will consider all memory regions with at least 'count' candidates
                 // as equal in sort order to avoid needlessly preferring giant memory regions.
                 let mut remaining_memory_regions = candidates.keys().copied().collect_vec();
-                remaining_memory_regions.shuffle(&mut thread_rng());
+                remaining_memory_regions.shuffle(&mut rng());
                 remaining_memory_regions.sort_unstable_by_key(|x| {
                     candidates
                         .get(x)
@@ -247,7 +245,7 @@ impl ProcessorSetBuilder {
                     let choose_count = count.min(processors_in_region.len());
 
                     let region_processors = processors_in_region
-                        .choose_multiple(&mut rand::thread_rng(), choose_count)
+                        .choose_multiple(&mut rand::rng(), choose_count)
                         .cloned();
 
                     processors.extend(region_processors);
@@ -269,14 +267,14 @@ impl ProcessorSetBuilder {
                     })
                     .collect_vec();
 
-                let memory_region = qualifying_memory_regions.choose(&mut rand::thread_rng())?;
+                let memory_region = qualifying_memory_regions.choose(&mut rand::rng())?;
 
                 let processors = candidates.get(memory_region).expect(
                     "we picked an existing key for an existing HashSet - the values must exist",
                 );
 
                 processors
-                    .choose_multiple(&mut rand::thread_rng(), count.get())
+                    .choose_multiple(&mut rand::rng(), count.get())
                     .cloned()
                     .collect_vec()
             }
@@ -296,10 +294,8 @@ impl ProcessorSetBuilder {
                     }
 
                     for remaining_processors in candidates.values_mut() {
-                        let (index, processor) = remaining_processors
-                            .iter()
-                            .enumerate()
-                            .choose(&mut thread_rng())?;
+                        let (index, processor) =
+                            remaining_processors.iter().enumerate().choose(&mut rng())?;
 
                         let processor = processor.clone();
 
@@ -328,10 +324,10 @@ impl ProcessorSetBuilder {
 
                 candidates
                     .iter()
-                    .choose_multiple(&mut thread_rng(), count.get())
+                    .choose_multiple(&mut rng(), count.get())
                     .into_iter()
                     .map(|(_, processors)| {
-                        processors.iter().choose(&mut thread_rng()).cloned().expect(
+                        processors.iter().choose(&mut rng()).cloned().expect(
                             "we are picking one item from a non-empty list - item must exist",
                         )
                     })
@@ -375,7 +371,7 @@ impl ProcessorSetBuilder {
                 // count, so even 1 processor is enough to satisfy the "all" criterion.
                 let memory_region = candidates
                     .keys()
-                    .choose(&mut rand::thread_rng())
+                    .choose(&mut rand::rng())
                     .expect("we picked a random existing index - element must exist");
 
                 let processors = candidates.get(memory_region).expect(
@@ -390,7 +386,7 @@ impl ProcessorSetBuilder {
                 // we know that all candidate memory regions have enough to satisfy our needs.
                 let processors = candidates.values().map(|processors| {
                     processors
-                        .choose(&mut rand::thread_rng())
+                        .choose(&mut rand::rng())
                         .cloned()
                         .expect("we picked a random item from a non-empty list - item must exist")
                 });

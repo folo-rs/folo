@@ -19,6 +19,6 @@ proc-macro = true
 shared-version = "linked"
 
 [dependencies]
-linked_macros_impl = { path = "../linked_macros_impl" }
+linked_macros_impl = { workspace = true }
 
 [dev-dependencies]

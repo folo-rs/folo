@@ -11,17 +11,17 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-derive_more = { version = "1", features = ["as_ref", "display"] }
-itertools = "0.14"
-nonempty = "0.11"
-rand = "0.8"
+derive_more = { workspace = true, features = ["as_ref", "display"] }
+itertools = { workspace = true }
+nonempty = { workspace = true }
+rand = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-cpulist = { path = "../cpulist" }
-libc = "0.2"
+cpulist = { workspace = true }
+libc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = [
+windows = { workspace = true, features = [
     "Win32_System_JobObjects",
     "Win32_System_Kernel",
     "Win32_System_SystemInformation",
@@ -29,12 +29,12 @@ windows = { version = "0.58", features = [
 ] }
 
 [dev-dependencies]
-cpulist = { path = "../cpulist" }
+cpulist = { workspace = true }
 # Using Git reference here because the published crate is out of date and lacks proper graph support.
-criterion = { git = "https://github.com/bheisler/criterion.rs.git" }
-mockall = "0.13"
-scopeguard = "1.2.0"
-static_assertions = "1"
+criterion = { workspace = true }
+mockall = { workspace = true }
+scopeguard = { workspace = true }
+static_assertions = { workspace = true }
 
 [target.'cfg(windows)'.dev-dependencies]
-windows = { version = "0.58", features = ["Win32_Security"] }
+windows = { workspace = true, features = ["Win32_Security"] }

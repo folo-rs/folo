@@ -17,7 +17,7 @@ shared-version = "linked"
 
 [dependencies]
 hash_hasher = { workspace = true }
-linked_macros = { path = "../linked_macros" }
+linked_macros = { workspace = true }
 negative-impl = { workspace = true }
 paste = { workspace = true }
 

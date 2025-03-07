@@ -11,7 +11,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-many_cpus = { path = "../many_cpus" }
+many_cpus = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }
