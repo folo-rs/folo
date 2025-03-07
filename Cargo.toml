@@ -8,7 +8,6 @@ edition = "2024"
 license = "MIT"
 repository = "https://github.com/folo-rs/folo"
 rust-version = "1.85"
-version = "0.0.1"
 
 [profile.release]
 # This ensures we have high quality data with full symbols when profiling.
@@ -16,12 +15,12 @@ debug = "full"
 
 [workspace.dependencies]
 # The packages we publish.
-cpulist = { version = "0.0.1", path = "crates/cpulist" }
-linked = { version = "0.0.1", path = "crates/linked" }
-linked_macros = { version = "0.0.1", path = "crates/linked_macros" }
-linked_macros_impl = { version = "0.0.1", path = "crates/linked_macros_impl" }
-many_cpus = { version = "0.0.1", path = "crates/many_cpus" }
-many_cpus_benchmarking = { version = "0.0.1", path = "../many_cpus_benchmarking" }
+cpulist = { version = "0.0.1-pre.1", path = "crates/cpulist" }
+linked = { version = "0.0.1-pre.1", path = "crates/linked" }
+linked_macros = { version = "0.0.1-pre.1", path = "crates/linked_macros" }
+linked_macros_impl = { version = "0.0.1-pre.1", path = "crates/linked_macros_impl" }
+many_cpus = { version = "0.0.1-pre.1", path = "crates/many_cpus" }
+many_cpus_benchmarking = { version = "0.0.1-pre.1", path = "../many_cpus_benchmarking" }
 
 # The packages we consume.
 axum = "0.8"
