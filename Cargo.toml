@@ -18,16 +18,24 @@ debug = "full"
 axum = "0.8"
 # Using Git reference here because the published crate is out of date and lacks proper graph support.
 criterion = { git = "https://github.com/bheisler/criterion.rs.git" }
-derive_more = { version = "2.0" }
+darling = "0.20"
+derive_more = "2.0"
 fake_headers = "0.0"
 frozen-collections = "0.3"
+hash_hasher = "2.0"
 http = "1.2"
 itertools = "0.14"
 many_cpus_benchmarking = { path = "../many_cpus_benchmarking" }
 mockall = "0.13"
+negative-impl = "0.1"
 nonempty = "0.11"
+paste = "1.0"
+proc-macro2 = "1.0"
+quote = "1.0"
 rand = "0.9"
 scc = "2.3"
+seq-macro = "0.3"
 static_assertions = "1"
+syn = "2.0"
 thiserror = "2.0"
-tokio = { version = "1.43", features = ["full"] }
+tokio = "1.43"

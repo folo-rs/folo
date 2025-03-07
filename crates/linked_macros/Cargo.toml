@@ -1,0 +1,19 @@
+[package]
+name = "linked_macros"
+description = "Internal dependency of the 'linked' crate - do not reference directly"
+publish = true
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+linked_macros_impl = { path = "../linked_macros_impl" }
+
+[dev-dependencies]

@@ -1,0 +1,25 @@
+[package]
+name = "linked"
+description = "Create families of linked objects that can collaborate across threads while being internally single-threaded"
+publish = true
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+hash_hasher = { workspace = true }
+linked_macros = { path = "../linked_macros" }
+negative-impl = { workspace = true }
+paste = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+seq-macro = { workspace = true }
+
+[[bench]]
+name = "linked"
+harness = false
