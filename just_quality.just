@@ -36,6 +36,7 @@ validate-linux:
 # Performs validation on the current platform, whatever that may be.
 [group('quality')]
 validate-local:
+    cargo generate-lockfile
     just machete
     just format-check
     just clippy dev
