@@ -1,21 +1,30 @@
 # linked
 
-Mechanisms for creating linked objects.
+Mechanisms for creating families of linked objects that can collaborate across threads while being
+internally single-threaded.
+
+The linked object pattern ensures that cross-thread state sharing is always explicit, as well as
+cross-thread transfer of linked object instances, facilitated by the mechanisms in this crate. Each
+individual instance of a linked object and the mechanisms for obtaining new instances are 
+structured in a manner that helps avoid accidental or implicit shared state, by making each instance
+thread-local while the entire family can act together to provide a multithreaded API to user code.
+
+# Definitions
 
 Linked objects are types whose instances:
 
-1. Are internally connected with other instances from the same family.
-2. Share some state with each other via messaging or synchronized state.
-3. Perform the collaboration independently and out of view of user code.
+1. are each local to a single thread (i.e. `!Send`);
+1. and are internally connected to other instances from the same family;
+1. and share some thread-safe state via messaging or synchronized state;
+1. and perform all collaboration between instances without involvement of user code (i.e. there is
+   no `Arc` or `Mutex` that the user needs to create).
 
 Instances belong to the same family if they:
-- are created via cloning.
-- are created by obtaining a thread-safe [Handle] and converting it to a new instance.
-- are obtained from the same static variable in a [link!][folo::linked::link] macro block.
 
-The linked object pattern integrates with the folo highly isolated and data-local execution
-model by providing explicit paths for cross-thread transfer of instances and keeping each
-instance natively single-threaded.
+- are created via cloning;
+- or are created by obtaining a thread-safe [Handle] and converting it to a new instance;
+- or are obtained from the same static variable in a [linked::variable!][crate::variable]
+  or [linked::variable_ref!][crate::variable_ref] macro block.
 
 # Using and defining linked objects
 
@@ -25,7 +34,6 @@ This object can generally be used like any other Rust type. All linked objects s
 since that is one of the primary mechanisms for creating additional linked instances.
 
 ```rust
-# use folo::linked;
 # use std::sync::{Arc, Mutex};
 # #[linked::object]
 # struct Thing {
@@ -57,14 +65,13 @@ assert_eq!(thing2.value(), "world");
 
 We can compare this example to the linked object definition above:
 
-* The relation is established via cloning.
-* The “value” is shared.
-* Implementing the collaboration does not require action (e.g. Mutex) from user code.
+* The relation between instances is established via cloning.
+* The `value` is shared.
+* Implementing the collaboration does not require anything (e.g. a `Mutex`) from user code.
 
 The implementation of this type is the following:
 
 ```rust
-use folo::linked;
 use std::sync::{Arc, Mutex};
 
 #[linked::object]
@@ -91,30 +98,35 @@ impl Thing {
 }
 ```
 
-The implementation steps are:
+The implementation steps to apply the pattern to a struct are:
 
-* Apply [`#[linked::object]`][folo::linked::object] on the struct. This will automatically
-  derive `Linked`, `Clone` and other mechanisms required for the linked objects pattern.
-* In the constructor, call [`linked::new!`][folo::linked::new] to create the first instance.
+* Apply [`#[linked::object]`][crate::object] on the struct. This will automatically
+  derive the `linked::Object` and `Clone` traits and implement various other behind-the-scenes
+  mechanisms required for the linked object pattern to operate.
+* In the constructor, call [`linked::new!`][crate::new] to create the first instance.
 
-[`linked::new!`][folo::linked::new] is a wrapper around a `Self` struct-expression. What makes
-it special is that it will be called for every instance that is ever created in the same family
-of linked objects. This expression captures the state of the constructor (e.g. in the above
+[`linked::new!`][crate::new] is a wrapper around a `Self` struct-expression. What makes
+it special is that **it will be called for every instance that is ever created in the same family
+of linked objects**. This expression captures the state of the constructor (e.g. in the above
 example, it captures `shared_value`). Use the captured state to set up any shared connections
 between instances (e.g. by sharing an `Arc` or connecting message channels).
 
-The captured values must be thread-safe (`Send` + `Sync` + `'static`).
+The captured values must be thread-safe (`Send` + `Sync` + `'static`), while the `Thing` struct
+itself does not need to be thread-safe. In fact, the linked object pattern forces it to be `!Send`
+and `!Sync` to avoid accidental multithreading. See the next chapter to understand how to deal with
+multithreaded logic.
 
 # Linked objects on multiple threads
 
 Each instance of a linked object is single-threaded (enforced at compile time). To create a
 related instance on a different thread, you must either use a static variable inside a
-[link!][folo::linked::link] block or use a [Handle] to transfer the instance to another thread.
+[linked::variable!][crate::variable] or [linked::variable_ref!][crate::variable_ref] block or
+obtain a [Handle] that you can transfer to another thread and use to obtain a new instance there.
+Linked object handles are thread-safe.
 
 Example of using a static variable to connect instances on different threads:
 
 ```rust
-# use folo::linked;
 # use std::sync::{Arc, Mutex};
 # #[linked::object]
 # struct Thing {
@@ -134,10 +146,9 @@ Example of using a static variable to connect instances on different threads:
 #         *self.value.lock().unwrap() = value;
 #     }
 # }
-use folo::linked::link;
 use std::thread;
 
-link!(static THE_THING: Thing = Thing::new("hello".to_string()));
+linked::variable!(static THE_THING: Thing = Thing::new("hello".to_string()));
 
 let thing = THE_THING.get();
 assert_eq!(thing.value(), "hello");
@@ -153,7 +164,6 @@ thread::spawn(|| {
 Example of using a [Handle] to transfer an instance to another thread:
 
 ```rust
-# use folo::linked;
 # use std::sync::{Arc, Mutex};
 # #[linked::object]
 # struct Thing {
@@ -173,7 +183,7 @@ Example of using a [Handle] to transfer an instance to another thread:
 #         *self.value.lock().unwrap() = value;
 #     }
 # }
-use folo::linked::Linked; // This brings .handle() into scope.
+use linked::Object; // This brings .handle() into scope.
 use std::thread;
 
 let thing = Thing::new("hello".to_string());
@@ -196,22 +206,21 @@ a trait object of a trait `Xyz` that `T` implements, as `dyn Xyz`. This is a com
 in Rust but with the linked objects pattern there is a choice you must make:
 
 * If the linked objects are **always** to be accessed via trait objects, wrap the instances in
-  [`linked::Box`][Box], already returning such a box in the constructor.
+  [`linked::Box`][Box], returning such a box already in the constructor.
 * If the linked objects are **sometimes** to be accessed via trait objects, you can on-demand
   wrap them into a [`Box<dyn Xyz>`][std::boxed::Box].
 
 The difference is that [`linked::Box`][Box] preserves the linked object functionality - you can
 clone the box, obtain a [`Handle<linked::Box<dyn Xyz>>`][Handle] to transfer the box to another
-thread and store such a box in a static variable in a [link!][folo::linked::link] block.
-However, when you use a [`Box<dyn Xyz>`][std::boxed::Box], you lose the linked object
-functionality.
+thread and store such a box in a static variable in a [linked::variable!][crate::variable] or
+[linked::variable_ref!][crate::variable_ref] block. However, when you use a
+[`Box<dyn Xyz>`][std::boxed::Box], you lose the linked object functionality (but only for the
+instance that you put in the box).
 
 ```rust
 # trait ConfigSource {}
 # struct XmlConfig { config: String }
 # impl ConfigSource for XmlConfig {}
-use folo::linked;
-
 impl XmlConfig {
     pub fn new_as_config_source() -> linked::Box<dyn ConfigSource> {
         linked::new_box!(
