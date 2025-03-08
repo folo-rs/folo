@@ -67,7 +67,7 @@ where
         // Optimistic - if it is already present on this thread, we can just return it.
         if let Some(inner) = LOCAL_REGISTRY.with_borrow(move |registry| {
             registry.get(&self.family_key).map(move |v| {
-                Rc::clone(&v)
+                Rc::clone(v)
                     .downcast::<T>()
                     .expect("PerThread::local: found wrong type in Rc")
             })
