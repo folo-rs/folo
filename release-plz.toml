@@ -1,6 +1,3 @@
 [workspace]
 # TEMP: it currently complains for some unclear reason.
 allow_dirty = true
-# We do not care about making GitHub releases.
-git_release_enable = false
-
