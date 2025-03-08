@@ -32,9 +32,9 @@ where
     }
 
     /// Gets an `Rc` to the current thread's instance of the linked object.
-    /// 
+    ///
     /// # Performance
-    /// 
+    ///
     /// This function merely clones an `Rc`, which is relatively fast but still more work than
     /// doing nothing. If all you need is to execute some logic on the inner type `T`, you may
     /// want to use `.with()` instead, which does not create the `Rc` and saves a few nanoseconds.
@@ -43,9 +43,9 @@ where
     }
 
     /// Executes a closure with the current thread's instance of the linked object.
-    /// 
+    ///
     /// # Performance
-    /// 
+    ///
     /// This is typically the most efficient way to access the current thread's instance of the
     /// linked object.
     pub fn with<F, R>(&self, f: F) -> R
