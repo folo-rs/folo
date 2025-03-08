@@ -253,14 +253,14 @@ pub mod __private;
 mod r#box;
 mod handle;
 mod object;
-mod per_access;
-mod per_thread;
+mod per_access_static;
+mod per_thread_static;
 
 pub use r#box::*;
 pub use handle::*;
 pub use object::*;
-pub use per_access::*;
-pub use per_thread::*;
+pub use per_access_static::*;
+pub use per_thread_static::*;
 
 mod macros;
 
