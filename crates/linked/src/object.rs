@@ -6,7 +6,7 @@ use crate::Handle;
 /// Operations available on every instance of a [linked object][crate].
 ///
 /// The only supported way to implement this is via [`#[linked::object]`][crate::object].
-pub trait Object: Sized + Clone {
+pub trait Object: From<Handle<Self>> + Sized + Clone {
     /// Gets a thread-safe handle that can be used to create linked instances on other threads.
     ///
     /// The returned handle can be converted into a new instance of a linked object via

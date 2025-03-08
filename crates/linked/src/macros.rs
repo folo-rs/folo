@@ -1,9 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Copyright (c) Folo authors.
 
-/// Creates the first instance in a linked object family. You are expected to use this in the
-/// constructor of a [linked object][crate], except when you want to express the linked
-/// object via trait objects, in which case you should use [`linked::new_box`][crate::new_box].
+/// Defines the template used to create every instance in a linked object family.
+/// 
+/// You are expected to use this in the constructor of a [linked object][crate],
+/// except when you want to express the linked object via trait objects,
+/// in which case you should use [`linked::new_box`][crate::new_box].
 ///
 /// The macro body must be a struct-expression of the `Self` type. Any variables the macro body
 /// captures must be thread-safe (`Send` + `Sync` + `'static`). The returned object itself does

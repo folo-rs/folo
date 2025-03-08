@@ -21,7 +21,7 @@ use crate::Handle;
 #[derive(Debug)]
 pub struct PerAccessProvider<T>
 where
-    T: linked::Object + From<Handle<T>> + 'static,
+    T: linked::Object + 'static,
 {
     /// A function we can call to obtain the lookup key for the family of linked objects.
     ///
@@ -40,7 +40,7 @@ where
 
 impl<T> PerAccessProvider<T>
 where
-    T: linked::Object + From<Handle<T>> + 'static,
+    T: linked::Object + 'static,
 {
     /// Note: this function exists to serve the inner workings of the
     /// `linked::instance_per_access!` macro and should not be used directly.
@@ -184,7 +184,7 @@ where
 ///     let token = token_cache.get_token();
 /// }
 /// ```
-/// 
+///
 /// [1]: PerAccessProvider::get
 /// [3]: crate::Handle
 /// [4]: crate::Object::handle
