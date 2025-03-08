@@ -183,6 +183,7 @@ static NEXT_FAMILY_KEY: AtomicU64 = AtomicU64::new(0);
 type HandleRegistry = HashMap<u64, Rc<dyn Any>>;
 
 thread_local! {
+    // TODO: This is a bit of a hot shared map. What if we just replace family_key with a family_map?
     static LOCAL_REGISTRY: RefCell<HandleRegistry> = RefCell::new(HandleRegistry::default());
 }
 
