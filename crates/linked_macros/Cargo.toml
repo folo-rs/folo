@@ -17,6 +17,8 @@ proc-macro = true
 # All the `linked*` crates are published under the same version, as they are
 # all the "logically same" crate, just separated for cargotechnical reasons.
 shared-version = "linked"
+# This crate is invisible, changes are recorded in `linked` changelog instead.
+changelog_update = false
 
 [dependencies]
 linked_macros_impl = { workspace = true }

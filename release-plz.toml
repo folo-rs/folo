@@ -3,3 +3,4 @@
 allow_dirty = true
 # We do not care about making GitHub releases.
 git_release_enable = false
+
