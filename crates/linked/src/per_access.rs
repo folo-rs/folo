@@ -158,20 +158,16 @@ where
 /// Declares that all static variables within the macro body contain [linked objects][crate],
 /// with each access to this variable returning a new instance from the same family.
 ///
-/// Each `.get()` on an included static variable returns a new linked object instance, with all
-/// instances obtained from the same static variable being linked to each other.
-///
-/// The returned instance still works the same as any linked object - you can `.clone()` it to
-/// create additional linked instances without having to go through the static variables, and
-/// you can obtain a handle to the linked object family via `.handle()`, which you can pass to
-/// another thread to allow it to create  instances from the same object family.
+/// Each [`.get()`][1] on an included static variable returns a new linked object instance,
+/// with all instances obtained from the same static variable being part of the same family.
 ///
 /// # Dynamic family relationships
 ///
 /// If you need `Arc`-style dynamic multithreaded storage (i.e. not a single static variable),
-/// pass instances of [`Handle<T>`][crate::Handle] instead of (or in addition to) using this
-/// macro. You can obtain a `Handle` from any linked object via the `.handle()` method, even
-/// if the instance of the linked object originally came from a static variable.
+/// pass instances of [`Handle<T>`][3] between threads instead of (or in addition to)
+/// using this macro. You can obtain a [`Handle<T>`][3] from any linked object via the
+/// [`.handle()`][4] method of the [`linked::Object` trait][5], even if the instance of the
+/// linked object originally came from a static variable.
 ///
 /// # Example
 ///
@@ -188,6 +184,11 @@ where
 ///     let token = token_cache.get_token();
 /// }
 /// ```
+/// 
+/// [1]: PerAccessProvider::get
+/// [3]: crate::Handle
+/// [4]: crate::Object::handle
+/// [5]: crate::Object
 #[macro_export]
 macro_rules! instance_per_access {
     () => {};

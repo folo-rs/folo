@@ -250,19 +250,19 @@
 #[doc(hidden)]
 pub mod __private;
 
+mod r#box;
+mod handle;
+mod object;
 mod per_access;
-pub use per_access::*;
-
 mod per_thread;
+
+pub use r#box::*;
+pub use handle::*;
+pub use object::*;
+pub use per_access::*;
 pub use per_thread::*;
 
-mod r#box;
-pub use r#box::*;
-
 mod macros;
-
-mod types;
-pub use types::*;
 
 /// Marks a struct as implementing the [linked object pattern][crate].
 ///

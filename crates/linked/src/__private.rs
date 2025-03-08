@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use negative_impl::negative_impl;
 
-use crate::types::{Handle, Object};
+use crate::{Handle, Object};
 
 /// Re-export so we can use it via macros in projects that do not have a reference to `paste`.
 pub use ::paste::paste;

@@ -31,21 +31,6 @@ where
         Self { get_storage }
     }
 
-    /// Gets an `Rc` to the current thread's instance of the linked object.
-    ///
-    /// The instance behind this `Rc` is the same one accessed by all other calls through the static
-    /// variable on this thread. Note that it is still possible to create multiple instances on a
-    /// single thread, e.g. by cloning the `T` within.
-    ///
-    /// # Performance
-    ///
-    /// This function merely clones an `Rc`, which is relatively fast but still more work than
-    /// doing nothing. If all you need is to execute some logic on the inner type `T`, you may
-    /// want to use `.with()` instead, which does not create the `Rc` and saves a few nanoseconds.
-    pub fn to_rc(&self) -> Rc<T> {
-        (self.get_storage)().with(Rc::clone)
-    }
-
     /// Executes a closure with the current thread's instance of the linked object.
     ///
     /// # Performance
@@ -58,31 +43,44 @@ where
     {
         (self.get_storage)().with(f)
     }
+
+    /// Gets an `Rc` to the current thread's instance of the linked object.
+    ///
+    /// The instance behind this `Rc` is the same one accessed by all other calls through the static
+    /// variable on this thread. Note that it is still possible to create multiple instances on a
+    /// single thread, e.g. by cloning the `T` within.
+    ///
+    /// # Performance
+    ///
+    /// This function merely clones an `Rc`, which is relatively fast but still more work than
+    /// doing nothing. If all you need is to execute some logic on the inner type `T`, you may
+    /// want to use [`.with()`][Self::with] instead, which does not create the `Rc` and saves
+    /// a few nanoseconds.
+    pub fn to_rc(&self) -> Rc<T> {
+        (self.get_storage)().with(Rc::clone)
+    }
 }
 
 /// Declares that all static variables within the macro body contain [linked objects][crate],
 /// with a single instance from the same family maintained per-thread (at least by this
 /// macro - user code may still create additional instances via cloning).
 ///
-/// Call `.with()` to execute a closure with a shared reference to the linked object. This is the
-/// most efficient way to use the value, although the closure style is not always appropriate.
+/// Call [`.with()`][2] to execute a closure with a shared reference to the current thread's
+/// instance of the linked object. This is the most efficient way to use the static variable,
+/// although the closure style can sometimes be cumbersome.
 ///
-/// Call `.get()` on the static variable to obtain a thread-specific linked instance of the type
-/// within, wrapped in an `Rc`. This does not limit you to a closure. Every call to `.get()`
-/// returns an `Rc` for the same instance per thread (though you may clone the `T` inside to
+/// Call [`.to_rc()`][1] on the static variable to obtain a thread-specific linked instance
+/// of the object, wrapped in an `Rc`. This does not limit you to a closure. Every [`.to_rc()`][1]
+/// call returns an `Rc` for the same instance per thread (though you may clone the `T` inside to
 /// create additional instances not governed by the mechanics of this macro).
-///
-/// The returned instance still works the same as any linked object - you can `.clone()` it to
-/// create additional linked instances without having to go through the static variables, and
-/// you can obtain a handle to the linked object family via `.handle()`, which you can pass to
-/// another thread to allow it to create  instances from the same object family.
 ///
 /// # Dynamic family relationships
 ///
 /// If you need `Arc`-style dynamic multithreaded storage (i.e. not a single static variable),
-/// pass instances of [`Handle<T>`][crate::Handle] instead of (or in addition to) using this
-/// macro. You can obtain a `Handle` from any linked object via the `.handle()` method, even
-/// if the instance of the linked object originally came from a static variable.
+/// pass instances of [`Handle<T>`][3] between threads instead of (or in addition to)
+/// using this macro. You can obtain a [`Handle<T>`][3] from any linked object via the
+/// [`.handle()`][4] method of the [`linked::Object` trait][5], even if the instance of the
+/// linked object originally came from a static variable.
 ///
 /// # Example
 ///
@@ -97,6 +95,12 @@ where
 ///     let token = TOKEN_CACHE.with(|cache| cache.get_token());
 /// }
 /// ```
+///
+/// [1]: PerThreadProvider::to_rc
+/// [2]: PerThreadProvider::with
+/// [3]: crate::Handle
+/// [4]: crate::Object::handle
+/// [5]: crate::Object
 #[macro_export]
 macro_rules! instance_per_thread {
     () => {};
