@@ -4,6 +4,7 @@ prepare-release:
 
 [group('release')]
 release:
+    #!{{ shebang }}
     $env:GIT_TOKEN = gh auth token
     try {
         release-plz release --dry-run
