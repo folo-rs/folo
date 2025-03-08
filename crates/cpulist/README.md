@@ -1,17 +1,10 @@
-# cpulist
-
 Utilities for parsing and emitting strings in the the `cpulist` format often used by Linux
-utilities that work with processor IDs, memory region IDs and similar numeric hardware identifiers.
+utilities that work with processor IDs, memory region IDs and similar numeric hardware
+identifiers.
 
-Example: `0,1,2-4,5-9:2,6-10:2`
+Example cpulist string: `0,1,2-4,5-9:2,6-10:2`
 
-The value is a comma-separated list of zero or more integers or integer ranges, where each item
-is either:
+More details in the [crate documentation](https://docs.rs/cpulist/).
 
-* a single integer (e.g. `1`)
-* a range of integers (e.g. `2-4`)
-* a range of integers with a stride (step size) operator (e.g. `5-9:2` which is equivalent to `5,7,9`)
-
-Whitespace or extra characters are not allowed anywhere in the string.
-
-The identifiers in the list are of size `u32`.
+This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
+high-performance hardware-aware programming in Rust.

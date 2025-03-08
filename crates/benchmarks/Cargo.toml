@@ -10,8 +10,8 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-[package.metadata.release]
-release = false
+[lib]
+doc = false
 
 [dependencies]
 many_cpus_benchmarking = { path = "../many_cpus_benchmarking" }
