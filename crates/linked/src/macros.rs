@@ -2,7 +2,7 @@
 // Copyright (c) Folo authors.
 
 /// Defines the template used to create every instance in a linked object family.
-/// 
+///
 /// You are expected to use this in the constructor of a [linked object][crate],
 /// except when you want to express the linked object via trait objects,
 /// in which case you should use [`linked::new_box`][crate::new_box].
