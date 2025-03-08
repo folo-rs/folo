@@ -9,5 +9,6 @@ _default:
 
 import 'just_basics.just'
 import 'just_quality.just'
+import 'just_release.just'
 import 'just_setup.just'
 import 'just_testing.just'

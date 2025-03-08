@@ -21,6 +21,7 @@ Prerequisites:
 * Rust development tools for version listed in `rust-toolchain.toml`
 * `rustup toolchain install nightly`
 * `cargo install just`
+* (Only if publishing releases) GitHub CLI + `gh auth login`
 
 Setup:
 
