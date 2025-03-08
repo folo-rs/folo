@@ -8,7 +8,7 @@ use std::sync::{LazyLock, RwLock};
 
 use hash_hasher::HashedMap;
 
-use crate::types::{Handle, Object};
+use crate::Handle;
 
 /// This is the real type of variables wrapped in the [`linked::instance_per_access!` macro][1].
 /// See macro documentation for more details.
@@ -21,7 +21,7 @@ use crate::types::{Handle, Object};
 #[derive(Debug)]
 pub struct PerAccessProvider<T>
 where
-    T: Object + From<Handle<T>> + 'static,
+    T: linked::Object + From<Handle<T>> + 'static,
 {
     /// A function we can call to obtain the lookup key for the family of linked objects.
     ///
@@ -40,7 +40,7 @@ where
 
 impl<T> PerAccessProvider<T>
 where
-    T: Object + From<Handle<T>> + 'static,
+    T: linked::Object + From<Handle<T>> + 'static,
 {
     /// Note: this function exists to serve the inner workings of the
     /// `linked::instance_per_access!` macro and should not be used directly.

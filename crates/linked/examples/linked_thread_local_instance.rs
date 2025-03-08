@@ -74,8 +74,8 @@ fn main() {
     for _ in 0..THREAD_COUNT {
         threads.push(thread::spawn(move || {
             // These are the exact same instance, just accessed via different references.
-            let counter = RECORDS_PROCESSED.get();
-            let counter2 = RECORDS_PROCESSED.get();
+            let counter = RECORDS_PROCESSED.to_rc();
+            let counter2 = RECORDS_PROCESSED.to_rc();
 
             for _ in 0..RECORDS_PER_THREAD {
                 counter.increment();
@@ -83,7 +83,7 @@ fn main() {
             }
 
             // Again, the exact same instance as above!
-            let counter = RECORDS_PROCESSED.get();
+            let counter = RECORDS_PROCESSED.to_rc();
 
             println!(
                 "Thread completed work; thread local count: {}, global count: {}",
@@ -97,7 +97,7 @@ fn main() {
         thread.join().unwrap();
     }
 
-    let final_count = RECORDS_PROCESSED.get().global_count();
+    let final_count = RECORDS_PROCESSED.to_rc().global_count();
 
     println!("All threads completed work; final global count: {final_count}");
 }

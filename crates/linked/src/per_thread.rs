@@ -14,14 +14,14 @@ use std::{rc::Rc, thread::LocalKey};
 #[derive(Debug)]
 pub struct PerThreadProvider<T>
 where
-    T: 'static,
+    T: linked::Object + 'static,
 {
     get_storage: fn() -> &'static LocalKey<Rc<T>>,
 }
 
 impl<T> PerThreadProvider<T>
 where
-    T: 'static,
+    T: linked::Object + 'static,
 {
     /// Note: this function exists to serve the inner workings of the
     /// `linked::instance_per_thread!` macro and should not be used directly.
@@ -33,12 +33,16 @@ where
 
     /// Gets an `Rc` to the current thread's instance of the linked object.
     ///
+    /// The instance behind this `Rc` is the same one accessed by all other calls through the static
+    /// variable on this thread. Note that it is still possible to create multiple instances on a
+    /// single thread, e.g. by cloning the `T` within.
+    ///
     /// # Performance
     ///
     /// This function merely clones an `Rc`, which is relatively fast but still more work than
     /// doing nothing. If all you need is to execute some logic on the inner type `T`, you may
     /// want to use `.with()` instead, which does not create the `Rc` and saves a few nanoseconds.
-    pub fn get(&self) -> Rc<T> {
+    pub fn to_rc(&self) -> Rc<T> {
         (self.get_storage)().with(Rc::clone)
     }
 
@@ -147,8 +151,8 @@ mod tests {
             static YELLOW_TOKEN_CACHE: TokenCache = TokenCache::new(2000);
         }
 
-        assert_eq!(BLUE_TOKEN_CACHE.get().value(), 1000);
-        assert_eq!(YELLOW_TOKEN_CACHE.get().value(), 2000);
+        assert_eq!(BLUE_TOKEN_CACHE.to_rc().value(), 1000);
+        assert_eq!(YELLOW_TOKEN_CACHE.to_rc().value(), 2000);
 
         BLUE_TOKEN_CACHE.with(|cache| {
             assert_eq!(cache.value(), 1000);
@@ -157,26 +161,26 @@ mod tests {
             assert_eq!(cache.value(), 2000);
         });
 
-        BLUE_TOKEN_CACHE.get().increment();
-        YELLOW_TOKEN_CACHE.get().increment();
+        BLUE_TOKEN_CACHE.to_rc().increment();
+        YELLOW_TOKEN_CACHE.to_rc().increment();
 
-        assert_eq!(BLUE_TOKEN_CACHE.get().value(), 1001);
-        assert_eq!(YELLOW_TOKEN_CACHE.get().value(), 2001);
+        assert_eq!(BLUE_TOKEN_CACHE.to_rc().value(), 1001);
+        assert_eq!(YELLOW_TOKEN_CACHE.to_rc().value(), 2001);
 
         thread::spawn(move || {
-            assert_eq!(BLUE_TOKEN_CACHE.get().value(), 1000);
-            assert_eq!(YELLOW_TOKEN_CACHE.get().value(), 2000);
+            assert_eq!(BLUE_TOKEN_CACHE.to_rc().value(), 1000);
+            assert_eq!(YELLOW_TOKEN_CACHE.to_rc().value(), 2000);
 
-            BLUE_TOKEN_CACHE.get().increment();
-            YELLOW_TOKEN_CACHE.get().increment();
+            BLUE_TOKEN_CACHE.to_rc().increment();
+            YELLOW_TOKEN_CACHE.to_rc().increment();
 
-            assert_eq!(BLUE_TOKEN_CACHE.get().value(), 1001);
-            assert_eq!(YELLOW_TOKEN_CACHE.get().value(), 2001);
+            assert_eq!(BLUE_TOKEN_CACHE.to_rc().value(), 1001);
+            assert_eq!(YELLOW_TOKEN_CACHE.to_rc().value(), 2001);
         })
         .join()
         .unwrap();
 
-        assert_eq!(BLUE_TOKEN_CACHE.get().value(), 1001);
-        assert_eq!(YELLOW_TOKEN_CACHE.get().value(), 2001);
+        assert_eq!(BLUE_TOKEN_CACHE.to_rc().value(), 1001);
+        assert_eq!(YELLOW_TOKEN_CACHE.to_rc().value(), 2001);
     }
 }
