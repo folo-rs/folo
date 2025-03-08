@@ -1,3 +1,0 @@
-* Do we need some consideration for different hierarchy levels? e.g. same physical memory but different caches?
-* Do we need to offer any socket-related functionality? In terms of RSS targeting - do we want to be able to pin certain threads to RSS processors or to non-RSS processors? Unclear what may be desirable but there is potential there.
-* The Linux support is limited by cpu_set_t size, which means we can only do 1024 processors, larger will fail assertions due to out of bounds access. We need to dynamically allocate the CPU sets.
