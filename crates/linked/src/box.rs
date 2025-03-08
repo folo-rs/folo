@@ -7,14 +7,14 @@ use std::ops::{Deref, DerefMut};
 /// A linked object that acts like a `Box<T>` over linked instances of `T`. This is primarily meant
 /// to be used with the `T` being a trait object, for types exposed to user code via trait objects.
 ///
-/// The `Box` itself implements the linked object mechanics like storing the `Link<T>`. The type
-/// `T` within does not need to be extended with any elements of the linked object pattern (i.e.
-/// the type within does not need `#[linked::object]` - the box itself acts in that role).
+/// The `Box` itself implements the linked object mechanics from [`#[linked::object]`][3]. The type
+/// `T` within does not need to implement the mechanics of the linked object pattern itself (i.e.
+/// the type within does not need [`#[linked::object]`][3] - the box itself acts in that role).
 ///
 /// # Usage
 ///
 /// Use it like a regular `Box<T>` that also happens to support the linked objects mechanisms via
-/// the [`linked::variable!`][crate::variable] or [`linked::variable_ref!`][crate::variable_ref]
+/// the [`linked::instance_per_access!`][1] or [`linked::instance_per_thread!`][2]
 /// macros and offers the API surface for handle-based transfer across threads via `.handle()`.
 ///
 /// # Implementation
@@ -91,6 +91,10 @@ use std::ops::{Deref, DerefMut};
 /// assert_eq!(configs[0].config(), "xml".to_string());
 /// assert_eq!(configs[1].config(), "ini".to_string());
 /// ```
+/// 
+/// [1]: crate::instance_per_access
+/// [2]: crate::instance_per_thread
+/// [3]: crate::object
 #[linked::object]
 #[derive(Debug)]
 pub struct Box<T: ?Sized + 'static> {

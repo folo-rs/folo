@@ -22,7 +22,7 @@ impl Payload {
     }
 }
 
-linked::variable! {
+linked::instance_per_access! {
     static PAYLOAD: Payload = Payload::new();
 }
 
@@ -51,8 +51,8 @@ seq!(N in 0..1000 {
     #[allow(non_camel_case_types)]
     struct __lookup_key_~N;
 
-    const PAYLOAD_MANY_~N : ::linked::Variable<Payload> =
-        ::linked::Variable::new(
+    const PAYLOAD_MANY_~N : ::linked::PerAccessProvider<Payload> =
+        ::linked::PerAccessProvider::new(
             ::std::any::TypeId::of::<__lookup_key_~N>,
             Payload::new
         );

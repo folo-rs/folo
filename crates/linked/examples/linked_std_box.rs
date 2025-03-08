@@ -67,7 +67,7 @@ mod counters {
 
 use counters::*;
 
-linked::variable!(static RECORDS_PROCESSED: EventCounter = EventCounter::new());
+linked::instance_per_access!(static RECORDS_PROCESSED: EventCounter = EventCounter::new());
 
 // Here we have some code that takes ownership of abstract count results. In this simple example
 // there is of course no real "need" for us to use an abstraction but let's pretend we have a

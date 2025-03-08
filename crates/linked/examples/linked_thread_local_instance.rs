@@ -63,7 +63,7 @@ mod counters {
 
 use counters::*;
 
-linked::variable_ref!(static RECORDS_PROCESSED: EventCounter = EventCounter::new());
+linked::instance_per_thread!(static RECORDS_PROCESSED: EventCounter = EventCounter::new());
 
 fn main() {
     const THREAD_COUNT: usize = 4;

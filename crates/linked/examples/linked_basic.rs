@@ -56,7 +56,7 @@ use counters::*;
 // A static variable provides linked instances of the event counter on any thread.
 // The `linked::variable!` macro gives all necessary superpowers to this static variable.
 // This is the simplest way to create instances that are linked across threads.
-linked::variable!(static RECORDS_PROCESSED: EventCounter = EventCounter::new());
+linked::instance_per_access!(static RECORDS_PROCESSED: EventCounter = EventCounter::new());
 
 fn main() {
     const THREAD_COUNT: usize = 4;

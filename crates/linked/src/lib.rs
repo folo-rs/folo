@@ -22,13 +22,19 @@
 //! 1. and share some thread-safe state via messaging or synchronized state;
 //! 1. and perform all collaboration between instances without involvement of user code (i.e. there is
 //!    no `Arc` or `Mutex` that the user needs to create).
+//! 
+//! Note that despite instances of linked objects being thread-local (`!Send`), there may still be
+//! multiple instances per thread.
 //!
 //! Instances belong to the same family if they:
 //!
 //! - are created via cloning;
 //! - or are created by obtaining a thread-safe [Handle] and converting it to a new instance;
-//! - or are obtained from the same static variable in a [linked::variable!][crate::variable]
-//!   or [linked::variable_ref!][crate::variable_ref] macro block.
+//! - or are obtained from the same static variable in a [`linked::instance_per_access!`][1]
+//!   or [`linked::instance_per_thread!`][2] macro block.
+//! 
+//! [1]: crate::instance_per_access
+//! [2]: crate::instance_per_thread
 //!
 //! # Using and defining linked objects
 //!
@@ -124,7 +130,7 @@
 //!
 //! Each instance of a linked object is single-threaded (enforced at compile time). To create a
 //! related instance on a different thread, you must either use a static variable inside a
-//! [`linked::variable!`][crate::variable] or [`linked::variable_ref!`][crate::variable_ref] block or
+//! [`linked::instance_per_access!`][1] or [`linked::instance_per_thread!`][2] block or
 //! obtain a [Handle] that you can transfer to another thread and use to obtain a new instance there.
 //! Linked object handles are thread-safe.
 //!
@@ -152,7 +158,7 @@
 //! # }
 //! use std::thread;
 //!
-//! linked::variable!(static THE_THING: Thing = Thing::new("hello".to_string()));
+//! linked::instance_per_access!(static THE_THING: Thing = Thing::new("hello".to_string()));
 //!
 //! let thing = THE_THING.get();
 //! assert_eq!(thing.value(), "hello");
@@ -216,8 +222,8 @@
 //!
 //! The difference is that [`linked::Box`] preserves the linked object functionality - you can
 //! clone the box, obtain a [`Handle<linked::Box<dyn Xyz>>`][Handle] to transfer the box to another
-//! thread and store such a box in a static variable in a [linked::variable!][crate::variable] or
-//! [linked::variable_ref!][crate::variable_ref] block. However, when you use a
+//! thread and store such a box in a static variable in a [`linked::instance_per_access!`][1] or
+//! [`linked::instance_per_thread!`][2] block. However, when you use a
 //! [`Box<dyn Xyz>`][std::boxed::Box], you lose the linked object functionality (but only for the
 //! instance that you put in the box).
 //!
@@ -244,11 +250,11 @@
 #[doc(hidden)]
 pub mod __private;
 
-mod block;
-pub use block::*;
+mod per_access;
+pub use per_access::*;
 
-mod block_rc;
-pub use block_rc::*;
+mod per_thread;
+pub use per_thread::*;
 
 mod r#box;
 pub use r#box::*;
