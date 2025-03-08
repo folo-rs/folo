@@ -91,7 +91,7 @@ use std::ops::{Deref, DerefMut};
 /// assert_eq!(configs[0].config(), "xml".to_string());
 /// assert_eq!(configs[1].config(), "ini".to_string());
 /// ```
-/// 
+///
 /// [1]: crate::instance_per_access
 /// [2]: crate::instance_per_thread
 /// [3]: crate::object

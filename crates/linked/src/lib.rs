@@ -22,7 +22,7 @@
 //! 1. and share some thread-safe state via messaging or synchronized state;
 //! 1. and perform all collaboration between instances without involvement of user code (i.e. there is
 //!    no `Arc` or `Mutex` that the user needs to create).
-//! 
+//!
 //! Note that despite instances of linked objects being thread-local (`!Send`), there may still be
 //! multiple instances per thread.
 //!
@@ -32,7 +32,7 @@
 //! - or are created by obtaining a thread-safe [Handle] and converting it to a new instance;
 //! - or are obtained from the same static variable in a [`linked::instance_per_access!`][1]
 //!   or [`linked::instance_per_thread!`][2] macro block.
-//! 
+//!
 //! [1]: crate::instance_per_access
 //! [2]: crate::instance_per_thread
 //!
