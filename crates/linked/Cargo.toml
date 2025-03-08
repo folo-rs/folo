@@ -10,13 +10,6 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-[package.metadata.release]
-# All the `linked*` crates are published under the same version, as they are
-# all the "logically same" crate, just separated for cargotechnical reasons.
-shared-version = "linked"
-# Changelogs of these two are merged into the `linked` crate as the others are "invisible" crates.
-changelog_include = ["linked_macros", "linked_macros_impl"]
-
 [dependencies]
 hash_hasher = { workspace = true }
 linked_macros = { workspace = true }

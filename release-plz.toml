@@ -1,3 +1,33 @@
 [workspace]
 # TEMP: it currently complains for some unclear reason.
 allow_dirty = true
+
+[[package]]
+name = "linked"
+
+# Changelogs of these two are merged into the `linked` crate as the others are "invisible" crates.
+changelog_include = ["linked_macros", "linked_macros_impl"]
+
+# All the `linked*` crates are published under the same version, as they are
+# all the "logically same" crate, just separated for cargotechnical reasons.
+version_group = "linked"
+
+[[package]]
+name = "linked_macros"
+
+# This crate is invisible, changes are recorded in `linked` changelog instead.
+changelog_update = false
+
+# All the `linked*` crates are published under the same version, as they are
+# all the "logically same" crate, just separated for cargotechnical reasons.
+version_group = "linked"
+
+[[package]]
+name = "linked_macros_impl"
+
+# This crate is invisible, changes are recorded in `linked` changelog instead.
+changelog_update = false
+
+# All the `linked*` crates are published under the same version, as they are
+# all the "logically same" crate, just separated for cargotechnical reasons.
+version_group = "linked"
