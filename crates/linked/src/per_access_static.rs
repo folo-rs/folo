@@ -19,7 +19,7 @@ use crate::{ERR_POISONED_LOCK, Handle};
 ///
 /// [1]: [crate::instance_per_access]
 #[derive(Debug)]
-pub struct PerAccessProvider<T>
+pub struct PerAccessStatic<T>
 where
     T: linked::Object,
 {
@@ -38,7 +38,7 @@ where
     first_instance_provider: fn() -> T,
 }
 
-impl<T> PerAccessProvider<T>
+impl<T> PerAccessStatic<T>
 where
     T: linked::Object,
 {
@@ -204,8 +204,8 @@ macro_rules! instance_per_access {
             #[allow(non_camel_case_types)]
             struct [<__lookup_key_ $NAME>];
 
-            $(#[$attr])* $vis const $NAME: ::linked::PerAccessProvider<$t> =
-                ::linked::PerAccessProvider::new(
+            $(#[$attr])* $vis const $NAME: ::linked::PerAccessStatic<$t> =
+                ::linked::PerAccessStatic::new(
                     ::std::any::TypeId::of::<[<__lookup_key_ $NAME>]>,
                     move || $e);
         }
@@ -249,7 +249,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::thread;
 
-    use crate::PerAccessProvider;
+    use crate::PerAccessStatic;
 
     #[linked::object]
     struct TokenCache {
@@ -282,10 +282,10 @@ mod tests {
         struct RedKey;
         struct GreenKey;
 
-        const RED_TOKEN_CACHE: PerAccessProvider<TokenCache> =
-            PerAccessProvider::new(TypeId::of::<RedKey>, || TokenCache::new(42));
-        const GREEN_TOKEN_CACHE: PerAccessProvider<TokenCache> =
-            PerAccessProvider::new(TypeId::of::<GreenKey>, || TokenCache::new(99));
+        const RED_TOKEN_CACHE: PerAccessStatic<TokenCache> =
+            PerAccessStatic::new(TypeId::of::<RedKey>, || TokenCache::new(42));
+        const GREEN_TOKEN_CACHE: PerAccessStatic<TokenCache> =
+            PerAccessStatic::new(TypeId::of::<GreenKey>, || TokenCache::new(99));
 
         assert_eq!(RED_TOKEN_CACHE.get().value(), 42);
         assert_eq!(GREEN_TOKEN_CACHE.get().value(), 99);

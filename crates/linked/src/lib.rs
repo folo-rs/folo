@@ -24,17 +24,20 @@
 //!    no `Arc` or `Mutex` that the user needs to create).
 //!
 //! Note that despite instances of linked objects being thread-local (`!Send`), there may still be
-//! multiple instances per thread.
+//! multiple instances per thread. You can explicitly opt-in to "one per thread" behavior via the
+//! [`linked::PerThread<T>`][3] wrapper.
 //!
 //! Instances belong to the same family if they:
 //!
 //! - are created via cloning;
 //! - or are created by obtaining a thread-safe [Handle] and converting it to a new instance;
 //! - or are obtained from the same static variable in a [`linked::instance_per_access!`][1]
-//!   or [`linked::instance_per_thread!`][2] macro block.
+//!   or [`linked::instance_per_thread!`][2] macro block;
+//! - or are created from the same [`linked::PerThread<T>`][3] or one of its clones.
 //!
 //! [1]: crate::instance_per_access
 //! [2]: crate::instance_per_thread
+//! [3]: crate::PerThread
 //!
 //! # Using and defining linked objects
 //!

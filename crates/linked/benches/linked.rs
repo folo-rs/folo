@@ -51,8 +51,8 @@ seq!(N in 0..1000 {
     #[allow(non_camel_case_types)]
     struct __lookup_key_~N;
 
-    const PAYLOAD_MANY_~N : ::linked::PerAccessProvider<Payload> =
-        ::linked::PerAccessProvider::new(
+    const PAYLOAD_MANY_~N : ::linked::PerAccessStatic<Payload> =
+        ::linked::PerAccessStatic::new(
             ::std::any::TypeId::of::<__lookup_key_~N>,
             Payload::new
         );

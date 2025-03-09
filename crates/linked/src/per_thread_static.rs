@@ -12,14 +12,14 @@ use std::{rc::Rc, thread::LocalKey};
 ///
 /// [1]: [crate::instance_per_thread]
 #[derive(Debug)]
-pub struct PerThreadProvider<T>
+pub struct PerThreadStatic<T>
 where
     T: linked::Object,
 {
     get_storage: fn() -> &'static LocalKey<Rc<T>>,
 }
 
-impl<T> PerThreadProvider<T>
+impl<T> PerThreadStatic<T>
 where
     T: linked::Object,
 {
@@ -116,8 +116,8 @@ macro_rules! instance_per_thread {
 
             thread_local!(#[doc(hidden)] static [< $NAME _RC >]: ::std::rc::Rc<$t> = ::std::rc::Rc::new([< $NAME _INITIALIZER >].get()));
 
-            $(#[$attr])* $vis const $NAME: ::linked::PerThreadProvider<$t> =
-                ::linked::PerThreadProvider::new(move || &[< $NAME _RC >]);
+            $(#[$attr])* $vis const $NAME: ::linked::PerThreadStatic<$t> =
+                ::linked::PerThreadStatic::new(move || &[< $NAME _RC >]);
         }
     };
 }
