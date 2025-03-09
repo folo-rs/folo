@@ -23,7 +23,7 @@ This is an umbrella project that covers multiple largely independent crates:
 
 | Crate                                             | Description                                                                                                  |
 |---------------------------------------------------|--------------------------------------------------------------------------------------------------------------|
-| [`linked`](crates/linked/README.md)               | Create families of linked objects that can collaborate across threads while being internally single-threaded |
+| [`linked`](crates/linked/README.md) + siblings    | Create families of linked objects that can collaborate across threads while being internally single-threaded |
 | [`many_cpus`](crates/many_cpus/README.md)         | Efficiently schedule work and inspect the hardware environment on many-processor systems                     |
 | [`region_cached`](crates/region_cached/README.md) | Add a layer of cache between L3 and main memory                                                              |
 | [`region_local`](crates/region_local/README.md)   | Isolate variable storage per memory region, similar to `thread_local!`                                       |
@@ -38,9 +38,10 @@ functionality. They only indirectly contribute to the Folo mission, so are liste
 
 There are also some development-only crates in this repo, which are not published:
 
-| Crate                             | Description                                                                        |
-|-----------------------------------|------------------------------------------------------------------------------------|
-| [`benchmarks`](crates/benchmarks) | Random pile of benchmarks to explore relevant scenarios and guide Folo development |
+| Crate                                       | Description                                                                        |
+|---------------------------------------------|------------------------------------------------------------------------------------|
+| [`benchmark_utils`](crates/benchmark_utils) | Common benchmarking logic used across the crates in this project                   |
+| [`benchmarks`](crates/benchmarks)           | Random pile of benchmarks to explore relevant scenarios and guide Folo development |
 
 # Development environment setup
 

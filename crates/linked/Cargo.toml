@@ -17,6 +17,7 @@ negative-impl = { workspace = true }
 paste = { workspace = true }
 
 [dev-dependencies]
+benchmark_utils = { path = "../benchmark_utils" }
 criterion = { workspace = true }
 many_cpus = { workspace = true }
 seq-macro = { workspace = true }
@@ -27,4 +28,8 @@ harness = false
 
 [[bench]]
 name = "per_thread"
+harness = false
+
+[[bench]]
+name = "per_thread_static"
 harness = false

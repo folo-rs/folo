@@ -1,13 +1,12 @@
 use std::{
     cell::Cell,
     hint::black_box,
-    sync::{Arc, Barrier, atomic::AtomicUsize},
-    time::{Duration, Instant},
+    sync::{Arc, atomic::AtomicUsize},
 };
 
+use benchmark_utils::bench_on_every_processor;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use linked::PerThread;
-use many_cpus::ProcessorSet;
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
@@ -158,49 +157,6 @@ fn thread_local_multithreaded(c: &mut Criterion) {
     });
 
     g.finish();
-}
-
-fn bench_on_every_processor<P, D, F>(iters: u64, prepare_fn: P, iter_fn: F) -> Duration
-where
-    P: Fn() -> D + Send + Clone + 'static,
-    F: Fn(&D) + Send + Clone + 'static,
-{
-    let processors = ProcessorSet::all();
-
-    // All threads will wait on this before starting, so they start together.
-    let barrier = Arc::new(Barrier::new(processors.len()));
-
-    let threads = processors.spawn_threads({
-        let barrier = barrier.clone();
-        move |_| {
-            let data = prepare_fn();
-
-            barrier.wait();
-
-            let start = Instant::now();
-
-            for _ in 0..iters {
-                iter_fn(&data);
-            }
-
-            let elapsed = start.elapsed();
-
-            drop(data);
-
-            elapsed
-        }
-    });
-
-    let mut total_elapsed_nanos = 0;
-
-    let thread_count = threads.len();
-
-    for thread in threads {
-        let elapsed = thread.join().unwrap();
-        total_elapsed_nanos += elapsed.as_nanos();
-    }
-
-    Duration::from_nanos((total_elapsed_nanos / thread_count as u128) as u64)
 }
 
 fn thread_local_access(c: &mut Criterion) {
