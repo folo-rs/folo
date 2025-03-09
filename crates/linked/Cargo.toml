@@ -18,8 +18,13 @@ paste = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+many_cpus = { workspace = true }
 seq-macro = { workspace = true }
 
 [[bench]]
 name = "linked"
+harness = false
+
+[[bench]]
+name = "per_thread"
 harness = false

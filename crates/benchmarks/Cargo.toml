@@ -14,7 +14,7 @@ rust-version.workspace = true
 doc = false
 
 [dependencies]
-many_cpus_benchmarking = { path = "../many_cpus_benchmarking" }
+many_cpus_benchmarking = { workspace = true }
 
 criterion = { workspace = true }
 fake_headers = { workspace = true }
