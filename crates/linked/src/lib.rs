@@ -251,6 +251,7 @@
 pub mod __private;
 
 mod r#box;
+mod constants;
 mod handle;
 mod object;
 mod per_access_static;
@@ -258,6 +259,7 @@ mod per_thread;
 mod per_thread_static;
 
 pub use r#box::*;
+pub(crate) use constants::*;
 pub use handle::*;
 pub use object::*;
 pub use per_access_static::*;

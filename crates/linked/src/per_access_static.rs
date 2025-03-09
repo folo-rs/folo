@@ -8,7 +8,7 @@ use std::sync::{LazyLock, RwLock};
 
 use hash_hasher::HashedMap;
 
-use crate::Handle;
+use crate::{ERR_POISONED_LOCK, Handle};
 
 /// This is the real type of variables wrapped in the [`linked::instance_per_access!` macro][1].
 /// See macro documentation for more details.
@@ -211,9 +211,6 @@ macro_rules! instance_per_access {
         }
     };
 }
-
-// A poisoned lock means the process is in an unrecoverable/unsafe state and must exit (we panic).
-const ERR_POISONED_LOCK: &str = "encountered poisoned lock";
 
 // We use HashedMap which takes the raw value from Hash::hash() and uses it directly as the key.
 // This is OK because TypeId already returns a hashed value as its raw value, no need to hash more.
