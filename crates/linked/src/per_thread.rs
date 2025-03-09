@@ -104,10 +104,8 @@ where
 }
 
 /// A thread-local instance of a linked object of type `T`. This acts in a manner similar to
-/// `Rc<T>` for a type `T` that implements the [linked object pattern][crate].
-///
-/// For details, see documentation of [`PerThread<T>`][PerThread] which is the type used to
-/// create instances of `ThreadLocal<T>`.
+/// `Rc<T>` for a type `T` that implements the [linked object pattern][crate]. For details,
+/// see [`PerThread<T>`][PerThread] which is the type used to create instances of `ThreadLocal<T>`.
 #[derive(Debug)]
 pub struct ThreadLocal<T>
 where

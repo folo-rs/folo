@@ -96,8 +96,8 @@ where
 /// }
 /// ```
 ///
-/// [1]: PerThreadProvider::to_rc
-/// [2]: PerThreadProvider::with
+/// [1]: PerThreadStatic::to_rc
+/// [2]: PerThreadStatic::with
 /// [3]: crate::Handle
 /// [4]: crate::Object::handle
 /// [5]: crate::Object

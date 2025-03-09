@@ -185,7 +185,7 @@ where
 /// }
 /// ```
 ///
-/// [1]: PerAccessProvider::get
+/// [1]: PerAccessStatic::get
 /// [3]: crate::Handle
 /// [4]: crate::Object::handle
 /// [5]: crate::Object

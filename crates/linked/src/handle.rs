@@ -6,12 +6,12 @@ use std::sync::Arc;
 
 use crate::__private::{InstanceFactory, Link};
 
-/// A handle that can be transformed into an instance of a [linked object][crate]
-/// from a specific family of linked objects of type `T`.
+/// A handle can be obtained from any instance of a [linked object][crate] and used to create new
+/// instances from the same family on any thread.
 ///
-/// The handle can be cloned to allow multiple instances of the linked object to be created.
-/// Alternatively, the instances of linked objects can themselves be cloned - both approaches
-/// end up with the same outcome.
+/// Contrast this to cloning the linked object, which can only create a new instance on the same
+/// thread because linked object instances do not implement `Send` and cannot be moved across
+/// threads.
 ///
 /// # Thread safety
 ///

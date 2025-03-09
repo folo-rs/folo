@@ -5,7 +5,8 @@ use std::boxed::Box as StdBox;
 use std::ops::{Deref, DerefMut};
 
 /// A linked object that acts like a `Box<T>` over linked instances of `T`. This is primarily meant
-/// to be used with the `T` being a trait object, for types exposed to user code via trait objects.
+/// to be used with the `T` being a trait object, for types exposed to user code via trait objects
+/// as `linked::Box<dyn MyTrait>`.
 ///
 /// The `Box` itself implements the linked object mechanics from [`#[linked::object]`][3]. The type
 /// `T` within does not need to implement the mechanics of the linked object pattern itself (i.e.
