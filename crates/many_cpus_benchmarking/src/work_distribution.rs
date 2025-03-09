@@ -41,6 +41,10 @@ pub enum WorkDistribution {
     /// Each pair will work together, processing one payload between the two members. Different
     /// pairs may be in different memory regions.
     ///
+    /// This can occasionally be insightful when it surprises you by showing that two threads on
+    /// the same processor do not need twice as long to get twice as much work done. Not useful
+    /// with most scenarios, though - best to skip unless probing specifically for this effect.
+    ///
     /// The number of pairs will match the number that would have been used with
     /// `PinnedMemoryRegionPairs`, for optimal comparability. There will be a minimum of one pair.
     PinnedSameProcessor,
@@ -55,6 +59,9 @@ pub enum WorkDistribution {
     /// Note that this requires the benchmark scenario logic to be capable of handling its own data
     /// set. If the benchmark logic requires two collaborating workers, you cannot use this work
     /// distribution as it would likely end in a deadlock due to lack of a partner.
+    ///
+    /// This mode is also unlikely to be informative if the scenario setup does not distinguish
+    /// between the two workers (they either do the same thing or pick dynamically who does what).
     PinnedSelf,
 
     /// Like `PinnedMemoryRegionPairs` but each worker is allowed to float among all the processors
@@ -81,6 +88,9 @@ pub enum WorkDistribution {
     /// Note that this requires the benchmark scenario logic to be capable of handling its own data
     /// set. If the benchmark logic requires two collaborating workers, you cannot use this work
     /// distribution as it would likely end in a deadlock due to lack of a partner.
+    ///
+    /// This mode is also unlikely to be informative if the scenario setup does not distinguish
+    /// between the two workers (they either do the same thing or pick dynamically who does what).
     UnpinnedSelf,
 }
 
@@ -91,6 +101,44 @@ impl WorkDistribution {
             WorkDistribution::PinnedMemoryRegionPairs,
             WorkDistribution::PinnedSameMemoryRegion,
             WorkDistribution::PinnedSameProcessor,
+            WorkDistribution::PinnedSelf,
+            WorkDistribution::UnpinnedMemoryRegionPairs,
+            WorkDistribution::UnpinnedSameMemoryRegion,
+            WorkDistribution::UnpinnedSelf,
+        ]
+    }
+
+    /// All the work distribution modes that exchange payloads between processors
+    /// before starting the benchmark.
+    pub fn all_without_self() -> &'static [WorkDistribution] {
+        &[
+            WorkDistribution::PinnedMemoryRegionPairs,
+            WorkDistribution::PinnedSameMemoryRegion,
+            WorkDistribution::PinnedSameProcessor,
+            WorkDistribution::UnpinnedMemoryRegionPairs,
+            WorkDistribution::UnpinnedSameMemoryRegion,
+        ]
+    }
+
+    /// All the work distribution modes that place every worker
+    /// on a different processor.
+    pub fn all_with_unique_processors() -> &'static [WorkDistribution] {
+        &[
+            WorkDistribution::PinnedMemoryRegionPairs,
+            WorkDistribution::PinnedSameMemoryRegion,
+            WorkDistribution::PinnedSelf,
+            WorkDistribution::UnpinnedMemoryRegionPairs,
+            WorkDistribution::UnpinnedSameMemoryRegion,
+            WorkDistribution::UnpinnedSelf,
+        ]
+    }
+
+    /// All the work distribution modes that place every worker on a different processor
+    /// and exchange payloads between processors before starting the benchmark.
+    pub fn all_with_unique_processors_without_self() -> &'static [WorkDistribution] {
+        &[
+            WorkDistribution::PinnedMemoryRegionPairs,
+            WorkDistribution::PinnedSameMemoryRegion,
             WorkDistribution::PinnedSelf,
             WorkDistribution::UnpinnedMemoryRegionPairs,
             WorkDistribution::UnpinnedSameMemoryRegion,

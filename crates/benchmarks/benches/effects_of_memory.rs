@@ -20,233 +20,70 @@ criterion_main!(benches);
 
 /// A "small" data set is likely to fit into processor caches, demonstrating the effect of memory
 /// access on typically cached data).
-///
-/// Benchmarks with "_read" in their name only read the data once, so the majority of their data
-/// will only be read from main memory once and never again, making cache effects minimal, though
-/// internal data structures like bucket indexes may still be accessed consistently from cache.
 const SMALL_MAP_ENTRY_COUNT: usize = 64 * 1024; // x u64 = 512 KB of useful payload, cache-friendly
 
 /// A large data set is unlikely to fit into processor caches, even into large L3 caches, and will
 /// likely require trips to main memory for repeated access.
-///
-/// This only matters for non-read-only benchmarks (as the first read is always from main memory).
 const LARGE_MAP_ENTRY_COUNT: usize = 16 * 128 * 1024; // x u64 -> 128 MB, not very cache-friendly.
 
 fn entrypoint(c: &mut Criterion) {
-    execute_runs::<ChannelExchange, 1>(
+    execute_runs::<ChannelExchange, 1>(c, WorkDistribution::all_with_unique_processors());
+
+    execute_runs::<HashMapRead<SMALL_MAP_ENTRY_COUNT, 1>, 1>(
         c,
-        &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-        ],
+        // We do not care about "self" because the workers both perform the same work anyway, so
+        // it does not matter whether the payload is exchanged or not.
+        WorkDistribution::all_with_unique_processors_without_self(),
     );
 
-    execute_runs::<HashMapRead<SMALL_MAP_ENTRY_COUNT, 1>, 10>(
+    execute_runs::<HashMapBothRead<SMALL_MAP_ENTRY_COUNT, 1>, 1>(
         c,
-        &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::PinnedSelf,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-            WorkDistribution::UnpinnedSelf,
-        ],
+        // We do not care about "self" because the workers allocate roles dynamically at runtime,
+        // so it does not matter whether the payload is exchanged or not.
+        WorkDistribution::all_with_unique_processors_without_self(),
     );
 
-    execute_runs::<HashMapRead<SMALL_MAP_ENTRY_COUNT, 2>, 10>(
-        c,
-        &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::PinnedSelf,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-            WorkDistribution::UnpinnedSelf,
-        ],
-    );
-
-    execute_runs::<HashMapBothRead<SMALL_MAP_ENTRY_COUNT, 1>, 10>(
-        c,
-        &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-        ],
-    );
-
-    execute_runs::<HashMapBothRead<SMALL_MAP_ENTRY_COUNT, 2>, 10>(
-        c,
-        &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-        ],
-    );
-
+    // This is very fast, so we use multiple payloads.
     execute_runs::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT, 1>, 10>(
         c,
-        &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::PinnedSelf,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-            WorkDistribution::UnpinnedSelf,
-        ],
+        WorkDistribution::all_with_unique_processors(),
     );
 
-    execute_runs::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT, 2>, 10>(
-        c,
-        &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::PinnedSelf,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-            WorkDistribution::UnpinnedSelf,
-        ],
-    );
-
+    // This is very fast, so we use multiple payloads.
     execute_runs::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT, 1>, 50>(
         c,
-        &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::PinnedSelf,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-            WorkDistribution::UnpinnedSelf,
-        ],
+        WorkDistribution::all_with_unique_processors(),
     );
 
-    execute_runs::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT, 2>, 50>(
+    // We also include the same-processor variant here because it shows a surprising speedup.
+    // Reason unknown but this scenario has a lot of memory allocation in HTTP parsing, which
+    // is unusual compared to the others. Maybe related, maybe not.
+    execute_runs::<HttpHeadersParse, 1>(c, WorkDistribution::all());
+
+    execute_runs::<SccMapRead<SMALL_MAP_ENTRY_COUNT, 1>, 1>(
         c,
-        &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::PinnedSelf,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-            WorkDistribution::UnpinnedSelf,
-        ],
+        WorkDistribution::all_with_unique_processors(),
     );
 
-    execute_runs::<HttpHeadersParse, 1>(
+    execute_runs::<SccMapBothRead<SMALL_MAP_ENTRY_COUNT, 1>, 1>(
         c,
-        &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::PinnedSelf,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-            WorkDistribution::UnpinnedSelf,
-        ],
-    );
-
-    execute_runs::<SccMapRead<SMALL_MAP_ENTRY_COUNT, 1>, 10>(
-        c,
-        &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::PinnedSelf,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-            WorkDistribution::UnpinnedSelf,
-        ],
-    );
-
-    execute_runs::<SccMapRead<SMALL_MAP_ENTRY_COUNT, 2>, 10>(
-        c,
-        &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::PinnedSelf,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-            WorkDistribution::UnpinnedSelf,
-        ],
-    );
-
-    execute_runs::<SccMapBothRead<SMALL_MAP_ENTRY_COUNT, 1>, 10>(
-        c,
-        &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-        ],
-    );
-
-    execute_runs::<SccMapBothRead<SMALL_MAP_ENTRY_COUNT, 2>, 10>(
-        c,
-        &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-        ],
+        WorkDistribution::all_with_unique_processors(),
     );
 
     execute_runs::<SccMapSharedReadWrite<SMALL_MAP_ENTRY_COUNT, 1>, 1>(
         c,
-        &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-        ],
+        // We do not care about "self" because the workers allocate roles dynamically at runtime,
+        // so it does not matter whether the payload is exchanged or not.
+        WorkDistribution::all_without_self(),
     );
 
-    execute_runs::<SccMapSharedReadWrite<SMALL_MAP_ENTRY_COUNT, 2>, 1>(
-        c,
-        &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-        ],
-    );
-
+    // This is extremely slow due to giant payload but what can we do, the giant payload is the
+    // point of this scenario - to show what happens when data that does not fit in caches.
     execute_runs::<SccMapSharedReadWrite<LARGE_MAP_ENTRY_COUNT, 1>, 1>(
         c,
-        &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-        ],
-    );
-
-    execute_runs::<SccMapSharedReadWrite<LARGE_MAP_ENTRY_COUNT, 2>, 1>(
-        c,
-        &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-        ],
+        // We do not care about "self" because the workers allocate roles dynamically at runtime,
+        // so it does not matter whether the payload is exchanged or not.
+        WorkDistribution::all_without_self(),
     );
 }
 
