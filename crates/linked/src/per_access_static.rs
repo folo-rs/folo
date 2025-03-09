@@ -21,7 +21,7 @@ use crate::{ERR_POISONED_LOCK, Handle};
 #[derive(Debug)]
 pub struct PerAccessProvider<T>
 where
-    T: linked::Object + 'static,
+    T: linked::Object,
 {
     /// A function we can call to obtain the lookup key for the family of linked objects.
     ///
@@ -40,7 +40,7 @@ where
 
 impl<T> PerAccessProvider<T>
 where
-    T: linked::Object + 'static,
+    T: linked::Object,
 {
     /// Note: this function exists to serve the inner workings of the
     /// `linked::instance_per_access!` macro and should not be used directly.

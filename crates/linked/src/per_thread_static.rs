@@ -14,14 +14,14 @@ use std::{rc::Rc, thread::LocalKey};
 #[derive(Debug)]
 pub struct PerThreadProvider<T>
 where
-    T: linked::Object + 'static,
+    T: linked::Object,
 {
     get_storage: fn() -> &'static LocalKey<Rc<T>>,
 }
 
 impl<T> PerThreadProvider<T>
 where
-    T: linked::Object + 'static,
+    T: linked::Object,
 {
     /// Note: this function exists to serve the inner workings of the
     /// `linked::instance_per_thread!` macro and should not be used directly.

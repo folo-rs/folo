@@ -12,39 +12,44 @@ use crate::ERR_POISONED_LOCK;
 /// instance of `T` is created per thread.
 ///
 /// This is a conceptual equivalent of the [`linked::instance_per_thread!` macro][1], with the main
-/// difference being that this type is a runtime wrapper that does not require a static variable.
+/// difference being that this type operates entirely at runtime and does not require a static
+/// variable to be defined.
 ///
 /// # Usage
 ///
-/// Create an instance of `PerThread` and provide it the initial instance of `T` from which other
-/// instances in the same family are to be created. Any instance of `T` retrieved through the same
-/// `PerThread` or a clone will be linked to the same family of `T`.
+/// Create an instance of `PerThread` and provide it an initial instance of `T`. This instance will
+/// be used to create additional instances on demand. Any instance of `T` retrieved through the same
+/// `PerThread` or a clone will be linked to the same family of `T` instances.
 ///
-/// To access the current thread's `T`, you must first obtain a [`ThreadLocal<T>`][ThreadLocal]
-/// which works in a similar manner to `Rc<T>`, allowing you to reference the value within. This
-/// is done by calling [`PerThread::local()`][Self::local].
+/// To access the current thread's instance of `T`, you must first obtain a
+/// [`ThreadLocal<T>`][ThreadLocal] which works in a manner similar to `Rc<T>`, allowing you to
+/// reference the value within. You can obtain a [`ThreadLocal<T>`][ThreadLocal] by calling
+/// [`PerThread::local()`][Self::local].
 ///
 /// Once you have a [`ThreadLocal<T>`][ThreadLocal], you can access the `T` within by simply
-/// dereferencing it via the `Deref<Target = T>` trait.
+/// dereferencing via the `Deref<Target = T>` trait.
 ///
-/// # Storage considerations
+/// # Long-lived thread-specific instances
 ///
-/// Note that the `ThreadLocal` is `!Send`, which means you cannot store it in places that need to
-/// be thread-mobile. For example, in web framework request handlers the compiler might not permit
-/// you to let a `ThreadLocal` live across an `await`, depending on the web framework.
-///
-/// Using this type only makes sense if you can store the `ThreadLocal` and reuse it, as creating
-/// one is relatively expensive. If you need to create a new `ThreadLocal` every time, you may be
-/// better off using alternative mechanisms.
+/// Note that the `ThreadLocal` type is `!Send`, which means you cannot store it in places that
+/// need to be thread-mobile. For example, in web framework request handlers the compiler might
+/// not permit you to let a `ThreadLocal` live across an `await`, depending on the web framework,
+/// the async task runtime used and its specific configuration.
 ///
 /// # Resource management
 ///
-/// Thread-specific state is dropped when the last `ThreadLocal` on that thread is dropped. If a
-/// new `ThreadLocal` is later obtained, it is initialized with a new instance of the linked object.
+/// A thread-specific instance of `T` is dropped when the last `ThreadLocal` on that thread is
+/// dropped. If a new `ThreadLocal` is later obtained, it is initialized with a new instance
+/// of the linked object.
+///
+/// It is important to emphasize that this means if you only create temporary `ThreadLocal`
+/// instances then you will get a new instance of `T` every time. The performance impact of
+/// this depends on how `T` works internally but you are recommended to keep `ThreadLocal`
+/// instances around for reuse when possible.
 ///
 /// # Advanced scenarios
 ///
-/// Note that use of `PerThread` does not close the door on other ways to use linked objects.
+/// Use of `PerThread` does not close the door on other ways to use linked objects.
 /// For example, you always have the possibility of manually taking the `T` and creating
 /// additional clones of it to break out the one-per-thread limitation. The `PerThread` type
 /// only controls what happens through the `PerThread` type.
@@ -53,14 +58,14 @@ use crate::ERR_POISONED_LOCK;
 #[derive(Debug)]
 pub struct PerThread<T>
 where
-    T: linked::Object + 'static,
+    T: linked::Object,
 {
     family: FamilyStateReference<T>,
 }
 
 impl<T> PerThread<T>
 where
-    T: linked::Object + 'static,
+    T: linked::Object,
 {
     /// Creates a new `PerThread` with an existing instance of `T`. Any further access to the `T`
     /// via the `PerThread` (or its clones) will return instances of `T` from the same family.
@@ -89,7 +94,7 @@ where
 
 impl<T> Clone for PerThread<T>
 where
-    T: linked::Object + 'static,
+    T: linked::Object,
 {
     fn clone(&self) -> Self {
         Self {
@@ -98,18 +103,25 @@ where
     }
 }
 
+/// A thread-local instance of a linked object of type `T`. This acts in a manner similar to
+/// `Rc<T>` for a type `T` that implements the [linked object pattern][crate].
+///
+/// For details, see documentation of [`PerThread<T>`][PerThread] which is the type used to
+/// create instances of `ThreadLocal<T>`.
 #[derive(Debug)]
 pub struct ThreadLocal<T>
 where
-    T: linked::Object + 'static,
+    T: linked::Object,
 {
+    // We really are just a wrapper around an Rc<T>. The only other duty we have
+    // is to clean up the thread-local instance when the last ThreadLocal is dropped.
     inner: Rc<T>,
     family: FamilyStateReference<T>,
 }
 
 impl<T> Deref for ThreadLocal<T>
 where
-    T: linked::Object + 'static,
+    T: linked::Object,
 {
     type Target = T;
 
@@ -120,7 +132,7 @@ where
 
 impl<T> Clone for ThreadLocal<T>
 where
-    T: linked::Object + 'static,
+    T: linked::Object,
 {
     fn clone(&self) -> Self {
         Self {
@@ -132,7 +144,7 @@ where
 
 impl<T> Drop for ThreadLocal<T>
 where
-    T: linked::Object + 'static,
+    T: linked::Object,
 {
     fn drop(&mut self) {
         // If we were the last ThreadLocal on this thread then we need to drop the thread-local
@@ -142,14 +154,10 @@ where
             return;
         }
 
-        // We are protected against reentrancy here because remember that there are still TWO
-        // references - we are holding the last one until we return from this fn, so even if
-        // there is a field of another ThreadLocal that is shortly going to be dropped, it will
-        // do so after this block here.
         self.family.clear_current_thread_instance();
 
-        // We are the last reference to the thread-local value in `inner`,
-        // which will be dropped once this function returns.
+        // `self.inner` is now the last reference to the current thread's instance of T
+        // and this instance will be dropped once this function returns and drops the last `Rc<T>`.
     }
 }
 
@@ -158,27 +166,31 @@ where
 #[derive(Debug)]
 struct FamilyStateReference<T>
 where
-    T: linked::Object + 'static,
+    T: linked::Object,
 {
     // If a thread needs a new instance, we create it via this handle.
     handle: linked::Handle<T>,
 
     // We store the state of each thread here. See safety comments on ThreadSpecificState!
-    // NB! While it is legal to manipulate the HashMap from any thread, accessing a value
-    // is only permitted from the correct thread.
+    // NB! While it is legal to manipulate the HashMap from any thread, including to move
+    // the values, calling actual functions on a value is only valid from the thread in the key.
     //
     // To ensure safety, we must also ensure that all values are removed from here before the map
-    // is dropped (because each value must be removed and dropped from the thread that created it).
+    // is dropped, because each value must be dropped on the thread that created it and dropping is
+    // logic executed on that thread-specific value!
+    //
     // This is done in the `ThreadLocal` destructor. By the time this map is dropped, it must be
-    // empty (which we verify in our own drop()).
+    // empty, which we assert in our own drop().
+    //
     // TODO: This locking is a bit ugly but if ThreadLocal is cached, perhaps fine. Still, benchmark
-    // and compare against a thread-local HashMap shared between all PerThread instances?
+    // and compare against a thread-local HashMap shared between all PerThread instances? Tradeoff
+    // is more local sharing but zero global sharing, which may be superior.
     thread_specific: Arc<RwLock<HashMap<ThreadId, ThreadSpecificState<T>>>>,
 }
 
 impl<T> FamilyStateReference<T>
 where
-    T: linked::Object + 'static,
+    T: linked::Object,
 {
     fn new(handle: linked::Handle<T>) -> Self {
         Self {
@@ -203,9 +215,9 @@ where
         }
 
         // The state for the current thread is not yet initialized. Let's initialize!
-        // Note that we create this instance outside any locks, both to avoid unnecessary
-        // synchronization with other threads but also because cloning a linked object
-        // may execute arbitrary code, including potentially code that tries to grab the same lock.
+        // Note that we create this instance outside any locks, both to reduce the
+        // lock durations but also because cloning a linked object may execute arbitrary code,
+        // including potentially code that tries to grab the same lock.
         let instance: Rc<T> = Rc::new(self.handle.clone().into());
 
         // Let's add the new instance to the map.
@@ -213,9 +225,11 @@ where
 
         // In some wild corner cases, it is perhaps possible that the arbitrary code in the
         // linked object clone logic may already have filled the map with our value? It is
-        // a bit of a stretch of imagination but let's acknowledge the possibility just in case.
+        // a bit of a stretch of imagination but let's accept the possibility to be thorough.
         match map.entry(thread_id) {
             hash_map::Entry::Occupied(occupied_entry) => {
+                // There already is something in the entry. That's fine, we just ignore the
+                // new instance we created and pretend we are on the optimistic path.
                 let state = occupied_entry.get();
 
                 // SAFETY: We must guarantee that we are on the thread that owns
@@ -224,9 +238,12 @@ where
             }
             hash_map::Entry::Vacant(vacant_entry) => {
                 // We are the first thread to create an instance. Let's insert it.
-                let state = ThreadSpecificState {
-                    instance: Rc::clone(&instance),
-                };
+                // SAFETY: We must guarantee that any further access (taking the Rc or dropping)
+                // takes place on the same thread as was used to call this function. We ensure this
+                // by the thread ID lookup in the map key - we can only ever directly access map
+                // entries owned by the current thread (though we may resize the map from any
+                // thread, as it simply moves data in memory).
+                let state = unsafe { ThreadSpecificState::new(Rc::clone(&instance)) };
                 vacant_entry.insert(state);
 
                 instance
@@ -245,7 +262,7 @@ where
 
 impl<T> Clone for FamilyStateReference<T>
 where
-    T: linked::Object + 'static,
+    T: linked::Object,
 {
     fn clone(&self) -> Self {
         Self {
@@ -257,7 +274,7 @@ where
 
 impl<T> Drop for FamilyStateReference<T>
 where
-    T: linked::Object + 'static,
+    T: linked::Object,
 {
     fn drop(&mut self) {
         // If we are the last reference to the family state, this will drop the thread-specific map.
@@ -300,30 +317,44 @@ where
 #[derive(Debug)]
 struct ThreadSpecificState<T>
 where
-    T: linked::Object + 'static,
+    T: linked::Object,
 {
     instance: Rc<T>,
 }
 
 impl<T> ThreadSpecificState<T>
 where
-    T: linked::Object + 'static,
+    T: linked::Object,
 {
+    /// Creates a new `ThreadSpecificState` with the given `Rc<T>`.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that any further access (including dropping) takes place on the
+    /// same thread as was used to call this function.
+    ///
+    /// See type-level safety comments for details.
+    unsafe fn new(instance: Rc<T>) -> Self {
+        Self { instance }
+    }
+
     /// Returns the `Rc<T>` for this thread.
     ///
     /// # Safety
     ///
     /// The caller must guarantee that the current thread is the thread for which this
     /// `ThreadSpecificState` was created. This is not enforced by the type system.
+    ///
+    /// See type-level safety comments for details.
     unsafe fn clone_instance(&self) -> Rc<T> {
         Rc::clone(&self.instance)
     }
 }
 
 // SAFETY: See comments on type.
-unsafe impl<T> Sync for ThreadSpecificState<T> where T: linked::Object + 'static {}
+unsafe impl<T> Sync for ThreadSpecificState<T> where T: linked::Object {}
 // SAFETY: See comments on type.
-unsafe impl<T> Send for ThreadSpecificState<T> where T: linked::Object + 'static {}
+unsafe impl<T> Send for ThreadSpecificState<T> where T: linked::Object {}
 
 #[cfg(test)]
 mod tests {
