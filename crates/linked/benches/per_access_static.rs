@@ -29,42 +29,26 @@ impl TestSubject {
     }
 }
 
-linked::instance_per_thread!(static TARGET: TestSubject = TestSubject::new());
+linked::instance_per_access!(static TARGET: TestSubject = TestSubject::new());
 
 fn entrypoint(c: &mut Criterion) {
     let mut g = c.benchmark_group("access_single_threaded");
 
-    g.bench_function("with", |b| {
-        b.iter(|| black_box(TARGET.with(|val| val.local_state.get())));
-    });
-
-    g.bench_function("to_rc", |b| {
-        b.iter(|| black_box(TARGET.to_rc().local_state.get()));
+    g.bench_function("get", |b| {
+        b.iter(|| black_box(TARGET.get().local_state.get()));
     });
 
     g.finish();
 
     let mut g = c.benchmark_group("access_multi_threaded");
 
-    g.bench_function("with", |b| {
+    g.bench_function("get", |b| {
         b.iter_custom(|iters| {
             bench_on_every_processor(
                 iters,
                 || (),
                 |_| {
-                    black_box(TARGET.with(|val| val.local_state.get()));
-                },
-            )
-        });
-    });
-
-    g.bench_function("to_rc", |b| {
-        b.iter_custom(|iters| {
-            bench_on_every_processor(
-                iters,
-                || (),
-                |_| {
-                    black_box(TARGET.to_rc().local_state.get());
+                    black_box(TARGET.get().local_state.get());
                 },
             )
         });

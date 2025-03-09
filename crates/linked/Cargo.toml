@@ -27,9 +27,13 @@ name = "linked"
 harness = false
 
 [[bench]]
-name = "per_thread"
+name = "per_access_static"
 harness = false
 
 [[bench]]
 name = "per_thread_static"
+harness = false
+
+[[bench]]
+name = "per_thread"
 harness = false
