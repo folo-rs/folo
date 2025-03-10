@@ -5,7 +5,7 @@ use std::{
     num::NonZero,
     sync::{Arc, Barrier, Mutex, mpsc},
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use criterion::{BatchSize, BenchmarkGroup, Criterion, SamplingMode, measurement::WallTime};
@@ -102,22 +102,24 @@ fn execute_run<P: Payload, const PAYLOAD_MULTIPLIER: usize>(
     };
 
     g.bench_function(name, |b| {
-        b.iter_batched(
-            || {
+        b.iter_custom(move |iters| {
+            let mut total_duration = Duration::ZERO;
+
+            for _ in 0..iters {
                 let processor_set_pairs = get_processor_set_pairs(work_distribution)
                     .expect("we already validated that we have the right topology");
 
-                BenchmarkRun::new::<P, PAYLOAD_MULTIPLIER>(&processor_set_pairs, work_distribution)
-            },
-            // We explicitly return the run back to the benchmark infrastructure to ensure that any
-            // time spent in dropping the payload (between completed_signal and worker thread joins)
-            // is not counted into the benchmark time itself.
-            |run| {
-                run.wait();
-                run
-            },
-            BatchSize::PerIteration,
-        );
+                let iter_duration = BenchmarkIteration::new::<P, PAYLOAD_MULTIPLIER>(
+                    &processor_set_pairs,
+                    work_distribution,
+                )
+                .wait();
+
+                total_duration += iter_duration;
+            }
+
+            total_duration
+        });
     });
 }
 
@@ -473,14 +475,11 @@ fn get_processor_set_pairs(
 }
 
 #[derive(Debug)]
-struct BenchmarkRun {
-    // Waited 3 times, once be each worker thread and once by runner thread.
-    completed: Arc<Barrier>,
-
-    join_handles: Box<[JoinHandle<()>]>,
+struct BenchmarkIteration {
+    join_handles: Box<[JoinHandle<Duration>]>,
 }
 
-impl BenchmarkRun {
+impl BenchmarkIteration {
     /// Some benchmark scenarios can be a bit fast but cannot be "naturally" sized up because they
     /// need to meet some criteria like fitting in CPU caches. `PAYLOAD_MULTIPLIER > 1` will simply
     /// execute the benchmark multiple times in sequence to collect more data, with a different
@@ -495,7 +494,6 @@ impl BenchmarkRun {
         // Once by current thread + once by each worker in each pair.
         // All workers will start when all workers and the main thread are ready.
         let ready_signal = Arc::new(Barrier::new(1 + 2 * processor_set_pairs.len()));
-        let completed_signal = Arc::new(Barrier::new(1 + 2 * processor_set_pairs.len()));
 
         let mut join_handles = Vec::with_capacity(2 * processor_set_pairs.len());
 
@@ -530,16 +528,14 @@ impl BenchmarkRun {
                 (tx2, rx2, payloads2),
             ]));
 
-            join_handles.push(BenchmarkRun::spawn_worker(
+            join_handles.push(BenchmarkIteration::spawn_worker(
                 processor_set_1,
                 Arc::clone(&ready_signal),
-                Arc::clone(&completed_signal),
                 Arc::clone(&bag),
             ));
-            join_handles.push(BenchmarkRun::spawn_worker(
+            join_handles.push(BenchmarkIteration::spawn_worker(
                 processor_set_2,
                 Arc::clone(&ready_signal),
-                Arc::clone(&completed_signal),
                 Arc::clone(&bag),
             ));
         }
@@ -547,22 +543,32 @@ impl BenchmarkRun {
         ready_signal.wait();
 
         Self {
-            completed: completed_signal,
             join_handles: join_handles.into_boxed_slice(),
         }
     }
 
-    fn wait(&self) {
-        self.completed.wait();
+    fn wait(&mut self) -> Duration {
+        let thread_count = self.join_handles.len();
+
+        let join_handles = mem::replace(&mut self.join_handles, Box::new([]));
+
+        let mut total_elapsed_nanos = 0;
+
+        for thread in join_handles {
+            let elapsed = thread.join().unwrap();
+            total_elapsed_nanos += elapsed.as_nanos();
+        }
+
+        // We return the average duration of all threads as the duration of the iteration.
+        Duration::from_nanos((total_elapsed_nanos / thread_count as u128) as u64)
     }
 
     #[expect(clippy::type_complexity)] // True but whatever, do not care about it here.
     fn spawn_worker<P: Payload>(
         processor_set: &ProcessorSet,
         ready_signal: Arc<Barrier>,
-        completed_signal: Arc<Barrier>,
         payload_bag: Arc<Mutex<Vec<(mpsc::Sender<Vec<P>>, mpsc::Receiver<Vec<P>>, Vec<P>)>>>,
-    ) -> JoinHandle<()> {
+    ) -> JoinHandle<Duration> {
         processor_set.spawn_thread({
             move |_| {
                 let (payloads_tx, payloads_rx, mut payloads) =
@@ -580,26 +586,31 @@ impl BenchmarkRun {
                 clean_caches();
 
                 ready_signal.wait();
+                let start = Instant::now();
 
                 for payload in &mut payloads {
                     payload.process();
                 }
 
-                completed_signal.wait();
+                let elapsed = start.elapsed();
 
                 // The payloads are dropped at the end, after the benchmark time span
                 // measurement ends due to all threads reaching completed_signal.
                 drop(payloads);
+
+                elapsed
             }
         })
     }
 }
 
-impl Drop for BenchmarkRun {
+impl Drop for BenchmarkIteration {
     fn drop(&mut self) {
         let join_handles = mem::replace(&mut self.join_handles, Box::new([]));
 
         for handle in join_handles {
+            // In case something panicked and we left the panic hanging, this will bring it to
+            // the main thread. Generally, wait() should already consume all the threads.
             handle.join().unwrap();
         }
     }

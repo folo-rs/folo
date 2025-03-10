@@ -38,7 +38,7 @@ fn entrypoint(c: &mut Criterion) {
 }
 
 fn per_thread(c: &mut Criterion) {
-    let mut g = c.benchmark_group("PerThread");
+    let mut g = c.benchmark_group("per_thread::PerThread");
 
     g.bench_function("new", |b| {
         b.iter_batched(
@@ -62,7 +62,7 @@ fn per_thread(c: &mut Criterion) {
 }
 
 fn thread_local(c: &mut Criterion) {
-    let mut g = c.benchmark_group("ThreadLocal");
+    let mut g = c.benchmark_group("per_thread::ThreadLocal");
 
     let per_thread = PerThread::new(TestSubject::new());
 
@@ -100,7 +100,7 @@ fn thread_local(c: &mut Criterion) {
 }
 
 fn thread_local_multithreaded(c: &mut Criterion) {
-    let mut g = c.benchmark_group("ThreadLocalMultithreaded");
+    let mut g = c.benchmark_group("per_thread::ThreadLocalMultithreaded");
 
     let per_thread = PerThread::new(TestSubject::new());
 
@@ -160,7 +160,7 @@ fn thread_local_multithreaded(c: &mut Criterion) {
 }
 
 fn thread_local_access(c: &mut Criterion) {
-    let mut g = c.benchmark_group("ThreadLocalAccess");
+    let mut g = c.benchmark_group("per_thread::ThreadLocalAccess");
 
     let per_thread = PerThread::new(TestSubject::new());
 

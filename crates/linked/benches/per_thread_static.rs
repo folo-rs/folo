@@ -32,7 +32,7 @@ impl TestSubject {
 linked::instance_per_thread!(static TARGET: TestSubject = TestSubject::new());
 
 fn entrypoint(c: &mut Criterion) {
-    let mut g = c.benchmark_group("access_single_threaded");
+    let mut g = c.benchmark_group("per_thread_static::access_single_threaded");
 
     g.bench_function("with", |b| {
         b.iter(|| black_box(TARGET.with(|val| val.local_state.get())));
@@ -44,7 +44,7 @@ fn entrypoint(c: &mut Criterion) {
 
     g.finish();
 
-    let mut g = c.benchmark_group("access_multi_threaded");
+    let mut g = c.benchmark_group("per_thread_static::access_multi_threaded");
 
     g.bench_function("with", |b| {
         b.iter_custom(|iters| {
