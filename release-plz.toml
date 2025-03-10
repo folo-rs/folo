@@ -2,6 +2,9 @@
 # TEMP: it currently complains for some unclear reason.
 allow_dirty = true
 
+# At this point in pre-alpha time, changelogs are very messy and useless.
+changelog_update = false
+
 # All we care about is crates.io, Git releases are not used.
 git_release_enable = false
 
