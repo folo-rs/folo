@@ -22,21 +22,28 @@ criterion_main!(benches);
 /// access on typically cached data).
 const SMALL_MAP_ENTRY_COUNT: usize = 64 * 1024; // x u64 = 512 KB of useful payload, cache-friendly
 
+/// The small maps fit into memory very easily. 512 KB * 1000 = 512 MB per worker.
+const SMALL_MAP_BATCH_SIZE: u64 = 1000;
+
 /// A large data set is unlikely to fit into processor caches, even into large L3 caches, and will
 /// likely require trips to main memory for repeated access.
 const LARGE_MAP_ENTRY_COUNT: usize = 16 * 128 * 1024; // x u64 -> 128 MB, not very cache-friendly.
 
-fn entrypoint(c: &mut Criterion) {
-    execute_runs::<ChannelExchange, 1>(c, WorkDistribution::all_with_unique_processors());
+/// The large maps are large, so we try conserve memory. 128 MB * 10 = 1.28 GB per worker.
+const LARGE_MAP_BATCH_SIZE: u64 = 10;
 
-    execute_runs::<HashMapRead<SMALL_MAP_ENTRY_COUNT, 1>, 1>(
+fn entrypoint(c: &mut Criterion) {
+    // This payload is only 10K items, so we use a large batch size as it fits well in memory.
+    execute_runs::<ChannelExchange, 1000>(c, WorkDistribution::all_with_unique_processors());
+
+    execute_runs::<HashMapRead<SMALL_MAP_ENTRY_COUNT, 1>, SMALL_MAP_BATCH_SIZE>(
         c,
         // We do not care about "self" because the workers both perform the same work anyway, so
         // it does not matter whether the payload is exchanged or not.
         WorkDistribution::all_with_unique_processors_without_self(),
     );
 
-    execute_runs::<HashMapBothRead<SMALL_MAP_ENTRY_COUNT, 1>, 1>(
+    execute_runs::<HashMapBothRead<SMALL_MAP_ENTRY_COUNT, 1>, SMALL_MAP_BATCH_SIZE>(
         c,
         // We do not care about "self" because the workers allocate roles dynamically at runtime,
         // so it does not matter whether the payload is exchanged or not.
@@ -44,13 +51,13 @@ fn entrypoint(c: &mut Criterion) {
     );
 
     // This is very fast, so we use multiple payloads.
-    execute_runs::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT, 1>, 10>(
+    execute_runs::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT, 1>, SMALL_MAP_BATCH_SIZE>(
         c,
         WorkDistribution::all_with_unique_processors(),
     );
 
     // This is very fast, so we use multiple payloads.
-    execute_runs::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT, 1>, 50>(
+    execute_runs::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT, 1>, SMALL_MAP_BATCH_SIZE>(
         c,
         WorkDistribution::all_with_unique_processors(),
     );
@@ -58,19 +65,21 @@ fn entrypoint(c: &mut Criterion) {
     // We also include the same-processor variant here because it shows a surprising speedup.
     // Reason unknown but this scenario has a lot of memory allocation in HTTP parsing, which
     // is unusual compared to the others. Maybe related, maybe not.
-    execute_runs::<HttpHeadersParse, 1>(c, WorkDistribution::all());
+    //
+    // We use a large batch size, as the payload is quite small (10K headers) and fits well in memory.
+    execute_runs::<HttpHeadersParse, 1000>(c, WorkDistribution::all());
 
-    execute_runs::<SccMapRead<SMALL_MAP_ENTRY_COUNT, 1>, 1>(
+    execute_runs::<SccMapRead<SMALL_MAP_ENTRY_COUNT, 1>, SMALL_MAP_BATCH_SIZE>(
         c,
         WorkDistribution::all_with_unique_processors(),
     );
 
-    execute_runs::<SccMapBothRead<SMALL_MAP_ENTRY_COUNT, 1>, 1>(
+    execute_runs::<SccMapBothRead<SMALL_MAP_ENTRY_COUNT, 1>, SMALL_MAP_BATCH_SIZE>(
         c,
         WorkDistribution::all_with_unique_processors(),
     );
 
-    execute_runs::<SccMapSharedReadWrite<SMALL_MAP_ENTRY_COUNT, 1>, 1>(
+    execute_runs::<SccMapSharedReadWrite<SMALL_MAP_ENTRY_COUNT, 1>, SMALL_MAP_BATCH_SIZE>(
         c,
         // We do not care about "self" because the workers allocate roles dynamically at runtime,
         // so it does not matter whether the payload is exchanged or not.
@@ -79,7 +88,7 @@ fn entrypoint(c: &mut Criterion) {
 
     // This is extremely slow due to giant payload but what can we do, the giant payload is the
     // point of this scenario - to show what happens when data that does not fit in caches.
-    execute_runs::<SccMapSharedReadWrite<LARGE_MAP_ENTRY_COUNT, 1>, 1>(
+    execute_runs::<SccMapSharedReadWrite<LARGE_MAP_ENTRY_COUNT, 1>, LARGE_MAP_BATCH_SIZE>(
         c,
         // We do not care about "self" because the workers allocate roles dynamically at runtime,
         // so it does not matter whether the payload is exchanged or not.

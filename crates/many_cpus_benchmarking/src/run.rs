@@ -22,11 +22,12 @@ extern crate alloc;
 /// Executes a number of benchmark runs for a specific payload type, using the specified work
 /// distribution modes.
 ///
-/// `PAYLOAD_MULTIPLIER` can be used to increase the size of the payload data set, to easily compare
-/// how multiplying the data set size affects the duration of the scenario. This will generate
-/// multiple payloads, each processed sequentially by every worker. Caches are not cleaned between
-/// payloads since each payload is unique and will not be cached.
-pub fn execute_runs<P: Payload, const PAYLOAD_MULTIPLIER: usize>(
+/// `BATCH_SIZE` indicates the maximum number of iterations that can be prepared at the same time.
+/// It is optimal to prepare all iterations at once, to get the most consistent and noise-free
+/// results. However, there is only a limited amount of memory available, making that impractical.
+/// Assign the highest value that is low enough for this many payloads to fit in memory at the
+/// same time on every worker thread.
+pub fn execute_runs<P: Payload, const BATCH_SIZE: u64>(
     c: &mut Criterion,
     work_distributions: &[WorkDistribution],
 ) {
@@ -41,7 +42,7 @@ pub fn execute_runs<P: Payload, const PAYLOAD_MULTIPLIER: usize>(
     g.sampling_mode(SamplingMode::Flat);
 
     for &distribution in work_distributions {
-        execute_run::<P, PAYLOAD_MULTIPLIER>(&mut g, distribution);
+        execute_run::<P, BATCH_SIZE>(&mut g, distribution);
     }
 
     g.finish();
@@ -54,7 +55,7 @@ fn is_fake_run() -> bool {
     env::args().any(|a| a == "--test" || a == "--list")
 }
 
-fn execute_run<P: Payload, const PAYLOAD_MULTIPLIER: usize>(
+fn execute_run<P: Payload, const BATCH_SIZE: u64>(
     g: &mut BenchmarkGroup<'_, WallTime>,
     work_distribution: WorkDistribution,
 ) {
@@ -95,27 +96,23 @@ fn execute_run<P: Payload, const PAYLOAD_MULTIPLIER: usize>(
         }
     }
 
-    let name = if PAYLOAD_MULTIPLIER == 1 {
-        format!("{work_distribution}")
-    } else {
-        format!("{work_distribution}(x{PAYLOAD_MULTIPLIER})")
-    };
-
-    g.bench_function(name, |b| {
+    g.bench_function(work_distribution.to_string(), |b| {
         b.iter_custom(move |iters| {
             let mut total_duration = Duration::ZERO;
 
-            for _ in 0..iters {
+            let mut iters_remaining = iters;
+
+            while iters_remaining > 0 {
+                let batch_size = iters_remaining.min(BATCH_SIZE);
+                iters_remaining -= batch_size;
+
+                // Each batch uses the same selection of processors.
                 let processor_set_pairs = get_processor_set_pairs(work_distribution)
                     .expect("we already validated that we have the right topology");
 
-                let iter_duration = BenchmarkIteration::new::<P, PAYLOAD_MULTIPLIER>(
-                    &processor_set_pairs,
-                    work_distribution,
-                )
-                .wait();
-
-                total_duration += iter_duration;
+                total_duration +=
+                    BenchmarkBatch::new::<P>(&processor_set_pairs, work_distribution, batch_size)
+                        .wait();
             }
 
             total_duration
@@ -475,21 +472,15 @@ fn get_processor_set_pairs(
 }
 
 #[derive(Debug)]
-struct BenchmarkIteration {
+struct BenchmarkBatch {
     join_handles: Box<[JoinHandle<Duration>]>,
 }
 
-impl BenchmarkIteration {
-    /// Some benchmark scenarios can be a bit fast but cannot be "naturally" sized up because they
-    /// need to meet some criteria like fitting in CPU caches. `PAYLOAD_MULTIPLIER > 1` will simply
-    /// execute the benchmark multiple times in sequence to collect more data, with a different
-    /// payload each time but on the same workers. The expectation is that each payload is
-    /// independent and does not require cache cleaning between payloads for meaningful results.
-    /// This is just useful if a single payload is a very small number (single digit milliseconds)
-    /// and we cannot just increase the payload size because it is sized to fit into cache etc.
-    fn new<P: Payload, const PAYLOAD_MULTIPLIER: usize>(
+impl BenchmarkBatch {
+    fn new<P: Payload>(
         processor_set_pairs: &[(ProcessorSet, ProcessorSet)],
         distribution: WorkDistribution,
+        batch_size: u64,
     ) -> Self {
         // Once by current thread + once by each worker in each pair.
         // All workers will start when all workers and the main thread are ready.
@@ -500,7 +491,18 @@ impl BenchmarkIteration {
         for processor_set_pair in processor_set_pairs {
             let (processor_set_1, processor_set_2) = processor_set_pair;
 
-            let (payloads1, payloads2) = (0..PAYLOAD_MULTIPLIER).map(|_| P::new_pair()).unzip();
+            // We generate the payload instances here (but do not prepare them yet).
+            let (payloads1, payloads2) = (0..batch_size).map(|_| P::new_pair()).unzip();
+
+            // Each payload is also associated with a Barrier that will synchronize when that
+            // payload is allowed to start executing, to ensure that any impact from multithreaded
+            // access is felt at the same time. Time spent waiting for the barrier is still counted
+            // as part of the benchmark duration because we are mainly interested in the relative
+            // durations of different configurations and not the "pure" absolute timings.
+            let payload_barriers = (0..batch_size)
+                // One for each worker in the pair.
+                .map(|_| Arc::new(Barrier::new(2)))
+                .collect_vec();
 
             // We use these to deliver a prepared payload to the worker meant to process it.
             // Depending on the mode, we either wire up the channels to themselves or each other.
@@ -524,16 +526,16 @@ impl BenchmarkIteration {
 
             // We stuff everything in a bag. Whichever thread starts first takes the first group.
             let bag = Arc::new(Mutex::new(vec![
-                (tx1, rx1, payloads1),
-                (tx2, rx2, payloads2),
+                (tx1, rx1, payloads1, payload_barriers.clone()),
+                (tx2, rx2, payloads2, payload_barriers),
             ]));
 
-            join_handles.push(BenchmarkIteration::spawn_worker(
+            join_handles.push(BenchmarkBatch::spawn_worker(
                 processor_set_1,
                 Arc::clone(&ready_signal),
                 Arc::clone(&bag),
             ));
-            join_handles.push(BenchmarkIteration::spawn_worker(
+            join_handles.push(BenchmarkBatch::spawn_worker(
                 processor_set_2,
                 Arc::clone(&ready_signal),
                 Arc::clone(&bag),
@@ -567,11 +569,20 @@ impl BenchmarkIteration {
     fn spawn_worker<P: Payload>(
         processor_set: &ProcessorSet,
         ready_signal: Arc<Barrier>,
-        payload_bag: Arc<Mutex<Vec<(mpsc::Sender<Vec<P>>, mpsc::Receiver<Vec<P>>, Vec<P>)>>>,
+        payload_bag: Arc<
+            Mutex<
+                Vec<(
+                    mpsc::Sender<Vec<P>>,
+                    mpsc::Receiver<Vec<P>>,
+                    Vec<P>,
+                    Vec<Arc<Barrier>>,
+                )>,
+            >,
+        >,
     ) -> JoinHandle<Duration> {
         processor_set.spawn_thread({
             move |_| {
-                let (payloads_tx, payloads_rx, mut payloads) =
+                let (payloads_tx, payloads_rx, mut payloads, mut payload_barriers) =
                     payload_bag.lock().unwrap().pop().unwrap();
 
                 for payload in &mut payloads {
@@ -585,26 +596,39 @@ impl BenchmarkIteration {
 
                 clean_caches();
 
+                // This signal is set when all workers have completed the "prepare" step.
                 ready_signal.wait();
-                let start = Instant::now();
+
+                let mut total_duration = Duration::ZERO;
 
                 for payload in &mut payloads {
+                    // We need to synchronize with other workers before starting on each payload
+                    // because we want each worker to access the same payload at the same time
+                    // to see any multithreading related effects.
+                    payload_barriers
+                        .pop()
+                        .expect("caller gave us wrong number of barriers?!")
+                        .wait();
+
+                    let start = Instant::now();
+
                     payload.process();
+
+                    let elapsed = start.elapsed();
+                    total_duration += elapsed;
                 }
 
-                let elapsed = start.elapsed();
-
-                // The payloads are dropped at the end, after the benchmark time span
-                // measurement ends due to all threads reaching completed_signal.
+                // The payloads are dropped at the end, ensuring that we do not accidentally
+                // measure any of the "drop" overhead above, during the benchmark iterations.
                 drop(payloads);
 
-                elapsed
+                total_duration
             }
         })
     }
 }
 
-impl Drop for BenchmarkIteration {
+impl Drop for BenchmarkBatch {
     fn drop(&mut self) {
         let join_handles = mem::replace(&mut self.join_handles, Box::new([]));
 

@@ -7,7 +7,8 @@ criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
-    execute_runs::<CopyBytes, 1>(c, WorkDistribution::all());
+    // We use a BATCH_SIZE of 10, which means 10 * 64 = 640 MB of memory used per worker pair.
+    execute_runs::<CopyBytes, 10>(c, WorkDistribution::all());
 }
 
 const COPY_BYTES_LEN: usize = 64 * 1024 * 1024;
