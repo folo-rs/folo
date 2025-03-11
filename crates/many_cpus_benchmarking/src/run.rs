@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use criterion::{BenchmarkGroup, Criterion, SamplingMode, measurement::WallTime};
+use criterion::{BenchmarkGroup, Criterion, measurement::WallTime};
 use itertools::Itertools;
 use many_cpus::ProcessorSet;
 use nonempty::{NonEmpty, nonempty};
