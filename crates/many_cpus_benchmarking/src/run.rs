@@ -36,11 +36,7 @@ pub fn execute_runs<P: Payload, const BATCH_SIZE: u64>(
 
     // Many-processor benchmarks can be slow and clearing processor caches adds extra overhead
     // between iterations, so to get stable and consistent data it is worth taking some time.
-    g.measurement_time(Duration::from_secs(60));
-
-    // Unclear what exactly this does but the docs say for long-running benchmarks Flat is good.
-    // Many-processor benchmarks can be extremely long-running, so okay, let's believe it.
-    g.sampling_mode(SamplingMode::Flat);
+    g.measurement_time(Duration::from_secs(30));
 
     for &distribution in work_distributions {
         execute_run::<P, BATCH_SIZE>(&mut g, distribution);
