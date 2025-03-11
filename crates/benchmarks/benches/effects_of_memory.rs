@@ -50,14 +50,22 @@ fn entrypoint(c: &mut Criterion) {
         WorkDistribution::all_with_unique_processors_without_self(),
     );
 
-    // This is very fast, so we use multiple payloads.
     execute_runs::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT, 1>, SMALL_MAP_BATCH_SIZE>(
         c,
         WorkDistribution::all_with_unique_processors(),
     );
 
-    // This is very fast, so we use multiple payloads.
     execute_runs::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT, 1>, SMALL_MAP_BATCH_SIZE>(
+        c,
+        WorkDistribution::all_with_unique_processors(),
+    );
+
+    // This repeatedly reads the same map 10 times per iteration, to answer the question: does
+    // local caching eliminate the impact of reading from a different memory on the Nth read?
+    // If we still see a difference between same-region and cross-region reads, there is still
+    // benefit in keeping data local. If we see no difference, it is evidence that it matters less
+    // for data that is already locally cached.
+    execute_runs::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT, 10>, SMALL_MAP_BATCH_SIZE>(
         c,
         WorkDistribution::all_with_unique_processors(),
     );
