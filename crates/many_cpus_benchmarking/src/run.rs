@@ -26,7 +26,8 @@ extern crate alloc;
 /// It is optimal to prepare all iterations at once, to get the most consistent and noise-free
 /// results. However, there is only a limited amount of memory available, making that impractical.
 /// Assign the highest value that is low enough for this many payloads to fit in memory at the
-/// same time on every worker thread.
+/// same time on every worker thread. The benchmark infrastructure may also limit this value, so
+/// this is merely an upper bound.
 pub fn execute_runs<P: Payload, const BATCH_SIZE: u64>(
     c: &mut Criterion,
     work_distributions: &[WorkDistribution],
