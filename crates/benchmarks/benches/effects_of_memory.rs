@@ -60,6 +60,10 @@ fn entrypoint(c: &mut Criterion) {
     // If we still see a difference between same-region and cross-region reads, there is still
     // benefit in keeping data local. If we see no difference, it is evidence that it matters less
     // for data that is already locally cached.
+    //
+    // Another effect this may show us is the effect of caching within the same region (on different
+    // processors) - with the `Unpinned` distribution modes, the workload may move between
+    // processors, resulting in cache misses that should slow things down even if same-region.
     execute_runs::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT, 10>, SMALL_MAP_BATCH_SIZE>(
         c,
         WorkDistribution::all_with_unique_processors(),
@@ -75,6 +79,10 @@ fn entrypoint(c: &mut Criterion) {
     // If we still see a difference between same-region and cross-region reads, there is still
     // benefit in keeping data local. If we see no difference, it is evidence that it matters less
     // for data that is already locally cached.
+    //
+    // Another effect this may show us is the effect of caching within the same region (on different
+    // processors) - with the `Unpinned` distribution modes, the workload may move between
+    // processors, resulting in cache misses that should slow things down even if same-region.
     execute_runs::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT, 10>, SMALL_MAP_BATCH_SIZE>(
         c,
         WorkDistribution::all_with_unique_processors(),
