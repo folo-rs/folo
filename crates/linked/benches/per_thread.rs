@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, atomic::AtomicUsize},
 };
 
-use benchmark_utils::bench_on_every_processor;
+use benchmark_utils::{ThreadPool, bench_on_threadpool};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use linked::PerThread;
 
@@ -100,13 +100,15 @@ fn thread_local(c: &mut Criterion) {
 }
 
 fn thread_local_multithreaded(c: &mut Criterion) {
+    let thread_pool = ThreadPool::all();
+
     let mut g = c.benchmark_group("per_thread::ThreadLocalMultithreaded");
 
     let per_thread = PerThread::new(TestSubject::new());
 
     g.bench_function("new_single", |b| {
         b.iter_custom(|iters| {
-            bench_on_every_processor(iters, || (), {
+            bench_on_threadpool(&thread_pool, iters, || (), {
                 let per_thread = per_thread.clone();
                 move |_| {
                     black_box(per_thread.local());
@@ -117,7 +119,8 @@ fn thread_local_multithreaded(c: &mut Criterion) {
 
     g.bench_function("new_not_single", |b| {
         b.iter_custom(|iters| {
-            bench_on_every_processor(
+            bench_on_threadpool(
+                &thread_pool,
                 iters,
                 {
                     let per_thread = per_thread.clone();
@@ -138,7 +141,8 @@ fn thread_local_multithreaded(c: &mut Criterion) {
 
     g.bench_function("clone", |b| {
         b.iter_custom(|iters| {
-            bench_on_every_processor(
+            bench_on_threadpool(
+                &thread_pool,
                 iters,
                 {
                     let per_thread = per_thread.clone();

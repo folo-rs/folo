@@ -4,8 +4,9 @@ use std::{
     sync::{Arc, atomic::AtomicUsize},
 };
 
-use benchmark_utils::bench_on_every_processor;
-use criterion::{Criterion, criterion_group, criterion_main};
+use benchmark_utils::{ThreadPool, bench_on_threadpool};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use seq_macro::seq;
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
@@ -32,19 +33,18 @@ impl TestSubject {
 linked::instance_per_access!(static TARGET: TestSubject = TestSubject::new());
 
 fn entrypoint(c: &mut Criterion) {
-    let mut g = c.benchmark_group("per_access_static::access_single_threaded");
+    let thread_pool = ThreadPool::all();
 
-    g.bench_function("get", |b| {
+    let mut g = c.benchmark_group("per_access_static::get");
+
+    g.bench_function("single-threaded", |b| {
         b.iter(|| black_box(TARGET.get().local_state.get()));
     });
 
-    g.finish();
-
-    let mut g = c.benchmark_group("per_access_static::access_multi_threaded");
-
-    g.bench_function("get", |b| {
+    g.bench_function("multi-threaded", |b| {
         b.iter_custom(|iters| {
-            bench_on_every_processor(
+            bench_on_threadpool(
+                &thread_pool,
                 iters,
                 || (),
                 |_| {
@@ -55,4 +55,69 @@ fn entrypoint(c: &mut Criterion) {
     });
 
     g.finish();
+
+    let mut g = c.benchmark_group("per_access_static::get_1000");
+
+    g.bench_function("single-threaded", |b| {
+        b.iter_batched_ref(
+            LinkedVariableClearGuard::default,
+            |_| {
+                seq!(N in 0..1000 {
+                    black_box(TARGET_MANY_~N.get().local_state.get());
+                });
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    g.bench_function("multi-threaded", |b| {
+        b.iter_custom(|iters| {
+            let duration = bench_on_threadpool(
+                &thread_pool,
+                iters,
+                || (),
+                |_| {
+                    seq!(N in 0..1000 {
+                        black_box(TARGET_MANY_~N.get().local_state.get());
+                    });
+                },
+            );
+
+            // The other threads were all temporary and have already gone away, so all we care about
+            // is destroying the remains in the global registry, which is fine from this thread.
+            linked::__private_clear_linked_variables();
+
+            duration
+        });
+    });
+
+    g.finish();
+}
+
+// We manually expand the macro here just because macro-in-macro goes crazy and fails to operate.
+seq!(N in 0..1000 {
+    #[allow(non_camel_case_types)]
+    struct __lookup_key_~N;
+
+    const TARGET_MANY_~N : ::linked::PerAccessStatic<TestSubject> =
+        ::linked::PerAccessStatic::new(
+            ::std::any::TypeId::of::<__lookup_key_~N>,
+            TestSubject::new
+        );
+});
+
+/// Clears all data stored in the shared variable system when created and dropped. Just for testing.
+pub struct LinkedVariableClearGuard {}
+
+impl Default for LinkedVariableClearGuard {
+    fn default() -> Self {
+        ::linked::__private_clear_linked_variables();
+        Self {}
+    }
+}
+
+impl Drop for LinkedVariableClearGuard {
+    fn drop(&mut self) {
+        ::linked::__private_clear_linked_variables();
+    }
 }

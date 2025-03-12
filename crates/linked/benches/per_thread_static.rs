@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, atomic::AtomicUsize},
 };
 
-use benchmark_utils::bench_on_every_processor;
+use benchmark_utils::{ThreadPool, bench_on_threadpool};
 use criterion::{Criterion, criterion_group, criterion_main};
 
 criterion_group!(benches, entrypoint);
@@ -32,6 +32,8 @@ impl TestSubject {
 linked::instance_per_thread!(static TARGET: TestSubject = TestSubject::new());
 
 fn entrypoint(c: &mut Criterion) {
+    let thread_pool = ThreadPool::all();
+
     let mut g = c.benchmark_group("per_thread_static::access_single_threaded");
 
     g.bench_function("with", |b| {
@@ -48,7 +50,8 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("with", |b| {
         b.iter_custom(|iters| {
-            bench_on_every_processor(
+            bench_on_threadpool(
+                &thread_pool,
                 iters,
                 || (),
                 |_| {
@@ -60,7 +63,8 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("to_rc", |b| {
         b.iter_custom(|iters| {
-            bench_on_every_processor(
+            bench_on_threadpool(
+                &thread_pool,
                 iters,
                 || (),
                 |_| {

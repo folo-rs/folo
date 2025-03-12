@@ -23,10 +23,6 @@ many_cpus = { workspace = true }
 seq-macro = { workspace = true }
 
 [[bench]]
-name = "linked"
-harness = false
-
-[[bench]]
 name = "per_access_static"
 harness = false
 
