@@ -32,6 +32,8 @@ mod windows {
 
     pub fn entrypoint(c: &mut Criterion) {
         execute_runs::<AllocDefaultHeap, 10_000>(c, WorkDistribution::all());
+        execute_runs::<AllocPerThreadHeap, 10_000>(c, WorkDistribution::all());
+        execute_runs::<AllocPerThreadHeapThreadSafe, 10_000>(c, WorkDistribution::all());
     }
 
     const CHUNK_SIZE: usize = 1024; // 1 KB
