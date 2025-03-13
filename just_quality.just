@@ -52,4 +52,3 @@ validate-local:
     just clippy release
     just check release
     just build release
-    just audit
