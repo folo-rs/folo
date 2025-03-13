@@ -31,8 +31,8 @@ mod windows {
         execute_runs::<AllocDefaultHeap, 10_000>(c, WorkDistribution::all());
     }
 
-    const CHUNK_SIZE: usize = 10 * 1024; // 10 KB
-    const CHUNK_COUNT: usize = 1024 * 100; // x 100 = 1 MB x 1024 = 1 GB
+    const CHUNK_SIZE: usize = 1024; // 1 KB
+    const CHUNK_COUNT: usize = 1024 * 100; // -> 100 MB
 
     /// Allocates and frees memory on the default Windows heap assigned to the process.
     #[derive(Debug, Default)]
