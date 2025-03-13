@@ -16,5 +16,4 @@ doc = false
 [dependencies]
 many_cpus = { workspace = true }
 
-criterion = { workspace = true }
 oneshot = { workspace = true }
