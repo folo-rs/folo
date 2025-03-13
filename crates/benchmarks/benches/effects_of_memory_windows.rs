@@ -12,7 +12,7 @@ use windows::entrypoint;
 mod not_windows {
     use criterion::Criterion;
 
-    pub fn entrypoint(c: &mut Criterion) {}
+    pub fn entrypoint(_c: &mut Criterion) {}
 }
 
 #[cfg(windows)]
