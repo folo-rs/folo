@@ -1,3 +1,7 @@
+[group('release')]
+audit:
+    cargo audit
+
 [group('quality')]
 check PROFILE='dev':
     cargo check {{ target_package }} --profile {{ PROFILE }} --all-features --all-targets
@@ -48,3 +52,4 @@ validate-local:
     just clippy release
     just check release
     just build release
+    just audit
