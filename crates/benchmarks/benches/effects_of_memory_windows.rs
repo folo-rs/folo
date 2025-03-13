@@ -15,6 +15,7 @@ mod not_windows {
     pub fn entrypoint(c: &mut Criterion) {}
 }
 
+#[cfg(windows)]
 mod windows {
     use std::{
         cell::RefCell,
