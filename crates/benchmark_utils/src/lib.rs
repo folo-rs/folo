@@ -90,6 +90,7 @@ where
     Duration::from_nanos((total_elapsed_nanos / thread_count as u128) as u64)
 }
 
+#[cfg(not(miri))] // Miri cannot deal with hardware inspection APIs this uses.
 #[cfg(test)]
 mod tests {
     use super::*;
