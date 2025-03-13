@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use criterion::{BenchmarkGroup, Criterion, measurement::WallTime};
+use criterion::{BenchmarkGroup, Criterion, SamplingMode, measurement::WallTime};
 use itertools::Itertools;
 use many_cpus::ProcessorSet;
 use nonempty::{NonEmpty, nonempty};
@@ -37,6 +37,11 @@ pub fn execute_runs<P: Payload, const BATCH_SIZE: u64>(
     // Many-processor benchmarks can be slow and clearing processor caches adds extra overhead
     // between iterations, so to get stable and consistent data it is worth taking some time.
     g.measurement_time(Duration::from_secs(30));
+
+    // Criterion docs say that this is faster for slow benchmarks (which ours definitely are).
+    // The downside is that it supposedly disabled some advanced statistical analysis but that
+    // is not really something we care about here - we just want the basic duration scoring.
+    g.sampling_mode(SamplingMode::Flat);
 
     for &distribution in work_distributions {
         execute_run::<P, BATCH_SIZE>(&mut g, distribution);
