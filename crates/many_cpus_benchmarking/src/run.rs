@@ -655,6 +655,8 @@ impl BenchmarkBatch {
                         .expect("caller gave us wrong number of barriers?!")
                         .wait();
 
+                    payload.prepare_local();
+
                     let start = Instant::now();
 
                     payload.process();

@@ -24,7 +24,11 @@ pub trait Payload: Sized + Send + 'static {
     /// measurement starts. It will be called on a worker thread but the payload may be moved to
     /// a different worker thread before the benchmark starts (as workers by default prepare work
     /// for each other, to showcase what happens when the work is transferred between threads).
-    fn prepare(&mut self);
+    fn prepare(&mut self) {}
+
+    /// Performs any initialization required on the final worker thread selected. This is not
+    /// counted as part of the benchmark time span.
+    fn prepare_local(&mut self) {}
 
     /// Processes the payload but does not consume it. The iteration is complete when this returns
     /// for all payloads. The payloads are dropped later, to ensure that the benchmark time is not

@@ -19,6 +19,7 @@ mod not_windows {
 mod windows {
     use std::{
         cell::RefCell,
+        hint::black_box,
         sync::{Arc, Mutex},
     };
 
@@ -85,7 +86,10 @@ mod windows {
             (Self::default(), Self::default())
         }
 
-        fn prepare(&mut self) {}
+        fn prepare_local(&mut self) {
+            // Initialize the heap before the measurement starts.
+            PER_THREAD_HEAP.with(|heap| _ = black_box(heap));
+        }
 
         fn process(&mut self) {
             PER_THREAD_HEAP.with(|heap| {
@@ -109,7 +113,10 @@ mod windows {
             (Self::default(), Self::default())
         }
 
-        fn prepare(&mut self) {}
+        fn prepare_local(&mut self) {
+            // Initialize the heap before the measurement starts.
+            PER_THREAD_HEAP_THREAD_SAFE.with(|heap| _ = black_box(heap));
+        }
 
         fn process(&mut self) {
             PER_THREAD_HEAP_THREAD_SAFE.with(|heap| {
@@ -133,7 +140,10 @@ mod windows {
             (Self::default(), Self::default())
         }
 
-        fn prepare(&mut self) {}
+        fn prepare_local(&mut self) {
+            // Initialize the heap before the measurement starts.
+            PER_REGION_HEAP.with(|heap| _ = black_box(heap));
+        }
 
         fn process(&mut self) {
             PER_REGION_HEAP.with(|heap| {
