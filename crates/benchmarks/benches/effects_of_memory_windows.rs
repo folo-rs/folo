@@ -24,7 +24,6 @@ mod windows {
     };
 
     use criterion::Criterion;
-    use itertools::Itertools;
     use many_cpus::{HardwareInfo, HardwareTracker};
     use many_cpus_benchmarking::{Payload, WorkDistribution, execute_runs};
     use windows::Win32::{
@@ -39,24 +38,35 @@ mod windows {
     extern crate alloc;
 
     pub fn entrypoint(c: &mut Criterion) {
-        execute_runs::<AllocDefaultHeap, 10_000>(c, WorkDistribution::all());
-        execute_runs::<AllocPerThreadHeap, 10_000>(c, WorkDistribution::all());
-        execute_runs::<AllocPerThreadHeapThreadSafe, 10_000>(c, WorkDistribution::all());
-        execute_runs::<AllocPerMemoryRegionHeap, 10_000>(c, WorkDistribution::all());
+        execute_runs::<AllocDefaultHeap, 1000>(c, WorkDistribution::all());
+        execute_runs::<AllocPerThreadHeap, 1000>(c, WorkDistribution::all());
+        execute_runs::<AllocPerThreadHeapThreadSafe, 1000>(c, WorkDistribution::all());
+        execute_runs::<AllocPerMemoryRegionHeap, 1000>(c, WorkDistribution::all());
     }
 
     const CHUNK_SIZE: usize = 1024; // 1 KB
     const CHUNK_COUNT: usize = 1024 * 100; // -> 100 MB
 
     /// Allocates and frees memory on the default Windows heap assigned to the process.
-    #[derive(Debug, Default)]
+    #[derive(Debug)]
     struct AllocDefaultHeap {
         process_heap: HANDLE,
+
+        chunk_buffer: Vec<*mut std::ffi::c_void>,
+    }
+
+    impl AllocDefaultHeap {
+        pub fn new() -> Self {
+            Self {
+                process_heap: HANDLE::default(),
+                chunk_buffer: Vec::with_capacity(CHUNK_COUNT),
+            }
+        }
     }
 
     impl Payload for AllocDefaultHeap {
         fn new_pair() -> (Self, Self) {
-            (Self::default(), Self::default())
+            (Self::new(), Self::new())
         }
 
         fn prepare(&mut self) {
@@ -64,26 +74,37 @@ mod windows {
         }
 
         fn process(&mut self) {
-            let chunks = (0..CHUNK_COUNT)
-                .map(|_| unsafe { HeapAlloc(self.process_heap, HEAP_FLAGS(0), CHUNK_SIZE) })
-                .collect_vec();
+            self.chunk_buffer.extend(
+                (0..CHUNK_COUNT)
+                    .map(|_| unsafe { HeapAlloc(self.process_heap, HEAP_FLAGS(0), CHUNK_SIZE) }),
+            );
 
-            for chunk in chunks {
+            for chunk in self.chunk_buffer.drain(..) {
                 unsafe { HeapFree(self.process_heap, HEAP_FLAGS(0), Some(chunk)) }.unwrap();
             }
         }
     }
 
-    // SAFETY: It just complains because of the HANDLE - in reality, fine to send it.
+    // SAFETY: It just complains because of the HANDLE and pointers - in reality, fine to send them.
     unsafe impl Send for AllocDefaultHeap {}
 
     /// Allocates and frees memory on the a custom per-thread non-thread-safe Windows heap.
-    #[derive(Debug, Default)]
-    struct AllocPerThreadHeap {}
+    #[derive(Debug)]
+    struct AllocPerThreadHeap {
+        chunk_buffer: Vec<*mut std::ffi::c_void>,
+    }
+
+    impl AllocPerThreadHeap {
+        pub fn new() -> Self {
+            Self {
+                chunk_buffer: Vec::with_capacity(CHUNK_COUNT),
+            }
+        }
+    }
 
     impl Payload for AllocPerThreadHeap {
         fn new_pair() -> (Self, Self) {
-            (Self::default(), Self::default())
+            (Self::new(), Self::new())
         }
 
         fn prepare_local(&mut self) {
@@ -93,24 +114,36 @@ mod windows {
 
         fn process(&mut self) {
             PER_THREAD_HEAP.with(|heap| {
-                let chunks = (0..CHUNK_COUNT)
-                    .map(|_| heap.alloc(CHUNK_SIZE))
-                    .collect_vec();
+                self.chunk_buffer
+                    .extend((0..CHUNK_COUNT).map(|_| heap.alloc(CHUNK_SIZE)));
 
-                for chunk in chunks {
+                for chunk in self.chunk_buffer.drain(..) {
                     heap.free(chunk);
                 }
             });
         }
     }
 
+    // SAFETY: It just complains due to the pointers - that's fine, all is well.
+    unsafe impl Send for AllocPerThreadHeap {}
+
     /// Allocates and frees memory on the a custom per-thread thread-safe Windows heap.
-    #[derive(Debug, Default)]
-    struct AllocPerThreadHeapThreadSafe {}
+    #[derive(Debug)]
+    struct AllocPerThreadHeapThreadSafe {
+        chunk_buffer: Vec<*mut std::ffi::c_void>,
+    }
+
+    impl AllocPerThreadHeapThreadSafe {
+        pub fn new() -> Self {
+            Self {
+                chunk_buffer: Vec::with_capacity(CHUNK_COUNT),
+            }
+        }
+    }
 
     impl Payload for AllocPerThreadHeapThreadSafe {
         fn new_pair() -> (Self, Self) {
-            (Self::default(), Self::default())
+            (Self::new(), Self::new())
         }
 
         fn prepare_local(&mut self) {
@@ -120,24 +153,36 @@ mod windows {
 
         fn process(&mut self) {
             PER_THREAD_HEAP_THREAD_SAFE.with(|heap| {
-                let chunks = (0..CHUNK_COUNT)
-                    .map(|_| heap.alloc(CHUNK_SIZE))
-                    .collect_vec();
+                self.chunk_buffer
+                    .extend((0..CHUNK_COUNT).map(|_| heap.alloc(CHUNK_SIZE)));
 
-                for chunk in chunks {
+                for chunk in self.chunk_buffer.drain(..) {
                     heap.free(chunk);
                 }
             });
         }
     }
 
+    // SAFETY: It just complains due to the pointers - that's fine, all is well.
+    unsafe impl Send for AllocPerThreadHeapThreadSafe {}
+
     /// Allocates and frees memory on the a custom per-thread thread-safe Windows heap.
-    #[derive(Debug, Default)]
-    struct AllocPerMemoryRegionHeap {}
+    #[derive(Debug)]
+    struct AllocPerMemoryRegionHeap {
+        chunk_buffer: Vec<*mut std::ffi::c_void>,
+    }
+
+    impl AllocPerMemoryRegionHeap {
+        pub fn new() -> Self {
+            Self {
+                chunk_buffer: Vec::with_capacity(CHUNK_COUNT),
+            }
+        }
+    }
 
     impl Payload for AllocPerMemoryRegionHeap {
         fn new_pair() -> (Self, Self) {
-            (Self::default(), Self::default())
+            (Self::new(), Self::new())
         }
 
         fn prepare_local(&mut self) {
@@ -147,16 +192,18 @@ mod windows {
 
         fn process(&mut self) {
             PER_REGION_HEAP.with(|heap| {
-                let chunks = (0..CHUNK_COUNT)
-                    .map(|_| heap.alloc(CHUNK_SIZE))
-                    .collect_vec();
+                self.chunk_buffer
+                    .extend((0..CHUNK_COUNT).map(|_| heap.alloc(CHUNK_SIZE)));
 
-                for chunk in chunks {
+                for chunk in self.chunk_buffer.drain(..) {
                     heap.free(chunk);
                 }
             });
         }
     }
+
+    // SAFETY: It just complains due to the pointers - that's fine, all is well.
+    unsafe impl Send for AllocPerMemoryRegionHeap {}
 
     thread_local!(static PER_THREAD_HEAP_THREAD_SAFE: ThreadSafeCustomHeap = ThreadSafeCustomHeap::new());
     thread_local!(static PER_THREAD_HEAP: SingleThreadedCustomHeap = SingleThreadedCustomHeap::new());
