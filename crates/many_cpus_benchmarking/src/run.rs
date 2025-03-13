@@ -297,13 +297,20 @@ fn get_processor_set_pairs(
             )
         }
         WorkDistribution::PinnedSameProcessor => {
-            // Here we do not care at all which processors are selected - work is
-            // local on every processor, so just pick arbitrary processors and use
-            // the same processor for both members of the pair.
+            // To maintain comparability between distributions and avoid structural randomness,
+            // we pick one processor from each NUMA node - the same logic as with region-pairs.
+            // We start by picking the first item in each pair.
+            let processors = candidates
+                .to_builder()
+                .different_memory_regions()
+                .take(worker_pair_count)?;
+
+            // This must logically match our pair count because we have one pair per memory region
+            // and expect to get one processor from each memory region with performance processors.
+            assert_eq!(processors.len(), worker_pair_count.get());
+
             Some(
-                candidates
-                    .to_builder()
-                    .take(worker_pair_count)?
+                processors
                     .processors()
                     .into_iter()
                     .map(|p| {

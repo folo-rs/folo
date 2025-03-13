@@ -37,7 +37,8 @@ pub enum WorkDistribution {
     /// `PinnedMemoryRegionPairs`, for optimal comparability. There will be a minimum of one pair.
     PinnedSameMemoryRegion,
 
-    /// Both workers in each pair are spawned on the same processor, picked arbitrarily.
+    /// Both workers in each pair are spawned on the same processor, picked arbitrarily from
+    /// each memory region. One pair from each memory region, on the same processor.
     ///
     /// Each pair will work together, processing one payload between the two members. Different
     /// pairs may be in different memory regions.
@@ -45,6 +46,8 @@ pub enum WorkDistribution {
     /// This can occasionally be insightful when it surprises you by showing that two threads on
     /// the same processor do not need twice as long to get twice as much work done. Not useful
     /// with most scenarios, though - best to skip unless probing specifically for this effect.
+    /// 
+    /// It may also showcase effects of memory regions when compared to `UnpinnedSameProcessor`.
     ///
     /// The number of pairs will match the number that would have been used with
     /// `PinnedMemoryRegionPairs`, for optimal comparability. There will be a minimum of one pair.
