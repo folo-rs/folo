@@ -164,11 +164,11 @@ mod windows {
         }
 
         pub fn alloc(&self, size: usize) -> *mut std::ffi::c_void {
-            unsafe { HeapAlloc(self.heap, HEAP_FLAGS(0), size) }
+            unsafe { HeapAlloc(self.heap, HEAP_NO_SERIALIZE, size) }
         }
 
         pub fn free(&self, ptr: *mut std::ffi::c_void) {
-            unsafe { HeapFree(self.heap, HEAP_FLAGS(0), Some(ptr)) }.unwrap();
+            unsafe { HeapFree(self.heap, HEAP_NO_SERIALIZE, Some(ptr)) }.unwrap();
         }
     }
 
