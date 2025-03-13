@@ -20,7 +20,11 @@ criterion = { workspace = true }
 fake_headers = { workspace = true }
 frozen-collections = { workspace = true }
 http = { workspace = true }
+itertools = { workspace = true }
 scc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_System_Memory"] }
 
 [[bench]]
 name = "variable_access"
@@ -28,4 +32,8 @@ harness = false
 
 [[bench]]
 name = "effects_of_memory"
+harness = false
+
+[[bench]]
+name = "effects_of_memory_windows"
 harness = false
