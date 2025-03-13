@@ -328,6 +328,11 @@ fn get_processor_set_pairs(
             assert_eq!(first_processors.len(), worker_pair_count.get());
 
             // Now we expand each single processor into "all the processors in that memory region".
+            // In principle, this does allow multiple workers to be scheduled on the same
+            // processor, but that is not a problem for our purposes because those two workers
+            // are not working together - they are paired with different workers each, with
+            // different payloads each. At most, this can degrade performance but the OS will
+            // likely schedule them on different processors anyway since it sees this.
             let first_processor_sets = first_processors
                 .processors()
                 .into_iter()
@@ -356,7 +361,7 @@ fn get_processor_set_pairs(
             // Great success! Almost. We still need to package them up as pairs of ProcessorSets.
             Some(first_processor_sets.into_iter().zip(partners).collect_vec())
         }
-        WorkDistribution::UnpinnedSameMemoryRegion => {
+        WorkDistribution::ConstrainedSameMemoryRegion => {
             // We start by picking the first item in each pair. We still distribute the pairs
             // across all memory regions to even out the load and any hardware differences, even
             // though we do not actually care about crossing memory regions during operation.
@@ -465,6 +470,42 @@ fn get_processor_set_pairs(
                     .collect(),
             )
         }
+        WorkDistribution::UnpinnedPerMemoryRegionSelf => {
+            // We start by picking the first item in each pair. We still distribute the pairs
+            // across all memory regions to even out the load and any hardware differences, even
+            // though we do not actually care about crossing memory regions during operation.
+            let first_processors = candidates
+                .to_builder()
+                .different_memory_regions()
+                .take(worker_pair_count)?;
+
+            // This must logically match our pair count because we have one pair per memory region
+            // and expect to get one processor from each memory region with performance processors.
+            assert_eq!(first_processors.len(), worker_pair_count.get());
+
+            // We now expand each single processor into "all the processors in that memory region".
+            // In principle, this does allow multiple workers to be scheduled on the same
+            // processor, but that is not a problem for our purposes because those two workers
+            // are not working together - they are each processing their own separate payload.
+            // At most, this can degrade performance but the OS will likely schedule them on
+            // different processors anyway since it sees this.
+            let first_processor_sets = first_processors
+                .processors()
+                .into_iter()
+                .map(|p| {
+                    candidates
+                        .to_builder()
+                        .filter(|c| c.memory_region_id() == p.memory_region_id())
+                        .take_all()
+                        .expect("must have at least one processor in every active memory region")
+                })
+                .collect::<VecDeque<_>>();
+
+            // We pair them up with themselves, so we need to clone the whole thing.
+            let partners = first_processor_sets.clone();
+
+            Some(first_processor_sets.into_iter().zip(partners).collect_vec())
+        }
     }
 }
 
@@ -511,12 +552,14 @@ impl BenchmarkBatch {
                 | WorkDistribution::PinnedSameMemoryRegion
                 | WorkDistribution::PinnedSameProcessor
                 | WorkDistribution::UnpinnedMemoryRegionPairs
-                | WorkDistribution::UnpinnedSameMemoryRegion => {
-                    // Pair 1 will send to pair 2 and vice versa.
+                | WorkDistribution::ConstrainedSameMemoryRegion => {
+                    // Worker 1 will send to worker 2 and vice versa.
                     ((c1_tx, c2_rx), (c2_tx, c1_rx))
                 }
-                WorkDistribution::PinnedSelf | WorkDistribution::UnpinnedSelf => {
-                    // Pair 1 will send to itself and pair 2 will send to itself.
+                WorkDistribution::PinnedSelf
+                | WorkDistribution::UnpinnedSelf
+                | WorkDistribution::UnpinnedPerMemoryRegionSelf => {
+                    // Worker 1 will send to itself and worker 2 will send to itself.
                     ((c1_tx, c1_rx), (c2_tx, c2_rx))
                 }
             };

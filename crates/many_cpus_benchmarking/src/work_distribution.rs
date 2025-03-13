@@ -75,7 +75,7 @@ pub enum WorkDistribution {
     /// the pair gets one half of the processors in the memory region.
     ///
     /// We still have the same total number of workers to keep total system load equivalent.
-    UnpinnedSameMemoryRegion,
+    ConstrainedSameMemoryRegion,
 
     /// All workers are spawned without regard to memory region or processor, leaving it up
     /// to the operating system to decide where to run them. Note that, typically, this will still
@@ -92,6 +92,20 @@ pub enum WorkDistribution {
     /// This mode is also unlikely to be informative if the scenario setup does not distinguish
     /// between the two workers (they either do the same thing or pick dynamically who does what).
     UnpinnedSelf,
+
+    /// All workers are spawned without regard to processor but in specific memory regions, matching
+    /// the memory regions used in `PinnedMemoryRegionPairs`. Each worker is allowed to float among
+    /// all the processors in the memory region, based on the operating system's scheduling
+    /// decisions.
+    ///
+    /// Each worker is given back its own payload - while we still spawn the same number of workers
+    /// as in the paired scenarios, each member of the pair operates independently and processes
+    /// its own payload.
+    ///
+    /// Note that this requires the benchmark scenario logic to be capable of handling its own data
+    /// set. If the benchmark logic requires two collaborating workers, you cannot use this work
+    /// distribution as it would likely end in a deadlock due to lack of a partner.
+    UnpinnedPerMemoryRegionSelf,
 }
 
 impl WorkDistribution {
@@ -103,8 +117,9 @@ impl WorkDistribution {
             WorkDistribution::PinnedSameProcessor,
             WorkDistribution::PinnedSelf,
             WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
+            WorkDistribution::ConstrainedSameMemoryRegion,
             WorkDistribution::UnpinnedSelf,
+            WorkDistribution::UnpinnedPerMemoryRegionSelf,
         ]
     }
 
@@ -116,33 +131,35 @@ impl WorkDistribution {
             WorkDistribution::PinnedSameMemoryRegion,
             WorkDistribution::PinnedSameProcessor,
             WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
+            WorkDistribution::ConstrainedSameMemoryRegion,
         ]
     }
 
-    /// All the work distribution modes that place every worker
-    /// on a different processor.
+    /// All the work distribution modes that allow every worker to be placed
+    /// on a different processor (either explicitly or by allowing them to float
+    /// based on OS scheduling decisions).
     pub fn all_with_unique_processors() -> &'static [WorkDistribution] {
         &[
             WorkDistribution::PinnedMemoryRegionPairs,
             WorkDistribution::PinnedSameMemoryRegion,
             WorkDistribution::PinnedSelf,
             WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
+            WorkDistribution::ConstrainedSameMemoryRegion,
             WorkDistribution::UnpinnedSelf,
+            WorkDistribution::UnpinnedPerMemoryRegionSelf,
         ]
     }
 
-    /// All the work distribution modes that place every worker on a different processor
-    /// and exchange payloads between processors before starting the benchmark.
+    /// All the work distribution modes that allow every worker to be placed
+    /// on a different processor (either explicitly or by allowing them to float
+    /// based on OS scheduling decisions) and exchange payloads between workers
+    /// before starting the benchmark.
     pub fn all_with_unique_processors_without_self() -> &'static [WorkDistribution] {
         &[
             WorkDistribution::PinnedMemoryRegionPairs,
             WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSelf,
             WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::UnpinnedSameMemoryRegion,
-            WorkDistribution::UnpinnedSelf,
+            WorkDistribution::ConstrainedSameMemoryRegion,
         ]
     }
 }
