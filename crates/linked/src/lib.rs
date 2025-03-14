@@ -139,7 +139,7 @@
 //!     }
 //! }
 //! ```
-//! 
+//!
 //! Note: because this is a contrived example, this type is not very useful as it does not have
 //! any high-efficiency thread-local logic that would benefit from the linked object pattern. See
 //! the [Implementing local behavior][local-behavior] section.
@@ -302,18 +302,18 @@
 //!     assert_eq!(thing.value(), "world");
 //! }).join().unwrap();
 //! ```
-//! 
+//!
 //! # Implementing local behavior
 //! [local-behavior]: #local-behavior
-//! 
+//!
 //! The linked object pattern does not change the fact that synchronized state is expensive.
 //! Whenever possible, linked objects should operate on local state - the entire purpose of this
 //! pattern is to put local behavior front and center and make any sharing require explicit intent.
-//! 
+//!
 //! Let's extend the above example type with a local counter that counts the number of times
 //! the value has been modified via the current instance. This is local behavior that does not
 //! require any synchronization with other instances.
-//! 
+//!
 //! ```rust
 //! use std::sync::{Arc, Mutex};
 //!
@@ -321,7 +321,7 @@
 //! pub struct Thing {
 //!     // Shared state - synchronized with other instances in the family.
 //!     value: Arc<Mutex<String>>,
-//! 
+//!
 //!     // Local state - not synchronized with other instances in the family.
 //!     update_count: usize,
 //! }
@@ -333,7 +333,7 @@
 //!         linked::new!(Self {
 //!             // Capture `shared_value` to reuse it for all instances in the family.
 //!             value: Arc::clone(&shared_value),
-//! 
+//!
 //!             // Local state is simply initialized to 0 for every instance.
 //!             update_count: 0,
 //!         })
@@ -347,30 +347,30 @@
 //!         *self.value.lock().unwrap() = value;
 //!          self.update_count += 1;
 //!     }
-//! 
+//!
 //!     pub fn update_count(&self) -> usize {
 //!         self.update_count
 //!     }
 //! }
 //! ```
-//! 
+//!
 //! Local behavior consists of simply operating on regular non-synchronized fields of the struct.
-//! 
+//!
 //! However, note that we had to modify `set_value()` to receive `&mut self` instead of the
 //! previous `&self`. This is because we now need to modify a field of the object, so we need
 //! an exclusive `&mut` reference to the instance.
-//! 
+//!
 //! `&mut self` is not a universally applicable technique - if you are using a linked object in
 //! per-thread mode then all access must be via `&self` shared references because there can be
 //! multiple references simultaneously alive per thread. This means there can be no `&mut self`
 //! and we need to use interior mutability (e.g. `Cell`, `RefCell`, etc.) to support local
 //! behavior together with per-thread instantiation.
-//! 
+//!
 //! Attempting to use the above example type in a per-thread context will simply mean that the
 //! `set_value()` method cannot be called because there is no way to create a `&mut self` reference.
-//! 
+//!
 //! Example of the same type using `Cell` to support local behavior without `&mut self`:
-//! 
+//!
 //! ```rust
 //! use std::cell::Cell;
 //! use std::sync::{Arc, Mutex};
@@ -379,7 +379,7 @@
 //! pub struct Thing {
 //!     // Shared state - synchronized with other instances in the family.
 //!     value: Arc<Mutex<String>>,
-//! 
+//!
 //!     // Local state - not synchronized with other instances in the family.
 //!     update_count: Cell<usize>,
 //! }
@@ -391,7 +391,7 @@
 //!         linked::new!(Self {
 //!             // Capture `shared_value` to reuse it for all instances in the family.
 //!             value: Arc::clone(&shared_value),
-//! 
+//!
 //!             // Local state is simply initialized to 0 for every instance.
 //!             update_count: Cell::new(0),
 //!         })
@@ -405,7 +405,7 @@
 //!         *self.value.lock().unwrap() = value;
 //!          self.update_count.set(self.update_count.get() + 1);
 //!     }
-//! 
+//!
 //!     pub fn update_count(&self) -> usize {
 //!         self.update_count.get()
 //!     }

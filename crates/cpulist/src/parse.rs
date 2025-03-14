@@ -3,9 +3,9 @@ use itertools::Itertools;
 use crate::Item;
 
 /// Parses a [cpulist][crate] and returns the numeric items in ascending order, removing duplicates.
-/// 
+///
 /// An empty string is valid input and returns an empty result.
-/// 
+///
 /// See [crate-level documentation][crate] for details.
 pub fn parse(cpulist: &str) -> crate::Result<Vec<Item>> {
     let parts = cpulist.split(',');

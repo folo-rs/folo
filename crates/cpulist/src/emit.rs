@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use crate::Item;
 
 /// Generates a [cpulist][crate] in a format that can be parsed by [`parse()`][crate::parse].
-/// 
+///
 /// Empty input is valid and returns an empty string.
 ///
 /// The exact emitted representation is unspecified and may change across versions of this crate.

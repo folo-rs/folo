@@ -46,7 +46,7 @@ pub enum WorkDistribution {
     /// This can occasionally be insightful when it surprises you by showing that two threads on
     /// the same processor do not need twice as long to get twice as much work done. Not useful
     /// with most scenarios, though - best to skip unless probing specifically for this effect.
-    /// 
+    ///
     /// It may also showcase effects of memory regions when compared to `UnpinnedSameProcessor`.
     ///
     /// The number of pairs will match the number that would have been used with
