@@ -5,9 +5,13 @@ use std::collections::VecDeque;
 use crate::Item;
 
 /// Generates a [cpulist][crate] in a format that can be parsed by [`parse()`][crate::parse].
+/// 
+/// Empty input is valid and returns an empty string.
 ///
 /// The exact emitted representation is unspecified and may change across versions of this crate.
 /// All we promise is that it is a recognizable cpulist and can be parsed by this crate.
+///
+/// See [crate-level documentation][crate] for more details.
 pub fn emit<'a>(items: impl IntoIterator<Item = &'a Item>) -> String {
     // We group consecutive items to generate shorter output strings.
     // Sorted remaining items that we have not yet grouped.

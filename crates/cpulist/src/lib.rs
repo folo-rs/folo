@@ -2,7 +2,7 @@
 //! utilities that work with processor IDs, memory region IDs and similar numeric hardware
 //! identifiers.
 //!
-//! Example cpulist string: `0,1,2-4,5-9:2,6-10:2`
+//! Example cpulist string: `0-9,32-35,40`
 //!
 //! This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
 //! high-performance hardware-aware programming in Rust.
@@ -19,6 +19,22 @@
 //! Whitespace or extra characters are not allowed anywhere in the string.
 //!
 //! The identifiers in the list are of size `u32`.
+//!
+//! # Example
+//!
+//! Basic conversion from/to strings:
+//!
+//! ```
+#![doc = source_file!("examples/cpulist_basic.rs")]
+//! ```
+//!
+//! The stride operator is also supported for parsing:
+//!
+//! ```
+#![doc = source_file!("examples/cpulist_stride.rs")]
+//! ```
+
+use include_doc::source_file;
 
 mod emit;
 mod error;
