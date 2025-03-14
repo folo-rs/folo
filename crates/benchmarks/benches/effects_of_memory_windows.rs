@@ -47,6 +47,13 @@ mod windows {
     const CHUNK_SIZE: usize = 1024; // 1 KB
     const CHUNK_COUNT: usize = 1024 * 100; // -> 100 MB
 
+    // The expectation here is that the default heap will quickly grow to be a large size to fit
+    // all our data, so to make a fair comparison we might as well start off all the heaps at the
+    // right size (because the non-defaults are (re)created multiple times in benchmarking).
+    // We double the size because the heap may need some padding or have overhead - not every
+    // item can be allocated next to each other (presumably).
+    const HEAP_INITIAL_SIZE: usize = CHUNK_SIZE * CHUNK_COUNT * 2;
+
     /// Allocates and frees memory on the default Windows heap assigned to the process.
     #[derive(Debug)]
     struct AllocDefaultHeap {
@@ -216,7 +223,7 @@ mod windows {
     impl SingleThreadedCustomHeap {
         pub fn new() -> Self {
             Self {
-                heap: unsafe { HeapCreate(HEAP_NO_SERIALIZE, 0, 0) }.unwrap(),
+                heap: unsafe { HeapCreate(HEAP_NO_SERIALIZE, HEAP_INITIAL_SIZE, 0) }.unwrap(),
             }
         }
 
@@ -242,7 +249,7 @@ mod windows {
     impl ThreadSafeCustomHeap {
         pub fn new() -> Self {
             Self {
-                heap: unsafe { HeapCreate(HEAP_FLAGS(0), 0, 0) }.unwrap(),
+                heap: unsafe { HeapCreate(HEAP_FLAGS(0), HEAP_INITIAL_SIZE, 0) }.unwrap(),
             }
         }
 
