@@ -22,7 +22,6 @@ criterion = { workspace = true }
 fake_headers = { workspace = true }
 frozen-collections = { workspace = true }
 http = { workspace = true }
-itertools = { workspace = true }
 scc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
