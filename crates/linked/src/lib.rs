@@ -35,19 +35,20 @@
 //!
 //! 1. are each local to a single thread (i.e. [`!Send`][4]); (see also, [linked objects on multiple
 //!    threads][multiple-threads])
-//! 1. and are internally connected to other instances from the same family (there may be
-//!    multiple families of the same type);
-//! 1. and share some state between instances via messaging or synchronized storage;
-//! 1. and perform all collaboration between instances without involvement of user code
-//!    (i.e. there is no `Arc` or `Mutex` that the user needs to create).
+//! 1. and are internally connected to other instances from the same family (note that multiple
+//!    families of the same type may exist, each instance belongs to exactly one);
+//! 1. and share some state between instances in the same family, e.g. via messaging or synchronized
+//!    storage;
+//! 1. and perform all collaboration between instances in the same family without involvement of
+//!    user code (i.e. there is no `Arc` or `Mutex` that the user needs to create/operate).
 //!
 //! In most cases, as long as logic is thread-local, user code can treat linked objects like any
 //! other Rust structs. The mechanisms only have an effect when [instances on multiple threads need
 //! to collaborate][multiple-threads].
 //!
-//! Note that despite instances of linked objects being thread-local (`!Send`), there may still be
-//! multiple instances per thread. You can explicitly opt-in to "one per thread" behavior via the
-//! [`linked::PerThread<T>`][3] wrapper.
+//! Note that despite instances of linked objects being designed for thread-local use, there may
+//! still exist multiple instances per thread in the same family. You can explicitly opt-in to
+//! "one per thread" behavior via the [`linked::PerThread<T>`][3] wrapper.
 //!
 //! # What is a family of linked objects?
 //!
@@ -106,8 +107,8 @@
 //!
 //! * The relation between instances is established via cloning.
 //! * The `value` is shared.
-//! * Implementing the collaboration between instances does not require anything (e.g. a `Mutex`)
-//!   from user code.
+//! * Implementing the collaboration between instances does not require anything (e.g. a `Mutex`
+//!   or `mpsc::channel`) from user code.
 //!
 //! The implementation of this type is the following:
 //!
@@ -141,7 +142,7 @@
 //! 
 //! Note: because this is a contrived example, this type is not very useful as it does not have
 //! any high-efficiency thread-local logic that would benefit from the linked object pattern. See
-//! the [Implementing local behavior][local-behavior] section for more details.
+//! the [Implementing local behavior][local-behavior] section.
 //!
 //! The implementation steps to apply the pattern to a struct are:
 //!
@@ -151,11 +152,11 @@
 //! * In the constructor, call [`linked::new!`][crate::new] to create the first instance.
 //!
 //! [`linked::new!`][crate::new] is a wrapper around a `Self` struct-expression. What makes
-//! it special is that **it will be called for every instance that is ever created in the same
-//! family of linked objects**. This expression captures the state of the constructor (e.g. in
-//! the above example, it captures `shared_value`). Use the captured state to set up any
-//! shared connections between instances (e.g. by sharing an `Arc` or connecting message
-//! channels).
+//! it special is that **this struct-expression will be called for every instance that is ever
+//! created in the same family of linked objects**. This expression captures the state of the
+//! constructor (e.g. in the above example, it captures `shared_value`). Use the captured
+//! state to set up any shared connections between instances in the same family (e.g. by sharing
+//! an `Arc` or connecting message channels).
 //!
 //! The captured values must be thread-safe (`Send` + `Sync` + `'static`), while the `Thing`
 //! struct itself does not need to be thread-safe. In fact, the linked object pattern forces
@@ -246,12 +247,12 @@
 //! #         *self.value.lock().unwrap() = value;
 //! #     }
 //! # }
-//! use linked::Object; // This brings .handle() into scope.
+//! use linked::PerThread;
 //! use std::thread;
 //!
-//! let thing_per_thread = linked::PerThread::new(Thing::new("hello".to_string()));
+//! let thing_per_thread = PerThread::new(Thing::new("hello".to_string()));
 //!
-//! // Obtain a local instance on demand. It is efficient to reuse this instance as long as you can.
+//! // Obtain a local instance on demand.
 //! let thing = thing_per_thread.local();
 //! assert_eq!(thing.value(), "hello");
 //!
@@ -306,11 +307,11 @@
 //! [local-behavior]: #local-behavior
 //! 
 //! The linked object pattern does not change the fact that synchronized state is expensive.
-//! However, it makes it much more ergonomic to implement local behavior in instances because
-//! it takes care of the linking and bookkeeping between instances.
+//! Whenever possible, linked objects should operate on local state - the entire purpose of this
+//! pattern is to put local behavior front and center and make any sharing require explicit intent.
 //! 
 //! Let's extend the above example type with a local counter that counts the number of times
-//! the value has been modified via the current instance. This is a local behavior that does not
+//! the value has been modified via the current instance. This is local behavior that does not
 //! require any synchronization with other instances.
 //! 
 //! ```rust
@@ -355,14 +356,15 @@
 //! 
 //! Local behavior consists of simply operating on regular non-synchronized fields of the struct.
 //! 
-//! However, note that we now had to modify `set_value()` to receive `&mut self` instead of the
+//! However, note that we had to modify `set_value()` to receive `&mut self` instead of the
 //! previous `&self`. This is because we now need to modify a field of the object, so we need
 //! an exclusive `&mut` reference to the instance.
 //! 
 //! `&mut self` is not a universally applicable technique - if you are using a linked object in
-//! per-thread mode then all access must be via `&self` shared references, so there can be no
-//! `&mut self`. This means we need to use interior mutability (e.g. `Cell`, `RefCell`, etc.) to
-//! support local behavior together with per-thread instantiation.
+//! per-thread mode then all access must be via `&self` shared references because there can be
+//! multiple references simultaneously alive per thread. This means there can be no `&mut self`
+//! and we need to use interior mutability (e.g. `Cell`, `RefCell`, etc.) to support local
+//! behavior together with per-thread instantiation.
 //! 
 //! Attempting to use the above example type in a per-thread context will simply mean that the
 //! `set_value()` method cannot be called because there is no way to create a `&mut self` reference.
