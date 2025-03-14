@@ -1,0 +1,17 @@
+graph TD
+    direction LR
+    
+    subgraph Thread1[Thread 1]
+        Task1[Local Task] -->|thread-agnostic API surface| Instance1[Linked object instance]
+        Instance1 -->|lock-free| Local1[Local State]
+    end
+    
+    subgraph Thread2[Thread 2]
+        Task2[Local Task] -->|thread-agnostic API surface| Instance2[Linked object instance]
+        Instance2 -->|lock-free| Local2[Local State]
+    end
+    
+    SS[Shared State]
+
+    Instance1 --->|synchronized| SS
+    Instance2 --->|synchronized| SS

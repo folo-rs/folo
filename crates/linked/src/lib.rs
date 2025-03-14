@@ -1,43 +1,68 @@
 // Copyright (c) Microsoft Corporation.
 // Copyright (c) Folo authors.
 
-//! Mechanisms for creating families of linked objects that can collaborate across threads while being
-//! internally single-threaded.
+//! Mechanisms for creating families of linked objects that can collaborate across threads
+//! while being internally single-threaded.
 //!
-//! The linked object pattern ensures that cross-thread state sharing is always explicit, as well as
-//! cross-thread transfer of linked object instances, facilitated by the mechanisms in this crate. Each
-//! individual instance of a linked object and the mechanisms for obtaining new instances are
-//! structured in a manner that helps avoid accidental or implicit shared state, by making each instance
-//! thread-local while the entire family can act together to provide a multithreaded API to user code.
+//! The problem this crate solves is that while writing highly efficient lock-free thread-local
+//! code can yield great performance, it comes with serious drawbacks in terms of usability and
+//! developer experience.
+//!
+//! This crate bridges the gap by providing patterns and mechanisms that facilitate thread-local
+//! behavior while presenting a simple and reasonably ergonomic API to user code:
+//!
+//! * Internally, a linked object can take advantage of lock-free thread-isolated logic for **high
+//!   performance and efficiency** because it operates as a multithreaded family of single-threaded
+//!   objects, each of which implements local behavior on a single thread.
+//! * Externally, the linked object looks and acts very much like a regular Rust object and can
+//!   operate on multiple threads, providing **a reasonably simple API with minimal extra
+//!   complexity**.
+//!
+#![ doc=mermaid!( "../doc/linked.mermaid") ]
+//!
+//!
+//! The patterns and mechanisms provided by this crate are designed to make it easy to create such
+//! object families and providing easy primitives that allow them to be referenced without the
+//! user code having to understand how the objects are wired up inside.
 //!
 //! This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
 //! high-performance hardware-aware programming in Rust.
 //!
-//! # Definitions
+//! # What is a linked object?
 //!
-//! Linked objects are types whose instances:
+//! Linked objects are types decorated with `#[linked::object]` whose instances:
 //!
-//! 1. are each local to a single thread (i.e. `!Send`);
-//! 1. and are internally connected to other instances from the same family;
-//! 1. and share some thread-safe state via messaging or synchronized state;
-//! 1. and perform all collaboration between instances without involvement of user code (i.e. there is
-//!    no `Arc` or `Mutex` that the user needs to create).
+//! 1. are each local to a single thread (i.e. [`!Send`][4]); (see also, [linked objects on multiple
+//!    threads][multiple-threads])
+//! 1. and are internally connected to other instances from the same family (there may be
+//!    multiple families of the same type);
+//! 1. and share some state between instances via messaging or synchronized storage;
+//! 1. and perform all collaboration between instances without involvement of user code
+//!    (i.e. there is no `Arc` or `Mutex` that the user needs to create).
+//!
+//! In most cases, as long as logic is thread-local, user code can treat linked objects like any
+//! other Rust structs. The mechanisms only have an effect when [instances on multiple threads need
+//! to collaborate][multiple-threads].
 //!
 //! Note that despite instances of linked objects being thread-local (`!Send`), there may still be
 //! multiple instances per thread. You can explicitly opt-in to "one per thread" behavior via the
 //! [`linked::PerThread<T>`][3] wrapper.
 //!
-//! Instances belong to the same family if they:
+//! # What is a family of linked objects?
+//!
+//! A family of linked objects is the unit of collaboration between instances. Each instance in a
+//! family can communicate with all other instances in the same family through shared state or other
+//! synchronization mechanisms. They act as a single distributed object, exhibiting thread-local
+//! behavior by default and internally triggering global behavior as needed.
+//!
+//! Instances are defined as belonging to the same family if they:
 //!
 //! - are created via cloning;
-//! - or are created by obtaining a thread-safe [Handle] and converting it to a new instance;
+//! - or are created by obtaining a thread-safe [Handle] from another family member, which is
+//!   thereafter converted to a new instance (potentially on a different thread);
 //! - or are obtained from the same static variable in a [`linked::instance_per_access!`][1]
 //!   or [`linked::instance_per_thread!`][2] macro block;
 //! - or are created from the same [`linked::PerThread<T>`][3] or one of its clones.
-//!
-//! [1]: crate::instance_per_access
-//! [2]: crate::instance_per_thread
-//! [3]: crate::PerThread
 //!
 //! # Using and defining linked objects
 //!
@@ -80,7 +105,8 @@
 //!
 //! * The relation between instances is established via cloning.
 //! * The `value` is shared.
-//! * Implementing the collaboration does not require anything (e.g. a `Mutex`) from user code.
+//! * Implementing the collaboration between instances does not require anything (e.g. a `Mutex`)
+//!   from user code.
 //!
 //! The implementation of this type is the following:
 //!
@@ -97,6 +123,7 @@
 //!         let shared_value = Arc::new(Mutex::new(initial_value));
 //!
 //!         linked::new!(Self {
+//!             // Capture `shared_value` to reuse it for all instances in the family.
 //!             value: Arc::clone(&shared_value),
 //!         })
 //!     }
@@ -110,6 +137,10 @@
 //!     }
 //! }
 //! ```
+//! 
+//! Note: because this is a contrived example, this type is not very useful as it does not have
+//! any high-efficiency thread-local logic that would benefit from the linked object pattern. See
+//! the [Implementing local behavior][local-behavior] section for more details.
 //!
 //! The implementation steps to apply the pattern to a struct are:
 //!
@@ -119,23 +150,41 @@
 //! * In the constructor, call [`linked::new!`][crate::new] to create the first instance.
 //!
 //! [`linked::new!`][crate::new] is a wrapper around a `Self` struct-expression. What makes
-//! it special is that **it will be called for every instance that is ever created in the same family
-//! of linked objects**. This expression captures the state of the constructor (e.g. in the above
-//! example, it captures `shared_value`). Use the captured state to set up any shared connections
-//! between instances (e.g. by sharing an `Arc` or connecting message channels).
+//! it special is that **it will be called for every instance that is ever created in the same
+//! family of linked objects**. This expression captures the state of the constructor (e.g. in
+//! the above example, it captures `shared_value`). Use the captured state to set up any
+//! shared connections between instances (e.g. by sharing an `Arc` or connecting message
+//! channels).
 //!
-//! The captured values must be thread-safe (`Send` + `Sync` + `'static`), while the `Thing` struct
-//! itself does not need to be thread-safe. In fact, the linked object pattern forces it to be `!Send`
-//! and `!Sync` to avoid accidental multithreading. See the next chapter to understand how to deal with
-//! multithreaded logic.
+//! The captured values must be thread-safe (`Send` + `Sync` + `'static`), while the `Thing`
+//! struct itself does not need to be thread-safe. In fact, the linked object pattern forces
+//! it to be `!Send` and `!Sync` to avoid accidental multithreaded use of a single instance.
+//! See the next chapter to understand how to implement multithreaded logic.
 //!
 //! # Linked objects on multiple threads
+//! [multiple-threads]: #multiple-threads
 //!
-//! Each instance of a linked object is single-threaded (enforced at compile time). To create a
-//! related instance on a different thread, you must either use a static variable inside a
-//! [`linked::instance_per_access!`][1] or [`linked::instance_per_thread!`][2] block or
-//! obtain a [Handle] that you can transfer to another thread and use to obtain a new instance there.
-//! Linked object handles are thread-safe.
+//! Each instance of a linked object is single-threaded (enforced at compile time via `!Send`). This
+//! raises an obvious question: how can I create different instances on different threads if the
+//! instances cannot be sent between threads?
+//!
+//! There are three mechanisms for this:
+//!
+//! * Use a static variable in a [`linked::instance_per_access!`][1] or
+//!   [`linked::instance_per_thread!`][2] block, with the former creating a new linked instance
+//!   on each access and the latter reusing per-thread instances. All instances resolved via such
+//!   static variables are linked to the same family.
+//! * Use a [`linked::PerThread<T>`][3] wrapper to create a thread-local instance of `T`. You can
+//!   freely send the `PerThread<T>` or its clones between threads, unpacking it into a thread-local
+//!   linked instance once the `PerThread<T>` arrives on the destination thread.
+//! * Use a [`Handle`] to transfer an instance between threads. A handle is a thread-safe reference
+//!   to a linked object family, from which instances belonging to that family can be created. This
+//!   is the low-level primitive used by all the other mechanisms internally.
+//!
+//! You can think of a `PerThread<T>` as a special-case `Handle<T>` that always returns the same
+//! instance on the same thread, unlike `Handle<T>` which can be used to create any number of
+//! separate instances on any thread. The purpose of the static variables and `PerThread<T>` is
+//! to minimize the bookkeeping required in user code to manage the linked object instances.
 //!
 //! Example of using a static variable to connect instances on different threads:
 //!
@@ -170,6 +219,46 @@
 //!
 //! thread::spawn(|| {
 //!     let thing = THE_THING.get();
+//!     assert_eq!(thing.value(), "world");
+//! }).join().unwrap();
+//! ```
+//!
+//! Example of using a [`PerThread<T>`][3] to create thread-local instances on each thread:
+//!
+//! ```rust
+//! # use std::sync::{Arc, Mutex};
+//! # #[linked::object]
+//! # struct Thing {
+//! #     value: Arc<Mutex<String>>,
+//! # }
+//! # impl Thing {
+//! #     pub fn new(initial_value: String) -> Self {
+//! #         let shared_value = Arc::new(Mutex::new(initial_value));
+//! #         linked::new!(Self {
+//! #             value: shared_value.clone(),
+//! #         })
+//! #     }
+//! #     pub fn value(&self) -> String {
+//! #         self.value.lock().unwrap().clone()
+//! #     }
+//! #     pub fn set_value(&self, value: String) {
+//! #         *self.value.lock().unwrap() = value;
+//! #     }
+//! # }
+//! use linked::Object; // This brings .handle() into scope.
+//! use std::thread;
+//!
+//! let thing_per_thread = linked::PerThread::new(Thing::new("hello".to_string()));
+//!
+//! // Obtain a local instance on demand. It is efficient to reuse this instance as long as you can.
+//! let thing = thing_per_thread.local();
+//! assert_eq!(thing.value(), "hello");
+//!
+//! thing.set_value("world".to_string());
+//!
+//! // We move the `thing_per_thread` to another thread (you can also just clone it).
+//! thread::spawn(move || {
+//!     let thing = thing_per_thread.local();
 //!     assert_eq!(thing.value(), "world");
 //! }).join().unwrap();
 //! ```
@@ -211,15 +300,124 @@
 //!     assert_eq!(thing.value(), "world");
 //! }).join().unwrap();
 //! ```
+//! 
+//! # Implementing local behavior
+//! [local-behavior]: #local-behavior
+//! 
+//! The linked object pattern does not change the fact that synchronized state is expensive.
+//! However, it makes it much more ergonomic to implement local behavior in instances because
+//! it takes care of the linking and bookkeeping between instances.
+//! 
+//! Let's extend the above example type with a local counter that counts the number of times
+//! the value has been modified via the current instance. This is a local behavior that does not
+//! require any synchronization with other instances.
+//! 
+//! ```rust
+//! use std::sync::{Arc, Mutex};
+//!
+//! #[linked::object]
+//! pub struct Thing {
+//!     // Shared state - synchronized with other instances in the family.
+//!     value: Arc<Mutex<String>>,
+//! 
+//!     // Local state - not synchronized with other instances in the family.
+//!     update_count: usize,
+//! }
+//!
+//! impl Thing {
+//!     pub fn new(initial_value: String) -> Self {
+//!         let shared_value = Arc::new(Mutex::new(initial_value));
+//!
+//!         linked::new!(Self {
+//!             // Capture `shared_value` to reuse it for all instances in the family.
+//!             value: Arc::clone(&shared_value),
+//! 
+//!             // Local state is simply initialized to 0 for every instance.
+//!             update_count: 0,
+//!         })
+//!     }
+//!
+//!     pub fn value(&self) -> String {
+//!         self.value.lock().unwrap().clone()
+//!     }
+//!
+//!     pub fn set_value(&mut self, value: String) {
+//!         *self.value.lock().unwrap() = value;
+//!          self.update_count += 1;
+//!     }
+//! 
+//!     pub fn update_count(&self) -> usize {
+//!         self.update_count
+//!     }
+//! }
+//! ```
+//! 
+//! Local behavior consists of simply operating on regular non-synchronized fields of the struct.
+//! 
+//! However, note that we now had to modify `set_value()` to receive `&mut self` instead of the
+//! previous `&self`. This is because we now need to modify a field of the object, so we need
+//! an exclusive `&mut` reference to the instance.
+//! 
+//! `&mut self` is not a universally applicable technique - if you are using a linked object in
+//! per-thread mode then all access must be via `&self` shared references, so there can be no
+//! `&mut self`. This means we need to use interior mutability (e.g. `Cell`, `RefCell`, etc.) to
+//! support local behavior together with per-thread instantiation.
+//! 
+//! Attempting to use the above example type in a per-thread context will simply mean that the
+//! `set_value()` method cannot be called because there is no way to create a `&mut self` reference.
+//! 
+//! Example of the same type using `Cell` to support local behavior without `&mut self`:
+//! 
+//! ```rust
+//! use std::cell::Cell;
+//! use std::sync::{Arc, Mutex};
+//!
+//! #[linked::object]
+//! pub struct Thing {
+//!     // Shared state - synchronized with other instances in the family.
+//!     value: Arc<Mutex<String>>,
+//! 
+//!     // Local state - not synchronized with other instances in the family.
+//!     update_count: Cell<usize>,
+//! }
+//!
+//! impl Thing {
+//!     pub fn new(initial_value: String) -> Self {
+//!         let shared_value = Arc::new(Mutex::new(initial_value));
+//!
+//!         linked::new!(Self {
+//!             // Capture `shared_value` to reuse it for all instances in the family.
+//!             value: Arc::clone(&shared_value),
+//! 
+//!             // Local state is simply initialized to 0 for every instance.
+//!             update_count: Cell::new(0),
+//!         })
+//!     }
+//!
+//!     pub fn value(&self) -> String {
+//!         self.value.lock().unwrap().clone()
+//!     }
+//!
+//!     pub fn set_value(&self, value: String) {
+//!         *self.value.lock().unwrap() = value;
+//!          self.update_count.set(self.update_count.get() + 1);
+//!     }
+//! 
+//!     pub fn update_count(&self) -> usize {
+//!         self.update_count.get()
+//!     }
+//! }
+//! ```
 //!
 //! # Using linked objects via abstractions
 //!
 //! You may find yourself in a situation where you need to use a linked object type `T` through
-//! a trait object of a trait `Xyz` that `T` implements, as `dyn Xyz`. This is a common pattern
-//! in Rust but with the linked objects pattern there is a choice you must make:
+//! a trait object of a trait `Xyz`, where `T: Xyz`. That is, you may want to use your `T` as a
+//! `dyn Xyz`. This is a common pattern in Rust but with the linked objects pattern there is
+//! a choice you must make:
 //!
-//! * If the linked objects are **always** to be accessed via trait objects, wrap the instances in
-//!   [`linked::Box`], returning such a box already in the constructor.
+//! * If the linked objects are **always** to be accessed via trait objects (`dyn Xyz`), wrap
+//!   the `dyn Xyz` instances in [`linked::Box`], returning such a box already in the constructor.
 //! * If the linked objects are **sometimes** to be accessed via trait objects, you can on-demand
 //!   wrap them into a [`Box<dyn Xyz>`][std::boxed::Box].
 //!
@@ -229,6 +427,9 @@
 //! [`linked::instance_per_thread!`][2] block. However, when you use a
 //! [`Box<dyn Xyz>`][std::boxed::Box], you lose the linked object functionality (but only for the
 //! instance that you put in the box).
+//!
+//! Example of using a linked object via a trait object using [`linked::Box`], for scenarios
+//! where the linked object is always accessed via a trait object:
 //!
 //! ```rust
 //! # trait ConfigSource {}
@@ -246,9 +447,41 @@
 //! }
 //! ```
 //!
+//! Example of using a linked object via a trait object using [`Box<dyn Xyz>`][std::boxed::Box],
+//! for scenarios where the linked object is only sometimes accessed via a trait object:
+//!
+//! ```rust
+//! # trait ConfigSource {}
+//! # #[linked::object]
+//! # struct XmlConfig { config: String }
+//! # impl ConfigSource for XmlConfig {}
+//! impl XmlConfig {
+//!     // XmlConfig itself is a regular linked object.
+//!     pub fn new() -> XmlConfig {
+//!         linked::new!(
+//!             Self {
+//!                 config: "xml".to_string(),
+//!             }
+//!         )
+//!     }
+//!
+//!     // When the caller wants a `dyn ConfigSource`, we can convert this specific instance into
+//!     // one. The trait object loses its linked objects API surface (though remains part of the
+//!     // family).
+//!     pub fn into_config_source(self) -> Box<dyn ConfigSource> {
+//!         Box::new(self)
+//!     }
+//! }
+//! ```
+//!
 //! # Additional examples
 //!
 //! See `examples/linked_*.rs` for more examples of using linked objects in different scenarios.
+//!
+//! [1]: crate::instance_per_access
+//! [2]: crate::instance_per_thread
+//! [3]: crate::PerThread
+//! [4]: https://doc.rust-lang.org/nomicon/send-and-sync.html
 
 #[doc(hidden)]
 pub mod __private;
@@ -271,7 +504,8 @@ pub use per_thread_static::*;
 
 mod macros;
 
-/// Marks a struct as implementing the [linked object pattern][crate].
+/// Marks a struct as implementing the [linked object pattern][crate]. See create-level
+/// documentation for a high-level guide.
 ///
 /// # Usage
 ///
@@ -312,6 +546,7 @@ mod macros;
 ///
 /// Only structs defined in the named fields form are supported (no tuple structs).
 pub use linked_macros::__macro_linked_object as object;
+use simple_mermaid::mermaid;
 
 // This is so procedural macros can produce code which refers to
 // ::linked::* which will work also in the current crate.
