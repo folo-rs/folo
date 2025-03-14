@@ -11,9 +11,7 @@ graph TD
         Instance2 -->|lock-free| Local2[Local State]
     end
     
-    SS[Shared State]
+    SS[Family-scoped shared state]
 
     Instance1 --->|synchronized| SS
     Instance2 --->|synchronized| SS
-
-    Instance1 -.-|family| Instance2
