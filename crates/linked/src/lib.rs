@@ -538,7 +538,7 @@ mod macros;
 /// 1. Generates the necessary wiring to support calling `linked::new!` in constructors.
 /// 2. Implements `Clone` for the struct. All linked objects can be cloned to create new
 ///    instances linked to the same family.
-/// 3. Implements the trait `linked::Linked` for the struct, enabling standard linked object
+/// 3. Implements the trait [`linked::Object`] for the struct, enabling standard linked object
 ///    pattern mechanisms such as calling `.handle()` on instances.
 /// 4. Implements `From<linked::Handle<T>>` for the struct. This allows creating a new
 ///    linked instance from a handle previously obtained from `.handle()`.
