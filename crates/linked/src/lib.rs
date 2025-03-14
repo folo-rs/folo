@@ -22,8 +22,9 @@
 //!
 //!
 //! The patterns and mechanisms provided by this crate are designed to make it easy to create such
-//! object families and providing easy primitives that allow them to be referenced without the
-//! user code having to understand how the objects are wired up inside.
+//! object families and to provide primitives that allow these object families to be used without
+//! the user code having to understand how the objects are wired up inside or keeping track of which
+//! instance is meant to be used where and on which thread.
 //!
 //! This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
 //! high-performance hardware-aware programming in Rust.
