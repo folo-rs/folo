@@ -1,6 +1,4 @@
 graph TD
-    direction LR
-    
     subgraph Thread1[Thread 1]
         Task1[Local task] -->|thread-agnostic API surface| Instance1[Linked object instance]
         Instance1 -->|lock-free| Local1[Local state]

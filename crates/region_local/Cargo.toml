@@ -12,6 +12,7 @@ rust-version.workspace = true
 
 [dependencies]
 many_cpus = { workspace = true }
+simple-mermaid = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }

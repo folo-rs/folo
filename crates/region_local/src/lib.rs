@@ -9,6 +9,8 @@
 //! memory region. This may be useful in circumstances where state needs to be shared but only within
 //! each memory region (e.g. because you intentionally want to avoid the overhead of cross-memory-region
 //! transfers and want to isolate the data sets).
+//! 
+#![doc = mermaid!("../doc/region_local.mermaid")]
 //!
 //! Think of this as an equivalent of `thread_local!`, except operating on the memory region boundary
 //! instead of the thread boundary.
@@ -38,8 +40,7 @@
 //!
 //! Writes are eventually consistent within the same memory region, with an undefined order of resolving
 //! from different threads. Writes from the same thread become visible sequentially on all threads in
-//! the same memory region, with the last write from the writing thread winning from among other writes
-//! from the same thread.
+//! the same memory region.
 //!
 //! Writes are immediately visible from the originating thread, with the caveats that:
 //! 1. Eventually consistent writes from other threads may be applied at any time, such as between
@@ -49,7 +50,8 @@
 //!    of the new memory region.
 //!
 //! In general, you can only have firm expectations about the sequencing of data produced by read
-//! operations if the writes are always performed from a single thread per memory region.
+//! operations if the writes are always performed from a single thread per memory region and the
+//! thread is pinned to processors of only a single memory region.
 //!
 //! # API
 //!
@@ -68,6 +70,7 @@
 
 mod block;
 pub use block::*;
+use simple_mermaid::mermaid;
 
 pub(crate) mod hw_info_client;
 pub(crate) mod hw_tracker_client;

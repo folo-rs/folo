@@ -1,0 +1,16 @@
+graph TD
+    subgraph Region2[Memory region 2]
+        Processor3[Processor 3]
+        Processor4[Processor 4]
+
+        Processor3 --> Region2Value[Regional value]
+        Processor4 --> Region2Value
+    end
+
+    subgraph Region1[Memory region 1]
+        Processor1[Processor 1]
+        Processor2[Processor 2]
+
+        Processor1 --> Region1Value[Regional value]
+        Processor2 --> Region1Value
+    end

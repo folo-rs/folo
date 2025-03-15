@@ -72,7 +72,7 @@ where
         }
     }
 
-    /// Executes the provided closure with a reference to the stored value.
+    /// Executes the provided closure with a shared reference to the stored value.
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         // Horrible inefficient implementation just to get tests to pass.
         //
@@ -196,6 +196,8 @@ where
 
 const ERR_POISONED_LOCK: &str = "poisoned lock - safe execution no longer possible";
 
+/// Transforms static variables in the macro body into region-local static variables.
+/// 
 /// Refer to [crate-level documentation][crate] for more information.
 #[macro_export]
 macro_rules! region_local {

@@ -1,0 +1,21 @@
+graph TD
+    subgraph Region1[Memory region 1]
+        Processor1[Processor 1]
+        Processor2[Processor 2]
+
+        Processor1 -->|read| Region1Value[Regional value]
+        Processor2 -->|read| Region1Value
+    end
+
+    subgraph Region2[Memory region 2]
+        Processor3[Processor 3]
+        Processor4[Processor 4]
+
+        Processor3 -->|read| Region2Value[Regional value]
+        Processor4 -->|read| Region2Value
+    end
+
+    Region1Value -->|eventually consistent<br/>clone from| GlobalValue[Global value]
+    Region2Value -->|eventually consistent<br/>clone from| GlobalValue
+
+    Processor1 -->|write| GlobalValue

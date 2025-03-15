@@ -8,6 +8,8 @@
 //! This crate provides the capability to cache frequently accessed shared data sets in the local memory
 //! region, speeding up reads when the data is not already in the local processor caches. You can think
 //! of it as an extra level of caching between L3 processor caches and main memory.
+//! 
+#![doc = mermaid!("../doc/region_cached.mermaid")]
 //!
 //! This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
 //! high-performance hardware-aware programming in Rust.
@@ -54,8 +56,7 @@
 //! # Consistency guarantees
 //!
 //! Writes are eventually consistent, with an undefined order of resolving from different threads.
-//! Writes from the same thread become visible sequentially on all threads, with the last write from
-//! the writing thread winning from among other writes from the same thread.
+//! Writes from the same thread become visible sequentially on all threads.
 //!
 //! Writes are immediately visible from the originating thread, with the caveats that:
 //! 1. Eventually consistent writes from other threads may be applied at any time, such as between
@@ -85,6 +86,7 @@
 
 mod block;
 pub use block::*;
+use simple_mermaid::mermaid;
 
 pub(crate) mod hw_info_client;
 pub(crate) mod hw_tracker_client;
