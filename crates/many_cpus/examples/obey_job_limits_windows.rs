@@ -20,8 +20,7 @@ mod windows {
     //!
     //! Job object limits are hard limits, whereas all other mechanisms to define affinity (e.g. CPU
     //! sets and legacy "process affinity masks") are just wishes by the process in question.
-    //! In case of conflicting masks, the intersection is used (which implies that a process created as
-    //! part of a job object with processor affinity can never use more than 64 processors).
+    //! In case of conflicting masks, the intersection is used.
     //!
     //! Note that we configure the job object using the legacy affinity mask, which only supports 64
     //! processors. The ProcessorSet API is not limited in this way and can work with any number of
