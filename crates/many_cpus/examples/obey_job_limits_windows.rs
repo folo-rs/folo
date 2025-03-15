@@ -115,10 +115,13 @@ mod windows {
             }
         }
 
-        // Set job CPU affinity to CPUs 0 and 1 (mask = 0x3)
+        // Set job CPU affinity to processors 0 and 1 (mask = 0x3).
+        // Note that this is a legacy affinity configuration, which is limited to 64 processors.
+        // This is good enough for our example, as we want to limit to only two anyway, and sticking
+        // to the legacy configuration keeps the code here simple and straightforward.
         let mut limit_info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         limit_info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_AFFINITY;
-        limit_info.BasicLimitInformation.Affinity = 0x3; // CPUs 0 and 1
+        limit_info.BasicLimitInformation.Affinity = 0x3; // Processors 0 and 1
 
         // SAFETY: No safety requirements, as long as we pass valid inputs.
         unsafe {
