@@ -42,3 +42,11 @@ windows = { workspace = true, features = ["Win32_Security"] }
 [[bench]]
 name = "hardware_info"
 harness = false
+
+[[bench]]
+name = "hardware_tracker"
+harness = false
+
+[[bench]]
+name = "processor_set_builder"
+harness = false
