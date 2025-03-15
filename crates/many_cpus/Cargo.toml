@@ -38,3 +38,7 @@ static_assertions = { workspace = true }
 
 [target.'cfg(windows)'.dev-dependencies]
 windows = { workspace = true, features = ["Win32_Security"] }
+
+[[bench]]
+name = "hardware_info"
+harness = false

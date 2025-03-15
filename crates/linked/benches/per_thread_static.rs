@@ -1,7 +1,10 @@
 use std::{
     cell::Cell,
     hint::black_box,
-    sync::{Arc, atomic::AtomicUsize},
+    sync::{
+        Arc, LazyLock,
+        atomic::{self, AtomicUsize},
+    },
 };
 
 use benchmark_utils::{ThreadPool, bench_on_threadpool};
@@ -44,6 +47,26 @@ fn entrypoint(c: &mut Criterion) {
         b.iter(|| black_box(TARGET.to_rc().local_state.get()));
     });
 
+    // For comparison, we also include a thread_local! LazyCell.
+    g.bench_function("vs_std_thread_local", |b| {
+        b.iter(|| {
+            TEST_SUBJECT_THREAD_LOCAL.with(|local| {
+                black_box(local.local_state.get());
+            });
+        });
+    });
+
+    // For comparison, we also include a global LazyLock.
+    g.bench_function("vs_static_lazy_lock", |b| {
+        b.iter(|| {
+            black_box(
+                TEST_SUBJECT_GLOBAL
+                    .local_state
+                    .load(atomic::Ordering::Relaxed),
+            );
+        });
+    });
+
     g.finish();
 
     let mut g = c.benchmark_group("per_thread_static::access_multi_threaded");
@@ -74,5 +97,61 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
+    g.bench_function("vs_std_thread_local", |b| {
+        b.iter_custom(|iters| {
+            bench_on_threadpool(
+                &thread_pool,
+                iters,
+                || (),
+                |_| {
+                    black_box(TEST_SUBJECT_THREAD_LOCAL.with(|local| {
+                        black_box(local.local_state.get());
+                    }));
+                },
+            )
+        });
+    });
+
+    g.bench_function("vs_static_lazy_lock", |b| {
+        b.iter_custom(|iters| {
+            bench_on_threadpool(
+                &thread_pool,
+                iters,
+                || (),
+                |_| {
+                    black_box(
+                        TEST_SUBJECT_GLOBAL
+                            .local_state
+                            .load(atomic::Ordering::Relaxed),
+                    );
+                },
+            )
+        });
+    });
+
     g.finish();
 }
+
+// Rough equivalent of the above TestSubject, to compare non-linked object via LazyLock.
+struct ComparisonTestSubject {
+    local_state: AtomicUsize,
+    _shared_state: Arc<AtomicUsize>,
+}
+
+impl ComparisonTestSubject {
+    fn new() -> Self {
+        let shared_state = Arc::new(AtomicUsize::new(0));
+
+        ComparisonTestSubject {
+            local_state: AtomicUsize::new(0),
+            _shared_state: shared_state,
+        }
+    }
+}
+
+thread_local! {
+    static TEST_SUBJECT_THREAD_LOCAL: TestSubject = TestSubject::new();
+}
+
+static TEST_SUBJECT_GLOBAL: LazyLock<ComparisonTestSubject> =
+    LazyLock::new(ComparisonTestSubject::new);
