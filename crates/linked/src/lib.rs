@@ -430,7 +430,7 @@
 //! extend the object family to another thread and store such a box in a static variable in a
 //! [`linked::instance_per_access!`][1] or [`linked::instance_per_thread!`][2] block or a
 //! [`PerThread<T>`][3] for automatic instance management.
-//! 
+//!
 //! In contrast, when you use a [`std::boxed::Box<dyn Xyz>`][5], you lose the linked
 //! object functionality (but only for the instance that you put in the box). Internally, the boxed
 //! instance keeps working as it always did but you cannot use the linked object API on it, such
@@ -447,7 +447,7 @@
 //! struct XmlConfig {
 //!     config: String
 //! }
-//! 
+//!
 //! impl XmlConfig {
 //!     pub fn new_as_config_source() -> linked::Box<dyn ConfigSource> {
 //!         // Constructing instances works logically the same as for regular linked objects.
@@ -475,7 +475,7 @@
 //! struct XmlConfig {
 //!     config: String
 //! }
-//! 
+//!
 //! impl XmlConfig {
 //!     // XmlConfig itself is a regular linked object, nothing special about it.
 //!     pub fn new() -> XmlConfig {
@@ -531,7 +531,7 @@ pub use per_thread_static::*;
 mod macros;
 
 /// Marks a struct as implementing the [linked object pattern][crate].
-/// 
+///
 /// See crate-level documentation for a high-level guide.
 ///
 /// # Usage

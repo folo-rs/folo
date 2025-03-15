@@ -197,7 +197,7 @@ where
 const ERR_POISONED_LOCK: &str = "poisoned lock - safe execution no longer possible";
 
 /// Transforms static variables in the macro body into region-local static variables.
-/// 
+///
 /// Refer to [crate-level documentation][crate] for more information.
 #[macro_export]
 macro_rules! region_local {

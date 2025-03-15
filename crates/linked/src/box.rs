@@ -35,7 +35,7 @@ use std::ops::{Deref, DerefMut};
 /// struct XmlConfig {
 ///     config: String
 /// }
-/// 
+///
 /// impl XmlConfig {
 ///     pub fn new_as_config_source() -> linked::Box<dyn ConfigSource> {
 ///         // Constructing instances works logically the same as for regular linked objects.
@@ -57,10 +57,10 @@ use std::ops::{Deref, DerefMut};
 /// closure (e.g. sharing an `Arc` or setting up messaging channels).
 ///
 /// # Example
-/// 
+///
 /// Using the linked objects as `linked::Box<dyn ConfigSource>`, without the user code knowing the
 /// exact type of the object in the box:
-/// 
+///
 /// ```
 /// trait ConfigSource {
 ///     fn config(&self) -> String;
@@ -143,7 +143,7 @@ impl<T: ?Sized + 'static> DerefMut for Box<T> {
 }
 
 /// Defines the template used to create every instance in a `linked::Box<T>` object family.
-/// 
+///
 /// This macro is meant to be used in the context of creating a new instance of a linked object
 /// type `T` that is meant to be always expressed via an abstraction (`dyn SomeTrait`).
 ///
@@ -153,9 +153,9 @@ impl<T: ?Sized + 'static> DerefMut for Box<T> {
 /// * `$ctor` - The template for constructing new instances of the linked object on demand. This
 ///   will be used in a factory function and it will move-capture any referenced state. All captured
 ///   values must be thread-safe (`Send` + `Sync` + `'static`).
-/// 
+///
 /// # Example
-/// 
+///
 /// ```rust
 /// # trait ConfigSource {}
 /// # impl ConfigSource for XmlConfig {}
@@ -164,7 +164,7 @@ impl<T: ?Sized + 'static> DerefMut for Box<T> {
 /// struct XmlConfig {
 ///     config: String
 /// }
-/// 
+///
 /// impl XmlConfig {
 ///     pub fn new_as_config_source() -> linked::Box<dyn ConfigSource> {
 ///         linked::new_box!(

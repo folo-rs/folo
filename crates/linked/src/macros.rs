@@ -15,7 +15,7 @@
 ///
 /// ```
 /// use std::sync::{Arc, Mutex};
-/// 
+///
 /// #[linked::object]
 /// struct TokenCache {
 ///     tokens_created: usize,
@@ -23,12 +23,12 @@
 ///     master_key: Arc<Mutex<String>>,
 ///     is_multidimensional: bool,
 /// }
-/// 
+///
 /// impl TokenCache {
 ///     fn new(name: String, is_multidimensional: bool) -> Self {
 ///         // Any shared data referenced by the macro body must be thread-safe.
 ///         let master_key = Arc::new(Mutex::new(String::new()));
-/// 
+///
 ///         linked::new!(Self {
 ///             tokens_created: 0,
 ///             name: name.clone(),
@@ -47,7 +47,7 @@
 ///     token_sources: Vec<linked::Box<dyn TokenSource>>,
 /// }
 /// # trait TokenSource {}
-/// 
+///
 /// impl TokenCache {
 ///     fn new(source_handles: &[linked::Handle<linked::Box<dyn TokenSource>>]) -> Self {
 ///         linked::new!(Self {
