@@ -507,6 +507,8 @@
 //! [6]: std::cell::Cell
 //! [7]: std::cell::RefCell
 
+use simple_mermaid::mermaid;
+
 #[doc(hidden)]
 pub mod __private;
 
@@ -574,7 +576,6 @@ mod macros;
 ///
 /// Only structs defined in the named fields form are supported (no tuple structs).
 pub use linked_macros::__macro_linked_object as object;
-use simple_mermaid::mermaid;
 
 // This is so procedural macros can produce code which refers to
 // ::linked::* which will work also in the current crate.

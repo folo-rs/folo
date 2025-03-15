@@ -8,7 +8,7 @@
 //! This crate provides the capability to cache frequently accessed shared data sets in the local memory
 //! region, speeding up reads when the data is not already in the local processor caches. You can think
 //! of it as an extra level of caching between L3 processor caches and main memory.
-//! 
+//!
 #![doc = mermaid!("../doc/region_cached.mermaid")]
 //!
 //! This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
@@ -84,9 +84,10 @@
 //!
 //! [1]: crate::RegionCachedKey
 
+use simple_mermaid::mermaid;
+
 mod block;
 pub use block::*;
-use simple_mermaid::mermaid;
 
 pub(crate) mod hw_info_client;
 pub(crate) mod hw_tracker_client;

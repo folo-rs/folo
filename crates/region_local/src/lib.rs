@@ -9,7 +9,7 @@
 //! memory region. This may be useful in circumstances where state needs to be shared but only within
 //! each memory region (e.g. because you intentionally want to avoid the overhead of cross-memory-region
 //! transfers and want to isolate the data sets).
-//! 
+//!
 #![doc = mermaid!("../doc/region_local.mermaid")]
 //!
 //! Think of this as an equivalent of `thread_local!`, except operating on the memory region boundary
@@ -68,9 +68,10 @@
 //!
 //! [1]: crate::RegionLocalKey
 
+use simple_mermaid::mermaid;
+
 mod block;
 pub use block::*;
-use simple_mermaid::mermaid;
 
 pub(crate) mod hw_info_client;
 pub(crate) mod hw_tracker_client;
