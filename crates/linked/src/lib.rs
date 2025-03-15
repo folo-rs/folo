@@ -363,13 +363,14 @@
 //! `&mut self` is not a universally applicable technique - if you are using a linked object in
 //! per-thread mode then all access must be via `&self` shared references because there can be
 //! multiple references simultaneously alive per thread. This means there can be no `&mut self`
-//! and we need to use interior mutability (e.g. `Cell`, `RefCell`, etc.) to support local
-//! behavior together with per-thread instantiation.
+//! and we need to use interior mutability (e.g. [`Cell`][6], [`RefCell`][7], etc.) to support
+//! local behavior together with per-thread instantiation.
 //!
 //! Attempting to use the above example type in a per-thread context will simply mean that the
 //! `set_value()` method cannot be called because there is no way to create a `&mut self` reference.
 //!
-//! Example of the same type using `Cell` to support local behavior without `&mut self`:
+//! Example of the same type using [`Cell`][6] to support local behavior
+//! without `&mut self`:
 //!
 //! ```rust
 //! use std::cell::Cell;
@@ -422,24 +423,38 @@
 //! * If the linked objects are **always** to be accessed via trait objects (`dyn Xyz`), wrap
 //!   the `dyn Xyz` instances in [`linked::Box`], returning such a box already in the constructor.
 //! * If the linked objects are **sometimes** to be accessed via trait objects, you can on-demand
-//!   wrap them into a [`Box<dyn Xyz>`][std::boxed::Box].
+//!   wrap them into a [`std::boxed::Box<dyn Xyz>`][5].
 //!
-//! The difference is that [`linked::Box`] preserves the linked object functionality - you can
-//! clone the box, obtain a [`Handle<linked::Box<dyn Xyz>>`][Handle] to transfer the box to another
-//! thread and store such a box in a static variable in a [`linked::instance_per_access!`][1] or
-//! [`linked::instance_per_thread!`][2] block. However, when you use a
-//! [`Box<dyn Xyz>`][std::boxed::Box], you lose the linked object functionality (but only for the
-//! instance that you put in the box).
+//! The difference is that [`linked::Box`] preserves the linked object functionality even for the
+//! `dyn Xyz` form - you can clone the box, obtain a [`Handle<linked::Box<dyn Xyz>>`][Handle] to
+//! extend the object family to another thread and store such a box in a static variable in a
+//! [`linked::instance_per_access!`][1] or [`linked::instance_per_thread!`][2] block or a
+//! [`PerThread<T>`][3] for automatic instance management.
+//! 
+//! In contrast, when you use a [`std::boxed::Box<dyn Xyz>`][5], you lose the linked
+//! object functionality (but only for the instance that you put in the box). Internally, the boxed
+//! instance keeps working as it always did but you cannot use the linked object API on it, such
+//! as obtaining a handle.
 //!
 //! Example of using a linked object via a trait object using [`linked::Box`], for scenarios
 //! where the linked object is always accessed via a trait object:
 //!
 //! ```rust
 //! # trait ConfigSource {}
-//! # struct XmlConfig { config: String }
 //! # impl ConfigSource for XmlConfig {}
+//! // If using linked::Box, do not put `#[linked::object]` on the struct.
+//! // The linked::Box itself is the linked object and our struct is only its contents.
+//! struct XmlConfig {
+//!     config: String
+//! }
+//! 
 //! impl XmlConfig {
 //!     pub fn new_as_config_source() -> linked::Box<dyn ConfigSource> {
+//!         // Constructing instances works logically the same as for regular linked objects.
+//!         //
+//!         // The only differences are:
+//!         // 1. We use `linked::new_box!` instead of `linked::new!`
+//!         // 2. There is an additional parameter to the macro to name the trait object type.
 //!         linked::new_box!(
 //!             dyn ConfigSource,
 //!             Self {
@@ -450,16 +465,19 @@
 //! }
 //! ```
 //!
-//! Example of using a linked object via a trait object using [`Box<dyn Xyz>`][std::boxed::Box],
+//! Example of using a linked object via a trait object using [`std::boxed::Box<dyn Xyz>`][5],
 //! for scenarios where the linked object is only sometimes accessed via a trait object:
 //!
 //! ```rust
 //! # trait ConfigSource {}
-//! # #[linked::object]
-//! # struct XmlConfig { config: String }
 //! # impl ConfigSource for XmlConfig {}
+//! #[linked::object]
+//! struct XmlConfig {
+//!     config: String
+//! }
+//! 
 //! impl XmlConfig {
-//!     // XmlConfig itself is a regular linked object.
+//!     // XmlConfig itself is a regular linked object, nothing special about it.
 //!     pub fn new() -> XmlConfig {
 //!         linked::new!(
 //!             Self {
@@ -485,6 +503,9 @@
 //! [2]: crate::instance_per_thread
 //! [3]: crate::PerThread
 //! [4]: https://doc.rust-lang.org/nomicon/send-and-sync.html
+//! [5]: std::boxed::Box
+//! [6]: std::cell::Cell
+//! [7]: std::cell::RefCell
 
 #[doc(hidden)]
 pub mod __private;
@@ -507,12 +528,14 @@ pub use per_thread_static::*;
 
 mod macros;
 
-/// Marks a struct as implementing the [linked object pattern][crate]. See create-level
-/// documentation for a high-level guide.
+/// Marks a struct as implementing the [linked object pattern][crate].
+/// 
+/// See crate-level documentation for a high-level guide.
 ///
 /// # Usage
 ///
-/// Apply attribute on a struct block with named fields.
+/// Apply the attribute on a struct block. Then, in constructors, use the
+/// [`linked::new!`][crate::new] macro to create an instance of the struct.
 ///
 /// # Example
 ///
@@ -535,13 +558,15 @@ mod macros;
 ///
 /// Applying this macro has the following effects:
 ///
-/// 1. Generates the necessary wiring to support calling `linked::new!` in constructors.
+/// 1. Generates the necessary wiring to support calling `linked::new!` in constructors to create
+///    instances. This macro disables regular `Self {}` struct-expressions and requires the use
+///    of `linked::new!`.
 /// 2. Implements `Clone` for the struct. All linked objects can be cloned to create new
 ///    instances linked to the same family.
 /// 3. Implements the trait [`linked::Object`] for the struct, enabling standard linked object
-///    pattern mechanisms such as calling `.handle()` on instances.
-/// 4. Implements `From<linked::Handle<T>>` for the struct. This allows creating a new
-///    linked instance from a handle previously obtained from `.handle()`.
+///    pattern mechanisms such as calling `.handle()` on instances to obtain [`Handle`]s.
+/// 4. Implements `From<linked::Handle<T>>` for the struct. This allows converting a [`Handle`]
+///    into an instance of the linked object using `.into()`.
 /// 5. Removes `Send` and `Sync` traits implementation for the struct. Linked objects are single-
 ///    threaded and require explicit steps to transfer instances across threads (e.g. via handles).
 ///

@@ -2,13 +2,13 @@ graph TD
     direction LR
     
     subgraph Thread1[Thread 1]
-        Task1[Local Task] -->|thread-agnostic API surface| Instance1[Linked object instance]
-        Instance1 -->|lock-free| Local1[Local State]
+        Task1[Local task] -->|thread-agnostic API surface| Instance1[Linked object instance]
+        Instance1 -->|lock-free| Local1[Local state]
     end
     
     subgraph Thread2[Thread 2]
-        Task2[Local Task] -->|thread-agnostic API surface| Instance2[Linked object instance]
-        Instance2 -->|lock-free| Local2[Local State]
+        Task2[Local task] -->|thread-agnostic API surface| Instance2[Linked object instance]
+        Instance2 -->|lock-free| Local2[Local state]
     end
     
     SS[Family state]

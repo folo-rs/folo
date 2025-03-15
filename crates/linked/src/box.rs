@@ -4,33 +4,45 @@
 use std::boxed::Box as StdBox;
 use std::ops::{Deref, DerefMut};
 
-/// A linked object that acts like a `Box<T>` over linked instances of `T`. This is primarily meant
-/// to be used with the `T` being a trait object, for types exposed to user code via trait objects
-/// as `linked::Box<dyn MyTrait>`.
+/// A linked object that acts like a `std::boxed::Box<dyn MyTrait>` over linked instances of `T`
+/// where `T: MyTrait`. This is meant to be used with types that are always exposed to user code
+/// as trait objects via `linked::Box<dyn MyTrait>`.
 ///
 /// The `Box` itself implements the linked object mechanics from [`#[linked::object]`][3]. The type
-/// `T` within does not need to implement the mechanics of the linked object pattern itself (i.e.
-/// the type within does not need [`#[linked::object]`][3] - the box itself acts in that role).
+/// `T` does not need to implement the mechanics of the linked object pattern itself and must not
+/// be decorated with the [`#[linked::object]`][3] attribute.
 ///
 /// # Usage
 ///
-/// Use it like a regular `Box<T>` that also happens to support the linked objects mechanisms via
-/// the [`linked::instance_per_access!`][1] or [`linked::instance_per_thread!`][2]
-/// macros and offers the API surface for handle-based transfer across threads via `.handle()`.
+/// Use it like a regular `std::boxed::Box<T>` that also happens to support the linked object
+/// mechanisms via the [`linked::instance_per_access!`][1] or [`linked::instance_per_thread!`][2]
+/// macros or [`PerThread<T>`][crate::PerThread] and offers the API surface for handle-based
+/// transfer across threads via `.handle()`.
 ///
 /// # Implementation
 ///
-/// Instead of a typical constructor, create one that returns `linked::Box<T>`. Inside this
-/// constructor, create a `linked::Box` instance using the
+/// Instead of a typical constructor, create one that returns `linked::Box<dyn MyTrait>`. Inside
+/// this constructor, create a `linked::Box` instance using the
 /// [`linked::new_box!` macro][crate::new_box]. The first macro parameter is the type inside the
-/// box, and the second is a `Self` struct-expression to create one instance of that type.
+/// box, and the second is a `Self` struct-expression to create one instance of the implementation
+/// type.
 ///
 /// ```
 /// # trait ConfigSource {}
-/// # struct XmlConfig { config: String }
 /// # impl ConfigSource for XmlConfig {}
+/// // If using linked::Box, do not put `#[linked::object]` on the struct.
+/// // The linked::Box itself is the linked object and our struct is only its contents.
+/// struct XmlConfig {
+///     config: String
+/// }
+/// 
 /// impl XmlConfig {
 ///     pub fn new_as_config_source() -> linked::Box<dyn ConfigSource> {
+///         // Constructing instances works logically the same as for regular linked objects.
+///         //
+///         // The only differences are:
+///         // 1. We use `linked::new_box!` instead of `linked::new!`
+///         // 2. There is an additional parameter to the macro to name the trait object type
 ///         linked::new_box!(
 ///             dyn ConfigSource,
 ///             Self {
@@ -45,7 +57,10 @@ use std::ops::{Deref, DerefMut};
 /// closure (e.g. sharing an `Arc` or setting up messaging channels).
 ///
 /// # Example
-///
+/// 
+/// Using the linked objects as `linked::Box<dyn ConfigSource>`, without the user code knowing the
+/// exact type of the object in the box:
+/// 
 /// ```
 /// trait ConfigSource {
 ///     fn config(&self) -> String;
@@ -103,6 +118,9 @@ pub struct Box<T: ?Sized + 'static> {
 }
 
 impl<T: ?Sized> Box<T> {
+    /// This is an implementation detail of the `linked::new_box!` macro and is not part of the
+    /// public API. It is not meant to be used directly and may change or be removed at any time.
+    #[doc(hidden)]
     pub fn new(instance_factory: impl Fn() -> StdBox<T> + Send + Sync + 'static) -> Self {
         linked::new!(Self {
             value: (instance_factory)(),
@@ -124,9 +142,10 @@ impl<T: ?Sized + 'static> DerefMut for Box<T> {
     }
 }
 
-/// Shorthand macro for creating a new [`linked::Box`][Box] instance, as the exact syntax for that
-/// can be cumbersome. This macro is meant to be used in the context of creating a new instance of a
-/// linked object `T` that is meant to be always expressed via an abstraction (`dyn SomeTrait`).
+/// Defines the template used to create every instance in a `linked::Box<T>` object family.
+/// 
+/// This macro is meant to be used in the context of creating a new instance of a linked object
+/// type `T` that is meant to be always expressed via an abstraction (`dyn SomeTrait`).
 ///
 /// # Arguments
 ///
@@ -134,10 +153,31 @@ impl<T: ?Sized + 'static> DerefMut for Box<T> {
 /// * `$ctor` - The template for constructing new instances of the linked object on demand. This
 ///   will be used in a factory function and it will move-capture any referenced state. All captured
 ///   values must be thread-safe (`Send` + `Sync` + `'static`).
-///
+/// 
 /// # Example
+/// 
+/// ```rust
+/// # trait ConfigSource {}
+/// # impl ConfigSource for XmlConfig {}
+/// // If using linked::Box, do not put `#[linked::object]` on the struct.
+/// // The linked::Box itself is the linked object and our struct is only its contents.
+/// struct XmlConfig {
+///     config: String
+/// }
+/// 
+/// impl XmlConfig {
+///     pub fn new_as_config_source() -> linked::Box<dyn ConfigSource> {
+///         linked::new_box!(
+///             dyn ConfigSource,
+///             Self {
+///                 config: "xml".to_string(),
+///             }
+///         )
+///     }
+/// }
+/// ```
 ///
-/// See `examples/linked_box.rs`.
+/// See `examples/linked_box.rs` for a complete example.
 #[macro_export]
 macro_rules! new_box {
     ($dyn_trait:ty, $ctor:expr) => {

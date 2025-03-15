@@ -4,7 +4,7 @@
 /// Defines the template used to create every instance in a linked object family.
 ///
 /// You are expected to use this in the constructor of a [linked object][crate],
-/// except when you want to express the linked object via trait objects,
+/// except when you want to always express the linked object via trait objects (`dyn Xyz`),
 /// in which case you should use [`linked::new_box`][crate::new_box].
 ///
 /// The macro body must be a struct-expression of the `Self` type. Any variables the macro body
@@ -13,25 +13,52 @@
 ///
 /// # Example
 ///
-/// ```ignore
-/// linked::new!(Self {
-///     field1: value1,
-///     field2: value2,
-///     field3: Arc::clone(&value3),
-///     another_field,
-/// })
+/// ```
+/// use std::sync::{Arc, Mutex};
+/// 
+/// #[linked::object]
+/// struct TokenCache {
+///     tokens_created: usize,
+///     name: String,
+///     master_key: Arc<Mutex<String>>,
+///     is_multidimensional: bool,
+/// }
+/// 
+/// impl TokenCache {
+///     fn new(name: String, is_multidimensional: bool) -> Self {
+///         // Any shared data referenced by the macro body must be thread-safe.
+///         let master_key = Arc::new(Mutex::new(String::new()));
+/// 
+///         linked::new!(Self {
+///             tokens_created: 0,
+///             name: name.clone(),
+///             master_key: Arc::clone(&master_key),
+///             is_multidimensional,
+///         })
+///     }
+/// }
 /// ```
 ///
-/// Complex expressions as values are supported within the `Self` struct-expression:
+/// Complex expressions are supported within the `Self` struct-expression:
 ///
-/// ```ignore
-/// linked::new!(Self {
-///     sources: source_handles
-///         .iter()
-///         .cloned()
-///         .map(Handle::into)
-///         .collect_vec()
-/// })
+/// ```
+/// #[linked::object]
+/// struct TokenCache {
+///     token_sources: Vec<linked::Box<dyn TokenSource>>,
+/// }
+/// # trait TokenSource {}
+/// 
+/// impl TokenCache {
+///     fn new(source_handles: &[linked::Handle<linked::Box<dyn TokenSource>>]) -> Self {
+///         linked::new!(Self {
+///             token_sources: source_handles
+///                 .iter()
+///                 .cloned()
+///                 .map(linked::Handle::into)
+///                 .collect()
+///         })
+///     }
+/// }
 /// ```
 ///
 /// For a complete example, see `examples/linked_basic.rs`.

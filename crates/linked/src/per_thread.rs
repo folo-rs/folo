@@ -6,20 +6,25 @@ use std::{
     thread::{self, ThreadId},
 };
 
+use simple_mermaid::mermaid;
+
 use crate::ERR_POISONED_LOCK;
 
 /// A wrapper that manages instances of linked objects of type `T`, ensuring that only one
 /// instance of `T` is created per thread.
 ///
 /// This is a conceptual equivalent of the [`linked::instance_per_thread!` macro][1], with the main
-/// difference being that this type operates entirely at runtime and does not require a static
-/// variable to be defined.
+/// difference being that this type operates entirely at runtime using dynamic storage and does
+/// not require a static variable to be defined.
 ///
 /// # Usage
 ///
-/// Create an instance of `PerThread` and provide it an initial instance of `T`. This instance will
-/// be used to create additional instances on demand. Any instance of `T` retrieved through the same
-/// `PerThread` or a clone will be linked to the same family of `T` instances.
+/// Create an instance of `PerThread` and provide it an initial instance of a linked object `T`.
+/// This initial instance will be used to create additional instances on demand. Any instance
+/// of `T` retrieved through the same `PerThread` or a clone will be linked to the same family
+/// of `T` instances.
+///
+#[ doc=mermaid!( "../doc/per_thread.mermaid") ]
 ///
 /// To access the current thread's instance of `T`, you must first obtain a
 /// [`ThreadLocal<T>`][ThreadLocal] which works in a manner similar to `Rc<T>`, allowing you to
@@ -78,6 +83,87 @@ where
     /// Returns a `ThreadLocal<T>` that can be used to efficiently access the current
     /// thread's `T` instance.
     ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::cell::Cell;
+    /// #
+    /// # #[linked::object]
+    /// # struct Thing {
+    /// #     local_value: Cell<usize>,
+    /// # }
+    /// #
+    /// # impl Thing {
+    /// #     pub fn new() -> Self {
+    /// #         linked::new!(Self { local_value: Cell::new(0) })
+    /// #     }
+    /// #
+    /// #     pub fn increment(&self) {
+    /// #        self.local_value.set(self.local_value.get() + 1);
+    /// #     }
+    /// #
+    /// #     pub fn local_value(&self) -> usize {
+    /// #         self.local_value.get()
+    /// #     }
+    /// # }
+    /// #
+    /// let per_thread_thing = linked::PerThread::new(Thing::new());
+    ///
+    /// let local_thing = per_thread_thing.local();
+    /// local_thing.increment();
+    /// assert_eq!(local_thing.local_value(), 1);
+    /// ```
+    ///
+    /// # Efficiency
+    ///
+    /// Reuse the returned instance as much as possible. Every call to this function has some
+    /// overhead, especially if there are no other `ThreadLocal<T>` instances from the same family
+    /// active on the current thread.
+    ///
+    /// # Instance lifecycle
+    ///
+    /// A thread-specific instance of `T` is dropped when the last `ThreadLocal` on that thread is
+    /// dropped. If a new `ThreadLocal` is later obtained, it is initialized with a new instance
+    /// of the linked object.
+    ///
+    /// ```
+    /// # use std::cell::Cell;
+    /// #
+    /// # #[linked::object]
+    /// # struct Thing {
+    /// #     local_value: Cell<usize>,
+    /// # }
+    /// #
+    /// # impl Thing {
+    /// #     pub fn new() -> Self {
+    /// #         linked::new!(Self { local_value: Cell::new(0) })
+    /// #     }
+    /// #
+    /// #     pub fn increment(&self) {
+    /// #        self.local_value.set(self.local_value.get() + 1);
+    /// #     }
+    /// #
+    /// #     pub fn local_value(&self) -> usize {
+    /// #         self.local_value.get()
+    /// #     }
+    /// # }
+    /// #
+    /// let per_thread_thing = linked::PerThread::new(Thing::new());
+    ///
+    /// let local_thing = per_thread_thing.local();
+    /// local_thing.increment();
+    /// assert_eq!(local_thing.local_value(), 1);
+    ///
+    /// drop(local_thing);
+    ///
+    /// // Dropping the only thread-local instance above will have reset the thread-local state.
+    /// let local_thing = per_thread_thing.local();
+    /// assert_eq!(local_thing.local_value(), 0);
+    /// ```
+    ///
+    /// To minimize the effort spent on re-creating the thread-local state, ensure that you reuse
+    /// the `ThreadLocal<T>` instances as much as possible.
+    ///
     /// # Thread safety
     ///
     /// The returned value is single-threaded and cannot be moved or used across threads. For
@@ -104,8 +190,10 @@ where
 }
 
 /// A thread-local instance of a linked object of type `T`. This acts in a manner similar to
-/// `Rc<T>` for a type `T` that implements the [linked object pattern][crate]. For details,
-/// see [`PerThread<T>`][PerThread] which is the type used to create instances of `ThreadLocal<T>`.
+/// `Rc<T>` for a type `T` that implements the [linked object pattern][crate].
+///
+/// For details, see [`PerThread<T>`][PerThread] which is the type used to create instances
+/// of `ThreadLocal<T>`.
 #[derive(Debug)]
 pub struct ThreadLocal<T>
 where
