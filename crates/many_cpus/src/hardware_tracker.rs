@@ -21,13 +21,13 @@ thread_local! {
 /// simple: the current processor is whatever processor is executing the code at the moment the
 /// "get current processor" logic is called.
 ///
-/// Now, most threads can move between processors, so the current processor can change over time.
+/// Most threads can move between processors, so the current processor can change over time.
 /// This means that there is a certain "time of check to time of use" discrepancy that can occur.
-/// This is unavoidable if your threads are floating - just live with it.
+/// This is unavoidable if your threads are floating - just accept it as a fact.
 ///
-/// To avoid this problem, you have to use pinned threads, assigned to execute on either a specific
-/// processor or set of processors that the desired quality you care about (e.g. memory region). You
-/// can pin the current thread to one or more processors via
+/// You may avoid this problem by using pinned threads, assigned to execute on either a specific
+/// processor or set of processors that have the desired quality you care about (e.g. processors
+/// in the same memory region). You can pin the current thread to one or more processors via
 /// [ProcessorSet::pin_current_thread_to][crate::ProcessorSet::pin_current_thread_to].
 #[derive(Debug)]
 pub struct HardwareTracker {
@@ -61,7 +61,24 @@ impl HardwareTracker {
         }
     }
 
-    /// Executes a closure with the latest information from the hardware tracker.
+    /// Executes a closure that can access the latest information from the hardware tracker.
+    ///
+    /// While this crate does not support dynamic hardware changes, we nevertheless leave the door
+    /// open for a future version to start supporting it. Because of this, any references returned
+    /// from the hardware tracker are constrained to this callback, allowing the hardware tracker
+    /// to update its data set when it has exclusive access.
+    ///
+    /// # Data consistency
+    ///
+    /// The data returned may change at any time during the execution of the callback, as it is not
+    /// a snapshot. This implies that different properties may be out of sync with each other. For
+    /// example, if you call [`current_processor_id()`][1] and [`current_memory_region_id()`][2]
+    /// in the same callback, you may find that the indicated processor is not in the indicated
+    /// memory region because the thread may have moved to a different processor in a different
+    /// memory region between the two calls.
+    ///
+    /// [1]: HardwareTracker::current_processor_id
+    /// [2]: HardwareTracker::current_memory_region_id
     pub fn with_current<F, R>(f: F) -> R
     where
         F: FnOnce(&Self) -> R,
@@ -96,11 +113,13 @@ impl HardwareTracker {
         }
     }
 
+    /// Returns the ID of the processor that the current thread is executing on.
     pub fn current_processor_id(&self) -> ProcessorId {
         self.pinned_processor_id
             .unwrap_or_else(|| self.pal.current_processor_id())
     }
 
+    /// Returns the ID of the memory region of the processor that the current thread is executing on.
     pub fn current_memory_region_id(&self) -> MemoryRegionId {
         self.pinned_memory_region_id
             .unwrap_or_else(|| self.current_processor().memory_region_id())
