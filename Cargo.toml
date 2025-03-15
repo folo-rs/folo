@@ -22,6 +22,9 @@ linked_macros_impl = { version = "0.0.1", path = "crates/linked_macros_impl" }
 many_cpus = { version = "0.0.1", path = "crates/many_cpus" }
 many_cpus_benchmarking = { version = "0.0.1", path = "crates/many_cpus_benchmarking" }
 
+# Internal packages we do not publish.
+benchmark_utils = { path = "crates/benchmark_utils" }
+
 # The packages we consume.
 axum = "0.8"
 # Using Git reference here because the published crate is out of date and lacks proper graph support.

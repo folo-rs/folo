@@ -18,7 +18,7 @@ paste = { workspace = true }
 simple-mermaid = { workspace = true }
 
 [dev-dependencies]
-benchmark_utils = { path = "../benchmark_utils" }
+benchmark_utils = { workspace = true }
 criterion = { workspace = true }
 many_cpus = { workspace = true }
 seq-macro = { workspace = true }

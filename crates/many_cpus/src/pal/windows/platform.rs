@@ -36,9 +36,6 @@ pub(crate) static BUILD_TARGET_PLATFORM: BuildTargetPlatform =
 pub(crate) struct BuildTargetPlatform {
     bindings: BindingsFacade,
 
-    // TODO: This caching is a problem due to the synchronization - we should instead do this
-    // per-thread, so we do not require synchronization. This is still suboptimal here, even if
-    // slightly better than recalculating the values every time.
     group_max_count: OnceLock<ProcessorGroupIndex>,
     group_max_sizes: OnceLock<Box<[ProcessorIndexInGroup]>>,
     group_start_offsets: OnceLock<Box<[ProcessorId]>>,

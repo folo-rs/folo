@@ -30,6 +30,7 @@ windows = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
+benchmark_utils = { workspace = true }
 cpulist = { workspace = true }
 # Using Git reference here because the published crate is out of date and lacks proper graph support.
 criterion = { workspace = true }
