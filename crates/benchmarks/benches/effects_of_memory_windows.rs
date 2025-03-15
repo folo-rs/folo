@@ -315,7 +315,7 @@ mod windows {
 
             let heap = current_region_heap.get_or_insert_with(|| {
                 let region =
-                    HardwareTracker::with_current(|tracker| tracker.current_memory_region_id());
+                    HardwareTracker::with(|tracker| tracker.current_memory_region_id());
 
                 let mut heaps = self.per_region_heaps.lock().unwrap();
 

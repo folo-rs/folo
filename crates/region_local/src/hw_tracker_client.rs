@@ -10,7 +10,7 @@ pub(crate) struct HardwareTrackerClientImpl;
 
 impl HardwareTrackerClient for HardwareTrackerClientImpl {
     fn current_memory_region_id(&self) -> MemoryRegionId {
-        HardwareTracker::with_current(|tracker| tracker.current_memory_region_id())
+        HardwareTracker::with(|tracker| tracker.current_memory_region_id())
     }
 }
 

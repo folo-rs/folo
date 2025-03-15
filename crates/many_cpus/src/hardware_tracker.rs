@@ -1,5 +1,7 @@
 use std::cell::RefCell;
 
+use negative_impl::negative_impl;
+
 use crate::{
     MemoryRegionId, Processor, ProcessorId,
     pal::{AbstractProcessor, Platform, PlatformFacade},
@@ -14,6 +16,25 @@ thread_local! {
 }
 
 /// Tracks changing hardware information over time.
+///
+/// This type is accessed through a singleton instance that you can reference via
+/// [`HardwareTracker::with`], which provides a shared reference for the duration of
+/// a callback.
+///
+/// # Example
+///
+/// ```
+/// use many_cpus::HardwareTracker;
+///
+/// HardwareTracker::with(|tracker| {
+///     let processor = tracker.current_processor();
+///
+///     let efficiency_class = processor.efficiency_class();
+///     let id = processor.id();
+///
+///     println!("Executing on processor {id}, which has the efficiency class {efficiency_class:?}");
+/// });
+/// ```
 ///
 /// # Current processor
 ///
@@ -66,7 +87,7 @@ impl HardwareTracker {
     /// While this crate does not support dynamic hardware changes, we nevertheless leave the door
     /// open for a future version to start supporting it. Because of this, any references returned
     /// from the hardware tracker are constrained to this callback, allowing the hardware tracker
-    /// to update its data set when it has exclusive access.
+    /// to update its data set when it has exclusive access (potentially even during the callback).
     ///
     /// # Data consistency
     ///
@@ -79,17 +100,23 @@ impl HardwareTracker {
     ///
     /// [1]: HardwareTracker::current_processor_id
     /// [2]: HardwareTracker::current_memory_region_id
-    pub fn with_current<F, R>(f: F) -> R
+    pub fn with<F, R>(f: F) -> R
     where
         F: FnOnce(&Self) -> R,
     {
-        CURRENT_TRACKER.with(|current| f(&current.borrow()))
+        CURRENT_TRACKER.with_borrow(f)
     }
 
     /// Obtains a reference to the current processor.
     ///
     /// If all you need is the processor ID or memory region ID, you may get better performance
     /// if you query [`current_processor_id()`][1] or [`current_memory_region_id()`][2].
+    ///
+    /// # Data consistency
+    ///
+    /// While the reference remains valid to the end of the [`with()`][Self::with] callback it
+    /// was made in, future calls to `current_processor()`, even in the same callback, may
+    /// return a different processor if the thread moves to a different processor.
     ///
     /// [1]: HardwareTracker::current_processor_id
     /// [2]: HardwareTracker::current_memory_region_id
@@ -148,10 +175,16 @@ impl HardwareTracker {
     }
 }
 
+#[negative_impl]
+impl !Send for HardwareTracker {}
+#[negative_impl]
+impl !Sync for HardwareTracker {}
+
 #[cfg(test)]
 mod tests {
     use mockall::Sequence;
     use nonempty::nonempty;
+    use static_assertions::assert_not_impl_any;
 
     use crate::{
         EfficiencyClass,
@@ -162,6 +195,11 @@ mod tests {
 
     // https://github.com/cloudhead/nonempty/issues/68
     extern crate alloc;
+
+    #[test]
+    fn single_threaded_type() {
+        assert_not_impl_any!(HardwareTracker: Send, Sync);
+    }
 
     #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]

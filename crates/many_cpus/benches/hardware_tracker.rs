@@ -11,7 +11,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.bench_function("current_processor_unpinned", |b| {
         b.iter(|| {
-            black_box(HardwareTracker::with_current(|tracker| {
+            black_box(HardwareTracker::with(|tracker| {
                 // We cannot return a reference to the processor itself but this is close enough.
                 tracker.current_processor().id()
             }));
@@ -20,7 +20,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.bench_function("current_processor_id_unpinned", |b| {
         b.iter(|| {
-            black_box(HardwareTracker::with_current(|tracker| {
+            black_box(HardwareTracker::with(|tracker| {
                 tracker.current_processor_id()
             }));
         })
@@ -28,7 +28,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.bench_function("current_memory_region_id_unpinned", |b| {
         b.iter(|| {
-            black_box(HardwareTracker::with_current(|tracker| {
+            black_box(HardwareTracker::with(|tracker| {
                 tracker.current_memory_region_id()
             }));
         })
@@ -44,7 +44,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.bench_function("current_processor_pinned", |b| {
         b.iter(|| {
-            black_box(HardwareTracker::with_current(|tracker| {
+            black_box(HardwareTracker::with(|tracker| {
                 // We cannot return a reference to the processor itself but this is close enough.
                 tracker.current_processor().id()
             }));
@@ -53,7 +53,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.bench_function("current_processor_id_pinned", |b| {
         b.iter(|| {
-            black_box(HardwareTracker::with_current(|tracker| {
+            black_box(HardwareTracker::with(|tracker| {
                 tracker.current_processor_id()
             }));
         })
@@ -61,7 +61,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.bench_function("current_memory_region_id_pinned", |b| {
         b.iter(|| {
-            black_box(HardwareTracker::with_current(|tracker| {
+            black_box(HardwareTracker::with(|tracker| {
                 tracker.current_memory_region_id()
             }));
         })
