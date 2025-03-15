@@ -104,9 +104,9 @@ fn entrypoint(c: &mut Criterion) {
                 iters,
                 || (),
                 |_| {
-                    black_box(TEST_SUBJECT_THREAD_LOCAL.with(|local| {
+                    TEST_SUBJECT_THREAD_LOCAL.with(|local| {
                         black_box(local.local_state.get());
-                    }));
+                    });
                 },
             )
         });
