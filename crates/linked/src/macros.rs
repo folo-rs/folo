@@ -49,7 +49,7 @@
 /// # trait TokenSource {}
 ///
 /// impl TokenCache {
-///     fn new(source_handles: &[linked::Handle<linked::Box<dyn TokenSource>>]) -> Self {
+///     fn new(source_handles: Vec<linked::Handle<linked::Box<dyn TokenSource>>>) -> Self {
 ///         linked::new!(Self {
 ///             token_sources: source_handles
 ///                 .iter()
