@@ -14,7 +14,7 @@ use many_cpus::ProcessorSet;
 use nonempty::{NonEmpty, nonempty};
 use rand::{rng, seq::SliceRandom};
 
-use crate::{Payload, WorkDistribution, clean_caches};
+use crate::{Payload, WorkDistribution};
 
 // https://github.com/cloudhead/nonempty/issues/68
 extern crate alloc;
@@ -54,7 +54,10 @@ pub fn execute_runs<P: Payload, const BATCH_SIZE: u64>(
 /// run of a single iteration to test that it works. In these cases, we do not want to emit any
 /// additional output to stderr because it will confuse the test runner.
 fn is_fake_run() -> bool {
-    env::args().any(|a| a == "--test" || a == "--list")
+    // --test is used by cargo test
+    // --exact is used by nextest
+    // --list is used by both
+    env::args().any(|a| a == "--test" || a == "--list" || a == "--exact")
 }
 
 fn execute_run<P: Payload, const BATCH_SIZE: u64>(
@@ -646,7 +649,10 @@ impl BenchmarkBatch {
                 payloads_tx.send(payloads).unwrap();
                 let mut payloads = payloads_rx.recv().unwrap();
 
-                clean_caches();
+                // We skip this when in debug/test builds because it is expensive - this is only
+                // important for real benchmarks, not testing (we do test it separately, of course).
+                #[cfg(all(not(test), not(debug_assertions)))]
+                crate::cache::clean_caches();
 
                 // This signal is set when all workers have completed the "prepare" step.
                 ready_signal.wait();

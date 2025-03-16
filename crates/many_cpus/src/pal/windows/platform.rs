@@ -43,6 +43,7 @@ pub(crate) struct BuildTargetPlatform {
     group_max_count: OnceLock<ProcessorGroupIndex>,
     group_max_sizes: OnceLock<Box<[ProcessorIndexInGroup]>>,
     group_start_offsets: OnceLock<Box<[ProcessorId]>>,
+    max_processor_id: OnceLock<ProcessorId>,
 }
 
 impl Platform for BuildTargetPlatform {
@@ -93,12 +94,16 @@ impl Platform for BuildTargetPlatform {
     }
 
     fn max_processor_id(&self) -> ProcessorId {
-        let group_max_sizes = self.get_processor_group_max_sizes();
-        group_max_sizes
-            .iter()
-            .map(|&s| s as ProcessorId)
-            .sum::<ProcessorId>()
-            - 1
+        *self.max_processor_id.get_or_init(|| {
+            let group_max_sizes = self.get_processor_group_max_sizes();
+
+            // The max processor ID is the sum of all processors in all groups minus 1.
+            group_max_sizes
+                .iter()
+                .map(|&s| s as ProcessorId)
+                .sum::<ProcessorId>()
+                - 1
+        })
     }
 
     fn max_memory_region_id(&self) -> MemoryRegionId {
@@ -188,6 +193,7 @@ impl BuildTargetPlatform {
             group_max_count: OnceLock::new(),
             group_max_sizes: OnceLock::new(),
             group_start_offsets: OnceLock::new(),
+            max_processor_id: OnceLock::new(),
         }
     }
 
@@ -329,7 +335,8 @@ impl BuildTargetPlatform {
         // processors with the max efficiency class (whatever the numeric value) - those are the
         // performance processors.
 
-        let mut processor_to_efficiency_class = HashMap::new();
+        let mut processor_to_efficiency_class =
+            HashMap::with_capacity(self.max_processor_id() as usize + 1);
 
         // The structures returned by the OS are dynamically sized so we only have various
         // disgusting options for parsing/processing them. Pointer wrangling is the most readable.
@@ -390,7 +397,7 @@ impl BuildTargetPlatform {
         let memory_region_relationships_raw =
             self.get_logical_processor_information_raw(RelationNumaNodeEx);
 
-        let mut result = HashMap::new();
+        let mut result = HashMap::with_capacity(self.max_processor_id() as usize + 1);
 
         // The structures returned by the OS are dynamically sized so we only have various
         // disgusting options for parsing/processing them. Pointer wrangling is the most readable.

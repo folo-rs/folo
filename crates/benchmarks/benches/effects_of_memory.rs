@@ -16,21 +16,40 @@ extern crate alloc;
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
-// TODO: Do not hang forever if worker panics. We need timeouts on barriers!
+#[cfg(not(test))]
+mod real_constants {
+    /// A "small" data set is likely to fit into processor caches, demonstrating the effect of memory
+    /// access on typically cached data).
+    pub const SMALL_MAP_ENTRY_COUNT: usize = 64 * 1024; // x u64 = 512 KB of useful payload, cache-friendly
 
-/// A "small" data set is likely to fit into processor caches, demonstrating the effect of memory
-/// access on typically cached data).
-const SMALL_MAP_ENTRY_COUNT: usize = 64 * 1024; // x u64 = 512 KB of useful payload, cache-friendly
+    /// The small maps fit into memory very easily. 512 KB * 1000 = 512 MB per worker.
+    pub const SMALL_MAP_BATCH_SIZE: u64 = 1000;
 
-/// The small maps fit into memory very easily. 512 KB * 1000 = 512 MB per worker.
-const SMALL_MAP_BATCH_SIZE: u64 = 1000;
+    /// A large data set is unlikely to fit into processor caches, even into large L3 caches, and will
+    /// likely require trips to main memory for repeated access.
+    pub const LARGE_MAP_ENTRY_COUNT: usize = 16 * 128 * 1024; // x u64 -> 128 MB, not very cache-friendly.
 
-/// A large data set is unlikely to fit into processor caches, even into large L3 caches, and will
-/// likely require trips to main memory for repeated access.
-const LARGE_MAP_ENTRY_COUNT: usize = 16 * 128 * 1024; // x u64 -> 128 MB, not very cache-friendly.
+    /// The large maps are large, so we try conserve memory. 128 MB * 10 = 1.28 GB per worker.
+    pub const LARGE_MAP_BATCH_SIZE: u64 = 10;
 
-/// The large maps are large, so we try conserve memory. 128 MB * 10 = 1.28 GB per worker.
-const LARGE_MAP_BATCH_SIZE: u64 = 10;
+    pub const HEADERS_COUNT: usize = 10_000;
+}
+
+#[cfg(test)]
+mod test_constants {
+    // Small values to make tests fast but still run the real logic.
+    pub const SMALL_MAP_ENTRY_COUNT: usize = 10;
+    pub const SMALL_MAP_BATCH_SIZE: u64 = 10;
+    pub const LARGE_MAP_ENTRY_COUNT: usize = 10;
+    pub const LARGE_MAP_BATCH_SIZE: u64 = 10;
+
+    pub const HEADERS_COUNT: usize = 10;
+}
+
+#[cfg(not(test))]
+use real_constants::*;
+#[cfg(test)]
+use test_constants::*;
 
 fn entrypoint(c: &mut Criterion) {
     // This payload is only 10K items, so we use a large batch size as it fits well in memory.
@@ -456,8 +475,6 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
         }
     }
 }
-
-const HEADERS_COUNT: usize = 10_000;
 
 // One worker serializes HTTP headers, the other deserializes them back.
 // Involves a fair bit of memory allocation but somewhat "realistic".

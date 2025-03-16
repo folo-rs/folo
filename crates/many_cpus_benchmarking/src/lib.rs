@@ -117,12 +117,12 @@
 //! [5]: crate::Payload::process
 //! [6]: crate::execute_runs
 
-mod cache;
+#[cfg(all(not(debug_assertions), not(test)))]
+pub(crate) mod cache;
 mod payload;
 mod run;
 mod work_distribution;
 
-pub(crate) use cache::*;
 pub use payload::*;
 pub use run::*;
 pub use work_distribution::*;
