@@ -1,19 +1,29 @@
-use std::{
-    hint::black_box,
-    sync::{
-        Arc, Barrier,
-        atomic::{AtomicUsize, Ordering},
-    },
-    thread,
-};
+use std::{hint::black_box, num::NonZero};
 
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use benchmark_utils::{AbWorker, ThreadPool, bench_on_threadpool, bench_on_threadpool_ab};
+use criterion::{Criterion, criterion_group, criterion_main};
+use many_cpus::ProcessorSet;
 use region_local::region_local;
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
+    let two_threads = ThreadPool::new(
+        ProcessorSet::builder()
+            .same_memory_region()
+            .performance_processors_only()
+            .take(NonZero::new(2).unwrap())
+            .unwrap(),
+    );
+
+    // Not every system is going to have multiple memory regions, so only some can do this.
+    let two_memory_regions = ProcessorSet::builder()
+        .performance_processors_only()
+        .different_memory_regions()
+        .take(NonZero::new(2).unwrap())
+        .map(ThreadPool::new);
+
     let mut group = c.benchmark_group("region_local");
 
     group.bench_function("get", |b| {
@@ -41,17 +51,9 @@ fn entrypoint(c: &mut Criterion) {
     group.bench_function("par_get", |b| {
         region_local!(static VALUE: u32 = 99942);
 
-        b.iter_batched(
-            || {
-                ParallelRun::prepare(
-                    || _ = black_box(VALUE.get()),
-                    || _ = black_box(VALUE.get()),
-                    10_000,
-                )
-            },
-            |run| run.start(),
-            BatchSize::PerIteration,
-        );
+        b.iter_custom(|iters| {
+            bench_on_threadpool(&two_threads, iters, || (), |_| _ = black_box(VALUE.get()))
+        });
     });
 
     // One thread performs "get" in a loop, another performs "set" in a loop.
@@ -59,135 +61,48 @@ fn entrypoint(c: &mut Criterion) {
     group.bench_function("par_get_set", |b| {
         region_local!(static VALUE: u32 = 99942);
 
-        b.iter_batched(
-            || {
-                ParallelRun::prepare(
-                    || _ = black_box(VALUE.get()),
-                    || VALUE.set(black_box(566)),
-                    10_000,
-                )
-            },
-            |run| run.start(),
-            BatchSize::PerIteration,
-        );
+        b.iter_custom(|iters| {
+            bench_on_threadpool_ab(
+                &two_threads,
+                iters,
+                |_| (),
+                |worker, _| match worker {
+                    AbWorker::A => _ = black_box(VALUE.get()),
+                    AbWorker::B => VALUE.set(black_box(566)),
+                },
+            )
+        });
     });
 
-    // TODO: Get & get+set from different memory regions.
-    // TODO: Get & get+set from pinned processors.
+    if let Some(thread_pool) = two_memory_regions {
+        // Two threads perform "get" in a loop.
+        // Both threads work until both have hit the target iteration count.
+        group.bench_function("par_get_2region", |b| {
+            region_local!(static VALUE: u32 = 99942);
+
+            b.iter_custom(|iters| {
+                bench_on_threadpool(&thread_pool, iters, || (), |_| _ = black_box(VALUE.get()))
+            });
+        });
+
+        // One thread performs "get" in a loop, another performs "set" in a loop.
+        // Both threads work until both have hit the target iteration count.
+        group.bench_function("par_get_set_2region", |b| {
+            region_local!(static VALUE: u32 = 99942);
+
+            b.iter_custom(|iters| {
+                bench_on_threadpool_ab(
+                    &thread_pool,
+                    iters,
+                    |_| (),
+                    |worker, _| match worker {
+                        AbWorker::A => _ = black_box(VALUE.get()),
+                        AbWorker::B => VALUE.set(black_box(566)),
+                    },
+                )
+            });
+        });
+    }
 
     group.finish();
-}
-
-struct ParallelRun {
-    start_barrier: Arc<Barrier>,
-    done_barrier: Arc<Barrier>,
-
-    threads: Vec<thread::JoinHandle<()>>,
-}
-
-impl ParallelRun {
-    fn prepare<A, B>(mut a: A, mut b: B, target_iterations: usize) -> Self
-    where
-        A: FnMut() + Send + 'static,
-        B: FnMut() + Send + 'static,
-    {
-        // We update iteration counts every BATCH_SIZE iterations (because updating those
-        // counts can be slow, so we do not want to apply this overhead to every iteration).
-        const BATCH_SIZE: usize = 100;
-
-        let iterations_completed_a = Arc::new(AtomicUsize::new(0));
-        let iterations_completed_b = Arc::new(AtomicUsize::new(0));
-
-        // a + b + prepare()
-        let ready_barrier = Arc::new(Barrier::new(3));
-        // a + b + start()
-        let start_barrier = Arc::new(Barrier::new(3));
-        // a + b + start()
-        let done_barrier = Arc::new(Barrier::new(3));
-
-        let thread_a = thread::spawn({
-            let ready_barrier = Arc::clone(&ready_barrier);
-            let start_barrier = Arc::clone(&start_barrier);
-            let done_barrier = Arc::clone(&done_barrier);
-            let iterations_completed_a = Arc::clone(&iterations_completed_a);
-            let iterations_completed_b = Arc::clone(&iterations_completed_b);
-
-            move || {
-                ready_barrier.wait();
-                start_barrier.wait();
-
-                let mut iterations_completed = 0;
-                loop {
-                    a();
-
-                    iterations_completed += 1;
-
-                    if iterations_completed % BATCH_SIZE == 0 {
-                        iterations_completed_a.fetch_add(BATCH_SIZE, Ordering::Relaxed);
-
-                        if iterations_completed >= target_iterations
-                            && iterations_completed_b.load(Ordering::Relaxed) >= target_iterations
-                        {
-                            break;
-                        }
-                    }
-                }
-
-                done_barrier.wait();
-            }
-        });
-
-        let thread_b = thread::spawn({
-            let ready_barrier = Arc::clone(&ready_barrier);
-            let start_barrier = Arc::clone(&start_barrier);
-            let done_barrier = Arc::clone(&done_barrier);
-            let iterations_completed_a = Arc::clone(&iterations_completed_a);
-            let iterations_completed_b = Arc::clone(&iterations_completed_b);
-
-            move || {
-                ready_barrier.wait();
-                start_barrier.wait();
-
-                let mut iterations_completed = 0;
-                loop {
-                    b();
-
-                    iterations_completed += 1;
-
-                    if iterations_completed % BATCH_SIZE == 0 {
-                        iterations_completed_b.fetch_add(BATCH_SIZE, Ordering::Relaxed);
-
-                        if iterations_completed >= target_iterations
-                            && iterations_completed_a.load(Ordering::Relaxed) >= target_iterations
-                        {
-                            break;
-                        }
-                    }
-                }
-
-                done_barrier.wait();
-            }
-        });
-
-        ready_barrier.wait();
-
-        Self {
-            start_barrier,
-            done_barrier,
-            threads: vec![thread_a, thread_b],
-        }
-    }
-
-    fn start(&self) {
-        self.start_barrier.wait();
-        self.done_barrier.wait();
-    }
-}
-
-impl Drop for ParallelRun {
-    fn drop(&mut self) {
-        for thread in self.threads.drain(..) {
-            thread.join().unwrap();
-        }
-    }
 }
