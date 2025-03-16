@@ -11,7 +11,7 @@ use crate::{
 ///
 /// Refer to [crate-level documentation][crate] for more information.
 #[derive(Debug)]
-pub struct RegionLocalKey<T>
+pub struct RegionLocalStatic<T>
 where
     T: Clone + 'static,
 {
@@ -44,7 +44,7 @@ impl<T> State<T> {
     }
 }
 
-impl<T> RegionLocalKey<T>
+impl<T> RegionLocalStatic<T>
 where
     T: Clone + 'static,
 {
@@ -184,7 +184,7 @@ where
     }
 }
 
-impl<T> RegionLocalKey<T>
+impl<T> RegionLocalStatic<T>
 where
     T: Clone + Copy + 'static,
 {
@@ -209,8 +209,8 @@ macro_rules! region_local {
     );
 
     ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $e:expr) => {
-        $(#[$attr])* $vis static $NAME: $crate::RegionLocalKey<$t> =
-            $crate::RegionLocalKey::new(move || $e);
+        $(#[$attr])* $vis static $NAME: $crate::RegionLocalStatic<$t> =
+            $crate::RegionLocalStatic::new(move || $e);
     };
 }
 
@@ -282,7 +282,7 @@ mod tests {
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
         let local =
-            RegionLocalKey::with_clients(|| "foo".to_string(), hardware_info, hardware_tracker);
+            RegionLocalStatic::with_clients(|| "foo".to_string(), hardware_info, hardware_tracker);
 
         let value1 = local.with(ptr::from_ref);
         let value2 = local.with(ptr::from_ref);
@@ -319,7 +319,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocalKey::with_clients(|| 42, hardware_info, hardware_tracker);
+        let local = RegionLocalStatic::with_clients(|| 42, hardware_info, hardware_tracker);
 
         assert_eq!(local.get(), 42);
         assert_eq!(local.get(), 42);
@@ -360,7 +360,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocalKey::with_clients(|| 42, hardware_info, hardware_tracker);
+        let local = RegionLocalStatic::with_clients(|| 42, hardware_info, hardware_tracker);
 
         assert_eq!(local.get(), 42);
         local.set(43);
@@ -405,7 +405,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocalKey::with_clients(|| 42, hardware_info, hardware_tracker);
+        let local = RegionLocalStatic::with_clients(|| 42, hardware_info, hardware_tracker);
 
         local.set(43);
         assert_eq!(local.get(), 43);

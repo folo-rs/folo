@@ -56,8 +56,8 @@
 //! # API
 //!
 //! The macro internally transforms a static variable of type `T` into a static variable of type
-//! [`RegionLocalKey<T>`][1]. See the API documentation of this type for more details about available
-//! methods.
+//! [`RegionLocalStatic<T>`][1]. See the API documentation of this type for more details about
+//! available methods.
 //!
 //! # Cross-region visibility
 //!
@@ -66,7 +66,7 @@
 //! not need to have separate variables per memory region but still want the efficiency benefits
 //! of reading from local memory.
 //!
-//! [1]: crate::RegionLocalKey
+//! [1]: crate::RegionLocalStatic
 
 use simple_mermaid::mermaid;
 

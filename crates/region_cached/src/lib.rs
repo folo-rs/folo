@@ -70,7 +70,7 @@
 //! # API
 //!
 //! The macro internally transforms a static variable of type `T` into a static variable of type
-//! [`RegionCachedKey<T>`][1]. See the API documentation of this type for more details about available
+//! [`RegionCachedStatic<T>`][1]. See the API documentation of this type for more details about available
 //! methods.
 //!
 //! # Cross-region visibility
@@ -82,7 +82,7 @@
 //! only a single memory region - updates do not propagate across region boundaries. This may be
 //! a useful alternative if you want unique values per memory region.
 //!
-//! [1]: crate::RegionCachedKey
+//! [1]: crate::RegionCachedStatic
 
 use simple_mermaid::mermaid;
 

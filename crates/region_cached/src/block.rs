@@ -11,7 +11,7 @@ use crate::{
 ///
 /// Refer to [crate-level documentation][crate] for more information.
 #[derive(Debug)]
-pub struct RegionCachedKey<T>
+pub struct RegionCachedStatic<T>
 where
     T: Clone + 'static,
 {
@@ -42,7 +42,7 @@ impl<T> State<T> {
     }
 }
 
-impl<T> RegionCachedKey<T>
+impl<T> RegionCachedStatic<T>
 where
     T: Clone + 'static,
 {
@@ -205,7 +205,7 @@ where
     }
 }
 
-impl<T> RegionCachedKey<T>
+impl<T> RegionCachedStatic<T>
 where
     T: Clone + Copy + 'static,
 {
@@ -228,8 +228,8 @@ macro_rules! region_cached {
     );
 
     ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $e:expr) => {
-        $(#[$attr])* $vis static $NAME: $crate::RegionCachedKey<$t> =
-            $crate::RegionCachedKey::new(move || $e);
+        $(#[$attr])* $vis static $NAME: $crate::RegionCachedStatic<$t> =
+            $crate::RegionCachedStatic::new(move || $e);
     };
 }
 
@@ -301,7 +301,7 @@ mod tests {
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
         let local =
-            RegionCachedKey::with_clients(|| "foo".to_string(), hardware_info, hardware_tracker);
+            RegionCachedStatic::with_clients(|| "foo".to_string(), hardware_info, hardware_tracker);
 
         let value1 = local.with(ptr::from_ref);
         let value2 = local.with(ptr::from_ref);
@@ -338,7 +338,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionCachedKey::with_clients(|| 42, hardware_info, hardware_tracker);
+        let local = RegionCachedStatic::with_clients(|| 42, hardware_info, hardware_tracker);
 
         assert_eq!(local.get(), 42);
         assert_eq!(local.get(), 42);
@@ -379,7 +379,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionCachedKey::with_clients(|| 42, hardware_info, hardware_tracker);
+        let local = RegionCachedStatic::with_clients(|| 42, hardware_info, hardware_tracker);
 
         assert_eq!(local.get(), 42);
         local.set(43);
@@ -423,7 +423,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionCachedKey::with_clients(|| 42, hardware_info, hardware_tracker);
+        let local = RegionCachedStatic::with_clients(|| 42, hardware_info, hardware_tracker);
 
         local.set(43);
 
