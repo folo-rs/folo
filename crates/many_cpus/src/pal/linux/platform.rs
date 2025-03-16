@@ -1,5 +1,6 @@
-use std::{collections::HashMap, mem, sync::OnceLock};
+use std::{mem, sync::OnceLock};
 
+use foldhash::HashMap;
 use itertools::Itertools;
 use nonempty::NonEmpty;
 

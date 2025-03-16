@@ -1,5 +1,6 @@
-use std::{collections::HashMap, mem::offset_of, num::NonZeroUsize, sync::OnceLock};
+use std::{mem::offset_of, num::NonZeroUsize, sync::OnceLock};
 
+use foldhash::{HashMap, HashMapExt};
 use itertools::Itertools;
 use nonempty::NonEmpty;
 use windows::{

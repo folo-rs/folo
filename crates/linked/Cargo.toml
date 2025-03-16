@@ -11,6 +11,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+foldhash = { workspace = true }
 hash_hasher = { workspace = true }
 linked_macros = { workspace = true }
 negative-impl = { workspace = true }

@@ -1,9 +1,7 @@
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    fmt::Debug,
-    num::NonZeroUsize,
-};
+use std::{collections::VecDeque, fmt::Debug, num::NonZeroUsize};
 
+use foldhash::HashMapExt;
+use foldhash::{HashMap, HashSet, HashSetExt};
 use itertools::Itertools;
 use nonempty::NonEmpty;
 use rand::prelude::*;
@@ -405,30 +403,37 @@ impl ProcessorSetBuilder {
     /// Returns candidates grouped by memory region, with each returned memory region having at
     /// least one candidate processor.
     fn candidates_by_memory_region(&self) -> HashMap<MemoryRegionId, Vec<Processor>> {
-        self.all_processors()
-            .into_iter()
-            .filter_map(move |p| {
-                if self.except_indexes.contains(&p.id()) {
-                    return None;
+        let candidates_iter = self.all_processors().into_iter().filter_map(move |p| {
+            if self.except_indexes.contains(&p.id()) {
+                return None;
+            }
+
+            let is_acceptable_type = match self.processor_type_selector {
+                ProcessorTypeSelector::Any => true,
+                ProcessorTypeSelector::Performance => {
+                    p.efficiency_class() == EfficiencyClass::Performance
                 }
-
-                let is_acceptable_type = match self.processor_type_selector {
-                    ProcessorTypeSelector::Any => true,
-                    ProcessorTypeSelector::Performance => {
-                        p.efficiency_class() == EfficiencyClass::Performance
-                    }
-                    ProcessorTypeSelector::Efficiency => {
-                        p.efficiency_class() == EfficiencyClass::Efficiency
-                    }
-                };
-
-                if !is_acceptable_type {
-                    return None;
+                ProcessorTypeSelector::Efficiency => {
+                    p.efficiency_class() == EfficiencyClass::Efficiency
                 }
+            };
 
-                Some((p.memory_region_id(), p))
-            })
-            .into_group_map()
+            if !is_acceptable_type {
+                return None;
+            }
+
+            Some((p.memory_region_id(), p))
+        });
+
+        let mut candidates = HashMap::new();
+        for (region, processor) in candidates_iter {
+            candidates
+                .entry(region)
+                .or_insert_with(Vec::new)
+                .push(processor);
+        }
+
+        candidates
     }
 
     fn all_processors(&self) -> NonEmpty<Processor> {

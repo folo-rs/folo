@@ -1,11 +1,12 @@
 use std::{
-    collections::{HashMap, hash_map},
+    collections::{hash_map},
     ops::Deref,
     rc::Rc,
     sync::{Arc, RwLock},
     thread::{self, ThreadId},
 };
 
+use foldhash::{HashMap, HashMapExt};
 use simple_mermaid::mermaid;
 
 use crate::ERR_POISONED_LOCK;
@@ -268,9 +269,10 @@ where
     // This is done in the `ThreadLocal` destructor. By the time this map is dropped, it must be
     // empty, which we assert in our own drop().
     //
-    // TODO: This locking is a bit ugly but if ThreadLocal is cached, perhaps fine. Still, benchmark
-    // and compare against a thread-local HashMap shared between all PerThread instances? Tradeoff
-    // is more local sharing but zero global sharing, which may be superior.
+    // The write lock here is only held when initializing the thread-specific state for a thread
+    // for the first time, which should generally be rare, especially as user code will also be
+    // motivated to reduce those instances because it also means initializing the actual `T` inside.
+    // Most access will therefore only need to take a read lock.
     thread_specific: Arc<RwLock<HashMap<ThreadId, ThreadSpecificState<T>>>>,
 }
 
