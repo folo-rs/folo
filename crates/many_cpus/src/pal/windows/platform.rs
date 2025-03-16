@@ -36,6 +36,9 @@ pub(crate) static BUILD_TARGET_PLATFORM: BuildTargetPlatform =
 pub(crate) struct BuildTargetPlatform {
     bindings: BindingsFacade,
 
+    // We cache these as we expect them to never change. This data is in non-local memory in
+    // systems with multiple memory regions, which is not ideal but the bookkeeping to make it
+    // local is also not really better. `#[thread_local]` might help but is currently unstable.
     group_max_count: OnceLock<ProcessorGroupIndex>,
     group_max_sizes: OnceLock<Box<[ProcessorIndexInGroup]>>,
     group_start_offsets: OnceLock<Box<[ProcessorId]>>,
