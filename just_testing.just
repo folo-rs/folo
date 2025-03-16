@@ -16,6 +16,11 @@ miri:
 
 [group('testing')]
 test FILTER="":
+    cargo nextest run {{ target_package }} --all-features {{ FILTER }}
+
+# Test all targets, including a test pass over benchmarks (slow).
+[group('testing')]
+test-all FILTER="":
     cargo nextest run {{ target_package }} --all-targets --all-features {{ FILTER }}
 
 [group('testing')]

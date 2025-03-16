@@ -45,7 +45,7 @@ validate-local:
     just format-check
     just clippy dev
     just check dev
-    just test
+    just test-all
     just test-docs
     just docs
     just miri
