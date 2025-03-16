@@ -1,15 +1,14 @@
 use std::{
-    collections::{hash_map},
+    collections::{HashMap, hash_map},
     ops::Deref,
     rc::Rc,
     sync::{Arc, RwLock},
     thread::{self, ThreadId},
 };
 
-use foldhash::{HashMap, HashMapExt};
 use simple_mermaid::mermaid;
 
-use crate::ERR_POISONED_LOCK;
+use crate::{BuildThreadIdHasher, ERR_POISONED_LOCK};
 
 /// A wrapper that manages instances of linked objects of type `T`, ensuring that only one
 /// instance of `T` is created per thread.
@@ -273,7 +272,7 @@ where
     // for the first time, which should generally be rare, especially as user code will also be
     // motivated to reduce those instances because it also means initializing the actual `T` inside.
     // Most access will therefore only need to take a read lock.
-    thread_specific: Arc<RwLock<HashMap<ThreadId, ThreadSpecificState<T>>>>,
+    thread_specific: Arc<RwLock<HashMap<ThreadId, ThreadSpecificState<T>, BuildThreadIdHasher>>>,
 }
 
 impl<T> FamilyStateReference<T>
@@ -283,7 +282,7 @@ where
     fn new(handle: linked::Handle<T>) -> Self {
         Self {
             handle,
-            thread_specific: Arc::new(RwLock::new(HashMap::new())),
+            thread_specific: Arc::new(RwLock::new(HashMap::with_hasher(BuildThreadIdHasher))),
         }
     }
 

@@ -519,6 +519,7 @@ mod object;
 mod per_access_static;
 mod per_thread;
 mod per_thread_static;
+mod thread_id_hash;
 
 pub use r#box::*;
 pub(crate) use constants::*;
@@ -527,6 +528,7 @@ pub use object::*;
 pub use per_access_static::*;
 pub use per_thread::*;
 pub use per_thread_static::*;
+pub(crate) use thread_id_hash::*;
 
 mod macros;
 
