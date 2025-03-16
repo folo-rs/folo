@@ -23,6 +23,10 @@ format-self:
     just --fmt --unstable
 
 [group('quality')]
+hack:
+    cargo hack check --feature-powerset
+
+[group('quality')]
 machete:
     cargo machete --skip-target-dir
 
@@ -53,3 +57,4 @@ validate-local:
     just clippy release
     just check release
     just build release
+    just hack
