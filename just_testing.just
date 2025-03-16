@@ -18,10 +18,11 @@ miri:
 test FILTER="":
     cargo nextest run {{ target_package }} --all-features {{ FILTER }}
 
-# Test all targets, including a test pass over benchmarks (slow).
+# We run benches separately because they are slow in Nextest multi-process mode,
+# probably due to the Gnuplot integration that spawns an external process.
 [group('testing')]
-test-all FILTER="":
-    cargo nextest run {{ target_package }} --all-targets --all-features {{ FILTER }}
+test-benches FILTER="":
+    cargo test --benches --all-features {{ FILTER }}
 
 [group('testing')]
 test-docs FILTER="":
