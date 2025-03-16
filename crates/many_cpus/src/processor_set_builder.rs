@@ -993,6 +993,16 @@ mod tests {
             },
             FakeProcessor {
                 index: 1,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 2,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Performance,
+            },
+            FakeProcessor {
+                index: 3,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
             }
@@ -1007,6 +1017,11 @@ mod tests {
         let builder = ProcessorSetBuilder::with_platform(platform.into());
         let set = builder.different_memory_regions().take_all().unwrap();
         assert_eq!(set.len(), 2);
+
+        assert_ne!(
+            set.processors().first().memory_region_id(),
+            set.processors().last().memory_region_id()
+        );
     }
 
     #[test]
@@ -1021,6 +1036,16 @@ mod tests {
             },
             FakeProcessor {
                 index: 1,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 2,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Performance,
+            },
+            FakeProcessor {
+                index: 3,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
             }
@@ -1035,6 +1060,11 @@ mod tests {
         let builder = ProcessorSetBuilder::with_platform(platform.into());
         let set = builder.different_memory_regions().take_all().unwrap();
         assert_eq!(set.len(), 2);
+
+        assert_ne!(
+            set.processors().first().memory_region_id(),
+            set.processors().last().memory_region_id()
+        );
     }
 
     #[test]
