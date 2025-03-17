@@ -152,6 +152,16 @@ impl HardwareTracker {
             .unwrap_or_else(|| self.current_processor().memory_region_id())
     }
 
+    /// Whether the current thread is pinned to a single processor.
+    pub fn is_thread_processor_pinned(&self) -> bool {
+        self.pinned_processor_id.is_some()
+    }
+
+    /// Whether the current thread is pinned to a single memory region.
+    pub fn is_thread_memory_region_pinned(&self) -> bool {
+        self.pinned_memory_region_id.is_some()
+    }
+
     /// Notifies the tracker that the current thread has been pinned or unpinned and that,
     /// for `Some` arguments, future requests may be answered with the provided values.
     ///
@@ -388,8 +398,14 @@ mod tests {
 
         let mut tracker = HardwareTracker::new(PlatformFacade::from_mock(platform));
 
+        assert!(!tracker.is_thread_processor_pinned());
+        assert!(!tracker.is_thread_memory_region_pinned());
+
         // We start in a pinned mode and expect the pinned-to knowledge to be used.
         tracker.update_pin_status(Some(0), Some(0));
+
+        assert!(tracker.is_thread_processor_pinned());
+        assert!(tracker.is_thread_memory_region_pinned());
 
         assert_eq!(0, tracker.current_processor_id());
         assert_eq!(0, tracker.current_memory_region_id());
@@ -397,11 +413,17 @@ mod tests {
         // We stay pinned, now to a different processor and memory region.
         tracker.update_pin_status(Some(1), Some(1));
 
+        assert!(tracker.is_thread_processor_pinned());
+        assert!(tracker.is_thread_memory_region_pinned());
+
         assert_eq!(1, tracker.current_processor_id());
         assert_eq!(1, tracker.current_memory_region_id());
 
         // Even when pinned to a ghost processor, everything is fine.
         tracker.update_pin_status(Some(2), Some(2));
+
+        assert!(tracker.is_thread_processor_pinned());
+        assert!(tracker.is_thread_memory_region_pinned());
 
         assert_eq!(2, tracker.current_processor_id());
         assert_eq!(2, tracker.current_memory_region_id());
@@ -413,6 +435,9 @@ mod tests {
         // request the memory region ID.
         tracker.update_pin_status(None, Some(2));
 
+        assert!(!tracker.is_thread_processor_pinned());
+        assert!(tracker.is_thread_memory_region_pinned());
+
         let processor = tracker.current_processor();
         assert_eq!(0, processor.id());
         assert_eq!(2, tracker.current_memory_region_id());
@@ -422,6 +447,9 @@ mod tests {
 
         // Now we are completely unpinned.
         tracker.update_pin_status(None, None);
+
+        assert!(!tracker.is_thread_processor_pinned());
+        assert!(!tracker.is_thread_memory_region_pinned());
 
         let processor = tracker.current_processor();
         assert_eq!(1, processor.id());

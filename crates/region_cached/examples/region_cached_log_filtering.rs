@@ -1,13 +1,13 @@
 use std::thread;
 
-use region_cached::region_cached;
+use region_cached::{region_cached, RegionCachedExt};
 
 region_cached!(static FILTER_KEYS: Vec<String> = load_initial_filters());
 
 /// Returns true if the log line contains any of the filter keys.
 fn process_log_line(line: &str) -> bool {
-    // `.with()` provides an immutable reference to the cached value.
-    FILTER_KEYS.with(|keys| keys.iter().any(|key| line.contains(key)))
+    // `.with_regional()` provides an immutable reference to the cached value.
+    FILTER_KEYS.with_regional(|keys| keys.iter().any(|key| line.contains(key)))
 }
 
 fn update_filters(new_filters: Vec<String>) {

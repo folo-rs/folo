@@ -3,7 +3,7 @@ use std::{hint::black_box, num::NonZero};
 use benchmark_utils::{AbWorker, ThreadPool, bench_on_threadpool, bench_on_threadpool_ab};
 use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus::ProcessorSet;
-use region_cached::region_cached;
+use region_cached::{RegionCachedCopyExt, RegionCachedExt, region_cached};
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
@@ -30,7 +30,7 @@ fn entrypoint(c: &mut Criterion) {
         b.iter(|| {
             region_cached!(static VALUE: u32 = 99942);
 
-            black_box(VALUE.get());
+            black_box(VALUE.get_regional());
         })
     });
 
@@ -52,7 +52,12 @@ fn entrypoint(c: &mut Criterion) {
         region_cached!(static VALUE: u32 = 99942);
 
         b.iter_custom(|iters| {
-            bench_on_threadpool(&two_threads, iters, || (), |_| _ = black_box(VALUE.get()))
+            bench_on_threadpool(
+                &two_threads,
+                iters,
+                || (),
+                |_| _ = black_box(VALUE.get_regional()),
+            )
         });
     });
 
@@ -67,7 +72,7 @@ fn entrypoint(c: &mut Criterion) {
                 iters,
                 |_| (),
                 |worker, _| match worker {
-                    AbWorker::A => _ = black_box(VALUE.get()),
+                    AbWorker::A => _ = black_box(VALUE.get_regional()),
                     AbWorker::B => VALUE.set(black_box(566)),
                 },
             )
@@ -81,7 +86,12 @@ fn entrypoint(c: &mut Criterion) {
             region_cached!(static VALUE: u32 = 99942);
 
             b.iter_custom(|iters| {
-                bench_on_threadpool(&thread_pool, iters, || (), |_| _ = black_box(VALUE.get()))
+                bench_on_threadpool(
+                    &thread_pool,
+                    iters,
+                    || (),
+                    |_| _ = black_box(VALUE.get_regional()),
+                )
             });
         });
 
@@ -96,7 +106,7 @@ fn entrypoint(c: &mut Criterion) {
                     iters,
                     |_| (),
                     |worker, _| match worker {
-                        AbWorker::A => _ = black_box(VALUE.get()),
+                        AbWorker::A => _ = black_box(VALUE.get_regional()),
                         AbWorker::B => VALUE.set(black_box(566)),
                     },
                 )

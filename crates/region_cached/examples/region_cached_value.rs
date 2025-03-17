@@ -1,6 +1,6 @@
 use axum::{Router, routing::get};
 use many_cpus::HardwareInfo;
-use region_cached::region_cached;
+use region_cached::{RegionCachedCopyExt, RegionCachedExt, region_cached};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // A global variable whose latest value is cached in each memory region for fast local read access.
@@ -25,7 +25,7 @@ async fn main() {
 
 /// Open http://localhost:1234/ to read the current value.
 async fn read() -> String {
-    let last_update_timestamp = LAST_UPDATE.get();
+    let last_update_timestamp = LAST_UPDATE.get_regional();
 
     format!("Last update: {last_update_timestamp}")
 }
