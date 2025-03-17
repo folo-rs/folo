@@ -9,6 +9,14 @@ criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
+    let one_thread = ThreadPool::new(
+        ProcessorSet::builder()
+            .same_memory_region()
+            .performance_processors_only()
+            .take(NonZero::new(1).unwrap())
+            .unwrap(),
+    );
+
     let two_threads = ThreadPool::new(
         ProcessorSet::builder()
             .same_memory_region()
@@ -24,7 +32,7 @@ fn entrypoint(c: &mut Criterion) {
         .take(NonZero::new(2).unwrap())
         .map(ThreadPool::new);
 
-    let mut group = c.benchmark_group("region_cached");
+    let mut group = c.benchmark_group("region_cached_unpinned");
 
     group.bench_function("get", |b| {
         b.iter(|| {
@@ -44,7 +52,32 @@ fn entrypoint(c: &mut Criterion) {
 
     group.finish();
 
-    let mut group = c.benchmark_group("region_cached_par");
+    let mut group = c.benchmark_group("region_cached_pinned");
+
+    group.bench_function("get", |b| {
+        region_cached!(static VALUE: u32 = 99942);
+
+        b.iter_custom(|iters| {
+            bench_on_threadpool(
+                &one_thread,
+                iters,
+                || (),
+                |_| _ = black_box(VALUE.get_regional()),
+            )
+        });
+    });
+
+    group.bench_function("set", |b| {
+        region_cached!(static VALUE: u32 = 99942);
+
+        b.iter_custom(|iters| {
+            bench_on_threadpool(&one_thread, iters, || (), |_| VALUE.set(black_box(566)))
+        });
+    });
+
+    group.finish();
+
+    let mut group = c.benchmark_group("region_cached_pinned_par");
 
     // Two threads perform "get" in a loop.
     // Both threads work until both have hit the target iteration count.
