@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Temporary
+
 //! On many-processor systems with multiple memory regions, there is an extra cost associated with
 //! accessing data in physical memory modules that are in a different memory region than the current
 //! processor:
@@ -86,7 +88,12 @@
 
 use simple_mermaid::mermaid;
 
+mod atomic_arc;
+mod atomic_arc_option;
 mod block;
+
+pub(crate) use atomic_arc::*;
+pub(crate) use atomic_arc_option::*;
 pub use block::*;
 
 pub(crate) mod hw_info_client;

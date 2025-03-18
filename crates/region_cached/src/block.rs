@@ -1,9 +1,12 @@
-use std::sync::{Arc, OnceLock};
+use std::{
+    ptr,
+    sync::{Arc, OnceLock},
+};
 
-use arc_swap::{ArcSwap, ArcSwapOption, AsRaw};
 use many_cpus::MemoryRegionId;
 
 use crate::{
+    AtomicArc, AtomicArcOption,
     hw_info_client::{HardwareInfoClient, HardwareInfoClientFacade},
     hw_tracker_client::{HardwareTrackerClient, HardwareTrackerClientFacade},
 };
@@ -124,12 +127,12 @@ where
                 let initial_value = self.global_state.latest_value.load();
 
                 // We use the raw pointer to compare the value before and after.
-                let initial_value_raw = initial_value.as_raw();
+                let initial_value_raw = ptr::from_ref(initial_value.as_ref());
 
                 regional_state.set(&initial_value);
 
                 let initial_value_after = self.global_state.latest_value.load();
-                let initial_value_after_raw = initial_value_after.as_raw();
+                let initial_value_after_raw = ptr::from_ref(initial_value_after.as_ref());
 
                 if initial_value_raw == initial_value_after_raw {
                     // We are done - the universe did not change during initialization.
@@ -172,7 +175,7 @@ where
 {
     /// The latest value written into the region-cached variable from any thread. This is only used
     /// to create regional clones for local caching and is never read directly in any hot path.
-    latest_value: ArcSwap<T>,
+    latest_value: AtomicArc<T>,
 
     // We cannot avoid the array itself being cross-region accessed but the RegionalState items
     // inside are at least initialized lazily and on the correct region, so we can ensure that
@@ -194,7 +197,7 @@ where
             regional_states.push(OnceLock::new());
         }
 
-        let initial_value = ArcSwap::from_pointee(initial_value);
+        let initial_value = AtomicArc::from_pointee(initial_value);
 
         Self {
             latest_value: initial_value,
@@ -238,7 +241,7 @@ where
     ///
     /// This is `None` if the value for this region has not been initialized yet.
     /// It will be initialized on first access from this region.
-    value: ArcSwapOption<T>,
+    value: AtomicArcOption<T>,
 }
 
 impl<T> RegionalState<T>
@@ -247,7 +250,7 @@ where
 {
     fn new() -> Self {
         Self {
-            value: ArcSwapOption::const_empty(),
+            value: AtomicArcOption::empty(),
         }
     }
 
@@ -259,9 +262,7 @@ where
     where
         F: FnOnce(&T) -> R,
     {
-        let reader = self.value.load();
-
-        if let Some(ref value) = *reader {
+        if let Some(ref value) = self.value.load() {
             return Ok(f(value));
         }
 
