@@ -25,6 +25,8 @@ fn entrypoint(c: &mut Criterion) {
             .unwrap(),
     );
 
+    let all_threads = ThreadPool::all();
+
     // Not every system is going to have multiple memory regions, so only some can do this.
     let two_memory_regions = ProcessorSet::builder()
         .performance_processors_only()
@@ -80,13 +82,26 @@ fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("region_cached_pinned_par");
 
     // Two threads perform "get" in a loop.
-    // Both threads work until both have hit the target iteration count.
     group.bench_function("par_get", |b| {
         region_cached!(static VALUE: u32 = 99942);
 
         b.iter_custom(|iters| {
             bench_on_threadpool(
                 &two_threads,
+                iters,
+                || (),
+                |_| _ = black_box(VALUE.get_regional()),
+            )
+        });
+    });
+
+    // All threads perform "get" in a loop.
+    group.bench_function("par_get_all", |b| {
+        region_cached!(static VALUE: u32 = 99942);
+
+        b.iter_custom(|iters| {
+            bench_on_threadpool(
+                &all_threads,
                 iters,
                 || (),
                 |_| _ = black_box(VALUE.get_regional()),
