@@ -1,5 +1,6 @@
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 
+use arc_swap::{ArcSwap, ArcSwapOption, AsRaw};
 use many_cpus::MemoryRegionId;
 
 use crate::{
@@ -105,28 +106,36 @@ where
     {
         loop {
             // If the read fails, we get our `f` callback returned back to us.
-            match regional_state.try_with_value_read(f) {
+            match regional_state.try_with_value(f) {
                 Ok(result) => return result,
                 Err(callback) => f = callback,
             }
 
-            // If we got here then the regional state is not initialized. Let's initialize it.
-            // We now need a value to initialize the region state with. The latest written value
-            // (for our weakly consistent definition of "latest") is stored in the global state.
-            //
-            // NB! It is legal to lock the initial value first and then the regional state, as we
-            // are doing here. This is important to avoid a missed write between the initial value
-            // being cloned here and it being inserted to the regional state - any writer who wants
-            // to update will have to wait until our regional state initialization is completed.
-            let initial_value_reader = self
-                .global_state
-                .latest_value
-                .read()
-                .expect(ERR_POISONED_LOCK);
-            let initial_value = initial_value_reader.clone();
+            loop {
+                // If we got here then the regional state is not initialized. Let's initialize it.
+                // We now need a value to initialize the region state with. The latest written value
+                // (for our weakly consistent definition of "latest") is stored in the global state.
+                //
+                // We need to protect against concurrent initialization causing torn initialization,
+                // where when two threads initialize with A and B, some regions end up seeing A and
+                // some end up seeing B, depending on how things were ordered between the threads.
+                // We do this by verifying after our initialization that the initial value is still
+                // the same as when we started the initialization. If it is not, we need to try again.
+                let initial_value = self.global_state.latest_value.load();
 
-            // We initialize and loop back to try using the value.
-            regional_state.initialize(initial_value);
+                // We use the raw pointer to compare the value before and after.
+                let initial_value_raw = initial_value.as_raw();
+
+                regional_state.set(&initial_value);
+
+                let initial_value_after = self.global_state.latest_value.load();
+                let initial_value_after_raw = initial_value_after.as_raw();
+
+                if initial_value_raw == initial_value_after_raw {
+                    // We are done - the universe did not change during initialization.
+                    break;
+                }
+            }
         }
     }
 
@@ -136,20 +145,9 @@ where
     pub fn set(&self, value: T) {
         // The first thing we do is update the latest value in the global state. This ensures that
         // any new regional states that get initialized will get our latest updated value.
-        {
-            let mut writer = self
-                .global_state
-                .latest_value
-                .write()
-                .expect(ERR_POISONED_LOCK);
-            *writer = value;
-
-            // We release the lock here. Our weak consistency model allows us to do this - as long
-            // as the new value can be observed at some point (even if immediately overwritten),
-            // all is well. It is possible that the new value will only reach some or no threads
-            // due to concurrent writes, which is also fine - ordering of competing writes is not
-            // defined and anything goes.
-        }
+        self.global_state
+            .latest_value
+            .store(Arc::new(value.clone()));
 
         // Now all we need to do is loop through all the regions and mark them as out of date
         // by clearing their local state. Each region will reinitialize itself automatically.
@@ -172,12 +170,9 @@ struct GlobalState<T>
 where
     T: Clone + Send + Sync + 'static,
 {
-    /// The latest value written into the region-cached variable. This is only used to create
-    /// regional clones for local caching and is never read directly in any hot path.
-    ///
-    /// NB! You must NOT access this when already holding the lock of any regional state. However,
-    /// it is legal to take a regional state lock after obtaining a lock for this value.
-    latest_value: RwLock<T>,
+    /// The latest value written into the region-cached variable from any thread. This is only used
+    /// to create regional clones for local caching and is never read directly in any hot path.
+    latest_value: ArcSwap<T>,
 
     // We cannot avoid the array itself being cross-region accessed but the RegionalState items
     // inside are at least initialized lazily and on the correct region, so we can ensure that
@@ -199,7 +194,7 @@ where
             regional_states.push(OnceLock::new());
         }
 
-        let initial_value = RwLock::new(initial_value);
+        let initial_value = ArcSwap::from_pointee(initial_value);
 
         Self {
             latest_value: initial_value,
@@ -224,6 +219,9 @@ where
 
     fn invalidate_regions(&self) {
         for slot in &self.regional_states {
+            // If it is already `None`, it will already get initialized on the next access.
+            // It might already be in the process of being initialized by another thread, which
+            // is fine - once initialized, it will by default be in the invalidated state.
             if let Some(state) = slot.get() {
                 state.clear()
             }
@@ -237,7 +235,10 @@ where
     T: Clone + Send + Sync + 'static,
 {
     /// The value shared (via `Arc`) between all threads in the same memory region.
-    value: RwLock<Option<Arc<T>>>,
+    ///
+    /// This is `None` if the value for this region has not been initialized yet.
+    /// It will be initialized on first access from this region.
+    value: ArcSwapOption<T>,
 }
 
 impl<T> RegionalState<T>
@@ -246,23 +247,19 @@ where
 {
     fn new() -> Self {
         Self {
-            value: RwLock::new(None),
+            value: ArcSwapOption::const_empty(),
         }
     }
 
-    /// Attempts to execute a callback on the value stored in this regional state, holding the read
-    /// lock while doing so.
+    /// Attempts to execute a callback on the value stored in this regional state.
     ///
     /// Returns back the unused callback as `Err` if the value in this regional state is not yet
     /// initialized. In such a case, you should call `initialize()` and try again.
-    ///
-    /// The value read lock is held while the callback is executed. You may want to minimize the
-    /// lock time by simply cloning the `Arc` for yourself instead of doing work in the callback.
-    fn try_with_value_read<F, R>(&self, f: F) -> Result<R, F>
+    fn try_with_value<F, R>(&self, f: F) -> Result<R, F>
     where
         F: FnOnce(&T) -> R,
     {
-        let reader = self.value.read().expect(ERR_POISONED_LOCK);
+        let reader = self.value.load();
 
         if let Some(ref value) = *reader {
             return Ok(f(value));
@@ -271,20 +268,14 @@ where
         Err(f)
     }
 
-    fn initialize(&self, value: T) {
-        let mut writer = self.value.write().expect(ERR_POISONED_LOCK);
-
-        // It may be that it is already initialized by someone else, in which case we do nothing.
-        writer.get_or_insert_with(move || Arc::new(value));
+    fn set(&self, value: &T) {
+        self.value.store(Some(Arc::new(value.clone())));
     }
 
     fn clear(&self) {
-        let mut writer = self.value.write().expect(ERR_POISONED_LOCK);
-        *writer = None;
+        self.value.store(None);
     }
 }
-
-const ERR_POISONED_LOCK: &str = "poisoned lock - safe execution no longer possible";
 
 /// Refer to [crate-level documentation][crate] for more information.
 #[macro_export]

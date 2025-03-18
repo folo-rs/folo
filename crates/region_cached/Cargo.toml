@@ -11,6 +11,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+arc-swap = { workspace = true }
 linked = { workspace = true }
 many_cpus = { workspace = true }
 simple-mermaid = { workspace = true }
