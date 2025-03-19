@@ -28,10 +28,12 @@
 //! # Quick start
 //!
 //! This crate provides the `region_cached!` macro that enhances static variables with region-local
-//! caching behavior and provides interior mutability via eventually consistent writes.
+//! caching behavior and provides interior mutability via weakly consistent writes.
 //!
 //! ```rust
-//! use region_cached::region_cached;
+//! // RegionCachedExt provides required extension methods on
+//! // region-cached static variables, such as `with_regional()` and `set()`.
+//! use region_cached::{region_cached, RegionCachedExt};
 //!
 //! region_cached!(static FILTER_KEYS: Vec<String> = vec![
 //!     "error".to_string(),
@@ -40,8 +42,8 @@
 //!
 //! /// Returns true if the log line contains any of the filter keys.
 //! fn process_log_line(line: &str) -> bool {
-//!     // `.with()` provides an immutable reference to the cached value.
-//!     FILTER_KEYS.with(|keys| keys.iter().any(|key| line.contains(key)))
+//!     // `.with_regional()` provides an immutable reference to the cached value.
+//!     FILTER_KEYS.with_regional(|keys| keys.iter().any(|key| line.contains(key)))
 //! }
 //!
 //! assert!(!process_log_line("info: all is well"));
@@ -55,12 +57,12 @@
 //!
 //! # Consistency guarantees
 //!
-//! Writes are eventually consistent, with an undefined order of resolving from different threads.
+//! Writes are weakly consistent, with an undefined order of resolving from different threads.
 //! Writes from the same thread become visible sequentially on all threads.
 //!
 //! Writes are immediately visible from the originating thread, with the caveats that:
-//! 1. Eventually consistent writes from other threads may be applied at any time, such as between
-//!    a write and an immediately following read.
+//! 1. Writes from other threads may be applied at any time, such as between
+//!    a local write and an immediately following read.
 //! 2. A thread, if not pinned, may migrate to a new memory region between the write and read
 //!    operations, which invalidates any causal link between the two operations.
 //!
@@ -69,20 +71,20 @@
 //!
 //! # API
 //!
-//! The macro internally transforms a static variable of type `T` into a static variable of type
-//! [`RegionCachedStatic<T>`][1]. See the API documentation of this type for more details about available
-//! methods.
+//! The macro internally transforms a static variable of type `T` and provides the new API surface
+//! via extension methods on [`RegionCachedExt<T>`][1]. See the API documentation of this
+//! type for more details about available methods.
 //!
 //! # Cross-region visibility
 //!
-//! This type makes the value visible across memory regions, simply enhancing a static variable
-//! with same-region caching to ensure high performance during read and write operations.
+//! This type makes the value visible across memory regions, enhancing a static variable with
+//! region-local caching to ensure low latency and high memory throughput for read operations.
 //!
 //! The `region_local` crate provides a similar mechanism but limits the visibility of values to
 //! only a single memory region - updates do not propagate across region boundaries. This may be
-//! a useful alternative if you want unique values per memory region.
+//! a useful alternative if you want unique values per memory region, similar to `thread_local!`.
 //!
-//! [1]: crate::RegionCachedStatic
+//! [1]: crate::RegionCachedExt
 
 use simple_mermaid::mermaid;
 

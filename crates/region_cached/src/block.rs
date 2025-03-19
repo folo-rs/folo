@@ -17,7 +17,7 @@ pub struct RegionCachedStatic<T>
 where
     T: Clone + Send + Sync + 'static,
 {
-    // If the current thread is in a fixed memory region, we just reference the regional state.
+    // If the current thread is pinned to a memory region, we just reference the regional state.
     // Otherwise, we have to look up the regional state from the global state on every access
     // because we do not know what region we are in (it might change for every call).
     // If this is `None`, we are in a mode where we need to perform the lookup every time.
@@ -77,7 +77,7 @@ where
         Some(global_state.with_regional_state(memory_region_id, Arc::clone))
     }
 
-    /// Executes the provided closure with a reference to the stored value.
+    /// Executes the provided function with a reference to the stored value.
     pub fn with<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&T) -> R,
@@ -88,7 +88,7 @@ where
         }
 
         // Otherwise, we need to identify our memory region look up the region-specific
-        // value from the shared state. This is the slow path - pin threads for max happiness.
+        // value from the shared state. This is the slow path - pin your threads for max happiness.
 
         // We fix the memory region ID at this point. It may be that the thread migrates to a
         // different memory region during the rest of this function - we do not care about that.
@@ -117,10 +117,14 @@ where
                 // (for our weakly consistent definition of "latest") is stored in the global state.
                 //
                 // We need to protect against concurrent initialization causing torn initialization,
-                // where when two threads initialize with A and B, some regions end up seeing A and
+                // where when two threads set values A and B, and some regions end up seeing A and
                 // some end up seeing B, depending on how things were ordered between the threads.
+                // To be clear, we do not care whether we end up with A or B, but we do care that
+                // all regions see the same value.
+                //
                 // We do this by verifying after our initialization that the initial value is still
-                // the same as when we started the initialization. If it is not, we need to try again.
+                // the same as when we started the initialization. If it is not, we re-initialize
+                // to "catch up" to any new changes that have occurred.
                 let initial_value = self.global_state.latest_value.load();
 
                 // We use the raw pointer to compare the value before and after.
@@ -149,8 +153,8 @@ where
             .latest_value
             .store(Arc::new(value.clone()));
 
-        // Now all we need to do is loop through all the regions and mark them as out of date
-        // by clearing their local state. Each region will reinitialize itself automatically.
+        // Now all we need to do is invalidate the current value in all regions.
+        // Each region will reinitialize itself automatically on next access.
         self.global_state.invalidate_regions();
     }
 }
@@ -202,7 +206,7 @@ where
         }
     }
 
-    /// Executes a callback on the regional state for the given memory region.
+    /// Executes a function on the regional state for the given memory region.
     fn with_regional_state<F, R>(&self, memory_region_id: MemoryRegionId, f: F) -> R
     where
         F: FnOnce(&Arc<RegionalState<T>>) -> R,
@@ -238,6 +242,11 @@ where
     ///
     /// This is `None` if the value for this region has not been initialized yet.
     /// It will be initialized on first access from this region.
+    ///
+    /// We use ArcSwap here because it offers very good multithreaded read performance.
+    /// In single-threaded and write-heavy scenarios, RwLock is faster but those
+    /// are not the scenarios we target - we expect the data to be cached for long
+    /// periods and read from many threads, with writes happening not so often.
     value: ArcSwapOption<T>,
 }
 
@@ -251,9 +260,9 @@ where
         }
     }
 
-    /// Attempts to execute a callback on the value stored in this regional state.
+    /// Attempts to execute a function on the value stored in this regional state.
     ///
-    /// Returns back the unused callback as `Err` if the value in this regional state is not yet
+    /// Returns back the unused function via `Err` if the value in this regional state is not yet
     /// initialized. In such a case, you should call `initialize()` and try again.
     fn try_with_value<F, R>(&self, f: F) -> Result<R, F>
     where
@@ -277,6 +286,8 @@ where
     }
 }
 
+/// Marks static variables in the macro block as region-cached.
+///
 /// Refer to [crate-level documentation][crate] for more information.
 #[macro_export]
 macro_rules! region_cached {
@@ -295,18 +306,25 @@ macro_rules! region_cached {
     };
 }
 
+/// Extension trait that adds convenience methods to region-cached static variables
+/// in a `region_cached!` block.
 pub trait RegionCachedExt<T> {
+    /// Executes the provided function with a reference to the stored value.
     fn with_regional<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&T) -> R;
 
+    /// Updates the stored value in all memory regions.
     fn set(&self, value: T);
 }
 
+/// Extension trait that adds convenience methods to region-cached static variables
+/// in a `region_cached!` block, specifically for `Copy` types.
 pub trait RegionCachedCopyExt<T>
 where
     T: Copy,
 {
+    /// Gets a copy of the stored value.
     fn get_regional(&self) -> T;
 }
 

@@ -15,7 +15,7 @@ graph TD
         Processor4 -->|read| Region2Value
     end
 
-    Region1Value -->|eventually consistent<br/>clone from| GlobalValue[Global value]
-    Region2Value -->|eventually consistent<br/>clone from| GlobalValue
+    Region1Value -->|weakly consistent<br/>clone from| GlobalValue[Global value]
+    Region2Value -->|weakly consistent<br/>clone from| GlobalValue
 
     Processor1 -->|write| GlobalValue
