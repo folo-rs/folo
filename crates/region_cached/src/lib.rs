@@ -32,7 +32,7 @@
 //!
 //! ```rust
 //! // RegionCachedExt provides required extension methods on
-//! // region-cached static variables, such as `with_regional()` and `set()`.
+//! // region-cached static variables, such as `with_current()` and `set()`.
 //! use region_cached::{region_cached, RegionCachedExt};
 //!
 //! region_cached!(static FILTER_KEYS: Vec<String> = vec![
@@ -42,8 +42,8 @@
 //!
 //! /// Returns true if the log line contains any of the filter keys.
 //! fn process_log_line(line: &str) -> bool {
-//!     // `.with_regional()` provides an immutable reference to the cached value.
-//!     FILTER_KEYS.with_regional(|keys| keys.iter().any(|key| line.contains(key)))
+//!     // `.with_current()` provides an immutable reference to the cached value.
+//!     FILTER_KEYS.with_current(|keys| keys.iter().any(|key| line.contains(key)))
 //! }
 //!
 //! assert!(!process_log_line("info: all is well"));

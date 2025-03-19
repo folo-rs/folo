@@ -40,7 +40,7 @@ fn entrypoint(c: &mut Criterion) {
         b.iter(|| {
             region_cached!(static VALUE: u32 = 99942);
 
-            black_box(VALUE.get_regional());
+            black_box(VALUE.get_current());
         })
     });
 
@@ -64,7 +64,7 @@ fn entrypoint(c: &mut Criterion) {
                 &one_thread,
                 iters,
                 || (),
-                |_| _ = black_box(VALUE.get_regional()),
+                |_| _ = black_box(VALUE.get_current()),
             )
         });
     });
@@ -90,7 +90,7 @@ fn entrypoint(c: &mut Criterion) {
                 &two_threads,
                 iters,
                 || (),
-                |_| _ = black_box(VALUE.get_regional()),
+                |_| _ = black_box(VALUE.get_current()),
             )
         });
     });
@@ -104,7 +104,7 @@ fn entrypoint(c: &mut Criterion) {
                 &all_threads,
                 iters,
                 || (),
-                |_| _ = black_box(VALUE.get_regional()),
+                |_| _ = black_box(VALUE.get_current()),
             )
         });
     });
@@ -119,7 +119,7 @@ fn entrypoint(c: &mut Criterion) {
                 iters,
                 |_| (),
                 |worker, _| match worker {
-                    AbWorker::A => _ = black_box(VALUE.get_regional()),
+                    AbWorker::A => _ = black_box(VALUE.get_current()),
                     AbWorker::B => VALUE.set(black_box(566)),
                 },
             )
@@ -137,7 +137,7 @@ fn entrypoint(c: &mut Criterion) {
                 iters,
                 |_| (),
                 |worker, _| match worker {
-                    AbWorker::A => VALUE.with_regional(|v| {
+                    AbWorker::A => VALUE.with_current(|v| {
                         _ = black_box(*v);
                         thread::yield_now();
                     }),
@@ -158,7 +158,7 @@ fn entrypoint(c: &mut Criterion) {
                     &thread_pool,
                     iters,
                     || (),
-                    |_| _ = black_box(VALUE.get_regional()),
+                    |_| _ = black_box(VALUE.get_current()),
                 )
             });
         });
@@ -173,7 +173,7 @@ fn entrypoint(c: &mut Criterion) {
                     iters,
                     |_| (),
                     |worker, _| match worker {
-                        AbWorker::A => _ = black_box(VALUE.get_regional()),
+                        AbWorker::A => _ = black_box(VALUE.get_current()),
                         AbWorker::B => VALUE.set(black_box(566)),
                     },
                 )
@@ -191,7 +191,7 @@ fn entrypoint(c: &mut Criterion) {
                     iters,
                     |_| (),
                     |worker, _| match worker {
-                        AbWorker::A => VALUE.with_regional(|v| {
+                        AbWorker::A => VALUE.with_current(|v| {
                             _ = black_box(*v);
                             thread::yield_now();
                         }),

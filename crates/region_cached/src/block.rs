@@ -8,7 +8,8 @@ use crate::{
     hw_tracker_client::{HardwareTrackerClient, HardwareTrackerClientFacade},
 };
 
-/// The backing type behind static variables in a `region_cached!` block.
+/// The backing type behind static variables in a `region_cached!` block. User code would generally
+/// use extension methods on the [`RegionCachedExt`] type for simpler syntax.
 ///
 /// Refer to [crate-level documentation][crate] for more information.
 #[derive(Debug)]
@@ -310,7 +311,7 @@ macro_rules! region_cached {
 /// in a `region_cached!` block.
 pub trait RegionCachedExt<T> {
     /// Executes the provided function with a reference to the stored value.
-    fn with_regional<F, R>(&self, f: F) -> R
+    fn with_current<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&T) -> R;
 
@@ -325,14 +326,14 @@ where
     T: Copy,
 {
     /// Gets a copy of the stored value.
-    fn get_regional(&self) -> T;
+    fn get_current(&self) -> T;
 }
 
 impl<T> RegionCachedExt<T> for linked::PerThreadStatic<RegionCachedStatic<T>>
 where
     T: Clone + Send + Sync + 'static,
 {
-    fn with_regional<F, R>(&self, f: F) -> R
+    fn with_current<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&T) -> R,
     {
@@ -348,7 +349,7 @@ impl<T> RegionCachedCopyExt<T> for linked::PerThreadStatic<RegionCachedStatic<T>
 where
     T: Clone + Copy + Send + Sync + 'static,
 {
-    fn get_regional(&self) -> T {
+    fn get_current(&self) -> T {
         self.with(|inner| inner.get())
     }
 }
@@ -373,17 +374,17 @@ mod tests {
             static FAVORITE_NUMBER: i32 = 42;
         }
 
-        FAVORITE_COLOR.with_regional(|color| {
+        FAVORITE_COLOR.with_current(|color| {
             assert_eq!(*color, "blue");
         });
 
         FAVORITE_COLOR.set("red".to_string());
 
-        FAVORITE_COLOR.with_regional(|color| {
+        FAVORITE_COLOR.with_current(|color| {
             assert_eq!(*color, "red");
         });
 
-        assert_eq!(FAVORITE_NUMBER.get_regional(), 42);
+        assert_eq!(FAVORITE_NUMBER.get_current(), 42);
     }
 
     #[cfg(not(miri))] // Miri does not support talking to the real platform.
@@ -391,7 +392,7 @@ mod tests {
     fn with_non_const_initial_value() {
         region_cached!(static FAVORITE_COLOR: Arc<String> = Arc::new("blue".to_string()));
 
-        FAVORITE_COLOR.with_regional(|color| {
+        FAVORITE_COLOR.with_current(|color| {
             assert_eq!(**color, "blue");
         });
     }

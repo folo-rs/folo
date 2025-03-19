@@ -25,7 +25,7 @@ async fn main() {
 
 /// Open http://localhost:1234/ to read the current value.
 async fn read() -> String {
-    let last_update_timestamp = LAST_UPDATE.get_regional();
+    let last_update_timestamp = LAST_UPDATE.get_current();
 
     format!("Last update: {last_update_timestamp}")
 }
