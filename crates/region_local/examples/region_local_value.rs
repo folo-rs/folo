@@ -1,6 +1,6 @@
 use axum::{Router, routing::get};
 use many_cpus::HardwareInfo;
-use region_local::region_local;
+use region_local::{RegionLocalCopyExt, RegionLocalExt, region_local};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // A global variable whose value is unique in each memory region for fast local access.
@@ -21,7 +21,7 @@ async fn main() {
 
 /// Open http://localhost:1234/ to read the current value.
 async fn read() -> String {
-    let last_update_timestamp = LAST_UPDATE.get();
+    let last_update_timestamp = LAST_UPDATE.get_local();
 
     format!("Last update: {last_update_timestamp}")
 }
@@ -33,6 +33,6 @@ async fn update() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    LAST_UPDATE.set(now);
+    LAST_UPDATE.set_local(now);
     format!("Last update time set to: {}", now)
 }

@@ -31,8 +31,8 @@
 //! caching behavior and provides interior mutability via weakly consistent writes.
 //!
 //! ```rust
-//! // RegionCachedExt provides required extension methods on
-//! // region-cached static variables, such as `with_current()` and `set()`.
+//! // RegionCachedExt provides required extension methods on region-cached
+//! // static variables, such as `with_current()` and `set()`.
 //! use region_cached::{region_cached, RegionCachedExt};
 //!
 //! region_cached!(static FILTER_KEYS: Vec<String> = vec![

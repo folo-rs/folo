@@ -89,7 +89,7 @@ where
         }
 
         // Otherwise, we need to identify our memory region look up the region-specific
-        // value from the shared state. This is the slow path - pin your threads for max happiness.
+        // value from the global state. This is the slow path - pin your threads for max happiness.
 
         // We fix the memory region ID at this point. It may be that the thread migrates to a
         // different memory region during the rest of this function - we do not care about that.

@@ -21,29 +21,31 @@
 //! # Quick start
 //!
 //! This crate provides the `region_local!` macro that enhances static variables with region-local
-//! storage behavior and provides interior mutability via eventually consistent writes within the same
+//! storage behavior and provides interior mutability via weakly consistent writes within the same
 //! memory region.
 //!
 //! ```rust
-//! use region_local::region_local;
+//! // RegionLocalExt provides required extension methods on region-local
+//! // static variables, such as `with_local()` and `set_local()`.
+//! use region_local::{region_local, RegionLocalExt};
 //!
 //! region_local!(static FAVORITE_COLOR: String = "blue".to_string());
 //!
-//! FAVORITE_COLOR.with(|color| {
+//! FAVORITE_COLOR.with_local(|color| {
 //!     println!("My favorite color is {color}");
 //! });
 //!
-//! FAVORITE_COLOR.set("red".to_string());
+//! FAVORITE_COLOR.set_local("red".to_string());
 //! ```
 //!
 //! # Consistency guarantees
 //!
-//! Writes are eventually consistent within the same memory region, with an undefined order of resolving
+//! Writes are weakly consistent within the same memory region, with an undefined order of resolving
 //! from different threads. Writes from the same thread become visible sequentially on all threads in
 //! the same memory region.
 //!
 //! Writes are immediately visible from the originating thread, with the caveats that:
-//! 1. Eventually consistent writes from other threads may be applied at any time, such as between
+//! 1. Writes from other threads may be applied at any time, such as between
 //!    a write and an immediately following read.
 //! 2. A thread, if not pinned, may migrate to a new memory region between the write and read
 //!    operations, which invalidates any link between the two operations and reads from the storage
@@ -55,9 +57,9 @@
 //!
 //! # API
 //!
-//! The macro internally transforms a static variable of type `T` into a static variable of type
-//! [`RegionLocalStatic<T>`][1]. See the API documentation of this type for more details about
-//! available methods.
+//! The macro internally transforms a static variable of type `T` and provides the new API surface
+//! via extension methods on [`RegionLocalExt<T>`][1]. See the API documentation of this
+//! type for more details about available methods.
 //!
 //! # Cross-region visibility
 //!
@@ -66,7 +68,7 @@
 //! not need to have separate variables per memory region but still want the efficiency benefits
 //! of reading from local memory.
 //!
-//! [1]: crate::RegionLocalStatic
+//! [1]: crate::RegionLocalExt
 
 use simple_mermaid::mermaid;
 

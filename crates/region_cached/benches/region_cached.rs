@@ -11,7 +11,6 @@ criterion_main!(benches);
 fn entrypoint(c: &mut Criterion) {
     let one_thread = ThreadPool::new(
         ProcessorSet::builder()
-            .same_memory_region()
             .performance_processors_only()
             .take(NonZero::new(1).unwrap())
             .unwrap(),

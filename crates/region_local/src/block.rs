@@ -1,5 +1,6 @@
-use std::sync::RwLock;
+use std::sync::{Arc, OnceLock};
 
+use arc_swap::ArcSwapOption;
 use many_cpus::MemoryRegionId;
 
 use crate::{
@@ -7,186 +8,134 @@ use crate::{
     hw_tracker_client::{HardwareTrackerClient, HardwareTrackerClientFacade},
 };
 
-/// The backing type behind variables in a `region_local!` block.
+/// The backing type behind static variables in a `region_local!` block. User code would generally
+/// use extension methods on the [`RegionLocalExt`] type for simpler syntax.
 ///
 /// Refer to [crate-level documentation][crate] for more information.
 #[derive(Debug)]
+#[linked::object]
 pub struct RegionLocalStatic<T>
 where
-    T: Clone + 'static,
+    T: Clone + Send + Sync + 'static,
 {
-    state: RwLock<State<T>>,
+    // If the current thread is pinned to a memory region, we just reference the regional state.
+    // Otherwise, we have to look up the regional state from the global state on every access
+    // because we do not know what region we are in (it might change for every call).
+    // If this is `None`, we are in a mode where we need to perform the lookup every time.
+    regional_state: Option<Arc<RegionalState<T>>>,
 
-    hardware_info: HardwareInfoClientFacade,
+    global_state: Arc<GlobalState<T>>,
+
     hardware_tracker: HardwareTrackerClientFacade,
-}
-
-#[derive(Debug)]
-enum State<T> {
-    // The instance has been created but not yet initialized, all we have is the initial value.
-    Created {
-        initializer: fn() -> T,
-    },
-
-    // The instance has been initialized, we have one slot per memory region.
-    Initialized {
-        // We keep the initializer around so that we can initialize each memory
-        // region with the initial value on first read.
-        initializer: fn() -> T,
-
-        region_values: Box<[Option<Box<T>>]>,
-    },
-}
-
-impl<T> State<T> {
-    const fn new(initializer: fn() -> T) -> Self {
-        Self::Created { initializer }
-    }
 }
 
 impl<T> RegionLocalStatic<T>
 where
-    T: Clone + 'static,
+    T: Clone + Send + Sync + 'static,
 {
     /// Note: this function exists to serve the inner workings of the `region_local!` macro and
     /// should not be used directly. It is not part of the public API and may be removed or changed
     /// at any time.
     #[doc(hidden)]
-    pub const fn new(initializer: fn() -> T) -> Self {
+    pub fn new(initial_value: T) -> Self {
         Self::with_clients(
-            initializer,
+            initial_value,
             HardwareInfoClientFacade::real(),
             HardwareTrackerClientFacade::real(),
         )
     }
 
-    pub(crate) const fn with_clients(
-        initializer: fn() -> T,
+    pub(crate) fn with_clients(
+        initial_value: T,
         hardware_info: HardwareInfoClientFacade,
         hardware_tracker: HardwareTrackerClientFacade,
     ) -> Self {
-        Self {
-            state: RwLock::new(State::new(initializer)),
-            hardware_info,
-            hardware_tracker,
-        }
+        let memory_region_count = hardware_info.max_memory_region_count();
+
+        let global_state = Arc::new(GlobalState::new(initial_value, memory_region_count));
+
+        linked::new!(Self {
+            regional_state: Self::try_locate_regional_state(
+                &global_state,
+                hardware_tracker.clone()
+            ),
+            global_state: Arc::clone(&global_state),
+            hardware_tracker: hardware_tracker.clone(),
+        })
     }
 
-    /// Executes the provided closure with a shared reference to the stored value.
-    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        // Horrible inefficient implementation just to get tests to pass.
-        //
-        // Optimize: avoid the various checks and such.
-        // Optimize: can we do better than RwLock?
-        // Optimize: region_values itself may be stored outside the current memory region...
+    fn try_locate_regional_state(
+        global_state: &Arc<GlobalState<T>>,
+        hardware_tracker: HardwareTrackerClientFacade,
+    ) -> Option<Arc<RegionalState<T>>> {
+        if !hardware_tracker.is_thread_memory_region_pinned() {
+            return None;
+        }
 
+        // This thread is pinned to a specific memory region, so we can directly access the
+        // state of that region and skip the regional state lookup on every access.
+        let memory_region_id = hardware_tracker.current_memory_region_id();
+        Some(global_state.with_regional_state(memory_region_id, Arc::clone))
+    }
+
+    /// Executes the provided function with a reference to the stored value.
+    pub fn with<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&T) -> R,
+    {
+        // If we are in a fixed memory region, we can just use the value directly.
+        if let Some(value) = self.regional_state.as_ref() {
+            return self.with_in_region(value, f);
+        }
+
+        // Otherwise, we need to identify our memory region look up the region-specific
+        // value from the global state. This is the slow path - pin your threads for max happiness.
+
+        // We fix the memory region ID at this point. It may be that the thread migrates to a
+        // different memory region during the rest of this function - we do not care about that.
         let memory_region_id = self.hardware_tracker.current_memory_region_id();
-        self.with_in_region(memory_region_id, f)
+
+        self.global_state
+            .with_regional_state(memory_region_id, |regional_state| {
+                self.with_in_region(regional_state, f)
+            })
     }
 
-    fn with_in_region<R>(&self, memory_region_id: MemoryRegionId, f: impl FnOnce(&T) -> R) -> R {
-        {
-            // Optimistic case - a value already exists for this memory region.
-            let state = self.state.read().expect(ERR_POISONED_LOCK);
-
-            if let Some(value) = Self::try_read_core(memory_region_id, &*state) {
-                return f(value);
-            }
-        }
-
-        {
-            // Fallback case - we need to obtain a value for this memory region.
-            let mut state = self.state.write().expect(ERR_POISONED_LOCK);
-
-            // It could be that something already assigned the value, so check again first.
-            if let Some(value) = Self::try_read_core(memory_region_id, &*state) {
-                return f(value);
+    fn with_in_region<F, R>(&self, regional_state: &RegionalState<T>, mut f: F) -> R
+    where
+        F: FnOnce(&T) -> R,
+    {
+        loop {
+            // If the read fails, we get our `f` callback returned back to us.
+            match regional_state.try_with_value(f) {
+                Ok(result) => return result,
+                Err(callback) => f = callback,
             }
 
-            self.initialize_slot(memory_region_id, &mut *state);
-
-            // We release the write lock here to avoid holding it while calling the closure.
-        }
-
-        // If we got here, we did a write, so recurse back to go back to the optimistic case
-        // and read the value that we just wrote, because optimism is now guaranteed to win.
-        self.with_in_region(memory_region_id, f)
-    }
-
-    fn try_read_core(memory_region_id: MemoryRegionId, state: &State<T>) -> Option<&T> {
-        match state {
-            State::Created { .. } => {}
-            State::Initialized { region_values, .. } => {
-                // This bounds check could only fail if the platform
-                // lied about the maximum memory region ID.
-                let slot = region_values.get(memory_region_id as usize);
-
-                if let Some(Some(value)) = slot {
-                    return Some(value);
-                }
-            }
-        }
-
-        None
-    }
-
-    fn initialize_slot(&self, memory_region_id: MemoryRegionId, state: &mut State<T>) {
-        // If the state is not yet initialized, we initialize it now, consuming the initial
-        // value. Otherwise, we simply clone the initial value from the first filled slot.
-        // The values in the slots are all the same, so it does not matter which we pick.
-
-        // TODO: Do we really need the boxes?
-        match state {
-            State::Created { initializer } => {
-                let mut region_values =
-                    vec![None; self.hardware_info.max_memory_region_id() as usize + 1];
-                region_values[memory_region_id as usize] = Some(Box::new(initializer()));
-
-                *state = State::Initialized {
-                    initializer: *initializer,
-                    region_values: region_values.into_boxed_slice(),
-                }
-            }
-            State::Initialized {
-                initializer,
-                region_values,
-            } => {
-                region_values[memory_region_id as usize] = Some(Box::new(initializer()));
-            }
+            // If we got here then the regional state is not initialized. Let's initialize it.
+            let initial_value = self.global_state.initial_value.clone();
+            regional_state.set(initial_value);
         }
     }
 
-    /// Updates the stored value.
+    /// Updates the stored value in the current memory region.
     ///
-    /// The update will not be applied to other memory regions, only visible from the same one.
+    /// The update will not be visible in other memory regions.
     pub fn set(&self, value: T) {
+        // We fix the memory region ID at this point. It may be that the thread migrates to a
+        // different memory region during the rest of this function - we do not care about that.
         let memory_region_id = self.hardware_tracker.current_memory_region_id();
 
-        // In the current implementation, we just take a write lock and update the value.
-        // This is suboptimal - ideally, we would allow other threads to read the old value
-        // while we are doing our write. TODO: Avoid taking an exclusive lock for the write.
-        // Potentially we can (or may have to) condition this optimization to be lock-free if there
-        // is a single thread doing writes (conflicting writes may still require locks).
-        let mut state = self.state.write().expect(ERR_POISONED_LOCK);
-
-        // TODO: This can perform an unnecessary clone of the initial value
-        // that we just throw away immediately - optimize it away.
-        self.initialize_slot(memory_region_id, &mut state);
-
-        match &mut *state {
-            State::Created { .. } => {
-                unreachable!("initialize_slot should have transitioned the state away from this");
-            }
-            State::Initialized { region_values, .. } => {
-                region_values[memory_region_id as usize] = Some(Box::new(value));
-            }
-        }
+        self.global_state
+            .with_regional_state(memory_region_id, |regional_state| {
+                regional_state.set(value);
+            })
     }
 }
 
 impl<T> RegionLocalStatic<T>
 where
-    T: Clone + Copy + 'static,
+    T: Clone + Copy + Send + Sync + 'static,
 {
     /// Gets a copy of the stored value.
     pub fn get(&self) -> T {
@@ -194,24 +143,176 @@ where
     }
 }
 
-const ERR_POISONED_LOCK: &str = "poisoned lock - safe execution no longer possible";
+#[derive(Debug)]
+struct GlobalState<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    /// The initial value that any new region is initialized with. This is only used to assign the
+    /// initial value in each memory region.
+    ///
+    /// We do not currently drop this because due to multiple threads racing to initialize a
+    /// memory region, it can be difficult to determine when it is truly "unused". Something
+    /// to consider in a future iteration.
+    initial_value: T,
 
-/// Transforms static variables in the macro body into region-local static variables.
+    // We cannot avoid the array itself being cross-region accessed but the RegionalState items
+    // inside are at least initialized lazily and on the correct region, so we can ensure that
+    // they are allocated in that memory region (assuming the allocator cooperates).
+    //
+    // Accessing this can be skipped for threads that are pinned in one specific memory region,
+    // as they then have direct access to the `Arc<RegionalState>`, which is the fastest path.
+    regional_states: Box<[OnceLock<Arc<RegionalState<T>>>]>,
+}
+
+impl<T> GlobalState<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    fn new(initial_value: T, memory_region_count: usize) -> Self {
+        let mut regional_states = Vec::with_capacity(memory_region_count);
+
+        for _ in 0..memory_region_count {
+            regional_states.push(OnceLock::new());
+        }
+
+        Self {
+            initial_value,
+            regional_states: regional_states.into_boxed_slice(),
+        }
+    }
+
+    /// Executes a function on the regional state for the given memory region.
+    fn with_regional_state<F, R>(&self, memory_region_id: MemoryRegionId, f: F) -> R
+    where
+        F: FnOnce(&Arc<RegionalState<T>>) -> R,
+    {
+        let slot = &self.regional_states[memory_region_id as usize];
+
+        // The entire purpose of that OnceLock is to ensure this Arc::new() happens
+        // when the current thread is executing in the correct memory region, to place
+        // the regional state of every region in that specific region.
+        let regional_state = slot.get_or_init(|| Arc::new(RegionalState::new()));
+
+        f(regional_state)
+    }
+}
+
+#[derive(Debug)]
+struct RegionalState<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    /// The value shared (via `Arc`) between all threads in the same memory region.
+    ///
+    /// This is `None` if the value for this region has not been initialized yet.
+    /// It will be initialized on first access from this region.
+    ///
+    /// We use ArcSwap here because it offers very good multithreaded read performance.
+    /// In single-threaded and write-heavy scenarios, RwLock is faster but those
+    /// are not the scenarios we target - we expect the data to be local for long
+    /// periods and read from many threads, with writes happening not so often.
+    value: ArcSwapOption<T>,
+}
+
+impl<T> RegionalState<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    fn new() -> Self {
+        Self {
+            value: ArcSwapOption::const_empty(),
+        }
+    }
+
+    /// Attempts to execute a function on the value stored in this regional state.
+    ///
+    /// Returns back the unused function via `Err` if the value in this regional state is not yet
+    /// initialized. In such a case, you should call `initialize()` and try again.
+    fn try_with_value<F, R>(&self, f: F) -> Result<R, F>
+    where
+        F: FnOnce(&T) -> R,
+    {
+        let reader = self.value.load();
+
+        if let Some(ref value) = *reader {
+            return Ok(f(value));
+        }
+
+        Err(f)
+    }
+
+    fn set(&self, value: T) {
+        self.value.store(Some(Arc::new(value)));
+    }
+}
+
+/// Marks static variables in the macro block as region-local.
 ///
 /// Refer to [crate-level documentation][crate] for more information.
 #[macro_export]
 macro_rules! region_local {
     () => {};
 
-    ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $e:expr; $($rest:tt)*) => (
-        $crate::region_local!($(#[$attr])* $vis static $NAME: $t = $e);
+    ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $initial_value:expr; $($rest:tt)*) => (
+        $crate::region_local!($(#[$attr])* $vis static $NAME: $t = $initial_value);
         $crate::region_local!($($rest)*);
     );
 
-    ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $e:expr) => {
-        $(#[$attr])* $vis static $NAME: $crate::RegionLocalStatic<$t> =
-            $crate::RegionLocalStatic::new(move || $e);
+    ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $initial_value:expr) => {
+        linked::instance_per_thread! {
+            $(#[$attr])* $vis static $NAME: $crate::RegionLocalStatic<$t> =
+                $crate::RegionLocalStatic::new($initial_value);
+        }
     };
+}
+
+/// Extension trait that adds convenience methods to region-local static variables
+/// in a `region_local!` block.
+pub trait RegionLocalExt<T> {
+    /// Executes the provided function with a reference to the stored value
+    /// local to the current memory region.
+    fn with_local<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&T) -> R;
+
+    /// Updates the stored value in the current memory region.
+    fn set_local(&self, value: T);
+}
+
+/// Extension trait that adds convenience methods to region-local static variables
+/// in a `region_local!` block, specifically for `Copy` types.
+pub trait RegionLocalCopyExt<T>
+where
+    T: Copy,
+{
+    /// Gets a copy of the stored value local to the current memory region.
+    fn get_local(&self) -> T;
+}
+
+impl<T> RegionLocalExt<T> for linked::PerThreadStatic<RegionLocalStatic<T>>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    fn with_local<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&T) -> R,
+    {
+        self.with(|inner| inner.with(f))
+    }
+
+    fn set_local(&self, value: T) {
+        self.with(|inner| inner.set(value));
+    }
+}
+
+impl<T> RegionLocalCopyExt<T> for linked::PerThreadStatic<RegionLocalStatic<T>>
+where
+    T: Clone + Copy + Send + Sync + 'static,
+{
+    fn get_local(&self) -> T {
+        self.with(|inner| inner.get())
+    }
 }
 
 #[cfg(test)]
@@ -230,16 +331,16 @@ mod tests {
     #[test]
     fn real_smoke_test() {
         region_local! {
-            static FAVORITE_COLOR: &str = "blue";
+            static FAVORITE_COLOR: String = "blue".to_string();
         }
 
-        FAVORITE_COLOR.with(|color| {
+        FAVORITE_COLOR.with_local(|color| {
             assert_eq!(*color, "blue");
         });
 
-        FAVORITE_COLOR.set("red");
+        FAVORITE_COLOR.set_local("red".to_string());
 
-        FAVORITE_COLOR.with(|color| {
+        FAVORITE_COLOR.with_local(|color| {
             assert_eq!(*color, "red");
         });
     }
@@ -249,7 +350,7 @@ mod tests {
     fn with_non_const_initial_value() {
         region_local!(static FAVORITE_COLOR: Arc<String> = Arc::new("blue".to_string()));
 
-        FAVORITE_COLOR.with(|color| {
+        FAVORITE_COLOR.with_local(|color| {
             assert_eq!(**color, "blue");
         });
     }
@@ -257,6 +358,10 @@ mod tests {
     #[test]
     fn different_regions_have_different_clones() {
         let mut hardware_tracker = MockHardwareTrackerClient::new();
+
+        hardware_tracker
+            .expect_is_thread_memory_region_pinned()
+            .return_const(false);
 
         hardware_tracker
             .expect_current_memory_region_id()
@@ -276,8 +381,8 @@ mod tests {
         let mut hardware_info = MockHardwareInfoClient::new();
 
         hardware_info
-            .expect_max_memory_region_id()
-            .return_const(9 as MemoryRegionId);
+            .expect_max_memory_region_count()
+            .return_const(10_usize);
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
@@ -297,6 +402,10 @@ mod tests {
         let mut hardware_tracker = MockHardwareTrackerClient::new();
 
         hardware_tracker
+            .expect_is_thread_memory_region_pinned()
+            .return_const(false);
+
+        hardware_tracker
             .expect_current_memory_region_id()
             .times(1)
             .return_const(0 as MemoryRegionId);
@@ -314,12 +423,12 @@ mod tests {
         let mut hardware_info = MockHardwareInfoClient::new();
 
         hardware_info
-            .expect_max_memory_region_id()
-            .return_const(9 as MemoryRegionId);
+            .expect_max_memory_region_count()
+            .return_const(10_usize);
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocalStatic::with_clients(|| 42, hardware_info, hardware_tracker);
+        let local = RegionLocalStatic::with_clients(42, hardware_info, hardware_tracker);
 
         assert_eq!(local.get(), 42);
         assert_eq!(local.get(), 42);
@@ -329,6 +438,10 @@ mod tests {
     #[test]
     fn update_does_not_propagate_to_all_regions() {
         let mut hardware_tracker = MockHardwareTrackerClient::new();
+
+        hardware_tracker
+            .expect_is_thread_memory_region_pinned()
+            .return_const(false);
 
         // Initial read + write + read.
         hardware_tracker
@@ -355,12 +468,12 @@ mod tests {
         let mut hardware_info = MockHardwareInfoClient::new();
 
         hardware_info
-            .expect_max_memory_region_id()
-            .return_const(9 as MemoryRegionId);
+            .expect_max_memory_region_count()
+            .return_const(10_usize);
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocalStatic::with_clients(|| 42, hardware_info, hardware_tracker);
+        let local = RegionLocalStatic::with_clients(42, hardware_info, hardware_tracker);
 
         assert_eq!(local.get(), 42);
         local.set(43);
@@ -374,6 +487,10 @@ mod tests {
     #[test]
     fn immediate_set_does_not_propagate_to_all_regions() {
         let mut hardware_tracker = MockHardwareTrackerClient::new();
+
+        hardware_tracker
+            .expect_is_thread_memory_region_pinned()
+            .return_const(false);
 
         // Initial write + read.
         hardware_tracker
@@ -400,12 +517,12 @@ mod tests {
         let mut hardware_info = MockHardwareInfoClient::new();
 
         hardware_info
-            .expect_max_memory_region_id()
-            .return_const(9 as MemoryRegionId);
+            .expect_max_memory_region_count()
+            .return_const(10_usize);
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocalStatic::with_clients(|| 42, hardware_info, hardware_tracker);
+        let local = RegionLocalStatic::with_clients(42, hardware_info, hardware_tracker);
 
         local.set(43);
         assert_eq!(local.get(), 43);
