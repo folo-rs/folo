@@ -26,18 +26,18 @@
 //! As with all performance and efficiency questions, you should use a profiler to measure real impact.
 //!
 //! # Usage
-//! 
+//!
 //! There are two ways to create region-cached values:
-//! 
+//!
 //! 1. Define a static variable in a [`region_cached!`][2] block.
 //! 2. Use the [`RegionCached`][5] type inside a [`PerThread`][4] wrapper.
-//! 
+//!
 //! The difference is only a question of convenience - static variables are easier to use but come
 //! with language-driven limitations, such as needing to know in advance how many you need and
 //! defining them in the code. In contrast, `PerThread<RegionCached<T>>` is more flexible and
 //! you can create any number of instances at runtime, at a cost of having to manually deliver
 //! instances to the right place in the code.
-//! 
+//!
 //! ## Usage via static variables
 //!
 //! This crate provides the [`region_cached!`][2] macro that enhances static variables with
@@ -70,7 +70,7 @@
 //! See `examples/region_cached_log_filtering.rs` for a more complete example of using this macro.
 //!
 //! ## Usage via `PerThread<RegionCached<T>>`
-//! 
+//!
 //! There exist situations where a static variable is not suitable. For example, the number of
 //! different region-cached objects may be determined at runtime (e.g. a separate set of filter keys
 //! for each log source loaded from configuration).

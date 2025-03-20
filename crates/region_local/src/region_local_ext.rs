@@ -5,14 +5,14 @@ use crate::RegionLocal;
 pub trait RegionLocalExt<T> {
     /// Executes the provided function with a reference to the value stored
     /// in the current memory region.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```
     /// use region_local::{region_local, RegionLocalExt};
-    /// 
+    ///
     /// region_local!(static FAVORITE_COLOR: String = "blue".to_string());
-    /// 
+    ///
     /// let len = FAVORITE_COLOR.with_local(|color| color.len());
     /// assert_eq!(len, 4);
     /// ```
@@ -25,43 +25,43 @@ pub trait RegionLocalExt<T> {
     /// The update will be applied to all threads in the current memory region
     /// in a [weakly consistent manner][1]. The updated value will not be visible
     /// in other memory regions - storage is independent for each memory region.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```
     /// use region_local::{region_local, RegionLocalExt};
-    /// 
+    ///
     /// region_local!(static FAVORITE_COLOR: String = "blue".to_string());
-    /// 
+    ///
     /// FAVORITE_COLOR.set_local("red".to_string());
     /// ```
-    /// 
+    ///
     /// Updating the value is [weakly consistent][1]. Do not expect the update to be
     /// immediately visible. Even on the same thread, it is only guaranteed to be
     /// immediately visible if the thread is pinned to a specific memory region.
-    /// 
+    ///
     /// ```
     /// use many_cpus::ProcessorSet;
     /// use region_local::{region_local, RegionLocalExt};
     /// use std::num::NonZero;
-    /// 
+    ///
     /// region_local!(static FAVORITE_COLOR: String = "blue".to_string());
-    /// 
+    ///
     /// // We can use this to pin a thread to a specific processor, to demonstrate a
     /// // situation where you can rely on consistency guarantees for immediate visibility.
     /// let one_processor = ProcessorSet::builder()
     ///     .take(NonZero::new(1).unwrap())
     ///     .unwrap();
-    /// 
+    ///
     /// one_processor.spawn_thread(move |processor_set| {
     ///     let processor = processor_set.processors().first();
     ///     println!("Thread pinned to processor {} in memory region {}",
     ///         processor.id(),
     ///         processor.memory_region_id()
     ///     );
-    /// 
+    ///
     ///     FAVORITE_COLOR.set_local("red".to_string());
-    /// 
+    ///
     ///     // This thread is pinned to a specific processor, so it is guaranteed to stay
     ///     // within the same memory region (== on the same physical hardware). This means
     ///     // that an update to a region-local value is immediately visible.
@@ -81,14 +81,14 @@ where
     T: Copy,
 {
     /// Gets a copy of the value from the current memory region.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```
     /// use region_local::{region_local, RegionLocalCopyExt};
-    /// 
+    ///
     /// region_local!(static CURRENT_ACCESS_TOKEN: u128 = 0x123100);
-    /// 
+    ///
     /// let token = CURRENT_ACCESS_TOKEN.get_local();
     /// assert_eq!(token, 0x123100);
     /// ```

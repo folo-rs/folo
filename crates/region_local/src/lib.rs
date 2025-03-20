@@ -19,18 +19,18 @@
 //! high-performance hardware-aware programming in Rust.
 //!
 //! # Usage
-//! 
+//!
 //! There are two ways to create region-local values:
-//! 
+//!
 //! 1. Define a static variable in a [`region_local!`][2] block.
 //! 2. Use the [`RegionLocal`][5] type inside a [`PerThread`][4] wrapper.
-//! 
+//!
 //! The difference is only a question of convenience - static variables are easier to use but come
 //! with language-driven limitations, such as needing to know in advance how many you need and
 //! defining them in the code. In contrast, `PerThread<RegionLocal<T>>` is more flexible and
 //! you can create any number of instances at runtime, at a cost of having to manually deliver
 //! instances to the right place in the code.
-//! 
+//!
 //! ## Usage via static variables
 //!
 //! This crate provides the [`region_local!`][3] macro that enhances static variables with
@@ -50,9 +50,9 @@
 //!
 //! FAVORITE_COLOR.set_local("red".to_string());
 //! ```
-//! 
+//!
 //! ## Usage via `PerThread<RegionLocal<T>>`
-//! 
+//!
 //! There exist situations where a static variable is not suitable. For example, the number of
 //! different region-local objects may be determined at runtime (e.g. a separate value
 //! for each log source loaded from configuration).
@@ -60,13 +60,13 @@
 //! In this case, you can directly use the [`RegionLocal`][4] type which underpins the mechanisms
 //! exposed by the macro. This type is implemented using the [linked object pattern][3] and
 //! is most conveniently used via the [`PerThread<T>`][4] type, as `PerThread<RegionLocal<T>>`.
-//! 
+//!
 //! ```rust
 //! use linked::PerThread;
 //! use region_local::RegionLocal;
-//! 
+//!
 //! let favorite_color_regional = PerThread::new(RegionLocal::new("blue".to_string()));
-//! 
+//!
 //! // This localizes the variable, identifying the memory region specified storage.
 //! let favorite_color = favorite_color_regional.local();
 //!
@@ -79,7 +79,7 @@
 //!
 //! See the documentation of the [`linked`][linked] crate for more details on the mechanisms
 //! offered by the linked object pattern. Additional capabilities exist beyond those described here.
-//! 
+//!
 //! # Consistency guarantees
 //! [consistency-guarantees]: [#consistency-guarantees]
 //!

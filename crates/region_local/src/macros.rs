@@ -18,10 +18,10 @@
 ///         "debug".to_string()
 ///     ];
 /// }
-/// 
+///
 /// let allowed_key_count = ALLOWED_KEYS.with_local(|keys| keys.len());
 /// ```
-/// 
+///
 /// [1]: crate::RegionLocalExt
 #[macro_export]
 macro_rules! region_local {

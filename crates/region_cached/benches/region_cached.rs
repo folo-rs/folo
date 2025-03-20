@@ -72,7 +72,12 @@ fn entrypoint(c: &mut Criterion) {
         region_cached!(static VALUE: u32 = 99942);
 
         b.iter_custom(|iters| {
-            bench_on_threadpool(&one_thread, iters, || (), |_| VALUE.set_global(black_box(566)))
+            bench_on_threadpool(
+                &one_thread,
+                iters,
+                || (),
+                |_| VALUE.set_global(black_box(566)),
+            )
         });
     });
 
