@@ -62,7 +62,7 @@ pub trait RegionCachedExt<T> {
     /// 
     ///     // This thread is pinned to a specific processor, so it is guaranteed to stay
     ///     // within the same memory region (== on the same physical hardware). This means
-    ///     // that an update to a region-cached static variable is immediately visible.
+    ///     // that an update to a region-cached value is immediately visible.
     ///     let color = FAVORITE_COLOR.with_cached(|color| color.clone());
     ///     assert_eq!(color, "red");
     /// }).join().unwrap();

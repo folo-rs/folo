@@ -71,14 +71,13 @@
 //!
 //! ## Usage via `PerThread<RegionCached<T>>`
 //! 
-//! There may exist situations where a static variable is not suitable. For example, the number of
+//! There exist situations where a static variable is not suitable. For example, the number of
 //! different region-cached objects may be determined at runtime (e.g. a separate set of filter keys
 //! for each log source loaded from configuration).
 //!
-//! In this case, you can directly use the `RegionCached` type, which underpins the mechanisms
+//! In this case, you can directly use the [`RegionCached`][5] type which underpins the mechanisms
 //! exposed by the macro. This type is implemented using the [linked object pattern][3] and
-//! can be conveniently used via the [`PerThread<T>`][4] type, as
-//! `PerThread<RegionCached<T>>`.
+//! is most conveniently used via the [`PerThread<T>`][4] type, as `PerThread<RegionCached<T>>`.
 //!
 //! ```
 //! use linked::{PerThread, ThreadLocal};

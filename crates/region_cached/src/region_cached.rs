@@ -36,6 +36,13 @@ where
     ///
     /// The instance may be cloned and shared between threads following the linked object patterns.
     /// Every instance from the same family of objects will reference the same region-cached value.
+    /// 
+    /// This type is internally used by the [`region_cached!`][1] macro but can also be used
+    /// independently of that macro, typically via a [`PerThread`][2] wrapper that automatically
+    /// manager the per-thread instance lifecycle and delivery across threads.
+    /// 
+    /// [1]: crate::region_cached
+    /// [2]: linked::PerThread
     pub fn new(initial_value: T) -> Self {
         Self::with_clients(
             initial_value,
@@ -212,7 +219,7 @@ where
     ///
     ///     // This thread is pinned to a specific processor, so it is guaranteed to stay
     ///     // within the same memory region (== on the same physical hardware). This means
-    ///     // that an update to a region-cached static variable is immediately visible.
+    ///     // that an update to a region-cached value is immediately visible.
     ///     let color = favorite_color.with_cached(|color| color.clone());
     ///     assert_eq!(color, "red");
     /// }).join().unwrap();
