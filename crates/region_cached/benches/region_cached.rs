@@ -39,7 +39,7 @@ fn entrypoint(c: &mut Criterion) {
         b.iter(|| {
             region_cached!(static VALUE: u32 = 99942);
 
-            black_box(VALUE.get_current());
+            black_box(VALUE.get_cached());
         })
     });
 
@@ -47,7 +47,7 @@ fn entrypoint(c: &mut Criterion) {
         b.iter(|| {
             region_cached!(static VALUE: u32 = 99942);
 
-            VALUE.set(black_box(566));
+            VALUE.set_global(black_box(566));
         })
     });
 
@@ -63,7 +63,7 @@ fn entrypoint(c: &mut Criterion) {
                 &one_thread,
                 iters,
                 || (),
-                |_| _ = black_box(VALUE.get_current()),
+                |_| _ = black_box(VALUE.get_cached()),
             )
         });
     });
@@ -72,7 +72,7 @@ fn entrypoint(c: &mut Criterion) {
         region_cached!(static VALUE: u32 = 99942);
 
         b.iter_custom(|iters| {
-            bench_on_threadpool(&one_thread, iters, || (), |_| VALUE.set(black_box(566)))
+            bench_on_threadpool(&one_thread, iters, || (), |_| VALUE.set_global(black_box(566)))
         });
     });
 
@@ -89,7 +89,7 @@ fn entrypoint(c: &mut Criterion) {
                 &two_threads,
                 iters,
                 || (),
-                |_| _ = black_box(VALUE.get_current()),
+                |_| _ = black_box(VALUE.get_cached()),
             )
         });
     });
@@ -103,7 +103,7 @@ fn entrypoint(c: &mut Criterion) {
                 &all_threads,
                 iters,
                 || (),
-                |_| _ = black_box(VALUE.get_current()),
+                |_| _ = black_box(VALUE.get_cached()),
             )
         });
     });
@@ -118,8 +118,8 @@ fn entrypoint(c: &mut Criterion) {
                 iters,
                 |_| (),
                 |worker, _| match worker {
-                    AbWorker::A => _ = black_box(VALUE.get_current()),
-                    AbWorker::B => VALUE.set(black_box(566)),
+                    AbWorker::A => _ = black_box(VALUE.get_cached()),
+                    AbWorker::B => VALUE.set_global(black_box(566)),
                 },
             )
         });
@@ -136,11 +136,11 @@ fn entrypoint(c: &mut Criterion) {
                 iters,
                 |_| (),
                 |worker, _| match worker {
-                    AbWorker::A => VALUE.with_current(|v| {
+                    AbWorker::A => VALUE.with_cached(|v| {
                         _ = black_box(*v);
                         thread::yield_now();
                     }),
-                    AbWorker::B => VALUE.set(black_box(566)),
+                    AbWorker::B => VALUE.set_global(black_box(566)),
                 },
             )
         });
@@ -157,7 +157,7 @@ fn entrypoint(c: &mut Criterion) {
                     &thread_pool,
                     iters,
                     || (),
-                    |_| _ = black_box(VALUE.get_current()),
+                    |_| _ = black_box(VALUE.get_cached()),
                 )
             });
         });
@@ -172,8 +172,8 @@ fn entrypoint(c: &mut Criterion) {
                     iters,
                     |_| (),
                     |worker, _| match worker {
-                        AbWorker::A => _ = black_box(VALUE.get_current()),
-                        AbWorker::B => VALUE.set(black_box(566)),
+                        AbWorker::A => _ = black_box(VALUE.get_cached()),
+                        AbWorker::B => VALUE.set_global(black_box(566)),
                     },
                 )
             });
@@ -190,11 +190,11 @@ fn entrypoint(c: &mut Criterion) {
                     iters,
                     |_| (),
                     |worker, _| match worker {
-                        AbWorker::A => VALUE.with_current(|v| {
+                        AbWorker::A => VALUE.with_cached(|v| {
                             _ = black_box(*v);
                             thread::yield_now();
                         }),
-                        AbWorker::B => VALUE.set(black_box(566)),
+                        AbWorker::B => VALUE.set_global(black_box(566)),
                     },
                 )
             });

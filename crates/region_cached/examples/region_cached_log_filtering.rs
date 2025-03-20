@@ -7,13 +7,13 @@ region_cached!(static FILTER_KEYS: Vec<String> = load_initial_filters());
 /// Returns true if the log line contains any of the filter keys.
 fn process_log_line(line: &str) -> bool {
     // `.with_current()` provides an immutable reference to the cached value.
-    FILTER_KEYS.with_current(|keys| keys.iter().any(|key| line.contains(key)))
+    FILTER_KEYS.with_cached(|keys| keys.iter().any(|key| line.contains(key)))
 }
 
 fn update_filters(new_filters: Vec<String>) {
     // `.set()` publishes a new value, which will be distributed to all memory regions in an
     // eventually consistent manner.
-    FILTER_KEYS.set(new_filters);
+    FILTER_KEYS.set_global(new_filters);
 }
 
 fn load_initial_filters() -> Vec<String> {
@@ -36,7 +36,7 @@ fn main() {
     let mut threads = Vec::new();
 
     for _ in 0..100 {
-        threads.push(thread::spawn(|| {
+        threads.push(thread::spawn(move || {
             for line in SAMPLE_LOG_LINES {
                 if process_log_line(line) {
                     println!("Matched filters: {}", line);

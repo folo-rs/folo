@@ -8,13 +8,12 @@ use crate::{
     hw_tracker_client::{HardwareTrackerClient, HardwareTrackerClientFacade},
 };
 
-/// The backing type behind static variables in a `region_cached!` block. User code would generally
-/// use extension methods on the [`RegionCachedExt`] type for simpler syntax.
+/// Provides access to an instance of `T` that is locally cached in the current memory region.
 ///
 /// Refer to [crate-level documentation][crate] for more information.
 #[derive(Debug)]
 #[linked::object]
-pub struct RegionCachedStatic<T>
+pub struct RegionCached<T>
 where
     T: Clone + Send + Sync + 'static,
 {
@@ -29,14 +28,14 @@ where
     hardware_tracker: HardwareTrackerClientFacade,
 }
 
-impl<T> RegionCachedStatic<T>
+impl<T> RegionCached<T>
 where
     T: Clone + Send + Sync + 'static,
 {
-    /// Note: this function exists to serve the inner workings of the `region_cached!` macro and
-    /// should not be used directly. It is not part of the public API and may be removed or changed
-    /// at any time.
-    #[doc(hidden)]
+    /// Creates a new instance of `RegionCached` with the given initial value.
+    ///
+    /// The instance may be cloned and shared between threads following the linked object patterns.
+    /// Every instance from the same family of objects will reference the same region-cached value.
     pub fn new(initial_value: T) -> Self {
         Self::with_clients(
             initial_value,
@@ -78,8 +77,25 @@ where
         Some(global_state.with_regional_state(memory_region_id, Arc::clone))
     }
 
-    /// Executes the provided function with a reference to the stored value.
-    pub fn with<F, R>(&self, f: F) -> R
+    /// Executes the provided function with a reference to the cached value
+    /// in the current memory region.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use linked::PerThread;
+    /// use region_cached::{RegionCached};
+    ///
+    /// let favorite_color_global = PerThread::new(RegionCached::new("blue".to_string()));
+    ///
+    /// // This localizes the value for the current thread, accessing data
+    /// // in the current thread's active memory region.
+    /// let favorite_color = favorite_color_global.local();
+    ///
+    /// let len = favorite_color.with_cached(|color| color.len());
+    /// assert_eq!(len, 4);
+    /// ```
+    pub fn with_cached<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&T) -> R,
     {
@@ -144,10 +160,66 @@ where
         }
     }
 
-    /// Updates the stored value.
+    /// Publishes a new value to all memory regions.
     ///
-    /// The update will be applied to all memory regions in a weakly consistent manner.
-    pub fn set(&self, value: T) {
+    /// The update will be applied to all memory regions in a [weakly consistent manner][1].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use linked::PerThread;
+    /// use region_cached::{RegionCached};
+    ///
+    /// let favorite_color_global = PerThread::new(RegionCached::new("blue".to_string()));
+    ///
+    /// // This localizes the value for the current thread, accessing data
+    /// // in the current thread's active memory region.
+    /// let favorite_color = favorite_color_global.local();
+    ///
+    /// favorite_color.set_global("red".to_string());
+    /// ```
+    ///
+    /// Updating the value is [weakly consistent][1]. Do not expect the update to be
+    /// immediately visible. Even on the same thread, it is only guaranteed to be
+    /// immediately visible if the thread is pinned to a specific memory region.
+    ///
+    /// ```
+    /// use linked::PerThread;
+    /// use many_cpus::ProcessorSet;
+    /// use region_cached::{RegionCached};
+    /// use std::num::NonZero;
+    ///
+    /// let favorite_color_global = PerThread::new(RegionCached::new("blue".to_string()));
+    ///
+    /// // We can use this to pin a thread to a specific processor, to demonstrate a
+    /// // situation where you can rely on consistency guarantees for immediate visibility.
+    /// let one_processor = ProcessorSet::builder()
+    ///     .take(NonZero::new(1).unwrap())
+    ///     .unwrap();
+    ///
+    /// one_processor.spawn_thread(move |processor_set| {
+    ///     let processor = processor_set.processors().first();
+    ///     println!("Thread pinned to processor {} in memory region {}",
+    ///         processor.id(),
+    ///         processor.memory_region_id()
+    ///     );
+    ///
+    ///     // This localizes the value for the current thread, accessing data
+    ///     // in the current thread's active memory region.
+    ///     let favorite_color = favorite_color_global.local();
+    ///
+    ///     favorite_color.set_global("red".to_string());
+    ///
+    ///     // This thread is pinned to a specific processor, so it is guaranteed to stay
+    ///     // within the same memory region (== on the same physical hardware). This means
+    ///     // that an update to a region-cached static variable is immediately visible.
+    ///     let color = favorite_color.with_cached(|color| color.clone());
+    ///     assert_eq!(color, "red");
+    /// }).join().unwrap();
+    /// ```
+    ///
+    /// [1]: crate#consistency-guarantees
+    pub fn set_global(&self, value: T) {
         // The first thing we do is update the latest value in the global state. This ensures that
         // any new regional states that get initialized will get our latest updated value.
         self.global_state
@@ -160,13 +232,29 @@ where
     }
 }
 
-impl<T> RegionCachedStatic<T>
+impl<T> RegionCached<T>
 where
     T: Clone + Copy + Send + Sync + 'static,
 {
-    /// Gets a copy of the stored value.
-    pub fn get(&self) -> T {
-        self.with(|v| *v)
+    /// Gets a copy of the cached value in the current memory region.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use linked::PerThread;
+    /// use region_cached::{RegionCached};
+    ///
+    /// let current_access_token_global = PerThread::new(RegionCached::new(0x123100));
+    ///
+    /// // This localizes the value for the current thread, accessing data
+    /// // in the current thread's active memory region.
+    /// let current_access_token = current_access_token_global.local();
+    ///
+    /// let token = current_access_token.get_cached();
+    /// assert_eq!(token, 0x123100);
+    /// ```
+    pub fn get_cached(&self) -> T {
+        self.with_cached(|v| *v)
     }
 }
 
@@ -287,81 +375,14 @@ where
     }
 }
 
-/// Marks static variables in the macro block as region-cached.
-///
-/// Refer to [crate-level documentation][crate] for more information.
-#[macro_export]
-macro_rules! region_cached {
-    () => {};
-
-    ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $initial_value:expr; $($rest:tt)*) => (
-        $crate::region_cached!($(#[$attr])* $vis static $NAME: $t = $initial_value);
-        $crate::region_cached!($($rest)*);
-    );
-
-    ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $initial_value:expr) => {
-        linked::instance_per_thread! {
-            $(#[$attr])* $vis static $NAME: $crate::RegionCachedStatic<$t> =
-                $crate::RegionCachedStatic::new($initial_value);
-        }
-    };
-}
-
-/// Extension trait that adds convenience methods to region-cached static variables
-/// in a `region_cached!` block.
-pub trait RegionCachedExt<T> {
-    /// Executes the provided function with a reference to the stored value.
-    fn with_current<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&T) -> R;
-
-    /// Updates the stored value in all memory regions.
-    fn set(&self, value: T);
-}
-
-/// Extension trait that adds convenience methods to region-cached static variables
-/// in a `region_cached!` block, specifically for `Copy` types.
-pub trait RegionCachedCopyExt<T>
-where
-    T: Copy,
-{
-    /// Gets a copy of the stored value.
-    fn get_current(&self) -> T;
-}
-
-impl<T> RegionCachedExt<T> for linked::PerThreadStatic<RegionCachedStatic<T>>
-where
-    T: Clone + Send + Sync + 'static,
-{
-    fn with_current<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&T) -> R,
-    {
-        self.with(|inner| inner.with(f))
-    }
-
-    fn set(&self, value: T) {
-        self.with(|inner| inner.set(value));
-    }
-}
-
-impl<T> RegionCachedCopyExt<T> for linked::PerThreadStatic<RegionCachedStatic<T>>
-where
-    T: Clone + Copy + Send + Sync + 'static,
-{
-    fn get_current(&self) -> T {
-        self.with(|inner| inner.get())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::ptr;
     use std::sync::Arc;
 
-    use crate::region_cached;
     use crate::{
-        hw_info_client::MockHardwareInfoClient, hw_tracker_client::MockHardwareTrackerClient,
+        RegionCachedCopyExt, RegionCachedExt, hw_info_client::MockHardwareInfoClient,
+        hw_tracker_client::MockHardwareTrackerClient, region_cached,
     };
 
     use super::*;
@@ -374,17 +395,17 @@ mod tests {
             static FAVORITE_NUMBER: i32 = 42;
         }
 
-        FAVORITE_COLOR.with_current(|color| {
+        FAVORITE_COLOR.with_cached(|color| {
             assert_eq!(*color, "blue");
         });
 
-        FAVORITE_COLOR.set("red".to_string());
+        FAVORITE_COLOR.set_global("red".to_string());
 
-        FAVORITE_COLOR.with_current(|color| {
+        FAVORITE_COLOR.with_cached(|color| {
             assert_eq!(*color, "red");
         });
 
-        assert_eq!(FAVORITE_NUMBER.get_current(), 42);
+        assert_eq!(FAVORITE_NUMBER.get_cached(), 42);
     }
 
     #[cfg(not(miri))] // Miri does not support talking to the real platform.
@@ -392,7 +413,7 @@ mod tests {
     fn with_non_const_initial_value() {
         region_cached!(static FAVORITE_COLOR: Arc<String> = Arc::new("blue".to_string()));
 
-        FAVORITE_COLOR.with_current(|color| {
+        FAVORITE_COLOR.with_cached(|color| {
             assert_eq!(**color, "blue");
         });
     }
@@ -429,11 +450,11 @@ mod tests {
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
         let local =
-            RegionCachedStatic::with_clients(|| "foo".to_string(), hardware_info, hardware_tracker);
+            RegionCached::with_clients(|| "foo".to_string(), hardware_info, hardware_tracker);
 
-        let value1 = local.with(ptr::from_ref);
-        let value2 = local.with(ptr::from_ref);
-        let value3 = local.with(ptr::from_ref);
+        let value1 = local.with_cached(ptr::from_ref);
+        let value2 = local.with_cached(ptr::from_ref);
+        let value3 = local.with_cached(ptr::from_ref);
 
         assert_ne!(value1, value2);
         assert_ne!(value1, value3);
@@ -470,11 +491,11 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionCachedStatic::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionCached::with_clients(42, hardware_info, hardware_tracker);
 
-        assert_eq!(local.get(), 42);
-        assert_eq!(local.get(), 42);
-        assert_eq!(local.get(), 42);
+        assert_eq!(local.get_cached(), 42);
+        assert_eq!(local.get_cached(), 42);
+        assert_eq!(local.get_cached(), 42);
     }
 
     #[test]
@@ -515,14 +536,14 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionCachedStatic::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionCached::with_clients(42, hardware_info, hardware_tracker);
 
-        assert_eq!(local.get(), 42);
-        local.set(43);
+        assert_eq!(local.get_cached(), 42);
+        local.set_global(43);
 
-        assert_eq!(local.get(), 43);
-        assert_eq!(local.get(), 43);
-        assert_eq!(local.get(), 43);
+        assert_eq!(local.get_cached(), 43);
+        assert_eq!(local.get_cached(), 43);
+        assert_eq!(local.get_cached(), 43);
     }
 
     #[test]
@@ -557,13 +578,13 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionCachedStatic::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionCached::with_clients(42, hardware_info, hardware_tracker);
 
-        local.set(43);
+        local.set_global(43);
 
-        assert_eq!(local.get(), 43);
-        assert_eq!(local.get(), 43);
-        assert_eq!(local.get(), 43);
+        assert_eq!(local.get_cached(), 43);
+        assert_eq!(local.get_cached(), 43);
+        assert_eq!(local.get_cached(), 43);
     }
 
     #[test]
@@ -591,10 +612,10 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionCachedStatic::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionCached::with_clients(42, hardware_info, hardware_tracker);
 
-        assert_eq!(local.get(), 42);
-        assert_eq!(local.get(), 42);
-        assert_eq!(local.get(), 42);
+        assert_eq!(local.get_cached(), 42);
+        assert_eq!(local.get_cached(), 42);
+        assert_eq!(local.get_cached(), 42);
     }
 }

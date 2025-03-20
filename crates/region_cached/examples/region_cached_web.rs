@@ -4,7 +4,7 @@ use region_cached::{RegionCachedCopyExt, RegionCachedExt, region_cached};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // A global variable whose latest value is cached in each memory region for fast local read access.
-// Writes to this variable are eventually consistent across all memory regions.
+// Writes to this variable are weakly consistent across all memory regions.
 //
 // Note: to keep the example simple, the value of this variable is of a trivial size and unlikely
 // to actually benefit from region-local caching as it easily fits into local processor caches.
@@ -12,7 +12,7 @@ region_cached!(static LAST_UPDATE: u128 = 0);
 
 #[tokio::main]
 async fn main() {
-    // The main beneficial impact will arise only on systems with multiple memory regions.
+    // The beneficial impact will arise only on systems with multiple memory regions.
     let memory_region_count = HardwareInfo::current().max_memory_region_count();
     println!("the current system has {memory_region_count} memory regions");
 
@@ -25,7 +25,7 @@ async fn main() {
 
 /// Open http://localhost:1234/ to read the current value.
 async fn read() -> String {
-    let last_update_timestamp = LAST_UPDATE.get_current();
+    let last_update_timestamp = LAST_UPDATE.get_cached();
 
     format!("Last update: {last_update_timestamp}")
 }
@@ -36,6 +36,6 @@ async fn update() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    LAST_UPDATE.set(now);
+    LAST_UPDATE.set_global(now);
     format!("Last update time set to: {}", now)
 }
