@@ -30,6 +30,10 @@ hack:
 machete:
     cargo machete --skip-target-dir
 
+[group('quality')]
+mutants:
+    cargo mutants
+
 # Full validation of everything, as you would do in a build pipeline before a release.
 # We assume this is executed on Windows, and will also perform the full validation on Linux.
 [group('quality')]
