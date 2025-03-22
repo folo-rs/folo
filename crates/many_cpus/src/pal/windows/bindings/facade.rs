@@ -28,10 +28,12 @@ pub(crate) enum BindingsFacade {
 }
 
 impl BindingsFacade {
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     pub const fn real() -> Self {
         BindingsFacade::Real(&BuildTargetBindings)
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     #[cfg(test)]
     pub fn from_mock(mock: MockBindings) -> Self {
         BindingsFacade::Mock(Arc::new(mock))
@@ -39,6 +41,7 @@ impl BindingsFacade {
 }
 
 impl Bindings for BindingsFacade {
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn get_active_processor_count(&self, group_number: u16) -> u32 {
         match self {
             BindingsFacade::Real(bindings) => bindings.get_active_processor_count(group_number),
@@ -47,6 +50,7 @@ impl Bindings for BindingsFacade {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn get_maximum_processor_count(&self, group_number: u16) -> u32 {
         match self {
             BindingsFacade::Real(bindings) => bindings.get_maximum_processor_count(group_number),
@@ -55,6 +59,7 @@ impl Bindings for BindingsFacade {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn get_maximum_processor_group_count(&self) -> u16 {
         match self {
             BindingsFacade::Real(bindings) => bindings.get_maximum_processor_group_count(),
@@ -63,6 +68,7 @@ impl Bindings for BindingsFacade {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn get_current_processor_number_ex(&self) -> PROCESSOR_NUMBER {
         match self {
             BindingsFacade::Real(bindings) => bindings.get_current_processor_number_ex(),
@@ -71,6 +77,7 @@ impl Bindings for BindingsFacade {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     unsafe fn get_logical_processor_information_ex(
         &self,
         relationship_type: LOGICAL_PROCESSOR_RELATIONSHIP,
@@ -94,6 +101,7 @@ impl Bindings for BindingsFacade {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn get_numa_highest_node_number(&self) -> u32 {
         match self {
             BindingsFacade::Real(bindings) => bindings.get_numa_highest_node_number(),
@@ -102,6 +110,7 @@ impl Bindings for BindingsFacade {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn get_current_process_default_cpu_set_masks(&self) -> Vec<GROUP_AFFINITY> {
         match self {
             BindingsFacade::Real(bindings) => bindings.get_current_process_default_cpu_set_masks(),
@@ -110,6 +119,7 @@ impl Bindings for BindingsFacade {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn get_current_thread_cpu_set_masks(&self) -> Vec<GROUP_AFFINITY> {
         match self {
             BindingsFacade::Real(bindings) => bindings.get_current_thread_cpu_set_masks(),
@@ -118,6 +128,7 @@ impl Bindings for BindingsFacade {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn set_current_thread_cpu_set_masks(&self, masks: &[GROUP_AFFINITY]) {
         match self {
             BindingsFacade::Real(bindings) => bindings.set_current_thread_cpu_set_masks(masks),
@@ -126,6 +137,7 @@ impl Bindings for BindingsFacade {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn get_current_job_cpu_set_masks(&self) -> Vec<GROUP_AFFINITY> {
         match self {
             BindingsFacade::Real(bindings) => bindings.get_current_job_cpu_set_masks(),
@@ -134,6 +146,7 @@ impl Bindings for BindingsFacade {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn get_current_thread_legacy_group_affinity(&self) -> GROUP_AFFINITY {
         match self {
             BindingsFacade::Real(bindings) => bindings.get_current_thread_legacy_group_affinity(),
@@ -144,6 +157,7 @@ impl Bindings for BindingsFacade {
 }
 
 impl Debug for BindingsFacade {
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Real(inner) => inner.fmt(f),

@@ -232,6 +232,7 @@ thread_local! {
 ///
 /// This is intended for use in tests only. It is publicly exposed because it may need to be called
 /// from integration tests and benchmarks, which cannot access private functions.
+#[cfg_attr(test, mutants::skip)] // Test/bench logic, do not waste time mutating.
 #[doc(hidden)]
 pub fn __private_clear_linked_variables() {
     let mut global_registry = GLOBAL_REGISTRY.write().expect(ERR_POISONED_LOCK);

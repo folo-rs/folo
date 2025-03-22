@@ -20,6 +20,9 @@ itertools = { workspace = true }
 nonempty = { workspace = true }
 rand = { workspace = true }
 
+[dev-dependencies]
+mutants = { workspace = true }
+
 [[bench]]
 name = "many_cpus_harness_demo"
 harness = false

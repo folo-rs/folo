@@ -18,10 +18,12 @@ pub(crate) enum FilesystemFacade {
 }
 
 impl FilesystemFacade {
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     pub const fn real() -> Self {
         FilesystemFacade::Real(&BuildTargetFilesystem)
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     #[cfg(test)]
     pub fn from_mock(mock: MockFilesystem) -> Self {
         FilesystemFacade::Mock(Arc::new(mock))
@@ -29,6 +31,7 @@ impl FilesystemFacade {
 }
 
 impl Filesystem for FilesystemFacade {
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn get_cpuinfo_contents(&self) -> String {
         match self {
             FilesystemFacade::Real(filesystem) => filesystem.get_cpuinfo_contents(),
@@ -37,6 +40,7 @@ impl Filesystem for FilesystemFacade {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn get_numa_node_cpulist_contents(&self, node_index: u32) -> String {
         match self {
             FilesystemFacade::Real(filesystem) => {
@@ -47,6 +51,7 @@ impl Filesystem for FilesystemFacade {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn get_cpu_online_contents(&self, cpu_index: u32) -> Option<String> {
         match self {
             FilesystemFacade::Real(filesystem) => filesystem.get_cpu_online_contents(cpu_index),
@@ -55,6 +60,7 @@ impl Filesystem for FilesystemFacade {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn get_numa_node_possible_contents(&self) -> Option<String> {
         match self {
             FilesystemFacade::Real(filesystem) => filesystem.get_numa_node_possible_contents(),
@@ -63,6 +69,7 @@ impl Filesystem for FilesystemFacade {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn get_proc_self_status_contents(&self) -> String {
         match self {
             FilesystemFacade::Real(filesystem) => filesystem.get_proc_self_status_contents(),
@@ -73,6 +80,7 @@ impl Filesystem for FilesystemFacade {
 }
 
 impl Debug for FilesystemFacade {
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Real(inner) => inner.fmt(f),

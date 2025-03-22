@@ -35,6 +35,7 @@ benchmark_utils = { workspace = true }
 cpulist = { workspace = true }
 criterion = { workspace = true }
 mockall = { workspace = true }
+mutants = { workspace = true }
 scopeguard = { workspace = true }
 static_assertions = { workspace = true }
 

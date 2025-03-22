@@ -39,3 +39,27 @@ impl BuildHasher for BuildThreadIdHasher {
         ThreadIdHasher::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn control_byte_is_different() {
+        // Even for tiny changes in the ID value, we expect the control byte (high byte) to be
+        // different because the control byte comparison is performance-critical.
+        let mut hasher = ThreadIdHasher::new();
+        hasher.write(&0u64.to_le_bytes());
+        let hash1 = hasher.finish();
+
+        let mut hasher = ThreadIdHasher::new();
+        hasher.write(&1u64.to_le_bytes());
+        let hash2 = hasher.finish();
+
+        // There has to be at least some difference.
+        assert_ne!(hash1, hash2);
+
+        // This is the control byte (high byte).
+        assert_ne!(hash1 & 0xFF00_0000_0000_0000, hash2 & 0xFF00_0000_0000_0000);
+    }
+}

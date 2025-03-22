@@ -32,6 +32,7 @@ thread_local! {
 /// during the benchmark runs - that all data is not simply cached locally.
 ///
 /// This function will perform a large memory copy operation, which hopefully trashes any caches.
+#[cfg_attr(test, mutants::skip)] // Functional testing infeasible; we just check for panic.
 pub(crate) fn clean_caches() {
     let source_ptr = CACHE_CLEANER_SOURCE.as_ptr();
     let destination_ptr =

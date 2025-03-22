@@ -40,6 +40,7 @@ impl ProcessorImpl {
 }
 
 impl Display for ProcessorImpl {
+    #[cfg_attr(test, mutants::skip)] // There no API contract to test here.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,

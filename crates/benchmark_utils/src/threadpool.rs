@@ -5,8 +5,12 @@ use std::{
 
 use many_cpus::ProcessorSet;
 
-/// Simple minimal threadpool to allow benchmarks to run on pre-warmed threads
-/// instead of creating new threads for every batch of iterations.
+/// Simple thread pool to allow benchmarks to run on pre-warmed threads instead of creating new
+/// threads for every batch of iterations. Thread reuse reduces benchmark harness overhead.
+///
+/// # Lifecycle
+///
+/// Dropping the pool will wait for all threads to finish executing their tasks.
 #[derive(Debug)]
 pub struct ThreadPool {
     command_txs: Vec<mpsc::Sender<Command>>,
@@ -14,11 +18,12 @@ pub struct ThreadPool {
 }
 
 impl ThreadPool {
-    /// Creates a threadpool with one thread per processor.
+    /// Creates a thread pool with one thread per processor available to the current process.
     pub fn all() -> Self {
         Self::new(ProcessorSet::all().clone())
     }
 
+    /// Creates a thread pool with one thread per processor in the provided processor set.
     pub fn new(processors: ProcessorSet) -> Self {
         let (txs, rxs): (Vec<_>, Vec<_>) = (0..(processors.len())).map(|_| mpsc::channel()).unzip();
 
@@ -43,13 +48,14 @@ impl ThreadPool {
     /// Enqueues a task to be executed on all threads in the pool.
     ///
     /// Will not wait for the task to complete - getting back any result
-    /// is up to the caller to organize via sidechannels.
+    /// is up to the caller to organize via side-channels.
     pub fn enqueue_task(&self, f: impl FnOnce() + Clone + Send + 'static) {
         for tx in self.command_txs.iter() {
             tx.send(Command::Execute(Box::new(f.clone()))).unwrap();
         }
     }
 
+    /// Numbers of threads in the pool.
     pub fn thread_count(&self) -> usize {
         self.command_txs.len()
     }
@@ -75,5 +81,71 @@ enum Command {
 fn worker_entrypoint(rx: mpsc::Receiver<Command>) {
     while let Command::Execute(f) = rx.recv().unwrap() {
         f();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        num::NonZero,
+        sync::atomic::{self, AtomicUsize},
+    };
+
+    use super::*;
+
+    #[test]
+    fn smoke_test_all() {
+        let expected_all = ProcessorSet::all();
+        let expected_thread_count = expected_all.len();
+
+        let pool = ThreadPool::all();
+
+        assert_eq!(pool.thread_count(), expected_thread_count);
+
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        pool.enqueue_task({
+            let counter = Arc::clone(&counter);
+            move || {
+                counter.fetch_add(1, atomic::Ordering::SeqCst);
+            }
+        });
+
+        // Waits for all thereads to complete their work.
+        drop(pool);
+
+        assert_eq!(
+            counter.load(atomic::Ordering::SeqCst),
+            expected_thread_count
+        );
+    }
+
+    #[test]
+    fn smoke_test_one() {
+        let processor_set = ProcessorSet::builder()
+            .take(NonZero::new(1).unwrap())
+            .unwrap();
+        let expected_thread_count = processor_set.len();
+
+        let pool = ThreadPool::new(processor_set);
+
+        assert_eq!(pool.thread_count(), expected_thread_count);
+
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        pool.enqueue_task({
+            let counter = Arc::clone(&counter);
+            move || {
+                counter.fetch_add(1, atomic::Ordering::SeqCst);
+            }
+        });
+
+        // Waits for all thereads to complete their work.
+        drop(pool);
+
+        assert_eq!(
+            counter.load(atomic::Ordering::SeqCst),
+            expected_thread_count
+        );
     }
 }

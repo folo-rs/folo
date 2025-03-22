@@ -153,10 +153,88 @@ where
 #[cfg(not(miri))] // Miri cannot deal with hardware inspection APIs this uses.
 #[cfg(test)]
 mod tests {
+    use std::{
+        num::NonZero,
+        sync::atomic::{self, AtomicBool},
+    };
+
+    use many_cpus::ProcessorSet;
+
     use super::*;
 
     #[test]
-    fn all_smoke_test() {
-        _ = bench_on_every_processor(1, || (), |_| {});
+    fn bench_all() {
+        let prepare_called_at_least_once = Arc::new(AtomicBool::new(false));
+        let iter_called_at_least_once = Arc::new(AtomicBool::new(false));
+
+        _ = bench_on_every_processor(
+            1,
+            {
+                let prepare_called_at_least_once = Arc::clone(&prepare_called_at_least_once);
+                move || {
+                    prepare_called_at_least_once.store(true, atomic::Ordering::SeqCst);
+                }
+            },
+            {
+                let iter_called_at_least_once = Arc::clone(&iter_called_at_least_once);
+                move |_| {
+                    iter_called_at_least_once.store(true, atomic::Ordering::SeqCst);
+                }
+            },
+        );
+
+        assert!(prepare_called_at_least_once.load(atomic::Ordering::SeqCst));
+        assert!(iter_called_at_least_once.load(atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn bench_ab_two() {
+        let two_processors = ProcessorSet::builder().take(NonZero::new(2).unwrap());
+
+        let Some(two_processors) = two_processors else {
+            eprintln!("need at least two processors to run this test");
+            return;
+        };
+
+        let pool = ThreadPool::new(two_processors);
+
+        let a_prepare_called_at_least_once = Arc::new(AtomicBool::new(false));
+        let a_iter_called_at_least_once = Arc::new(AtomicBool::new(false));
+        let b_prepare_called_at_least_once = Arc::new(AtomicBool::new(false));
+        let b_iter_called_at_least_once = Arc::new(AtomicBool::new(false));
+
+        _ = bench_on_threadpool_ab(
+            &pool,
+            1,
+            {
+                let a_prepare_called_at_least_once = Arc::clone(&a_prepare_called_at_least_once);
+                let b_prepare_called_at_least_once = Arc::clone(&b_prepare_called_at_least_once);
+                move |ab| match ab {
+                    AbWorker::A => {
+                        a_prepare_called_at_least_once.store(true, atomic::Ordering::SeqCst)
+                    }
+                    AbWorker::B => {
+                        b_prepare_called_at_least_once.store(true, atomic::Ordering::SeqCst)
+                    }
+                }
+            },
+            {
+                let a_iter_called_at_least_once = Arc::clone(&a_iter_called_at_least_once);
+                let b_iter_called_at_least_once = Arc::clone(&b_iter_called_at_least_once);
+                move |ab, _| match ab {
+                    AbWorker::A => {
+                        a_iter_called_at_least_once.store(true, atomic::Ordering::SeqCst)
+                    }
+                    AbWorker::B => {
+                        b_iter_called_at_least_once.store(true, atomic::Ordering::SeqCst)
+                    }
+                }
+            },
+        );
+
+        assert!(a_prepare_called_at_least_once.load(atomic::Ordering::SeqCst));
+        assert!(a_iter_called_at_least_once.load(atomic::Ordering::SeqCst));
+        assert!(b_prepare_called_at_least_once.load(atomic::Ordering::SeqCst));
+        assert!(b_iter_called_at_least_once.load(atomic::Ordering::SeqCst));
     }
 }
