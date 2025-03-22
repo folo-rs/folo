@@ -13,6 +13,11 @@ rust-version = "1.85"
 # This ensures we have high quality data with full symbols when profiling.
 debug = "full"
 
+[profile.mutants]
+inherits = "dev"
+# Speed up the build.
+debug = "none"
+
 [workspace.dependencies]
 # The packages we publish.
 cpulist = { version = "0.0.1", path = "crates/cpulist" }

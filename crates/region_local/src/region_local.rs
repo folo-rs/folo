@@ -340,6 +340,9 @@ where
         Err(f)
     }
 
+    // Skip mutating - would lead to infinite loop as it looks just like another thread
+    // constantly resetting the value, so the conflict resolver will never finish.
+    #[cfg_attr(test, mutants::skip)]
     fn set(&self, value: T) {
         self.value.store(Some(Arc::new(value)));
     }
@@ -556,6 +559,37 @@ mod tests {
 
         local.set_local(43);
         assert_eq!(local.get_local(), 43);
+
+        assert_eq!(local.get_local(), 42);
+        assert_eq!(local.get_local(), 42);
+        assert_eq!(local.get_local(), 42);
+    }
+
+    #[test]
+    fn does_not_relocalize_when_pinned() {
+        let mut hardware_tracker = MockHardwareTrackerClient::new();
+
+        hardware_tracker
+            .expect_is_thread_memory_region_pinned()
+            .return_const(true);
+
+        // We expect this to only ever be called once because we are pinned.
+        hardware_tracker
+            .expect_current_memory_region_id()
+            .times(1)
+            .return_const(3 as MemoryRegionId);
+
+        let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
+
+        let mut hardware_info = MockHardwareInfoClient::new();
+
+        hardware_info
+            .expect_max_memory_region_count()
+            .return_const(10_usize);
+
+        let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
+
+        let local = RegionLocal::with_clients(42, hardware_info, hardware_tracker);
 
         assert_eq!(local.get_local(), 42);
         assert_eq!(local.get_local(), 42);

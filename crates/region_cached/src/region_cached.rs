@@ -139,27 +139,14 @@ where
                 // If we got here then the regional state is not initialized. Let's initialize it.
                 // We now need a value to initialize the region state with. The latest written value
                 // (for our weakly consistent definition of "latest") is stored in the global state.
-                //
-                // We need to protect against concurrent initialization causing torn initialization,
-                // where when two threads set values A and B, and some regions end up seeing A and
-                // some end up seeing B, depending on how things were ordered between the threads.
-                // To be clear, we do not care whether we end up with A or B, but we do care that
-                // all regions see the same value.
-                //
-                // We do this by verifying after our initialization that the initial value is still
-                // the same as when we started the initialization. If it is not, we re-initialize
-                // to "catch up" to any new changes that have occurred.
                 let initial_value = self.global_state.latest_value.load();
 
-                // We use the raw pointer to compare the value before and after.
-                let initial_value_raw = initial_value.as_raw();
+                let update_operation =
+                    UpdateRegionOperation::new(&initial_value, &self.global_state);
 
                 regional_state.set(&initial_value);
 
-                let initial_value_after = self.global_state.latest_value.load();
-                let initial_value_after_raw = initial_value_after.as_raw();
-
-                if initial_value_raw == initial_value_after_raw {
+                if update_operation.try_commit() {
                     // We are done - the universe did not change during initialization.
                     break;
                 }
@@ -262,6 +249,50 @@ where
     /// ```
     pub fn get_cached(&self) -> T {
         self.with_cached(|v| *v)
+    }
+}
+
+/// An "update region" operation that takes into consideration the potential changes of state
+/// that may invalidate an in-progress regional update and require it to be restarted.
+///
+/// We need to protect against concurrent initialization causing torn initialization,
+/// where when two threads set values A and B, and some regions end up seeing A and
+/// some end up seeing B, depending on how things were ordered between the threads.
+/// To be clear, we do not care whether we end up with A or B, but we do care that
+/// all regions see the same value.
+///
+/// We do this by verifying after our initialization that the initial value is still
+/// the same as when we started the initialization. If it is not, we re-initialize
+/// to "catch up" to any new changes that have occurred.
+struct UpdateRegionOperation<'a, T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    global_state: &'a GlobalState<T>,
+    initial_value: *mut T,
+}
+
+impl<'a, T> UpdateRegionOperation<'a, T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    fn new(initial_value: &Arc<T>, global_state: &'a GlobalState<T>) -> Self {
+        let initial_value_raw = initial_value.as_raw();
+
+        Self {
+            global_state,
+            initial_value: initial_value_raw,
+        }
+    }
+
+    // Mutation of this will result in an infinite loop in the caller, as we retry forever.
+    #[cfg_attr(test, mutants::skip)]
+    fn try_commit(&self) -> bool {
+        // If the current value is the same as the initial value, we can commit.
+        // Otherwise, return false to indicate that we need to restart the update.
+        let current_value = self.global_state.latest_value.load().as_raw();
+
+        current_value == self.initial_value
     }
 }
 
@@ -373,6 +404,9 @@ where
         Err(f)
     }
 
+    // Skip mutating - would lead to infinite loop as it looks just like another thread
+    // constantly resetting the value, so the conflict resolver will never finish.
+    #[cfg_attr(test, mutants::skip)]
     fn set(&self, value: &T) {
         self.value.store(Some(Arc::new(value.clone())));
     }
