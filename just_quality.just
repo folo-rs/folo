@@ -53,16 +53,16 @@ mutants:
 
     if ($IsLinux) {
         $args += "-e"
-        $args += "**/*linux.rs"
-
-        $args += "-e"
-        $args += "linux"
-    } else {
-        $args += "-e"
         $args += "**/*windows.rs"
 
         $args += "-e"
         $args += "windows"
+    } else {
+        $args += "-e"
+        $args += "**/*linux.rs"
+
+        $args += "-e"
+        $args += "linux"
     }
 
     # We deliberately do not use nextest here because it cannot run doctests.
