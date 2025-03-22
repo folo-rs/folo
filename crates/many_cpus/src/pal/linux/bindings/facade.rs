@@ -20,12 +20,10 @@ pub(crate) enum BindingsFacade {
 }
 
 impl BindingsFacade {
-    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     pub const fn real() -> Self {
         BindingsFacade::Real(&BuildTargetBindings)
     }
 
-    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     #[cfg(test)]
     pub fn from_mock(mock: MockBindings) -> Self {
         BindingsFacade::Mock(Arc::new(mock))
@@ -33,7 +31,6 @@ impl BindingsFacade {
 }
 
 impl Bindings for BindingsFacade {
-    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn sched_setaffinity_current(&self, cpuset: &cpu_set_t) -> Result<(), io::Error> {
         match self {
             BindingsFacade::Real(bindings) => bindings.sched_setaffinity_current(cpuset),
@@ -42,7 +39,6 @@ impl Bindings for BindingsFacade {
         }
     }
 
-    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn sched_getcpu(&self) -> i32 {
         match self {
             BindingsFacade::Real(bindings) => bindings.sched_getcpu(),
@@ -51,7 +47,6 @@ impl Bindings for BindingsFacade {
         }
     }
 
-    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn sched_getaffinity_current(&self) -> Result<cpu_set_t, io::Error> {
         match self {
             BindingsFacade::Real(bindings) => bindings.sched_getaffinity_current(),
@@ -62,7 +57,6 @@ impl Bindings for BindingsFacade {
 }
 
 impl Debug for BindingsFacade {
-    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Real(inner) => inner.fmt(f),

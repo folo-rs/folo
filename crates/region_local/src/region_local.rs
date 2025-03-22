@@ -4,8 +4,8 @@ use arc_swap::ArcSwapOption;
 use many_cpus::MemoryRegionId;
 
 use crate::{
-    hw_info_client::{HardwareInfoClient, HardwareInfoClientFacade},
-    hw_tracker_client::{HardwareTrackerClient, HardwareTrackerClientFacade},
+    HardwareInfoClient, HardwareInfoClientFacade, HardwareTrackerClient,
+    HardwareTrackerClientFacade,
 };
 
 /// Provides access to an instance of `T` whose values are local to the current memory region.
@@ -353,10 +353,7 @@ mod tests {
     use std::ptr;
     use std::sync::Arc;
 
-    use crate::{
-        RegionLocalExt, hw_info_client::MockHardwareInfoClient,
-        hw_tracker_client::MockHardwareTrackerClient, region_local,
-    };
+    use crate::{MockHardwareInfoClient, MockHardwareTrackerClient, RegionLocalExt, region_local};
 
     use super::*;
 

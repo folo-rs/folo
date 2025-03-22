@@ -16,7 +16,6 @@ pub(crate) enum ProcessorFacade {
 }
 
 impl ProcessorFacade {
-    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     pub(crate) fn as_real(&self) -> &ProcessorImpl {
         match self {
             ProcessorFacade::Real(p) => p,
@@ -27,14 +26,12 @@ impl ProcessorFacade {
 }
 
 impl AsRef<ProcessorFacade> for ProcessorFacade {
-    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn as_ref(&self) -> &ProcessorFacade {
         self
     }
 }
 
 impl AbstractProcessor for ProcessorFacade {
-    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn id(&self) -> crate::ProcessorId {
         match self {
             ProcessorFacade::Real(p) => p.id(),
@@ -43,7 +40,6 @@ impl AbstractProcessor for ProcessorFacade {
         }
     }
 
-    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn memory_region_id(&self) -> crate::MemoryRegionId {
         match self {
             ProcessorFacade::Real(p) => p.memory_region_id(),
@@ -52,7 +48,6 @@ impl AbstractProcessor for ProcessorFacade {
         }
     }
 
-    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn efficiency_class(&self) -> crate::EfficiencyClass {
         match self {
             ProcessorFacade::Real(p) => p.efficiency_class(),
@@ -63,7 +58,6 @@ impl AbstractProcessor for ProcessorFacade {
 }
 
 impl From<ProcessorImpl> for ProcessorFacade {
-    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn from(p: ProcessorImpl) -> Self {
         ProcessorFacade::Real(p)
     }
@@ -71,14 +65,12 @@ impl From<ProcessorImpl> for ProcessorFacade {
 
 #[cfg(test)]
 impl From<FakeProcessor> for ProcessorFacade {
-    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn from(p: FakeProcessor) -> Self {
         ProcessorFacade::Fake(p)
     }
 }
 
 impl Debug for ProcessorFacade {
-    #[cfg_attr(test, mutants::skip)] // Trivial layer, mutation not insightful.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Real(inner) => inner.fmt(f),

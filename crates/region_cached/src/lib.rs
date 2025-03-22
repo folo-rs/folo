@@ -154,12 +154,11 @@
 
 use simple_mermaid::mermaid;
 
+mod clients;
 mod macros;
 mod region_cached;
 mod region_cached_ext;
 
+pub(crate) use clients::*;
 pub use region_cached::*;
 pub use region_cached_ext::*;
-
-pub(crate) mod hw_info_client;
-pub(crate) mod hw_tracker_client;

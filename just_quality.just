@@ -32,8 +32,41 @@ machete:
 
 [group('quality')]
 mutants:
+    #!{{ shebang }}
+
+    $args = @(
+        "-e"
+        # Parts of this crate require Criterion to work and other parts are currently not tested
+        # as there is no public way to simulate a system topology for `many_cpus`.
+        "many_cpus_benchmarking",
+
+        # We do not test facades, as they are just trivial code that forwards calls to real impls.
+        "-e"
+        "**/*facade.rs"
+
+        "-e"
+        # We have limited coverage of platform bindings because it can be difficult to set up the
+        # right scenarios for each, given they are platform-dependent. Instead, we test higher
+        # level code using a mock platform.
+        "bindings"
+    )
+
+    if ($IsLinux) {
+        $args += "-e"
+        $args += "**/*linux.rs"
+
+        $args += "-e"
+        $args += "linux"
+    } else {
+        $args += "-e"
+        $args += "**/*windows.rs"
+
+        $args += "-e"
+        $args += "windows"
+    }
+
     # We deliberately do not use nextest here because it cannot run doctests.
-    cargo mutants {{ target_package }} --profile=mutants
+    cargo mutants {{ target_package }} --profile=mutants @args
 
 # Full validation of everything, as you would do in a build pipeline before a release.
 # We assume this is executed on Windows, and will also perform the full validation on Linux.
