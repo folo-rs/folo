@@ -54,3 +54,22 @@ impl HardwareInfo {
         self.max_memory_region_id as usize + 1
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn count_is_id_plus_one() {
+        let info = HardwareInfo::current();
+        
+        assert_eq!(
+            info.max_processor_count(),
+            info.max_processor_id() as usize + 1
+        );
+        assert_eq!(
+            info.max_memory_region_count(),
+            info.max_memory_region_id() as usize + 1
+        );
+    }
+}

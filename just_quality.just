@@ -43,6 +43,8 @@ mutants:
         # We do not test facades, as they are just trivial code that forwards calls to real impls.
         "-e"
         "**/*facade.rs"
+        "-e"
+        "facade"
 
         "-e"
         # We have limited coverage of platform bindings because it can be difficult to set up the

@@ -158,6 +158,7 @@ impl<T: Sized> NativeBuffer<T> {
 }
 
 impl<T: Sized> Drop for NativeBuffer<T> {
+    #[cfg_attr(test, mutants::skip)] // Impractical to test that dealloc actually happens.
     fn drop(&mut self) {
         // SAFETY: We are required to provide a matching layout, the same as we used for alloc().
         // We do that. All is well.
