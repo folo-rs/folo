@@ -157,14 +157,23 @@ impl ProcessorSet {
     {
         self.processors()
             .iter()
-            .map(|p| {
-                let p = p.clone();
-                let entrypoint = entrypoint.clone();
+            .map(|processor| {
+                thread::spawn({
+                    let processor = processor.clone();
+                    let entrypoint = entrypoint.clone();
+                    let tracker_client = self.tracker_client.clone();
+                    let pal = self.pal.clone();
 
-                thread::spawn(move || {
-                    let set = Self::from(p.clone());
-                    set.pin_current_thread_to();
-                    entrypoint(p)
+                    move || {
+                        let set = Self::new(
+                            NonEmpty::from_vec(vec![processor.clone()])
+                                .expect("we provide 1-item vec as input, so it must be non-empty"),
+                            tracker_client.clone(),
+                            pal.clone(),
+                        );
+                        set.pin_current_thread_to();
+                        entrypoint(processor)
+                    }
                 })
             })
             .collect::<Vec<_>>()
@@ -185,6 +194,7 @@ impl ProcessorSet {
         R: Send + 'static,
     {
         let set = self.clone();
+
         thread::spawn(move || {
             set.pin_current_thread_to();
             entrypoint(set)
@@ -274,7 +284,28 @@ mod tests {
 
         tracker_client
             .expect_update_pin_status()
-            .withf(|processor, memory_region| processor.is_none() && memory_region.unwrap() == 0)
+            // Once for entrypoint thread, once for spawn_thread().
+            .times(2)
+            .withf(|processor, memory_region| {
+                processor.is_none() && matches!(memory_region, Some(0))
+            })
+            .return_const(());
+
+        // Once for each of the threads in spawn_threads().
+        tracker_client
+            .expect_update_pin_status()
+            .times(1)
+            .withf(|processor, memory_region| {
+                matches!(processor, Some(0)) && matches!(memory_region, Some(0))
+            })
+            .return_const(());
+
+        tracker_client
+            .expect_update_pin_status()
+            .times(1)
+            .withf(|processor, memory_region| {
+                matches!(processor, Some(1)) && matches!(memory_region, Some(0))
+            })
             .return_const(());
 
         let tracker_client = HardwareTrackerClientFacade::from_mock(tracker_client);
@@ -360,6 +391,7 @@ mod tests {
         assert_eq!(processor1, processor2);
     }
 
+    #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]
     fn inherit_on_pinned() {
         thread::spawn(|| {
