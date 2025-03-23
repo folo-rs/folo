@@ -50,3 +50,42 @@ impl AsRef<ProcessorImpl> for ProcessorImpl {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn smoke_test() {
+        let processor = ProcessorImpl {
+            id: 2,
+            memory_region_id: 3,
+            efficiency_class: EfficiencyClass::Performance,
+            is_active: true,
+        };
+
+        assert_eq!(processor.id(), 2);
+        assert_eq!(processor.memory_region_id(), 3);
+        assert_eq!(processor.efficiency_class(), EfficiencyClass::Performance);
+
+        let processor2 = ProcessorImpl {
+            id: 2,
+            memory_region_id: 3,
+            efficiency_class: EfficiencyClass::Performance,
+            is_active: true,
+        };
+
+        assert_eq!(processor, processor2);
+
+        let processor3 = ProcessorImpl {
+            id: 4,
+            memory_region_id: 3,
+            efficiency_class: EfficiencyClass::Performance,
+            is_active: true,
+        };
+
+        assert_ne!(processor, processor3);
+        assert!(processor < processor3);
+        assert!(processor3 > processor);
+    }
+}

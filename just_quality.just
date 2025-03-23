@@ -55,6 +55,10 @@ mutants:
         # right scenarios for each, given they are platform-dependent. Instead, we test higher
         # level code using a mock platform.
         "bindings"
+
+        "-e"
+        # This is just a different type of bindings, skipped for same reason as `bindings` above.
+        "crates/many_cpus/src/pal/linux/filesystem/**"
     )
 
     if ($IsLinux) {
