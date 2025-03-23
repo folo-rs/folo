@@ -54,6 +54,17 @@ impl Platform for BuildTargetPlatform {
     where
         P: AsRef<ProcessorFacade>,
     {
+        #[cfg_attr(test, mutants::skip)] // False positive due to no-op mutation from | to ^.
+        fn add_processor_to_mask<P>(mask: &mut GROUP_AFFINITY, processor: &P)
+        where
+            P: AsRef<ProcessorFacade>,
+        {
+            let processor = processor.as_ref().as_real();
+
+            // We started with all bits clear and now set any that we do want to allow.
+            mask.Mask |= 1 << processor.index_in_group;
+        }
+
         let group_count = self.get_processor_group_max_count();
 
         let mut affinity_masks = Vec::with_capacity(group_count as usize);
@@ -70,7 +81,7 @@ impl Platform for BuildTargetPlatform {
                 .iter()
                 .filter(|p| p.as_ref().as_real().group_index == group_index as ProcessorGroupIndex)
             {
-                affinity.Mask |= 1 << processor.as_ref().as_real().index_in_group;
+                add_processor_to_mask(&mut affinity, processor);
             }
 
             affinity_masks.push(affinity);
@@ -603,6 +614,7 @@ mod tests {
     use itertools::Itertools;
     use mockall::Sequence;
     use static_assertions::assert_eq_size;
+    use windows::Win32::System::Kernel::PROCESSOR_NUMBER;
 
     use crate::{
         MemoryRegionId,
@@ -1767,5 +1779,39 @@ mod tests {
 
         assert!(processor_ids.contains(&0));
         assert!(processor_ids.contains(&2));
+    }
+
+    #[test]
+    fn basic_facts_are_represented() {
+        let mut bindings = MockBindings::new();
+        // 3 groups, 3 processors each group, 3 different memory regions.
+        simulate_processor_layout(
+            &mut bindings,
+            [3, 3, 3],
+            [3, 3, 3],
+            [vec![0, 0, 0], vec![0, 0, 0], vec![0, 0, 0]],
+            [vec![0, 0, 0], vec![1, 1, 1], vec![2, 2, 2]],
+            None, // All processors are allowed by job constraints.
+        );
+
+        bindings
+            .expect_get_current_processor_number_ex()
+            .times(1)
+            .return_once(|| PROCESSOR_NUMBER {
+                Group: 1,
+                Number: 2,
+                ..Default::default()
+            });
+
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
+
+        let current_processor_id = platform.current_processor_id();
+        assert_eq!(current_processor_id, 5);
+
+        let max_processor_id = platform.max_processor_id();
+        assert_eq!(max_processor_id, 8);
+
+        let max_memory_region_id = platform.max_memory_region_id();
+        assert_eq!(max_memory_region_id, 2);
     }
 }

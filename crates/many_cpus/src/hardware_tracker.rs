@@ -71,7 +71,10 @@ impl HardwareTracker {
         let mut all_processors = vec![None; max_processor_id as usize + 1];
 
         for processor in all_pal_processors {
-            all_processors[processor.id() as usize] = Some(Processor::new(processor, pal.clone()));
+            *all_processors
+                .get_mut(processor.id() as usize)
+                .expect("encountered processor with ID above max_processor_id") =
+                Some(Processor::new(processor, pal.clone()));
         }
 
         Self {

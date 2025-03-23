@@ -81,3 +81,25 @@ impl Ord for ProcessorImpl {
         self.id.cmp(&other.id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn smoke_test() {
+        let processor = ProcessorImpl::new(0, 1, 2, 3, EfficiencyClass::Performance);
+
+        assert_eq!(processor.id(), 2);
+        assert_eq!(processor.memory_region_id(), 3);
+        assert_eq!(processor.efficiency_class(), EfficiencyClass::Performance);
+
+        let processor2 = ProcessorImpl::new(0, 1, 2, 3, EfficiencyClass::Performance);
+        assert_eq!(processor, processor2);
+
+        let processor3 = ProcessorImpl::new(0, 1, 4, 3, EfficiencyClass::Performance);
+        assert_ne!(processor, processor3);
+        assert!(processor < processor3);
+        assert!(processor3 > processor);
+    }
+}
