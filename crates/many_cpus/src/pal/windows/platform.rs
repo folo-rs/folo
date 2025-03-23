@@ -1,4 +1,4 @@
-use std::{mem::offset_of, num::NonZeroUsize, sync::OnceLock};
+use std::{mem::offset_of, num::NonZeroUsize, ptr::NonNull, sync::OnceLock};
 
 use foldhash::{HashMap, HashMapExt};
 use folo_ffi::NativeBuffer;
@@ -339,13 +339,13 @@ impl BuildTargetPlatform {
 
         // The structures returned by the OS are dynamically sized so we only have various
         // disgusting options for parsing/processing them. Pointer wrangling is the most readable.
-        let raw_range = core_relationships_raw.as_ptr_range();
-        let mut next: *const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX = raw_range.start.cast();
+        let raw_range = core_relationships_raw.as_data_ptr_range();
+        let mut next: NonNull<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX> = raw_range.start.cast();
         let end = raw_range.end.cast();
 
         while next < end {
             // SAFETY: We just process the data in the form the OS promises to give it to us.
-            let info = unsafe { &*next };
+            let info = unsafe { next.as_ref() };
 
             // SAFETY: We just process the data in the form the OS promises to give it to us.
             next = unsafe { next.byte_add(info.Size as usize) };
@@ -400,15 +400,15 @@ impl BuildTargetPlatform {
 
         // The structures returned by the OS are dynamically sized so we only have various
         // disgusting options for parsing/processing them. Pointer wrangling is the most readable.
-        let raw_range = memory_region_relationships_raw.as_ptr_range();
-        let mut next: *const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX = raw_range.start.cast();
+        let raw_range = memory_region_relationships_raw.as_data_ptr_range();
+        let mut next: NonNull<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX> = raw_range.start.cast();
         let end = raw_range.end.cast();
 
         while next < end {
             let current = next;
 
             // SAFETY: We just process the data in the form the OS promises to give it to us.
-            let info = unsafe { &*current };
+            let info = unsafe { current.as_ref() };
 
             // SAFETY: We just process the data in the form the OS promises to give it to us.
             next = unsafe { next.byte_add(info.Size as usize) };
@@ -441,7 +441,7 @@ impl BuildTargetPlatform {
 
             for _ in 0..details.GroupCount {
                 // SAFETY: The OS promises us that this array contains `GroupCount` elements.
-                let affinity = unsafe { *group_mask_array };
+                let affinity = unsafe { *group_mask_array.as_ref() };
 
                 for processor_id in Self::affinity_mask_to_processor_ids(&affinity, group_max_sizes)
                 {
