@@ -9,11 +9,11 @@ use std::{
     ptr::NonNull,
 };
 
-/// Windows often wants us to provide a buffer of arbitrary size aligned for a type `T`.
+/// Windows often wants us to provide a buffer of arbitrary size aligned for a type `T`, in which
+/// it wants to place instances of `T` or `T`-like types (not necessarily at integer `T` offsets).
 ///
 /// This is a wrapper around alloc/dealloc to make working with such buffers slightly convenient.
-/// It is still a major hassle but one step at a time.
-pub(super) struct NativeBuffer<T: Sized> {
+pub struct NativeBuffer<T: Sized> {
     ptr: NonNull<u8>,
     layout: Layout,
 
@@ -26,11 +26,11 @@ pub(super) struct NativeBuffer<T: Sized> {
 impl<T: Sized> NativeBuffer<T> {
     pub fn new(size_bytes: NonZeroUsize) -> Self {
         // Sometimes Windows will ask for less memory than technically required to fit a T.
-        // While this is "okay" as long as Rust never tries to read that extra memory (e.g.
-        // because the larger union members are not used), it is still feels a bit dirty, so
+        // While this may be valid as long as Rust never tries to read that extra memory (e.g.
+        // because the larger union members are not used), it is still feels risky, so
         // we round up to the minimum size required to fit one T to avoid any accidents.
         // In cases where we have multiple T in the buffer, the risk of "reading off the edge"
-        // (albeit requiring invalid code) still remains.
+        // (albeit requiring invalid code) still remains and needs to be guarded against upstack.
         let min_size = mem::size_of::<T>();
 
         let size_bytes = if size_bytes.get() < min_size {
@@ -55,12 +55,17 @@ impl<T: Sized> NativeBuffer<T> {
         }
     }
 
-    /// Writes a value at the start of the buffer.
+    /// Writes a value at the start of the buffer and declares the buffer length to match.
     pub fn emplace(&mut self, value: T) {
         // SAFETY: Type invariants guarantee the pointer is properly aligned
         // and the borrow checker ensures it is valid for writes via `self`.
         unsafe {
             self.ptr.cast::<T>().write(value);
+        }
+
+        // SAFETY: We just wrote a T into it, so obviously there is a T worth of data in there.
+        unsafe {
+            self.set_len(mem::size_of::<T>());
         }
     }
 
@@ -80,16 +85,20 @@ impl<T: Sized> NativeBuffer<T> {
         buffer
     }
 
-    pub fn from_vec(vec: Vec<T>) -> Self {
+    /// Allocates a buffer that can fit a number of consecutive instances of `T` and moves the
+    /// provided instances into the buffer.
+    pub fn from_items(items: impl IntoIterator<Item = T>) -> Self {
+        let items = items.into_iter().collect::<Vec<_>>();
+
         let mut buffer = Self::new(
-            NonZeroUsize::new(mem::size_of::<T>() * vec.len())
+            NonZeroUsize::new(mem::size_of::<T>() * items.len())
                 .expect("cannot create NativeBuffer from zero-sized type"),
         );
 
-        let count = vec.len();
+        let count = items.len();
 
         let mut dest = buffer.ptr.cast::<T>();
-        for item in vec {
+        for item in items {
             // SAFETY: We own the memory and type invariants guarantee proper alignment,
             // so this pointer is safe to write through.
             unsafe {
@@ -100,7 +109,7 @@ impl<T: Sized> NativeBuffer<T> {
             dest = unsafe { dest.add(1) };
         }
 
-        // SAFETY: We just wrote N*T into it, so obviously there is N*T worth of data in there.
+        // SAFETY: We just wrote N*T bytes into it, math guaranteed valid by Rust language rules.
         unsafe {
             buffer.set_len(mem::size_of::<T>() * count);
         }
@@ -113,44 +122,56 @@ impl<T: Sized> NativeBuffer<T> {
         self.layout.size()
     }
 
-    /// Length of the data in the buffer, in bytes.
+    /// Length of the declared data in the buffer, in bytes.
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// Whether the buffer is considered empty.
+    ///
+    /// This is determined by `set_len()` being called with a non-zero value.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
-    /// Sets the length of the data in the buffer, in bytes.
+    /// Declares the length of the data in the buffer, in bytes.
     ///
     /// # Safety
     ///
-    /// The caller guarantees that the indicated number of bytes has been initialized.
+    /// The caller guarantees that the indicated number of bytes have been initialized.
     pub unsafe fn set_len(&mut self, len: usize) {
         assert!(len <= self.capacity());
+
         self.len = len;
     }
 
+    /// Returns a pointer to the start of the buffer.
     pub fn as_ptr(&self) -> NonNull<T> {
         self.ptr.cast()
     }
 
+    /// Returns a range of pointers from the start of the buffer to just past the end of the buffer.
     pub fn as_ptr_range(&self) -> Range<*const T> {
         let start = self.ptr.as_ptr().cast_const().cast();
-        // SAFETY: We have been promised that there are `self.len` bytes of data in the buffer.
+
+        // SAFETY: We have allocated `self.len` bytes of data in the buffer so the add is valid.
+        // It is also valid for pointers to point just past the end of an allocation.
         let end = unsafe { self.ptr.as_ptr().cast_const().byte_add(self.len).cast() };
 
         start..end
     }
+}
 
-    pub fn as_mut(&mut self) -> &mut MaybeUninit<T> {
+impl<T: Sized> AsMut<MaybeUninit<T>> for NativeBuffer<T> {
+    fn as_mut(&mut self) -> &mut MaybeUninit<T> {
         // SAFETY: We are returning MaybeUninit, so it is safe to reference the contents.
         // Borrowing rules are enforced via the borrow on `self`, which is extended here.
         unsafe { self.ptr.cast().as_mut() }
     }
+}
 
-    pub fn as_ref(&self) -> &MaybeUninit<T> {
+impl<T: Sized> AsRef<MaybeUninit<T>> for NativeBuffer<T> {
+    fn as_ref(&self) -> &MaybeUninit<T> {
         // SAFETY: We are returning MaybeUninit, so it is safe to reference the contents.
         // Borrowing rules are enforced via the borrow on `self`, which is extended here.
         unsafe { self.ptr.cast().as_ref() }

@@ -21,6 +21,7 @@ debug = "none"
 [workspace.dependencies]
 # The packages we publish.
 cpulist = { version = "0.0.1", path = "crates/cpulist" }
+folo_ffi = { version = "0.0.1", path = "crates/folo_ffi" }
 linked = { version = "0.0.2", path = "crates/linked" }
 linked_macros = { version = "0.0.2", path = "crates/linked_macros" }
 linked_macros_impl = { version = "0.0.2", path = "crates/linked_macros_impl" }

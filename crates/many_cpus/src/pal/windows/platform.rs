@@ -1,6 +1,7 @@
 use std::{mem::offset_of, num::NonZeroUsize, sync::OnceLock};
 
 use foldhash::{HashMap, HashMapExt};
+use folo_ffi::NativeBuffer;
 use itertools::Itertools;
 use nonempty::NonEmpty;
 use windows::{
@@ -18,9 +19,7 @@ use crate::{
     EfficiencyClass, MemoryRegionId, ProcessorId,
     pal::{
         Platform, ProcessorFacade, ProcessorImpl,
-        windows::{
-            Bindings, BindingsFacade, NativeBuffer, ProcessorGroupIndex, ProcessorIndexInGroup,
-        },
+        windows::{Bindings, BindingsFacade, ProcessorGroupIndex, ProcessorIndexInGroup},
     },
 };
 
@@ -607,7 +606,7 @@ mod tests {
 
     use crate::{
         MemoryRegionId,
-        pal::windows::{MockBindings, NativeBuffer, ProcessorIndexInGroup},
+        pal::windows::{MockBindings, ProcessorIndexInGroup},
     };
 
     use super::*;
@@ -1212,7 +1211,7 @@ mod tests {
             })
             .collect_vec();
 
-        let memory_region_response_buffer = NativeBuffer::from_vec(memory_region_responses);
+        let memory_region_response_buffer = NativeBuffer::from_items(memory_region_responses);
         let memory_region_response_len = memory_region_response_buffer.len();
 
         let mut seq = Sequence::new();
@@ -1309,7 +1308,7 @@ mod tests {
             .collect_vec();
 
         let core_info_response_entry_count = response_entries.len();
-        let core_info_response_buffer = NativeBuffer::from_vec(response_entries);
+        let core_info_response_buffer = NativeBuffer::from_items(response_entries);
         let core_info_response_len = core_info_response_buffer.len();
 
         let mut seq = Sequence::new();

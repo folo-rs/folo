@@ -1,0 +1,16 @@
+[package]
+name = "folo_ffi"
+description = "Utilities for working with FFI logic; exists for internal use in Folo crates; no stable API surface"
+publish = true
+version = "0.0.1"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+mutants = { workspace = true }
