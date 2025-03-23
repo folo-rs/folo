@@ -34,6 +34,18 @@ machete:
 mutants:
     #!{{ shebang }}
 
+    function Escape-Wildcards ($s) {
+        if (!$IsLinux) {
+            return $s
+        }
+
+        # On Linux, PowerShell has built-in globbing that expands wildcards. Unfortunately,
+        # cargo mutants requires literal input values, globbing just breaks it. We convince
+        # PowerShell to turn off globbing by single-quoting the arguments we fear may be
+        # interpreted as wildcard glob expressions.
+        "'" + $s + "'"
+    }
+
     $args = @(
         "-e"
         # Parts of this crate require Criterion to work and other parts are currently not tested
@@ -46,7 +58,7 @@ mutants:
 
         # We do not test facades, as they are just trivial code that forwards calls to real impls.
         "-e"
-        "**/*facade.rs"
+        (Escape-Wildcards "**/*facade.rs")
         "-e"
         "facade"
 
@@ -58,25 +70,28 @@ mutants:
 
         "-e"
         # This is just a different type of bindings, skipped for same reason as `bindings` above.
-        "crates/many_cpus/src/pal/linux/filesystem/**"
+        (Escape-Wildcards "crates/many_cpus/src/pal/linux/filesystem/**")
     )
 
     if ($IsLinux) {
         $args += "-e"
-        $args += "**/*windows.rs"
+        $args += (Escape-Wildcards "**/*windows.rs")
 
         $args += "-e"
         $args += "windows"
     } else {
         $args += "-e"
-        $args += "**/*linux.rs"
+        $args += (Escape-Wildcards "**/*linux.rs")
 
         $args += "-e"
         $args += "linux"
     }
 
     # We deliberately do not use nextest here because it cannot run doctests.
-    cargo mutants {{ target_package }} --profile=mutants --jobs 4 @args
+
+    # We must use Invoke-Expression to preserve the quotes around the wildcarded arguments on Linux.
+    $expanded_args = [String]::join(" ", $args)
+    Invoke-Expression "cargo mutants {{ target_package }} --profile=mutants --jobs 4 $expanded_args"
 
 # Full validation of everything, as you would do in a build pipeline before a release.
 # We assume this is executed on Windows, and will also perform the full validation on Linux.
