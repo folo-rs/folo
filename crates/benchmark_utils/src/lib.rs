@@ -81,13 +81,18 @@ where
         }
     });
 
-    let mut total_elapsed_nanos = 0;
+    let mut total_elapsed_nanos: u128 = 0;
 
     for rx in result_rxs.drain(..) {
         let elapsed = rx.recv().unwrap();
-        total_elapsed_nanos += elapsed.as_nanos();
+        total_elapsed_nanos = total_elapsed_nanos.saturating_add(elapsed.as_nanos());
     }
 
+    calculate_average_duration(thread_count, total_elapsed_nanos)
+}
+
+#[cfg_attr(test, mutants::skip)] // Difficult to simulate time and therefore set expectations.
+fn calculate_average_duration(thread_count: usize, total_elapsed_nanos: u128) -> Duration {
     Duration::from_nanos((total_elapsed_nanos / thread_count as u128) as u64)
 }
 

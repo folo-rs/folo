@@ -40,6 +40,10 @@ mutants:
         # as there is no public way to simulate a system topology for `many_cpus`.
         "many_cpus_benchmarking",
 
+        "-e"
+        # Macros are tested via the impl crate, mutations in the middle layer might not be detected.
+        "linked_macros"
+
         # We do not test facades, as they are just trivial code that forwards calls to real impls.
         "-e"
         "**/*facade.rs"

@@ -31,8 +31,10 @@ pub fn emit<'a>(items: impl IntoIterator<Item = &'a Item>) -> String {
             .fold_while(None, |acc: Option<(Item, Item)>, p: &&Item| {
                 if let Some((start, len)) = acc {
                     if start + len == **p {
+                        let new_len = len.checked_add(1)
+                            .expect("len overflow here is inconceivable - it would require a kjillion loop iterations");
                         // This item is part of the current group.
-                        FoldWhile::Continue(Some((start, len + 1)))
+                        FoldWhile::Continue(Some((start, new_len)))
                     } else {
                         // This item is not part of the current group.
                         FoldWhile::Done(Some((start, len)))

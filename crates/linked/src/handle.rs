@@ -24,6 +24,7 @@ pub struct Handle<T> {
 }
 
 impl<T> Debug for Handle<T> {
+    #[cfg_attr(test, mutants::skip)] // We have no API contract for this.
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("Handle")
             .field(

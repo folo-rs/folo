@@ -363,6 +363,7 @@ impl<T> Drop for FamilyStateReference<T>
 where
     T: linked::Object,
 {
+    #[cfg_attr(test, mutants::skip)] // This is just a sanity check, no functional behavior.
     fn drop(&mut self) {
         // If we are the last reference to the family state, this will drop the thread-specific map.
         // We need to ensure that the thread-specific state is empty before we drop the map.

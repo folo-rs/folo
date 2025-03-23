@@ -17,3 +17,6 @@ doc = false
 many_cpus = { workspace = true }
 
 oneshot = { workspace = true }
+
+[dev-dependencies]
+mutants = { workspace = true }

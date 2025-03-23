@@ -16,6 +16,8 @@ impl Hasher for ThreadIdHasher {
         self.state
     }
 
+    // No mutation - we avoid hardcoding hash logic into tests, so expectations are minimal.
+    #[cfg_attr(test, mutants::skip)]
     fn write(&mut self, bytes: &[u8]) {
         // We expect this to only be called once per hash operation.
         // We expect the contents to be a u64 that typically has only
