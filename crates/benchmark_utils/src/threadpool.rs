@@ -84,6 +84,7 @@ fn worker_entrypoint(rx: mpsc::Receiver<Command>) {
     }
 }
 
+#[cfg(not(miri))] // ProcessorSet is not supported under Miri.
 #[cfg(test)]
 mod tests {
     use std::{

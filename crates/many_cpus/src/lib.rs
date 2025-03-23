@@ -1,3 +1,6 @@
+// We disable a bunch of incompatible lint rules under Miri, which leaves dead code around.
+#![cfg_attr(miri, allow(unused_imports, unused_variables, dead_code))]
+
 //! Working on many-processor systems with 100+ logical processors can require you to pay extra
 //! attention to the specifics of the hardware to make optimal use of available compute capacity
 //! and extract the most performance out of the system.
@@ -210,6 +213,7 @@
 //! thread::sleep(Duration::from_secs(10));
 //! ```
 
+mod clients;
 mod functions;
 mod hardware_info;
 mod hardware_tracker;
@@ -218,6 +222,7 @@ mod processor;
 mod processor_set;
 mod processor_set_builder;
 
+pub(crate) use clients::*;
 pub use functions::*;
 pub use hardware_info::*;
 pub use hardware_tracker::*;

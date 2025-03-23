@@ -4,7 +4,7 @@ use itertools::Itertools;
 use nonempty::NonEmpty;
 
 use crate::{
-    CURRENT_TRACKER, Processor, ProcessorSetBuilder,
+    HardwareTrackerClient, HardwareTrackerClientFacade, Processor, ProcessorSetBuilder,
     pal::{Platform, PlatformFacade},
 };
 
@@ -39,6 +39,11 @@ static ALL_PROCESSORS: LazyLock<ProcessorSet> = LazyLock::new(|| {
 #[derive(Clone, Debug)]
 pub struct ProcessorSet {
     processors: NonEmpty<Processor>,
+
+    // We use this when we pin a thread, to update the tracker
+    // about the current thread's pinning status.
+    tracker_client: HardwareTrackerClientFacade,
+
     pal: PlatformFacade,
 }
 
@@ -61,23 +66,36 @@ impl ProcessorSet {
     /// Returns a [`ProcessorSetBuilder`] that is narrowed down to all processors in the current
     /// set, to be used to further narrow down the set to a specific subset.
     pub fn to_builder(&self) -> ProcessorSetBuilder {
-        ProcessorSetBuilder::new().filter(|p| self.processors.contains(p))
+        ProcessorSetBuilder::with_internals(self.tracker_client.clone(), self.pal.clone())
+            .filter(|p| self.processors.contains(p))
     }
 
-    pub(crate) fn new(processors: NonEmpty<Processor>, pal: PlatformFacade) -> Self {
-        Self { processors, pal }
+    pub(crate) fn new(
+        processors: NonEmpty<Processor>,
+        tracker_client: HardwareTrackerClientFacade,
+        pal: PlatformFacade,
+    ) -> Self {
+        Self {
+            processors,
+            tracker_client,
+            pal,
+        }
     }
 
     /// Returns a [`ProcessorSet`] containing the provided processors.
     pub fn from_processors(processors: NonEmpty<Processor>) -> Self {
         let pal = processors.first().pal.clone();
-        Self::new(processors, pal)
+        Self::new(processors, HardwareTrackerClientFacade::real(), pal)
     }
 
     /// Returns a [`ProcessorSet`] containing a single processor.
     pub fn from_processor(processor: Processor) -> Self {
         let pal = processor.pal.clone();
-        Self::new(NonEmpty::singleton(processor), pal)
+        Self::new(
+            NonEmpty::singleton(processor),
+            HardwareTrackerClientFacade::real(),
+            pal,
+        )
     }
 
     /// Returns the number of processors in the set. A processor set is never empty.
@@ -102,14 +120,12 @@ impl ProcessorSet {
     pub fn pin_current_thread_to(&self) {
         self.pal.pin_current_thread_to(&self.processors);
 
-        // TODO: Shift tracker to a dependency so we can properly test the set-tracker interactions.
         if self.processors.len() == 1 {
             // If there is only one processor, both the processor and memory region are known.
             let processor = self.processors.first();
 
-            CURRENT_TRACKER.with_borrow_mut(|tracker| {
-                tracker.update_pin_status(Some(processor.id()), Some(processor.memory_region_id()));
-            })
+            self.tracker_client
+                .update_pin_status(Some(processor.id()), Some(processor.memory_region_id()));
         } else if self
             .processors
             .iter()
@@ -121,14 +137,11 @@ impl ProcessorSet {
             // All processors are in the same memory region, so we can at least track that.
             let memory_region_id = self.processors.first().memory_region_id();
 
-            CURRENT_TRACKER.with_borrow_mut(|tracker| {
-                tracker.update_pin_status(None, Some(memory_region_id));
-            })
+            self.tracker_client
+                .update_pin_status(None, Some(memory_region_id));
         } else {
             // We got nothing, have to resolve from scratch every time the data is asked for.
-            CURRENT_TRACKER.with_borrow_mut(|tracker| {
-                tracker.update_pin_status(None, None);
-            })
+            self.tracker_client.update_pin_status(None, None);
         }
     }
 
@@ -204,13 +217,12 @@ mod tests {
     use nonempty::nonempty;
 
     use crate::{
-        EfficiencyClass,
+        EfficiencyClass, MockHardwareTrackerClient,
         pal::{FakeProcessor, MockPlatform},
     };
 
     use super::*;
 
-    #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]
     fn smoke_test() {
         let mut platform = MockPlatform::new();
@@ -258,7 +270,16 @@ mod tests {
             move |p| Processor::new(p.into(), platform.clone())
         });
 
-        let processor_set = ProcessorSet::new(processors, platform);
+        let mut tracker_client = MockHardwareTrackerClient::new();
+
+        tracker_client
+            .expect_update_pin_status()
+            .withf(|processor, memory_region| processor.is_none() && memory_region.unwrap() == 0)
+            .return_const(());
+
+        let tracker_client = HardwareTrackerClientFacade::from_mock(tracker_client);
+
+        let processor_set = ProcessorSet::new(processors, tracker_client, platform);
 
         // Getters appear to get the expected values.
         assert_eq!(processor_set.len(), 2);
@@ -321,6 +342,7 @@ mod tests {
         assert_eq!(cloned_processor_set.len(), 2);
     }
 
+    #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]
     fn to_builder_preserves_processors() {
         let set = ProcessorSet::builder()
@@ -336,5 +358,30 @@ mod tests {
         let processor2 = set2.processors().first();
 
         assert_eq!(processor1, processor2);
+    }
+
+    #[test]
+    fn inherit_on_pinned() {
+        thread::spawn(|| {
+            let one = ProcessorSet::builder()
+                .take(NonZero::new(1).unwrap())
+                .unwrap();
+
+            one.pin_current_thread_to();
+
+            // Potential false negative here if the system only has one processor but that's fine.
+            let current_thread_allowed = ProcessorSet::builder()
+                .where_available_for_current_thread()
+                .take_all()
+                .unwrap();
+
+            assert_eq!(current_thread_allowed.len(), 1);
+            assert_eq!(
+                current_thread_allowed.processors().first(),
+                one.processors().first()
+            );
+        })
+        .join()
+        .unwrap();
     }
 }

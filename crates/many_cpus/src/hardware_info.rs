@@ -61,8 +61,9 @@ mod tests {
 
     use super::*;
 
+    #[cfg(not(miri))] // Real platform is not supported under Miri.
     #[test]
-    fn count_is_id_plus_one() {
+    fn count_is_id_plus_one_real() {
         let info = HardwareInfo::current();
 
         assert_eq!(
@@ -91,5 +92,14 @@ mod tests {
 
         assert_eq!(info.max_processor_id(), 3);
         assert_eq!(info.max_memory_region_id(), 5);
+
+        assert_eq!(
+            info.max_processor_count(),
+            info.max_processor_id() as usize + 1
+        );
+        assert_eq!(
+            info.max_memory_region_count(),
+            info.max_memory_region_id() as usize + 1
+        );
     }
 }

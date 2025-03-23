@@ -7,6 +7,7 @@ use nonempty::NonEmpty;
 use rand::prelude::*;
 use rand::rng;
 
+use crate::HardwareTrackerClientFacade;
 use crate::{
     EfficiencyClass, MemoryRegionId, Processor, ProcessorId, ProcessorSet,
     pal::{Platform, PlatformFacade},
@@ -64,19 +65,28 @@ pub struct ProcessorSetBuilder {
 
     except_indexes: HashSet<ProcessorId>,
 
+    // ProcessorSet needs this because it needs to inform the tracker
+    // about any changes to the pinning status of the current thread.
+    // We just carry it around and pass to any processor set we create.
+    tracker_client: HardwareTrackerClientFacade,
+
     pal: PlatformFacade,
 }
 
 impl ProcessorSetBuilder {
     pub fn new() -> Self {
-        Self::with_platform(PlatformFacade::real())
+        Self::with_internals(HardwareTrackerClientFacade::real(), PlatformFacade::real())
     }
 
-    pub(crate) fn with_platform(pal: PlatformFacade) -> Self {
+    pub(crate) fn with_internals(
+        tracker_client: HardwareTrackerClientFacade,
+        pal: PlatformFacade,
+    ) -> Self {
         Self {
             processor_type_selector: ProcessorTypeSelector::Any,
             memory_region_selector: MemoryRegionSelector::Any,
             except_indexes: HashSet::new(),
+            tracker_client,
             pal,
         }
     }
@@ -333,7 +343,11 @@ impl ProcessorSetBuilder {
             }
         };
 
-        Some(ProcessorSet::new(NonEmpty::from_vec(processors)?, self.pal))
+        Some(ProcessorSet::new(
+            NonEmpty::from_vec(processors)?,
+            self.tracker_client,
+            self.pal,
+        ))
     }
 
     /// Returns a processor set with all processors that match the configured criteria.
@@ -393,7 +407,11 @@ impl ProcessorSetBuilder {
             }
         };
 
-        Some(ProcessorSet::new(NonEmpty::from_vec(processors)?, self.pal))
+        Some(ProcessorSet::new(
+            NonEmpty::from_vec(processors)?,
+            self.tracker_client,
+            self.pal,
+        ))
     }
 
     /// Executes the first stage filters to kick out processors purely based on their individual
@@ -655,7 +673,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
 
         // Simplest possible test, verify that we see all the processors.
         let set = builder.take_all().unwrap();
@@ -685,7 +706,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder.efficiency_processors_only().take_all().unwrap();
         assert_eq!(set.len(), 1);
         assert_eq!(set.processors().first().id(), 0);
@@ -714,7 +738,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder.efficiency_processors_only().take_all().unwrap();
         assert_eq!(set.len(), 1);
         assert_eq!(set.processors().first().id(), 0);
@@ -748,7 +775,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder.take(TWO_USIZE).unwrap();
         assert_eq!(set.len(), 2);
     }
@@ -776,7 +806,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder.take(THREE_USIZE);
         assert!(set.is_none());
     }
@@ -797,7 +830,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder.performance_processors_only().take_all();
         assert!(set.is_none());
     }
@@ -825,7 +861,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
 
         let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
         assert_eq!(except_set.len(), 1);
@@ -858,7 +897,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
         assert_eq!(except_set.len(), 1);
 
@@ -890,7 +932,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder.filter(|p| p.id() == 1).take_all().unwrap();
         assert_eq!(set.len(), 1);
         assert_eq!(set.processors().first().id(), 1);
@@ -919,7 +964,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder.filter(|p| p.id() == 1).take_all().unwrap();
         assert_eq!(set.len(), 1);
         assert_eq!(set.processors().first().id(), 1);
@@ -948,7 +996,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder.same_memory_region().take_all().unwrap();
         assert_eq!(set.len(), 1);
     }
@@ -976,7 +1027,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder.same_memory_region().take_all().unwrap();
         assert_eq!(set.len(), 1);
     }
@@ -1014,7 +1068,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder.different_memory_regions().take_all().unwrap();
         assert_eq!(set.len(), 2);
 
@@ -1057,7 +1114,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder.different_memory_regions().take_all().unwrap();
         assert_eq!(set.len(), 2);
 
@@ -1095,7 +1155,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
         let set = builder
             .efficiency_processors_only()
@@ -1135,7 +1198,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder.same_memory_region().take(TWO_USIZE).unwrap();
         assert_eq!(set.len(), 2);
         assert!(set.processors().iter().any(|p| p.id() == 1));
@@ -1175,7 +1241,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder
             .different_memory_regions()
             .efficiency_processors_only()
@@ -1201,7 +1270,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder.performance_processors_only().take_all();
         assert!(set.is_none(), "No performance processors should be found.");
     }
@@ -1221,7 +1293,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder.different_memory_regions().take(TWO_USIZE);
         assert!(
             set.is_none(),
@@ -1257,7 +1332,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder
             .prefer_different_memory_regions()
             .take_all()
@@ -1298,7 +1376,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder
             .prefer_different_memory_regions()
             .take(TWO_USIZE)
@@ -1345,7 +1426,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder.prefer_same_memory_region().take(TWO_USIZE).unwrap();
         assert_eq!(set.len(), 2);
         let regions: HashSet<_> = set
@@ -1389,7 +1473,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder
             .prefer_different_memory_regions()
             .take(FOUR_USIZE)
@@ -1430,7 +1517,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder
             .prefer_same_memory_region()
             .take(THREE_USIZE)
@@ -1481,7 +1571,10 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_platform(platform.into());
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
         let set = builder.prefer_same_memory_region().take(TWO_USIZE).unwrap();
         assert_eq!(set.len(), 2);
         let regions: HashSet<_> = set
