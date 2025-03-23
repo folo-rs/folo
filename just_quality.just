@@ -72,7 +72,7 @@ mutants:
     }
 
     # We deliberately do not use nextest here because it cannot run doctests.
-    cargo mutants {{ target_package }} --profile=mutants @args
+    cargo mutants {{ target_package }} --profile=mutants --jobs 4 @args
 
 # Full validation of everything, as you would do in a build pipeline before a release.
 # We assume this is executed on Windows, and will also perform the full validation on Linux.
