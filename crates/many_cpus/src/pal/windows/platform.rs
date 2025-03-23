@@ -314,7 +314,7 @@ impl BuildTargetPlatform {
             // SAFETY: We must be sure that the specified number of bytes have actually been written.
             // We are sure, obviously, because the operating system just told us it did that.
             unsafe {
-                buffer.set_len(final_length as usize);
+                buffer.set_len_bytes(final_length as usize);
             }
 
             return buffer;
@@ -1212,7 +1212,7 @@ mod tests {
             .collect_vec();
 
         let memory_region_response_buffer = NativeBuffer::from_items(memory_region_responses);
-        let memory_region_response_len = memory_region_response_buffer.len();
+        let memory_region_response_len = memory_region_response_buffer.len_bytes();
 
         let mut seq = Sequence::new();
 
@@ -1309,7 +1309,7 @@ mod tests {
 
         let core_info_response_entry_count = response_entries.len();
         let core_info_response_buffer = NativeBuffer::from_items(response_entries);
-        let core_info_response_len = core_info_response_buffer.len();
+        let core_info_response_len = core_info_response_buffer.len_bytes();
 
         let mut seq = Sequence::new();
 
