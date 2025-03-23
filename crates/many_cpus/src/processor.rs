@@ -24,39 +24,47 @@ impl Processor {
         Self { inner, pal }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     pub fn id(&self) -> ProcessorId {
         self.inner.id()
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     pub fn memory_region_id(&self) -> MemoryRegionId {
         self.inner.memory_region_id()
     }
 
+    #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     pub fn efficiency_class(&self) -> EfficiencyClass {
         self.inner.efficiency_class()
     }
 }
 
 impl PartialEq for Processor {
+    #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner
     }
 }
+
 impl Eq for Processor {}
 
 impl Hash for Processor {
+    #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.inner.hash(state)
     }
 }
 
 impl Display for Processor {
+    #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Display::fmt(&self.inner, f)
     }
 }
 
 impl Debug for Processor {
+    #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Debug::fmt(&self.inner, f)
     }

@@ -57,12 +57,14 @@ impl HardwareInfo {
 
 #[cfg(test)]
 mod tests {
+    use crate::pal::MockPlatform;
+
     use super::*;
 
     #[test]
     fn count_is_id_plus_one() {
         let info = HardwareInfo::current();
-        
+
         assert_eq!(
             info.max_processor_count(),
             info.max_processor_id() as usize + 1
@@ -71,5 +73,23 @@ mod tests {
             info.max_memory_region_count(),
             info.max_memory_region_id() as usize + 1
         );
+    }
+
+    #[test]
+    fn accurately_represents_platform() {
+        let mut platform = MockPlatform::new();
+        platform
+            .expect_max_processor_id()
+            .return_const(3 as ProcessorId);
+        platform
+            .expect_max_memory_region_id()
+            .return_const(5 as MemoryRegionId);
+
+        let platform = PlatformFacade::from_mock(platform);
+
+        let info = HardwareInfo::new(platform);
+
+        assert_eq!(info.max_processor_id(), 3);
+        assert_eq!(info.max_memory_region_id(), 5);
     }
 }

@@ -53,6 +53,7 @@ impl ProcessorSet {
     }
 
     /// Creates a builder that can be used to construct a processor set with specific criteria.
+    #[cfg_attr(test, mutants::skip)] // Mutates to itself via Default::default().
     pub fn builder() -> ProcessorSetBuilder {
         ProcessorSetBuilder::default()
     }
@@ -192,9 +193,12 @@ impl From<NonEmpty<Processor>> for ProcessorSet {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+    use std::{
+        num::NonZero,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use nonempty::nonempty;
@@ -315,5 +319,22 @@ mod tests {
         let cloned_processor_set = processor_set.clone();
 
         assert_eq!(cloned_processor_set.len(), 2);
+    }
+
+    #[test]
+    fn to_builder_preserves_processors() {
+        let set = ProcessorSet::builder()
+            .take(NonZero::new(1).unwrap())
+            .unwrap();
+
+        let builder = set.to_builder();
+
+        let set2 = builder.take_all().unwrap();
+        assert_eq!(set2.len(), 1);
+
+        let processor1 = set.processors().first();
+        let processor2 = set2.processors().first();
+
+        assert_eq!(processor1, processor2);
     }
 }
