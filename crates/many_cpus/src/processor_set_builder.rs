@@ -516,46 +516,31 @@ enum ProcessorTypeSelector {
 #[cfg(not(miri))] // Talking to the operating system is not possible under Miri.
 #[cfg(test)]
 mod tests_real {
-    use std::sync::{Arc, Barrier};
-
     use super::*;
-
-    // TODO: We need a "give up" mechanism so tests do not hang forever if they fail.
 
     const ONE: NonZeroUsize = NonZeroUsize::new(1).unwrap();
 
     #[test]
     fn spawn_on_any_processor() {
-        let done = Arc::new(Barrier::new(2));
-
         let set = ProcessorSet::all();
-        set.spawn_thread({
-            let done = Arc::clone(&done);
+        let result = set.spawn_thread(move |_| 1234).join().unwrap();
 
-            move |_| {
-                done.wait();
-            }
-        });
-
-        done.wait();
+        assert_eq!(result, 1234);
     }
 
     #[test]
     fn spawn_on_every_processor() {
         let processor_count = ProcessorSet::all().len();
 
-        let done = Arc::new(Barrier::new(processor_count + 1));
-
         let set = ProcessorSet::all();
-        set.spawn_threads({
-            let done = Arc::clone(&done);
+        let join_handles = set.spawn_threads(move |_| 4567);
 
-            move |_| {
-                done.wait();
-            }
-        });
+        assert_eq!(join_handles.len(), processor_count);
 
-        done.wait();
+        for handle in join_handles {
+            let result = handle.join().unwrap();
+            assert_eq!(result, 4567);
+        }
     }
 
     #[test]
