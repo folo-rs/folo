@@ -30,6 +30,7 @@ many_cpus_benchmarking = { version = "0.0.2", path = "crates/many_cpus_benchmark
 
 # Internal packages we do not publish.
 benchmark_utils = { path = "crates/benchmark_utils" }
+test_utils = { path = "crates/test_utils" }
 
 # The packages we consume.
 arc-swap = "1.7"

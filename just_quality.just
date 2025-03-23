@@ -40,6 +40,10 @@ mutants:
         # as there is no public way to simulate a system topology for `many_cpus`.
         "many_cpus_benchmarking",
 
+        "-e"
+        # This crate is for testing, no point mutating it.
+        "test_utils"
+
         # We do not test facades, as they are just trivial code that forwards calls to real impls.
         "-e"
         "**/*facade.rs"

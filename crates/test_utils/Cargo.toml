@@ -1,0 +1,16 @@
+[package]
+name = "test_utils"
+description = "Common test logic used across the crates in this project"
+publish = false
+version = "0.0.1-never"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+doc = false
+
+[dependencies]
