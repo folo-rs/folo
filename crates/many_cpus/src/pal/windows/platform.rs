@@ -1795,6 +1795,11 @@ mod tests {
         );
 
         bindings
+            .expect_get_numa_highest_node_number()
+            .times(1)
+            .return_once(|| 2);
+
+        bindings
             .expect_get_current_processor_number_ex()
             .times(1)
             .return_once(|| PROCESSOR_NUMBER {
@@ -1813,5 +1818,8 @@ mod tests {
 
         let max_memory_region_id = platform.max_memory_region_id();
         assert_eq!(max_memory_region_id, 2);
+
+        // We do this just to ensure we meet all the expectations declared by the simulation.
+        _ = platform.get_all_processors();
     }
 }
