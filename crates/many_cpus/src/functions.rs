@@ -32,7 +32,7 @@ mod tests {
         let memory_region_id = current_memory_region_id();
 
         // We can at least check that the IDs are not above the maximums.
-        assert!(processor_id < HardwareInfo::current().max_processor_id());
-        assert!(memory_region_id < HardwareInfo::current().max_memory_region_id());
+        assert!(processor_id <= HardwareInfo::current().max_processor_id());
+        assert!(memory_region_id <= HardwareInfo::current().max_memory_region_id());
     }
 }
