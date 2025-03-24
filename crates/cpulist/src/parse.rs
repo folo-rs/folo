@@ -143,5 +143,6 @@ mod tests {
         parse("123-foo").unwrap_err();
         parse("foo-123").unwrap_err();
         parse("123-456:foo").unwrap_err();
+        parse("123-foo:456").unwrap_err();
     }
 }

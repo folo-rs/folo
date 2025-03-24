@@ -3,6 +3,10 @@ build PROFILE='dev':
     cargo build {{ target_package }} --profile {{ PROFILE }} --all-features --all-targets
 
 [group('basics')]
+check PROFILE='dev':
+    cargo check {{ target_package }} --profile {{ PROFILE }} --all-features --all-targets
+
+[group('basics')]
 clean:
     cargo clean
 

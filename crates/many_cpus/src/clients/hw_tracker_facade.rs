@@ -49,10 +49,3 @@ impl HardwareTrackerClient for HardwareTrackerClientFacade {
         }
     }
 }
-
-#[cfg(test)]
-impl From<MockHardwareTrackerClient> for HardwareTrackerClientFacade {
-    fn from(mock: MockHardwareTrackerClient) -> Self {
-        Self::from_mock(mock)
-    }
-}

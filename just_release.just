@@ -1,4 +1,8 @@
 [group('release')]
+audit:
+    cargo audit
+    
+[group('release')]
 prepare-release:
     release-plz update
 

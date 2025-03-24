@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn with_unnamed_fields_fails() {
         let input = quote! {
-            struct Foo(usize, String)
+            struct Foo(usize, String);
         };
 
         let result = entrypoint(TokenStream::new(), input);
