@@ -22,11 +22,11 @@ debug = "none"
 # The packages we publish.
 cpulist = { version = "0.0.2", path = "crates/cpulist" }
 folo_ffi = { version = "0.0.1", path = "crates/folo_ffi" }
-linked = { version = "0.0.4", path = "crates/linked" }
-linked_macros = { version = "0.0.3", path = "crates/linked_macros" }
-linked_macros_impl = { version = "0.0.3", path = "crates/linked_macros_impl" }
-many_cpus = { version = "0.0.4", path = "crates/many_cpus" }
-many_cpus_benchmarking = { version = "0.0.4", path = "crates/many_cpus_benchmarking" }
+linked = { version = "0.0.5", path = "crates/linked" }
+linked_macros = { version = "0.0.4", path = "crates/linked_macros" }
+linked_macros_impl = { version = "0.0.4", path = "crates/linked_macros_impl" }
+many_cpus = { version = "0.0.5", path = "crates/many_cpus" }
+many_cpus_benchmarking = { version = "0.0.5", path = "crates/many_cpus_benchmarking" }
 
 # Internal packages we do not publish.
 benchmark_utils = { path = "crates/benchmark_utils" }
