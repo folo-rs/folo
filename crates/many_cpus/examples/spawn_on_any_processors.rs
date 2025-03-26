@@ -15,7 +15,7 @@ fn main() {
         let thread = std::thread::spawn(move || {
             let start = Instant::now();
 
-            let mut x: usize = 0;
+            let mut x: u64 = 0;
 
             loop {
                 for _ in 0..100_000 {
