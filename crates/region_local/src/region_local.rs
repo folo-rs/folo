@@ -44,22 +44,22 @@ where
     ///
     /// [1]: crate::region_local
     /// [2]: linked::PerThread
-    pub fn new(initial_value: T) -> Self {
+    pub fn new(initializer: fn() -> T) -> Self {
         Self::with_clients(
-            initial_value,
+            initializer,
             HardwareInfoClientFacade::real(),
             HardwareTrackerClientFacade::real(),
         )
     }
 
     pub(crate) fn with_clients(
-        initial_value: T,
+        initializer: fn() -> T,
         hardware_info: HardwareInfoClientFacade,
         hardware_tracker: HardwareTrackerClientFacade,
     ) -> Self {
         let memory_region_count = hardware_info.max_memory_region_count();
 
-        let global_state = Arc::new(GlobalState::new(initial_value, memory_region_count));
+        let global_state = Arc::new(GlobalState::new(initializer, memory_region_count));
 
         linked::new!(Self {
             regional_state: Self::try_locate_regional_state(
@@ -137,7 +137,7 @@ where
             }
 
             // If we got here then the regional state is not initialized. Let's initialize it.
-            let initial_value = self.global_state.initial_value.clone();
+            let initial_value = (self.global_state.initializer)();
             regional_state.set(initial_value);
         }
     }
@@ -246,13 +246,9 @@ struct GlobalState<T>
 where
     T: Clone + Send + Sync + 'static,
 {
-    /// The initial value that any new region is initialized with. This is only used to assign the
-    /// initial value in each memory region.
-    ///
-    /// We do not currently drop this because due to multiple threads racing to initialize a
-    /// memory region, it can be difficult to determine when it is truly "unused". Something
-    /// to consider in a future iteration.
-    initial_value: T,
+    /// The initializer that any new region is initialized with. This is only used to create the
+    /// initial value for each memory region.
+    initializer: fn() -> T,
 
     // We cannot avoid the array itself being cross-region accessed but the RegionalState items
     // inside are at least initialized lazily and on the correct region, so we can ensure that
@@ -267,7 +263,7 @@ impl<T> GlobalState<T>
 where
     T: Clone + Send + Sync + 'static,
 {
-    fn new(initial_value: T, memory_region_count: usize) -> Self {
+    fn new(initializer: fn() -> T, memory_region_count: usize) -> Self {
         let mut regional_states = Vec::with_capacity(memory_region_count);
 
         for _ in 0..memory_region_count {
@@ -275,7 +271,7 @@ where
         }
 
         Self {
-            initial_value,
+            initializer,
             regional_states: regional_states.into_boxed_slice(),
         }
     }
@@ -458,7 +454,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocal::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionLocal::with_clients(|| 42, hardware_info, hardware_tracker);
 
         assert_eq!(local.get_local(), 42);
         assert_eq!(local.get_local(), 42);
@@ -503,7 +499,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocal::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionLocal::with_clients(|| 42, hardware_info, hardware_tracker);
 
         assert_eq!(local.get_local(), 42);
         local.set_local(43);
@@ -552,7 +548,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocal::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionLocal::with_clients(|| 42, hardware_info, hardware_tracker);
 
         local.set_local(43);
         assert_eq!(local.get_local(), 43);
@@ -586,7 +582,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocal::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionLocal::with_clients(|| 42, hardware_info, hardware_tracker);
 
         assert_eq!(local.get_local(), 42);
         assert_eq!(local.get_local(), 42);
