@@ -117,12 +117,6 @@ impl ProcessorSet {
     /// If multiple processors are present in the processor set, they might not be evenly used.
     /// An arbitrary processor may be preferentially used, with others used only when the preferred
     /// processor is otherwise busy.
-    ///
-    /// It may be that not all processors are used, even if it would make sense from a capacity
-    /// point of view. Windows, for example, tends to keep threads of a single process together
-    /// in the same memory region, even if the pinning allows them to be in different memory
-    /// regions. You will need to pin specific threads to specific processors (or memory regions)
-    /// to achieve a wide distribution across processors.
     pub fn pin_current_thread_to(&self) {
         self.pal.pin_current_thread_to(&self.processors);
 
@@ -194,12 +188,6 @@ impl ProcessorSet {
     /// If multiple processors are present in the processor set, they might not be evenly used.
     /// An arbitrary processor may be preferentially used, with others used only when the preferred
     /// processor is otherwise busy.
-    ///
-    /// It may be that not all processors are used, even if it would make sense from a capacity
-    /// point of view. Windows, for example, tends to keep threads of a single process together
-    /// in the same memory region, even if the pinning allows them to be in different memory
-    /// regions. You will need to pin specific threads to specific processors (or memory regions)
-    /// to achieve a wide distribution across processors.
     pub fn spawn_thread<E, R>(&self, entrypoint: E) -> thread::JoinHandle<R>
     where
         E: FnOnce(ProcessorSet) -> R + Send + 'static,
