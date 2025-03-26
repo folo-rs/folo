@@ -345,7 +345,7 @@ impl BuildTargetPlatform {
                 .map(|node| {
                     let cpulist_str = self.fs.get_numa_node_cpulist_contents(node);
                     let cpulist = NonEmpty::from_vec(
-                        cpulist::parse(&cpulist_str.trim())
+                        cpulist::parse(cpulist_str.trim())
                             .expect("platform provided invalid cpulist for NUMA node members"))
                         .expect("platform provided empty cpulist for NUMA node members - at least one processor must be present to make a NUMA node");
 
