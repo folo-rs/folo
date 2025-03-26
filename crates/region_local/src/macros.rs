@@ -33,7 +33,7 @@ macro_rules! region_local {
     );
 
     ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $initial_value:expr) => {
-        linked::instance_per_thread! {
+        $crate::__private::linked::instance_per_thread! {
             $(#[$attr])* $vis static $NAME: $crate::RegionLocal<$t> =
                 $crate::RegionLocal::new($initial_value);
         }

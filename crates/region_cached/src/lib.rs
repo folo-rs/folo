@@ -162,3 +162,7 @@ mod region_cached_ext;
 pub(crate) use clients::*;
 pub use region_cached::*;
 pub use region_cached_ext::*;
+
+/// Macros require these things to be public but they are not part of the public API.
+#[doc(hidden)]
+pub mod __private;

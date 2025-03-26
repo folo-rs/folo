@@ -194,18 +194,18 @@ macro_rules! instance_per_access {
     () => {};
 
     ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $e:expr; $($rest:tt)*) => (
-        ::linked::instance_per_access!($(#[$attr])* $vis static $NAME: $t = $e);
-        ::linked::instance_per_access!($($rest)*);
+        $crate::instance_per_access!($(#[$attr])* $vis static $NAME: $t = $e);
+        $crate::instance_per_access!($($rest)*);
     );
 
     ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $e:expr) => {
-        ::linked::__private::paste! {
+        $crate::__private::paste! {
             #[doc(hidden)]
             #[allow(non_camel_case_types)]
             struct [<__lookup_key_ $NAME>];
 
-            $(#[$attr])* $vis const $NAME: ::linked::PerAccessStatic<$t> =
-                ::linked::PerAccessStatic::new(
+            $(#[$attr])* $vis const $NAME: $crate::PerAccessStatic<$t> =
+            $crate::PerAccessStatic::new(
                     ::std::any::TypeId::of::<[<__lookup_key_ $NAME>]>,
                     move || $e);
         }

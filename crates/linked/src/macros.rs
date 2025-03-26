@@ -66,11 +66,11 @@
 macro_rules! new {
     // `new!()` is forwarded to `new!(Self {})`
     (Self) => {
-        ::linked::new!(Self {})
+        $crate::new!(Self {})
     };
     // Special case if there are no field initializers (for proper comma handling).
     (Self {}) => {
-        ::linked::__private::new(move |__private_linked_link| Self {
+        $crate::__private::new(move |__private_linked_link| Self {
             __private_linked_link,
         })
     };
@@ -78,8 +78,8 @@ macro_rules! new {
     // Each field initializer is processed as per the `@expand` rules below,
     // which essentially does not touch/change them.
     (Self { $($field:ident $( : $value:expr )?),* $(,)? }) => {
-        ::linked::__private::new(move |__private_linked_link| Self {
-            $($field: ::linked::new!(@expand $field $( : $value )?)),*,
+        $crate::__private::new(move |__private_linked_link| Self {
+            $($field: $crate::new!(@expand $field $( : $value )?)),*,
             __private_linked_link,
         })
     };

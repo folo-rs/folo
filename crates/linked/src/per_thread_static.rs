@@ -106,18 +106,18 @@ macro_rules! instance_per_thread {
     () => {};
 
     ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $e:expr; $($rest:tt)*) => (
-        ::linked::instance_per_thread!($(#[$attr])* $vis static $NAME: $t = $e);
-        ::linked::instance_per_thread!($($rest)*);
+        $crate::instance_per_thread!($(#[$attr])* $vis static $NAME: $t = $e);
+        $crate::instance_per_thread!($($rest)*);
     );
 
     ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $e:expr) => {
-        ::linked::__private::paste! {
-            ::linked::instance_per_access!(#[doc(hidden)] static [< $NAME _INITIALIZER >]: $t = $e;);
+        $crate::__private::paste! {
+            $crate::instance_per_access!(#[doc(hidden)] static [< $NAME _INITIALIZER >]: $t = $e;);
 
             thread_local!(#[doc(hidden)] static [< $NAME _RC >]: ::std::rc::Rc<$t> = ::std::rc::Rc::new([< $NAME _INITIALIZER >].get()));
 
-            $(#[$attr])* $vis const $NAME: ::linked::PerThreadStatic<$t> =
-                ::linked::PerThreadStatic::new(move || &[< $NAME _RC >]);
+            $(#[$attr])* $vis const $NAME: $crate::PerThreadStatic<$t> =
+                $crate::PerThreadStatic::new(move || &[< $NAME _RC >]);
         }
     };
 }

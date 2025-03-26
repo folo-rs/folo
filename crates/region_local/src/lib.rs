@@ -127,3 +127,7 @@ mod region_local_ext;
 pub(crate) use clients::*;
 pub use region_local::*;
 pub use region_local_ext::*;
+
+/// Macros require these things to be public but they are not part of the public API.
+#[doc(hidden)]
+pub mod __private;
