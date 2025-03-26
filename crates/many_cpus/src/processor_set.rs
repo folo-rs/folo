@@ -190,7 +190,7 @@ impl ProcessorSet {
     /// processor is otherwise busy.
     pub fn spawn_thread<E, R>(&self, entrypoint: E) -> thread::JoinHandle<R>
     where
-        E: Fn(ProcessorSet) -> R + Send + 'static,
+        E: FnOnce(ProcessorSet) -> R + Send + 'static,
         R: Send + 'static,
     {
         let set = self.clone();
@@ -336,14 +336,24 @@ mod tests {
         // spawn_thread() spawns and pins a single thread.
         let threads_spawned = Arc::new(AtomicUsize::new(0));
 
+        // We create one clone for the worker thread to use.
+        // We do not create any additional clones (spawn_thread() is guaranteed to only spawn 1).
+        let threads_spawned_clone = Arc::clone(&threads_spawned);
+
+        let non_copy_value = "foo".to_string();
+
+        fn process_string(_s: String) {}
+
         processor_set
             .spawn_thread({
-                let threads_spawned = Arc::clone(&threads_spawned);
                 move |processor_set| {
                     // Verify that we appear to have been given the expected processor set.
                     assert_eq!(processor_set.len(), 2);
 
-                    threads_spawned.fetch_add(1, Ordering::Relaxed);
+                    // We prove that the callback can use !Copy values by calling this fn.
+                    process_string(non_copy_value);
+
+                    threads_spawned_clone.fetch_add(1, Ordering::Relaxed);
                 }
             })
             .join()
