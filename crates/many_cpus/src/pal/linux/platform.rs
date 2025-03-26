@@ -345,7 +345,7 @@ impl BuildTargetPlatform {
                 .map(|node| {
                     let cpulist_str = self.fs.get_numa_node_cpulist_contents(node);
                     let cpulist = NonEmpty::from_vec(
-                        cpulist::parse(&cpulist_str)
+                        cpulist::parse(&cpulist_str.trim())
                             .expect("platform provided invalid cpulist for NUMA node members"))
                         .expect("platform provided empty cpulist for NUMA node members - at least one processor must be present to make a NUMA node");
 
@@ -745,18 +745,22 @@ mod tests {
                 .withf(move |p| *p == processor_id)
                 .times(1)
                 .return_const(if is_online {
-                    Some("1".to_string())
+                    // \n might or might not be present, so let's verify that it gets trimmed if it is.
+                    Some("1\n".to_string())
                 } else {
                     Some("0".to_string())
                 });
         }
 
         for (node, processors) in processors_per_node {
-            let cpulist = processors
+            let mut cpulist = processors
                 .iter()
                 .map(|p| p.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
+
+            // This might or might not be present, so let's verify that it gets trimmed if it is.
+            cpulist.push('\n');
 
             fs.expect_get_numa_node_cpulist_contents()
                 .withf(move |n| *n == node)
