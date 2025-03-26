@@ -24,6 +24,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(not(miri))] // Cannot talk to real platform under Miri.
     #[test]
     fn smoke_test() {
         // This is working against a real environment, so the most we can really do here
