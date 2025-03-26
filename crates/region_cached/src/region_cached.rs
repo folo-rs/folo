@@ -1,7 +1,11 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::{
+    Arc, OnceLock,
+    atomic::{self, AtomicU64},
+};
 
-use arc_swap::{ArcSwap, ArcSwapOption, AsRaw};
+use arc_swap::{ArcSwap, ArcSwapOption};
 use many_cpus::MemoryRegionId;
+use rsevents::{Awaitable, EventState, ManualResetEvent};
 
 use crate::{
     HardwareInfoClient, HardwareInfoClientFacade, HardwareTrackerClient,
@@ -139,17 +143,25 @@ where
                 // If we got here then the regional state is not initialized. Let's initialize it.
                 // We now need a value to initialize the region state with. The latest written value
                 // (for our weakly consistent definition of "latest") is stored in the global state.
+                // Note that other threads in the region may also be racing to initialize. While
+                // there is mutual exclusion built in, it remains up to us here to detect ordering
+                // issues and reinitialize if an outdated value was set.
                 let initial_value = self.global_state.latest_value.load();
 
-                let update_operation =
-                    UpdateRegionOperation::new(&initial_value, &self.global_state);
+                let expected_generation = initial_value.generation;
+                let actual_generation = regional_state.initialize(&initial_value);
 
-                regional_state.set(&initial_value);
-
-                if update_operation.try_commit() {
+                // The commit will fail if the generation of the value we set does not match
+                // the generation of the value that was initialized. We do not know which one
+                // is the correct one, so we just retry until we get a match.
+                if expected_generation == actual_generation {
                     // We are done - the universe did not change during initialization.
                     break;
                 }
+
+                // Retry initialization. It could be that our expected value was wrong, in which
+                // case we perform some wasted cloning but avoid violating causality.
+                self.global_state.invalidate_regions();
             }
         }
     }
@@ -214,11 +226,20 @@ where
     ///
     /// [1]: crate#consistency-guarantees
     pub fn set_global(&self, value: T) {
+        // Numeric value is irrelevant, all that matters is the uniqueness.
+        let generation = self
+            .global_state
+            .next_generation
+            .fetch_add(1, atomic::Ordering::Relaxed);
+
         // The first thing we do is update the latest value in the global state. This ensures that
         // any new regional states that get initialized will get our latest updated value.
         self.global_state
             .latest_value
-            .store(Arc::new(value.clone()));
+            .store(Arc::new(GenerationValue {
+                generation,
+                value: value.clone(),
+            }));
 
         // Now all we need to do is invalidate the current value in all regions.
         // Each region will reinitialize itself automatically on next access.
@@ -252,48 +273,10 @@ where
     }
 }
 
-/// An "update region" operation that takes into consideration the potential changes of state
-/// that may invalidate an in-progress regional update and require it to be restarted.
-///
-/// We need to protect against concurrent initialization causing torn initialization,
-/// where when two threads set values A and B, and some regions end up seeing A and
-/// some end up seeing B, depending on how things were ordered between the threads.
-/// To be clear, we do not care whether we end up with A or B, but we do care that
-/// all regions see the same value.
-///
-/// We do this by verifying after our initialization that the initial value is still
-/// the same as when we started the initialization. If it is not, we re-initialize
-/// to "catch up" to any new changes that have occurred.
-struct UpdateRegionOperation<'a, T>
-where
-    T: Clone + Send + Sync + 'static,
-{
-    global_state: &'a GlobalState<T>,
-    initial_value: *mut T,
-}
-
-impl<'a, T> UpdateRegionOperation<'a, T>
-where
-    T: Clone + Send + Sync + 'static,
-{
-    fn new(initial_value: &Arc<T>, global_state: &'a GlobalState<T>) -> Self {
-        let initial_value_raw = initial_value.as_raw();
-
-        Self {
-            global_state,
-            initial_value: initial_value_raw,
-        }
-    }
-
-    // Mutation of this will result in an infinite loop in the caller, as we retry forever.
-    #[cfg_attr(test, mutants::skip)]
-    fn try_commit(&self) -> bool {
-        // If the current value is the same as the initial value, we can commit.
-        // Otherwise, return false to indicate that we need to restart the update.
-        let current_value = self.global_state.latest_value.load().as_raw();
-
-        current_value == self.initial_value
-    }
+#[derive(Clone, Debug)]
+struct GenerationValue<T> {
+    generation: u64,
+    value: T,
 }
 
 #[derive(Debug)]
@@ -303,7 +286,11 @@ where
 {
     /// The latest value written into the region-cached variable from any thread. This is only used
     /// to create regional clones for local caching and is never read directly in any hot path.
-    latest_value: ArcSwap<T>,
+    latest_value: ArcSwap<GenerationValue<T>>,
+
+    /// The generation to assign to the next value written into the global state.
+    /// This value is used to identity outdated caches.
+    next_generation: AtomicU64,
 
     // We cannot avoid the array itself being cross-region accessed but the RegionalState items
     // inside are at least initialized lazily and on the correct region, so we can ensure that
@@ -325,11 +312,15 @@ where
             regional_states.push(OnceLock::new());
         }
 
-        let initial_value = ArcSwap::from_pointee(initial_value);
+        let initial_value = ArcSwap::from_pointee(GenerationValue {
+            generation: 0,
+            value: initial_value,
+        });
 
         Self {
             latest_value: initial_value,
             regional_states: regional_states.into_boxed_slice(),
+            next_generation: AtomicU64::new(1),
         }
     }
 
@@ -374,7 +365,7 @@ where
     /// In single-threaded and write-heavy scenarios, RwLock is faster but those
     /// are not the scenarios we target - we expect the data to be cached for long
     /// periods and read from many threads, with writes happening not so often.
-    value: ArcSwapOption<T>,
+    value: ArcSwapOption<RegionalValue<T>>,
 }
 
 impl<T> RegionalState<T>
@@ -398,22 +389,96 @@ where
         let reader = self.value.load();
 
         if let Some(ref value) = *reader {
-            return Ok(f(value));
+            if let RegionalValue::Ready(GenerationValue { value, .. }) = &**value {
+                return Ok(f(value));
+            }
         }
 
         Err(f)
     }
 
+    /// Initializes the value in this regional state (potentially accepting a value from another
+    /// thread already doing the same).
+    ///
+    /// Returns the generation of the value that was set. This is not necessarily the same as the
+    /// input value, if we accept initialization from another thread. It is the responsibility of
+    /// the caller to decide whether that is acceptable or not (in which case it can reset).
+    ///
     // Skip mutating - would lead to infinite loop as it looks just like another thread
     // constantly resetting the value, so the conflict resolver will never finish.
     #[cfg_attr(test, mutants::skip)]
-    fn set(&self, value: &T) {
-        self.value.store(Some(Arc::new(value.clone())));
+    fn initialize(&self, value: &GenerationValue<T>) -> u64 {
+        // This is a conditional swap - we only initialize if we can swap in our "initializing"
+        // value onto a clean slate. If someone else got there first, we line up behind them
+        // and wait for them to finish before we do anything.
+
+        loop {
+            let reader = self.value.load();
+
+            if let Some(ref value) = *reader {
+                // Something is already happening.
+
+                match &**value {
+                    RegionalValue::Initializing(manual_reset_event) => {
+                        manual_reset_event.wait();
+                        // Initialization by someone else has completed.
+                        // Loop back and try to read again to see what we got.
+                        continue;
+                    }
+                    RegionalValue::Ready(GenerationValue { generation, .. }) => {
+                        return *generation;
+                    }
+                }
+            } else {
+                // Nothing is happening. We may be the first to start initializing.
+                let attempt_signal = Arc::new(ManualResetEvent::new(EventState::Set));
+                let attempt = RegionalValue::<T>::Initializing(Arc::clone(&attempt_signal));
+
+                let previous_value = self.value.compare_and_swap(reader, Some(Arc::new(attempt)));
+
+                if !previous_value.is_none() {
+                    // Someone raced ahead of us. Re-enter loop.
+                    continue;
+                }
+
+                let new_value = RegionalValue::Ready(value.clone());
+
+                // It is possible that another thread has assigned a new global value
+                // while we are doing this, so our `value` is out of date already. We
+                // detect this in the caller by checking (after initialization) whether
+                // the value that was set is of the expected generation. If not, everything
+                // starts all over again for the current thread and it tries to re-initialize.
+
+                self.value.store(Some(Arc::new(new_value)));
+
+                // We are done initializing. Notify all waiters that they can continue.
+                attempt_signal.set();
+
+                return value.generation;
+            }
+        }
     }
 
     fn clear(&self) {
         self.value.store(None);
     }
+}
+
+#[derive(derive_more::Debug)]
+enum RegionalValue<T> {
+    /// One thread has declared that it has started initializing the value.
+    ///
+    /// It is possible that multiple threads to attempt to start initializing (i.e. to set this
+    /// state). To avoid double initialization, the second caller must perform a conditional swap
+    /// and become a waiter if it sees someone else got there first.
+    ///
+    /// It is possible that the second initializer who "lined up" behind the first one actually has
+    /// a newer value to set. In this case, it will need to restart initialization once it finishes
+    /// waiting for the first one to complete the initial initialization.
+    Initializing(#[debug(ignore)] Arc<ManualResetEvent>),
+
+    /// The value has been initialized and is ready for use.
+    Ready(GenerationValue<T>),
 }
 
 #[cfg(test)]

@@ -12,8 +12,10 @@ rust-version.workspace = true
 
 [dependencies]
 arc-swap = { workspace = true }
+derive_more = { workspace = true, features = ["debug"] }
 linked = { workspace = true }
 many_cpus = { workspace = true }
+rsevents = { workspace = true }
 simple-mermaid = { workspace = true }
 
 [dev-dependencies]
