@@ -336,7 +336,7 @@ impl BuildTargetPlatform {
     // Otherwise, returns a list of NUMA nodes, where each entry is a list of processor
     // indexes that belong to that node.
     fn get_numa_nodes(&self) -> Option<HashMap<MemoryRegionId, NonEmpty<ProcessorId>>> {
-        let node_indexes = cpulist::parse(&self.fs.get_numa_node_possible_contents()?)
+        let node_indexes = cpulist::parse(self.fs.get_numa_node_possible_contents()?.trim())
             .expect("platform provided invalid cpulist for list of NUMA nodes");
 
         Some(
@@ -718,7 +718,9 @@ mod tests {
         let node_indexes =
             NonEmpty::from_vec(memory_region_index.iter().copied().unique().collect_vec())
                 .expect("simulating zero nodes is not supported");
-        let node_indexes_cpulist = cpulist::emit(&node_indexes);
+        let mut node_indexes_cpulist = cpulist::emit(&node_indexes);
+        // \n might or might not be present, so let's verify that it gets trimmed if it is.
+        node_indexes_cpulist.push('\n');
 
         let processors_per_node = memory_region_index
             .iter()
