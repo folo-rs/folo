@@ -157,18 +157,18 @@
 //! region_cached! {
 //!     static DATA: Vec<u8> = vec![50; 1024 * 1024 * 1024];
 //! }
-//! 
+//!
 //! fn main() {
 //!     ProcessorSet::all()
 //!         .spawn_threads(|_| DATA.with_cached(|data| _ = black_box(data.len())))
 //!         .into_iter()
 //!         .for_each(|x| x.join().unwrap());
-//! 
+//!
 //!     println!(
 //!         "All {} threads have accessed the region-cached data. Terminating in 60 seconds.",
 //!         ProcessorSet::all().len()
 //!     );
-//! 
+//!
 //! # #[cfg(doc)] // Only for show, do not run when testing.
 //!     thread::sleep(Duration::from_secs(60));
 //! }
