@@ -34,10 +34,13 @@ impl<T> RegionLocal<T>
 where
     T: Clone + Send + Sync + 'static,
 {
-    /// Creates a new instance of `RegionLocal` with the given initial value.
+    /// Creates a new instance of `RegionLocal`, providing a callback to create the initial value.
     ///
-    /// The instance may be cloned and shared between threads following the linked object patterns.
-    /// Every instance from the same family of objects will reference the same region-local value.
+    /// This callback will be called on a thread in the memory region where the value will be used.
+    ///
+    /// The instance of `RegionLocal` may be cloned and shared between threads following the
+    /// [linked object patterns][linked]. Every instance from the same family of objects will
+    /// reference the same region-local value.
     ///
     /// This type is internally used by the [`region_local!`][1] macro but can also be used
     /// independently of that macro, typically via a [`PerThread`][2] wrapper that automatically
@@ -45,6 +48,7 @@ where
     ///
     /// [1]: crate::region_local
     /// [2]: linked::PerThread
+    /// [3]: linked
     pub fn new(initializer: fn() -> T) -> Self {
         Self::with_clients(
             initializer,
@@ -95,7 +99,7 @@ where
     /// use linked::PerThread;
     /// use region_local::{RegionLocal};
     ///
-    /// let favorite_color_regional = PerThread::new(RegionLocal::new("blue".to_string()));
+    /// let favorite_color_regional = PerThread::new(RegionLocal::new(|| "blue".to_string()));
     ///
     /// // This localizes the value for the current thread, accessing data
     /// // in the current thread's active memory region.
@@ -154,7 +158,7 @@ where
     /// use linked::PerThread;
     /// use region_local::{RegionLocal};
     ///
-    /// let favorite_color_regional = PerThread::new(RegionLocal::new("blue".to_string()));
+    /// let favorite_color_regional = PerThread::new(RegionLocal::new(|| "blue".to_string()));
     ///
     /// // This localizes the value for the current thread, accessing data
     /// // in the current thread's active memory region.
@@ -173,7 +177,7 @@ where
     /// use region_local::{RegionLocal};
     /// use std::num::NonZero;
     ///
-    /// let favorite_color_regional = PerThread::new(RegionLocal::new("blue".to_string()));
+    /// let favorite_color_regional = PerThread::new(RegionLocal::new(|| "blue".to_string()));
     ///
     /// // We can use this to pin a thread to a specific processor, to demonstrate a
     /// // situation where you can rely on consistency guarantees for immediate visibility.
@@ -227,7 +231,7 @@ where
     /// use linked::PerThread;
     /// use region_local::{RegionLocal};
     ///
-    /// let current_access_token_regional = PerThread::new(RegionLocal::new(0x123100));
+    /// let current_access_token_regional = PerThread::new(RegionLocal::new(|| 0x123100));
     ///
     /// // This localizes the value for the current thread, accessing data
     /// // in the current thread's active memory region.

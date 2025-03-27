@@ -65,7 +65,7 @@
 //! use linked::PerThread;
 //! use region_local::RegionLocal;
 //!
-//! let favorite_color_regional = PerThread::new(RegionLocal::new("blue".to_string()));
+//! let favorite_color_regional = PerThread::new(RegionLocal::new(|| "blue".to_string()));
 //!
 //! // This localizes the variable, identifying the memory region specified storage.
 //! let favorite_color = favorite_color_regional.local();
@@ -119,7 +119,27 @@
 //! Example of using this crate with processor-pinned threads (`examples/region_local_1gb.rs`):
 //!
 //! ```
-#![doc = source_file!("examples/region_local_1gb.rs")]
+//! # use std::{hint::black_box, thread, time::Duration};
+//! # use many_cpus::ProcessorSet;
+//! # use region_local::{RegionLocalExt, region_local};
+//! region_local! {
+//!     static DATA: Vec<u8> = vec![50; 1024 * 1024 * 1024];
+//! }
+//! 
+//! fn main() {
+//!     ProcessorSet::all()
+//!         .spawn_threads(|_| DATA.with_local(|data| _ = black_box(data.len())))
+//!         .into_iter()
+//!         .for_each(|x| x.join().unwrap());
+//! 
+//!     println!(
+//!         "All {} threads have accessed the region-local data. Terminating in 60 seconds.",
+//!         ProcessorSet::all().len()
+//!     );
+//! 
+//! # #[cfg(doc)] // Only for show, do not run when testing.
+//!     thread::sleep(Duration::from_secs(60));
+//! }
 //! ```
 //!
 //! # Cross-region visibility
@@ -135,7 +155,6 @@
 //! [4]: crate::RegionLocal
 //! [5]: https://docs.rs/region_cached/latest/region_cached/
 
-use include_doc::source_file;
 use simple_mermaid::mermaid;
 
 mod clients;
