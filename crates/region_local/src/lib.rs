@@ -116,7 +116,7 @@
 //! Perform your own measurements to identify the behavior of your system and adjust the application
 //! structure accordingly.
 //!
-//! Example of using this crate with processor-pinned threads:
+//! Example of using this crate with processor-pinned threads (`examples/region_local_1gb.rs`):
 //!
 //! ```
 #![doc = source_file!("examples/region_local_1gb.rs")]
