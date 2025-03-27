@@ -135,7 +135,7 @@
 //! The macro internally transforms a static variable of type `T` to a different type and
 //! provides additional API surface via extension methods on [`RegionCachedExt<T>`][1].
 //! See the API documentation of this type for more details about available methods.
-//! 
+//!
 //! # Operating system compatibility
 //!
 //! This crate relies on the collaboration between the Rust global allocator and the operating
