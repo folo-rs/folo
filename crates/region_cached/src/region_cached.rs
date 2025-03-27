@@ -431,7 +431,7 @@ where
                 }
             } else {
                 // Nothing is happening. We may be the first to start initializing.
-                let attempt_signal = Arc::new(ManualResetEvent::new(EventState::Set));
+                let attempt_signal = Arc::new(ManualResetEvent::new(EventState::Unset));
                 let attempt = RegionalValue::<T>::Initializing(Arc::clone(&attempt_signal));
 
                 let previous_value = self.value.compare_and_swap(reader, Some(Arc::new(attempt)));

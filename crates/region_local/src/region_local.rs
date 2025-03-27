@@ -2,6 +2,7 @@ use std::sync::{Arc, OnceLock};
 
 use arc_swap::ArcSwapOption;
 use many_cpus::MemoryRegionId;
+use rsevents::{Awaitable, EventState, ManualResetEvent};
 
 use crate::{
     HardwareInfoClient, HardwareInfoClientFacade, HardwareTrackerClient,
@@ -137,8 +138,7 @@ where
             }
 
             // If we got here then the regional state is not initialized. Let's initialize it.
-            let initial_value = (self.global_state.initializer)();
-            regional_state.set(initial_value);
+            regional_state.initialize(self.global_state.initializer);
         }
     }
 
@@ -306,7 +306,7 @@ where
     /// In single-threaded and write-heavy scenarios, RwLock is faster but those
     /// are not the scenarios we target - we expect the data to be local for long
     /// periods and read from many threads, with writes happening not so often.
-    value: ArcSwapOption<T>,
+    value: ArcSwapOption<RegionalValue<T>>,
 }
 
 impl<T> RegionalState<T>
@@ -330,18 +330,82 @@ where
         let reader = self.value.load();
 
         if let Some(ref value) = *reader {
-            return Ok(f(value));
+            if let RegionalValue::Ready(value) = &**value {
+                return Ok(f(value));
+            }
         }
 
         Err(f)
+    }
+
+    /// Initializes the region-local value to an initial value, potentially accepting
+    /// a value from another thread already doing the same.
+    fn initialize(&self, initializer: fn() -> T) {
+        // This is a conditional swap - we only initialize if we can swap in our "initializing"
+        // value onto a clean slate. If someone else got there first, we line up behind them
+        // and wait for them to finish before we do anything.
+
+        loop {
+            let reader = self.value.load();
+
+            if let Some(ref value) = *reader {
+                // Something is already happening.
+
+                if let RegionalValue::Initializing(manual_reset_event) = &**value {
+                    // We are waiting for someone else to finish initializing.
+                    manual_reset_event.wait();
+                }
+
+                // Something has finished happening! Whatever it was, we are now initialized.
+                break;
+            } else {
+                // Nothing is happening. We may be the first to start initializing.
+                let attempt_signal = Arc::new(ManualResetEvent::new(EventState::Unset));
+                let attempt = RegionalValue::<T>::Initializing(Arc::clone(&attempt_signal));
+
+                let previous_value = self.value.compare_and_swap(reader, Some(Arc::new(attempt)));
+
+                if !previous_value.is_none() {
+                    // Someone raced ahead of us. Re-enter loop.
+                    continue;
+                }
+
+                let new_value = RegionalValue::Ready(initializer());
+                self.value.store(Some(Arc::new(new_value)));
+
+                // We are done initializing. Notify all waiters that they can continue.
+                attempt_signal.set();
+
+                break;
+            }
+        }
     }
 
     // Skip mutating - would lead to infinite loop as it looks just like another thread
     // constantly resetting the value, so the conflict resolver will never finish.
     #[cfg_attr(test, mutants::skip)]
     fn set(&self, value: T) {
-        self.value.store(Some(Arc::new(value)));
+        self.value
+            .store(Some(Arc::new(RegionalValue::Ready(value))));
     }
+}
+
+#[derive(derive_more::Debug)]
+enum RegionalValue<T> {
+    /// One thread has declared that it has started initializing the value.
+    ///
+    /// It is possible that multiple threads to attempt to start initializing (i.e. to set this
+    /// state). To avoid double initialization, the second caller must perform a conditional swap
+    /// and become a waiter if it sees someone else got there first.
+    ///
+    /// This is only used for the first initialization, to avoid every thread attempting to
+    /// initialize when they start doing work together at the same time, e.g. on app startup,
+    /// because that would create a memory spike as they all try to initialize. Only one can win
+    /// this race, so we want to stop the others doing unnecessary work.
+    Initializing(#[debug(ignore)] Arc<ManualResetEvent>),
+
+    /// The value has been initialized and is ready for use.
+    Ready(T),
 }
 
 #[cfg(test)]
