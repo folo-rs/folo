@@ -269,6 +269,7 @@ where
     /// let token = current_access_token.get_cached();
     /// assert_eq!(token, 0x123100);
     /// ```
+    #[inline]
     pub fn get_cached(&self) -> T {
         self.with_cached(|v| *v)
     }

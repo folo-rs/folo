@@ -103,6 +103,7 @@ impl HardwareTracker {
     ///
     /// [1]: HardwareTracker::current_processor_id
     /// [2]: HardwareTracker::current_memory_region_id
+    #[inline]
     pub fn with<F, R>(f: F) -> R
     where
         F: FnOnce(&Self) -> R,
@@ -144,23 +145,27 @@ impl HardwareTracker {
     }
 
     /// Returns the ID of the processor that the current thread is executing on.
+    #[inline]
     pub fn current_processor_id(&self) -> ProcessorId {
         self.pinned_processor_id
             .unwrap_or_else(|| self.pal.current_processor_id())
     }
 
     /// Returns the ID of the memory region of the processor that the current thread is executing on.
+    #[inline]
     pub fn current_memory_region_id(&self) -> MemoryRegionId {
         self.pinned_memory_region_id
             .unwrap_or_else(|| self.current_processor().memory_region_id())
     }
 
     /// Whether the current thread is pinned to a single processor.
+    #[inline]
     pub fn is_thread_processor_pinned(&self) -> bool {
         self.pinned_processor_id.is_some()
     }
 
     /// Whether the current thread is pinned to a single memory region.
+    #[inline]
     pub fn is_thread_memory_region_pinned(&self) -> bool {
         self.pinned_memory_region_id.is_some()
     }

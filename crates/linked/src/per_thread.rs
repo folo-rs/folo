@@ -182,6 +182,7 @@ impl<T> Clone for PerThread<T>
 where
     T: linked::Object,
 {
+    #[inline]
     fn clone(&self) -> Self {
         Self {
             family: self.family.clone(),
@@ -211,6 +212,7 @@ where
 {
     type Target = T;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
@@ -220,6 +222,7 @@ impl<T> Clone for ThreadLocal<T>
 where
     T: linked::Object,
 {
+    #[inline]
     fn clone(&self) -> Self {
         Self {
             inner: Rc::clone(&self.inner),

@@ -22,6 +22,7 @@ pub use ::paste::paste;
 /// The instance factory must be thread-safe, which implies that all captured state in this factory
 /// function must be `Send` + `Sync` + `'static`. The instances it returns do not need to be thread-
 /// safe, however.
+#[inline]
 pub fn new<T>(instance_factory: impl Fn(Link<T>) -> T + Send + Sync + 'static) -> T {
     Link::new(Arc::new(instance_factory)).into_instance()
 }
@@ -30,6 +31,7 @@ pub fn new<T>(instance_factory: impl Fn(Link<T>) -> T + Send + Sync + 'static) -
 ///
 /// Clones a linked object. They require a specific pattern to clone, so the `#[linked::object]`
 /// macro wires up a suitable `Clone` implementation for all such types to avoid mistakes.
+#[inline]
 pub fn clone<T>(value: &T) -> T
 where
     T: Object + From<Handle<T>>,
@@ -88,6 +90,7 @@ impl<T> Link<T> {
         }
     }
 
+    #[inline]
     pub fn handle(&self) -> Handle<T> {
         Handle::new(self.clone())
     }

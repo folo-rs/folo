@@ -131,12 +131,14 @@ impl<T: ?Sized> Box<T> {
 impl<T: ?Sized + 'static> Deref for Box<T> {
     type Target = T;
 
+    #[inline(always)]
     fn deref(&self) -> &Self::Target {
         &self.value
     }
 }
 
 impl<T: ?Sized + 'static> DerefMut for Box<T> {
+    #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
     }

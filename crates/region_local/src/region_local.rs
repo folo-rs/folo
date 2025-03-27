@@ -240,6 +240,7 @@ where
     /// let token = current_access_token.get_local();
     /// assert_eq!(token, 0x123100);
     /// ```
+    #[inline]
     pub fn get_local(&self) -> T {
         self.with_local(|v| *v)
     }

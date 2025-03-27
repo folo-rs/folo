@@ -5,6 +5,7 @@ use crate::{HardwareTracker, MemoryRegionId, ProcessorId};
 /// Convenience function to access the singleton hardware tracker instance
 /// and perform the relevant query on it.
 #[cfg_attr(test, mutants::skip)] // Impractical to test; only lower levels covered.
+#[inline]
 pub fn current_processor_id() -> ProcessorId {
     HardwareTracker::with(|tracker| tracker.current_processor_id())
 }
@@ -14,6 +15,7 @@ pub fn current_processor_id() -> ProcessorId {
 /// Convenience function to access the singleton hardware tracker instance
 /// and perform the relevant query on it.
 #[cfg_attr(test, mutants::skip)] // Impractical to test; only lower levels covered.
+#[inline]
 pub fn current_memory_region_id() -> MemoryRegionId {
     HardwareTracker::with(|tracker| tracker.current_memory_region_id())
 }

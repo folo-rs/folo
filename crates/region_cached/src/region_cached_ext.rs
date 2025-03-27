@@ -97,6 +97,7 @@ impl<T> RegionCachedExt<T> for linked::PerThreadStatic<RegionCached<T>>
 where
     T: Clone + Send + Sync + 'static,
 {
+    #[inline]
     fn with_cached<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&T) -> R,
@@ -104,6 +105,7 @@ where
         self.with(|inner| inner.with_cached(f))
     }
 
+    #[inline]
     fn set_global(&self, value: T) {
         self.with(|inner| inner.set_global(value));
     }
@@ -113,6 +115,7 @@ impl<T> RegionCachedCopyExt<T> for linked::PerThreadStatic<RegionCached<T>>
 where
     T: Clone + Copy + Send + Sync + 'static,
 {
+    #[inline]
     fn get_cached(&self) -> T {
         self.with(|inner| inner.get_cached())
     }

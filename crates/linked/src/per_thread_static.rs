@@ -37,6 +37,7 @@ where
     ///
     /// This is typically the most efficient way to access the current thread's instance of the
     /// linked object.
+    #[inline]
     pub fn with<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&Rc<T>) -> R,
@@ -56,6 +57,7 @@ where
     /// doing nothing. If all you need is to execute some logic on the inner type `T`, you may
     /// want to use [`.with()`][Self::with] instead, which does not create the `Rc` and saves
     /// a few nanoseconds.
+    #[inline]
     pub fn to_rc(&self) -> Rc<T> {
         (self.get_storage)().with(Rc::clone)
     }

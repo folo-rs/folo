@@ -26,30 +26,35 @@ impl HardwareInfo {
     }
 
     /// The singleton instance of the type.
+    #[inline]
     pub fn current() -> &'static Self {
         &CURRENT
     }
 
     /// Gets the maximum (inclusive) processor ID of any processor that could possibly
     /// be present on the system (including processors that are not currently active).
+    #[inline]
     pub fn max_processor_id(&self) -> ProcessorId {
         self.max_processor_id
     }
 
     /// Gets the maximum (inclusive) memory region ID of any memory region that could possibly
     /// be present on the system (including memory regions that are not currently active).
+    #[inline]
     pub fn max_memory_region_id(&self) -> MemoryRegionId {
         self.max_memory_region_id
     }
 
     /// Gets the maximum number of processors that could possibly be present on the system,
     /// including processors that are not currently active or available to this process.
+    #[inline]
     pub fn max_processor_count(&self) -> usize {
         self.max_processor_id as usize + 1
     }
 
     /// Gets the maximum number of memory regions that could possibly be present on the system,
     /// including memory regions that are not currently active or available to this process.
+    #[inline]
     pub fn max_memory_region_count(&self) -> usize {
         self.max_memory_region_id as usize + 1
     }

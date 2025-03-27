@@ -47,6 +47,7 @@ impl<T> Handle<T> {
 
     // Implementation of `From<Handle<T>> for T`, called from macro-generated code for a specific T.
     #[doc(hidden)]
+    #[inline]
     pub fn __private_into(self) -> T {
         Link::new(Arc::clone(&self.instance_factory)).into_instance()
     }
