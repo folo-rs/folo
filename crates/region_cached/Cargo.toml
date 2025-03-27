@@ -2,7 +2,7 @@
 name = "region_cached"
 description = "Add a layer of cache between L3 and main memory"
 publish = true
-version = "0.0.6"
+version = "0.1.0"
 
 authors.workspace = true
 edition.workspace = true
