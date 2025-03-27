@@ -104,6 +104,24 @@
 //! provides additional API surface via extension methods on [`RegionLocalExt<T>`][1].
 //! See the API documentation of this type for more details about available methods.
 //!
+//! # Operating system compatibility
+//!
+//! This crate relies on the collaboration between the Rust global allocator and the operating
+//! system to allocate memory in the correct memory region. The default configuration in operating
+//! systems tends to encourage region-local allocation but this is not guaranteed.
+//!
+//! Some evidence suggests that on Windows, region-local allocation is only enabled when the threads
+//! are pinned to specific processors in specific memory regions. A similar requirement is not known
+//! for Linux (at least Ubuntu 24) but this may differ based on the specific OS and configuration.
+//! Perform your own measurements to identify the behavior of your system and adjust the application
+//! structure accordingly.
+//!
+//! Example of using this crate with processor-pinned threads:
+//!
+//! ```
+#![doc = source_file!("examples/region_local_1gb.rs")]
+//! ```
+//!
 //! # Cross-region visibility
 //!
 //! The [`region_cached`][5] crate provides a similar mechanism that also publishes the value to all
@@ -117,6 +135,7 @@
 //! [4]: crate::RegionLocal
 //! [5]: https://docs.rs/region_cached/latest/region_cached/
 
+use include_doc::source_file;
 use simple_mermaid::mermaid;
 
 mod clients;
