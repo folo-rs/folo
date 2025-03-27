@@ -5,7 +5,7 @@ use derive_more::Display;
 /// The work is redistributed for each benchmark iteration, ensuring that hardware-specific
 /// performance anomalies are averaged out (e.g. if some processors have worse thermals and
 /// throttle more often).
-#[derive(Copy, Clone, Debug, Display, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Display, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WorkDistribution {
     /// One worker pair is spawned for each numerically neighboring memory region pair.

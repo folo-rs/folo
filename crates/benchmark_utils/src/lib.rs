@@ -97,7 +97,7 @@ fn calculate_average_duration(thread_count: usize, total_elapsed_nanos: u128) ->
 }
 
 /// For the A/B benchmarking, identifiers whether a worker is the A or the B.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AbWorker {
     A,
     B,

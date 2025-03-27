@@ -21,10 +21,12 @@ coverage-report:
 [group('quality')]
 format:
     cargo fmt --verbose --all
+    cargo sort-derives
 
 [group('quality')]
 format-check:
     cargo fmt --verbose --all --check
+    cargo sort-derives --check
 
 [group('quality')]
 hack:
