@@ -128,6 +128,7 @@ where
             })
     }
 
+    #[cfg_attr(test, mutants::skip)] // Mutation easily makes this into infinite loop.
     fn with_in_region<F, R>(&self, regional_state: &RegionalState<T>, mut f: F) -> R
     where
         F: FnOnce(&T) -> R,

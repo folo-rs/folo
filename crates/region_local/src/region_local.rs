@@ -344,6 +344,7 @@ where
 
     /// Initializes the region-local value to an initial value, potentially accepting
     /// a value from another thread already doing the same.
+    #[cfg_attr(test, mutants::skip)] // Several mutations result in infinite looping.
     fn initialize(&self, initializer: fn() -> T) {
         // This is a conditional swap - we only initialize if we can swap in our "initializing"
         // value onto a clean slate. If someone else got there first, we line up behind them
