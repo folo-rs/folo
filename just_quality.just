@@ -27,10 +27,6 @@ format-check:
     cargo fmt --verbose --all --check
 
 [group('quality')]
-format-self:
-    just --fmt --unstable
-
-[group('quality')]
 hack:
     cargo hack check --feature-powerset
 
