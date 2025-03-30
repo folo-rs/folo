@@ -10,6 +10,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+
 [dependencies]
 include-doc = { workspace = true }
 itertools = { workspace = true }
