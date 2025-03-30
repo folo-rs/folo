@@ -3,7 +3,7 @@
 //! processor:
 //!
 //! * Cross-memory-region loads have higher latency (e.g. 100 ns local versus 200 ns remote).
-//! * Cross-memory-region loads have lower throughput (e.g. 50 Gbps local versus 10 Gbps remote).
+//! * Cross-memory-region loads have lower throughput (e.g. 200 GBps local versus 100 GBps remote).
 //!
 //! This crate provides the capability to cache frequently accessed shared data sets in the local memory
 //! region, speeding up reads when the data is not already in the local processor caches. You can think
