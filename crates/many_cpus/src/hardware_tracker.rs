@@ -200,12 +200,13 @@ impl !Sync for HardwareTracker {}
 
 #[cfg(test)]
 mod tests {
+    use itertools::Itertools;
     use mockall::Sequence;
     use nonempty::nonempty;
     use static_assertions::assert_not_impl_any;
 
     use crate::{
-        EfficiencyClass,
+        EfficiencyClass, ProcessorSet,
         pal::{FakeProcessor, MockPlatform, ProcessorFacade},
     };
 
@@ -491,5 +492,30 @@ mod tests {
         let mut tracker = HardwareTracker::new(PlatformFacade::from_mock(platform));
 
         tracker.update_pin_status(Some(0), None);
+    }
+
+    #[test]
+    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    fn real_current_processor_id_is_unique_and_matches_expectation() {
+        // We spawn a thread on every processor and check that the processor ID is unique.
+        let mut processor_ids = ProcessorSet::all()
+            .spawn_threads(|processor| {
+                let processor_id = processor.id();
+
+                let current_processor_id = HardwareTracker::with(|x| x.current_processor_id());
+                assert_eq!(processor_id, current_processor_id);
+
+                current_processor_id
+            })
+            .into_iter()
+            .map(|x| x.join().unwrap())
+            .collect_vec();
+
+        // We expect the processor IDs to be unique.
+        processor_ids.sort();
+
+        let unique_id_count = processor_ids.iter().dedup().count();
+
+        assert_eq!(unique_id_count, processor_ids.len());
     }
 }
