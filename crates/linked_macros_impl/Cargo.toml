@@ -16,6 +16,6 @@ doc = false
 [dependencies]
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
-syn = { workspace = true, features = ["full", "parsing", "extra-traits"] }
+syn = { workspace = true, features = ["full", "parsing", "printing"] }
 
 [dev-dependencies]

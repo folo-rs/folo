@@ -1,6 +1,6 @@
 [package]
 name = "region_local"
-description = "Isolate variable storage per memory region, similar to `thread_local!`"
+description = "Isolated variable storage per memory region, similar to `thread_local!`"
 publish = true
 version = "0.1.2"
 
@@ -19,13 +19,13 @@ rsevents = { workspace = true }
 simple-mermaid = { workspace = true }
 
 [dev-dependencies]
-axum = { workspace = true }
+axum = { workspace = true, features = ["http1", "tokio"] }
 benchmark_utils = { workspace = true }
 criterion = { workspace = true }
 mockall = { workspace = true }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
 
 [[bench]]
 name = "region_local"

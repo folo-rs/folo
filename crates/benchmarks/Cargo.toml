@@ -13,7 +13,7 @@ rust-version.workspace = true
 [lib]
 doc = false
 
-[dependencies]
+[dev-dependencies]
 linked = { workspace = true }
 many_cpus = { workspace = true }
 many_cpus_benchmarking = { workspace = true }
@@ -24,7 +24,7 @@ frozen-collections = { workspace = true }
 http = { workspace = true }
 scc = { workspace = true }
 
-[target.'cfg(windows)'.dependencies]
+[target.'cfg(windows)'.dev-dependencies]
 windows = { workspace = true, features = ["Win32_System_Memory"] }
 
 [[bench]]

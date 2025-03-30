@@ -1,6 +1,6 @@
 [package]
 name = "region_cached"
-description = "Add a layer of cache between L3 and main memory"
+description = "Adds a logical layer of caching between processor L3 cache and main memory"
 publish = true
 version = "0.1.2"
 
@@ -19,13 +19,13 @@ rsevents = { workspace = true }
 simple-mermaid = { workspace = true }
 
 [dev-dependencies]
-axum = { workspace = true }
+axum = { workspace = true, features = ["http1", "tokio"] }
 benchmark_utils = { workspace = true }
 criterion = { workspace = true }
 mockall = { workspace = true }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
 
 [[bench]]
 name = "region_cached"

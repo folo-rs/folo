@@ -10,8 +10,8 @@ repository = "https://github.com/folo-rs/folo"
 rust-version = "1.85"
 
 [profile.release]
-# This ensures we have high quality data with full symbols when profiling.
-debug = "full"
+# This ensures we have high quality data with proper stack traces when profiling.
+debug = "line-tables-only"
 
 [profile.mutants]
 inherits = "dev"
@@ -31,37 +31,39 @@ many_cpus_benchmarking = { version = "0.1.1", path = "crates/many_cpus_benchmark
 # Internal packages we do not publish.
 benchmark_utils = { path = "crates/benchmark_utils" }
 
-# The packages we consume.
-arc-swap = "1.7"
-axum = "0.8"
+# The packages we consume. We only enable "std" features here, the rest in individual crates.
+arc-swap = { version = "1.7", default-features = false }
+axum = { version = "0.8", default-features = false }
 # Using Git reference here because the published crate is out of date and lacks proper graph support.
-criterion = { version = "0.5", git = "https://github.com/bheisler/criterion.rs.git" }
-darling = "0.20"
-derive_more = "2.0"
-fake_headers = "0.0"
-foldhash = "0.1"
-frozen-collections = "0.4"
-hash_hasher = "2.0"
-http = "1.2"
-include-doc = "0.2"
-itertools = "0.14"
-libc = "0.2"
-mockall = "0.13"
-mutants = "0.0.3"
-negative-impl = "0.1"
-nonempty = "0.11"
-oneshot = "0.1"
-paste = "1.0"
-proc-macro2 = "1.0"
-quote = "1.0"
-rand = "0.9"
-rsevents = "0.3.1"
-scc = "2.3"
-scopeguard = "1.2"
-seq-macro = "0.3"
-simple-mermaid = "0.2"
-static_assertions = "1"
-syn = "2.0"
-thiserror = "2.0"
-tokio = "1.43"
-windows = "0.58"
+criterion = { version = "0.5", git = "https://github.com/bheisler/criterion.rs.git", default-features = false }
+darling = { version = "0.20", default-features = false }
+derive_more = { version = "2.0", default-features = false }
+fake_headers = { version = "0.0", default-features = false }
+foldhash = { version = "0.1", default-features = false, features = ["std"] }
+frozen-collections = { version = "0.4", default-features = false }
+hash_hasher = { version = "2.0", default-features = false }
+http = { version = "1.2", default-features = false }
+include-doc = { version = "0.2", default-features = false }
+itertools = { version = "0.14", default-features = false, features = [
+    "use_std",
+] }
+libc = { version = "0.2", default-features = false }
+mockall = { version = "0.13", default-features = false }
+mutants = { version = "0.0.3", default-features = false }
+negative-impl = { version = "0.1", default-features = false }
+nonempty = { version = "0.11", default-features = false }
+oneshot = { version = "0.1", default-features = false, features = ["std"] }
+paste = { version = "1.0", default-features = false }
+proc-macro2 = { version = "1.0", default-features = false }
+quote = { version = "1.0", default-features = false }
+rand = { version = "0.9", default-features = false, features = ["std"] }
+rsevents = { version = "0.3.1", default-features = false }
+scc = { version = "2.3", default-features = false }
+scopeguard = { version = "1.2", default-features = false }
+seq-macro = { version = "0.3", default-features = false }
+simple-mermaid = { version = "0.2", default-features = false }
+static_assertions = { version = "1", default-features = false }
+syn = { version = "2.0", default-features = false }
+thiserror = { version = "2.0", default-features = false }
+tokio = { version = "1.43", default-features = false }
+windows = { version = "0.58", default-features = false }

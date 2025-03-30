@@ -17,7 +17,7 @@ folo_ffi = { workspace = true }
 itertools = { workspace = true }
 negative-impl = { workspace = true }
 nonempty = { workspace = true }
-rand = { workspace = true }
+rand = { workspace = true, features = ["thread_rng"] }
 
 [target.'cfg(unix)'.dependencies]
 cpulist = { workspace = true }
