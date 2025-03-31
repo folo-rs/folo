@@ -54,7 +54,7 @@
 //! * Windows 11 and newer
 //! * Windows Server 2022 and newer
 //! * Ubuntu 24.04 and newer
-//! 
+//!
 //! The functionality may also work on other operating systems if they offer compatible platform
 //! APIs but this is not actively tested.
 //!
