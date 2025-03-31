@@ -119,7 +119,7 @@
 //! ```rust
 //! use many_cpus::{HardwareInfo, HardwareTracker};
 //! use std::{thread, time::Duration};
-//! 
+//!
 //! let max_processors = HardwareInfo::max_processor_count();
 //! let max_memory_regions = HardwareInfo::max_memory_region_count();
 //! println!(
