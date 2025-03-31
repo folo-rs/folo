@@ -44,7 +44,7 @@ impl Display for ProcessorImpl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "processor {} [{}-{}]",
+            "processor {} [{}.{}]",
             self.id, self.group_index, self.index_in_group
         )
     }
