@@ -19,33 +19,29 @@ use crate::{
 /// You can obtain a builder via [`ProcessorSet::builder()`] or from an existing processor set
 /// via [`ProcessorSet::to_builder()`].
 ///
-/// # Process-scoped processor affinity
+/// # External constraints
 ///
-/// Operating systems provide various ways to start processes with a specific processor affinity,
-/// such as via the `start /affinity 0x1` command on Windows, the `taskset 0x1` command on Linux
-/// or via the cgroups mechanism.
+/// The operating system may define constraints that prohibit the application from using all the available
+/// processors (e.g. when the app is containerized and provided limited hardware resources).
 ///
-/// Some of these techniques only specify a default processor affinity, while others are hard
-/// constraints.
+/// This crate treats platform constraints as follows:
 ///
-/// Due to limitations in the design of the underlying platform APIs, how `ProcessorSetBuilder`
-/// interacts with these constraints depends on the operating system and the specific way in which
-/// the constraint was defined. We do not guarantee that any specific process-level affinity
-/// configuration on any specific operating system is or is not considered a constraint.
+/// * Hard limits on which processors are allowed are respected - forbidden processors are mostly
+///   ignored by this crate and cannot be used to spawn threads, though such processors are still
+///   accounted for when inspecting hardware information such as "max processor count".
+///   The mechanisms for defining such limits are cgroups on Linux and job objects on Windows.
+///   See `examples/obey_job_limits_windows.rs` for a Windows-specific example.
+/// * Soft limits on which processors are allowed are ignored by default - specifying a processor
+///   affinity via `taskset` on Linux, `start.exe /affinity 0xff` on Windows or similar mechanisms
+///   does not affect the set of processors this crate will use by default, though you can opt in to
+///   this (see next chapter).
 ///
-/// Typical behavior resembles the following:
-///
-/// * On Linux, process-scoped affinity is treated as a hard constraint - only processors allowed by
-///   the affinity configuration are considered available for use.
-/// * On Windows, process-scoped affinity is ignored and all processors present on the system are
-///   considered available for use.
-///
-/// For maximum compatibility, do not rely on external configuration to limit the processors in use
-/// and assume that `ProcessorSetBuilder` may see all processors present on the system.
-///
-/// If your code is running in a thread where you can be certain that processor affinity has not
-/// been customized, you can inherit the allowed processor set from the current thread to get a set
-/// of processors that matches the defaults the platform would prefer the process to use.
+/// Note that limits on **processor time** are ignored - they are still enforced by the platform (which
+/// will force idle periods to keep the process within the limits) but have no effect on which actual
+/// processors are available for use. For example, if you configure a processor time limit of 10 seconds
+/// per second of real time on a 20-processor system, then at full utilization this crate may use all 20
+/// processors but only for a maximum of 0.5 seconds of each second (leaving the processors idle for
+/// the remaining 0.5 seconds, potentially smeared around in smaller units over the whole second).
 ///
 /// # Inheriting processor affinity from current thread
 ///
