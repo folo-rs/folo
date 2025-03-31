@@ -11,26 +11,22 @@ fn entrypoint(c: &mut Criterion) {
 
     group.bench_function("current_processor_unpinned", |b| {
         b.iter(|| {
-            black_box(HardwareTracker::with(|tracker| {
+            black_box(HardwareTracker::with_current_processor(|p| {
                 // We cannot return a reference to the processor itself but this is close enough.
-                tracker.current_processor().id()
+                p.id()
             }));
         })
     });
 
     group.bench_function("current_processor_id_unpinned", |b| {
         b.iter(|| {
-            black_box(HardwareTracker::with(|tracker| {
-                tracker.current_processor_id()
-            }));
+            black_box(HardwareTracker::current_processor_id());
         })
     });
 
     group.bench_function("current_memory_region_id_unpinned", |b| {
         b.iter(|| {
-            black_box(HardwareTracker::with(|tracker| {
-                tracker.current_memory_region_id()
-            }));
+            black_box(HardwareTracker::current_memory_region_id());
         })
     });
 
@@ -44,26 +40,22 @@ fn entrypoint(c: &mut Criterion) {
 
     group.bench_function("current_processor_pinned", |b| {
         b.iter(|| {
-            black_box(HardwareTracker::with(|tracker| {
+            black_box(HardwareTracker::with_current_processor(|p| {
                 // We cannot return a reference to the processor itself but this is close enough.
-                tracker.current_processor().id()
+                p.id()
             }));
         })
     });
 
     group.bench_function("current_processor_id_pinned", |b| {
         b.iter(|| {
-            black_box(HardwareTracker::with(|tracker| {
-                tracker.current_processor_id()
-            }));
+            black_box(HardwareTracker::current_processor_id());
         })
     });
 
     group.bench_function("current_memory_region_id_pinned", |b| {
         b.iter(|| {
-            black_box(HardwareTracker::with(|tracker| {
-                tracker.current_memory_region_id()
-            }));
+            black_box(HardwareTracker::current_memory_region_id());
         })
     });
 

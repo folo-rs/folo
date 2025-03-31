@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, marker::PhantomData};
 
 use negative_impl::negative_impl;
 
@@ -8,29 +8,24 @@ use crate::{
 };
 
 thread_local! {
-    /// Thread-local default instance of the hardware tracker.
+    /// Thread-local default instance of the hardware tracker core.
     ///
     /// Each thread has its own hardware tracker, as some of the information will be thread-
     /// specific. This also helps avoid the need for synchronization when accessing the tracker.
-    pub(crate) static CURRENT_TRACKER: RefCell<HardwareTracker> = RefCell::new(HardwareTracker::new(PlatformFacade::real()));
+    pub(crate) static CURRENT_TRACKER: RefCell<HardwareTrackerCore>
+        = RefCell::new(HardwareTrackerCore::new(PlatformFacade::real()));
 }
 
-/// Tracks changing hardware information over time.
-///
-/// This type is accessed through a singleton instance that you can reference via
-/// [`HardwareTracker::with`], which provides a shared reference for the duration of
-/// a callback.
+/// Tracks and provides access to changing hardware information over time.
 ///
 /// # Example
 ///
 /// ```
 /// use many_cpus::HardwareTracker;
 ///
-/// HardwareTracker::with(|tracker| {
-///     let processor = tracker.current_processor();
-///
-///     let efficiency_class = processor.efficiency_class();
-///     let id = processor.id();
+/// HardwareTracker::with_current_processor(|p| {
+///     let efficiency_class = p.efficiency_class();
+///     let id = p.id();
 ///
 ///     println!("Executing on processor {id}, which has the efficiency class {efficiency_class:?}");
 /// });
@@ -38,20 +33,194 @@ thread_local! {
 ///
 /// # Current processor
 ///
-/// Some of the data is related to the current processor.  The meaning of "current" is deceptively
-/// simple: the current processor is whatever processor is executing the code at the moment the
-/// "get current processor" logic is called.
+/// Many of the tracked parameters are related to the current processor. The meaning of "current"
+/// is simple: the current processor is whatever processor is executing the `HardwareTracker` code
+/// when it is called.
 ///
-/// Most threads can move between processors, so the current processor can change over time.
-/// This means that there is a certain "time of check to time of use" discrepancy that can occur.
-/// This is unavoidable if your threads are floating - just accept it as a fact.
+/// Unless otherwise configured, threads can move between processors, so the current processor can
+/// change over time. This means that there is a certain "time of check to time of use" discrepancy
+/// that can occur. This is unavoidable if your threads are not pinned to specific processors.
 ///
-/// You may avoid this problem by using pinned threads, assigned to execute on either a specific
-/// processor or set of processors that have the desired quality you care about (e.g. processors
-/// in the same memory region). You can pin the current thread to one or more processors via
+/// If you need certainty in the data, you must use pinned threads, with each thread assigned to
+/// execute on either a specific processor or set of processors that have the desired quality you
+/// care about (e.g. a number of processors in the same memory region). You can pin the current
+/// thread to one or more processors via
 /// [ProcessorSet::pin_current_thread_to][crate::ProcessorSet::pin_current_thread_to].
 #[derive(Debug)]
 pub struct HardwareTracker {
+    _no_ctor: PhantomData<()>,
+}
+
+impl HardwareTracker {
+    /// Obtains a reference to the current processor for the duration of a callback.
+    ///
+    /// If all you need is the processor ID or memory region ID, you may see better performance
+    /// if you query [`current_processor_id()`][1] or [`current_memory_region_id()`][2] directly.
+    ///
+    /// [1]: HardwareTracker::current_processor_id
+    /// [2]: HardwareTracker::current_memory_region_id
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use many_cpus::HardwareTracker;
+    ///
+    /// HardwareTracker::with_current_processor(|p| {
+    ///     let efficiency_class = p.efficiency_class();
+    ///     let id = p.id();
+    ///
+    ///     println!("Executing on processor {id}, which has the efficiency class {efficiency_class:?}");
+    /// });
+    /// ```
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, only the core is tested.
+    #[inline]
+    pub fn with_current_processor<F, R>(f: F) -> R
+    where
+        F: FnOnce(&Processor) -> R,
+    {
+        CURRENT_TRACKER.with_borrow(|core| f(core.current_processor()))
+    }
+
+    /// The ID of the processor currently executing this thread.
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, only the core is tested.
+    #[inline]
+    pub fn current_processor_id() -> ProcessorId {
+        CURRENT_TRACKER.with_borrow(|core| core.current_processor_id())
+    }
+
+    /// The memory region ID of the processor currently executing this thread.
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, only the core is tested.
+    #[inline]
+    pub fn current_memory_region_id() -> MemoryRegionId {
+        CURRENT_TRACKER.with_borrow(|core| core.current_memory_region_id())
+    }
+
+    /// Whether the current thread is pinned to a single processor.
+    ///
+    /// Threads may be pinned to any number of processors, not just one - this only checks for
+    /// the scenario where the thread is pinned to one specific processor.
+    ///
+    /// # Example (basic)
+    ///
+    /// ```
+    /// use many_cpus::HardwareTracker;
+    ///
+    /// // Threads are typically not pinned unless you pin them yourself.
+    /// assert!(!HardwareTracker::is_thread_processor_pinned());
+    /// ```
+    ///
+    /// # Example (pinned to one processor)
+    ///
+    /// ```
+    /// use many_cpus::{HardwareTracker, ProcessorSet};
+    /// use std::num::NonZero;
+    /// use std::thread;
+    ///
+    /// let one_processor = ProcessorSet::builder()
+    ///     .take(NonZero::new(1).unwrap())
+    ///     .unwrap();
+    ///
+    /// thread::spawn(move || {
+    ///     one_processor.pin_current_thread_to();
+    ///
+    ///     assert!(HardwareTracker::is_thread_processor_pinned());
+    /// }).join().unwrap();
+    /// ```
+    ///
+    /// # Example (pinned to multiple processors)
+    ///
+    /// ```
+    /// use many_cpus::{HardwareTracker, ProcessorSet};
+    /// use std::num::NonZero;
+    /// use std::thread;
+    ///
+    /// let two_processors = ProcessorSet::builder()
+    ///     .take(NonZero::new(2).unwrap());
+    ///
+    /// let Some(two_processors) = two_processors else {
+    ///     eprintln!("This example requires at least two processors");
+    ///     return;
+    /// };
+    ///
+    /// thread::spawn(move || {
+    ///     two_processors.pin_current_thread_to();
+    ///
+    ///     assert!(!HardwareTracker::is_thread_processor_pinned());
+    /// }).join().unwrap();
+    /// ```
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, only the core is tested.
+    #[inline]
+    pub fn is_thread_processor_pinned() -> bool {
+        CURRENT_TRACKER.with_borrow(|core| core.is_thread_processor_pinned())
+    }
+
+    /// Whether the current thread is pinned to one or more processors that are all
+    /// in the same memory region.
+    ///
+    /// # Example (basic)
+    ///
+    /// ```
+    /// use many_cpus::HardwareTracker;
+    ///
+    /// // Threads are typically not pinned unless you pin them yourself.
+    /// assert!(!HardwareTracker::is_thread_memory_region_pinned());
+    /// ```
+    ///
+    /// # Example (pinned to one processor)
+    ///
+    /// ```
+    /// use many_cpus::{HardwareTracker, ProcessorSet};
+    /// use std::num::NonZero;
+    /// use std::thread;
+    ///
+    /// let one_processor = ProcessorSet::builder()
+    ///     .take(NonZero::new(1).unwrap())
+    ///     .unwrap();
+    ///
+    /// thread::spawn(move || {
+    ///     one_processor.pin_current_thread_to();
+    ///
+    ///     // Each processor is in exactly one memory region, so as we are
+    ///     // pinned to one processor, we are also pinned to one memory region.
+    ///     assert!(HardwareTracker::is_thread_memory_region_pinned());
+    /// }).join().unwrap();
+    /// ```
+    ///
+    /// # Example (pinned to multiple processors)
+    ///
+    /// ```
+    /// use many_cpus::{HardwareTracker, ProcessorSet};
+    /// use std::num::NonZero;
+    /// use std::thread;
+    ///
+    /// let two_processors = ProcessorSet::builder()
+    ///     .same_memory_region()
+    ///     .take(NonZero::new(2).unwrap());
+    ///
+    /// let Some(two_processors) = two_processors else {
+    ///     eprintln!("This example requires at least two processors in the same memory region");
+    ///     return;
+    /// };
+    ///
+    /// thread::spawn(move || {
+    ///     two_processors.pin_current_thread_to();
+    ///
+    ///     // While we are not pinned to a single processor, all processors we are pinned to
+    ///     // are in the same memory region, so we are still pinned to one memory region.
+    ///     assert!(HardwareTracker::is_thread_memory_region_pinned());
+    /// }).join().unwrap();
+    /// ```
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, only the core is tested.
+    #[inline]
+    pub fn is_thread_memory_region_pinned() -> bool {
+        CURRENT_TRACKER.with_borrow(|core| core.is_thread_memory_region_pinned())
+    }
+}
+
+/// The real implementation of HardwareTracker, accepting the PAL facade as a parameter
+/// to enable mocking for testing purposes. Public API uses a singleton of this per thread.
+#[derive(Debug)]
+pub(crate) struct HardwareTrackerCore {
     pinned_processor_id: Option<ProcessorId>,
     pinned_memory_region_id: Option<MemoryRegionId>,
 
@@ -63,7 +232,7 @@ pub struct HardwareTracker {
     pal: PlatformFacade,
 }
 
-impl HardwareTracker {
+impl HardwareTrackerCore {
     pub(crate) fn new(pal: PlatformFacade) -> Self {
         let all_pal_processors = pal.get_all_processors();
         let max_processor_id = pal.max_processor_id();
@@ -85,46 +254,7 @@ impl HardwareTracker {
         }
     }
 
-    /// Executes a closure that can access the latest information from the hardware tracker.
-    ///
-    /// While this crate does not support dynamic hardware changes, we nevertheless leave the door
-    /// open for a future version to start supporting it. Because of this, any references returned
-    /// from the hardware tracker are constrained to this callback, allowing the hardware tracker
-    /// to update its data set when it has exclusive access (potentially even during the callback).
-    ///
-    /// # Data consistency
-    ///
-    /// The data returned may change at any time during the execution of the callback, as it is not
-    /// a snapshot. This implies that different properties may be out of sync with each other. For
-    /// example, if you call [`current_processor_id()`][1] and [`current_memory_region_id()`][2]
-    /// in the same callback, you may find that the indicated processor is not in the indicated
-    /// memory region because the thread may have moved to a different processor in a different
-    /// memory region between the two calls.
-    ///
-    /// [1]: HardwareTracker::current_processor_id
-    /// [2]: HardwareTracker::current_memory_region_id
-    #[inline]
-    pub fn with<F, R>(f: F) -> R
-    where
-        F: FnOnce(&Self) -> R,
-    {
-        CURRENT_TRACKER.with_borrow(f)
-    }
-
-    /// Obtains a reference to the current processor.
-    ///
-    /// If all you need is the processor ID or memory region ID, you may get better performance
-    /// if you query [`current_processor_id()`][1] or [`current_memory_region_id()`][2].
-    ///
-    /// # Data consistency
-    ///
-    /// While the reference remains valid to the end of the [`with()`][Self::with] callback it
-    /// was made in, future calls to `current_processor()`, even in the same callback, may
-    /// return a different processor if the thread moves to a different processor.
-    ///
-    /// [1]: HardwareTracker::current_processor_id
-    /// [2]: HardwareTracker::current_memory_region_id
-    pub fn current_processor(&self) -> &Processor {
+    pub(crate) fn current_processor(&self) -> &Processor {
         let processor_id = self.current_processor_id();
 
         // This should never go OOB unless the PAL lied to us.
@@ -144,40 +274,24 @@ impl HardwareTracker {
         }
     }
 
-    /// Returns the ID of the processor that the current thread is executing on.
-    #[inline]
-    pub fn current_processor_id(&self) -> ProcessorId {
+    pub(crate) fn current_processor_id(&self) -> ProcessorId {
         self.pinned_processor_id
             .unwrap_or_else(|| self.pal.current_processor_id())
     }
 
-    /// Returns the ID of the memory region of the processor that the current thread is executing on.
-    #[inline]
-    pub fn current_memory_region_id(&self) -> MemoryRegionId {
+    pub(crate) fn current_memory_region_id(&self) -> MemoryRegionId {
         self.pinned_memory_region_id
             .unwrap_or_else(|| self.current_processor().memory_region_id())
     }
 
-    /// Whether the current thread is pinned to a single processor.
-    #[inline]
-    pub fn is_thread_processor_pinned(&self) -> bool {
+    pub(crate) fn is_thread_processor_pinned(&self) -> bool {
         self.pinned_processor_id.is_some()
     }
 
-    /// Whether the current thread is pinned to a single memory region.
-    #[inline]
-    pub fn is_thread_memory_region_pinned(&self) -> bool {
+    pub(crate) fn is_thread_memory_region_pinned(&self) -> bool {
         self.pinned_memory_region_id.is_some()
     }
 
-    /// Notifies the tracker that the current thread has been pinned or unpinned and that,
-    /// for `Some` arguments, future requests may be answered with the provided values.
-    ///
-    /// # Compatibility
-    ///
-    /// We assume here that there is no miscreant that is going to change the thread affinity
-    /// manually after it is pinned using this library's API. If that happens, our information
-    /// may become out of date.
     pub(crate) fn update_pin_status(
         &mut self,
         processor_id: Option<ProcessorId>,
@@ -223,7 +337,7 @@ mod tests {
     #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]
     fn real_does_not_panic() {
-        let tracker = HardwareTracker::new(PlatformFacade::real());
+        let tracker = HardwareTrackerCore::new(PlatformFacade::real());
 
         // We do not care what it returns (because we are operating in arbitrary thread which can
         // float among all processors); all we care about is that it does not panic.
@@ -263,7 +377,7 @@ mod tests {
             .in_sequence(&mut seq)
             .return_const(1_u32);
 
-        let tracker = HardwareTracker::new(PlatformFacade::from_mock(platform));
+        let tracker = HardwareTrackerCore::new(PlatformFacade::from_mock(platform));
 
         assert_eq!(0, tracker.current_processor_id());
         assert_eq!(1, tracker.current_processor_id());
@@ -289,7 +403,7 @@ mod tests {
         // We do not expect the tracker to ever ask the platform for the current processor
         // because we directly tell it what processor the current thread has been pinned to.
 
-        let mut tracker = HardwareTracker::new(PlatformFacade::from_mock(platform));
+        let mut tracker = HardwareTrackerCore::new(PlatformFacade::from_mock(platform));
 
         tracker.update_pin_status(Some(0), Some(0));
 
@@ -346,7 +460,7 @@ mod tests {
             .in_sequence(&mut seq)
             .return_const(3_u32);
 
-        let tracker = HardwareTracker::new(PlatformFacade::from_mock(platform));
+        let tracker = HardwareTrackerCore::new(PlatformFacade::from_mock(platform));
 
         let processor = tracker.current_processor();
         assert_eq!(0, processor.id());
@@ -405,7 +519,7 @@ mod tests {
             .in_sequence(&mut seq)
             .return_const(1_u32);
 
-        let mut tracker = HardwareTracker::new(PlatformFacade::from_mock(platform));
+        let mut tracker = HardwareTrackerCore::new(PlatformFacade::from_mock(platform));
 
         assert!(!tracker.is_thread_processor_pinned());
         assert!(!tracker.is_thread_memory_region_pinned());
@@ -489,7 +603,7 @@ mod tests {
             .expect_get_all_processors_core()
             .return_const(pal_processors);
 
-        let mut tracker = HardwareTracker::new(PlatformFacade::from_mock(platform));
+        let mut tracker = HardwareTrackerCore::new(PlatformFacade::from_mock(platform));
 
         tracker.update_pin_status(Some(0), None);
     }
@@ -502,7 +616,7 @@ mod tests {
             .spawn_threads(|processor| {
                 let processor_id = processor.id();
 
-                let current_processor_id = HardwareTracker::with(|x| x.current_processor_id());
+                let current_processor_id = HardwareTracker::current_processor_id();
                 assert_eq!(processor_id, current_processor_id);
 
                 current_processor_id

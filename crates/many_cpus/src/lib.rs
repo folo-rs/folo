@@ -46,11 +46,11 @@
 //! Other crates from the [Folo project](https://github.com/folo-rs/folo) build upon this hardware-
 //! awareness functionality to provide higher-level primitives such as thread pools, work schedulers,
 //! region-local cells and more.
-//! 
+//!
 //! # Supported operating systems
-//! 
+//!
 //! This crate aims to be compatible with:
-//! 
+//!
 //! * Windows 11 and newer
 //! * Windows Server 2022 and newer
 //! * Ubuntu 24.04 and newer
@@ -117,11 +117,18 @@
 //! (`examples/observe_processor.rs`):
 //!
 //! ```rust
+//! use many_cpus::{HardwareInfo, HardwareTracker};
 //! use std::{thread, time::Duration};
+//! 
+//! let max_processors = HardwareInfo::max_processor_count();
+//! let max_memory_regions = HardwareInfo::max_memory_region_count();
+//! println!(
+//!     "This system can support up to {max_processors} processors in {max_memory_regions} memory regions"
+//! );
 //!
 //! loop {
-//!     let current_processor_id = many_cpus::current_processor_id();
-//!     let current_memory_region_id = many_cpus::current_memory_region_id();
+//!     let current_processor_id = HardwareTracker::current_processor_id();
+//!     let current_memory_region_id = HardwareTracker::current_memory_region_id();
 //!
 //!     println!(
 //!         "Thread executing on processor {current_processor_id} in memory region {current_memory_region_id}"
@@ -138,6 +145,7 @@
 //! specific processors (such as those spawned via `ProcessorSet::spawn_threads()`). Example output:
 //!
 //! ```text
+//! This system can support up to 32 processors in 1 memory regions
 //! Thread executing on processor 4 in memory region 0
 //! Thread executing on processor 4 in memory region 0
 //! Thread executing on processor 12 in memory region 0
@@ -161,8 +169,11 @@
 //!
 //! This crate treats platform constraints as follows:
 //!
-//! * Hard limits on which processors are allowed are respected - forbidden processors are invisible to
-//!   this crate. The mechanisms for defining such limits are cgroups on Linux and job objects on Windows.
+//! * Hard limits on which processors are allowed are respected - forbidden processors are mostly
+//!   ignored by this crate and cannot be used to spawn threads, though such processors are still
+//!   accounted for when inspecting hardware information such as "max processor count".
+//!   The mechanisms for defining such limits are cgroups on Linux and job objects on Windows.
+//!   See `examples/obey_job_limits_windows.rs` for a Windows-specific example.
 //! * Soft limits on which processors are allowed are ignored by default - specifying a processor
 //!   affinity via `taskset` on Linux, `start.exe /affinity 0xff` on Windows or similar mechanisms
 //!   does not affect the set of processors this crate will use by default, though you can opt in to
@@ -222,7 +233,6 @@
 //! ```
 
 mod clients;
-mod functions;
 mod hardware_info;
 mod hardware_tracker;
 mod primitive_types;
@@ -231,7 +241,6 @@ mod processor_set;
 mod processor_set_builder;
 
 pub(crate) use clients::*;
-pub use functions::*;
 pub use hardware_info::*;
 pub use hardware_tracker::*;
 pub use primitive_types::*;
