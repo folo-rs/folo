@@ -47,7 +47,7 @@
 //! awareness functionality to provide higher-level primitives such as thread pools, work schedulers,
 //! region-local cells and more.
 //!
-//! # Supported operating systems
+//! # Operating system compatibility
 //!
 //! This crate is tested on the following operating systems:
 //!
@@ -55,8 +55,8 @@
 //! * Windows Server 2022 and newer
 //! * Ubuntu 24.04 and newer
 //! 
-//! Other operating systems may be supported if they offer compatible platform APIs but this
-//! support is not actively tested.
+//! The functionality may also work on other operating systems if they offer compatible platform
+//! APIs but this is not actively tested.
 //!
 //! # Quick start: spawn threads on specific processors
 //!
