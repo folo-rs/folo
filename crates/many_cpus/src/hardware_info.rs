@@ -35,6 +35,7 @@ impl HardwareInfo {
     ///
     /// This includes processors that are not currently active and processors that are active
     /// but not available to the current process.
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, we only test the underlying logic.
     #[inline]
     pub fn max_processor_id() -> ProcessorId {
         BUILD_TARGET_PLATFORM.max_processor_id()
@@ -45,6 +46,7 @@ impl HardwareInfo {
     ///
     /// This includes memory regions that are not currently active and memory regions that
     /// are active but not available to the current process.
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, we only test the underlying logic.
     #[inline]
     pub fn max_memory_region_id() -> MemoryRegionId {
         BUILD_TARGET_PLATFORM.max_memory_region_id()
@@ -55,6 +57,7 @@ impl HardwareInfo {
     ///
     /// This includes processors that are not currently active and processors that are active
     /// but not available to the current process.
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, we only test the underlying logic.
     #[inline]
     pub fn max_processor_count() -> usize {
         (Self::max_processor_id() as usize)
@@ -67,6 +70,7 @@ impl HardwareInfo {
     ///
     /// This includes memory regions that are not currently active and memory regions that
     /// are active but not available to the current process.
+    #[cfg_attr(test, mutants::skip)] // Trivial layer, we only test the underlying logic.
     #[inline]
     pub fn max_memory_region_count() -> usize {
         (Self::max_memory_region_id() as usize)
