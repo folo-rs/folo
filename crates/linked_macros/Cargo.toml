@@ -16,5 +16,6 @@ doc = false
 
 [dependencies]
 linked_macros_impl = { workspace = true }
+proc-macro2 = { workspace = true, features = ["proc-macro"] }
 
 [dev-dependencies]
