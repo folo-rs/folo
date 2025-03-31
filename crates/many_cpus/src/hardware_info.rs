@@ -1,110 +1,90 @@
-use std::sync::LazyLock;
+use std::marker::PhantomData;
 
 use crate::{
     MemoryRegionId, ProcessorId,
-    pal::{Platform, PlatformFacade},
+    pal::{BUILD_TARGET_PLATFORM, Platform},
 };
-
-static CURRENT: LazyLock<HardwareInfo> =
-    LazyLock::new(|| HardwareInfo::new(PlatformFacade::real()));
 
 /// Reports non-changing information about the system hardware.
 ///
-/// To inspect changing information, use [`HardwareTracker`][crate::HardwareTracker].
+/// To inspect information that may change over time, use [`HardwareTracker`][1].
+///
+/// Functions exposed by this type represent the system hardware and are not limited by the
+/// current system or process configuration. That is, this type will still count processors and
+/// memory regions that are currently inactive (e.g. some processors are physically disconnected)
+/// or are not available to this process (e.g. because of cgroups policy).
+///
+/// # Example
+///
+/// ```
+/// use many_cpus::HardwareInfo;
+///
+/// let max_processor_id = HardwareInfo::max_processor_id();
+/// println!("The maximum processor ID is: {max_processor_id}");
+/// ```
+///
+/// [1]: crate::HardwareTracker
 #[derive(Debug)]
 pub struct HardwareInfo {
-    max_processor_id: ProcessorId,
-    max_memory_region_id: MemoryRegionId,
+    _no_ctor: PhantomData<()>,
 }
 
 impl HardwareInfo {
-    pub(crate) fn new(pal: PlatformFacade) -> Self {
-        Self {
-            max_processor_id: pal.max_processor_id(),
-            max_memory_region_id: pal.max_memory_region_id(),
-        }
-    }
-
-    /// The singleton instance of the type.
-    #[inline]
-    pub fn current() -> &'static Self {
-        &CURRENT
-    }
-
     /// Gets the maximum (inclusive) processor ID of any processor that could possibly
-    /// be present on the system (including processors that are not currently active).
+    /// be present on the system at any point in time.
+    ///
+    /// This includes processors that are not currently active and processors that are active
+    /// but not available to the current process.
     #[inline]
-    pub fn max_processor_id(&self) -> ProcessorId {
-        self.max_processor_id
+    pub fn max_processor_id() -> ProcessorId {
+        BUILD_TARGET_PLATFORM.max_processor_id()
     }
 
     /// Gets the maximum (inclusive) memory region ID of any memory region that could possibly
-    /// be present on the system (including memory regions that are not currently active).
+    /// be present on the system at any point in time.
+    ///
+    /// This includes memory regions that are not currently active and memory regions that
+    /// are active but not available to the current process.
     #[inline]
-    pub fn max_memory_region_id(&self) -> MemoryRegionId {
-        self.max_memory_region_id
+    pub fn max_memory_region_id() -> MemoryRegionId {
+        BUILD_TARGET_PLATFORM.max_memory_region_id()
     }
 
-    /// Gets the maximum number of processors that could possibly be present on the system,
-    /// including processors that are not currently active or available to this process.
+    /// Gets the maximum number of processors that could possibly be present on the system
+    /// at any point in time.
+    ///
+    /// This includes processors that are not currently active and processors that are active
+    /// but not available to the current process.
     #[inline]
-    pub fn max_processor_count(&self) -> usize {
-        self.max_processor_id as usize + 1
+    pub fn max_processor_count() -> usize {
+        (Self::max_processor_id() as usize).checked_add(1).expect("overflow when counting processors - this can only result from a critical error in the PAL")
     }
 
-    /// Gets the maximum number of memory regions that could possibly be present on the system,
-    /// including memory regions that are not currently active or available to this process.
+    /// Gets the maximum number of memory regions that could possibly be present on the system
+    /// at any point in time.
+    ///
+    /// This includes memory regions that are not currently active and memory regions that
+    /// are active but not available to the current process.
     #[inline]
-    pub fn max_memory_region_count(&self) -> usize {
-        self.max_memory_region_id as usize + 1
+    pub fn max_memory_region_count() -> usize {
+        (Self::max_memory_region_id() as usize).checked_add(1).expect("overflow when counting memory regions - this can only result from a critical error in the PAL")
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::pal::MockPlatform;
-
     use super::*;
 
     #[cfg(not(miri))] // Real platform is not supported under Miri.
     #[test]
     fn count_is_id_plus_one_real() {
-        let info = HardwareInfo::current();
-
         assert_eq!(
-            info.max_processor_count(),
-            info.max_processor_id() as usize + 1
+            HardwareInfo::max_processor_count(),
+            HardwareInfo::max_processor_id() as usize + 1
         );
         assert_eq!(
-            info.max_memory_region_count(),
-            info.max_memory_region_id() as usize + 1
-        );
-    }
-
-    #[test]
-    fn accurately_represents_platform() {
-        let mut platform = MockPlatform::new();
-        platform
-            .expect_max_processor_id()
-            .return_const(3 as ProcessorId);
-        platform
-            .expect_max_memory_region_id()
-            .return_const(5 as MemoryRegionId);
-
-        let platform = PlatformFacade::from_mock(platform);
-
-        let info = HardwareInfo::new(platform);
-
-        assert_eq!(info.max_processor_id(), 3);
-        assert_eq!(info.max_memory_region_id(), 5);
-
-        assert_eq!(
-            info.max_processor_count(),
-            info.max_processor_id() as usize + 1
-        );
-        assert_eq!(
-            info.max_memory_region_count(),
-            info.max_memory_region_id() as usize + 1
+            HardwareInfo::max_memory_region_count(),
+            HardwareInfo::max_memory_region_id() as usize + 1
         );
     }
 }

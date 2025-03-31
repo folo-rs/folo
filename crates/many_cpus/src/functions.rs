@@ -4,6 +4,13 @@ use crate::{HardwareTracker, MemoryRegionId, ProcessorId};
 ///
 /// Convenience function to access the singleton hardware tracker instance
 /// and perform the relevant query on it.
+///
+/// # Example
+///
+/// ```
+/// let processor_id = many_cpus::current_processor_id();
+/// println!("Executing on processor {processor_id}");
+/// ```
 #[cfg_attr(test, mutants::skip)] // Impractical to test; only lower levels covered.
 #[inline]
 pub fn current_processor_id() -> ProcessorId {
@@ -14,6 +21,13 @@ pub fn current_processor_id() -> ProcessorId {
 ///
 /// Convenience function to access the singleton hardware tracker instance
 /// and perform the relevant query on it.
+///
+/// # Example
+///
+/// ```
+/// let memory_region_id = many_cpus::current_memory_region_id();
+/// println!("Executing in memory region {memory_region_id}");
+/// ```
 #[cfg_attr(test, mutants::skip)] // Impractical to test; only lower levels covered.
 #[inline]
 pub fn current_memory_region_id() -> MemoryRegionId {
@@ -35,7 +49,7 @@ mod tests {
         let memory_region_id = current_memory_region_id();
 
         // We can at least check that the IDs are not above the maximums.
-        assert!(processor_id <= HardwareInfo::current().max_processor_id());
-        assert!(memory_region_id <= HardwareInfo::current().max_memory_region_id());
+        assert!(processor_id <= HardwareInfo::max_processor_id());
+        assert!(memory_region_id <= HardwareInfo::max_memory_region_id());
     }
 }

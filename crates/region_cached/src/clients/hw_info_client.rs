@@ -11,6 +11,6 @@ pub(crate) struct HardwareInfoClientImpl;
 impl HardwareInfoClient for HardwareInfoClientImpl {
     #[cfg_attr(test, mutants::skip)] // Trivial fn, tested on lower levels - skip mutating.
     fn max_memory_region_count(&self) -> usize {
-        HardwareInfo::current().max_memory_region_count()
+        HardwareInfo::max_memory_region_count()
     }
 }

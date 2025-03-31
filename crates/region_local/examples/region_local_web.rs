@@ -9,7 +9,7 @@ region_local!(static LAST_UPDATE: u128 = 0);
 
 #[tokio::main]
 async fn main() {
-    let memory_region_count = HardwareInfo::current().max_memory_region_count();
+    let memory_region_count = HardwareInfo::max_memory_region_count();
     println!("the current system has {memory_region_count} memory regions");
 
     let app = Router::new()

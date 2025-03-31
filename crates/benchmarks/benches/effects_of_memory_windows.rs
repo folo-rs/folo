@@ -288,7 +288,7 @@ mod windows {
 
     impl MemoryRegionSpecificHeap {
         pub fn new() -> Self {
-            let memory_region_count = HardwareInfo::current().max_memory_region_count();
+            let memory_region_count = HardwareInfo::max_memory_region_count();
             let per_region_heaps = Arc::new(Mutex::new(
                 vec![None; memory_region_count].into_boxed_slice(),
             ));

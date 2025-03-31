@@ -11,7 +11,7 @@ fn entrypoint(c: &mut Criterion) {
     // variable. Just here to detect anomalies if we do something strange and it gets slow.
     group.bench_function("max_processor_id", |b| {
         b.iter(|| {
-            let _ = HardwareInfo::current().max_processor_id();
+            let _ = HardwareInfo::max_processor_id();
         })
     });
 
