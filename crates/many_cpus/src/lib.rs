@@ -46,6 +46,14 @@
 //! Other crates from the [Folo project](https://github.com/folo-rs/folo) build upon this hardware-
 //! awareness functionality to provide higher-level primitives such as thread pools, work schedulers,
 //! region-local cells and more.
+//! 
+//! # Supported operating systems
+//! 
+//! This crate aims to be compatible with:
+//! 
+//! * Windows 11 and newer
+//! * Windows Server 2022 and newer
+//! * Ubuntu 24.04 and newer
 //!
 //! # Quick start: spawn threads on specific processors
 //!
