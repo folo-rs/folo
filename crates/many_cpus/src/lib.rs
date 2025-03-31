@@ -49,11 +49,14 @@
 //!
 //! # Supported operating systems
 //!
-//! This crate aims to be compatible with:
+//! This crate is tested on the following operating systems:
 //!
 //! * Windows 11 and newer
 //! * Windows Server 2022 and newer
 //! * Ubuntu 24.04 and newer
+//! 
+//! Other operating systems may be supported if they offer compatible platform APIs but this
+//! support is not actively tested.
 //!
 //! # Quick start: spawn threads on specific processors
 //!
