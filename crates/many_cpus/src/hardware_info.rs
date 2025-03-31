@@ -57,7 +57,9 @@ impl HardwareInfo {
     /// but not available to the current process.
     #[inline]
     pub fn max_processor_count() -> usize {
-        (Self::max_processor_id() as usize).checked_add(1).expect("overflow when counting processors - this can only result from a critical error in the PAL")
+        (Self::max_processor_id() as usize)
+            .checked_add(1)
+            .expect("overflow when counting processors - this can only result from a critical error in the PAL")
     }
 
     /// Gets the maximum number of memory regions that could possibly be present on the system
@@ -67,7 +69,9 @@ impl HardwareInfo {
     /// are active but not available to the current process.
     #[inline]
     pub fn max_memory_region_count() -> usize {
-        (Self::max_memory_region_id() as usize).checked_add(1).expect("overflow when counting memory regions - this can only result from a critical error in the PAL")
+        (Self::max_memory_region_id() as usize)
+            .checked_add(1)
+            .expect("overflow when counting memory regions - this can only result from a critical error in the PAL")
     }
 }
 
