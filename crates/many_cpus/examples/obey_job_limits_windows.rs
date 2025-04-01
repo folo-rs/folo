@@ -46,7 +46,7 @@ mod windows {
                 },
             },
         },
-        core::{PCWSTR, PWSTR, Result},
+        core::{PCWSTR, Result},
     };
 
     pub fn main() -> Result<()> {
@@ -154,7 +154,7 @@ mod windows {
         unsafe {
             CreateProcessW(
                 PCWSTR(exe_path_wide.as_ptr()),
-                PWSTR::null(),    // No command line arguments
+                None,             // No command line arguments
                 None,             // Process handle not inheritable
                 None,             // Thread handle not inheritable
                 false,            // No handle inheritance

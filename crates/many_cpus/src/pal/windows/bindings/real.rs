@@ -1,24 +1,21 @@
-use std::{fmt::Debug, mem, ptr};
+use std::{fmt::Debug, mem};
 
 use windows::{
-    Win32::{
-        Foundation::{BOOL, HANDLE},
-        System::{
-            JobObjects::{IsProcessInJob, JobObjectGroupInformationEx, QueryInformationJobObject},
-            Kernel::PROCESSOR_NUMBER,
-            SystemInformation::{
-                GROUP_AFFINITY, GetLogicalProcessorInformationEx, LOGICAL_PROCESSOR_RELATIONSHIP,
-                SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
-            },
-            Threading::{
-                GetActiveProcessorCount, GetCurrentProcess, GetCurrentProcessorNumberEx,
-                GetCurrentThread, GetMaximumProcessorCount, GetMaximumProcessorGroupCount,
-                GetNumaHighestNodeNumber, GetProcessDefaultCpuSetMasks, GetThreadGroupAffinity,
-                GetThreadSelectedCpuSetMasks, SetThreadSelectedCpuSetMasks,
-            },
+    Win32::System::{
+        JobObjects::{IsProcessInJob, JobObjectGroupInformationEx, QueryInformationJobObject},
+        Kernel::PROCESSOR_NUMBER,
+        SystemInformation::{
+            GROUP_AFFINITY, GetLogicalProcessorInformationEx, LOGICAL_PROCESSOR_RELATIONSHIP,
+            SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
+        },
+        Threading::{
+            GetActiveProcessorCount, GetCurrentProcess, GetCurrentProcessorNumberEx,
+            GetCurrentThread, GetMaximumProcessorCount, GetMaximumProcessorGroupCount,
+            GetNumaHighestNodeNumber, GetProcessDefaultCpuSetMasks, GetThreadGroupAffinity,
+            GetThreadSelectedCpuSetMasks, SetThreadSelectedCpuSetMasks,
         },
     },
-    core::Result,
+    core::{BOOL, Result},
 };
 
 use crate::pal::windows::Bindings;
@@ -146,7 +143,7 @@ impl Bindings for BuildTargetBindings {
 
         // SAFETY: No safety requirements beyond passing valid inputs.
         unsafe {
-            IsProcessInJob(current_process, HANDLE(ptr::null_mut()), &raw mut result).expect(
+            IsProcessInJob(current_process, None, &raw mut result).expect(
                 "platform refused to confirm or deny whether the current process is part of a job",
             )
         }
@@ -164,7 +161,7 @@ impl Bindings for BuildTargetBindings {
         // SAFETY: No safety requirements beyond passing valid inputs.
         unsafe {
             QueryInformationJobObject(
-                HANDLE(ptr::null_mut()),
+                None,
                 JobObjectGroupInformationEx,
                 buffer.as_mut_ptr().cast(),
                 buffer.len() as u32 * mem::size_of::<GROUP_AFFINITY>() as u32,

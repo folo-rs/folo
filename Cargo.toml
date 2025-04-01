@@ -66,4 +66,4 @@ static_assertions = { version = "1", default-features = false }
 syn = { version = "2.0", default-features = false }
 thiserror = { version = "2.0", default-features = false }
 tokio = { version = "1.43", default-features = false }
-windows = { version = "0.58", default-features = false }
+windows = { version = "0.61", default-features = false, features = ["std"] }
