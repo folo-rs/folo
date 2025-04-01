@@ -38,15 +38,17 @@ where
 {
     /// Creates a new instance of `RegionCached` with the given initial value.
     ///
-    /// The instance may be cloned and shared between threads following the linked object patterns.
-    /// Every instance from the same family of objects will reference the same region-cached value.
+    /// The instance of `RegionCached` may be cloned and shared between threads using mechanisms
+    /// of the [linked object pattern][3]. Every instance from the same family of objects
+    /// will reference the same region-cached value.
     ///
     /// This type is internally used by the [`region_cached!`][1] macro but can also be used
     /// independently of that macro, typically via a [`PerThread`][2] wrapper that automatically
-    /// manager the per-thread instance lifecycle and delivery across threads.
+    /// manages the per-thread instance lifecycle and delivery across threads.
     ///
     /// [1]: crate::region_cached
     /// [2]: linked::PerThread
+    /// [3]: linked
     pub fn new(initial_value: T) -> Self {
         Self::with_clients(
             initial_value,
@@ -99,8 +101,7 @@ where
     ///
     /// let favorite_color_global = PerThread::new(RegionCached::new("blue".to_string()));
     ///
-    /// // This localizes the value for the current thread, accessing data
-    /// // in the current thread's active memory region.
+    /// // This localizes the object to the current thread. Reuse this object when possible.
     /// let favorite_color = favorite_color_global.local();
     ///
     /// let len = favorite_color.with_cached(|color| color.len());
@@ -167,7 +168,7 @@ where
         }
     }
 
-    /// Publishes a new value to all memory regions.
+    /// Publishes a new value to all threads in all memory regions.
     ///
     /// The update will be applied to all memory regions in a [weakly consistent manner][1].
     ///
@@ -179,8 +180,7 @@ where
     ///
     /// let favorite_color_global = PerThread::new(RegionCached::new("blue".to_string()));
     ///
-    /// // This localizes the value for the current thread, accessing data
-    /// // in the current thread's active memory region.
+    /// // This localizes the object to the current thread. Reuse this object when possible.
     /// let favorite_color = favorite_color_global.local();
     ///
     /// favorite_color.set_global("red".to_string());
@@ -211,8 +211,7 @@ where
     ///         processor.memory_region_id()
     ///     );
     ///
-    ///     // This localizes the value for the current thread, accessing data
-    ///     // in the current thread's active memory region.
+    ///     // This localizes the object to the current thread. Reuse this object when possible.
     ///     let favorite_color = favorite_color_global.local();
     ///
     ///     favorite_color.set_global("red".to_string());
@@ -262,8 +261,7 @@ where
     ///
     /// let current_access_token_global = PerThread::new(RegionCached::new(0x123100));
     ///
-    /// // This localizes the value for the current thread, accessing data
-    /// // in the current thread's active memory region.
+    /// // This localizes the object to the current thread. Reuse this object when possible.
     /// let current_access_token = current_access_token_global.local();
     ///
     /// let token = current_access_token.get_cached();

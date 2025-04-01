@@ -38,13 +38,13 @@ where
     ///
     /// This callback will be called on a thread in the memory region where the value will be used.
     ///
-    /// The instance of `RegionLocal` may be cloned and shared between threads following the
-    /// [linked object patterns][linked]. Every instance from the same family of objects will
-    /// reference the same region-local value.
+    /// The instance of `RegionLocal` may be cloned and shared between threads using mechanisms
+    /// of the [linked object pattern][3]. Every instance from the same family of objects in the
+    /// same memory region will reference the same region-local value.
     ///
     /// This type is internally used by the [`region_local!`][1] macro but can also be used
     /// independently of that macro, typically via a [`PerThread`][2] wrapper that automatically
-    /// manager the per-thread instance lifecycle and delivery across threads.
+    /// manages the per-thread instance lifecycle and delivery across threads.
     ///
     /// [1]: crate::region_local
     /// [2]: linked::PerThread
@@ -101,8 +101,7 @@ where
     ///
     /// let favorite_color_regional = PerThread::new(RegionLocal::new(|| "blue".to_string()));
     ///
-    /// // This localizes the value for the current thread, accessing data
-    /// // in the current thread's active memory region.
+    /// // This localizes the object to the current thread. Reuse this object when possible.
     /// let favorite_color = favorite_color_regional.local();
     ///
     /// let len = favorite_color.with_local(|color| color.len());
@@ -160,8 +159,7 @@ where
     ///
     /// let favorite_color_regional = PerThread::new(RegionLocal::new(|| "blue".to_string()));
     ///
-    /// // This localizes the value for the current thread, accessing data
-    /// // in the current thread's active memory region.
+    /// // This localizes the object to the current thread. Reuse this object when possible.
     /// let favorite_color = favorite_color_regional.local();
     ///
     /// favorite_color.set_local("red".to_string());
@@ -192,8 +190,7 @@ where
     ///         processor.memory_region_id()
     ///     );
     ///
-    ///     // This localizes the value for the current thread, accessing data
-    ///     // in the current thread's active memory region.
+    ///     // This localizes the object to the current thread. Reuse this object when possible.
     ///     let favorite_color = favorite_color_regional.local();
     ///
     ///     favorite_color.set_local("red".to_string());
@@ -233,8 +230,7 @@ where
     ///
     /// let current_access_token_regional = PerThread::new(RegionLocal::new(|| 0x123100));
     ///
-    /// // This localizes the value for the current thread, accessing data
-    /// // in the current thread's active memory region.
+    /// // This localizes the object to the current thread. Reuse this object when possible.
     /// let current_access_token = current_access_token_regional.local();
     ///
     /// let token = current_access_token.get_local();

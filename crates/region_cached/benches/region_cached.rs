@@ -33,9 +33,9 @@ fn entrypoint(c: &mut Criterion) {
         .take(NonZero::new(2).unwrap())
         .map(ThreadPool::new);
 
-    let mut group = c.benchmark_group("region_cached_unpinned");
+    let mut group = c.benchmark_group("region_cached");
 
-    group.bench_function("get", |b| {
+    group.bench_function("get_unpin", |b| {
         b.iter(|| {
             region_cached!(static VALUE: u32 = 99942);
 
@@ -43,7 +43,7 @@ fn entrypoint(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("set", |b| {
+    group.bench_function("set_unpin", |b| {
         b.iter(|| {
             region_cached!(static VALUE: u32 = 99942);
 
@@ -51,11 +51,7 @@ fn entrypoint(c: &mut Criterion) {
         })
     });
 
-    group.finish();
-
-    let mut group = c.benchmark_group("region_cached_pinned");
-
-    group.bench_function("get", |b| {
+    group.bench_function("get_pin", |b| {
         region_cached!(static VALUE: u32 = 99942);
 
         b.iter_custom(|iters| {
@@ -68,7 +64,7 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    group.bench_function("set", |b| {
+    group.bench_function("set_pin", |b| {
         region_cached!(static VALUE: u32 = 99942);
 
         b.iter_custom(|iters| {
@@ -80,10 +76,6 @@ fn entrypoint(c: &mut Criterion) {
             )
         });
     });
-
-    group.finish();
-
-    let mut group = c.benchmark_group("region_cached_pinned_par");
 
     // Two threads perform "get" in a loop.
     group.bench_function("par_get", |b| {
@@ -112,6 +104,27 @@ fn entrypoint(c: &mut Criterion) {
             )
         });
     });
+
+    if let Some(ref thread_pool) = two_memory_regions {
+        // Two threads perform "get" in a loop.
+        // Both threads work until both have hit the target iteration count.
+        group.bench_function("par_get_2region", |b| {
+            region_cached!(static VALUE: u32 = 99942);
+
+            b.iter_custom(|iters| {
+                bench_on_threadpool(
+                    thread_pool,
+                    iters,
+                    || (),
+                    |_| _ = black_box(VALUE.get_cached()),
+                )
+            });
+        });
+    }
+
+    group.finish();
+
+    let mut group = c.benchmark_group("region_cached_get_set_pin");
 
     // One thread performs "get" in a loop, another performs "set" in a loop.
     group.bench_function("par_get_set", |b| {
@@ -151,29 +164,14 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    if let Some(thread_pool) = two_memory_regions {
-        // Two threads perform "get" in a loop.
-        // Both threads work until both have hit the target iteration count.
-        group.bench_function("par_get_2region", |b| {
-            region_cached!(static VALUE: u32 = 99942);
-
-            b.iter_custom(|iters| {
-                bench_on_threadpool(
-                    &thread_pool,
-                    iters,
-                    || (),
-                    |_| _ = black_box(VALUE.get_cached()),
-                )
-            });
-        });
-
+    if let Some(ref thread_pool) = two_memory_regions {
         // One thread performs "get" in a loop, another performs "set" in a loop.
         group.bench_function("par_get_set_2region", |b| {
             region_cached!(static VALUE: u32 = 99942);
 
             b.iter_custom(|iters| {
                 bench_on_threadpool_ab(
-                    &thread_pool,
+                    thread_pool,
                     iters,
                     |_| (),
                     |worker, _| match worker {
@@ -191,7 +189,7 @@ fn entrypoint(c: &mut Criterion) {
 
             b.iter_custom(|iters| {
                 bench_on_threadpool_ab(
-                    &thread_pool,
+                    thread_pool,
                     iters,
                     |_| (),
                     |worker, _| match worker {
