@@ -1,10 +1,4 @@
-use std::{
-    cell::RefCell,
-    hint::black_box,
-    mem::{self},
-    ptr,
-    sync::LazyLock,
-};
+use std::{cell::RefCell, hint::black_box, ptr, sync::LazyLock};
 
 // Large servers can make hundreds of MBs of L3 cache available to a single core, though it
 // depends on the specific model and hardware configuration. We use a sufficiently large data set
@@ -14,7 +8,7 @@ const CACHE_CLEANER_LEN_BYTES: usize = 128 * 1024 * 1024;
 #[cfg(miri)]
 const CACHE_CLEANER_LEN_BYTES: usize = 1024;
 
-const CACHE_CLEANER_LEN_U64: usize = CACHE_CLEANER_LEN_BYTES / mem::size_of::<u64>();
+const CACHE_CLEANER_LEN_U64: usize = CACHE_CLEANER_LEN_BYTES / size_of::<u64>();
 
 // We copy the data from a shared immutable source.
 static CACHE_CLEANER_SOURCE: LazyLock<Vec<u64>> =

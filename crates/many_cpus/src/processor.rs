@@ -27,7 +27,9 @@ impl Processor {
     /// The unique numeric ID of the processor, matching the ID used by operating system tools.
     ///
     /// Processor IDs are not guaranteed to be contiguous, though you can obtain the upper bound
-    /// via [`HardwareInfo::max_processor_id()`].
+    /// via [`HardwareInfo::max_processor_id()`][1].
+    ///
+    /// [1]: crate::HardwareInfo::max_processor_id
     #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     #[inline]
     pub fn id(&self) -> ProcessorId {
@@ -37,7 +39,9 @@ impl Processor {
     /// The unique numeric ID of the memory region, matching the ID used by operating system tools.
     ///
     /// Memory region IDs are not guaranteed to be contiguous, though you can obtain the upper bound
-    /// via [`HardwareInfo::max_memory_region_id()`].
+    /// via [`HardwareInfo::max_memory_region_id()`][1].
+    ///
+    /// [1]: crate::HardwareInfo::max_memory_region_id
     #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     #[inline]
     pub fn memory_region_id(&self) -> MemoryRegionId {
