@@ -18,12 +18,12 @@ pub(crate) enum FilesystemFacade {
 }
 
 impl FilesystemFacade {
-    pub const fn real() -> Self {
+    pub(crate) const fn real() -> Self {
         FilesystemFacade::Real(&BuildTargetFilesystem)
     }
 
     #[cfg(test)]
-    pub fn from_mock(mock: MockFilesystem) -> Self {
+    pub(crate) fn from_mock(mock: MockFilesystem) -> Self {
         FilesystemFacade::Mock(Arc::new(mock))
     }
 }

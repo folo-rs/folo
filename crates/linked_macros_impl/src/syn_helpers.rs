@@ -10,7 +10,7 @@ use quote::quote;
 /// all the necessary metadata to emit rich errors (with red underlines and all that).
 ///
 /// Also preserves the original token stream, merely appending the error instead of replacing.
-pub fn token_stream_and_error(s: TokenStream, e: syn::Error) -> TokenStream {
+pub(crate) fn token_stream_and_error(s: TokenStream, e: syn::Error) -> TokenStream {
     let error = e.to_compile_error();
 
     // We preserve both the original input and emit the compiler error message.
@@ -29,7 +29,7 @@ pub fn token_stream_and_error(s: TokenStream, e: syn::Error) -> TokenStream {
 /// We deliberately do not take an error message as input here. Testing for error messages is
 /// fragile and creates maintenance headaches - be satisfied with OK/NOK testing and keep it simple.
 #[cfg(test)]
-pub fn contains_compile_error(tokens: &TokenStream) -> bool {
+pub(crate) fn contains_compile_error(tokens: &TokenStream) -> bool {
     // String-based implementation, so vulnerable to false positives in very unlikely cases.
     tokens.to_string().contains(":: core :: compile_error ! {")
 }
@@ -51,7 +51,7 @@ mod tests {
             fn gkf5dj8yhuldri58uygdkiluyot() {}
         };
 
-        let e = syn::Error::new(proc_macro2::Span::call_site(), canary);
+        let e = syn::Error::new(Span::call_site(), canary);
 
         let merged = token_stream_and_error(s, e);
 

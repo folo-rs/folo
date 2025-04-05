@@ -1,4 +1,4 @@
-use std::{fmt::Debug, mem};
+use std::fmt::Debug;
 
 use windows::{
     Win32::System::{
@@ -164,13 +164,13 @@ impl Bindings for BuildTargetBindings {
                 None,
                 JobObjectGroupInformationEx,
                 buffer.as_mut_ptr().cast(),
-                buffer.len() as u32 * mem::size_of::<GROUP_AFFINITY>() as u32,
+                buffer.len() as u32 * size_of::<GROUP_AFFINITY>() as u32,
                 Some(&raw mut bytes_written),
             )
         }
         .expect("platform refused to provide the process's current job processor affinity");
 
-        buffer.truncate((bytes_written / mem::size_of::<GROUP_AFFINITY>() as u32) as usize);
+        buffer.truncate((bytes_written / size_of::<GROUP_AFFINITY>() as u32) as usize);
         buffer
     }
 

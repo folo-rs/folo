@@ -38,3 +38,6 @@ harness = false
 [[bench]]
 name = "effects_of_memory_windows"
 harness = false
+
+[lints]
+workspace = true

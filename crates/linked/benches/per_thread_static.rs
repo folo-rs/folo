@@ -1,3 +1,7 @@
+//! Basic operations on the `instance_per_thread!` macro and underlying type.
+
+#![allow(missing_docs)] // No need for API documentation in benchmark code.
+
 use std::{
     cell::Cell,
     hint::black_box,

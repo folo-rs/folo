@@ -13,7 +13,7 @@ mod counters {
 
     /// An event counter that keeps both a local count and a global count across all linked instances.
     #[linked::object] // Activates the linked object pattern on this type.
-    pub struct EventCounter {
+    pub(crate) struct EventCounter {
         // Each instance has its own local count.
         local_count: usize,
 
@@ -22,7 +22,7 @@ mod counters {
     }
 
     impl EventCounter {
-        pub fn new() -> Self {
+        pub(crate) fn new() -> Self {
             // The global count is shared between all instances by cloning this Arc into each one.
             let global_count = Arc::new(AtomicUsize::new(0));
 
@@ -36,16 +36,16 @@ mod counters {
             })
         }
 
-        pub fn increment(&mut self) {
+        pub(crate) fn increment(&mut self) {
             self.local_count = self.local_count.saturating_add(1);
             self.global_count.fetch_add(1, Ordering::Relaxed);
         }
 
-        pub fn local_count(&self) -> usize {
+        pub(crate) fn local_count(&self) -> usize {
             self.local_count
         }
 
-        pub fn global_count(&self) -> usize {
+        pub(crate) fn global_count(&self) -> usize {
             self.global_count.load(Ordering::Relaxed)
         }
     }

@@ -1,3 +1,8 @@
+//! Windows-specific memory benchmarks that try explore different memory allocation strategies
+//! using built-in Windows mechanisms under different operating conditions.
+
+#![allow(missing_docs)] // No need for API documentation in benchmark code.
+
 use criterion::{criterion_group, criterion_main};
 
 criterion_group!(benches, entrypoint);
@@ -12,7 +17,7 @@ use windows::entrypoint;
 mod not_windows {
     use criterion::Criterion;
 
-    pub fn entrypoint(_c: &mut Criterion) {}
+    pub(crate) fn entrypoint(_c: &mut Criterion) {}
 }
 
 #[cfg(windows)]
@@ -37,7 +42,7 @@ mod windows {
     // https://github.com/cloudhead/nonempty/issues/68
     extern crate alloc;
 
-    pub fn entrypoint(c: &mut Criterion) {
+    pub(crate) fn entrypoint(c: &mut Criterion) {
         execute_runs::<AllocDefaultHeap, 1000>(c, WorkDistribution::all());
         execute_runs::<AllocPerThreadHeap, 1000>(c, WorkDistribution::all());
         execute_runs::<AllocPerThreadHeapThreadSafe, 1000>(c, WorkDistribution::all());
@@ -63,7 +68,7 @@ mod windows {
     }
 
     impl AllocDefaultHeap {
-        pub fn new() -> Self {
+        fn new() -> Self {
             Self {
                 process_heap: HANDLE::default(),
                 chunk_buffer: Vec::with_capacity(CHUNK_COUNT),
@@ -102,7 +107,7 @@ mod windows {
     }
 
     impl AllocPerThreadHeap {
-        pub fn new() -> Self {
+        fn new() -> Self {
             Self {
                 chunk_buffer: Vec::with_capacity(CHUNK_COUNT),
             }
@@ -141,7 +146,7 @@ mod windows {
     }
 
     impl AllocPerThreadHeapThreadSafe {
-        pub fn new() -> Self {
+        fn new() -> Self {
             Self {
                 chunk_buffer: Vec::with_capacity(CHUNK_COUNT),
             }
@@ -180,7 +185,7 @@ mod windows {
     }
 
     impl AllocPerMemoryRegionHeap {
-        pub fn new() -> Self {
+        fn new() -> Self {
             Self {
                 chunk_buffer: Vec::with_capacity(CHUNK_COUNT),
             }
@@ -221,17 +226,17 @@ mod windows {
     }
 
     impl SingleThreadedCustomHeap {
-        pub fn new() -> Self {
+        fn new() -> Self {
             Self {
                 heap: unsafe { HeapCreate(HEAP_NO_SERIALIZE, HEAP_INITIAL_SIZE, 0) }.unwrap(),
             }
         }
 
-        pub fn alloc(&self, size: usize) -> *mut std::ffi::c_void {
+        fn alloc(&self, size: usize) -> *mut std::ffi::c_void {
             unsafe { HeapAlloc(self.heap, HEAP_NO_SERIALIZE, size) }
         }
 
-        pub fn free(&self, ptr: *mut std::ffi::c_void) {
+        fn free(&self, ptr: *mut std::ffi::c_void) {
             unsafe { HeapFree(self.heap, HEAP_NO_SERIALIZE, Some(ptr)) }.unwrap();
         }
     }
@@ -247,17 +252,17 @@ mod windows {
     }
 
     impl ThreadSafeCustomHeap {
-        pub fn new() -> Self {
+        fn new() -> Self {
             Self {
                 heap: unsafe { HeapCreate(HEAP_FLAGS(0), HEAP_INITIAL_SIZE, 0) }.unwrap(),
             }
         }
 
-        pub fn alloc(&self, size: usize) -> *mut std::ffi::c_void {
+        fn alloc(&self, size: usize) -> *mut std::ffi::c_void {
             unsafe { HeapAlloc(self.heap, HEAP_FLAGS(0), size) }
         }
 
-        pub fn free(&self, ptr: *mut std::ffi::c_void) {
+        fn free(&self, ptr: *mut std::ffi::c_void) {
             unsafe { HeapFree(self.heap, HEAP_FLAGS(0), Some(ptr)) }.unwrap();
         }
     }
@@ -287,7 +292,7 @@ mod windows {
     }
 
     impl MemoryRegionSpecificHeap {
-        pub fn new() -> Self {
+        fn new() -> Self {
             let memory_region_count = HardwareInfo::max_memory_region_count();
             let per_region_heaps = Arc::new(Mutex::new(
                 vec![None; memory_region_count].into_boxed_slice(),
@@ -299,11 +304,11 @@ mod windows {
             })
         }
 
-        pub fn alloc(&self, size: usize) -> *mut std::ffi::c_void {
+        fn alloc(&self, size: usize) -> *mut std::ffi::c_void {
             self.with_current_heap(|heap| heap.alloc(size))
         }
 
-        pub fn free(&self, ptr: *mut std::ffi::c_void) {
+        fn free(&self, ptr: *mut std::ffi::c_void) {
             self.with_current_heap(|heap| heap.free(ptr))
         }
 

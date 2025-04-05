@@ -1,3 +1,5 @@
+//! Parsing a cpulist string and emitting it back to the terminal.
+
 fn main() {
     let selected_processors = cpulist::parse("0-9,32-35,40").unwrap();
     assert_eq!(

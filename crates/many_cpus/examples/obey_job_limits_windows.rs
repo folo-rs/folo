@@ -1,3 +1,25 @@
+//! The mechanism used in Windows to enforce limits on processes is Job Objects. Processes are
+//! assigned to jobs, and jobs can be constrained to only use a limited set of processors.
+//!
+//! This example proves that the APIs we offer do not "see" the universe outside of the limits
+//! of the current process's job object constraints.
+//!
+//! If you start the example with no other input, it will start a new instance of itself, assigned
+//! to a job that can only use two processors. The new instance will then sleep for 10 seconds to
+//! allow you to verify that it is properly functioning.
+//!
+//! Job object limits are hard limits, whereas all other mechanisms to define affinity (e.g. CPU
+//! sets and legacy "process affinity masks") are just wishes by the process in question.
+//! In case of conflicting masks, the intersection is used.
+//!
+//! Note that we configure the job object using the legacy affinity mask, which only supports 64
+//! processors. The ProcessorSet API is not limited in this way and can work with any number of
+//! processors. We just use the legacy Windows APIs here to keep the example-specific code simple.
+//! On systems with more than 64 processors, the platform will simply pick one arbitrary processor
+//! group and use two processors from it.
+//!
+//! This example is Windows-only, as job objects are a Windows-specific feature.
+
 fn main() {
     #[cfg(windows)]
     windows::main().unwrap();
@@ -8,29 +30,9 @@ fn main() {
 
 #[cfg(windows)]
 mod windows {
-    //! The mechanism used in Windows to enforce limits on processes is Job Objects. Processes are
-    //! assigned to jobs, and jobs can be constrained to only use a limited set of processors.
-    //!
-    //! This example proves that the APIs we offer do not "see" the universe outside of the limits
-    //! of the current process's job object constraints.
-    //!
-    //! If you start the example with no other input, it will start a new instance of itself, assigned
-    //! to a job that can only use two processors. The new instance will then sleep for 10 seconds to
-    //! allow you to verify that it is properly functioning.
-    //!
-    //! Job object limits are hard limits, whereas all other mechanisms to define affinity (e.g. CPU
-    //! sets and legacy "process affinity masks") are just wishes by the process in question.
-    //! In case of conflicting masks, the intersection is used.
-    //!
-    //! Note that we configure the job object using the legacy affinity mask, which only supports 64
-    //! processors. The ProcessorSet API is not limited in this way and can work with any number of
-    //! processors. We just use the legacy Windows APIs here to keep the example-specific code simple.
-    //! On systems with more than 64 processors, the platform will simply pick one arbitrary processor
-    //! group and use two processors from it.
-
     use many_cpus::ProcessorSet;
     use scopeguard::defer;
-    use std::{mem, ptr, thread, time::Duration};
+    use std::{ptr, thread, time::Duration};
     use windows::{
         Win32::{
             Foundation::CloseHandle,
@@ -49,7 +51,7 @@ mod windows {
         core::{PCWSTR, Result},
     };
 
-    pub fn main() -> Result<()> {
+    pub(crate) fn main() -> Result<()> {
         let (process_affinity, system_affinity) = get_current_legacy_process_and_system_affinity()?;
 
         let processors_present_on_system = system_affinity.count_ones();
@@ -129,7 +131,7 @@ mod windows {
                 job,
                 JobObjectExtendedLimitInformation,
                 ptr::from_ref(&limit_info).cast(),
-                mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
             )?;
         }
 
@@ -143,7 +145,7 @@ mod windows {
 
         // Prepare process creation structures.
         let startup_info = STARTUPINFOW {
-            cb: mem::size_of::<STARTUPINFOW>() as u32,
+            cb: size_of::<STARTUPINFOW>() as u32,
             ..Default::default()
         };
 

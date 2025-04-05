@@ -1,3 +1,5 @@
+//! Spawns one thread on each processor in the system.
+
 use many_cpus::ProcessorSet;
 
 fn main() {

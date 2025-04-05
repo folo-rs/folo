@@ -19,7 +19,7 @@ mod counters {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[linked::object]
-    pub struct EventCounter {
+    pub(crate) struct EventCounter {
         // This now acts as a thread-local count because we only access a single instance of the
         // linked object on every thread.
         //
@@ -33,7 +33,7 @@ mod counters {
     }
 
     impl EventCounter {
-        pub fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let global_count = Arc::new(AtomicUsize::new(0));
 
             linked::new!(Self {
@@ -45,17 +45,17 @@ mod counters {
         // Note how this went from `&mut self` to `&self` - we cannot use `&mut self` or have any
         // variables typed `mut EventCounter` or `&mut EventCounter` if we are reusing the same
         // instance for all operations on a single thread.
-        pub fn increment(&self) {
+        pub(crate) fn increment(&self) {
             self.local_count
                 .set(self.local_count.get().saturating_add(1));
             self.global_count.fetch_add(1, Ordering::Relaxed);
         }
 
-        pub fn local_count(&self) -> usize {
+        pub(crate) fn local_count(&self) -> usize {
             self.local_count.get()
         }
 
-        pub fn global_count(&self) -> usize {
+        pub(crate) fn global_count(&self) -> usize {
             self.global_count.load(Ordering::Relaxed)
         }
     }

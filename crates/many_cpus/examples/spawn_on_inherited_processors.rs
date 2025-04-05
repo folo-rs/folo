@@ -1,14 +1,17 @@
+//! Starts one thread on every processor in the system, allowing the set of allowed processors
+//! to be inherited from the environment (based on user configuration).
+//!
+//! The set of processors used here can be adjusted via any suitable OS mechanisms.
+//!
+//! For example, to select only processors 0 and 1:
+//! Linux: taskset 0x3 target/debug/examples/spawn_on_inherited_processors
+//! Windows: start /affinity 0x3 target/debug/examples/spawn_on_inherited_processors.exe
+
 use std::{thread, time::Duration};
 
 use many_cpus::ProcessorSet;
 
 fn main() {
-    // The set of processors used here can be adjusted via OS mechanisms.
-    //
-    // For example, to select only processors 0 and 1:
-    // Linux: taskset 0x3 target/debug/examples/spawn_on_inherited_processors
-    // Windows: start /affinity 0x3 target/debug/examples/spawn_on_inherited_processors.exe
-
     let inherited_processors = ProcessorSet::builder()
         .where_available_for_current_thread()
         .take_all()

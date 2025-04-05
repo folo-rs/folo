@@ -33,3 +33,6 @@ tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
 [[bench]]
 name = "region_cached"
 harness = false
+
+[lints]
+workspace = true

@@ -183,6 +183,7 @@ impl<T: ?Sized + 'static> DerefMut for Box<T> {
 #[macro_export]
 macro_rules! new_box {
     ($dyn_trait:ty, $ctor:expr) => {
+        #[allow(trivial_casts)]
         ::linked::Box::new(move || ::std::boxed::Box::new($ctor) as ::std::boxed::Box<$dyn_trait>)
     };
 }
@@ -228,7 +229,7 @@ mod tests {
         }
 
         impl XmlConfig {
-            pub fn new_as_config_source() -> linked::Box<dyn ConfigSource> {
+            fn new_as_config_source() -> linked::Box<dyn ConfigSource> {
                 linked::new_box!(
                     dyn ConfigSource,
                     Self {
@@ -239,7 +240,7 @@ mod tests {
         }
 
         impl IniConfig {
-            pub fn new_as_config_source() -> linked::Box<dyn ConfigSource> {
+            fn new_as_config_source() -> linked::Box<dyn ConfigSource> {
                 linked::new_box!(
                     dyn ConfigSource,
                     Self {

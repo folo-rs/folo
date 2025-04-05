@@ -1,3 +1,5 @@
+//! Showcase basic use of the `region_cached!` macro in a multithreaded web app.
+
 use axum::{Router, routing::get};
 use many_cpus::HardwareInfo;
 use region_cached::{RegionCachedCopyExt, RegionCachedExt, region_cached};

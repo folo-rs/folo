@@ -1,3 +1,5 @@
+//! Showcase basic use of the `region_local!` macro in a multithreaded web app.
+//!
 use axum::{Router, routing::get};
 use many_cpus::HardwareInfo;
 use region_local::{RegionLocalCopyExt, RegionLocalExt, region_local};

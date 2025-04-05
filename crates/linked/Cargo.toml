@@ -38,3 +38,6 @@ harness = false
 [[bench]]
 name = "per_thread"
 harness = false
+
+[lints]
+workspace = true

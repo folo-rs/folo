@@ -19,3 +19,6 @@ itertools = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+
+[lints]
+workspace = true

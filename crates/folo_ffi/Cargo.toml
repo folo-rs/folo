@@ -17,3 +17,6 @@ default = []
 
 [dev-dependencies]
 mutants = { workspace = true }
+
+[lints]
+workspace = true

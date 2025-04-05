@@ -1,18 +1,12 @@
-#![allow(dead_code)] // Probably will use later.
-
 use std::{
-    alloc::Layout,
-    marker::PhantomData,
-    mem::{self, MaybeUninit},
-    num::NonZeroUsize,
-    ops::Range,
-    ptr::NonNull,
+    alloc::Layout, marker::PhantomData, mem::MaybeUninit, num::NonZero, ops::Range, ptr::NonNull,
 };
 
 /// Windows often wants us to provide a buffer of arbitrary size aligned for a type `T`, in which
 /// it wants to place instances of `T` or `T`-like types (not necessarily at integer `T` offsets).
 ///
 /// This is a wrapper around alloc/dealloc to make working with such buffers slightly convenient.
+#[derive(Debug)]
 pub struct NativeBuffer<T: Sized> {
     ptr: NonNull<u8>,
     layout: Layout,
@@ -24,25 +18,34 @@ pub struct NativeBuffer<T: Sized> {
 }
 
 impl<T: Sized> NativeBuffer<T> {
-    pub fn new(size_bytes: NonZeroUsize) -> Self {
+    /// Allocates a buffer of at least the indicated size in bytes, aligned for `T`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `T` is a zero-sized type.
+    ///
+    /// Panics if the requested size is too large to yield a valid memory layout. Valid
+    /// memory layouts must not exceed `isize::MAX` bytes.
+    pub fn new(min_size_bytes: NonZero<usize>) -> Self {
         // Sometimes Windows will ask for less memory than technically required to fit a T.
         // While this may be valid as long as Rust never tries to read that extra memory (e.g.
         // because the larger union members are not used), it is still feels risky, so
         // we round up to the minimum size required to fit one T to avoid any accidents.
         // In cases where we have multiple T in the buffer, the risk of "reading off the edge"
         // (albeit requiring invalid code) still remains and needs to be guarded against upstack.
-        let min_size = mem::size_of::<T>();
+        let min_size = size_of::<T>();
 
-        let size_bytes = if size_bytes.get() < min_size {
-            NonZeroUsize::new(min_size).expect("zero-sized T is not supported")
+        let size_bytes = if min_size_bytes.get() < min_size {
+            NonZero::new(min_size).expect("zero-sized T is not supported")
         } else {
-            size_bytes
+            min_size_bytes
         };
 
-        let layout = Layout::from_size_align(size_bytes.get(), mem::align_of::<T>())
+        let layout = Layout::from_size_align(size_bytes.get(), align_of::<T>())
             .expect("called with arguments that yielded an invalid memory layout");
 
-        // SAFETY: We must promise to provide a layout of nonzero size. All is well.
+        // SAFETY: We must promise to provide a layout of nonzero size.
+        // All is well - we asserted above that it is not zero-sized.
         let ptr = unsafe { std::alloc::alloc(layout) };
         let ptr =
             NonNull::new(ptr).expect("allocation failed - the app cannot continue to operate");
@@ -57,41 +60,47 @@ impl<T: Sized> NativeBuffer<T> {
 
     /// Writes a value at the start of the buffer and declares the buffer length to match.
     pub fn emplace(&mut self, value: T) {
-        // SAFETY: Type invariants guarantee the pointer is properly aligned
-        // and the borrow checker ensures it is valid for writes via `self`.
+        // SAFETY: Type invariants guarantee the pointer is properly aligned and the borrow checker
+        // ensures via `self` that it is valid for writes because we never create references unless
+        // a matching `self` reference is held, nor do we hand out pointers via safe APIs.
         unsafe {
             self.ptr.cast::<T>().write(value);
         }
 
         // SAFETY: We just wrote a T into it, so obviously there is a T worth of data in there.
         unsafe {
-            self.set_len_bytes(mem::size_of::<T>());
+            self.set_len_bytes(size_of::<T>());
         }
     }
 
     /// Allocates a buffer that can exactly fit a `T` and moves the `T` into it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `T` is a zero-sized type.
     pub fn from_value(value: T) -> Self {
         let mut buffer = Self::new(
-            NonZeroUsize::new(mem::size_of::<T>())
-                .expect("cannot create NativeBuffer from zero-sized type"),
+            NonZero::new(size_of::<T>()).expect("cannot create NativeBuffer from zero-sized type"),
         );
         buffer.emplace(value);
-
-        // SAFETY: We just wrote a T into it, so obviously there is a T worth of data in there.
-        unsafe {
-            buffer.set_len_bytes(mem::size_of::<T>());
-        }
 
         buffer
     }
 
     /// Allocates a buffer that can fit a number of consecutive instances of `T` and moves the
     /// provided instances into the buffer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `T` is a zero-sized type.
+    ///
+    /// Panics if the resulting buffer size is too large to yield a valid memory layout. Valid
+    /// memory layouts must not exceed `isize::MAX` bytes.
     pub fn from_items(items: impl IntoIterator<Item = T>) -> Self {
         let items = items.into_iter().collect::<Vec<_>>();
 
         let mut buffer = Self::new(
-            NonZeroUsize::new(mem::size_of::<T>() * items.len())
+            NonZero::new(size_of::<T>() * items.len())
                 .expect("cannot create NativeBuffer from zero-sized type"),
         );
 
@@ -111,7 +120,7 @@ impl<T: Sized> NativeBuffer<T> {
 
         // SAFETY: We just wrote N*T bytes into it, math guaranteed valid by Rust language rules.
         unsafe {
-            buffer.set_len_bytes(mem::size_of::<T>() * count);
+            buffer.set_len_bytes(size_of::<T>() * count);
         }
 
         buffer
@@ -129,7 +138,7 @@ impl<T: Sized> NativeBuffer<T> {
 
     /// Whether the buffer is considered empty.
     ///
-    /// This is determined by `set_len()` being called with a non-zero value.
+    /// This is determined by `set_len()` having been last called with a non-zero value.
     pub fn is_empty(&self) -> bool {
         self.len_bytes == 0
     }
@@ -153,9 +162,9 @@ impl<T: Sized> NativeBuffer<T> {
     /// Returns a range of pointers from the start of the buffer to just past the end of the
     /// declared length of the buffer.
     ///
-    /// NB! The `end` pointer is not guaranteed to be valid as it may not be aligned for `T`
-    /// if the declared length is not a multiple of `T`'s size. Its only purpose is to indicate
-    /// the end of the declared data in the buffer.
+    /// NB! The `end` pointer is not guaranteed to be valid for reads or writes as it may not be
+    /// aligned for `T` if the declared length (`len_bytes()`) is not a multiple of `T`'s size.
+    /// Its only purpose is to indicate the end of the declared data in the buffer.
     pub fn as_data_ptr_range(&self) -> Range<NonNull<T>> {
         let start = self.ptr.cast();
 
@@ -218,9 +227,9 @@ mod tests {
     #[test]
     fn smoke_test() {
         let mut buffer = NativeBuffer::from_value(1234_usize);
-        assert_eq!(buffer.len_bytes(), mem::size_of::<usize>());
+        assert_eq!(buffer.len_bytes(), size_of::<usize>());
         assert!(!buffer.is_empty());
-        assert!(buffer.capacity_bytes() >= mem::size_of::<usize>());
+        assert!(buffer.capacity_bytes() >= size_of::<usize>());
 
         // SAFETY: We have initialized the first item.
         let value = unsafe { buffer.as_ref().assume_init_read() };
@@ -267,8 +276,8 @@ mod tests {
         let items: [usize; 4] = [1, 2, 3, 4];
         let buffer = NativeBuffer::from_items(items);
 
-        assert_eq!(buffer.len_bytes(), mem::size_of::<usize>() * items.len());
-        assert!(buffer.capacity_bytes() >= mem::size_of::<usize>() * items.len());
+        assert_eq!(buffer.len_bytes(), size_of::<usize>() * items.len());
+        assert!(buffer.capacity_bytes() >= size_of::<usize>() * items.len());
 
         let data_range = buffer.as_data_ptr_range();
         let mut current = data_range.start;

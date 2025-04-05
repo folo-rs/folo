@@ -15,7 +15,7 @@ impl Bindings for BuildTargetBindings {
     fn sched_setaffinity_current(&self, cpuset: &cpu_set_t) -> Result<(), io::Error> {
         // 0 means current thread.
         // SAFETY: No safety requirements beyond passing valid arguments.
-        let result = unsafe { libc::sched_setaffinity(0, mem::size_of::<cpu_set_t>(), cpuset) };
+        let result = unsafe { libc::sched_setaffinity(0, size_of::<cpu_set_t>(), cpuset) };
 
         if result == 0 {
             Ok(())
@@ -35,8 +35,7 @@ impl Bindings for BuildTargetBindings {
 
         // 0 means current thread.
         // SAFETY: No safety requirements beyond passing valid arguments.
-        let result =
-            unsafe { libc::sched_getaffinity(0, mem::size_of::<cpu_set_t>(), &raw mut cpuset) };
+        let result = unsafe { libc::sched_getaffinity(0, size_of::<cpu_set_t>(), &raw mut cpuset) };
 
         if result == 0 {
             Ok(cpuset)

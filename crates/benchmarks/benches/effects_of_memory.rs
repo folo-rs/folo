@@ -1,3 +1,9 @@
+//! We compare typical algorithms under different execution conditions, with collaborating threads
+//! being organized in various ways supported by the `many_cpus_benchmarking` crate. Of particular
+//! interest are the effects of data locality (i.e. memory regions and processor caching).
+
+#![allow(missing_docs)] // No need for API documentation in benchmark code.
+
 use std::{
     collections::HashMap,
     hint::black_box,
@@ -20,30 +26,30 @@ criterion_main!(benches);
 mod real_constants {
     /// A "small" data set is likely to fit into processor caches, demonstrating the effect of memory
     /// access on typically cached data).
-    pub const SMALL_MAP_ENTRY_COUNT: usize = 64 * 1024; // x u64 = 512 KB of useful payload, cache-friendly
+    pub(crate) const SMALL_MAP_ENTRY_COUNT: usize = 64 * 1024; // x u64 = 512 KB of useful payload, cache-friendly
 
     /// The small maps fit into memory very easily. 512 KB * 1000 = 512 MB per worker.
-    pub const SMALL_MAP_BATCH_SIZE: u64 = 1000;
+    pub(crate) const SMALL_MAP_BATCH_SIZE: u64 = 1000;
 
     /// A large data set is unlikely to fit into processor caches, even into large L3 caches, and will
     /// likely require trips to main memory for repeated access.
-    pub const LARGE_MAP_ENTRY_COUNT: usize = 16 * 128 * 1024; // x u64 -> 128 MB, not very cache-friendly.
+    pub(crate) const LARGE_MAP_ENTRY_COUNT: usize = 16 * 128 * 1024; // x u64 -> 128 MB, not very cache-friendly.
 
     /// The large maps are large, so we try conserve memory. 128 MB * 10 = 1.28 GB per worker.
-    pub const LARGE_MAP_BATCH_SIZE: u64 = 10;
+    pub(crate) const LARGE_MAP_BATCH_SIZE: u64 = 10;
 
-    pub const HEADERS_COUNT: usize = 10_000;
+    pub(crate) const HEADERS_COUNT: usize = 10_000;
 }
 
 #[cfg(test)]
 mod test_constants {
     // Small values to make tests fast but still run the real logic.
-    pub const SMALL_MAP_ENTRY_COUNT: usize = 10;
-    pub const SMALL_MAP_BATCH_SIZE: u64 = 10;
-    pub const LARGE_MAP_ENTRY_COUNT: usize = 10;
-    pub const LARGE_MAP_BATCH_SIZE: u64 = 10;
+    pub(crate) const SMALL_MAP_ENTRY_COUNT: usize = 10;
+    pub(crate) const SMALL_MAP_BATCH_SIZE: u64 = 10;
+    pub(crate) const LARGE_MAP_ENTRY_COUNT: usize = 10;
+    pub(crate) const LARGE_MAP_BATCH_SIZE: u64 = 10;
 
-    pub const HEADERS_COUNT: usize = 10;
+    pub(crate) const HEADERS_COUNT: usize = 10;
 }
 
 #[cfg(not(test))]

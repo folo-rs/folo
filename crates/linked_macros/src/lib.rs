@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Copyright (c) Folo authors.
 
+#![allow(missing_docs)] // Private API, public API is documented in `linked` crate.
+
 use proc_macro::TokenStream;
 
 #[proc_macro_attribute]

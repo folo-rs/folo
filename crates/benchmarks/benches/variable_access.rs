@@ -1,3 +1,7 @@
+//! We compare the overhead of accessing different types of variables.
+
+#![allow(missing_docs)] // No need for API documentation in benchmark code.
+
 use std::{
     cell::{Cell, LazyCell, OnceCell, RefCell, UnsafeCell},
     hint::black_box,

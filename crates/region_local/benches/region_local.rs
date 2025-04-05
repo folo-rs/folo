@@ -1,3 +1,7 @@
+//! Benchmarks basic operations of the `region_local!` macro.
+
+#![allow(missing_docs)] // No need for API documentation in benchmark code.
+
 use std::{hint::black_box, num::NonZero, thread};
 
 use benchmark_utils::{AbWorker, ThreadPool, bench_on_threadpool, bench_on_threadpool_ab};

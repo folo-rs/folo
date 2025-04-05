@@ -1,3 +1,7 @@
+//! Demonstrates basic usage of the benchmark harness provided by `many_cpus_benchmarking`.
+
+#![allow(missing_docs)] // No need for API documentation in benchmark code.
+
 use std::{hint::black_box, ptr};
 
 use criterion::{Criterion, criterion_group, criterion_main};

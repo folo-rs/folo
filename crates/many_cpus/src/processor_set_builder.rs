@@ -70,6 +70,11 @@ pub struct ProcessorSetBuilder {
 }
 
 impl ProcessorSetBuilder {
+    /// Creates a new processor set builder with the default configuration.
+    ///
+    /// The default configuration considers every processor on the system as a valid candidate,
+    /// except those for which the operating system has defined hard limits. See type-level
+    /// documentation for more details on how operating system limits are handled.
     pub fn new() -> Self {
         Self::with_internals(HardwareTrackerClientFacade::real(), PlatformFacade::real())
     }
@@ -249,7 +254,7 @@ impl ProcessorSetBuilder {
                     let choose_count = count.min(processors_in_region.len());
 
                     let region_processors = processors_in_region
-                        .choose_multiple(&mut rand::rng(), choose_count)
+                        .choose_multiple(&mut rng(), choose_count)
                         .cloned();
 
                     processors.extend(region_processors);
@@ -271,14 +276,14 @@ impl ProcessorSetBuilder {
                     })
                     .collect_vec();
 
-                let memory_region = qualifying_memory_regions.choose(&mut rand::rng())?;
+                let memory_region = qualifying_memory_regions.choose(&mut rng())?;
 
                 let processors = candidates.get(memory_region).expect(
                     "we picked an existing key for an existing HashSet - the values must exist",
                 );
 
                 processors
-                    .choose_multiple(&mut rand::rng(), count.get())
+                    .choose_multiple(&mut rng(), count.get())
                     .cloned()
                     .collect_vec()
             }
@@ -379,7 +384,7 @@ impl ProcessorSetBuilder {
                 // count, so even 1 processor is enough to satisfy the "all" criterion.
                 let memory_region = candidates
                     .keys()
-                    .choose(&mut rand::rng())
+                    .choose(&mut rng())
                     .expect("we picked a random existing index - element must exist");
 
                 let processors = candidates.get(memory_region).expect(
@@ -394,7 +399,7 @@ impl ProcessorSetBuilder {
                 // we know that all candidate memory regions have enough to satisfy our needs.
                 let processors = candidates.values().map(|processors| {
                     processors
-                        .choose(&mut rand::rng())
+                        .choose(&mut rng())
                         .cloned()
                         .expect("we picked a random item from a non-empty list - item must exist")
                 });

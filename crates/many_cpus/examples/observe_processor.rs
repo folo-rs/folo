@@ -1,3 +1,6 @@
+//! Observe the processor assigned to the entrypoint thread, displaying an update in the
+//! terminal once per second, looping forever.
+
 use std::{thread, time::Duration};
 
 use many_cpus::{HardwareInfo, HardwareTracker};

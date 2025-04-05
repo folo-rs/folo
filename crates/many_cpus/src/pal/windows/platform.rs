@@ -71,7 +71,7 @@ impl Platform for BuildTargetPlatform {
 
         for group_index in 0..group_count {
             let mut affinity = GROUP_AFFINITY {
-                Group: group_index as ProcessorGroupIndex,
+                Group: group_index,
                 Mask: 0,
                 ..Default::default()
             };
@@ -79,7 +79,7 @@ impl Platform for BuildTargetPlatform {
             // We started with all bits clear and now set any that we do want to allow.
             for processor in processors
                 .iter()
-                .filter(|p| p.as_ref().as_real().group_index == group_index as ProcessorGroupIndex)
+                .filter(|p| p.as_ref().as_real().group_index == group_index)
             {
                 add_processor_to_mask(&mut affinity, processor);
             }
@@ -606,10 +606,7 @@ impl BuildTargetPlatform {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        mem::{self, offset_of},
-        sync::Arc,
-    };
+    use std::{mem::offset_of, sync::Arc};
 
     use itertools::Itertools;
     use mockall::Sequence;
@@ -1159,7 +1156,7 @@ mod tests {
                         // This is always RelationNumaNode, even if RelationNumaNodeEx is requested.
                         // RelationNumaNodeEx simply allows the group count to be more than 1.
                         Relationship: RelationNumaNode,
-                        Size: mem::size_of::<ExpandedLogicalProcessorInformation>() as u32,
+                        Size: size_of::<ExpandedLogicalProcessorInformation>() as u32,
                         ..Default::default()
                     },
                     extra_buffer: [Default::default(); MAX_ADDITIONAL_PROCESSOR_GROUPS],
@@ -1299,7 +1296,7 @@ mod tests {
                     move |index_in_group| {
                         let mut entry = SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX {
                             Relationship: RelationProcessorCore,
-                            Size: mem::size_of::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>() as u32,
+                            Size: size_of::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>() as u32,
                             ..Default::default()
                         };
 
@@ -1820,6 +1817,6 @@ mod tests {
         assert_eq!(max_memory_region_id, 2);
 
         // We do this just to ensure we meet all the expectations declared by the simulation.
-        _ = platform.get_all_processors();
+        drop(platform.get_all_processors());
     }
 }

@@ -24,18 +24,31 @@ impl Processor {
         Self { inner, pal }
     }
 
+    /// The unique numeric ID of the processor, matching the ID used by operating system tools.
+    ///
+    /// Processor IDs are not guaranteed to be contiguous, though you can obtain the upper bound
+    /// via [`HardwareInfo::max_processor_id()`].
     #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     #[inline]
     pub fn id(&self) -> ProcessorId {
         self.inner.id()
     }
 
+    /// The unique numeric ID of the memory region, matching the ID used by operating system tools.
+    ///
+    /// Memory region IDs are not guaranteed to be contiguous, though you can obtain the upper bound
+    /// via [`HardwareInfo::max_memory_region_id()`].
     #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     #[inline]
     pub fn memory_region_id(&self) -> MemoryRegionId {
         self.inner.memory_region_id()
     }
 
+    /// The [efficiency class][EfficiencyClass] of the processor.
+    ///
+    /// This is a relative measure - the fastest processors on any given system are always
+    /// considered performance processors, while any that are slower are considered efficiency
+    /// processors.
     #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     #[inline]
     pub fn efficiency_class(&self) -> EfficiencyClass {

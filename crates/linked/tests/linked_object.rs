@@ -1,15 +1,17 @@
+//! Linked object definition under various edge cases.
+
 #[test]
 fn empty_struct() {
     #[linked::object]
     struct Empty {}
 
     impl Empty {
-        pub fn new() -> Self {
+        fn new() -> Self {
             linked::new!(Self {})
         }
     }
 
-    _ = Empty::new();
+    drop(Empty::new());
 }
 
 #[test]
@@ -18,10 +20,10 @@ fn very_empty_struct() {
     struct Empty {}
 
     impl Empty {
-        pub fn new() -> Self {
+        fn new() -> Self {
             linked::new!(Self)
         }
     }
 
-    _ = Empty::new();
+    drop(Empty::new());
 }

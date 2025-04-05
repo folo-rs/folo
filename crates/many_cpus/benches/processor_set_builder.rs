@@ -1,3 +1,7 @@
+//! Benchmarking operations on the `ProcessorSetBuilder` type.
+
+#![allow(missing_docs)] // No need for API documentation in benchmark code.
+
 use std::{hint::black_box, num::NonZero};
 
 use benchmark_utils::{ThreadPool, bench_on_threadpool};

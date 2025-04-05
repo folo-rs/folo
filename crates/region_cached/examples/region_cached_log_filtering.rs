@@ -1,3 +1,5 @@
+//! Showcase basic use of the `region_cached!` macro.
+
 use std::thread;
 
 use region_cached::{RegionCachedExt, region_cached};

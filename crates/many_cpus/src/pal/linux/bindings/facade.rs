@@ -20,12 +20,12 @@ pub(crate) enum BindingsFacade {
 }
 
 impl BindingsFacade {
-    pub const fn real() -> Self {
+    pub(crate) const fn real() -> Self {
         BindingsFacade::Real(&BuildTargetBindings)
     }
 
     #[cfg(test)]
-    pub fn from_mock(mock: MockBindings) -> Self {
+    pub(crate) fn from_mock(mock: MockBindings) -> Self {
         BindingsFacade::Mock(Arc::new(mock))
     }
 }

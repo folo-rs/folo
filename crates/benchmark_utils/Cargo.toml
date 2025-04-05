@@ -20,3 +20,6 @@ oneshot = { workspace = true }
 
 [dev-dependencies]
 mutants = { workspace = true }
+
+[lints]
+workspace = true

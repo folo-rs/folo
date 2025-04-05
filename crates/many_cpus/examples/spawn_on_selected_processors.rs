@@ -1,3 +1,6 @@
+//! Selects a pair of processors and spawns a thread on each of them.
+//! This demonstrates arbitrary processor selection logic.
+
 use std::num::NonZero;
 
 use many_cpus::ProcessorSet;

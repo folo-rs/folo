@@ -1,3 +1,8 @@
+//! Common benchmarking logic used across the crates in this project.
+//!
+//! See also `many_cpus_benchmarking`, which provides public benchmarking utilities
+//! that may have value even outside this project.
+
 use std::{
     sync::{Arc, Barrier, Mutex},
     time::{Duration, Instant},
@@ -96,10 +101,13 @@ fn calculate_average_duration(thread_count: usize, total_elapsed_nanos: u128) ->
     Duration::from_nanos((total_elapsed_nanos / thread_count as u128) as u64)
 }
 
-/// For the A/B benchmarking, identifiers whether a worker is the A or the B.
+/// For the A/B benchmarking, identifiers whether a worker is a member of group A or B.
+/// Both groups are always of the same size (when counting number of threads).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AbWorker {
+    /// This is a worker arbitrarily assigned to group A.
     A,
+    /// This is a worker arbitrarily assigned to group B.
     B,
 }
 

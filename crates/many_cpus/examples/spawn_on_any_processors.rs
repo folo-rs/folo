@@ -1,3 +1,9 @@
+//! Spawns one thread for each processor in the system but allows the OS to decide what
+//! processor each thread runs on. This can be used to observe how the OS schedules threads
+//! across processors when not provided any constraints.
+//!
+//! Each thread will do a bit of work (10 seconds of spinning CPU) and then terminate.
+
 use std::time::Instant;
 
 use many_cpus::ProcessorSet;

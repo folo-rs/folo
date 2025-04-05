@@ -1,3 +1,5 @@
+//! Basic operations on linked objects.
+
 use std::{
     sync::{Arc, Mutex},
     thread,
@@ -14,7 +16,7 @@ fn linked_objects_smoke_test() {
     }
 
     impl Thing {
-        pub fn new(local_value: usize, global_value: String) -> Self {
+        fn new(local_value: usize, global_value: String) -> Self {
             let global_value = Arc::new(Mutex::new(global_value));
 
             linked::new!(Self {

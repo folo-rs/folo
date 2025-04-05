@@ -26,20 +26,20 @@ mod counters {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A trait that defines functions for reporting the results of some counting that happened.
-    pub trait CountResult {
+    pub(crate) trait CountResult {
         fn local_count(&self) -> usize;
         fn global_count(&self) -> usize;
     }
 
     // Note how this is a regular linked object type, just like in `linked_basic.rs`.
     #[linked::object]
-    pub struct EventCounter {
+    pub(crate) struct EventCounter {
         local_count: usize,
         global_count: Arc<AtomicUsize>,
     }
 
     impl EventCounter {
-        pub fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let global_count = Arc::new(AtomicUsize::new(0));
 
             linked::new!(Self {
@@ -48,7 +48,7 @@ mod counters {
             })
         }
 
-        pub fn increment(&mut self) {
+        pub(crate) fn increment(&mut self) {
             self.local_count = self.local_count.saturating_add(1);
             self.global_count.fetch_add(1, Ordering::Relaxed);
         }

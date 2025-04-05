@@ -20,7 +20,7 @@ mod counters {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    pub trait Counter {
+    pub(crate) trait Counter {
         fn increment(&mut self);
         fn local_count(&self) -> usize;
         fn global_count(&self) -> usize;
@@ -28,7 +28,7 @@ mod counters {
 
     // Note the difference from `linked_basic.rs`: there is no `#[linked::object]` attribute
     // This is because the `linked::Box` wrapper we use provides the necessary machinery.
-    pub struct EventCounter {
+    pub(crate) struct EventCounter {
         local_count: usize,
         global_count: Arc<AtomicUsize>,
     }
@@ -36,7 +36,7 @@ mod counters {
     impl EventCounter {
         // The desired pattern is to suffix the constructor with "as_<trait_name>" to indicate that
         // it returns the result as a trait object instead of the concrete type.
-        pub fn new_as_counter() -> linked::Box<dyn Counter> {
+        pub(crate) fn new_as_counter() -> linked::Box<dyn Counter> {
             let global_count = Arc::new(AtomicUsize::new(0));
 
             // Instead of `linked::new!` as we did in `linked_basic.rs`, we use `linked::new_box!`.
