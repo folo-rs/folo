@@ -74,7 +74,7 @@ fn parse_range(range_start: &str, range_end_inc: &str) -> crate::Result<Vec<Item
 
     if range_start > range_end_inc {
         return Err(crate::Error::InvalidSyntax {
-            invalid_value: format!("{}-{}", range_start, range_end_inc),
+            invalid_value: format!("{range_start}-{range_end_inc}"),
             problem: "range start must be <= end".to_string(),
         });
     }

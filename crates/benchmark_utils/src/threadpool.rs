@@ -23,12 +23,12 @@ impl ThreadPool {
     /// Creates a thread pool with one thread per processor available to the current process.
     #[must_use]
     pub fn all() -> Self {
-        Self::new(ProcessorSet::all().clone())
+        Self::new(ProcessorSet::all())
     }
 
     /// Creates a thread pool with one thread per processor in the provided processor set.
     #[must_use]
-    pub fn new(processors: ProcessorSet) -> Self {
+    pub fn new(processors: &ProcessorSet) -> Self {
         let (txs, rxs): (Vec<_>, Vec<_>) =
             repeat_with(mpsc::channel).take(processors.len()).unzip();
 
@@ -39,7 +39,7 @@ impl ThreadPool {
                 let rxs = Arc::clone(&rxs);
                 move |_| {
                     let rx = rxs.lock().unwrap().pop().unwrap();
-                    worker_entrypoint(rx);
+                    worker_entrypoint(&rx);
                 }
             })
             .into_vec();
@@ -86,7 +86,7 @@ enum Command {
     Shutdown,
 }
 
-fn worker_entrypoint(rx: mpsc::Receiver<Command>) {
+fn worker_entrypoint(rx: &mpsc::Receiver<Command>) {
     while let Command::Execute(f) = rx.recv().unwrap() {
         f();
     }
@@ -133,7 +133,7 @@ mod tests {
         let processor_set = ProcessorSet::builder().take(nz!(1)).unwrap();
         let expected_thread_count = processor_set.len();
 
-        let pool = ThreadPool::new(processor_set);
+        let pool = ThreadPool::new(&processor_set);
 
         assert_eq!(pool.thread_count().get(), expected_thread_count);
 

@@ -18,14 +18,14 @@ criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
     let one_thread = ThreadPool::new(
-        ProcessorSet::builder()
+        &ProcessorSet::builder()
             .performance_processors_only()
             .take(nz!(1))
             .unwrap(),
     );
 
     let two_threads = ThreadPool::new(
-        ProcessorSet::builder()
+        &ProcessorSet::builder()
             .same_memory_region()
             .performance_processors_only()
             .take(nz!(2))
@@ -39,7 +39,7 @@ fn entrypoint(c: &mut Criterion) {
         .performance_processors_only()
         .different_memory_regions()
         .take(nz!(2))
-        .map(ThreadPool::new);
+        .map(|x| ThreadPool::new(&x));
 
     let mut group = c.benchmark_group("region_cached");
 
@@ -48,7 +48,7 @@ fn entrypoint(c: &mut Criterion) {
             region_cached!(static VALUE: u32 = 99942);
 
             black_box(VALUE.get_cached());
-        })
+        });
     });
 
     group.bench_function("set_unpin", |b| {
@@ -56,7 +56,7 @@ fn entrypoint(c: &mut Criterion) {
             region_cached!(static VALUE: u32 = 99942);
 
             VALUE.set_global(black_box(566));
-        })
+        });
     });
 
     group.bench_function("get_pin", |b| {

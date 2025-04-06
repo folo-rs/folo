@@ -115,29 +115,29 @@ pub enum WorkDistribution {
 impl WorkDistribution {
     /// All the work distribution modes.
     #[must_use]
-    pub fn all() -> &'static [WorkDistribution] {
+    pub fn all() -> &'static [Self] {
         &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::PinnedSelf,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::ConstrainedSameMemoryRegion,
-            WorkDistribution::UnpinnedSelf,
-            WorkDistribution::UnpinnedPerMemoryRegionSelf,
+            Self::PinnedMemoryRegionPairs,
+            Self::PinnedSameMemoryRegion,
+            Self::PinnedSameProcessor,
+            Self::PinnedSelf,
+            Self::UnpinnedMemoryRegionPairs,
+            Self::ConstrainedSameMemoryRegion,
+            Self::UnpinnedSelf,
+            Self::UnpinnedPerMemoryRegionSelf,
         ]
     }
 
     /// All the work distribution modes that exchange payloads between processors
     /// before starting the benchmark.
     #[must_use]
-    pub fn all_without_self() -> &'static [WorkDistribution] {
+    pub fn all_without_self() -> &'static [Self] {
         &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSameProcessor,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::ConstrainedSameMemoryRegion,
+            Self::PinnedMemoryRegionPairs,
+            Self::PinnedSameMemoryRegion,
+            Self::PinnedSameProcessor,
+            Self::UnpinnedMemoryRegionPairs,
+            Self::ConstrainedSameMemoryRegion,
         ]
     }
 
@@ -145,15 +145,15 @@ impl WorkDistribution {
     /// on a different processor (either explicitly or by allowing them to float
     /// based on OS scheduling decisions).
     #[must_use]
-    pub fn all_with_unique_processors() -> &'static [WorkDistribution] {
+    pub fn all_with_unique_processors() -> &'static [Self] {
         &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::PinnedSelf,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::ConstrainedSameMemoryRegion,
-            WorkDistribution::UnpinnedSelf,
-            WorkDistribution::UnpinnedPerMemoryRegionSelf,
+            Self::PinnedMemoryRegionPairs,
+            Self::PinnedSameMemoryRegion,
+            Self::PinnedSelf,
+            Self::UnpinnedMemoryRegionPairs,
+            Self::ConstrainedSameMemoryRegion,
+            Self::UnpinnedSelf,
+            Self::UnpinnedPerMemoryRegionSelf,
         ]
     }
 
@@ -162,12 +162,12 @@ impl WorkDistribution {
     /// based on OS scheduling decisions) and exchange payloads between workers
     /// before starting the benchmark.
     #[must_use]
-    pub fn all_with_unique_processors_without_self() -> &'static [WorkDistribution] {
+    pub fn all_with_unique_processors_without_self() -> &'static [Self] {
         &[
-            WorkDistribution::PinnedMemoryRegionPairs,
-            WorkDistribution::PinnedSameMemoryRegion,
-            WorkDistribution::UnpinnedMemoryRegionPairs,
-            WorkDistribution::ConstrainedSameMemoryRegion,
+            Self::PinnedMemoryRegionPairs,
+            Self::PinnedSameMemoryRegion,
+            Self::UnpinnedMemoryRegionPairs,
+            Self::ConstrainedSameMemoryRegion,
         ]
     }
 }

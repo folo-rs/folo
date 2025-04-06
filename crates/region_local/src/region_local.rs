@@ -53,7 +53,7 @@ where
     pub fn new(initializer: fn() -> T) -> Self {
         Self::with_clients(
             initializer,
-            HardwareInfoClientFacade::real(),
+            &HardwareInfoClientFacade::real(),
             HardwareTrackerClientFacade::real(),
         )
     }
@@ -61,7 +61,7 @@ where
     #[must_use]
     pub(crate) fn with_clients(
         initializer: fn() -> T,
-        hardware_info: HardwareInfoClientFacade,
+        hardware_info: &HardwareInfoClientFacade,
         hardware_tracker: HardwareTrackerClientFacade,
     ) -> Self {
         let memory_region_count = hardware_info.max_memory_region_count();
@@ -69,10 +69,7 @@ where
         let global_state = Arc::new(GlobalState::new(initializer, memory_region_count));
 
         linked::new!(Self {
-            regional_state: Self::try_locate_regional_state(
-                &global_state,
-                hardware_tracker.clone()
-            ),
+            regional_state: Self::try_locate_regional_state(&global_state, &hardware_tracker),
             global_state: Arc::clone(&global_state),
             hardware_tracker: hardware_tracker.clone(),
         })
@@ -80,7 +77,7 @@ where
 
     fn try_locate_regional_state(
         global_state: &Arc<GlobalState<T>>,
-        hardware_tracker: HardwareTrackerClientFacade,
+        hardware_tracker: &HardwareTrackerClientFacade,
     ) -> Option<Arc<RegionalState<T>>> {
         if !hardware_tracker.is_thread_memory_region_pinned() {
             return None;
@@ -214,7 +211,7 @@ where
         self.global_state
             .with_regional_state(memory_region_id, |regional_state| {
                 regional_state.set(value);
-            })
+            });
     }
 }
 
@@ -367,26 +364,26 @@ where
 
                 // Something has finished happening! Whatever it was, we are now initialized.
                 break;
-            } else {
-                // Nothing is happening. We may be the first to start initializing.
-                let attempt_signal = Arc::new(ManualResetEvent::new(EventState::Unset));
-                let attempt = RegionalValue::<T>::Initializing(Arc::clone(&attempt_signal));
-
-                let previous_value = self.value.compare_and_swap(reader, Some(Arc::new(attempt)));
-
-                if !previous_value.is_none() {
-                    // Someone raced ahead of us. Re-enter loop.
-                    continue;
-                }
-
-                let new_value = RegionalValue::Ready(initializer());
-                self.value.store(Some(Arc::new(new_value)));
-
-                // We are done initializing. Notify all waiters that they can continue.
-                attempt_signal.set();
-
-                break;
             }
+
+            // Nothing is happening. We may be the first to start initializing.
+            let attempt_signal = Arc::new(ManualResetEvent::new(EventState::Unset));
+            let attempt = RegionalValue::<T>::Initializing(Arc::clone(&attempt_signal));
+
+            let previous_value = self.value.compare_and_swap(reader, Some(Arc::new(attempt)));
+
+            if !previous_value.is_none() {
+                // Someone raced ahead of us. Re-enter loop.
+                continue;
+            }
+
+            let new_value = RegionalValue::Ready(initializer());
+            self.value.store(Some(Arc::new(new_value)));
+
+            // We are done initializing. Notify all waiters that they can continue.
+            attempt_signal.set();
+
+            break;
         }
     }
 
@@ -486,7 +483,7 @@ mod tests {
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
         let local =
-            RegionLocal::with_clients(|| "foo".to_string(), hardware_info, hardware_tracker);
+            RegionLocal::with_clients(|| "foo".to_string(), &hardware_info, hardware_tracker);
 
         let value1 = local.with_local(ptr::from_ref);
         let value2 = local.with_local(ptr::from_ref);
@@ -527,7 +524,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocal::with_clients(|| 42, hardware_info, hardware_tracker);
+        let local = RegionLocal::with_clients(|| 42, &hardware_info, hardware_tracker);
 
         assert_eq!(local.get_local(), 42);
         assert_eq!(local.get_local(), 42);
@@ -572,7 +569,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocal::with_clients(|| 42, hardware_info, hardware_tracker);
+        let local = RegionLocal::with_clients(|| 42, &hardware_info, hardware_tracker);
 
         assert_eq!(local.get_local(), 42);
         local.set_local(43);
@@ -621,7 +618,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocal::with_clients(|| 42, hardware_info, hardware_tracker);
+        let local = RegionLocal::with_clients(|| 42, &hardware_info, hardware_tracker);
 
         local.set_local(43);
         assert_eq!(local.get_local(), 43);
@@ -655,7 +652,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionLocal::with_clients(|| 42, hardware_info, hardware_tracker);
+        let local = RegionLocal::with_clients(|| 42, &hardware_info, hardware_tracker);
 
         assert_eq!(local.get_local(), 42);
         assert_eq!(local.get_local(), 42);

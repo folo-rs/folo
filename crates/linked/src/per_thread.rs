@@ -74,6 +74,10 @@ where
 {
     /// Creates a new `PerThread` with an existing instance of `T`. Any further access to the `T`
     /// via the `PerThread` (or its clones) will return instances of `T` from the same family.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "intentional needless consume to encourage all access to go via ThreadLocal<T>"
+    )]
     #[must_use]
     pub fn new(inner: T) -> Self {
         let family = FamilyStateReference::new(inner.handle());
@@ -541,6 +545,12 @@ mod tests {
             assert_eq!(thread_local4.local_value(), 1);
             assert_eq!(thread_local4.shared_value(), 3);
 
+            // Every PerThread instance from the same family is equivalent.
+            let thread_local5 = per_thread.local();
+
+            assert_eq!(thread_local5.local_value(), 1);
+            assert_eq!(thread_local5.shared_value(), 3);
+
             thread::spawn(move || {
                 let thread_local5 = per_thread_clone.local();
 
@@ -591,10 +601,8 @@ mod tests {
         // We now have two references to the inner shared value - the link + this fn.
         assert_eq!(Arc::strong_count(&local.shared_value), 2);
 
-        let per_thread_clone = per_thread.clone();
-
         thread::spawn(move || {
-            let local = per_thread_clone.local();
+            let local = per_thread.local();
 
             assert_eq!(Arc::strong_count(&local.shared_value), 3);
         })

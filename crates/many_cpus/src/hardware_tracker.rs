@@ -87,7 +87,7 @@ impl HardwareTracker {
     #[inline]
     #[must_use]
     pub fn current_processor_id() -> ProcessorId {
-        CURRENT_TRACKER.with_borrow(|core| core.current_processor_id())
+        CURRENT_TRACKER.with_borrow(HardwareTrackerCore::current_processor_id)
     }
 
     /// The memory region ID of the processor currently executing this thread.
@@ -95,7 +95,7 @@ impl HardwareTracker {
     #[inline]
     #[must_use]
     pub fn current_memory_region_id() -> MemoryRegionId {
-        CURRENT_TRACKER.with_borrow(|core| core.current_memory_region_id())
+        CURRENT_TRACKER.with_borrow(HardwareTrackerCore::current_memory_region_id)
     }
 
     /// Whether the current thread is pinned to a single processor.
@@ -158,7 +158,7 @@ impl HardwareTracker {
     #[inline]
     #[must_use]
     pub fn is_thread_processor_pinned() -> bool {
-        CURRENT_TRACKER.with_borrow(|core| core.is_thread_processor_pinned())
+        CURRENT_TRACKER.with_borrow(HardwareTrackerCore::is_thread_processor_pinned)
     }
 
     /// Whether the current thread is pinned to one or more processors that are all
@@ -224,7 +224,7 @@ impl HardwareTracker {
     #[inline]
     #[must_use]
     pub fn is_thread_memory_region_pinned() -> bool {
-        CURRENT_TRACKER.with_borrow(|core| core.is_thread_memory_region_pinned())
+        CURRENT_TRACKER.with_borrow(HardwareTrackerCore::is_thread_memory_region_pinned)
     }
 }
 

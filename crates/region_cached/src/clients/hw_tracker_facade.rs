@@ -30,17 +30,17 @@ impl HardwareTrackerClientFacade {
 impl HardwareTrackerClient for HardwareTrackerClientFacade {
     fn current_memory_region_id(&self) -> MemoryRegionId {
         match self {
-            HardwareTrackerClientFacade::Real(real) => real.current_memory_region_id(),
+            Self::Real(real) => real.current_memory_region_id(),
             #[cfg(test)]
-            HardwareTrackerClientFacade::Mock(mock) => mock.current_memory_region_id(),
+            Self::Mock(mock) => mock.current_memory_region_id(),
         }
     }
 
     fn is_thread_memory_region_pinned(&self) -> bool {
         match self {
-            HardwareTrackerClientFacade::Real(real) => real.is_thread_memory_region_pinned(),
+            Self::Real(real) => real.is_thread_memory_region_pinned(),
             #[cfg(test)]
-            HardwareTrackerClientFacade::Mock(mock) => mock.is_thread_memory_region_pinned(),
+            Self::Mock(mock) => mock.is_thread_memory_region_pinned(),
         }
     }
 }

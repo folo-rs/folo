@@ -36,5 +36,5 @@ async fn update() -> String {
         .unwrap()
         .as_millis();
     LAST_UPDATE.set_local(now);
-    format!("Last update time set to: {}", now)
+    format!("Last update time set to: {now}")
 }

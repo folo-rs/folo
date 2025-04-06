@@ -39,12 +39,12 @@ impl HardwareTrackerClient for HardwareTrackerClientFacade {
         memory_region_id: Option<MemoryRegionId>,
     ) {
         match self {
-            HardwareTrackerClientFacade::Real(real) => {
-                real.update_pin_status(processor_id, memory_region_id)
+            Self::Real(real) => {
+                real.update_pin_status(processor_id, memory_region_id);
             }
             #[cfg(test)]
-            HardwareTrackerClientFacade::Mock(mock) => {
-                mock.update_pin_status(processor_id, memory_region_id)
+            Self::Mock(mock) => {
+                mock.update_pin_status(processor_id, memory_region_id);
             }
         }
     }

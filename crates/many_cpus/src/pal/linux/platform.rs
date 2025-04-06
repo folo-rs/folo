@@ -90,6 +90,8 @@ impl Platform for BuildTargetPlatform {
 
         NonEmpty::from_vec(
             (0..=max_processor_id)
+                // TODO: Do we need to check for cpuset overflow here to avoid panic?
+                // SAFETY: No safety requirements.
                 .filter(|processor_id| unsafe { libc::CPU_ISSET(*processor_id as usize, &affinity) })
                 .collect_vec())
                 .expect("current thread has no processors in its affinity mask - impossible because this code is running on an active processor")
@@ -204,12 +206,12 @@ impl BuildTargetPlatform {
                 EfficiencyClass::Performance
             };
 
-            let is_online = match self.fs.get_cpu_online_contents(info.index) {
-                Some(s) => s.trim() == "1",
-                // Some Linux flavors do not report this, so just assume online by default.
-                // Sometimes this is also omitted for a specific processor because... it just is.
-                None => true,
-            };
+            // Some Linux flavors do not report this, so just assume online by default.
+            // Sometimes this is also omitted for a specific processor because... it just is.
+            let is_online = self
+                .fs
+                .get_cpu_online_contents(info.index)
+                .is_none_or(|s| s.trim() == "1");
 
             ProcessorImpl {
                 id: info.index,
@@ -233,7 +235,7 @@ impl BuildTargetPlatform {
         // Process groups of lines delimited by empty lines.
         NonEmpty::from_vec(
             lines
-                .map(|line| line.trim())
+                .map(str::trim)
                 .chunk_by(|l| l.is_empty())
                 .into_iter()
                 .filter_map(|(is_empty, lines)| {
@@ -262,7 +264,7 @@ impl BuildTargetPlatform {
                         match key {
                             "processor" => index = value.parse::<ProcessorId>().ok(),
                             "cpu MHz" => {
-                                frequency_mhz = value.parse::<f32>().map(|f| f.round() as u32).ok()
+                                frequency_mhz = value.parse::<f32>().map(|f| f.round() as u32).ok();
                             }
                             _ => {}
                         }
@@ -289,7 +291,7 @@ impl BuildTargetPlatform {
 
         let cpus_allowed_list = lines
             .into_iter()
-            .map(|line| line.trim())
+            .map(str::trim)
             .filter_map(|line| {
                 if line.is_empty() {
                     // There do not seem to be empty lines in this file but just in case.
@@ -768,7 +770,7 @@ mod tests {
         for (node, processors) in processors_per_node {
             let mut cpulist = processors
                 .iter()
-                .map(|p| p.to_string())
+                .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(",");
 

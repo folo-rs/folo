@@ -25,14 +25,14 @@ fn entrypoint(c: &mut Criterion) {
         b.iter(|| {
             static VAR: u64 = EXPECTED_VALUE;
             assert_eq!(black_box(VAR), EXPECTED_VALUE);
-        })
+        });
     });
 
     group.bench_function("static_lazy_lock", |b| {
         b.iter(|| {
             static VAR: LazyLock<u64> = LazyLock::new(|| EXPECTED_VALUE);
             assert_eq!(black_box(*VAR), EXPECTED_VALUE);
-        })
+        });
     });
 
     group.bench_function("static_once_lock", |b| {
@@ -42,28 +42,28 @@ fn entrypoint(c: &mut Criterion) {
                 black_box(*VAR.get_or_init(|| EXPECTED_VALUE)),
                 EXPECTED_VALUE
             );
-        })
+        });
     });
 
     group.bench_function("thread_local_immutable", |b| {
         b.iter(|| {
             thread_local!(static VAR: u64 = const { EXPECTED_VALUE });
             assert_eq!(black_box(VAR.with(|v| *v)), EXPECTED_VALUE);
-        })
+        });
     });
 
     group.bench_function("thread_local_refcell_borrow", |b| {
         b.iter(|| {
             thread_local!(static VAR: RefCell<u64> = const { RefCell::new(EXPECTED_VALUE) });
             assert_eq!(black_box(VAR.with_borrow(|v| *v)), EXPECTED_VALUE);
-        })
+        });
     });
 
     group.bench_function("thread_local_refcell_borrow_mut", |b| {
         b.iter(|| {
             thread_local!(static VAR: RefCell<u64> = const { RefCell::new(EXPECTED_VALUE) });
             assert_eq!(black_box(VAR.with_borrow_mut(|v| *v)), EXPECTED_VALUE);
-        })
+        });
     });
 
     group.bench_function("thread_local_lazy_cell", |b| {
@@ -80,7 +80,7 @@ fn entrypoint(c: &mut Criterion) {
                 black_box(VAR.with(|v| *v.get_or_init(|| EXPECTED_VALUE))),
                 EXPECTED_VALUE
             );
-        })
+        });
     });
 
     // We lift these out of the iteration function to avoid measuring the cost of field
@@ -119,9 +119,10 @@ fn entrypoint(c: &mut Criterion) {
     group.bench_function("local_unsafe_cell", |b| {
         b.iter(|| {
             assert_eq!(
+                // SAFETY: It's all good.
                 black_box(unsafe { *local_unsafe_cell.get() }),
                 EXPECTED_VALUE
-            )
+            );
         });
     });
 
@@ -138,7 +139,7 @@ fn entrypoint(c: &mut Criterion) {
             assert_eq!(
                 black_box(*local_once_cell.get_or_init(|| EXPECTED_VALUE)),
                 EXPECTED_VALUE
-            )
+            );
         });
     });
 

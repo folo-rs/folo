@@ -324,8 +324,8 @@ mod tests {
         assert_eq!(BLUE_TOKEN_CACHE.get().value(), 1000);
         assert_eq!(YELLOW_TOKEN_CACHE.get().value(), 2000);
 
-        assert_eq!(BLUE_TOKEN_CACHE.get().clone().value(), 1000);
-        assert_eq!(YELLOW_TOKEN_CACHE.get().clone().value(), 2000);
+        assert_eq!(BLUE_TOKEN_CACHE.get().value(), 1000);
+        assert_eq!(YELLOW_TOKEN_CACHE.get().value(), 2000);
 
         BLUE_TOKEN_CACHE.get().increment();
         YELLOW_TOKEN_CACHE.get().increment();

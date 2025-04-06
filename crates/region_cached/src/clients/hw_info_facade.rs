@@ -28,9 +28,9 @@ impl HardwareInfoClientFacade {
 impl HardwareInfoClient for HardwareInfoClientFacade {
     fn max_memory_region_count(&self) -> usize {
         match self {
-            HardwareInfoClientFacade::Real(real) => real.max_memory_region_count(),
+            Self::Real(real) => real.max_memory_region_count(),
             #[cfg(test)]
-            HardwareInfoClientFacade::Mock(mock) => mock.max_memory_region_count(),
+            Self::Mock(mock) => mock.max_memory_region_count(),
         }
     }
 }

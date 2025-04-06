@@ -7,7 +7,7 @@ pub(crate) struct ThreadIdHasher {
 
 impl ThreadIdHasher {
     pub(crate) fn new() -> Self {
-        ThreadIdHasher { state: 0 }
+        Self { state: 0 }
     }
 }
 
@@ -60,11 +60,11 @@ mod tests {
         // Even for tiny changes in the ID value, we expect the control byte (high byte) to be
         // different because the control byte comparison is performance-critical.
         let mut hasher = ThreadIdHasher::new();
-        hasher.write(&0u64.to_le_bytes());
+        hasher.write(&0_u64.to_le_bytes());
         let hash1 = hasher.finish();
 
         let mut hasher = ThreadIdHasher::new();
-        hasher.write(&1u64.to_le_bytes());
+        hasher.write(&1_u64.to_le_bytes());
         let hash2 = hasher.finish();
 
         // There has to be at least some difference.

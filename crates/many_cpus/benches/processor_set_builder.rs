@@ -23,13 +23,13 @@ fn entrypoint(c: &mut Criterion) {
     group.bench_function("all", |b| {
         b.iter(|| {
             black_box(ProcessorSet::builder().take_all().unwrap());
-        })
+        });
     });
 
     group.bench_function("one", |b| {
         b.iter(|| {
             black_box(ProcessorSet::builder().take(nz!(1)).unwrap());
-        })
+        });
     });
 
     group.bench_function("only_evens", |b| {
@@ -40,7 +40,7 @@ fn entrypoint(c: &mut Criterion) {
                     .take_all()
                     .unwrap(),
             );
-        })
+        });
     });
 
     group.finish();

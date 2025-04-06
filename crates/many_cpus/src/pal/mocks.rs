@@ -1,3 +1,5 @@
+#![expect(clippy::same_name_method, reason = "mock magic")]
+
 use derive_more::derive::Display;
 use mockall::mock;
 use nonempty::NonEmpty;

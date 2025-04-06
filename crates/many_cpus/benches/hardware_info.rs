@@ -17,9 +17,7 @@ fn entrypoint(c: &mut Criterion) {
     // Mostly pointless since all the accessors just load from a static lazy-initialize
     // variable. Just here to detect anomalies if we do something strange and it gets slow.
     group.bench_function("max_processor_id", |b| {
-        b.iter(|| {
-            _ = HardwareInfo::max_processor_id();
-        })
+        b.iter(HardwareInfo::max_processor_id);
     });
 
     group.finish();

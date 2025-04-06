@@ -53,7 +53,7 @@ where
     pub fn new(initial_value: T) -> Self {
         Self::with_clients(
             initial_value,
-            HardwareInfoClientFacade::real(),
+            &HardwareInfoClientFacade::real(),
             HardwareTrackerClientFacade::real(),
         )
     }
@@ -61,7 +61,7 @@ where
     #[must_use]
     pub(crate) fn with_clients(
         initial_value: T,
-        hardware_info: HardwareInfoClientFacade,
+        hardware_info: &HardwareInfoClientFacade,
         hardware_tracker: HardwareTrackerClientFacade,
     ) -> Self {
         let memory_region_count = hardware_info.max_memory_region_count();
@@ -69,10 +69,7 @@ where
         let global_state = Arc::new(GlobalState::new(initial_value, memory_region_count));
 
         linked::new!(Self {
-            regional_state: Self::try_locate_regional_state(
-                &global_state,
-                hardware_tracker.clone()
-            ),
+            regional_state: Self::try_locate_regional_state(&global_state, &hardware_tracker),
             global_state: Arc::clone(&global_state),
             hardware_tracker: hardware_tracker.clone(),
         })
@@ -80,7 +77,7 @@ where
 
     fn try_locate_regional_state(
         global_state: &Arc<GlobalState<T>>,
-        hardware_tracker: HardwareTrackerClientFacade,
+        hardware_tracker: &HardwareTrackerClientFacade,
     ) -> Option<Arc<RegionalState<T>>> {
         if !hardware_tracker.is_thread_memory_region_pinned() {
             return None;
@@ -238,10 +235,7 @@ where
         // any new regional states that get initialized will get our latest updated value.
         self.global_state
             .latest_value
-            .store(Arc::new(GenerationValue {
-                generation,
-                value: value.clone(),
-            }));
+            .store(Arc::new(GenerationValue { generation, value }));
 
         // Now all we need to do is invalidate the current value in all regions.
         // Each region will reinitialize itself automatically on next access.
@@ -350,7 +344,7 @@ where
             // It might already be in the process of being initialized by another thread, which
             // is fine - once initialized, it will by default be in the invalidated state.
             if let Some(state) = slot.get() {
-                state.clear()
+                state.clear();
             }
         }
     }
@@ -434,33 +428,33 @@ where
                         return *generation;
                     }
                 }
-            } else {
-                // Nothing is happening. We may be the first to start initializing.
-                let attempt_signal = Arc::new(ManualResetEvent::new(EventState::Unset));
-                let attempt = RegionalValue::<T>::Initializing(Arc::clone(&attempt_signal));
-
-                let previous_value = self.value.compare_and_swap(reader, Some(Arc::new(attempt)));
-
-                if !previous_value.is_none() {
-                    // Someone raced ahead of us. Re-enter loop.
-                    continue;
-                }
-
-                let new_value = RegionalValue::Ready(value.clone());
-
-                // It is possible that another thread has assigned a new global value
-                // while we are doing this, so our `value` is out of date already. We
-                // detect this in the caller by checking (after initialization) whether
-                // the value that was set is of the expected generation. If not, everything
-                // starts all over again for the current thread and it tries to re-initialize.
-
-                self.value.store(Some(Arc::new(new_value)));
-
-                // We are done initializing. Notify all waiters that they can continue.
-                attempt_signal.set();
-
-                return value.generation;
             }
+
+            // Nothing is happening. We may be the first to start initializing.
+            let attempt_signal = Arc::new(ManualResetEvent::new(EventState::Unset));
+            let attempt = RegionalValue::<T>::Initializing(Arc::clone(&attempt_signal));
+
+            let previous_value = self.value.compare_and_swap(reader, Some(Arc::new(attempt)));
+
+            if !previous_value.is_none() {
+                // Someone raced ahead of us. Re-enter loop.
+                continue;
+            }
+
+            let new_value = RegionalValue::Ready(value.clone());
+
+            // It is possible that another thread has assigned a new global value
+            // while we are doing this, so our `value` is out of date already. We
+            // detect this in the caller by checking (after initialization) whether
+            // the value that was set is of the expected generation. If not, everything
+            // starts all over again for the current thread and it tries to re-initialize.
+
+            self.value.store(Some(Arc::new(new_value)));
+
+            // We are done initializing. Notify all waiters that they can continue.
+            attempt_signal.set();
+
+            return value.generation;
         }
     }
 
@@ -561,7 +555,7 @@ mod tests {
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
         let local =
-            RegionCached::with_clients(|| "foo".to_string(), hardware_info, hardware_tracker);
+            RegionCached::with_clients(|| "foo".to_string(), &hardware_info, hardware_tracker);
 
         let value1 = local.with_cached(ptr::from_ref);
         let value2 = local.with_cached(ptr::from_ref);
@@ -602,7 +596,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionCached::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionCached::with_clients(42, &hardware_info, hardware_tracker);
 
         assert_eq!(local.get_cached(), 42);
         assert_eq!(local.get_cached(), 42);
@@ -647,7 +641,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionCached::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionCached::with_clients(42, &hardware_info, hardware_tracker);
 
         assert_eq!(local.get_cached(), 42);
         local.set_global(43);
@@ -689,7 +683,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionCached::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionCached::with_clients(42, &hardware_info, hardware_tracker);
 
         local.set_global(43);
 
@@ -723,7 +717,7 @@ mod tests {
 
         let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionCached::with_clients(42, hardware_info, hardware_tracker);
+        let local = RegionCached::with_clients(42, &hardware_info, hardware_tracker);
 
         assert_eq!(local.get_cached(), 42);
         assert_eq!(local.get_cached(), 42);

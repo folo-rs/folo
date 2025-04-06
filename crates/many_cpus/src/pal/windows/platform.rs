@@ -380,6 +380,7 @@ impl BuildTargetPlatform {
 
             assert_eq!(info.Relationship, RelationProcessorCore);
 
+            // SAFETY: Guarded via info.Relationship, asserted above.
             let details = unsafe { &info.Anonymous.Processor };
 
             // API docs: If the PROCESSOR_RELATIONSHIP structure represents a processor core,
@@ -387,7 +388,7 @@ impl BuildTargetPlatform {
             assert_eq!(details.GroupCount, 1);
 
             // There may be 1 or more bits set in the mask because one core might have multiple logical
-            // processors via SMT (hyperthreading). We just iterate over all the bits to check them
+            // processors via SMT (hyper-threading). We just iterate over all the bits to check them
             // individually without worrying about SMT logic.
             for processor_id in
                 Self::affinity_mask_to_processor_ids(&details.GroupMask[0], group_max_sizes)
@@ -446,6 +447,7 @@ impl BuildTargetPlatform {
             // for the same NUMA node (instead of just the primary group as with plain NumaNode).
             assert_eq!(info.Relationship, RelationNumaNode);
 
+            // SAFETY: Guarded via info.Relationship, asserted above.
             let details = unsafe { &info.Anonymous.NumaNode };
 
             let numa_node_number = details.NodeNumber;
@@ -985,7 +987,10 @@ mod tests {
             .in_sequence(&mut seq)
             .withf(|rel, buf, _| rel == &RelationProcessorCore && buf.is_none())
             .returning(|_, _, returned_length| {
-                unsafe { *returned_length = 64 };
+                // SAFETY: No safety requirements.
+                unsafe {
+                    *returned_length = 64;
+                }
                 Err(windows::core::Error::from_hresult(
                     ERROR_INSUFFICIENT_BUFFER.to_hresult(),
                 ))
@@ -998,7 +1003,10 @@ mod tests {
             .in_sequence(&mut seq)
             .withf(|rel, buf, _| rel == &RelationProcessorCore && buf.is_some())
             .returning(|_, _, returned_length| {
-                unsafe { *returned_length = 96 };
+                // SAFETY: No safety requirements.
+                unsafe {
+                    *returned_length = 96;
+                }
                 Err(windows::core::Error::from_hresult(
                     ERROR_INSUFFICIENT_BUFFER.to_hresult(),
                 ))
@@ -1011,7 +1019,11 @@ mod tests {
             .in_sequence(&mut seq)
             .withf(|rel, buf, _| rel == &RelationProcessorCore && buf.is_none())
             .returning(|_, _, returned_length| {
-                unsafe { *returned_length = 128 };
+                // SAFETY: No safety requirements.
+                unsafe {
+                    *returned_length = 128;
+                }
+
                 Err(windows::core::Error::from_hresult(
                     ERROR_INSUFFICIENT_BUFFER.to_hresult(),
                 ))
@@ -1024,7 +1036,11 @@ mod tests {
             .in_sequence(&mut seq)
             .withf(|rel, buf, _| rel == &RelationProcessorCore && buf.is_some())
             .returning(|_, _, returned_length| {
-                unsafe { *returned_length = 128 };
+                // SAFETY: No safety requirements.
+                unsafe {
+                    *returned_length = 128;
+                }
+
                 Ok(())
             });
 
@@ -1065,13 +1081,11 @@ mod tests {
             );
         }
 
-        // Copy the data because we need to keep referencing it in the mock.
-        let group_active_counts = Arc::new(group_active_counts.to_vec());
-        let group_max_counts = Arc::new(group_max_counts.to_vec());
-        let efficiency_ratings_per_group =
-            Arc::new(efficiency_ratings_per_group.iter().cloned().collect_vec());
-        let memory_regions_per_group =
-            Arc::new(memory_regions_per_group.iter().cloned().collect_vec());
+        // Move into Arc because we need to keep referencing it in the mock.
+        let group_active_counts = Arc::from(group_active_counts);
+        let group_max_counts = Arc::from(group_max_counts);
+        let efficiency_ratings_per_group = Arc::from(efficiency_ratings_per_group);
+        let memory_regions_per_group = Arc::from(memory_regions_per_group);
 
         simulate_get_counts(bindings, &group_active_counts, &group_max_counts);
         simulate_get_numa_relations(bindings, &memory_regions_per_group);
@@ -1107,8 +1121,8 @@ mod tests {
 
     fn simulate_get_counts(
         bindings: &mut MockBindings,
-        group_active_counts: &Arc<Vec<ProcessorIndexInGroup>>,
-        group_max_counts: &Arc<Vec<ProcessorIndexInGroup>>,
+        group_active_counts: &Arc<[ProcessorIndexInGroup]>,
+        group_max_counts: &Arc<[ProcessorIndexInGroup]>,
     ) {
         let max_group_count = group_active_counts.len() as u16;
 
@@ -1141,7 +1155,7 @@ mod tests {
     fn simulate_get_numa_relations(
         bindings: &mut MockBindings,
         // Active processors only.
-        active_processor_memory_regions_per_group: &Arc<Vec<Vec<MemoryRegionId>>>,
+        active_processor_memory_regions_per_group: &Arc<[Vec<MemoryRegionId>]>,
     ) {
         // The mask logic is weird on 32-bit, so we have not bothered to implement/test it.
         // We do not today care about correctly operating in 32-bit builds.
@@ -1310,9 +1324,9 @@ mod tests {
 
     fn simulate_get_core_info(
         bindings: &mut MockBindings,
-        group_active_counts: &Arc<Vec<ProcessorIndexInGroup>>,
+        group_active_counts: &Arc<[ProcessorIndexInGroup]>,
         // Active processors only.
-        active_processor_efficiency_ratings_per_group: &Arc<Vec<Vec<u8>>>,
+        active_processor_efficiency_ratings_per_group: &Arc<[Vec<u8>]>,
     ) {
         // Next we define the "get core info" simulation, used to access metadata of each processor.
         // Specifically, this provides the efficiency class. The other info is currently unused.

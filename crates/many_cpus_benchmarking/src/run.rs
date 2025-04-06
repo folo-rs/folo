@@ -13,7 +13,7 @@ use std::{
 use criterion::{BenchmarkGroup, Criterion, SamplingMode, measurement::WallTime};
 use folo_utils::nz;
 use itertools::Itertools;
-use many_cpus::ProcessorSet;
+use many_cpus::{Processor, ProcessorSet};
 use nonempty::{NonEmpty, nonempty};
 use rand::{rng, seq::SliceRandom};
 
@@ -89,14 +89,14 @@ fn execute_run<P: Payload, const BATCH_SIZE: u64>(
                 &processor_set_1
                     .processors()
                     .iter()
-                    .map(|p| p.id())
+                    .map(Processor::id)
                     .collect_vec(),
             );
             let cpulist2 = cpulist::emit(
                 &processor_set_2
                     .processors()
                     .iter()
-                    .map(|p| p.id())
+                    .map(Processor::id)
                     .collect_vec(),
             );
 
@@ -147,7 +147,7 @@ fn calculate_worker_pair_count() -> NonZero<usize> {
             .expect("must have at least one processor")
             .processors()
             .iter()
-            .map(|p| p.memory_region_id())
+            .map(Processor::memory_region_id)
             .unique()
             .count(),
     )
@@ -612,12 +612,12 @@ impl BenchmarkBatch {
                 (tx2, rx2, payloads2, payload_barriers),
             ]));
 
-            join_handles.push(BenchmarkBatch::spawn_worker(
+            join_handles.push(Self::spawn_worker(
                 processor_set_1,
                 Arc::clone(&ready_signal),
                 Arc::clone(&bag),
             ));
-            join_handles.push(BenchmarkBatch::spawn_worker(
+            join_handles.push(Self::spawn_worker(
                 processor_set_2,
                 Arc::clone(&ready_signal),
                 Arc::clone(&bag),

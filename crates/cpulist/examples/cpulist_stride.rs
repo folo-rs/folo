@@ -6,8 +6,8 @@ fn main() {
 
     let all = cpulist::emit(odds.iter().chain(evens.iter()));
 
-    println!("Evens: {:?}", evens);
-    println!("Odds: {:?}", odds);
+    println!("Evens: {evens:?}");
+    println!("Odds: {odds:?}");
 
-    println!("All as cpulist: {}", all);
+    println!("All as cpulist: {all}");
 }

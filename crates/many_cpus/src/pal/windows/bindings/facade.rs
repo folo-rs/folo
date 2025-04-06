@@ -29,45 +29,45 @@ pub(crate) enum BindingsFacade {
 
 impl BindingsFacade {
     pub(crate) const fn real() -> Self {
-        BindingsFacade::Real(&BuildTargetBindings)
+        Self::Real(&BuildTargetBindings)
     }
 
     #[cfg(test)]
     pub(crate) fn from_mock(mock: MockBindings) -> Self {
-        BindingsFacade::Mock(Arc::new(mock))
+        Self::Mock(Arc::new(mock))
     }
 }
 
 impl Bindings for BindingsFacade {
     fn get_active_processor_count(&self, group_number: u16) -> u32 {
         match self {
-            BindingsFacade::Real(bindings) => bindings.get_active_processor_count(group_number),
+            Self::Real(bindings) => bindings.get_active_processor_count(group_number),
             #[cfg(test)]
-            BindingsFacade::Mock(bindings) => bindings.get_active_processor_count(group_number),
+            Self::Mock(bindings) => bindings.get_active_processor_count(group_number),
         }
     }
 
     fn get_maximum_processor_count(&self, group_number: u16) -> u32 {
         match self {
-            BindingsFacade::Real(bindings) => bindings.get_maximum_processor_count(group_number),
+            Self::Real(bindings) => bindings.get_maximum_processor_count(group_number),
             #[cfg(test)]
-            BindingsFacade::Mock(bindings) => bindings.get_maximum_processor_count(group_number),
+            Self::Mock(bindings) => bindings.get_maximum_processor_count(group_number),
         }
     }
 
     fn get_maximum_processor_group_count(&self) -> u16 {
         match self {
-            BindingsFacade::Real(bindings) => bindings.get_maximum_processor_group_count(),
+            Self::Real(bindings) => bindings.get_maximum_processor_group_count(),
             #[cfg(test)]
-            BindingsFacade::Mock(bindings) => bindings.get_maximum_processor_group_count(),
+            Self::Mock(bindings) => bindings.get_maximum_processor_group_count(),
         }
     }
 
     fn get_current_processor_number_ex(&self) -> PROCESSOR_NUMBER {
         match self {
-            BindingsFacade::Real(bindings) => bindings.get_current_processor_number_ex(),
+            Self::Real(bindings) => bindings.get_current_processor_number_ex(),
             #[cfg(test)]
-            BindingsFacade::Mock(bindings) => bindings.get_current_processor_number_ex(),
+            Self::Mock(bindings) => bindings.get_current_processor_number_ex(),
         }
     }
 
@@ -78,7 +78,8 @@ impl Bindings for BindingsFacade {
         returned_length: *mut u32,
     ) -> Result<()> {
         match self {
-            BindingsFacade::Real(bindings) => unsafe {
+            // SAFETY: Forwarding safety requirements to caller.
+            Self::Real(bindings) => unsafe {
                 bindings.get_logical_processor_information_ex(
                     relationship_type,
                     buffer,
@@ -86,7 +87,8 @@ impl Bindings for BindingsFacade {
                 )
             },
             #[cfg(test)]
-            BindingsFacade::Mock(bindings) => unsafe {
+            // SAFETY: Forwarding safety requirements to caller.
+            Self::Mock(bindings) => unsafe {
                 bindings.get_logical_processor_information_ex(
                     relationship_type,
                     buffer,
@@ -98,49 +100,49 @@ impl Bindings for BindingsFacade {
 
     fn get_numa_highest_node_number(&self) -> u32 {
         match self {
-            BindingsFacade::Real(bindings) => bindings.get_numa_highest_node_number(),
+            Self::Real(bindings) => bindings.get_numa_highest_node_number(),
             #[cfg(test)]
-            BindingsFacade::Mock(bindings) => bindings.get_numa_highest_node_number(),
+            Self::Mock(bindings) => bindings.get_numa_highest_node_number(),
         }
     }
 
     fn get_current_process_default_cpu_set_masks(&self) -> Vec<GROUP_AFFINITY> {
         match self {
-            BindingsFacade::Real(bindings) => bindings.get_current_process_default_cpu_set_masks(),
+            Self::Real(bindings) => bindings.get_current_process_default_cpu_set_masks(),
             #[cfg(test)]
-            BindingsFacade::Mock(bindings) => bindings.get_current_process_default_cpu_set_masks(),
+            Self::Mock(bindings) => bindings.get_current_process_default_cpu_set_masks(),
         }
     }
 
     fn get_current_thread_cpu_set_masks(&self) -> Vec<GROUP_AFFINITY> {
         match self {
-            BindingsFacade::Real(bindings) => bindings.get_current_thread_cpu_set_masks(),
+            Self::Real(bindings) => bindings.get_current_thread_cpu_set_masks(),
             #[cfg(test)]
-            BindingsFacade::Mock(bindings) => bindings.get_current_thread_cpu_set_masks(),
+            Self::Mock(bindings) => bindings.get_current_thread_cpu_set_masks(),
         }
     }
 
     fn set_current_thread_cpu_set_masks(&self, masks: &[GROUP_AFFINITY]) {
         match self {
-            BindingsFacade::Real(bindings) => bindings.set_current_thread_cpu_set_masks(masks),
+            Self::Real(bindings) => bindings.set_current_thread_cpu_set_masks(masks),
             #[cfg(test)]
-            BindingsFacade::Mock(bindings) => bindings.set_current_thread_cpu_set_masks(masks),
+            Self::Mock(bindings) => bindings.set_current_thread_cpu_set_masks(masks),
         }
     }
 
     fn get_current_job_cpu_set_masks(&self) -> Vec<GROUP_AFFINITY> {
         match self {
-            BindingsFacade::Real(bindings) => bindings.get_current_job_cpu_set_masks(),
+            Self::Real(bindings) => bindings.get_current_job_cpu_set_masks(),
             #[cfg(test)]
-            BindingsFacade::Mock(bindings) => bindings.get_current_job_cpu_set_masks(),
+            Self::Mock(bindings) => bindings.get_current_job_cpu_set_masks(),
         }
     }
 
     fn get_current_thread_legacy_group_affinity(&self) -> GROUP_AFFINITY {
         match self {
-            BindingsFacade::Real(bindings) => bindings.get_current_thread_legacy_group_affinity(),
+            Self::Real(bindings) => bindings.get_current_thread_legacy_group_affinity(),
             #[cfg(test)]
-            BindingsFacade::Mock(bindings) => bindings.get_current_thread_legacy_group_affinity(),
+            Self::Mock(bindings) => bindings.get_current_thread_legacy_group_affinity(),
         }
     }
 }

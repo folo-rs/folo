@@ -53,7 +53,7 @@ fn main() {
 
                 for line in SAMPLE_LOG_LINES {
                     if process_log_line(line, &filters) {
-                        println!("Matched filters: {}", line);
+                        println!("Matched filters: {line}");
                     }
                 }
             }

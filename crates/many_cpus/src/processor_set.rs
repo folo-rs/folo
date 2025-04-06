@@ -137,7 +137,7 @@ impl ProcessorSet {
         } else if self
             .processors
             .iter()
-            .map(|p| p.memory_region_id())
+            .map(Processor::memory_region_id)
             .unique()
             .count()
             == 1
@@ -198,7 +198,7 @@ impl ProcessorSet {
     /// processor is otherwise busy.
     pub fn spawn_thread<E, R>(&self, entrypoint: E) -> thread::JoinHandle<R>
     where
-        E: FnOnce(ProcessorSet) -> R + Send + 'static,
+        E: FnOnce(Self) -> R + Send + 'static,
         R: Send + 'static,
     {
         let set = self.clone();

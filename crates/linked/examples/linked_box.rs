@@ -70,7 +70,7 @@ mod counters {
     }
 }
 
-use counters::*;
+use counters::{Counter, EventCounter};
 
 linked::instance_per_access!(static RECORDS_PROCESSED: linked::Box<dyn Counter> = EventCounter::new_as_counter());
 

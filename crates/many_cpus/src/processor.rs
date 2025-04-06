@@ -77,7 +77,7 @@ impl Hash for Processor {
     #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.inner.hash(state)
+        self.inner.hash(state);
     }
 }
 
@@ -121,6 +121,7 @@ mod tests {
         assert_eq!(processor.efficiency_class(), EfficiencyClass::Efficiency);
 
         // A clone is a legit clone.
+        #[expect(clippy::redundant_clone, reason = "testing")]
         let processor_clone = processor.clone();
         assert_eq!(processor, processor_clone);
 

@@ -57,7 +57,7 @@ fn per_thread(c: &mut Criterion) {
             || (),
             |()| black_box(PerThread::new(TestSubject::new())),
             BatchSize::SmallInput,
-        )
+        );
     });
 
     let per_thread = PerThread::new(TestSubject::new());
@@ -67,7 +67,7 @@ fn per_thread(c: &mut Criterion) {
             || (),
             |()| black_box(per_thread.clone()),
             BatchSize::SmallInput,
-        )
+        );
     });
 
     g.finish();
@@ -83,7 +83,7 @@ fn thread_local(c: &mut Criterion) {
             || (),
             |()| black_box(per_thread.local()),
             BatchSize::SmallInput,
-        )
+        );
     });
 
     {
@@ -95,7 +95,7 @@ fn thread_local(c: &mut Criterion) {
                 || (),
                 |()| black_box(per_thread.local()),
                 BatchSize::SmallInput,
-            )
+            );
         });
     }
 
@@ -104,7 +104,7 @@ fn thread_local(c: &mut Criterion) {
         let first = per_thread.local();
 
         g.bench_function("clone", |b| {
-            b.iter_batched(|| (), |()| black_box(first.clone()), BatchSize::SmallInput)
+            b.iter_batched(|| (), |()| black_box(first.clone()), BatchSize::SmallInput);
         });
     }
 
@@ -242,7 +242,7 @@ impl ComparisonTestSubject {
     fn new() -> Self {
         let shared_state = Arc::new(AtomicUsize::new(0));
 
-        ComparisonTestSubject {
+        Self {
             local_state: AtomicUsize::new(0),
             _shared_state: shared_state,
         }

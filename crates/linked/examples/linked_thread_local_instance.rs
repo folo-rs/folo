@@ -61,7 +61,7 @@ mod counters {
     }
 }
 
-use counters::*;
+use counters::EventCounter;
 
 linked::instance_per_thread!(static RECORDS_PROCESSED: EventCounter = EventCounter::new());
 

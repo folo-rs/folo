@@ -86,16 +86,19 @@ mod windows {
         }
 
         fn prepare(&mut self) {
+            // SAFETY: No safety requirements. We do not need to free this handle - it is virtual.
             self.process_heap = unsafe { GetProcessHeap() }.unwrap();
         }
 
         fn process(&mut self) {
             self.chunk_buffer.extend(
+                // SAFETY: No safety requirements.
                 repeat_with(|| unsafe { HeapAlloc(self.process_heap, HEAP_FLAGS(0), CHUNK_SIZE) })
                     .take(CHUNK_COUNT),
             );
 
             for chunk in self.chunk_buffer.drain(..) {
+                // SAFETY: No safety requirements.
                 unsafe { HeapFree(self.process_heap, HEAP_FLAGS(0), Some(chunk)) }.unwrap();
             }
         }
@@ -134,7 +137,10 @@ mod windows {
                     .extend(repeat_with(|| heap.alloc(CHUNK_SIZE)).take(CHUNK_COUNT));
 
                 for chunk in self.chunk_buffer.drain(..) {
-                    heap.free(chunk);
+                    // SAFETY: The pointee must be allocated on this heap. It is.
+                    unsafe {
+                        heap.free(chunk);
+                    }
                 }
             });
         }
@@ -173,7 +179,10 @@ mod windows {
                     .extend(repeat_with(|| heap.alloc(CHUNK_SIZE)).take(CHUNK_COUNT));
 
                 for chunk in self.chunk_buffer.drain(..) {
-                    heap.free(chunk);
+                    // SAFETY: The pointee must be allocated on this heap. It is.
+                    unsafe {
+                        heap.free(chunk);
+                    }
                 }
             });
         }
@@ -232,21 +241,28 @@ mod windows {
     impl SingleThreadedCustomHeap {
         fn new() -> Self {
             Self {
+                // SAFETY: We fulfill the requirement to destroy this handle in drop().
                 heap: unsafe { HeapCreate(HEAP_NO_SERIALIZE, HEAP_INITIAL_SIZE, 0) }.unwrap(),
             }
         }
 
         fn alloc(&self, size: usize) -> *mut std::ffi::c_void {
+            // SAFETY: No safety requirements.
             unsafe { HeapAlloc(self.heap, HEAP_NO_SERIALIZE, size) }
         }
 
-        fn free(&self, ptr: *mut std::ffi::c_void) {
+        /// # Safety
+        ///
+        /// The caller must ensure that the pointer was allocated by this heap.
+        unsafe fn free(&self, ptr: *mut std::ffi::c_void) {
+            // SAFETY: Forwarding "same heap" requirement to the caller.
             unsafe { HeapFree(self.heap, HEAP_NO_SERIALIZE, Some(ptr)) }.unwrap();
         }
     }
 
     impl Drop for SingleThreadedCustomHeap {
         fn drop(&mut self) {
+            // SAFETY: No safety requirements.
             unsafe { HeapDestroy(self.heap) }.unwrap();
         }
     }
@@ -258,21 +274,28 @@ mod windows {
     impl ThreadSafeCustomHeap {
         fn new() -> Self {
             Self {
+                // SAFETY: No safety requirements.
                 heap: unsafe { HeapCreate(HEAP_FLAGS(0), HEAP_INITIAL_SIZE, 0) }.unwrap(),
             }
         }
 
         fn alloc(&self, size: usize) -> *mut std::ffi::c_void {
+            // SAFETY: No safety requirements.
             unsafe { HeapAlloc(self.heap, HEAP_FLAGS(0), size) }
         }
 
-        fn free(&self, ptr: *mut std::ffi::c_void) {
+        /// # Safety
+        ///
+        /// The caller must ensure that the pointer was allocated by this heap.
+        unsafe fn free(&self, ptr: *mut std::ffi::c_void) {
+            // SAFETY: Forwarding "same heap" requirement to the caller.
             unsafe { HeapFree(self.heap, HEAP_FLAGS(0), Some(ptr)) }.unwrap();
         }
     }
 
     impl Drop for ThreadSafeCustomHeap {
         fn drop(&mut self) {
+            // SAFETY: No safety requirements.
             unsafe { HeapDestroy(self.heap) }.unwrap();
         }
     }
@@ -315,8 +338,12 @@ mod windows {
             self.with_current_heap(|heap| heap.alloc(size))
         }
 
+        /// # Safety
+        ///
+        /// The caller must ensure that the pointer was allocated by this heap.
         fn free(&self, ptr: *mut std::ffi::c_void) {
-            self.with_current_heap(|heap| heap.free(ptr))
+            // SAFETY: Forwarding "same heap" requirement to the caller.
+            self.with_current_heap(|heap| unsafe { heap.free(ptr) });
         }
 
         fn with_current_heap<F, R>(&self, f: F) -> R

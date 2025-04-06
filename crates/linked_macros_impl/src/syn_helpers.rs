@@ -10,7 +10,7 @@ use quote::quote;
 /// all the necessary metadata to emit rich errors (with red underlines and all that).
 ///
 /// Also preserves the original token stream, merely appending the error instead of replacing.
-pub(crate) fn token_stream_and_error(s: TokenStream, e: syn::Error) -> TokenStream {
+pub(crate) fn token_stream_and_error(s: &TokenStream, e: &syn::Error) -> TokenStream {
     let error = e.to_compile_error();
 
     // We preserve both the original input and emit the compiler error message.
@@ -53,7 +53,7 @@ mod tests {
 
         let e = syn::Error::new(Span::call_site(), canary);
 
-        let merged = token_stream_and_error(s, e);
+        let merged = token_stream_and_error(&s, &e);
 
         let merged_str = merged.to_string();
         assert!(merged_str.contains(canary));
@@ -81,7 +81,8 @@ mod tests {
             let bar = "More random stuff here"
         };
 
-        let tokens = token_stream_and_error(tokens, syn::Error::new(Span::call_site(), "Testing"));
+        let tokens =
+            token_stream_and_error(&tokens, &syn::Error::new(Span::call_site(), "Testing"));
 
         assert!(contains_compile_error(&tokens));
     }

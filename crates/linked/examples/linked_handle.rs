@@ -51,7 +51,7 @@ mod counters {
     }
 }
 
-use counters::*;
+use counters::EventCounter;
 
 fn main() {
     const THREAD_COUNT: usize = 4;

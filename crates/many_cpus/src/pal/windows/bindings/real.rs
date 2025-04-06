@@ -145,7 +145,7 @@ impl Bindings for BuildTargetBindings {
         unsafe {
             IsProcessInJob(current_process, None, &raw mut result).expect(
                 "platform refused to confirm or deny whether the current process is part of a job",
-            )
+            );
         }
 
         if !result.as_bool() {
@@ -200,6 +200,7 @@ impl Bindings for BuildTargetBindings {
 
         let mut aff = GROUP_AFFINITY::default();
 
+        // SAFETY: No safety requirements.
         unsafe { GetThreadGroupAffinity(current_thread, &raw mut aff) }
             .expect("platform refused to provide the current thread's legacy processor affinity");
 

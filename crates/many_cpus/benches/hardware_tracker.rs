@@ -23,19 +23,19 @@ fn entrypoint(c: &mut Criterion) {
                 // We cannot return a reference to the processor itself but this is close enough.
                 p.id()
             }));
-        })
+        });
     });
 
     group.bench_function("current_processor_id_unpinned", |b| {
         b.iter(|| {
             black_box(HardwareTracker::current_processor_id());
-        })
+        });
     });
 
     group.bench_function("current_memory_region_id_unpinned", |b| {
         b.iter(|| {
             black_box(HardwareTracker::current_memory_region_id());
-        })
+        });
     });
 
     // Now we pin the current thread and do the whole thing again!
@@ -52,19 +52,19 @@ fn entrypoint(c: &mut Criterion) {
                 // We cannot return a reference to the processor itself but this is close enough.
                 p.id()
             }));
-        })
+        });
     });
 
     group.bench_function("current_processor_id_pinned", |b| {
         b.iter(|| {
             black_box(HardwareTracker::current_processor_id());
-        })
+        });
     });
 
     group.bench_function("current_memory_region_id_pinned", |b| {
         b.iter(|| {
             black_box(HardwareTracker::current_memory_region_id());
-        })
+        });
     });
 
     // Don't forget to unpin the thread to avoid affecting future benchmarks!

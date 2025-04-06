@@ -65,8 +65,10 @@ where
     }
 }
 
-/// Declares that all static variables within the macro body contain [linked objects][crate],
-/// with a single instance from the same family maintained per-thread (at least by this
+/// Declares that all static variables within the macro body
+/// contain thread-local [linked objects][crate].
+///
+/// A single instance from the same family is maintained per-thread (at least by this
 /// macro - user code may still create additional instances via cloning).
 ///
 /// Call [`.with()`][2] to execute a closure with a shared reference to the current thread's

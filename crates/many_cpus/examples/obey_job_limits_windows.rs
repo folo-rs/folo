@@ -57,8 +57,7 @@ mod windows {
         let processors_present_on_system = system_affinity.count_ones();
         if processors_present_on_system <= 2 {
             println!(
-                "System has only {} processors - this example requires at least 3 processors.",
-                processors_present_on_system
+                "System has only {processors_present_on_system} processors - this example requires at least 3 processors."
             );
             return Ok(());
         }

@@ -64,8 +64,8 @@ impl AbstractProcessor for ProcessorImpl {
     }
 }
 
-impl AsRef<ProcessorImpl> for ProcessorImpl {
-    fn as_ref(&self) -> &ProcessorImpl {
+impl AsRef<Self> for ProcessorImpl {
+    fn as_ref(&self) -> &Self {
         self
     }
 }

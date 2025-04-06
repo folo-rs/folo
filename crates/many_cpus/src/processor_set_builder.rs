@@ -1391,7 +1391,7 @@ mod tests {
         let regions: HashSet<_> = set
             .processors()
             .iter()
-            .map(|p| p.memory_region_id())
+            .map(Processor::memory_region_id)
             .collect();
         assert_eq!(regions.len(), 2);
     }
@@ -1438,7 +1438,7 @@ mod tests {
         let regions: HashSet<_> = set
             .processors()
             .iter()
-            .map(|p| p.memory_region_id())
+            .map(Processor::memory_region_id)
             .collect();
         assert_eq!(regions.len(), 1);
     }
@@ -1532,7 +1532,7 @@ mod tests {
         let regions: HashSet<_> = set
             .processors()
             .iter()
-            .map(|p| p.memory_region_id())
+            .map(Processor::memory_region_id)
             .collect();
         assert_eq!(
             2,
@@ -1583,7 +1583,7 @@ mod tests {
         let regions: HashSet<_> = set
             .processors()
             .iter()
-            .map(|p| p.memory_region_id())
+            .map(Processor::memory_region_id)
             .collect();
         assert_eq!(
             1,

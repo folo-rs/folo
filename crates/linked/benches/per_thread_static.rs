@@ -151,7 +151,7 @@ impl ComparisonTestSubject {
     fn new() -> Self {
         let shared_state = Arc::new(AtomicUsize::new(0));
 
-        ComparisonTestSubject {
+        Self {
             local_state: AtomicUsize::new(0),
             _shared_state: shared_state,
         }

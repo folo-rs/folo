@@ -1,13 +1,19 @@
 {
     "cSpell.words": [
+        "affinitization",
+        "affinitized",
+        "affinitizing",
         "cpulist",
         "cpus",
+        "foldhash",
         "Folo",
         "miri",
         "nanos",
         "nextest",
+        "nonoverlapping",
         "pointee",
-        "taskset"
+        "taskset",
+        "withf"
     ],
     "rust-analyzer.cargo.cfgs": [
         "debug_assertions"

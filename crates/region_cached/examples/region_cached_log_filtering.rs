@@ -41,7 +41,7 @@ fn main() {
         threads.push(thread::spawn(move || {
             for line in SAMPLE_LOG_LINES {
                 if process_log_line(line) {
-                    println!("Matched filters: {}", line);
+                    println!("Matched filters: {line}");
                 }
             }
         }));

@@ -80,7 +80,7 @@ pub fn emit<'a>(items: impl IntoIterator<Item = &'a Item>) -> String {
                 "overflow impossible unless we far exceed any realistic processor ID range",
             );
 
-            write!(result, "{},{}", start, second_processor_id).unwrap();
+            write!(result, "{start},{second_processor_id}").unwrap();
         } else {
             let last_processor_id = start
                 .checked_add(len)
@@ -88,7 +88,7 @@ pub fn emit<'a>(items: impl IntoIterator<Item = &'a Item>) -> String {
                 .checked_sub(1)
                 .expect("cannot underflow because len is NonZero");
 
-            write!(result, "{}-{}", start, last_processor_id).unwrap();
+            write!(result, "{start}-{last_processor_id}").unwrap();
         }
     }
 

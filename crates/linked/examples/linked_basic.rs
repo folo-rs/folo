@@ -3,7 +3,7 @@
 
 //! Demonstrates basic usage of the linked object pattern.
 
-#![allow(clippy::new_without_default, reason = "Not relevant for example")]
+#![allow(clippy::new_without_default, reason = "not relevant for example")]
 
 use std::thread;
 
@@ -51,7 +51,7 @@ mod counters {
     }
 }
 
-use counters::*;
+use counters::EventCounter;
 
 // A static variable provides linked instances of the event counter on any thread.
 // The `linked::variable!` macro gives all necessary superpowers to this static variable.

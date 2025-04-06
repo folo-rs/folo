@@ -9,7 +9,7 @@ use syn::{Fields, FieldsNamed, Item, ItemStruct, parse_quote};
 use crate::syn_helpers::token_stream_and_error;
 
 #[must_use]
-pub fn entrypoint(_attr: TokenStream, input: TokenStream) -> TokenStream {
+pub fn entrypoint(_attr: &TokenStream, input: &TokenStream) -> TokenStream {
     let item_ast = syn::parse2::<Item>(input.clone());
 
     let result = match item_ast {
@@ -23,7 +23,7 @@ pub fn entrypoint(_attr: TokenStream, input: TokenStream) -> TokenStream {
 
     match result {
         Ok(r) => r,
-        Err(e) => token_stream_and_error(input, e),
+        Err(e) => token_stream_and_error(input, &e),
     }
 }
 
@@ -81,7 +81,7 @@ mod tests {
             }
         };
 
-        let result = entrypoint(TokenStream::new(), input);
+        let result = entrypoint(&TokenStream::new(), &input);
 
         let expected = quote! {
             struct Foo {
@@ -123,7 +123,7 @@ mod tests {
             }
         };
 
-        let result = entrypoint(TokenStream::new(), input);
+        let result = entrypoint(&TokenStream::new(), &input);
 
         let expected = quote! {
             struct Foo<'y, T: Clone, X>
@@ -173,7 +173,7 @@ mod tests {
             struct Foo(usize, String);
         };
 
-        let result = entrypoint(TokenStream::new(), input);
+        let result = entrypoint(&TokenStream::new(), &input);
         assert!(contains_compile_error(&result));
     }
 
@@ -183,7 +183,7 @@ mod tests {
             enum Direction { Up, Down }
         };
 
-        let result = entrypoint(TokenStream::new(), input);
+        let result = entrypoint(&TokenStream::new(), &input);
         assert!(contains_compile_error(&result));
     }
 }

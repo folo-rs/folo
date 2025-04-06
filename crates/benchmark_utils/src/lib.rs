@@ -229,7 +229,7 @@ mod tests {
             return;
         };
 
-        let pool = ThreadPool::new(two_processors);
+        let pool = ThreadPool::new(&two_processors);
 
         let a_prepare_called_at_least_once = Arc::new(AtomicBool::new(false));
         let a_iter_called_at_least_once = Arc::new(AtomicBool::new(false));
@@ -244,10 +244,10 @@ mod tests {
                 let b_prepare_called_at_least_once = Arc::clone(&b_prepare_called_at_least_once);
                 move |ab| match ab {
                     AbWorker::A => {
-                        a_prepare_called_at_least_once.store(true, atomic::Ordering::SeqCst)
+                        a_prepare_called_at_least_once.store(true, atomic::Ordering::SeqCst);
                     }
                     AbWorker::B => {
-                        b_prepare_called_at_least_once.store(true, atomic::Ordering::SeqCst)
+                        b_prepare_called_at_least_once.store(true, atomic::Ordering::SeqCst);
                     }
                 }
             },
@@ -256,10 +256,10 @@ mod tests {
                 let b_iter_called_at_least_once = Arc::clone(&b_iter_called_at_least_once);
                 move |ab, ()| match ab {
                     AbWorker::A => {
-                        a_iter_called_at_least_once.store(true, atomic::Ordering::SeqCst)
+                        a_iter_called_at_least_once.store(true, atomic::Ordering::SeqCst);
                     }
                     AbWorker::B => {
-                        b_iter_called_at_least_once.store(true, atomic::Ordering::SeqCst)
+                        b_iter_called_at_least_once.store(true, atomic::Ordering::SeqCst);
                     }
                 }
             },

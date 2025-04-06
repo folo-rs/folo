@@ -7,6 +7,6 @@ fn main() {
         vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 32, 33, 34, 35, 40]
     );
 
-    println!("Selected processors: {:?}", selected_processors);
+    println!("Selected processors: {selected_processors:?}");
     println!("As cpulist: {}", cpulist::emit(&selected_processors));
 }
