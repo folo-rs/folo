@@ -1,11 +1,15 @@
 //! Benchmarking operations on the `ProcessorSetBuilder` type.
 
-#![allow(missing_docs)] // No need for API documentation in benchmark code.
+#![allow(
+    missing_docs,
+    reason = "No need for API documentation in benchmark code"
+)]
 
-use std::{hint::black_box, num::NonZero};
+use std::hint::black_box;
 
 use benchmark_utils::{ThreadPool, bench_on_threadpool};
 use criterion::{Criterion, criterion_group, criterion_main};
+use folo_utils::nz;
 use many_cpus::ProcessorSet;
 
 criterion_group!(benches, entrypoint);
@@ -24,11 +28,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.bench_function("one", |b| {
         b.iter(|| {
-            black_box(
-                ProcessorSet::builder()
-                    .take(NonZero::new(1).unwrap())
-                    .unwrap(),
-            );
+            black_box(ProcessorSet::builder().take(nz!(1)).unwrap());
         })
     });
 
@@ -67,11 +67,7 @@ fn entrypoint(c: &mut Criterion) {
                 iters,
                 || (),
                 |_| {
-                    black_box(
-                        ProcessorSet::builder()
-                            .take(NonZero::new(1).unwrap())
-                            .unwrap(),
-                    );
+                    black_box(ProcessorSet::builder().take(nz!(1)).unwrap());
                 },
             )
         });

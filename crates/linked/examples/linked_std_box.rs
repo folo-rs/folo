@@ -17,7 +17,7 @@
 //! instance of `dyn Xyz`, you must create **all** instances (starting from the constructor) as
 //! `linked::Box<dyn Xyz>` instead of `std::boxed::Box<T>`. See `linked_box.rs` for an example.
 
-#![allow(clippy::new_without_default)] // Not relevant for example.
+#![allow(clippy::new_without_default, reason = "Not relevant for example")]
 
 use std::thread;
 

@@ -96,6 +96,8 @@ impl Debug for Processor {
 
 #[cfg(test)]
 mod tests {
+    use std::hash::DefaultHasher;
+
     use crate::pal::{FakeProcessor, MockPlatform};
 
     use super::*;
@@ -120,11 +122,11 @@ mod tests {
         assert_eq!(processor, processor_clone);
 
         // Clones have the same hash.
-        let mut hasher1 = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher1 = DefaultHasher::new();
         processor.hash(&mut hasher1);
         let hash1 = hasher1.finish();
 
-        let mut hasher2 = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher2 = DefaultHasher::new();
         processor_clone.hash(&mut hasher2);
         let hash2 = hasher2.finish();
 

@@ -3,7 +3,7 @@
 
 //! Demonstrates basic usage of the linked object pattern.
 
-#![allow(clippy::new_without_default)] // Not relevant for example.
+#![allow(clippy::new_without_default, reason = "Not relevant for example")]
 
 use std::thread;
 

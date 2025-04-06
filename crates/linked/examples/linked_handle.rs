@@ -7,7 +7,7 @@
 //! useful because sometimes it might not be convenient for you to define a static variable. This
 //! example instead creates linked instances from handles that are passed between threads.
 
-#![allow(clippy::new_without_default)] // Not relevant for example.
+#![allow(clippy::new_without_default, reason = "Not relevant for example")]
 
 use std::thread;
 

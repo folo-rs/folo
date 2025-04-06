@@ -1,10 +1,14 @@
 //! Benchmarking operations exposed by the `HardwareTracker` struct.
 
-#![allow(missing_docs)] // No need for API documentation in benchmark code.
+#![allow(
+    missing_docs,
+    reason = "No need for API documentation in benchmark code"
+)]
 
-use std::{hint::black_box, num::NonZero};
+use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use folo_utils::nz;
 use many_cpus::{HardwareTracker, ProcessorSet};
 
 criterion_group!(benches, entrypoint);
@@ -37,7 +41,7 @@ fn entrypoint(c: &mut Criterion) {
     // Now we pin the current thread and do the whole thing again!
     let one_processor = ProcessorSet::builder()
         .performance_processors_only()
-        .take(NonZero::new(1).unwrap())
+        .take(nz!(1))
         .unwrap();
 
     one_processor.pin_current_thread_to();

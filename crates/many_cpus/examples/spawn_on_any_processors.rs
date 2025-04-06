@@ -25,7 +25,7 @@ fn main() {
 
             loop {
                 for _ in 0..100_000 {
-                    x += 1;
+                    x = x.wrapping_add(1);
                 }
 
                 // Every thread spins the CPU for 10 seconds.

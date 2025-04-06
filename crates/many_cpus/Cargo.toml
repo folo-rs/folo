@@ -17,6 +17,7 @@ default = []
 derive_more = { workspace = true, features = ["as_ref", "display"] }
 foldhash = { workspace = true }
 folo_ffi = { workspace = true }
+folo_utils = { workspace = true }
 itertools = { workspace = true }
 negative-impl = { workspace = true }
 nonempty = { workspace = true }

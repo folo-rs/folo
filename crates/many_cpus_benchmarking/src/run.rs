@@ -9,6 +9,7 @@ use std::{
 };
 
 use criterion::{BenchmarkGroup, Criterion, SamplingMode, measurement::WallTime};
+use folo_utils::nz;
 use itertools::Itertools;
 use many_cpus::ProcessorSet;
 use nonempty::{NonEmpty, nonempty};
@@ -109,15 +110,20 @@ fn execute_run<P: Payload, const BATCH_SIZE: u64>(
 
             while iters_remaining > 0 {
                 let batch_size = iters_remaining.min(BATCH_SIZE);
-                iters_remaining -= batch_size;
+
+                iters_remaining = iters_remaining
+                    .checked_sub(batch_size)
+                    .expect("we used min() above to ensure we do not consume more iterations than remaining");
 
                 // Each batch uses the same selection of processors.
                 let processor_set_pairs = get_processor_set_pairs(work_distribution)
                     .expect("we already validated that we have the right topology");
 
-                total_duration +=
-                    BenchmarkBatch::new::<P>(&processor_set_pairs, work_distribution, batch_size)
-                        .wait();
+                let batch_duration = BenchmarkBatch::new::<P>(&processor_set_pairs, work_distribution, batch_size)
+                    .wait();
+
+                total_duration = total_duration.checked_add(batch_duration)
+                    .expect("duration overflow is unfathomable within our spacetime boundaries");
             }
 
             total_duration
@@ -146,7 +152,7 @@ fn calculate_worker_pair_count() -> NonZero<usize> {
     .expect("there must be at least one memory region")
 }
 
-const ONE_PROCESSOR: NonZero<usize> = NonZero::new(1).unwrap();
+const ONE_PROCESSOR: NonZero<usize> = nz!(1);
 
 /// Obtains the processor pairs to use for one iteration of the benchmark. We pick different
 /// processors for different iterations to help average out any differences in performance
@@ -276,8 +282,13 @@ fn get_processor_set_pairs(
                 candidates
                     .to_builder()
                     .take(
-                        NonZero::new(worker_pair_count.get() * 2)
-                            .expect("* 2 cannot make a number zero"),
+                        NonZero::new(
+                            worker_pair_count
+                                .get()
+                                .checked_mul(2)
+                                .expect("no system will ever have that many processors"),
+                        )
+                        .expect("* 2 cannot make a number zero"),
                     )?
                     .processors()
                     .into_iter()
@@ -535,11 +546,22 @@ impl BenchmarkBatch {
         distribution: WorkDistribution,
         batch_size: u64,
     ) -> Self {
+        assert_ne!(processor_set_pairs.len(), 0);
+
         // Once by current thread + once by each worker in each pair.
         // All workers will start when all workers and the main thread are ready.
-        let ready_signal = Arc::new(Barrier::new(1 + 2 * processor_set_pairs.len()));
+        let worker_count = processor_set_pairs
+            .len()
+            .checked_mul(2)
+            .expect("we will never have so many processors that we overflow usize");
 
-        let mut join_handles = Vec::with_capacity(2 * processor_set_pairs.len());
+        let workers_plus_coordinator = worker_count.checked_add(1).expect(
+            "we will never have so many processors that we overflow usize, even if we add one",
+        );
+
+        let ready_signal = Arc::new(Barrier::new(workers_plus_coordinator));
+
+        let mut join_handles = Vec::with_capacity(worker_count);
 
         for processor_set_pair in processor_set_pairs {
             let (processor_set_1, processor_set_2) = processor_set_pair;
@@ -609,18 +631,29 @@ impl BenchmarkBatch {
 
         let join_handles = mem::replace(&mut self.join_handles, Box::new([]));
 
-        let mut total_elapsed_nanos = 0;
+        let mut total_elapsed_nanos: u128 = 0;
 
         for thread in join_handles {
             let elapsed = thread.join().unwrap();
-            total_elapsed_nanos += elapsed.as_nanos();
+            total_elapsed_nanos = total_elapsed_nanos
+                .checked_add(elapsed.as_nanos())
+                .expect("elapsed time overflow is unfathomable within our spacetime boundaries");
         }
 
         // We return the average duration of all threads as the duration of the iteration.
-        Duration::from_nanos((total_elapsed_nanos / thread_count as u128) as u64)
+        let total_elapsed_nanos_per_thread = total_elapsed_nanos
+            .checked_div(thread_count as u128)
+            .expect(
+                "thread count is asserted as non-zero in ctor, so division by zero is impossible",
+            );
+
+        Duration::from_nanos(total_elapsed_nanos_per_thread as u64)
     }
 
-    #[expect(clippy::type_complexity)] // True but whatever, do not care about it here.
+    #[expect(
+        clippy::type_complexity,
+        reason = "only used once, so we accept it as cost of doing business"
+    )]
     fn spawn_worker<P: Payload>(
         processor_set: &ProcessorSet,
         ready_signal: Arc<Barrier>,
@@ -675,7 +708,9 @@ impl BenchmarkBatch {
                     payload.process();
 
                     let elapsed = start.elapsed();
-                    total_duration += elapsed;
+                    total_duration = total_duration.checked_add(elapsed).expect(
+                        "duration overflow is unfathomable within our spacetime boundaries",
+                    );
                 }
 
                 // The payloads are dropped at the end, ensuring that we do not accidentally

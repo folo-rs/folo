@@ -2,7 +2,10 @@
 //! being organized in various ways supported by the `many_cpus_benchmarking` crate. Of particular
 //! interest are the effects of data locality (i.e. memory regions and processor caching).
 
-#![allow(missing_docs)] // No need for API documentation in benchmark code.
+#![allow(
+    missing_docs,
+    reason = "No need for API documentation in benchmark code"
+)]
 
 use std::{
     collections::HashMap,
@@ -214,7 +217,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
         self.map = HashMap::with_capacity(MAP_ENTRY_COUNT);
 
         for i in 0..MAP_ENTRY_COUNT {
-            self.map.insert(i as u64, (i * 2) as u64);
+            self.map.insert(i as u64, i.wrapping_mul(2) as u64);
         }
     }
 
@@ -263,7 +266,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
         let mut map = self.map.write().unwrap();
 
         for i in 0..MAP_ENTRY_COUNT {
-            map.insert(i as u64, (i * 2) as u64);
+            map.insert(i as u64, i.wrapping_mul(2) as u64);
         }
     }
 
@@ -294,7 +297,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
 
     fn prepare(&mut self) {
         let entries = (0..MAP_ENTRY_COUNT)
-            .map(|i| (i as u64, (i * 2) as u64))
+            .map(|i| (i as u64, i.wrapping_mul(2) as u64))
             .collect();
 
         self.map = FzHashMap::new(entries);
@@ -325,7 +328,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
 
     fn prepare(&mut self) {
         let entries = (0..MAP_ENTRY_COUNT)
-            .map(|i| (i as u64, (i * 2) as u64))
+            .map(|i| (i as u64, i.wrapping_mul(2) as u64))
             .collect();
 
         self.map = FzScalarMap::new(entries);
@@ -358,7 +361,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
         self.map = scc::HashMap::with_capacity(MAP_ENTRY_COUNT);
 
         for i in 0..MAP_ENTRY_COUNT {
-            self.map.insert(i as u64, (i * 2) as u64).unwrap();
+            self.map.insert(i as u64, i.wrapping_mul(2) as u64).unwrap();
         }
     }
 
@@ -405,7 +408,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
         }
 
         for i in 0..MAP_ENTRY_COUNT {
-            self.map.insert(i as u64, (i * 2) as u64).unwrap();
+            self.map.insert(i as u64, i.wrapping_mul(2) as u64).unwrap();
         }
     }
 
@@ -435,7 +438,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize>
 {
     fn increment(&self, key: u64) {
         let mut value = black_box(self.map.get(&key).unwrap());
-        *value += 1;
+        *value = value.wrapping_add(1);
     }
 }
 
@@ -463,7 +466,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
         }
 
         for i in 0..MAP_ENTRY_COUNT {
-            self.map.insert(i as u64, (i * 2) as u64).unwrap();
+            self.map.insert(i as u64, i.wrapping_mul(2) as u64).unwrap();
         }
     }
 

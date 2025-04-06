@@ -1,6 +1,9 @@
 //! Benchmarking operations exposed by the `HardwareInfo` struct.
 
-#![allow(missing_docs)] // No need for API documentation in benchmark code.
+#![allow(
+    missing_docs,
+    reason = "No need for API documentation in benchmark code"
+)]
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus::HardwareInfo;

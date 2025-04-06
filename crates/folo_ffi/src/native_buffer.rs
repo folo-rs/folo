@@ -97,11 +97,14 @@ impl<T: Sized> NativeBuffer<T> {
     /// Panics if the resulting buffer size is too large to yield a valid memory layout. Valid
     /// memory layouts must not exceed `isize::MAX` bytes.
     pub fn from_items(items: impl IntoIterator<Item = T>) -> Self {
+        // TODO: Use the iterator size hint to avoid this intermediate allocation.
         let items = items.into_iter().collect::<Vec<_>>();
 
         let mut buffer = Self::new(
-            NonZero::new(size_of::<T>() * items.len())
-                .expect("cannot create NativeBuffer from zero-sized type"),
+            NonZero::new(size_of::<T>().checked_mul(items.len()).expect(
+                "if we could put the items in the Vec above, we can put them in the buffer",
+            ))
+            .expect("cannot create NativeBuffer from zero-sized type"),
         );
 
         let count = items.len();
@@ -120,7 +123,9 @@ impl<T: Sized> NativeBuffer<T> {
 
         // SAFETY: We just wrote N*T bytes into it, math guaranteed valid by Rust language rules.
         unsafe {
-            buffer.set_len_bytes(size_of::<T>() * count);
+            buffer.set_len_bytes(size_of::<T>().checked_mul(count).expect(
+                "this is a subset of the capacity so cannot overflow if capacity did not overflow",
+            ));
         }
 
         buffer

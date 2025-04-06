@@ -1,7 +1,10 @@
 //! Windows-specific memory benchmarks that try explore different memory allocation strategies
 //! using built-in Windows mechanisms under different operating conditions.
 
-#![allow(missing_docs)] // No need for API documentation in benchmark code.
+#![allow(
+    missing_docs,
+    reason = "No need for API documentation in benchmark code"
+)]
 
 use criterion::{criterion_group, criterion_main};
 
@@ -287,7 +290,10 @@ mod windows {
 
         // This is our big bag of all the heaps. We create the heap on-demand,
         // on a thread that is running in the target memory region.
-        #[allow(clippy::type_complexity)]
+        #[allow(
+            clippy::type_complexity,
+            reason = "will allow since it is only used once"
+        )]
         per_region_heaps: Arc<Mutex<Box<[Option<Arc<ThreadSafeCustomHeap>>]>>>,
     }
 

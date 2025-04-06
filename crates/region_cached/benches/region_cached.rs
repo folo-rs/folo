@@ -1,11 +1,15 @@
 //! Benchmarks basic operations of the `region_cached!` macro.
 
-#![allow(missing_docs)] // No need for API documentation in benchmark code.
+#![allow(
+    missing_docs,
+    reason = "No need for API documentation in benchmark code"
+)]
 
-use std::{hint::black_box, num::NonZero, thread};
+use std::{hint::black_box, thread};
 
 use benchmark_utils::{AbWorker, ThreadPool, bench_on_threadpool, bench_on_threadpool_ab};
 use criterion::{Criterion, criterion_group, criterion_main};
+use folo_utils::nz;
 use many_cpus::ProcessorSet;
 use region_cached::{RegionCachedCopyExt, RegionCachedExt, region_cached};
 
@@ -16,7 +20,7 @@ fn entrypoint(c: &mut Criterion) {
     let one_thread = ThreadPool::new(
         ProcessorSet::builder()
             .performance_processors_only()
-            .take(NonZero::new(1).unwrap())
+            .take(nz!(1))
             .unwrap(),
     );
 
@@ -24,7 +28,7 @@ fn entrypoint(c: &mut Criterion) {
         ProcessorSet::builder()
             .same_memory_region()
             .performance_processors_only()
-            .take(NonZero::new(2).unwrap())
+            .take(nz!(2))
             .unwrap(),
     );
 
@@ -34,7 +38,7 @@ fn entrypoint(c: &mut Criterion) {
     let two_memory_regions = ProcessorSet::builder()
         .performance_processors_only()
         .different_memory_regions()
-        .take(NonZero::new(2).unwrap())
+        .take(nz!(2))
         .map(ThreadPool::new);
 
     let mut group = c.benchmark_group("region_cached");

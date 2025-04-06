@@ -14,6 +14,7 @@ rust-version.workspace = true
 doc = false
 
 [dependencies]
+folo_utils = { workspace = true }
 many_cpus = { workspace = true }
 
 oneshot = { workspace = true }

@@ -100,7 +100,9 @@ impl Platform for BuildTargetPlatform {
             .get(current_processor.Group as usize)
             .expect("platform indicated a processor group that the platform said does not exist");
 
-        group_start_offset + current_processor.Number as ProcessorId
+        group_start_offset
+            .checked_add(current_processor.Number as ProcessorId)
+            .expect("processor ID calculation overflowed - platform must have given is bad inputs")
     }
 
     fn max_processor_id(&self) -> ProcessorId {
@@ -112,7 +114,8 @@ impl Platform for BuildTargetPlatform {
                 .iter()
                 .map(|&s| s as ProcessorId)
                 .sum::<ProcessorId>()
-                - 1
+                .checked_sub(1)
+                .expect("there must be at least 1 processor")
         })
     }
 
@@ -166,7 +169,7 @@ impl Platform for BuildTargetPlatform {
         let group_max_sizes = self.get_processor_group_max_sizes();
         let group_start_offsets = self.get_processor_group_start_offsets();
 
-        let mut result = Vec::with_capacity(self.max_processor_id() as usize + 1);
+        let mut result = Vec::with_capacity(self.max_processor_count());
 
         for (group_index, group_size) in group_max_sizes.iter().enumerate() {
             let group_start_offset = group_start_offsets[group_index];
@@ -186,7 +189,8 @@ impl Platform for BuildTargetPlatform {
                     continue;
                 }
 
-                let global_index = group_start_offset + index_in_group as ProcessorId;
+                let global_index = group_start_offset.checked_add(index_in_group as ProcessorId)
+                    .expect("processor ID overflow is never going to happen unless the platform has gone crazy");
 
                 result.push(global_index);
             }
@@ -211,6 +215,11 @@ impl BuildTargetPlatform {
         *self
             .group_max_count
             .get_or_init(|| self.bindings.get_maximum_processor_group_count())
+    }
+
+    fn max_processor_count(&self) -> usize {
+        (self.max_processor_id() as usize).checked_add(1)
+            .expect("this could only overflow if the platform has usize::MAX processors, which is unrealistic")
     }
 
     /// Returns the max number of processors in each processor group.
@@ -244,7 +253,8 @@ impl BuildTargetPlatform {
             let mut group_start_offset: ProcessorId = 0;
             for &size in group_sizes.iter() {
                 group_offsets.push(group_start_offset);
-                group_start_offset += size as ProcessorId;
+                group_start_offset = group_start_offset.checked_add(size as ProcessorId)
+                    .expect("processor group start offset overflowed - this is only possible if the platform have us bad inputs");
             }
 
             group_offsets.into_boxed_slice()
@@ -345,8 +355,7 @@ impl BuildTargetPlatform {
         // processors with the max efficiency class (whatever the numeric value) - those are the
         // performance processors.
 
-        let mut processor_to_efficiency_class =
-            HashMap::with_capacity(self.max_processor_id() as usize + 1);
+        let mut processor_to_efficiency_class = HashMap::with_capacity(self.max_processor_count());
 
         // The structures returned by the OS are dynamically sized so we only have various
         // disgusting options for parsing/processing them. Pointer wrangling is the most readable.
@@ -407,7 +416,7 @@ impl BuildTargetPlatform {
         let memory_region_relationships_raw =
             self.get_logical_processor_information_raw(RelationNumaNodeEx);
 
-        let mut result = HashMap::with_capacity(self.max_processor_id() as usize + 1);
+        let mut result = HashMap::with_capacity(self.max_processor_count());
 
         // The structures returned by the OS are dynamically sized so we only have various
         // disgusting options for parsing/processing them. Pointer wrangling is the most readable.
@@ -494,7 +503,9 @@ impl BuildTargetPlatform {
                 .map(|x| *x as ProcessorId)
                 .sum();
 
-            let global_index: ProcessorId = group_start_offset + index_in_group;
+            let global_index: ProcessorId = group_start_offset.checked_add(index_in_group).expect(
+                "processor ID calculation overflowed - platform must have given us bad inputs",
+            );
             result.push(global_index);
         }
 
@@ -516,7 +527,7 @@ impl BuildTargetPlatform {
             // The next global index is recalculated at the beginning of every processor group
             // because there may be a gap at the end of the previous processor group if it is
             // a dynamically sized group.
-            let mut next_global_index = processor_group_max_sizes
+            let mut next_global_index: ProcessorId = processor_group_max_sizes
                 .iter()
                 .take(group_index)
                 .map(|&x| x as u32)
@@ -524,7 +535,9 @@ impl BuildTargetPlatform {
 
             for index_in_group in 0..processor_group_active_sizes[group_index] {
                 let global_index = next_global_index;
-                next_global_index += 1;
+                next_global_index = next_global_index.checked_add(1).expect(
+                    "processor ID calculation overflowed - platform must have given us bad inputs",
+                );
 
                 if !allowed_processors.contains(&global_index) {
                     continue;
@@ -574,7 +587,7 @@ impl BuildTargetPlatform {
         let group_max_sizes = self.get_processor_group_max_sizes();
         let group_start_offsets = self.get_processor_group_start_offsets();
 
-        let mut result = Vec::with_capacity(self.max_processor_id() as usize + 1);
+        let mut result = Vec::with_capacity(self.max_processor_count());
 
         for (group_index, group_size) in group_max_sizes.iter().enumerate() {
             let group_start_offset = group_start_offsets[group_index];
@@ -594,7 +607,8 @@ impl BuildTargetPlatform {
                     continue;
                 }
 
-                let global_index = group_start_offset + index_in_group as ProcessorId;
+                let global_index = group_start_offset.checked_add(index_in_group as ProcessorId)
+                    .expect("processor ID calculation overflowed - platform must have given us bad inputs");
 
                 result.push(global_index);
             }

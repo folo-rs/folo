@@ -9,7 +9,7 @@
 //! Whether this is appropriate or not in a given scenario depends on the design of the linked
 //! object type.
 
-#![allow(clippy::new_without_default)] // Not relevant for example.
+#![allow(clippy::new_without_default, reason = "Not relevant for example")]
 
 use std::thread;
 

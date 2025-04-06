@@ -1,4 +1,5 @@
 use std::{
+    num::NonZero,
     sync::{Arc, Mutex, mpsc},
     thread::JoinHandle,
 };
@@ -57,8 +58,9 @@ impl ThreadPool {
     }
 
     /// Numbers of threads in the pool.
-    pub fn thread_count(&self) -> usize {
-        self.command_txs.len()
+    pub fn thread_count(&self) -> NonZero<usize> {
+        NonZero::new(self.command_txs.len())
+            .expect("thread pool cannot be created with zero threads")
     }
 }
 
@@ -88,10 +90,9 @@ fn worker_entrypoint(rx: mpsc::Receiver<Command>) {
 #[cfg(not(miri))] // ProcessorSet is not supported under Miri.
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::NonZero,
-        sync::atomic::{self, AtomicUsize},
-    };
+    use std::sync::atomic::{self, AtomicUsize};
+
+    use folo_utils::nz;
 
     use super::*;
 
@@ -102,7 +103,7 @@ mod tests {
 
         let pool = ThreadPool::all();
 
-        assert_eq!(pool.thread_count(), expected_thread_count);
+        assert_eq!(pool.thread_count().get(), expected_thread_count);
 
         let counter = Arc::new(AtomicUsize::new(0));
 
@@ -124,14 +125,12 @@ mod tests {
 
     #[test]
     fn smoke_test_one() {
-        let processor_set = ProcessorSet::builder()
-            .take(NonZero::new(1).unwrap())
-            .unwrap();
+        let processor_set = ProcessorSet::builder().take(nz!(1)).unwrap();
         let expected_thread_count = processor_set.len();
 
         let pool = ThreadPool::new(processor_set);
 
-        assert_eq!(pool.thread_count(), expected_thread_count);
+        assert_eq!(pool.thread_count().get(), expected_thread_count);
 
         let counter = Arc::new(AtomicUsize::new(0));
 
@@ -142,7 +141,7 @@ mod tests {
             }
         });
 
-        // Waits for all thereads to complete their work.
+        // Waits for all threads to complete their work.
         drop(pool);
 
         assert_eq!(

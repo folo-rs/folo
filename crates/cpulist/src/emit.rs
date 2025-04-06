@@ -1,6 +1,7 @@
+use folo_utils::nz;
 use itertools::{FoldWhile, Itertools};
 
-use std::collections::VecDeque;
+use std::{collections::VecDeque, num::NonZero};
 
 use crate::Item;
 
@@ -23,16 +24,20 @@ pub fn emit<'a>(items: impl IntoIterator<Item = &'a Item>) -> String {
 
     // We want to coalesce consecutive numbers into groups (ranges).
     // Each group is (start ID, len).
-    let mut groups: Vec<(Item, Item)> = Vec::new();
+    let mut groups: Vec<(Item, NonZero<Item>)> = Vec::new();
 
     while !remaining.is_empty() {
         let group = remaining
             .iter()
-            .fold_while(None, |acc: Option<(Item, Item)>, p: &&Item| {
+            .fold_while(None, |acc: Option<(Item, NonZero<Item>)>, p: &&Item| {
                 if let Some((start, len)) = acc {
-                    if start + len == **p {
+                    let expected_next_p = start.checked_add(len.get())
+                        .expect("overflow impossible unless we iterate far beyond any realistic processor ID range");
+
+                    if expected_next_p == **p {
                         let new_len = len.checked_add(1)
-                            .expect("len overflow here is inconceivable - it would require a kjillion loop iterations");
+                            .expect("overflow impossible unless we iterate far beyond any realistic processor ID range");
+
                         // This item is part of the current group.
                         FoldWhile::Continue(Some((start, new_len)))
                     } else {
@@ -41,7 +46,7 @@ pub fn emit<'a>(items: impl IntoIterator<Item = &'a Item>) -> String {
                     }
                 } else {
                     // Start a new group.
-                    FoldWhile::Continue(Some((**p, 1)))
+                    FoldWhile::Continue(Some((**p, nz!(1))))
                 }
             });
 
@@ -51,7 +56,7 @@ pub fn emit<'a>(items: impl IntoIterator<Item = &'a Item>) -> String {
 
         groups.push((start, len));
 
-        for _ in 0..len {
+        for _ in 0..len.get() {
             remaining.pop_front();
         }
     }
@@ -63,12 +68,26 @@ pub fn emit<'a>(items: impl IntoIterator<Item = &'a Item>) -> String {
             result.push(',');
         }
 
+        let len = len.get();
+
         if len == 1 {
+            // A range of one item - just emit the item.
             result.push_str(&start.to_string());
         } else if len == 2 {
-            result.push_str(&format!("{},{}", start, start + 1));
+            // If the range only has two items, we emit them separately.
+            let second_processor_id = start.checked_add(1).expect(
+                "overflow impossible unless we far exceed any realistic processor ID range",
+            );
+
+            result.push_str(&format!("{},{}", start, second_processor_id));
         } else {
-            result.push_str(&format!("{}-{}", start, start + len - 1));
+            let last_processor_id = start
+                .checked_add(len)
+                .expect("overflow impossible unless we far exceed any realistic processor ID range")
+                .checked_sub(1)
+                .expect("cannot underflow because len is NonZero");
+
+            result.push_str(&format!("{}-{}", start, last_processor_id));
         }
     }
 

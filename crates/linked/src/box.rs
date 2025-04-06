@@ -183,7 +183,7 @@ impl<T: ?Sized + 'static> DerefMut for Box<T> {
 #[macro_export]
 macro_rules! new_box {
     ($dyn_trait:ty, $ctor:expr) => {
-        #[allow(trivial_casts)]
+        #[allow(trivial_casts, reason = "clearly expresses intent")]
         ::linked::Box::new(move || ::std::boxed::Box::new($ctor) as ::std::boxed::Box<$dyn_trait>)
     };
 }

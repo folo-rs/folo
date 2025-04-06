@@ -164,13 +164,19 @@ impl Bindings for BuildTargetBindings {
                 None,
                 JobObjectGroupInformationEx,
                 buffer.as_mut_ptr().cast(),
-                buffer.len() as u32 * size_of::<GROUP_AFFINITY>() as u32,
+                (buffer.len() as u32).checked_mul(size_of::<GROUP_AFFINITY>() as u32)
+                    .expect("even under extreme processor group counts, we cannot overflow u32 by having too many GROUP_AFFINITYs"),
                 Some(&raw mut bytes_written),
             )
         }
         .expect("platform refused to provide the process's current job processor affinity");
 
-        buffer.truncate((bytes_written / size_of::<GROUP_AFFINITY>() as u32) as usize);
+        buffer.truncate(
+            bytes_written
+                .checked_div(size_of::<GROUP_AFFINITY>() as u32)
+                .expect("GROUP_AFFINITY is not a ZST, so there can be no division by zero")
+                as usize,
+        );
         buffer
     }
 

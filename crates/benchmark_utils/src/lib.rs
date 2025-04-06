@@ -4,6 +4,7 @@
 //! that may have value even outside this project.
 
 use std::{
+    num::NonZero,
     sync::{Arc, Barrier, Mutex},
     time::{Duration, Instant},
     vec,
@@ -54,10 +55,10 @@ where
     let thread_count = thread_pool.thread_count();
 
     // All threads will wait on this before starting, so they start together.
-    let start = Arc::new(Barrier::new(thread_count));
+    let start = Arc::new(Barrier::new(thread_count.get()));
 
     let (result_txs, mut result_rxs): (Vec<_>, Vec<_>) =
-        (0..thread_count).map(|_| oneshot::channel()).unzip();
+        (0..thread_count.get()).map(|_| oneshot::channel()).unzip();
 
     let result_txs = Arc::new(Mutex::new(result_txs));
 
@@ -97,8 +98,12 @@ where
 }
 
 #[cfg_attr(test, mutants::skip)] // Difficult to simulate time and therefore set expectations.
-fn calculate_average_duration(thread_count: usize, total_elapsed_nanos: u128) -> Duration {
-    Duration::from_nanos((total_elapsed_nanos / thread_count as u128) as u64)
+fn calculate_average_duration(thread_count: NonZero<usize>, total_elapsed_nanos: u128) -> Duration {
+    let total_elapsed_nanos_per_thread = total_elapsed_nanos
+        .checked_div(thread_count.get() as u128)
+        .expect("thread count is NonZero, so division by zero is impossible");
+
+    Duration::from_nanos(total_elapsed_nanos_per_thread as u64)
 }
 
 /// For the A/B benchmarking, identifiers whether a worker is a member of group A or B.
@@ -132,11 +137,18 @@ where
     P: Fn(AbWorker) -> D + Send + Clone + 'static,
     F: Fn(AbWorker, &D) + Send + Clone + 'static,
 {
-    assert!(thread_pool.thread_count() >= 2);
-    assert!(thread_pool.thread_count() % 2 == 0);
+    assert!(thread_pool.thread_count().get() >= 2);
+    assert!(
+        thread_pool
+            .thread_count()
+            .get()
+            .checked_rem(2)
+            .expect("2 != 0")
+            == 0
+    );
 
     let thread_count = thread_pool.thread_count();
-    let half_thread_count = thread_count / 2;
+    let half_thread_count = thread_count.get().checked_div(2).expect("2 != 0");
 
     let worker_types = Arc::new(Mutex::new(
         vec![AbWorker::A; half_thread_count]
@@ -166,11 +178,9 @@ where
 #[cfg(not(miri))] // Miri cannot deal with hardware inspection APIs this uses.
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::NonZero,
-        sync::atomic::{self, AtomicBool},
-    };
+    use std::sync::atomic::{self, AtomicBool};
 
+    use folo_utils::nz;
     use many_cpus::ProcessorSet;
 
     use super::*;
@@ -202,7 +212,7 @@ mod tests {
 
     #[test]
     fn bench_ab_two() {
-        let two_processors = ProcessorSet::builder().take(NonZero::new(2).unwrap());
+        let two_processors = ProcessorSet::builder().take(nz!(2));
 
         let Some(two_processors) = two_processors else {
             eprintln!("need at least two processors to run this test");

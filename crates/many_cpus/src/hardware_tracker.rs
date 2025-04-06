@@ -243,7 +243,10 @@ impl HardwareTrackerCore {
         let all_pal_processors = pal.get_all_processors();
         let max_processor_id = pal.max_processor_id();
 
-        let mut all_processors = vec![None; max_processor_id as usize + 1];
+        let max_processor_count = (max_processor_id as usize)
+            .checked_add(1)
+            .expect("unrealistic to have more than an usize worth of processors");
+        let mut all_processors = vec![None; max_processor_count];
 
         for processor in all_pal_processors {
             *all_processors

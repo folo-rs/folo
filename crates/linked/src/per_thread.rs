@@ -474,10 +474,10 @@ mod tests {
         }
 
         fn increment(&self) {
-            self.local_value.set(self.local_value.get() + 1);
+            self.local_value.set(self.local_value.get().wrapping_add(1));
 
             let mut shared_value = self.shared_value.lock().unwrap();
-            *shared_value += 1;
+            *shared_value = shared_value.wrapping_add(1);
         }
 
         fn local_value(&self) -> usize {

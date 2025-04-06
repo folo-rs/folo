@@ -16,6 +16,7 @@ default = []
 [dependencies]
 arc-swap = { workspace = true }
 derive_more = { workspace = true, features = ["debug"] }
+folo_utils = { workspace = true }
 linked = { workspace = true }
 many_cpus = { workspace = true }
 rsevents = { workspace = true }

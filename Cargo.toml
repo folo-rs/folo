@@ -22,6 +22,7 @@ debug = "none"
 # The packages we publish.
 cpulist = { version = "0.1.1", path = "crates/cpulist" }
 folo_ffi = { version = "0.1.1", path = "crates/folo_ffi" }
+folo_utils = { version = "0.1.0", path = "crates/folo_utils" }
 linked = { version = "0.1.5", path = "crates/linked" }
 linked_macros = { version = "0.1.4", path = "crates/linked_macros" }
 linked_macros_impl = { version = "0.1.4", path = "crates/linked_macros_impl" }
@@ -94,3 +95,11 @@ variant_size_differences = "warn"
 [workspace.lints.rustdoc]
 private_doc_tests = "warn"
 unescaped_backticks = "warn"
+
+[workspace.lints.clippy]
+absolute_paths = "warn"
+allow_attributes_without_reason = "warn"
+arithmetic_side_effects = "warn"
+as_ptr_cast_mut = "warn"
+assertions_on_result_states = "warn"
+assigning_clones = "warn"

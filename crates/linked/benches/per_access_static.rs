@@ -1,6 +1,9 @@
 //! Basic operations on the `instance_per_access!` macro and underlying type.
 
-#![allow(missing_docs)] // No need for API documentation in benchmark code.
+#![allow(
+    missing_docs,
+    reason = "No need for API documentation in benchmark code"
+)]
 
 use std::{
     cell::Cell,
@@ -15,8 +18,10 @@ use seq_macro::seq;
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
-// We do not necessarily care about using all the fields, but we want to pay the price of initializing them.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "We do not care about using all the fields but we want to pay the price of initializing them"
+)]
 #[linked::object]
 struct TestSubject {
     local_state: Cell<usize>,
@@ -100,7 +105,7 @@ fn entrypoint(c: &mut Criterion) {
 
 // We manually expand the macro here just because macro-in-macro goes crazy and fails to operate.
 seq!(N in 0..1000 {
-    #[allow(non_camel_case_types)]
+    #[allow(non_camel_case_types, reason = "manually replicating uglified macro internals for benchmark")]
     struct __lookup_key_~N;
 
     const TARGET_MANY_~N : ::linked::PerAccessStatic<TestSubject> =

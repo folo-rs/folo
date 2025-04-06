@@ -99,7 +99,7 @@ impl ProcessorSet {
     }
 
     /// Returns the number of processors in the set. A processor set is never empty.
-    #[expect(clippy::len_without_is_empty)] // Never empty by definition.
+    #[expect(clippy::len_without_is_empty, reason = "never empty by definition")]
     pub fn len(&self) -> usize {
         self.processors.len()
     }
@@ -216,12 +216,9 @@ impl From<NonEmpty<Processor>> for ProcessorSet {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::NonZero,
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
     };
 
     use nonempty::nonempty;
@@ -386,9 +383,9 @@ mod tests {
     #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]
     fn to_builder_preserves_processors() {
-        let set = ProcessorSet::builder()
-            .take(NonZero::new(1).unwrap())
-            .unwrap();
+        use folo_utils::nz;
+
+        let set = ProcessorSet::builder().take(nz!(1)).unwrap();
 
         let builder = set.to_builder();
 
@@ -404,10 +401,10 @@ mod tests {
     #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]
     fn inherit_on_pinned() {
+        use folo_utils::nz;
+
         thread::spawn(|| {
-            let one = ProcessorSet::builder()
-                .take(NonZero::new(1).unwrap())
-                .unwrap();
+            let one = ProcessorSet::builder().take(nz!(1)).unwrap();
 
             one.pin_current_thread_to();
 
