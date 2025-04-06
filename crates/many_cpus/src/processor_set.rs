@@ -26,7 +26,7 @@ static ALL_PROCESSORS: LazyLock<ProcessorSet> = LazyLock::new(|| {
 /// One you have a [`ProcessorSet`], you can iterate over [`ProcessorSet::processors()`]
 /// to inspect the individual processors in the set or use [`ProcessorSet::spawn_threads()`] to
 /// spawn a set of threads pinned to each of the processors in the set, one thread per processor.
-/// You may also use [``ProcessorSet::spawn_thread()`] to spawn a single thread pinned to all
+/// You may also use [`ProcessorSet::spawn_thread()`] to spawn a single thread pinned to all
 /// processors in the set, allowing the thread to move but only between the processors in the set.
 ///
 /// # Changes at runtime

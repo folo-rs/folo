@@ -90,3 +90,7 @@ unused_macro_rules = "warn"
 unused_macros = "warn"
 unused_qualifications = "warn"
 variant_size_differences = "warn"
+
+[workspace.lints.rustdoc]
+private_doc_tests = "warn"
+unescaped_backticks = "warn"
