@@ -2,7 +2,7 @@
 name = "folo_ffi"
 description = "Utilities for working with FFI logic; exists for internal use in Folo crates; no stable API surface"
 publish = true
-version = "0.1.1"
+version = "0.1.2"
 
 authors.workspace = true
 edition.workspace = true
