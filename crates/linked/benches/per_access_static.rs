@@ -117,7 +117,7 @@ seq!(N in 0..1000 {
 
 /// Clears all data stored in the shared variable system when created and dropped. Just for testing.
 #[derive(Debug)]
-pub struct LinkedVariableClearGuard {}
+struct LinkedVariableClearGuard {}
 
 impl Default for LinkedVariableClearGuard {
     fn default() -> Self {

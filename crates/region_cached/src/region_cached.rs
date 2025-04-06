@@ -361,8 +361,8 @@ where
     /// This is `None` if the value for this region has not been initialized yet.
     /// It will be initialized on first access from this region.
     ///
-    /// We use ArcSwap here because it offers very good multithreaded read performance.
-    /// In single-threaded and write-heavy scenarios, RwLock is faster but those
+    /// We use `ArcSwap` here because it offers very good multithreaded read performance.
+    /// In single-threaded and write-heavy scenarios, `RwLock` is faster but those
     /// are not the scenarios we target - we expect the data to be cached for long
     /// periods and read from many threads, with writes happening not so often.
     value: ArcSwapOption<RegionalValue<T>>,

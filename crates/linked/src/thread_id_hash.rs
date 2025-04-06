@@ -27,11 +27,11 @@ impl Hasher for ThreadIdHasher {
 
         // We copy the low byte into the high byte because HashMap seems to care a lot about
         // the high bits (this is used as the control byte for fast comparisons).
-        self.state ^= (bytes[0] as u64) << 56;
+        self.state ^= u64::from(bytes[0]) << 56;
     }
 }
 
-/// A BuildHasher that creates ThreadIdHasher instances.
+/// A `BuildHasher` that creates `ThreadIdHasher` instances.
 pub(crate) struct BuildThreadIdHasher;
 
 impl BuildHasher for BuildThreadIdHasher {

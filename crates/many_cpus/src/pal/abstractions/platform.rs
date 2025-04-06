@@ -23,7 +23,7 @@ pub(crate) trait Platform: Debug + Send + Sync + 'static {
 
     /// Gets the IDs of all processors that the current thread is allowed to execute on.
     ///
-    /// Note: this may be a superset of get_all_processors() because it may include processors
+    /// Note: this may be a superset of `get_all_processors()` because it may include processors
     /// that our process is in fact forbidden to use due to resource constraints enforced by
     /// the operating system. The filtering to only see what we are allowed to use is performed
     /// by `get_all_processors()` but not by this function.

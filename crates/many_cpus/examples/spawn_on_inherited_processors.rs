@@ -4,8 +4,8 @@
 //! The set of processors used here can be adjusted via any suitable OS mechanisms.
 //!
 //! For example, to select only processors 0 and 1:
-//! Linux: taskset 0x3 target/debug/examples/spawn_on_inherited_processors
-//! Windows: start /affinity 0x3 target/debug/examples/spawn_on_inherited_processors.exe
+//! Linux: `taskset 0x3 target/debug/examples/spawn_on_inherited_processors`
+//! Windows: `start /affinity 0x3 target/debug/examples/spawn_on_inherited_processors.exe`
 
 use std::{thread, time::Duration};
 

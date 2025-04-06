@@ -21,14 +21,14 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-/// Open http://localhost:1234/ to read the current value.
+/// Open `http://localhost:1234/` to read the current value.
 async fn read() -> String {
     let last_update_timestamp = LAST_UPDATE.get_local();
 
     format!("Last update: {last_update_timestamp}")
 }
 
-/// Open http://localhost:1234/update to set a new value.
+/// Open `http://localhost:1234/update` to set a new value.
 /// The new value is only visible to `read()` handlers that run in the same memory region.
 async fn update() -> String {
     let now = SystemTime::now()

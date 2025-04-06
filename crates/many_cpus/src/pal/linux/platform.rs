@@ -64,6 +64,10 @@ impl Platform for BuildTargetPlatform {
             .expect("failed to configure thread affinity");
     }
 
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "negative processor IDs are not valid regardless, we do not expect to receive them"
+    )]
     fn current_processor_id(&self) -> ProcessorId {
         self.bindings.sched_getcpu() as ProcessorId
     }
@@ -115,7 +119,7 @@ impl BuildTargetPlatform {
                 self.get_all_processors_impl()
                     .iter()
                     .filter(|p| p.is_active)
-                    .cloned()
+                    .copied()
                     .map(ProcessorFacade::Real)
                     .collect_vec())
                     .expect("found 0 active processors - impossible because this code is running on an active processor")
@@ -257,6 +261,7 @@ impl BuildTargetPlatform {
                             .map(|(key, value)| (key.trim(), value.trim()))
                             .expect("/proc/cpuinfo line was not a key:value pair");
 
+                        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation, reason = "we expect small positive numbers for frequency, which can have their integer part losslessly converted to u32")]
                         match key {
                             "processor" => index = value.parse::<ProcessorId>().ok(),
                             "cpu MHz" => {
@@ -367,6 +372,12 @@ struct CpuInfo {
     frequency_mhz: u32,
 }
 
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    reason = "we need not worry in tests"
+)]
 #[cfg(test)]
 mod tests {
     use crate::pal::linux::{MockBindings, MockFilesystem};
@@ -687,7 +698,7 @@ mod tests {
 
     /// Configures mock bindings and filesystem to simulate a particular type of processor layout.
     ///
-    /// The simulation is valid for one call to get_all_processors_impl().
+    /// The simulation is valid for one call to `get_all_processors_impl()`.
     fn simulate_processor_layout<const PROCESSOR_COUNT: usize>(
         fs: &mut MockFilesystem,
         processor_index: [ProcessorId; PROCESSOR_COUNT],

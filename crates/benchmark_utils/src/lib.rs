@@ -103,12 +103,20 @@ fn calculate_average_duration(thread_count: NonZero<usize>, total_elapsed_nanos:
         .checked_div(thread_count.get() as u128)
         .expect("thread count is NonZero, so division by zero is impossible");
 
-    Duration::from_nanos(total_elapsed_nanos_per_thread as u64)
+    Duration::from_nanos(
+        total_elapsed_nanos_per_thread
+            .try_into()
+            .expect("overflowing u64 is unrealistic when using a real clock"),
+    )
 }
 
 /// For the A/B benchmarking, identifiers whether a worker is a member of group A or B.
 /// Both groups are always of the same size (when counting number of threads).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "intentional - choice of only two possibilities"
+)]
 pub enum AbWorker {
     /// This is a worker arbitrarily assigned to group A.
     A,

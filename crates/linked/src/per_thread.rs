@@ -392,7 +392,7 @@ where
 ///
 /// This contains an `Rc`, which is `!Send` and only meant to be accessed from the thread it was
 /// created on. Yet the instance of this type itself is visible from multiple threads and
-/// potentially even touched (moved) from another thread when resizing the HashMap of all
+/// potentially even touched (moved) from another thread when resizing the `HashMap` of all
 /// instances! How can this be?!
 ///
 /// We take advantage of the fact that an `Rc` is merely a reference to a control block.

@@ -101,7 +101,7 @@ impl Platform for BuildTargetPlatform {
             .expect("platform indicated a processor group that the platform said does not exist");
 
         group_start_offset
-            .checked_add(current_processor.Number as ProcessorId)
+            .checked_add(ProcessorId::from(current_processor.Number))
             .expect("processor ID calculation overflowed - platform must have given is bad inputs")
     }
 
@@ -112,7 +112,7 @@ impl Platform for BuildTargetPlatform {
             // The max processor ID is the sum of all processors in all groups minus 1.
             group_max_sizes
                 .iter()
-                .map(|&s| s as ProcessorId)
+                .map(|&s| ProcessorId::from(s))
                 .sum::<ProcessorId>()
                 .checked_sub(1)
                 .expect("there must be at least 1 processor")
@@ -152,7 +152,7 @@ impl Platform for BuildTargetPlatform {
             let group_max_sizes = self.get_processor_group_max_sizes();
 
             let is_default_mask = legacy_affinities.Mask.count_ones()
-                == group_max_sizes[legacy_affinities.Group as usize] as u32;
+                == group_max_sizes[legacy_affinities.Group as usize].into();
 
             if !is_default_mask {
                 // Got a non-default value, so we use it.
@@ -175,7 +175,7 @@ impl Platform for BuildTargetPlatform {
             let group_start_offset = group_start_offsets[group_index];
 
             let Some(affinity_mask) = current_thread_affinities.iter().find_map(|a| {
-                if a.Group == group_index as ProcessorGroupIndex {
+                if usize::from(a.Group) == group_index {
                     Some(a.Mask)
                 } else {
                     None
@@ -189,7 +189,7 @@ impl Platform for BuildTargetPlatform {
                     continue;
                 }
 
-                let global_index = group_start_offset.checked_add(index_in_group as ProcessorId)
+                let global_index = group_start_offset.checked_add(ProcessorId::from(index_in_group))
                     .expect("processor ID overflow is never going to happen unless the platform has gone crazy");
 
                 result.push(global_index);
@@ -233,9 +233,8 @@ impl BuildTargetPlatform {
             for group_index in 0..group_count {
                 let processor_count = self.bindings.get_maximum_processor_count(group_index);
 
-                // The OS says there are up to 64, so this is guaranteed but let's be explicit.
-                assert!(processor_count <= u8::MAX as u32);
-                let processor_count = processor_count as u8;
+                let processor_count = u8::try_from(processor_count)
+                    .expect("somehow encountered processor group with more than 64 processors, which is impossible as per Windows API");
 
                 group_sizes.push(processor_count);
             }
@@ -251,9 +250,9 @@ impl BuildTargetPlatform {
             let mut group_offsets = Vec::with_capacity(group_sizes.len());
 
             let mut group_start_offset: ProcessorId = 0;
-            for &size in group_sizes.iter() {
+            for &size in group_sizes {
                 group_offsets.push(group_start_offset);
-                group_start_offset = group_start_offset.checked_add(size as ProcessorId)
+                group_start_offset = group_start_offset.checked_add(ProcessorId::from(size))
                     .expect("processor group start offset overflowed - this is only possible if the platform have us bad inputs");
             }
 
@@ -272,9 +271,8 @@ impl BuildTargetPlatform {
         for group_index in 0..group_count {
             let processor_count = self.bindings.get_active_processor_count(group_index);
 
-            // The OS says there are up to 64, so this is guaranteed but let's be explicit.
-            assert!(processor_count <= u8::MAX as u32);
-            let processor_count = processor_count as u8;
+            let processor_count = u8::try_from(processor_count)
+                    .expect("somehow encountered processor group with more than 64 processors, which is impossible as per Windows API");
 
             group_sizes.push(processor_count);
         }
@@ -485,7 +483,7 @@ impl BuildTargetPlatform {
 
         let group_index: ProcessorGroupIndex = affinity.Group;
 
-        let processors_in_group = group_max_sizes[group_index as usize] as u32;
+        let processors_in_group = u32::from(group_max_sizes[group_index as usize]);
 
         // Minimum effort approach for WOW64 support - we only see the first 32 in a group.
         let processors_in_group = processors_in_group.min(usize::BITS);
@@ -500,7 +498,7 @@ impl BuildTargetPlatform {
             let group_start_offset: ProcessorId = group_max_sizes
                 .iter()
                 .take(group_index as usize)
-                .map(|x| *x as ProcessorId)
+                .map(|x| ProcessorId::from(*x))
                 .sum();
 
             let global_index: ProcessorId = group_start_offset.checked_add(index_in_group).expect(
@@ -530,7 +528,7 @@ impl BuildTargetPlatform {
             let mut next_global_index: ProcessorId = processor_group_max_sizes
                 .iter()
                 .take(group_index)
-                .map(|&x| x as u32)
+                .map(|&x| ProcessorId::from(x))
                 .sum();
 
             for index_in_group in 0..processor_group_active_sizes[group_index] {
@@ -554,7 +552,9 @@ impl BuildTargetPlatform {
                 };
 
                 let processor = ProcessorImpl::new(
-                    group_index as ProcessorGroupIndex,
+                    group_index
+                        .try_into()
+                        .expect("group index can only overflow if our algorithm has a logic error"),
                     index_in_group,
                     global_index,
                     memory_region_index,
@@ -593,7 +593,7 @@ impl BuildTargetPlatform {
             let group_start_offset = group_start_offsets[group_index];
 
             let Some(affinity_mask) = job_affinity_masks.iter().find_map(|a| {
-                if a.Group == group_index as ProcessorGroupIndex {
+                if usize::from(a.Group) == group_index {
                     Some(a.Mask)
                 } else {
                     None
@@ -607,7 +607,7 @@ impl BuildTargetPlatform {
                     continue;
                 }
 
-                let global_index = group_start_offset.checked_add(index_in_group as ProcessorId)
+                let global_index = group_start_offset.checked_add(ProcessorId::from(index_in_group))
                     .expect("processor ID calculation overflowed - platform must have given us bad inputs");
 
                 result.push(global_index);
@@ -618,6 +618,12 @@ impl BuildTargetPlatform {
     }
 }
 
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    reason = "we need not worry in tests"
+)]
 #[cfg(test)]
 mod tests {
     use std::{mem::offset_of, sync::Arc};
@@ -1005,7 +1011,7 @@ mod tests {
 
     /// Configures mock bindings to simulate a particular type of processor layout.
     ///
-    /// The simulation is valid for one call to get_all_processors() only.
+    /// The simulation is valid for one call to `get_all_processors()` only.
     fn simulate_processor_layout<const GROUP_COUNT: usize>(
         bindings: &mut MockBindings,
         // If entry is 0 the group is not considered active. Such groups have to be at the end.
@@ -1106,13 +1112,13 @@ mod tests {
             .returning({
                 let group_active_counts = Arc::clone(group_active_counts);
 
-                move |group_number| group_active_counts[group_number as usize] as u32
+                move |group_number| u32::from(group_active_counts[group_number as usize])
             });
 
         bindings.expect_get_maximum_processor_count().returning({
             let group_max_counts = Arc::clone(group_max_counts);
 
-            move |group_number| group_max_counts[group_number as usize] as u32
+            move |group_number| u32::from(group_max_counts[group_number as usize])
         });
     }
 
@@ -1173,7 +1179,7 @@ mod tests {
                         Size: size_of::<ExpandedLogicalProcessorInformation>() as u32,
                         ..Default::default()
                     },
-                    extra_buffer: [Default::default(); MAX_ADDITIONAL_PROCESSOR_GROUPS],
+                    extra_buffer: [GROUP_AFFINITY::default(); MAX_ADDITIONAL_PROCESSOR_GROUPS],
                 };
 
                 // SAFETY: We define RelationNumaNode above so this dereference is valid.

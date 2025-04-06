@@ -44,8 +44,9 @@ thread_local! {
 /// If you need certainty in the data, you must use pinned threads, with each thread assigned to
 /// execute on either a specific processor or set of processors that have the desired quality you
 /// care about (e.g. a number of processors in the same memory region). You can pin the current
-/// thread to one or more processors via
-/// [ProcessorSet::pin_current_thread_to][crate::ProcessorSet::pin_current_thread_to].
+/// thread to one or more processors via [`ProcessorSet::pin_current_thread_to`][1].
+/// 
+/// [1]: crate::ProcessorSet::pin_current_thread_to
 #[derive(Debug)]
 pub struct HardwareTracker {
     _no_ctor: PhantomData<()>,
@@ -223,7 +224,7 @@ impl HardwareTracker {
     }
 }
 
-/// The real implementation of HardwareTracker, accepting the PAL facade as a parameter
+/// The real implementation of `HardwareTracker`, accepting the PAL facade as a parameter
 /// to enable mocking for testing purposes. Public API uses a singleton of this per thread.
 #[derive(Debug)]
 pub(crate) struct HardwareTrackerCore {

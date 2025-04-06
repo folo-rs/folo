@@ -151,7 +151,7 @@ fn entrypoint(c: &mut Criterion) {
 }
 
 /// The two paired workers exchange messages with each other, sending back whatever is received.
-/// Note: SameProcessor mode is not supported because the workers must collaborate in real time.
+/// Note: `SameProcessor` mode is not supported because the workers must collaborate in real time.
 #[derive(Debug)]
 struct ChannelExchange {
     // Anything received here...
@@ -199,8 +199,8 @@ impl Payload for ChannelExchange {
     }
 }
 
-/// The first worker generates a hashmap with MAP_ENTRY_COUNT entries.
-/// The other worker reads all elements from it REPEAT_COUNT times.
+/// The first worker generates a hashmap with `MAP_ENTRY_COUNT` entries.
+/// The other worker reads all elements from it `REPEAT_COUNT` times.
 #[derive(Debug, Default)]
 struct HashMapRead<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: HashMap<u64, u64>,
@@ -230,8 +230,8 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
     }
 }
 
-/// The first worker generates a hashmap with MAP_ENTRY_COUNT entries.
-/// Both workers read all elements from it REPEAT_COUNT times.
+/// The first worker generates a hashmap with `MAP_ENTRY_COUNT` entries.
+/// Both workers read all elements from it `REPEAT_COUNT` times.
 #[derive(Debug, Default)]
 struct HashMapBothRead<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: Arc<RwLock<HashMap<u64, u64>>>,
@@ -281,8 +281,8 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
     }
 }
 
-/// The first worker generates a frozen hashmap with MAP_ENTRY_COUNT entries.
-/// The second worker reads all elements from it REPEAT_COUNT times.
+/// The first worker generates a frozen hashmap with `MAP_ENTRY_COUNT` entries.
+/// The second worker reads all elements from it `REPEAT_COUNT` times.
 #[derive(Debug, Default)]
 struct FzHashMapRead<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: FzHashMap<u64, u64>,
@@ -312,8 +312,8 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
     }
 }
 
-/// The first worker generates a frozen scalar map with MAP_ENTRY_COUNT entries.
-/// The second worker reads all elements from it REPEAT_COUNT times.
+/// The first worker generates a frozen scalar map with `MAP_ENTRY_COUNT` entries.
+/// The second worker reads all elements from it `REPEAT_COUNT` times.
 #[derive(Debug, Default)]
 struct FzScalarMapRead<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: FzScalarMap<u64, u64>,
@@ -343,8 +343,8 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
     }
 }
 
-/// The first worker generates an SCC hashmap with MAP_ENTRY_COUNT entries.
-/// The second worker reads all elements from it REPEAT_COUNT times.
+/// The first worker generates an SCC hashmap with `MAP_ENTRY_COUNT` entries.
+/// The second worker reads all elements from it `REPEAT_COUNT` times.
 #[derive(Debug, Default)]
 struct SccMapRead<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: scc::HashMap<u64, u64>,
@@ -374,8 +374,8 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
     }
 }
 
-/// The first worker generates an SCC hashmap with MAP_ENTRY_COUNT entries.
-/// Both workers read all elements from it REPEAT_COUNT times.
+/// The first worker generates an SCC hashmap with `MAP_ENTRY_COUNT` entries.
+/// Both workers read all elements from it `REPEAT_COUNT` times.
 #[derive(Debug, Default)]
 struct SccMapBothRead<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: Arc<scc::HashMap<u64, u64>>,
@@ -421,10 +421,10 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
     }
 }
 
-/// The first worker generates an SCC hashmap with MAP_ENTRY_COUNT entries.
+/// The first worker generates an SCC hashmap with `MAP_ENTRY_COUNT` entries.
 /// Both workers increment entries in the same shared map, one worker from high to low, the other
 /// from low to high, to avoid conflicting on the same keys. We want to see data effects, not lock
-/// contention. The increment loop is repeated REPEAT_COUNT times.
+/// contention. The increment loop is repeated `REPEAT_COUNT` times.
 #[derive(Debug, Default)]
 struct SccMapSharedReadWrite<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: Arc<scc::HashMap<u64, u64>>,

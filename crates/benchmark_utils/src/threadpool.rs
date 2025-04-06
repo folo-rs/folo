@@ -52,7 +52,7 @@ impl ThreadPool {
     /// is up to the caller to organize via side-channels.
     #[cfg_attr(test, mutants::skip)] // If work does not get enqueued, deadlocks are very easy.
     pub fn enqueue_task(&self, f: impl FnOnce() + Clone + Send + 'static) {
-        for tx in self.command_txs.iter() {
+        for tx in &self.command_txs {
             tx.send(Command::Execute(Box::new(f.clone()))).unwrap();
         }
     }

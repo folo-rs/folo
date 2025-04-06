@@ -1,7 +1,10 @@
 {
     "cSpell.words": [
         "cpus",
-        "Folo"
+        "Folo",
+        "miri",
+        "nanos",
+        "taskset"
     ],
     "rust-analyzer.cargo.cfgs": [
         "debug_assertions"

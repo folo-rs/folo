@@ -18,6 +18,10 @@ pub type MemoryRegionId = u32;
 /// This is a relative measurement - the most performant processors in a system are always
 /// considered performance processors, with less performant ones considered efficiency processors.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "mirroring two-tier structure of platform APIs"
+)]
 pub enum EfficiencyClass {
     /// A processor that is optimized for energy efficiency at the expense of performance.
     Efficiency,

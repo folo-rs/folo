@@ -25,14 +25,14 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-/// Open http://localhost:1234/ to read the current value.
+/// Open `http://localhost:1234/` to read the current value.
 async fn read() -> String {
     let last_update_timestamp = LAST_UPDATE.get_cached();
 
     format!("Last update: {last_update_timestamp}")
 }
 
-/// Open http://localhost:1234/update to set a new value.
+/// Open `http://localhost:1234/update` to set a new value.
 async fn update() -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)

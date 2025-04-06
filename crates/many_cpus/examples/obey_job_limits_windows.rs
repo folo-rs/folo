@@ -13,7 +13,7 @@
 //! In case of conflicting masks, the intersection is used.
 //!
 //! Note that we configure the job object using the legacy affinity mask, which only supports 64
-//! processors. The ProcessorSet API is not limited in this way and can work with any number of
+//! processors. The `ProcessorSet` API is not limited in this way and can work with any number of
 //! processors. We just use the legacy Windows APIs here to keep the example-specific code simple.
 //! On systems with more than 64 processors, the platform will simply pick one arbitrary processor
 //! group and use two processors from it.
@@ -131,7 +131,9 @@ mod windows {
                 job,
                 JobObjectExtendedLimitInformation,
                 ptr::from_ref(&limit_info).cast(),
-                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()
+                    .try_into()
+                    .expect("struct of known size guaranteed to fit in u32"),
             )?;
         }
 
@@ -145,7 +147,9 @@ mod windows {
 
         // Prepare process creation structures.
         let startup_info = STARTUPINFOW {
-            cb: size_of::<STARTUPINFOW>() as u32,
+            cb: size_of::<STARTUPINFOW>()
+                .try_into()
+                .expect("struct of known size guaranteed to fit in u32"),
             ..Default::default()
         };
 

@@ -159,8 +159,8 @@ const ONE_PROCESSOR: NonZero<usize> = nz!(1);
 /// that may exist due to competing workloads.
 ///
 /// For the "pinned" variants, this returns for each pair of workers a pair of single-processor
-/// ProcessorSets. For the "unpinned" variants, this returns for each pair of workers a pair of
-/// many-processor ProcessorSets.
+/// `ProcessorSet`s. For the "unpinned" variants, this returns for each pair of workers a pair of
+/// many-processor `ProcessorSet`s.
 fn get_processor_set_pairs(
     distribution: WorkDistribution,
 ) -> Option<Vec<(ProcessorSet, ProcessorSet)>> {
@@ -647,7 +647,11 @@ impl BenchmarkBatch {
                 "thread count is asserted as non-zero in ctor, so division by zero is impossible",
             );
 
-        Duration::from_nanos(total_elapsed_nanos_per_thread as u64)
+        Duration::from_nanos(
+            total_elapsed_nanos_per_thread
+                .try_into()
+                .expect("duration overflow is unfathomable within our spacetime boundaries"),
+        )
     }
 
     #[expect(

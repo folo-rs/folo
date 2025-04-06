@@ -158,14 +158,24 @@ impl Bindings for BuildTargetBindings {
 
         let mut bytes_written: u32 = 0;
 
+        let buffer_len_items: u32 = buffer.len().try_into().expect(
+            "platform does not support more than u32 processor groups, so this can never overflow",
+        );
+
+        let size_of_group_affinity = size_of::<GROUP_AFFINITY>()
+            .try_into()
+            .expect("struct of known size guaranteed to fit in u32");
+
+        let buffer_len_bytes = buffer_len_items.checked_mul(size_of_group_affinity)
+            .expect("even under extreme processor group counts, we cannot overflow u32 by having too many GROUP_AFFINITYs");
+
         // SAFETY: No safety requirements beyond passing valid inputs.
         unsafe {
             QueryInformationJobObject(
                 None,
                 JobObjectGroupInformationEx,
                 buffer.as_mut_ptr().cast(),
-                (buffer.len() as u32).checked_mul(size_of::<GROUP_AFFINITY>() as u32)
-                    .expect("even under extreme processor group counts, we cannot overflow u32 by having too many GROUP_AFFINITYs"),
+                buffer_len_bytes,
                 Some(&raw mut bytes_written),
             )
         }
@@ -173,7 +183,11 @@ impl Bindings for BuildTargetBindings {
 
         buffer.truncate(
             bytes_written
-                .checked_div(size_of::<GROUP_AFFINITY>() as u32)
+                .checked_div(
+                    size_of::<GROUP_AFFINITY>()
+                        .try_into()
+                        .expect("struct of known size guaranteed to fit in u32"),
+                )
                 .expect("GROUP_AFFINITY is not a ZST, so there can be no division by zero")
                 as usize,
         );
