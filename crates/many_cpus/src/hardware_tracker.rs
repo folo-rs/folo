@@ -45,7 +45,7 @@ thread_local! {
 /// execute on either a specific processor or set of processors that have the desired quality you
 /// care about (e.g. a number of processors in the same memory region). You can pin the current
 /// thread to one or more processors via [`ProcessorSet::pin_current_thread_to`][1].
-/// 
+///
 /// [1]: crate::ProcessorSet::pin_current_thread_to
 #[derive(Debug)]
 pub struct HardwareTracker {
