@@ -21,37 +21,37 @@ pub(crate) enum BindingsFacade {
 
 impl BindingsFacade {
     pub(crate) const fn real() -> Self {
-        BindingsFacade::Real(&BuildTargetBindings)
+        Self::Real(&BuildTargetBindings)
     }
 
     #[cfg(test)]
     pub(crate) fn from_mock(mock: MockBindings) -> Self {
-        BindingsFacade::Mock(Arc::new(mock))
+        Self::Mock(Arc::new(mock))
     }
 }
 
 impl Bindings for BindingsFacade {
     fn sched_setaffinity_current(&self, cpuset: &cpu_set_t) -> Result<(), io::Error> {
         match self {
-            BindingsFacade::Real(bindings) => bindings.sched_setaffinity_current(cpuset),
+            Self::Real(bindings) => bindings.sched_setaffinity_current(cpuset),
             #[cfg(test)]
-            BindingsFacade::Mock(mock) => mock.sched_setaffinity_current(cpuset),
+            Self::Mock(mock) => mock.sched_setaffinity_current(cpuset),
         }
     }
 
     fn sched_getcpu(&self) -> i32 {
         match self {
-            BindingsFacade::Real(bindings) => bindings.sched_getcpu(),
+            Self::Real(bindings) => bindings.sched_getcpu(),
             #[cfg(test)]
-            BindingsFacade::Mock(mock) => mock.sched_getcpu(),
+            Self::Mock(mock) => mock.sched_getcpu(),
         }
     }
 
     fn sched_getaffinity_current(&self) -> Result<cpu_set_t, io::Error> {
         match self {
-            BindingsFacade::Real(bindings) => bindings.sched_getaffinity_current(),
+            Self::Real(bindings) => bindings.sched_getaffinity_current(),
             #[cfg(test)]
-            BindingsFacade::Mock(mock) => mock.sched_getaffinity_current(),
+            Self::Mock(mock) => mock.sched_getaffinity_current(),
         }
     }
 }

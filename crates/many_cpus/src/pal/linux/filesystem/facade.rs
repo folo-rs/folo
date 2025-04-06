@@ -19,55 +19,53 @@ pub(crate) enum FilesystemFacade {
 
 impl FilesystemFacade {
     pub(crate) const fn real() -> Self {
-        FilesystemFacade::Real(&BuildTargetFilesystem)
+        Self::Real(&BuildTargetFilesystem)
     }
 
     #[cfg(test)]
     pub(crate) fn from_mock(mock: MockFilesystem) -> Self {
-        FilesystemFacade::Mock(Arc::new(mock))
+        Self::Mock(Arc::new(mock))
     }
 }
 
 impl Filesystem for FilesystemFacade {
     fn get_cpuinfo_contents(&self) -> String {
         match self {
-            FilesystemFacade::Real(filesystem) => filesystem.get_cpuinfo_contents(),
+            Self::Real(filesystem) => filesystem.get_cpuinfo_contents(),
             #[cfg(test)]
-            FilesystemFacade::Mock(mock) => mock.get_cpuinfo_contents(),
+            Self::Mock(mock) => mock.get_cpuinfo_contents(),
         }
     }
 
     fn get_numa_node_cpulist_contents(&self, node_index: u32) -> String {
         match self {
-            FilesystemFacade::Real(filesystem) => {
-                filesystem.get_numa_node_cpulist_contents(node_index)
-            }
+            Self::Real(filesystem) => filesystem.get_numa_node_cpulist_contents(node_index),
             #[cfg(test)]
-            FilesystemFacade::Mock(mock) => mock.get_numa_node_cpulist_contents(node_index),
+            Self::Mock(mock) => mock.get_numa_node_cpulist_contents(node_index),
         }
     }
 
     fn get_cpu_online_contents(&self, cpu_index: u32) -> Option<String> {
         match self {
-            FilesystemFacade::Real(filesystem) => filesystem.get_cpu_online_contents(cpu_index),
+            Self::Real(filesystem) => filesystem.get_cpu_online_contents(cpu_index),
             #[cfg(test)]
-            FilesystemFacade::Mock(mock) => mock.get_cpu_online_contents(cpu_index),
+            Self::Mock(mock) => mock.get_cpu_online_contents(cpu_index),
         }
     }
 
     fn get_numa_node_possible_contents(&self) -> Option<String> {
         match self {
-            FilesystemFacade::Real(filesystem) => filesystem.get_numa_node_possible_contents(),
+            Self::Real(filesystem) => filesystem.get_numa_node_possible_contents(),
             #[cfg(test)]
-            FilesystemFacade::Mock(mock) => mock.get_numa_node_possible_contents(),
+            Self::Mock(mock) => mock.get_numa_node_possible_contents(),
         }
     }
 
     fn get_proc_self_status_contents(&self) -> String {
         match self {
-            FilesystemFacade::Real(filesystem) => filesystem.get_proc_self_status_contents(),
+            Self::Real(filesystem) => filesystem.get_proc_self_status_contents(),
             #[cfg(test)]
-            FilesystemFacade::Mock(mock) => mock.get_proc_self_status_contents(),
+            Self::Mock(mock) => mock.get_proc_self_status_contents(),
         }
     }
 }

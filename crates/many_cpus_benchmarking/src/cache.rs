@@ -33,8 +33,7 @@ thread_local! {
 #[cfg_attr(test, mutants::skip)] // Functional testing infeasible; we just check for panic.
 pub(crate) fn clean_caches() {
     let source_ptr = CACHE_CLEANER_SOURCE.as_ptr();
-    let destination_ptr =
-        CACHE_CLEANER_DESTINATION.with_borrow_mut(|destination| destination.as_mut_ptr());
+    let destination_ptr = CACHE_CLEANER_DESTINATION.with_borrow_mut(Vec::as_mut_ptr);
 
     // SAFETY: Lengths are correct, pointers are valid, we are good to go.
     unsafe {
