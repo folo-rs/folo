@@ -26,6 +26,7 @@ impl<T: Sized> NativeBuffer<T> {
     ///
     /// Panics if the requested size is too large to yield a valid memory layout. Valid
     /// memory layouts must not exceed `isize::MAX` bytes.
+    #[must_use]
     pub fn new(min_size_bytes: NonZero<usize>) -> Self {
         // Sometimes Windows will ask for less memory than technically required to fit a T.
         // While this may be valid as long as Rust never tries to read that extra memory (e.g.
@@ -78,6 +79,7 @@ impl<T: Sized> NativeBuffer<T> {
     /// # Panics
     ///
     /// Panics if `T` is a zero-sized type.
+    #[must_use]
     pub fn from_value(value: T) -> Self {
         let mut buffer = Self::new(
             NonZero::new(size_of::<T>()).expect("cannot create NativeBuffer from zero-sized type"),
@@ -96,6 +98,7 @@ impl<T: Sized> NativeBuffer<T> {
     ///
     /// Panics if the resulting buffer size is too large to yield a valid memory layout. Valid
     /// memory layouts must not exceed `isize::MAX` bytes.
+    #[must_use]
     pub fn from_items(items: impl IntoIterator<Item = T>) -> Self {
         // TODO: Use the iterator size hint to avoid this intermediate allocation.
         let items = items.into_iter().collect::<Vec<_>>();
@@ -132,11 +135,13 @@ impl<T: Sized> NativeBuffer<T> {
     }
 
     /// Capacity of the buffer, in bytes.
+    #[must_use]
     pub fn capacity_bytes(&self) -> usize {
         self.layout.size()
     }
 
     /// Length of the declared data in the buffer, in bytes.
+    #[must_use]
     pub fn len_bytes(&self) -> usize {
         self.len_bytes
     }
@@ -144,6 +149,7 @@ impl<T: Sized> NativeBuffer<T> {
     /// Whether the buffer is considered empty.
     ///
     /// This is determined by `set_len()` having been last called with a non-zero value.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len_bytes == 0
     }
@@ -160,6 +166,7 @@ impl<T: Sized> NativeBuffer<T> {
     }
 
     /// Returns a pointer to the start of the buffer.
+    #[must_use]
     pub fn as_ptr(&self) -> NonNull<T> {
         self.ptr.cast()
     }
@@ -170,6 +177,7 @@ impl<T: Sized> NativeBuffer<T> {
     /// NB! The `end` pointer is not guaranteed to be valid for reads or writes as it may not be
     /// aligned for `T` if the declared length (`len_bytes()`) is not a multiple of `T`'s size.
     /// Its only purpose is to indicate the end of the declared data in the buffer.
+    #[must_use]
     pub fn as_data_ptr_range(&self) -> Range<NonNull<T>> {
         let start = self.ptr.cast();
 
@@ -185,6 +193,7 @@ impl<T: Sized> NativeBuffer<T> {
     ///
     /// The `end` pointer is guaranteed to be aligned for `T` but is not valid for reading
     /// or writing because it is at the end of the allocation
+    #[must_use]
     pub fn as_capacity_ptr_range(&self) -> Range<NonNull<T>> {
         let start = self.ptr.cast();
 

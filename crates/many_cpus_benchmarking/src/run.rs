@@ -1,7 +1,9 @@
 use std::{
     any::type_name,
     collections::VecDeque,
-    env, mem,
+    env,
+    iter::{once, repeat_with},
+    mem,
     num::NonZero,
     sync::{Arc, Barrier, Mutex, mpsc},
     thread::JoinHandle,
@@ -457,15 +459,18 @@ fn get_processor_set_pairs(
                                 let mut remaining_processors =
                                     remaining.processors().into_iter().cloned().collect_vec();
                                 remaining_processors.shuffle(&mut rng());
+
+                                #[allow(
+                                    clippy::integer_division,
+                                    reason = "we do not care if one side has one more than the other - what matters is lack of overlap"
+                                )]
                                 let (p1_more, p2_more) =
                                     remaining_processors.split_at(remaining_processors.len() / 2);
 
                                 (
                                     ProcessorSet::from_processors(
                                         NonEmpty::from_vec(
-                                            [p1].into_iter()
-                                                .chain(p1_more.iter().cloned())
-                                                .collect_vec(),
+                                            once(p1).chain(p1_more.iter().cloned()).collect_vec(),
                                         )
                                         .expect(
                                             "we know we have at least one processor for each pair",
@@ -473,9 +478,7 @@ fn get_processor_set_pairs(
                                     ),
                                     ProcessorSet::from_processors(
                                         NonEmpty::from_vec(
-                                            [p2].into_iter()
-                                                .chain(p2_more.iter().cloned())
-                                                .collect_vec(),
+                                            once(p2).chain(p2_more.iter().cloned()).collect_vec(),
                                         )
                                         .expect(
                                             "we know we have at least one processor for each pair",
@@ -491,8 +494,8 @@ fn get_processor_set_pairs(
         WorkDistribution::UnpinnedSelf => {
             // All processors are valid candidates here.
             Some(
-                (0..worker_pair_count.get())
-                    .map(|_| (candidates.clone(), candidates.clone()))
+                repeat_with(|| (candidates.clone(), candidates.clone()))
+                    .take(worker_pair_count.get())
                     .collect(),
             )
         }
@@ -548,6 +551,9 @@ impl BenchmarkBatch {
     ) -> Self {
         assert_ne!(processor_set_pairs.len(), 0);
 
+        let batch_size = usize::try_from(batch_size)
+            .expect("batch_size greater than usize::MAX is not going to work out - we cannot feasibly prepare that many payloads in a single batch");
+
         // Once by current thread + once by each worker in each pair.
         // All workers will start when all workers and the main thread are ready.
         let worker_count = processor_set_pairs
@@ -567,16 +573,15 @@ impl BenchmarkBatch {
             let (processor_set_1, processor_set_2) = processor_set_pair;
 
             // We generate the payload instances here (but do not prepare them yet).
-            let (payloads1, payloads2) = (0..batch_size).map(|_| P::new_pair()).unzip();
+            let (payloads1, payloads2) = repeat_with(|| P::new_pair()).take(batch_size).unzip();
 
             // Each payload is also associated with a Barrier that will synchronize when that
             // payload is allowed to start executing, to ensure that any impact from multithreaded
             // access is felt at the same time. Time spent waiting for the barrier is still counted
             // as part of the benchmark duration because we are mainly interested in the relative
             // durations of different configurations and not the "pure" absolute timings.
-            let payload_barriers = (0..batch_size)
-                // One for each worker in the pair.
-                .map(|_| Arc::new(Barrier::new(2)))
+            let payload_barriers = repeat_with(|| Arc::new(Barrier::new(2)))
+                .take(batch_size)
                 .collect_vec();
 
             // We use these to deliver a prepared payload to the worker meant to process it.

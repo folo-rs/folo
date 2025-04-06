@@ -85,6 +85,7 @@ impl HardwareTracker {
     /// The ID of the processor currently executing this thread.
     #[cfg_attr(test, mutants::skip)] // Trivial layer, only the core is tested.
     #[inline]
+    #[must_use]
     pub fn current_processor_id() -> ProcessorId {
         CURRENT_TRACKER.with_borrow(|core| core.current_processor_id())
     }
@@ -92,6 +93,7 @@ impl HardwareTracker {
     /// The memory region ID of the processor currently executing this thread.
     #[cfg_attr(test, mutants::skip)] // Trivial layer, only the core is tested.
     #[inline]
+    #[must_use]
     pub fn current_memory_region_id() -> MemoryRegionId {
         CURRENT_TRACKER.with_borrow(|core| core.current_memory_region_id())
     }
@@ -154,6 +156,7 @@ impl HardwareTracker {
     /// ```
     #[cfg_attr(test, mutants::skip)] // Trivial layer, only the core is tested.
     #[inline]
+    #[must_use]
     pub fn is_thread_processor_pinned() -> bool {
         CURRENT_TRACKER.with_borrow(|core| core.is_thread_processor_pinned())
     }
@@ -219,6 +222,7 @@ impl HardwareTracker {
     /// ```
     #[cfg_attr(test, mutants::skip)] // Trivial layer, only the core is tested.
     #[inline]
+    #[must_use]
     pub fn is_thread_memory_region_pinned() -> bool {
         CURRENT_TRACKER.with_borrow(|core| core.is_thread_memory_region_pinned())
     }
@@ -240,6 +244,7 @@ pub(crate) struct HardwareTrackerCore {
 }
 
 impl HardwareTrackerCore {
+    #[must_use]
     pub(crate) fn new(pal: PlatformFacade) -> Self {
         let all_pal_processors = pal.get_all_processors();
         let max_processor_id = pal.max_processor_id();
@@ -264,6 +269,7 @@ impl HardwareTrackerCore {
         }
     }
 
+    #[must_use]
     pub(crate) fn current_processor(&self) -> &Processor {
         let processor_id = self.current_processor_id();
 
@@ -284,20 +290,24 @@ impl HardwareTrackerCore {
         }
     }
 
+    #[must_use]
     pub(crate) fn current_processor_id(&self) -> ProcessorId {
         self.pinned_processor_id
             .unwrap_or_else(|| self.pal.current_processor_id())
     }
 
+    #[must_use]
     pub(crate) fn current_memory_region_id(&self) -> MemoryRegionId {
         self.pinned_memory_region_id
             .unwrap_or_else(|| self.current_processor().memory_region_id())
     }
 
+    #[must_use]
     pub(crate) fn is_thread_processor_pinned(&self) -> bool {
         self.pinned_processor_id.is_some()
     }
 
+    #[must_use]
     pub(crate) fn is_thread_memory_region_pinned(&self) -> bool {
         self.pinned_memory_region_id.is_some()
     }

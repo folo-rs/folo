@@ -1,4 +1,5 @@
 use std::{
+    iter::repeat_with,
     num::NonZero,
     sync::{Arc, Mutex, mpsc},
     thread::JoinHandle,
@@ -20,13 +21,16 @@ pub struct ThreadPool {
 
 impl ThreadPool {
     /// Creates a thread pool with one thread per processor available to the current process.
+    #[must_use]
     pub fn all() -> Self {
         Self::new(ProcessorSet::all().clone())
     }
 
     /// Creates a thread pool with one thread per processor in the provided processor set.
+    #[must_use]
     pub fn new(processors: ProcessorSet) -> Self {
-        let (txs, rxs): (Vec<_>, Vec<_>) = (0..(processors.len())).map(|_| mpsc::channel()).unzip();
+        let (txs, rxs): (Vec<_>, Vec<_>) =
+            repeat_with(mpsc::channel).take(processors.len()).unzip();
 
         let rxs = Arc::new(Mutex::new(rxs));
 
@@ -58,6 +62,7 @@ impl ThreadPool {
     }
 
     /// Numbers of threads in the pool.
+    #[must_use]
     pub fn thread_count(&self) -> NonZero<usize> {
         NonZero::new(self.command_txs.len())
             .expect("thread pool cannot be created with zero threads")

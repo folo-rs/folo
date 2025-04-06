@@ -77,20 +77,22 @@ impl Bindings for BindingsFacade {
         buffer: Option<*mut SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>,
         returned_length: *mut u32,
     ) -> Result<()> {
-        unsafe {
-            match self {
-                BindingsFacade::Real(bindings) => bindings.get_logical_processor_information_ex(
+        match self {
+            BindingsFacade::Real(bindings) => unsafe {
+                bindings.get_logical_processor_information_ex(
                     relationship_type,
                     buffer,
                     returned_length,
-                ),
-                #[cfg(test)]
-                BindingsFacade::Mock(bindings) => bindings.get_logical_processor_information_ex(
+                )
+            },
+            #[cfg(test)]
+            BindingsFacade::Mock(bindings) => unsafe {
+                bindings.get_logical_processor_information_ex(
                     relationship_type,
                     buffer,
                     returned_length,
-                ),
-            }
+                )
+            },
         }
     }
 

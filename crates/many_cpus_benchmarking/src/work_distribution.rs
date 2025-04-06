@@ -114,6 +114,7 @@ pub enum WorkDistribution {
 
 impl WorkDistribution {
     /// All the work distribution modes.
+    #[must_use]
     pub fn all() -> &'static [WorkDistribution] {
         &[
             WorkDistribution::PinnedMemoryRegionPairs,
@@ -129,6 +130,7 @@ impl WorkDistribution {
 
     /// All the work distribution modes that exchange payloads between processors
     /// before starting the benchmark.
+    #[must_use]
     pub fn all_without_self() -> &'static [WorkDistribution] {
         &[
             WorkDistribution::PinnedMemoryRegionPairs,
@@ -142,6 +144,7 @@ impl WorkDistribution {
     /// All the work distribution modes that allow every worker to be placed
     /// on a different processor (either explicitly or by allowing them to float
     /// based on OS scheduling decisions).
+    #[must_use]
     pub fn all_with_unique_processors() -> &'static [WorkDistribution] {
         &[
             WorkDistribution::PinnedMemoryRegionPairs,
@@ -158,6 +161,7 @@ impl WorkDistribution {
     /// on a different processor (either explicitly or by allowing them to float
     /// based on OS scheduling decisions) and exchange payloads between workers
     /// before starting the benchmark.
+    #[must_use]
     pub fn all_with_unique_processors_without_self() -> &'static [WorkDistribution] {
         &[
             WorkDistribution::PinnedMemoryRegionPairs,

@@ -46,6 +46,7 @@ where
     /// `linked::instance_per_access!` macro and should not be used directly.
     /// It is not part of the public API and may be removed or changed at any time.
     #[doc(hidden)]
+    #[must_use]
     pub const fn new(
         family_key_provider: fn() -> TypeId,
         first_instance_provider: fn() -> T,
@@ -67,6 +68,7 @@ where
     /// maintain only one instance per thread and return shared references to it.
     ///
     /// [1]: [crate::instance_per_thread]
+    #[must_use]
     pub fn get(&self) -> T {
         if let Some(instance) = self.new_from_local_registry() {
             return instance;
@@ -259,6 +261,10 @@ mod tests {
 
     impl TokenCache {
         fn new(value: usize) -> Self {
+            #[allow(
+                clippy::mutex_atomic,
+                reason = "inner type is placeholder, for realistic usage"
+            )]
             let value = Arc::new(Mutex::new(value));
 
             linked::new!(Self {

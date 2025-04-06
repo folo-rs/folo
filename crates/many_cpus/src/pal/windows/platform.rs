@@ -152,7 +152,10 @@ impl Platform for BuildTargetPlatform {
             let group_max_sizes = self.get_processor_group_max_sizes();
 
             let is_default_mask = legacy_affinities.Mask.count_ones()
-                == group_max_sizes[legacy_affinities.Group as usize].into();
+                == (*group_max_sizes
+                    .get(legacy_affinities.Group as usize)
+                    .expect("platform referenced a processor group that was out of bounds"))
+                .into();
 
             if !is_default_mask {
                 // Got a non-default value, so we use it.
@@ -168,11 +171,18 @@ impl Platform for BuildTargetPlatform {
 
         let group_max_sizes = self.get_processor_group_max_sizes();
         let group_start_offsets = self.get_processor_group_start_offsets();
+        assert_eq!(
+            group_max_sizes.len(),
+            group_start_offsets.len(),
+            "platform must provide group sizes and offsets in equal amounts",
+        );
 
         let mut result = Vec::with_capacity(self.max_processor_count());
 
         for (group_index, group_size) in group_max_sizes.iter().enumerate() {
-            let group_start_offset = group_start_offsets[group_index];
+            let group_start_offset = group_start_offsets
+                .get(group_index)
+                .expect("we asserted above that we have same number of each");
 
             let Some(affinity_mask) = current_thread_affinities.iter().find_map(|a| {
                 if usize::from(a.Group) == group_index {
@@ -483,7 +493,9 @@ impl BuildTargetPlatform {
 
         let group_index: ProcessorGroupIndex = affinity.Group;
 
-        let processors_in_group = u32::from(group_max_sizes[group_index as usize]);
+        let processors_in_group = u32::from(*group_max_sizes.get(group_index as usize).expect(
+            "platform indicated a processor group that was out of range of known processor groups",
+        ));
 
         // Minimum effort approach for WOW64 support - we only see the first 32 in a group.
         let processors_in_group = processors_in_group.min(usize::BITS);
@@ -531,7 +543,10 @@ impl BuildTargetPlatform {
                 .map(|&x| ProcessorId::from(x))
                 .sum();
 
-            for index_in_group in 0..processor_group_active_sizes[group_index] {
+            let group_active_processor_count = *processor_group_active_sizes.get(group_index)
+                .expect("out of bounds when iterating over processor groups - this could only be due to internal data inconsistency");
+
+            for index_in_group in 0..group_active_processor_count {
                 let global_index = next_global_index;
                 next_global_index = next_global_index.checked_add(1).expect(
                     "processor ID calculation overflowed - platform must have given us bad inputs",
@@ -587,10 +602,18 @@ impl BuildTargetPlatform {
         let group_max_sizes = self.get_processor_group_max_sizes();
         let group_start_offsets = self.get_processor_group_start_offsets();
 
+        assert_eq!(
+            group_max_sizes.len(),
+            group_start_offsets.len(),
+            "platform must provide group sizes and offsets in equal amounts",
+        );
+
         let mut result = Vec::with_capacity(self.max_processor_count());
 
         for (group_index, group_size) in group_max_sizes.iter().enumerate() {
-            let group_start_offset = group_start_offsets[group_index];
+            let group_start_offset = group_start_offsets
+                .get(group_index)
+                .expect("we asserted above that we have same number of each");
 
             let Some(affinity_mask) = job_affinity_masks.iter().find_map(|a| {
                 if usize::from(a.Group) == group_index {
@@ -622,6 +645,7 @@ impl BuildTargetPlatform {
     clippy::arithmetic_side_effects,
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
+    clippy::indexing_slicing,
     reason = "we need not worry in tests"
 )]
 #[cfg(test)]
@@ -1044,18 +1068,10 @@ mod tests {
         // Copy the data because we need to keep referencing it in the mock.
         let group_active_counts = Arc::new(group_active_counts.to_vec());
         let group_max_counts = Arc::new(group_max_counts.to_vec());
-        let efficiency_ratings_per_group = Arc::new(
-            efficiency_ratings_per_group
-                .iter()
-                .map(|x| x.to_vec())
-                .collect_vec(),
-        );
-        let memory_regions_per_group = Arc::new(
-            memory_regions_per_group
-                .iter()
-                .map(|x| x.to_vec())
-                .collect_vec(),
-        );
+        let efficiency_ratings_per_group =
+            Arc::new(efficiency_ratings_per_group.iter().cloned().collect_vec());
+        let memory_regions_per_group =
+            Arc::new(memory_regions_per_group.iter().cloned().collect_vec());
 
         simulate_get_counts(bindings, &group_active_counts, &group_max_counts);
         simulate_get_numa_relations(bindings, &memory_regions_per_group);

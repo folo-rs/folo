@@ -7,6 +7,8 @@
     reason = "No need for API documentation in benchmark code"
 )]
 
+use std::fmt::Write;
+use std::iter::repeat_with;
 use std::{
     collections::HashMap,
     hint::black_box,
@@ -499,19 +501,19 @@ impl Payload for HttpHeadersParse {
 
     fn prepare(&mut self) {
         self.serialized = Some(
-            (0..HEADERS_COUNT)
-                .map(|_| {
-                    let headers = Headers::default().generate();
+            repeat_with(|| {
+                let headers = Headers::default().generate();
 
-                    let mut result = String::new();
+                let mut result = String::new();
 
-                    for (key, value) in headers {
-                        result.push_str(&format!("{key}: {value}\r\n"));
-                    }
+                for (key, value) in headers {
+                    write!(result, "{key}: {value}\r\n").unwrap();
+                }
 
-                    result.into_bytes()
-                })
-                .collect(),
+                result.into_bytes()
+            })
+            .take(HEADERS_COUNT)
+            .collect(),
         );
     }
 

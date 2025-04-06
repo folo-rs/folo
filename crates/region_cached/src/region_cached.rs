@@ -49,6 +49,7 @@ where
     /// [1]: crate::region_cached
     /// [2]: linked::PerThread
     /// [3]: linked
+    #[must_use]
     pub fn new(initial_value: T) -> Self {
         Self::with_clients(
             initial_value,
@@ -57,6 +58,7 @@ where
         )
     }
 
+    #[must_use]
     pub(crate) fn with_clients(
         initial_value: T,
         hardware_info: HardwareInfoClientFacade,
@@ -267,6 +269,7 @@ where
     /// let token = current_access_token.get_cached();
     /// assert_eq!(token, 0x123100);
     /// ```
+    #[must_use]
     #[inline]
     pub fn get_cached(&self) -> T {
         self.with_cached(|v| *v)
@@ -329,7 +332,9 @@ where
     where
         F: FnOnce(&Arc<RegionalState<T>>) -> R,
     {
-        let slot = &self.regional_states[memory_region_id as usize];
+        let slot = &self.regional_states.get(memory_region_id as usize).expect(
+            "memory region ID was out of bounds - the platform lied about how many there are",
+        );
 
         // The entire purpose of that OnceLock is to ensure this Arc::new() happens
         // when the current thread is executing in the correct memory region, to place

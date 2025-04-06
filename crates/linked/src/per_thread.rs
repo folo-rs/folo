@@ -74,6 +74,7 @@ where
 {
     /// Creates a new `PerThread` with an existing instance of `T`. Any further access to the `T`
     /// via the `PerThread` (or its clones) will return instances of `T` from the same family.
+    #[must_use]
     pub fn new(inner: T) -> Self {
         let family = FamilyStateReference::new(inner.handle());
 
@@ -168,6 +169,7 @@ where
     ///
     /// The returned value is single-threaded and cannot be moved or used across threads. For
     /// transfer across threads, you need to preserve and share/send a `PerThread<T>` instance.
+    #[must_use]
     pub fn local(&self) -> ThreadLocal<T> {
         let inner = self.family.current_thread_instance();
 
@@ -282,6 +284,7 @@ impl<T> FamilyStateReference<T>
 where
     T: linked::Object,
 {
+    #[must_use]
     fn new(handle: linked::Handle<T>) -> Self {
         Self {
             handle,
@@ -290,6 +293,7 @@ where
     }
 
     /// Returns the `Rc<T>` for the current thread, creating it if necessary.
+    #[must_use]
     fn current_thread_instance(&self) -> Rc<T> {
         let thread_id = thread::current().id();
 
@@ -425,6 +429,7 @@ where
     /// same thread as was used to call this function.
     ///
     /// See type-level safety comments for details.
+    #[must_use]
     unsafe fn new(instance: Rc<T>) -> Self {
         Self { instance }
     }
@@ -437,6 +442,7 @@ where
     /// `ThreadSpecificState` was created. This is not enforced by the type system.
     ///
     /// See type-level safety comments for details.
+    #[must_use]
     unsafe fn clone_instance(&self) -> Rc<T> {
         Rc::clone(&self.instance)
     }
@@ -465,6 +471,10 @@ mod tests {
 
     impl TokenCache {
         fn new() -> Self {
+            #[allow(
+                clippy::mutex_atomic,
+                reason = "inner type is placeholder, for realistic usage"
+            )]
             let shared_value = Arc::new(Mutex::new(0));
 
             linked::new!(Self {

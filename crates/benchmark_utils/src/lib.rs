@@ -4,6 +4,7 @@
 //! that may have value even outside this project.
 
 use std::{
+    iter::repeat_with,
     num::NonZero,
     sync::{Arc, Barrier, Mutex},
     time::{Duration, Instant},
@@ -57,8 +58,9 @@ where
     // All threads will wait on this before starting, so they start together.
     let start = Arc::new(Barrier::new(thread_count.get()));
 
-    let (result_txs, mut result_rxs): (Vec<_>, Vec<_>) =
-        (0..thread_count.get()).map(|_| oneshot::channel()).unzip();
+    let (result_txs, result_rxs): (Vec<_>, Vec<_>) = repeat_with(oneshot::channel)
+        .take(thread_count.get())
+        .unzip();
 
     let result_txs = Arc::new(Mutex::new(result_txs));
 
@@ -89,7 +91,7 @@ where
 
     let mut total_elapsed_nanos: u128 = 0;
 
-    for rx in result_rxs.drain(..) {
+    for rx in result_rxs {
         let elapsed = rx.recv().unwrap();
         total_elapsed_nanos = total_elapsed_nanos.saturating_add(elapsed.as_nanos());
     }
@@ -208,7 +210,7 @@ mod tests {
             },
             {
                 let iter_called_at_least_once = Arc::clone(&iter_called_at_least_once);
-                move |_| {
+                move |()| {
                     iter_called_at_least_once.store(true, atomic::Ordering::SeqCst);
                 }
             },
@@ -252,7 +254,7 @@ mod tests {
             {
                 let a_iter_called_at_least_once = Arc::clone(&a_iter_called_at_least_once);
                 let b_iter_called_at_least_once = Arc::clone(&b_iter_called_at_least_once);
-                move |ab, _| match ab {
+                move |ab, ()| match ab {
                     AbWorker::A => {
                         a_iter_called_at_least_once.store(true, atomic::Ordering::SeqCst)
                     }

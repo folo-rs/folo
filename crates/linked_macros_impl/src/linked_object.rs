@@ -8,6 +8,7 @@ use syn::{Fields, FieldsNamed, Item, ItemStruct, parse_quote};
 
 use crate::syn_helpers::token_stream_and_error;
 
+#[must_use]
 pub fn entrypoint(_attr: TokenStream, input: TokenStream) -> TokenStream {
     let item_ast = syn::parse2::<Item>(input.clone());
 

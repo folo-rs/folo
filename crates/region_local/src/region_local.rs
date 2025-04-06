@@ -49,6 +49,7 @@ where
     /// [1]: crate::region_local
     /// [2]: linked::PerThread
     /// [3]: linked
+    #[must_use]
     pub fn new(initializer: fn() -> T) -> Self {
         Self::with_clients(
             initializer,
@@ -57,6 +58,7 @@ where
         )
     }
 
+    #[must_use]
     pub(crate) fn with_clients(
         initializer: fn() -> T,
         hardware_info: HardwareInfoClientFacade,
@@ -237,6 +239,7 @@ where
     /// assert_eq!(token, 0x123100);
     /// ```
     #[inline]
+    #[must_use]
     pub fn get_local(&self) -> T {
         self.with_local(|v| *v)
     }
@@ -264,6 +267,7 @@ impl<T> GlobalState<T>
 where
     T: Clone + Send + Sync + 'static,
 {
+    #[must_use]
     fn new(initializer: fn() -> T, memory_region_count: usize) -> Self {
         let mut regional_states = Vec::with_capacity(memory_region_count);
 
@@ -282,7 +286,9 @@ where
     where
         F: FnOnce(&Arc<RegionalState<T>>) -> R,
     {
-        let slot = &self.regional_states[memory_region_id as usize];
+        let slot = &self.regional_states.get(memory_region_id as usize).expect(
+            "memory region ID was out of bounds - the platform lied about how many there are",
+        );
 
         // The entire purpose of that OnceLock is to ensure this Arc::new() happens
         // when the current thread is executing in the correct memory region, to place
@@ -314,6 +320,7 @@ impl<T> RegionalState<T>
 where
     T: Clone + Send + Sync + 'static,
 {
+    #[must_use]
     fn new() -> Self {
         Self {
             value: ArcSwapOption::const_empty(),

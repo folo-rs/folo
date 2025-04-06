@@ -121,6 +121,7 @@ impl<T: ?Sized> Box<T> {
     /// This is an implementation detail of the `linked::new_box!` macro and is not part of the
     /// public API. It is not meant to be used directly and may change or be removed at any time.
     #[doc(hidden)]
+    #[must_use]
     pub fn new(instance_factory: impl Fn() -> StdBox<T> + Send + Sync + 'static) -> Self {
         linked::new!(Self {
             value: (instance_factory)(),

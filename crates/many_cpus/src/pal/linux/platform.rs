@@ -1,4 +1,4 @@
-use std::{mem, sync::OnceLock};
+use std::{iter::once, mem, sync::OnceLock};
 
 use foldhash::HashMap;
 use itertools::Itertools;
@@ -174,11 +174,8 @@ impl BuildTargetPlatform {
             .collect_vec()).expect("found no allowed processors after filtering out forbidden processors - so how is this code even executing?");
 
         // If we did not get any NUMA node info, construct an imaginary NUMA node containing all.
-        let numa_nodes = numa_nodes.unwrap_or_else(|| {
-            [(0, cpu_infos.clone().map(|info| info.index))]
-                .into_iter()
-                .collect()
-        });
+        let numa_nodes = numa_nodes
+            .unwrap_or_else(|| once((0, cpu_infos.clone().map(|info| info.index))).collect());
 
         // We identify efficiency cores by comparing the frequency of each processor to the maximum
         // frequency of all processors. If the frequency is less than the maximum, we consider it an
@@ -376,10 +373,13 @@ struct CpuInfo {
     clippy::arithmetic_side_effects,
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
+    clippy::indexing_slicing,
     reason = "we need not worry in tests"
 )]
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write;
+
     use crate::pal::linux::{MockBindings, MockFilesystem};
 
     use super::*;
@@ -719,11 +719,11 @@ mod tests {
         for (processor_index, frequency) in
             processor_index.iter().zip(frequencies_per_processor.iter())
         {
-            cpuinfo.push_str(&format!("processor       : {processor_index}\n"));
-            cpuinfo.push_str(&format!("cpu MHz         : {frequency}\n"));
-            cpuinfo.push_str("whatever        : 123\n");
-            cpuinfo.push_str("other           : ignored\n");
-            cpuinfo.push('\n');
+            writeln!(cpuinfo, "processor       : {processor_index}").unwrap();
+            writeln!(cpuinfo, "cpu MHz         : {frequency}").unwrap();
+            writeln!(cpuinfo, "whatever        : 123").unwrap();
+            writeln!(cpuinfo, "other           : ignored").unwrap();
+            writeln!(cpuinfo).unwrap();
         }
 
         let node_indexes =

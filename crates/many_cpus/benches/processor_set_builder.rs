@@ -53,7 +53,7 @@ fn entrypoint(c: &mut Criterion) {
                 &thread_pool,
                 iters,
                 || (),
-                |_| {
+                |()| {
                     black_box(ProcessorSet::builder().take_all().unwrap());
                 },
             )
@@ -66,7 +66,7 @@ fn entrypoint(c: &mut Criterion) {
                 &thread_pool,
                 iters,
                 || (),
-                |_| {
+                |()| {
                     black_box(ProcessorSet::builder().take(nz!(1)).unwrap());
                 },
             )
@@ -79,7 +79,7 @@ fn entrypoint(c: &mut Criterion) {
                 &thread_pool,
                 iters,
                 || (),
-                |_| {
+                |()| {
                     black_box(
                         ProcessorSet::builder()
                             .filter(|p| p.id() % 2 == 0)

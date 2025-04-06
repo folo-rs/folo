@@ -55,7 +55,7 @@ fn per_thread(c: &mut Criterion) {
     g.bench_function("new", |b| {
         b.iter_batched(
             || (),
-            |_| black_box(PerThread::new(TestSubject::new())),
+            |()| black_box(PerThread::new(TestSubject::new())),
             BatchSize::SmallInput,
         )
     });
@@ -65,7 +65,7 @@ fn per_thread(c: &mut Criterion) {
     g.bench_function("clone", |b| {
         b.iter_batched(
             || (),
-            |_| black_box(per_thread.clone()),
+            |()| black_box(per_thread.clone()),
             BatchSize::SmallInput,
         )
     });
@@ -81,7 +81,7 @@ fn thread_local(c: &mut Criterion) {
     g.bench_function("new_single", |b| {
         b.iter_batched(
             || (),
-            |_| black_box(per_thread.local()),
+            |()| black_box(per_thread.local()),
             BatchSize::SmallInput,
         )
     });
@@ -93,7 +93,7 @@ fn thread_local(c: &mut Criterion) {
         g.bench_function("new_not_single", |b| {
             b.iter_batched(
                 || (),
-                |_| black_box(per_thread.local()),
+                |()| black_box(per_thread.local()),
                 BatchSize::SmallInput,
             )
         });
@@ -104,7 +104,7 @@ fn thread_local(c: &mut Criterion) {
         let first = per_thread.local();
 
         g.bench_function("clone", |b| {
-            b.iter_batched(|| (), |_| black_box(first.clone()), BatchSize::SmallInput)
+            b.iter_batched(|| (), |()| black_box(first.clone()), BatchSize::SmallInput)
         });
     }
 
@@ -122,7 +122,7 @@ fn thread_local_multithreaded(c: &mut Criterion) {
         b.iter_custom(|iters| {
             bench_on_threadpool(&thread_pool, iters, || (), {
                 let per_thread = per_thread.clone();
-                move |_| {
+                move |()| {
                     black_box(per_thread.local());
                 }
             })
@@ -218,7 +218,7 @@ fn thread_local_access(c: &mut Criterion) {
                 &thread_pool,
                 iters,
                 || (),
-                |_| {
+                |()| {
                     black_box(
                         TEST_SUBJECT_GLOBAL
                             .local_state

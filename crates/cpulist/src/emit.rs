@@ -1,6 +1,7 @@
 use folo_utils::nz;
 use itertools::{FoldWhile, Itertools};
 
+use std::fmt::Write;
 use std::{collections::VecDeque, num::NonZero};
 
 use crate::Item;
@@ -79,7 +80,7 @@ pub fn emit<'a>(items: impl IntoIterator<Item = &'a Item>) -> String {
                 "overflow impossible unless we far exceed any realistic processor ID range",
             );
 
-            result.push_str(&format!("{},{}", start, second_processor_id));
+            write!(result, "{},{}", start, second_processor_id).unwrap();
         } else {
             let last_processor_id = start
                 .checked_add(len)
@@ -87,7 +88,7 @@ pub fn emit<'a>(items: impl IntoIterator<Item = &'a Item>) -> String {
                 .checked_sub(1)
                 .expect("cannot underflow because len is NonZero");
 
-            result.push_str(&format!("{}-{}", start, last_processor_id));
+            write!(result, "{}-{}", start, last_processor_id).unwrap();
         }
     }
 

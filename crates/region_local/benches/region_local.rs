@@ -67,7 +67,7 @@ fn entrypoint(c: &mut Criterion) {
                 &one_thread,
                 iters,
                 || (),
-                |_| _ = black_box(VALUE.get_local()),
+                |()| _ = black_box(VALUE.get_local()),
             )
         });
     });
@@ -80,7 +80,7 @@ fn entrypoint(c: &mut Criterion) {
                 &one_thread,
                 iters,
                 || (),
-                |_| VALUE.set_local(black_box(566)),
+                |()| VALUE.set_local(black_box(566)),
             )
         });
     });
@@ -94,7 +94,7 @@ fn entrypoint(c: &mut Criterion) {
                 &two_threads,
                 iters,
                 || (),
-                |_| _ = black_box(VALUE.get_local()),
+                |()| _ = black_box(VALUE.get_local()),
             )
         });
     });
@@ -108,7 +108,7 @@ fn entrypoint(c: &mut Criterion) {
                 &all_threads,
                 iters,
                 || (),
-                |_| _ = black_box(VALUE.get_local()),
+                |()| _ = black_box(VALUE.get_local()),
             )
         });
     });
@@ -124,7 +124,7 @@ fn entrypoint(c: &mut Criterion) {
                     thread_pool,
                     iters,
                     || (),
-                    |_| _ = black_box(VALUE.get_local()),
+                    |()| _ = black_box(VALUE.get_local()),
                 )
             });
         });
@@ -143,7 +143,7 @@ fn entrypoint(c: &mut Criterion) {
                 &two_threads,
                 iters,
                 |_| (),
-                |worker, _| match worker {
+                |worker, ()| match worker {
                     AbWorker::A => _ = black_box(VALUE.get_local()),
                     AbWorker::B => VALUE.set_local(black_box(566)),
                 },
@@ -161,7 +161,7 @@ fn entrypoint(c: &mut Criterion) {
                 &two_threads,
                 iters,
                 |_| (),
-                |worker, _| match worker {
+                |worker, ()| match worker {
                     AbWorker::A => VALUE.with_local(|v| {
                         _ = black_box(*v);
                         thread::yield_now();
@@ -182,7 +182,7 @@ fn entrypoint(c: &mut Criterion) {
                     thread_pool,
                     iters,
                     |_| (),
-                    |worker, _| match worker {
+                    |worker, ()| match worker {
                         AbWorker::A => _ = black_box(VALUE.get_local()),
                         AbWorker::B => VALUE.set_local(black_box(566)),
                     },
@@ -200,7 +200,7 @@ fn entrypoint(c: &mut Criterion) {
                     thread_pool,
                     iters,
                     |_| (),
-                    |worker, _| match worker {
+                    |worker, ()| match worker {
                         AbWorker::A => VALUE.with_local(|v| {
                             _ = black_box(*v);
                             thread::yield_now();

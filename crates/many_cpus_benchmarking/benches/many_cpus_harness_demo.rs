@@ -57,6 +57,6 @@ impl Payload for CopyBytes {
         }
 
         // Read from the destination to prevent the compiler from optimizing the copy away.
-        _ = black_box(to[0]);
+        _ = black_box(to.first().unwrap());
     }
 }

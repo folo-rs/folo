@@ -1,9 +1,12 @@
 {
     "cSpell.words": [
+        "cpulist",
         "cpus",
         "Folo",
         "miri",
         "nanos",
+        "nextest",
+        "pointee",
         "taskset"
     ],
     "rust-analyzer.cargo.cfgs": [

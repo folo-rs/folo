@@ -39,6 +39,7 @@ impl<T> Debug for Handle<T> {
 }
 
 impl<T> Handle<T> {
+    #[must_use]
     pub(super) fn new(link: Link<T>) -> Self {
         Self {
             instance_factory: link.instance_factory,
@@ -48,6 +49,7 @@ impl<T> Handle<T> {
     // Implementation of `From<Handle<T>> for T`, called from macro-generated code for a specific T.
     #[doc(hidden)]
     #[inline]
+    #[must_use]
     pub fn __private_into(self) -> T {
         Link::new(Arc::clone(&self.instance_factory)).into_instance()
     }

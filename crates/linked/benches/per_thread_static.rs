@@ -86,7 +86,7 @@ fn entrypoint(c: &mut Criterion) {
                 &thread_pool,
                 iters,
                 || (),
-                |_| {
+                |()| {
                     black_box(TARGET.with(|val| val.local_state.get()));
                 },
             )
@@ -99,7 +99,7 @@ fn entrypoint(c: &mut Criterion) {
                 &thread_pool,
                 iters,
                 || (),
-                |_| {
+                |()| {
                     black_box(TARGET.to_rc().local_state.get());
                 },
             )
@@ -112,7 +112,7 @@ fn entrypoint(c: &mut Criterion) {
                 &thread_pool,
                 iters,
                 || (),
-                |_| {
+                |()| {
                     TEST_SUBJECT_THREAD_LOCAL.with(|local| {
                         black_box(local.local_state.get());
                     });
@@ -127,7 +127,7 @@ fn entrypoint(c: &mut Criterion) {
                 &thread_pool,
                 iters,
                 || (),
-                |_| {
+                |()| {
                     black_box(
                         TEST_SUBJECT_GLOBAL
                             .local_state

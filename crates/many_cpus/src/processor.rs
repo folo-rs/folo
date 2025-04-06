@@ -32,6 +32,7 @@ impl Processor {
     /// [1]: crate::HardwareInfo::max_processor_id
     #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     #[inline]
+    #[must_use]
     pub fn id(&self) -> ProcessorId {
         self.inner.id()
     }
@@ -44,6 +45,7 @@ impl Processor {
     /// [1]: crate::HardwareInfo::max_memory_region_id
     #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     #[inline]
+    #[must_use]
     pub fn memory_region_id(&self) -> MemoryRegionId {
         self.inner.memory_region_id()
     }
@@ -55,6 +57,7 @@ impl Processor {
     /// processors.
     #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     #[inline]
+    #[must_use]
     pub fn efficiency_class(&self) -> EfficiencyClass {
         self.inner.efficiency_class()
     }

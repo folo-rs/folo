@@ -56,7 +56,7 @@ fn entrypoint(c: &mut Criterion) {
                 &thread_pool,
                 iters,
                 || (),
-                |_| {
+                |()| {
                     black_box(TARGET.get().local_state.get());
                 },
             )
@@ -85,7 +85,7 @@ fn entrypoint(c: &mut Criterion) {
                 &thread_pool,
                 iters,
                 || (),
-                |_| {
+                |()| {
                     seq!(N in 0..1000 {
                         black_box(TARGET_MANY_~N.get().local_state.get());
                     });

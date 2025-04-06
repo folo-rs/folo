@@ -75,10 +75,12 @@ impl ProcessorSetBuilder {
     /// The default configuration considers every processor on the system as a valid candidate,
     /// except those for which the operating system has defined hard limits. See type-level
     /// documentation for more details on how operating system limits are handled.
+    #[must_use]
     pub fn new() -> Self {
         Self::with_internals(HardwareTrackerClientFacade::real(), PlatformFacade::real())
     }
 
+    #[must_use]
     pub(crate) fn with_internals(
         tracker_client: HardwareTrackerClientFacade,
         pal: PlatformFacade,
@@ -95,6 +97,7 @@ impl ProcessorSetBuilder {
     /// Requires that all processors in the set be marked as [performance processors][1].
     ///
     /// [1]: EfficiencyClass::Performance
+    #[must_use]
     pub fn performance_processors_only(mut self) -> Self {
         self.processor_type_selector = ProcessorTypeSelector::Performance;
         self
@@ -103,6 +106,7 @@ impl ProcessorSetBuilder {
     /// Requires that all processors in the set be marked as [efficiency processors][1].
     ///
     /// [1]: EfficiencyClass::Efficiency
+    #[must_use]
     pub fn efficiency_processors_only(mut self) -> Self {
         self.processor_type_selector = ProcessorTypeSelector::Efficiency;
         self
@@ -110,12 +114,14 @@ impl ProcessorSetBuilder {
 
     /// Requires that all processors in the set be from different memory regions, selecting a
     /// maximum of 1 processor from each memory region.
+    #[must_use]
     pub fn different_memory_regions(mut self) -> Self {
         self.memory_region_selector = MemoryRegionSelector::RequireDifferent;
         self
     }
 
     /// Requires that all processors in the set be from the same memory region.
+    #[must_use]
     pub fn same_memory_region(mut self) -> Self {
         self.memory_region_selector = MemoryRegionSelector::RequireSame;
         self
@@ -124,6 +130,7 @@ impl ProcessorSetBuilder {
     /// Declares a preference that all processors in the set be from different memory regions,
     /// though will select multiple processors from the same memory region as needed to satisfy
     /// the requested processor count (while keeping the spread maximal).
+    #[must_use]
     pub fn prefer_different_memory_regions(mut self) -> Self {
         self.memory_region_selector = MemoryRegionSelector::PreferDifferent;
         self
@@ -132,6 +139,7 @@ impl ProcessorSetBuilder {
     /// Declares a preference that all processors in the set be from the same memory region,
     /// though will select processors from different memory regions as needed to satisfy the
     /// requested processor count (while keeping the spread minimal).
+    #[must_use]
     pub fn prefer_same_memory_region(mut self) -> Self {
         self.memory_region_selector = MemoryRegionSelector::PreferSame;
         self
@@ -145,6 +153,7 @@ impl ProcessorSetBuilder {
     /// conditions - even if this predicate returns `true`, the processor may end up being filtered
     /// out by other conditions. Conversely, some candidates may already be filtered out before
     /// being passed to this predicate.
+    #[must_use]
     pub fn filter(mut self, predicate: impl Fn(&Processor) -> bool) -> Self {
         for processor in self.all_processors() {
             if !predicate(&processor) {
@@ -156,6 +165,7 @@ impl ProcessorSetBuilder {
     }
 
     /// Removes specific processors from the set of candidates.
+    #[must_use]
     pub fn except<'a, I>(mut self, processors: I) -> Self
     where
         I: IntoIterator<Item = &'a Processor>,
@@ -172,6 +182,7 @@ impl ProcessorSetBuilder {
     ///
     /// This is a convenient way to identify the set of processors the platform prefers a process
     /// to use when called from a non-customized thread such as the `main()` entrypoint.
+    #[must_use]
     pub fn where_available_for_current_thread(mut self) -> Self {
         let current_thread_processors = self.pal.current_thread_processors();
 
@@ -191,6 +202,7 @@ impl ProcessorSetBuilder {
     /// there are six valid candidate processors then `take(4)` may return any four of them.
     ///
     /// Returns `None` if there were not enough candidate processors to satisfy the request.
+    #[must_use]
     pub fn take(self, count: NonZeroUsize) -> Option<ProcessorSet> {
         let candidates = self.candidates_by_memory_region();
 
@@ -358,6 +370,7 @@ impl ProcessorSetBuilder {
     /// the processors in an arbitrary memory region with at least one qualifying processor.
     ///
     /// Returns `None` if there were no matching processors to satisfy the request.
+    #[must_use]
     pub fn take_all(self) -> Option<ProcessorSet> {
         let candidates = self.candidates_by_memory_region();
 
@@ -391,7 +404,7 @@ impl ProcessorSetBuilder {
                     "we picked an existing key for an existing HashSet - the values must exist",
                 );
 
-                processors.to_vec()
+                processors.clone()
             }
             MemoryRegionSelector::RequireDifferent => {
                 // We return a random processor from each memory region.
@@ -517,9 +530,9 @@ enum ProcessorTypeSelector {
 #[cfg(not(miri))] // Talking to the operating system is not possible under Miri.
 #[cfg(test)]
 mod tests_real {
-    use super::*;
+    use folo_utils::nz;
 
-    const ONE: NonZeroUsize = NonZeroUsize::new(1).unwrap();
+    use super::*;
 
     #[test]
     fn spawn_on_any_processor() {
@@ -553,7 +566,7 @@ mod tests_real {
             .unwrap();
         ProcessorSet::builder()
             .same_memory_region()
-            .take(ONE)
+            .take(nz!(1))
             .unwrap();
         ProcessorSet::builder()
             .different_memory_regions()
@@ -561,7 +574,7 @@ mod tests_real {
             .unwrap();
         ProcessorSet::builder()
             .different_memory_regions()
-            .take(ONE)
+            .take(nz!(1))
             .unwrap();
     }
 
@@ -574,17 +587,21 @@ mod tests_real {
             .unwrap();
         ProcessorSet::builder()
             .performance_processors_only()
-            .take(ONE)
+            .take(nz!(1))
             .unwrap();
 
         // There might not be any. We just try resolving it and ignore the result.
         // As long as it does not panic, we are good.
-        ProcessorSet::builder()
-            .efficiency_processors_only()
-            .take_all();
-        ProcessorSet::builder()
-            .efficiency_processors_only()
-            .take(ONE);
+        drop(
+            ProcessorSet::builder()
+                .efficiency_processors_only()
+                .take_all(),
+        );
+        drop(
+            ProcessorSet::builder()
+                .efficiency_processors_only()
+                .take(nz!(1)),
+        );
     }
 
     #[test]

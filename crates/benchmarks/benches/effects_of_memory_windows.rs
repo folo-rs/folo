@@ -28,6 +28,7 @@ mod windows {
     use std::{
         cell::RefCell,
         hint::black_box,
+        iter::repeat_with,
         sync::{Arc, Mutex},
     };
 
@@ -90,8 +91,8 @@ mod windows {
 
         fn process(&mut self) {
             self.chunk_buffer.extend(
-                (0..CHUNK_COUNT)
-                    .map(|_| unsafe { HeapAlloc(self.process_heap, HEAP_FLAGS(0), CHUNK_SIZE) }),
+                repeat_with(|| unsafe { HeapAlloc(self.process_heap, HEAP_FLAGS(0), CHUNK_SIZE) })
+                    .take(CHUNK_COUNT),
             );
 
             for chunk in self.chunk_buffer.drain(..) {
@@ -130,7 +131,7 @@ mod windows {
         fn process(&mut self) {
             PER_THREAD_HEAP.with(|heap| {
                 self.chunk_buffer
-                    .extend((0..CHUNK_COUNT).map(|_| heap.alloc(CHUNK_SIZE)));
+                    .extend(repeat_with(|| heap.alloc(CHUNK_SIZE)).take(CHUNK_COUNT));
 
                 for chunk in self.chunk_buffer.drain(..) {
                     heap.free(chunk);
@@ -169,7 +170,7 @@ mod windows {
         fn process(&mut self) {
             PER_THREAD_HEAP_THREAD_SAFE.with(|heap| {
                 self.chunk_buffer
-                    .extend((0..CHUNK_COUNT).map(|_| heap.alloc(CHUNK_SIZE)));
+                    .extend(repeat_with(|| heap.alloc(CHUNK_SIZE)).take(CHUNK_COUNT));
 
                 for chunk in self.chunk_buffer.drain(..) {
                     heap.free(chunk);
@@ -208,7 +209,7 @@ mod windows {
         fn process(&mut self) {
             PER_REGION_HEAP.with(|heap| {
                 self.chunk_buffer
-                    .extend((0..CHUNK_COUNT).map(|_| heap.alloc(CHUNK_SIZE)));
+                    .extend(repeat_with(|| heap.alloc(CHUNK_SIZE)).take(CHUNK_COUNT));
 
                 for chunk in self.chunk_buffer.drain(..) {
                     heap.free(chunk);
@@ -329,7 +330,8 @@ mod windows {
 
                 let mut heaps = self.per_region_heaps.lock().unwrap();
 
-                let heap = heaps[region as usize]
+                let heap = heaps.get_mut(region as usize)
+                    .expect("current memory region ID is out of bounds - the platform lied about how many there are")
                     .get_or_insert_with(|| Arc::new(ThreadSafeCustomHeap::new()));
 
                 Arc::clone(heap)

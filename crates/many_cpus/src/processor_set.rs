@@ -53,23 +53,27 @@ impl ProcessorSet {
     /// This set does not include processors that are not available to the current process or those
     /// that are purely theoretical (e.g. processors that may be added later to the system but are
     /// not yet present).
+    #[must_use]
     pub fn all() -> &'static Self {
         &ALL_PROCESSORS
     }
 
     /// Creates a builder that can be used to construct a processor set with specific criteria.
     #[cfg_attr(test, mutants::skip)] // Mutates to itself via Default::default().
+    #[must_use]
     pub fn builder() -> ProcessorSetBuilder {
         ProcessorSetBuilder::default()
     }
 
     /// Returns a [`ProcessorSetBuilder`] that is narrowed down to all processors in the current
     /// set, to be used to further narrow down the set to a specific subset.
+    #[must_use]
     pub fn to_builder(&self) -> ProcessorSetBuilder {
         ProcessorSetBuilder::with_internals(self.tracker_client.clone(), self.pal.clone())
             .filter(|p| self.processors.contains(p))
     }
 
+    #[must_use]
     pub(crate) fn new(
         processors: NonEmpty<Processor>,
         tracker_client: HardwareTrackerClientFacade,
@@ -83,12 +87,14 @@ impl ProcessorSet {
     }
 
     /// Returns a [`ProcessorSet`] containing the provided processors.
+    #[must_use]
     pub fn from_processors(processors: NonEmpty<Processor>) -> Self {
         let pal = processors.first().pal.clone();
         Self::new(processors, HardwareTrackerClientFacade::real(), pal)
     }
 
     /// Returns a [`ProcessorSet`] containing a single processor.
+    #[must_use]
     pub fn from_processor(processor: Processor) -> Self {
         let pal = processor.pal.clone();
         Self::new(
@@ -100,11 +106,13 @@ impl ProcessorSet {
 
     /// Returns the number of processors in the set. A processor set is never empty.
     #[expect(clippy::len_without_is_empty, reason = "never empty by definition")]
+    #[must_use]
     pub fn len(&self) -> usize {
         self.processors.len()
     }
 
     /// Returns a reference to a collection containing all the processors in the set.
+    #[must_use]
     pub fn processors(&self) -> &NonEmpty<Processor> {
         &self.processors
     }
@@ -339,10 +347,10 @@ mod tests {
 
         let non_copy_value = "foo".to_string();
 
-        fn process_string(_s: String) {}
-
         processor_set
             .spawn_thread({
+                fn process_string(_s: String) {}
+
                 move |processor_set| {
                     // Verify that we appear to have been given the expected processor set.
                     assert_eq!(processor_set.len(), 2);

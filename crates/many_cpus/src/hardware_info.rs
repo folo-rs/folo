@@ -37,6 +37,7 @@ impl HardwareInfo {
     /// but not available to the current process.
     #[cfg_attr(test, mutants::skip)] // Trivial layer, we only test the underlying logic.
     #[inline]
+    #[must_use]
     pub fn max_processor_id() -> ProcessorId {
         BUILD_TARGET_PLATFORM.max_processor_id()
     }
@@ -48,6 +49,7 @@ impl HardwareInfo {
     /// are active but not available to the current process.
     #[cfg_attr(test, mutants::skip)] // Trivial layer, we only test the underlying logic.
     #[inline]
+    #[must_use]
     pub fn max_memory_region_id() -> MemoryRegionId {
         BUILD_TARGET_PLATFORM.max_memory_region_id()
     }
@@ -59,6 +61,7 @@ impl HardwareInfo {
     /// but not available to the current process.
     #[cfg_attr(test, mutants::skip)] // Trivial layer, we only test the underlying logic.
     #[inline]
+    #[must_use]
     pub fn max_processor_count() -> usize {
         (Self::max_processor_id() as usize)
             .checked_add(1)
@@ -72,6 +75,7 @@ impl HardwareInfo {
     /// are active but not available to the current process.
     #[cfg_attr(test, mutants::skip)] // Trivial layer, we only test the underlying logic.
     #[inline]
+    #[must_use]
     pub fn max_memory_region_count() -> usize {
         (Self::max_memory_region_id() as usize)
             .checked_add(1)

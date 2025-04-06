@@ -27,6 +27,7 @@ where
     /// `linked::instance_per_thread!` macro and should not be used directly.
     /// It is not part of the public API and may be removed or changed at any time.
     #[doc(hidden)]
+    #[must_use]
     pub const fn new(get_storage: fn() -> &'static LocalKey<Rc<T>>) -> Self {
         Self { get_storage }
     }
@@ -57,6 +58,7 @@ where
     /// doing nothing. If all you need is to execute some logic on the inner type `T`, you may
     /// want to use [`.with()`][Self::with] instead, which does not create the `Rc` and saves
     /// a few nanoseconds.
+    #[must_use]
     #[inline]
     pub fn to_rc(&self) -> Rc<T> {
         (self.get_storage)().with(Rc::clone)

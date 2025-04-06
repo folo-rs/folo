@@ -72,10 +72,12 @@ impl<T> !Send for Link<T> {}
 impl<T> !Sync for Link<T> {}
 
 impl<T> Link<T> {
+    #[must_use]
     pub(super) fn new(instance_factory: InstanceFactory<T>) -> Self {
         Self { instance_factory }
     }
 
+    #[must_use]
     pub(super) fn into_instance(self) -> T {
         let instance_factory = Arc::clone(&self.instance_factory);
         (instance_factory)(self)
@@ -84,6 +86,7 @@ impl<T> Link<T> {
     // This type deliberately does not implement `Clone` to discourage accidental implementation of
     // cloning of type `T` via `#[derive(Clone)]`. The expected pattern is to use `#[linked::object]`
     // which generates both a `Linked` implementation and a specialized `Clone` implementation.
+    #[must_use]
     fn clone(&self) -> Self {
         Self {
             instance_factory: Arc::clone(&self.instance_factory),
@@ -91,6 +94,7 @@ impl<T> Link<T> {
     }
 
     #[inline]
+    #[must_use]
     pub fn handle(&self) -> Handle<T> {
         Handle::new(self.clone())
     }
