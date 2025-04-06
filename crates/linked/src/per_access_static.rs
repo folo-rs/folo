@@ -203,7 +203,7 @@ macro_rules! instance_per_access {
     ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $e:expr) => {
         $crate::__private::paste! {
             #[doc(hidden)]
-            #[allow(non_camel_case_types, reason = "intentionally uglified macro generated code")]
+            #[expect(non_camel_case_types, reason = "intentionally uglified macro generated code")]
             struct [<__lookup_key_ $NAME>];
 
             $(#[$attr])* $vis const $NAME: $crate::PerAccessStatic<$t> =
@@ -261,7 +261,7 @@ mod tests {
 
     impl TokenCache {
         fn new(value: usize) -> Self {
-            #[allow(
+            #[expect(
                 clippy::mutex_atomic,
                 reason = "inner type is placeholder, for realistic usage"
             )]

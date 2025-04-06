@@ -8,6 +8,10 @@ const CACHE_CLEANER_LEN_BYTES: usize = 128 * 1024 * 1024;
 #[cfg(miri)]
 const CACHE_CLEANER_LEN_BYTES: usize = 1024;
 
+#[expect(
+    clippy::integer_division,
+    reason = "we are fine with inaccuracy if the inputs require it - this is a ballpark figure"
+)]
 const CACHE_CLEANER_LEN_U64: usize = CACHE_CLEANER_LEN_BYTES / size_of::<u64>();
 
 // We copy the data from a shared immutable source.

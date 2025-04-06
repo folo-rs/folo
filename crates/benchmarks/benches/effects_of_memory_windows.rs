@@ -291,7 +291,7 @@ mod windows {
 
         // This is our big bag of all the heaps. We create the heap on-demand,
         // on a thread that is running in the target memory region.
-        #[allow(
+        #[expect(
             clippy::type_complexity,
             reason = "will allow since it is only used once"
         )]

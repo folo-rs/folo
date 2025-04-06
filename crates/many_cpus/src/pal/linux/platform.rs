@@ -258,7 +258,7 @@ impl BuildTargetPlatform {
                             .map(|(key, value)| (key.trim(), value.trim()))
                             .expect("/proc/cpuinfo line was not a key:value pair");
 
-                        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation, reason = "we expect small positive numbers for frequency, which can have their integer part losslessly converted to u32")]
+                        #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation, reason = "we expect small positive numbers for frequency, which can have their integer part losslessly converted to u32")]
                         match key {
                             "processor" => index = value.parse::<ProcessorId>().ok(),
                             "cpu MHz" => {

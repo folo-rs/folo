@@ -21,7 +21,7 @@ use linked::PerThread;
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
-#[allow(
+#[expect(
     dead_code,
     reason = "We do not care about using all the fields but we want to pay the price of initializing them"
 )]

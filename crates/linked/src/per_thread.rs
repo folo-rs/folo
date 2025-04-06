@@ -471,7 +471,7 @@ mod tests {
 
     impl TokenCache {
         fn new() -> Self {
-            #[allow(
+            #[expect(
                 clippy::mutex_atomic,
                 reason = "inner type is placeholder, for realistic usage"
             )]

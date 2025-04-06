@@ -18,7 +18,7 @@ use seq_macro::seq;
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
-#[allow(
+#[expect(
     dead_code,
     reason = "We do not care about using all the fields but we want to pay the price of initializing them"
 )]
@@ -105,7 +105,7 @@ fn entrypoint(c: &mut Criterion) {
 
 // We manually expand the macro here just because macro-in-macro goes crazy and fails to operate.
 seq!(N in 0..1000 {
-    #[allow(non_camel_case_types, reason = "manually replicating uglified macro internals for benchmark")]
+    #[expect(non_camel_case_types, reason = "manually replicating uglified macro internals for benchmark")]
     struct __lookup_key_~N;
 
     const TARGET_MANY_~N : ::linked::PerAccessStatic<TestSubject> =

@@ -460,7 +460,7 @@ fn get_processor_set_pairs(
                                     remaining.processors().into_iter().cloned().collect_vec();
                                 remaining_processors.shuffle(&mut rng());
 
-                                #[allow(
+                                #[expect(
                                     clippy::integer_division,
                                     reason = "we do not care if one side has one more than the other - what matters is lack of overlap"
                                 )]
