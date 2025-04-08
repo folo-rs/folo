@@ -4,11 +4,13 @@
     missing_docs,
     reason = "No need for API documentation in benchmark code"
 )]
+#![allow(clippy::mutex_integer, reason = "Dummy data, does not matter")]
 
 use std::{
     cell::{Cell, LazyCell, OnceCell, RefCell, UnsafeCell},
     hint::black_box,
-    sync::{LazyLock, OnceLock},
+    rc::{Rc, Weak as RcWeak},
+    sync::{Arc, LazyLock, Mutex, OnceLock, RwLock, Weak as ArcWeak},
 };
 
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -140,6 +142,59 @@ fn entrypoint(c: &mut Criterion) {
                 black_box(*local_once_cell.get_or_init(|| EXPECTED_VALUE)),
                 EXPECTED_VALUE
             );
+        });
+    });
+
+    let local_mutex: Mutex<u64> = black_box(Mutex::new(EXPECTED_VALUE));
+
+    group.bench_function("local_mutex", |b| {
+        b.iter(|| {
+            assert_eq!(black_box(*local_mutex.lock().unwrap()), EXPECTED_VALUE);
+        });
+    });
+
+    let local_rwlock: RwLock<u64> = black_box(RwLock::new(EXPECTED_VALUE));
+
+    group.bench_function("local_rwlock_read", |b| {
+        b.iter(|| {
+            assert_eq!(black_box(*local_rwlock.read().unwrap()), EXPECTED_VALUE);
+        });
+    });
+
+    group.bench_function("local_rwlock_write", |b| {
+        b.iter(|| {
+            assert_eq!(black_box(*local_rwlock.write().unwrap()), EXPECTED_VALUE);
+        });
+    });
+
+    // Reference counted smart pointers benchmarks
+    let local_arc: Arc<u64> = black_box(Arc::new(EXPECTED_VALUE));
+
+    group.bench_function("local_arc", |b| {
+        b.iter(|| assert_eq!(black_box(*local_arc), EXPECTED_VALUE));
+    });
+
+    let local_arc_weak: ArcWeak<u64> = black_box(Arc::downgrade(&local_arc));
+
+    group.bench_function("local_arc_weak_upgrade", |b| {
+        b.iter(|| {
+            let strong = black_box(local_arc_weak.upgrade().unwrap());
+            assert_eq!(black_box(*strong), EXPECTED_VALUE);
+        });
+    });
+
+    let local_rc: Rc<u64> = black_box(Rc::new(EXPECTED_VALUE));
+
+    group.bench_function("local_rc", |b| {
+        b.iter(|| assert_eq!(black_box(*local_rc), EXPECTED_VALUE));
+    });
+
+    let local_rc_weak: RcWeak<u64> = black_box(Rc::downgrade(&local_rc));
+
+    group.bench_function("local_rc_weak_upgrade", |b| {
+        b.iter(|| {
+            let strong = black_box(local_rc_weak.upgrade().unwrap());
+            assert_eq!(black_box(*strong), EXPECTED_VALUE);
         });
     });
 
