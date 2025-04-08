@@ -731,7 +731,7 @@ mod tests {
         let node_indexes =
             NonEmpty::from_vec(memory_region_index.iter().copied().unique().collect_vec())
                 .expect("simulating zero nodes is not supported");
-        let mut node_indexes_cpulist = cpulist::emit(&node_indexes);
+        let mut node_indexes_cpulist = cpulist::emit(node_indexes);
         // \n might or might not be present, so let's verify that it gets trimmed if it is.
         node_indexes_cpulist.push('\n');
 
@@ -796,7 +796,7 @@ mod tests {
             })
             .collect_vec()).expect("simulated configuration allows zero processors - this is not valid, as some processor must be present to execute the code under test");
 
-        let allowed_cpus = cpulist::emit(&allowed_processors);
+        let allowed_cpus = cpulist::emit(allowed_processors);
 
         fs.expect_get_proc_self_status_contents()
             .times(1)
