@@ -471,9 +471,7 @@ impl ProcessorSetBuilder {
     fn all_processors(&self) -> NonEmpty<Processor> {
         // Cheap conversion, reasonable to do it inline since we do not expect
         // processor set logic to be on the hot path anyway.
-        self.pal
-            .get_all_processors()
-            .map(|p| Processor::new(p, self.pal.clone()))
+        self.pal.get_all_processors().map(Processor::new)
     }
 }
 

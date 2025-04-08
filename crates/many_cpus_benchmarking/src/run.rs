@@ -85,20 +85,8 @@ fn execute_run<P: Payload, const BATCH_SIZE: u64>(
         // Just to help a human reader get a feel for what is configured.
         // This selection is discarded - each iteration will make a new selection.
         for (processor_set_1, processor_set_2) in sample_processor_selection {
-            let cpulist1 = cpulist::emit(
-                &processor_set_1
-                    .processors()
-                    .iter()
-                    .map(Processor::id)
-                    .collect_vec(),
-            );
-            let cpulist2 = cpulist::emit(
-                &processor_set_2
-                    .processors()
-                    .iter()
-                    .map(Processor::id)
-                    .collect_vec(),
-            );
+            let cpulist1 = cpulist::emit(processor_set_1.processors().iter().map(Processor::id));
+            let cpulist2 = cpulist::emit(processor_set_2.processors().iter().map(Processor::id));
 
             eprintln!("{work_distribution} reference selection: ({cpulist1}) & ({cpulist2})");
         }

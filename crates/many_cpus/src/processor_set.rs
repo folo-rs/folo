@@ -1,4 +1,4 @@
-use std::{sync::LazyLock, thread};
+use std::{fmt::Display, sync::LazyLock, thread};
 
 use itertools::Itertools;
 use nonempty::NonEmpty;
@@ -11,6 +11,7 @@ use crate::{
 // https://github.com/cloudhead/nonempty/issues/68
 extern crate alloc;
 
+/// Exposed via `ProcessorSet::all()`.
 static ALL_PROCESSORS: LazyLock<ProcessorSet> = LazyLock::new(|| {
     ProcessorSetBuilder::default()
         .take_all()
@@ -65,8 +66,10 @@ impl ProcessorSet {
         ProcessorSetBuilder::default()
     }
 
-    /// Returns a [`ProcessorSetBuilder`] that is narrowed down to all processors in the current
-    /// set, to be used to further narrow down the set to a specific subset.
+    /// Returns a [`ProcessorSetBuilder`] that is narrowed down to all processors in this
+    /// processor set.
+    ///
+    /// This can be used to further narrow down the set to a specific subset.
     #[must_use]
     pub fn to_builder(&self) -> ProcessorSetBuilder {
         ProcessorSetBuilder::with_internals(self.tracker_client.clone(), self.pal.clone())
@@ -89,18 +92,28 @@ impl ProcessorSet {
     /// Returns a [`ProcessorSet`] containing the provided processors.
     #[must_use]
     pub fn from_processors(processors: NonEmpty<Processor>) -> Self {
-        let pal = processors.first().pal.clone();
-        Self::new(processors, HardwareTrackerClientFacade::real(), pal)
+        // Note: this always uses the real platform, so do not use it in tests
+        // that rely on ProcessorSets with a mock platform. Given that the only
+        // way to create a ProcessorSet with a mock platform is anyway private,
+        // this should be easy to control.
+        Self::new(
+            processors,
+            HardwareTrackerClientFacade::real(),
+            PlatformFacade::real(),
+        )
     }
 
     /// Returns a [`ProcessorSet`] containing a single processor.
     #[must_use]
     pub fn from_processor(processor: Processor) -> Self {
-        let pal = processor.pal.clone();
+        // Note: this always uses the real platform, so do not use it in tests
+        // that rely on ProcessorSets with a mock platform. Given that the only
+        // way to create a ProcessorSet with a mock platform is anyway private,
+        // this should be easy to control.
         Self::new(
             NonEmpty::singleton(processor),
             HardwareTrackerClientFacade::real(),
-            pal,
+            PlatformFacade::real(),
         )
     }
 
@@ -222,6 +235,14 @@ impl From<NonEmpty<Processor>> for ProcessorSet {
     }
 }
 
+impl Display for ProcessorSet {
+    #[cfg_attr(test, mutants::skip)] // We have no API contract to test here.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let list = cpulist::emit(self.processors.iter().map(Processor::id));
+        write!(f, " {list} ({} processors)", self.len())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -280,10 +301,7 @@ mod tests {
             }
         ];
 
-        let processors = pal_processors.map({
-            let platform = platform.clone();
-            move |p| Processor::new(p.into(), platform.clone())
-        });
+        let processors = pal_processors.map(move |p| Processor::new(p.into()));
 
         let mut tracker_client = MockHardwareTrackerClient::new();
 

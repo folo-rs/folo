@@ -258,7 +258,7 @@ impl HardwareTrackerCore {
             *all_processors
                 .get_mut(processor.id() as usize)
                 .expect("encountered processor with ID above max_processor_id") =
-                Some(Processor::new(processor, pal.clone()));
+                Some(Processor::new(processor));
         }
 
         Self {

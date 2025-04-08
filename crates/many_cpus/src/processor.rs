@@ -7,7 +7,7 @@ use derive_more::derive::AsRef;
 
 use crate::{
     EfficiencyClass, MemoryRegionId, ProcessorId,
-    pal::{AbstractProcessor, PlatformFacade, ProcessorFacade},
+    pal::{AbstractProcessor, ProcessorFacade},
 };
 
 /// A processor present on the system and available to the current process.
@@ -15,19 +15,17 @@ use crate::{
 pub struct Processor {
     #[as_ref]
     inner: ProcessorFacade,
-
-    pub(crate) pal: PlatformFacade,
 }
 
 impl Processor {
-    pub(crate) fn new(inner: ProcessorFacade, pal: PlatformFacade) -> Self {
-        Self { inner, pal }
+    #[must_use]
+    pub(crate) fn new(inner: ProcessorFacade) -> Self {
+        Self { inner }
     }
 
     /// The unique numeric ID of the processor, matching the ID used by operating system tools.
     ///
-    /// Processor IDs are not guaranteed to be contiguous, though you can obtain the upper bound
-    /// via [`HardwareInfo::max_processor_id()`][1].
+    /// You can obtain the upper bound via [`HardwareInfo::max_processor_id()`][1].
     ///
     /// [1]: crate::HardwareInfo::max_processor_id
     #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
@@ -39,8 +37,7 @@ impl Processor {
 
     /// The unique numeric ID of the memory region, matching the ID used by operating system tools.
     ///
-    /// Memory region IDs are not guaranteed to be contiguous, though you can obtain the upper bound
-    /// via [`HardwareInfo::max_memory_region_id()`][1].
+    /// You can obtain the upper bound via [`HardwareInfo::max_memory_region_id()`][1].
     ///
     /// [1]: crate::HardwareInfo::max_memory_region_id
     #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
@@ -101,7 +98,7 @@ impl Debug for Processor {
 mod tests {
     use std::hash::DefaultHasher;
 
-    use crate::pal::{FakeProcessor, MockPlatform};
+    use crate::pal::FakeProcessor;
 
     use super::*;
 
@@ -113,7 +110,7 @@ mod tests {
             efficiency_class: EfficiencyClass::Efficiency,
         };
 
-        let processor = Processor::new(pal_processor.into(), MockPlatform::new().into());
+        let processor = Processor::new(pal_processor.into());
 
         // Getters appear to get the expected values.
         assert_eq!(processor.id(), 42);

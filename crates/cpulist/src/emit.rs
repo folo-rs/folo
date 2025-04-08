@@ -14,11 +14,16 @@ use crate::Item;
 /// All we promise is that it is a recognizable cpulist and can be parsed by this crate.
 ///
 /// See [crate-level documentation][crate] for more details.
-pub fn emit<'a>(items: impl IntoIterator<Item = &'a Item>) -> String {
+pub fn emit<I>(items: I) -> String
+where
+    I: IntoIterator,
+    I::Item: Into<Item>,
+{
     // We group consecutive items to generate shorter output strings.
     // Sorted remaining items that we have not yet grouped.
     let mut remaining = items
         .into_iter()
+        .map(Into::into)
         .unique()
         .sorted_unstable()
         .collect::<VecDeque<_>>();
@@ -30,12 +35,12 @@ pub fn emit<'a>(items: impl IntoIterator<Item = &'a Item>) -> String {
     while !remaining.is_empty() {
         let group = remaining
             .iter()
-            .fold_while(None, |acc: Option<(Item, NonZero<Item>)>, p: &&Item| {
+            .fold_while(None, |acc: Option<(Item, NonZero<Item>)>, p: &Item| {
                 if let Some((start, len)) = acc {
                     let expected_next_p = start.checked_add(len.get())
                         .expect("overflow impossible unless we iterate far beyond any realistic processor ID range");
 
-                    if expected_next_p == **p {
+                    if expected_next_p == *p {
                         let new_len = len.checked_add(1)
                             .expect("overflow impossible unless we iterate far beyond any realistic processor ID range");
 
@@ -47,7 +52,7 @@ pub fn emit<'a>(items: impl IntoIterator<Item = &'a Item>) -> String {
                     }
                 } else {
                     // Start a new group.
-                    FoldWhile::Continue(Some((**p, nz!(1))))
+                    FoldWhile::Continue(Some((*p, nz!(1))))
                 }
             });
 
@@ -101,28 +106,44 @@ mod tests {
 
     #[test]
     fn emit_smoke_test() {
-        assert_eq!(emit(&[]), "");
+        assert_eq!(emit::<[u32; 0]>([]), "");
 
-        assert_eq!(emit(&[555]), "555");
+        assert_eq!(emit([555_u32]), "555");
 
-        assert_eq!(emit(&[555, 666]), "555,666");
+        assert_eq!(emit([555_u32, 666_u32]), "555,666");
 
-        assert_eq!(emit(&[0, 1, 2, 3]), "0-3");
+        assert_eq!(emit([0_u32, 1_u32, 2_u32, 3_u32]), "0-3");
 
-        assert_eq!(emit(&[0, 1, 2, 3, 6, 7, 8, 11, 12, 13]), "0-3,6-8,11-13");
+        assert_eq!(
+            emit([
+                0_u32, 1_u32, 2_u32, 3_u32, 6_u32, 7_u32, 8_u32, 11_u32, 12_u32, 13_u32
+            ]),
+            "0-3,6-8,11-13"
+        );
 
-        assert_eq!(emit(&[1, 2, 3]), "1-3");
+        assert_eq!(emit([1_u32, 2_u32, 3_u32]), "1-3");
 
-        assert_eq!(emit(&[0, 1, 2, 3, 4, 5, 6]), "0-6");
+        assert_eq!(
+            emit([0_u32, 1_u32, 2_u32, 3_u32, 4_u32, 5_u32, 6_u32]),
+            "0-6"
+        );
 
-        assert_eq!(emit(&[0]), "0");
+        assert_eq!(emit([0_u32]), "0");
 
-        assert_eq!(emit(&[0, 1, 3]), "0,1,3");
+        assert_eq!(emit([0_u32, 1_u32, 3_u32]), "0,1,3");
 
-        assert_eq!(emit(&[0, 3, 5, 6, 8, 9, 11, 14]), "0,3,5,6,8,9,11,14");
+        assert_eq!(
+            emit([0_u32, 3_u32, 5_u32, 6_u32, 8_u32, 9_u32, 11_u32, 14_u32]),
+            "0,3,5,6,8,9,11,14"
+        );
 
-        assert_eq!(emit(&[0]), "0");
+        assert_eq!(emit([0_u32]), "0");
 
-        assert_eq!(emit(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]), "0-10");
+        assert_eq!(
+            emit([
+                0_u32, 1_u32, 2_u32, 3_u32, 4_u32, 5_u32, 6_u32, 7_u32, 8_u32, 9_u32, 10_u32
+            ]),
+            "0-10"
+        );
     }
 }

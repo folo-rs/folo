@@ -4,7 +4,7 @@ fn main() {
     let evens = cpulist::parse("0-16:2").unwrap();
     let odds = cpulist::parse("1-16:2").unwrap();
 
-    let all = cpulist::emit(odds.iter().chain(evens.iter()));
+    let all = cpulist::emit(odds.iter().chain(evens.iter()).copied());
 
     println!("Evens: {evens:?}");
     println!("Odds: {odds:?}");
