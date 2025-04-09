@@ -5,7 +5,7 @@
     reason = "No need for API documentation in benchmark code"
 )]
 
-use std::hint::black_box;
+use std::{hint::black_box, time::Duration};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use folo_utils::nz;
@@ -16,6 +16,9 @@ criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("HardwareTracker");
+
+    // Results from this are really unstable for whatever reason. Give it more time to stabilize.
+    group.measurement_time(Duration::from_secs(30));
 
     group.bench_function("current_processor_unpinned", |b| {
         b.iter(|| {

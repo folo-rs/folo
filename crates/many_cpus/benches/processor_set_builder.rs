@@ -5,7 +5,7 @@
     reason = "No need for API documentation in benchmark code"
 )]
 
-use std::hint::black_box;
+use std::{hint::black_box, time::Duration};
 
 use benchmark_utils::{ThreadPool, bench_on_threadpool};
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -19,6 +19,9 @@ fn entrypoint(c: &mut Criterion) {
     let thread_pool = ThreadPool::all();
 
     let mut group = c.benchmark_group("ProcessorSetBuilder");
+
+    // Results from this are really unstable for whatever reason. Give it more time to stabilize.
+    group.measurement_time(Duration::from_secs(30));
 
     group.bench_function("all", |b| {
         b.iter(|| {
@@ -46,6 +49,9 @@ fn entrypoint(c: &mut Criterion) {
     group.finish();
 
     let mut group = c.benchmark_group("ProcessorSetBuilder_MT");
+
+    // Results from this are really unstable for whatever reason. Give it more time to stabilize.
+    group.measurement_time(Duration::from_secs(30));
 
     group.bench_function("all", |b| {
         b.iter_custom(|iters| {
