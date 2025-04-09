@@ -18,7 +18,7 @@ use windows::{
 use crate::{
     EfficiencyClass, MemoryRegionId, ProcessorId,
     pal::{
-        Platform, ProcessorFacade, ProcessorImpl,
+        GroupMask, Platform, ProcessorFacade, ProcessorImpl,
         windows::{Bindings, BindingsFacade, ProcessorGroupIndex, ProcessorIndexInGroup},
     },
 };
@@ -43,6 +43,15 @@ pub(crate) struct BuildTargetPlatform {
     group_max_sizes: OnceLock<Box<[ProcessorIndexInGroup]>>,
     group_start_offsets: OnceLock<Box<[ProcessorId]>>,
     max_processor_id: OnceLock<ProcessorId>,
+
+    // Combines some of the above information to make it easier to work with.
+    group_metas: OnceLock<Box<[ProcessorGroupMeta]>>,
+}
+
+#[derive(Debug)]
+struct ProcessorGroupMeta {
+    max_processors: ProcessorIndexInGroup,
+    start_offset: ProcessorId,
 }
 
 impl Platform for BuildTargetPlatform {
@@ -54,37 +63,28 @@ impl Platform for BuildTargetPlatform {
     where
         P: AsRef<ProcessorFacade>,
     {
-        #[cfg_attr(test, mutants::skip)] // False positive due to no-op mutation from | to ^.
-        fn add_processor_to_mask<P>(mask: &mut GROUP_AFFINITY, processor: &P)
-        where
-            P: AsRef<ProcessorFacade>,
-        {
-            let processor = processor.as_ref().as_real();
-
-            // We started with all bits clear and now set any that we do want to allow.
-            mask.Mask |= 1 << processor.index_in_group;
-        }
-
         let group_count = self.get_processor_group_max_count();
 
+        // We define one mask per processor group, even if that mask is all clear,
+        // to ensure that we overwrite any previous state that may have existed.
         let mut affinity_masks = Vec::with_capacity(group_count as usize);
 
         for group_index in 0..group_count {
-            let mut affinity = GROUP_AFFINITY {
-                Group: group_index,
-                Mask: 0,
-                ..Default::default()
-            };
+            let mut mask = GroupMask::none();
 
             // We started with all bits clear and now set any that we do want to allow.
             for processor in processors
                 .iter()
                 .filter(|p| p.as_ref().as_real().group_index == group_index)
             {
-                add_processor_to_mask(&mut affinity, processor);
+                mask.add(processor.as_ref().as_real());
             }
 
-            affinity_masks.push(affinity);
+            affinity_masks.push(GROUP_AFFINITY {
+                Group: group_index,
+                Mask: mask.value(),
+                ..Default::default()
+            });
         }
 
         self.bindings
@@ -98,24 +98,25 @@ impl Platform for BuildTargetPlatform {
 
         let group_start_offset = *group_start_offsets
             .get(current_processor.Group as usize)
-            .expect("platform indicated a processor group that the platform said does not exist");
+            .expect("the platform told us how many groups exist, so if it now tells us an out of bounds group, nothing we can do");
 
         group_start_offset
             .checked_add(ProcessorId::from(current_processor.Number))
-            .expect("processor ID calculation overflowed - platform must have given is bad inputs")
+            .expect("processor ID calculation overflowed - only possible if platform gives us bad IDs as inputs")
     }
 
     fn max_processor_id(&self) -> ProcessorId {
         *self.max_processor_id.get_or_init(|| {
             let group_max_sizes = self.get_processor_group_max_sizes();
 
+            // Windows assigns processor IDs sequentially from 0, so we just calculate.
             // The max processor ID is the sum of all processors in all groups minus 1.
             group_max_sizes
                 .iter()
                 .map(|&s| ProcessorId::from(s))
                 .sum::<ProcessorId>()
                 .checked_sub(1)
-                .expect("there must be at least 1 processor")
+                .expect("there must be at least 1 theoretical processor in each group")
         })
     }
 
@@ -151,39 +152,37 @@ impl Platform for BuildTargetPlatform {
             // processor groups.
             let group_max_sizes = self.get_processor_group_max_sizes();
 
-            let is_default_mask = legacy_affinities.Mask.count_ones()
-                == (*group_max_sizes
-                    .get(legacy_affinities.Group as usize)
-                    .expect("platform referenced a processor group that was out of bounds"))
-                .into();
+            // TODO: Does the default mask contain all bits for max or active processors?
+            let default_mask_processor_count = *group_max_sizes
+                .get(legacy_affinities.Group as usize)
+                .expect("platform referenced a processor group that was out of bounds");
+
+            let is_default_mask =
+                legacy_affinities.Mask.count_ones() == default_mask_processor_count.into();
 
             if !is_default_mask {
-                // Got a non-default value, so we use it.
+                // Found a non-default legacy affinity mask, so we use it.
                 current_thread_affinities = vec![legacy_affinities];
             }
         }
 
-        // If the legacy mechanism also says nothing then all processors are available to us.
+        // If the legacy mechanism also says nothing (== was at its default value)
+        // then the current thread may use all processors in all memory regions.
         if current_thread_affinities.is_empty() {
-            return NonEmpty::from_vec((0..=self.max_processor_id()).collect_vec())
+            // Note that we also include offline processors here because this function
+            // does not know or need to know which ones are active and which are not, as
+            // this list is only used as input for further processing upstream.
+            // Any inactive processors will be filtered out by the caller later.
+            return NonEmpty::collect(0..=self.max_processor_id())
                 .expect("range over non-empty set cannot result in empty result");
         }
 
-        let group_max_sizes = self.get_processor_group_max_sizes();
-        let group_start_offsets = self.get_processor_group_start_offsets();
-        assert_eq!(
-            group_max_sizes.len(),
-            group_start_offsets.len(),
-            "platform must provide group sizes and offsets in equal amounts",
-        );
+        let group_metas = self.get_processor_group_metas();
 
+        // We reserve enough capacity for each processor but not all of this capacity will be used.
         let mut result = Vec::with_capacity(self.max_processor_count());
 
-        for (group_index, group_size) in group_max_sizes.iter().enumerate() {
-            let group_start_offset = group_start_offsets
-                .get(group_index)
-                .expect("we asserted above that we have same number of each");
-
+        for (group_index, meta) in group_metas.iter().enumerate() {
             let Some(affinity_mask) = current_thread_affinities.iter().find_map(|a| {
                 if usize::from(a.Group) == group_index {
                     Some(a.Mask)
@@ -191,16 +190,19 @@ impl Platform for BuildTargetPlatform {
                     None
                 }
             }) else {
+                // Depending on how we obtained the per-group affinity masks, it may in theory
+                // be possible that we do not have an affinity mask for some group. In that
+                // case we consider the group off-limits and skip it.
                 continue;
             };
 
-            for index_in_group in 0..*group_size {
+            for index_in_group in 0..meta.max_processors {
                 if affinity_mask & (1 << index_in_group) == 0 {
                     continue;
                 }
 
-                let global_index = group_start_offset.checked_add(ProcessorId::from(index_in_group))
-                    .expect("processor ID overflow is never going to happen unless the platform has gone crazy");
+                let global_index = meta.start_offset.checked_add(ProcessorId::from(index_in_group))
+                    .expect("processor ID overflow is never going to happen unless the platform has given us invalid starting values");
 
                 result.push(global_index);
             }
@@ -218,6 +220,7 @@ impl BuildTargetPlatform {
             group_max_sizes: OnceLock::new(),
             group_start_offsets: OnceLock::new(),
             max_processor_id: OnceLock::new(),
+            group_metas: OnceLock::new(),
         }
     }
 
@@ -232,8 +235,9 @@ impl BuildTargetPlatform {
             .expect("this could only overflow if the platform has usize::MAX processors, which is unrealistic")
     }
 
-    /// Returns the max number of processors in each processor group.
-    /// This is used to calculate the global index of a processor.
+    /// Returns the max number of processors in each processor group, ordered ascending
+    /// by group index. This is used to calculate the global index of a processor and/or
+    /// the start offset of each processor group.
     fn get_processor_group_max_sizes(&self) -> &[u8] {
         self.group_max_sizes.get_or_init(|| {
             let group_count = self.get_processor_group_max_count();
@@ -244,7 +248,7 @@ impl BuildTargetPlatform {
                 let processor_count = self.bindings.get_maximum_processor_count(group_index);
 
                 let processor_count = u8::try_from(processor_count)
-                    .expect("somehow encountered processor group with more than 64 processors, which is impossible as per Windows API");
+                    .expect("somehow encountered processor group with more than 256 processors, which is impossible as per Windows API - the max is 64");
 
                 group_sizes.push(processor_count);
             }
@@ -270,9 +274,33 @@ impl BuildTargetPlatform {
         })
     }
 
-    /// Returns the active number of processors in each processor group.
-    /// This is used to identify which processors actually exist.
-    fn get_processor_group_active_sizes(&self) -> Box<[u8]> {
+    fn get_processor_group_metas(&self) -> &[ProcessorGroupMeta] {
+        self.group_metas.get_or_init(|| {
+            let max_sizes = self.get_processor_group_max_sizes();
+            let start_offsets = self.get_processor_group_start_offsets();
+
+            assert_eq!(
+                max_sizes.len(),
+                start_offsets.len(),
+                "platform must provide group sizes and offsets in equal amounts",
+            );
+
+            let mut group_metas = Vec::with_capacity(max_sizes.len());
+
+            for (max_size, start_offset) in max_sizes.iter().zip(start_offsets.iter()) {
+                group_metas.push(ProcessorGroupMeta {
+                    max_processors: *max_size,
+                    start_offset: *start_offset,
+                });
+            }
+
+            group_metas.into_boxed_slice()
+        })
+    }
+
+    /// Returns the active number of processors in each processor group, ordered ascending
+    /// by group index. This is used to identify which processors actually exist in a group.
+    fn get_processor_group_active_sizes(&self) -> Box<[ProcessorIndexInGroup]> {
         // We always consider all groups, even if they have 0 processors.
         let group_count = self.get_processor_group_max_count();
 
@@ -282,7 +310,7 @@ impl BuildTargetPlatform {
             let processor_count = self.bindings.get_active_processor_count(group_index);
 
             let processor_count = u8::try_from(processor_count)
-                    .expect("somehow encountered processor group with more than 64 processors, which is impossible as per Windows API");
+                    .expect("somehow encountered processor group with more than 256 processors, which is impossible as per Windows API - the max is 64");
 
             group_sizes.push(processor_count);
         }
@@ -387,9 +415,9 @@ impl BuildTargetPlatform {
             // the GroupCount member is always 1.
             assert_eq!(details.GroupCount, 1);
 
-            // There may be 1 or more bits set in the mask because one core might have multiple logical
-            // processors via SMT (hyper-threading). We just iterate over all the bits to check them
-            // individually without worrying about SMT logic.
+            // There may be 1 or more bits set in the mask because one core might have multiple
+            // logical processors via SMT (hyper-threading). We just iterate over all the bits
+            // to check them individually without worrying about SMT logic.
             for processor_id in
                 Self::affinity_mask_to_processor_ids(&details.GroupMask[0], group_max_sizes)
             {
@@ -495,17 +523,18 @@ impl BuildTargetPlatform {
 
         let group_index: ProcessorGroupIndex = affinity.Group;
 
-        let processors_in_group = u32::from(*group_max_sizes.get(group_index as usize).expect(
+        let processors_in_group = *group_max_sizes.get(group_index as usize).expect(
             "platform indicated a processor group that was out of range of known processor groups",
-        ));
+        );
 
         // Minimum effort approach for WOW64 support - we only see the first 32 in a group.
-        let processors_in_group = processors_in_group.min(usize::BITS);
+        let processors_in_group = processors_in_group
+            .min(u8::try_from(usize::BITS).expect("constant that always fits into u8"));
 
-        let mask = affinity.Mask;
+        let mask = GroupMask::from_components(affinity.Mask, affinity.Group);
 
         for index_in_group in 0..processors_in_group {
-            if mask & (1 << index_in_group) == 0 {
+            if !mask.contains_by_index_in_group(index_in_group) {
                 continue;
             }
 
@@ -515,9 +544,11 @@ impl BuildTargetPlatform {
                 .map(|x| ProcessorId::from(*x))
                 .sum();
 
-            let global_index: ProcessorId = group_start_offset.checked_add(index_in_group).expect(
-                "processor ID calculation overflowed - platform must have given us bad inputs",
-            );
+            let global_index: ProcessorId = group_start_offset
+                .checked_add(ProcessorId::from(index_in_group))
+                .expect(
+                    "processor ID calculation overflowed - platform must have given us bad inputs",
+                );
             result.push(global_index);
         }
 
@@ -601,22 +632,11 @@ impl BuildTargetPlatform {
                 .expect("range over non-empty set cannot result in empty result");
         }
 
-        let group_max_sizes = self.get_processor_group_max_sizes();
-        let group_start_offsets = self.get_processor_group_start_offsets();
-
-        assert_eq!(
-            group_max_sizes.len(),
-            group_start_offsets.len(),
-            "platform must provide group sizes and offsets in equal amounts",
-        );
+        let group_metas = self.get_processor_group_metas();
 
         let mut result = Vec::with_capacity(self.max_processor_count());
 
-        for (group_index, group_size) in group_max_sizes.iter().enumerate() {
-            let group_start_offset = group_start_offsets
-                .get(group_index)
-                .expect("we asserted above that we have same number of each");
-
+        for (group_index, meta) in group_metas.iter().enumerate() {
             let Some(affinity_mask) = job_affinity_masks.iter().find_map(|a| {
                 if usize::from(a.Group) == group_index {
                     Some(a.Mask)
@@ -627,12 +647,18 @@ impl BuildTargetPlatform {
                 continue;
             };
 
-            for index_in_group in 0..*group_size {
-                if affinity_mask & (1 << index_in_group) == 0 {
+            let mask = GroupMask::from_components(
+                affinity_mask,
+                ProcessorGroupIndex::try_from(group_index)
+                    .expect("platform gave us processor group index that was out of bounds"),
+            );
+
+            for index_in_group in 0..meta.max_processors {
+                if !mask.contains_by_index_in_group(index_in_group) {
                     continue;
                 }
 
-                let global_index = group_start_offset.checked_add(ProcessorId::from(index_in_group))
+                let global_index = meta.start_offset.checked_add(ProcessorId::from(index_in_group))
                     .expect("processor ID calculation overflowed - platform must have given us bad inputs");
 
                 result.push(global_index);

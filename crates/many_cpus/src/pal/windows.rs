@@ -1,8 +1,10 @@
 mod bindings;
+mod group_mask;
 mod platform;
 mod processor;
 
 use bindings::*;
+pub(crate) use group_mask::*;
 pub(crate) use platform::*;
 pub(crate) use processor::*;
 
