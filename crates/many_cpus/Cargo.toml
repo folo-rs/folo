@@ -17,7 +17,6 @@ default = []
 cpulist = { workspace = true }
 derive_more = { workspace = true, features = ["as_ref", "display"] }
 foldhash = { workspace = true }
-folo_ffi = { workspace = true }
 folo_utils = { workspace = true }
 itertools = { workspace = true }
 negative-impl = { workspace = true }
@@ -29,6 +28,8 @@ cpulist = { workspace = true }
 libc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
+folo_ffi = { workspace = true }
+heapless = { workspace = true }
 windows = { workspace = true, features = [
     "Win32_System_JobObjects",
     "Win32_System_Kernel",

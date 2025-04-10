@@ -28,6 +28,8 @@ use crate::{
 pub static BUILD_TARGET_PLATFORM: BuildTargetPlatform =
     BuildTargetPlatform::new(BindingsFacade::real());
 
+const PROCESSOR_GROUP_MAX_SIZE: usize = 64;
+
 /// The platform that matches the crate's build target.
 ///
 /// You would only use a different platform in unit tests that need to mock the platform.
@@ -549,8 +551,8 @@ impl BuildTargetPlatform {
         result
     }
 
-    fn affinity_mask_to_processor_ids(&self, affinity: &GROUP_AFFINITY) -> Vec<ProcessorId> {
-        let mut result = Vec::with_capacity(affinity.Mask.count_ones() as usize);
+    fn affinity_mask_to_processor_ids(&self, affinity: &GROUP_AFFINITY) -> heapless::Vec<ProcessorId, PROCESSOR_GROUP_MAX_SIZE> {
+        let mut result = heapless::Vec::new();
 
         let group_index: ProcessorGroupIndex = affinity.Group;
 
@@ -572,7 +574,7 @@ impl BuildTargetPlatform {
 
             result.push(*meta.all_processor_ids.get(index_in_group as usize).expect(
                 "internal conflict between processor group metadata - expected ID not found",
-            ));
+            )).expect("result could only be full if we somehow processed more than PROCESSOR_GROUP_MAX_SIZE processors, which is nonsense");
         }
 
         result
@@ -689,7 +691,7 @@ impl BuildTargetPlatform {
     pub fn __private_affinity_mask_to_processor_id(
         &self,
         mask: &GROUP_AFFINITY,
-    ) -> Vec<ProcessorId> {
+    ) -> heapless::Vec<ProcessorId, PROCESSOR_GROUP_MAX_SIZE> {
         self.affinity_mask_to_processor_ids(mask)
     }
 }
