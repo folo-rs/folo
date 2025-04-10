@@ -25,7 +25,7 @@ use crate::{
 
 /// Singleton instance of `BuildTargetPlatform`, used by public API types
 /// to hook up to the correct PAL implementation.
-pub(crate) static BUILD_TARGET_PLATFORM: BuildTargetPlatform =
+pub static BUILD_TARGET_PLATFORM: BuildTargetPlatform =
     BuildTargetPlatform::new(BindingsFacade::real());
 
 /// The platform that matches the crate's build target.
@@ -33,7 +33,7 @@ pub(crate) static BUILD_TARGET_PLATFORM: BuildTargetPlatform =
 /// You would only use a different platform in unit tests that need to mock the platform.
 /// Even then, whenever possible, unit tests should use the real platform for maximum realism.
 #[derive(Debug)]
-pub(crate) struct BuildTargetPlatform {
+pub struct BuildTargetPlatform {
     bindings: BindingsFacade,
 
     // We cache these as we expect them to never change. This data is in non-local memory in
@@ -666,6 +666,12 @@ impl BuildTargetPlatform {
         }
 
         NonEmpty::from_vec(result).expect("we are returning the set of processors assigned to the current thread - obviously there must be at least one because the thread is executing")
+    }
+
+    // Exposed for benchmarking only, not part of public API surface.
+    #[doc(hidden)]
+    pub fn __private_current_thread_processors(&self) -> NonEmpty<ProcessorId> {
+        self.current_thread_processors()
     }
 }
 

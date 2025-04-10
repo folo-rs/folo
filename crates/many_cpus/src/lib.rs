@@ -251,4 +251,6 @@ pub use processor::*;
 pub use processor_set::*;
 pub use processor_set_builder::*;
 
-pub(crate) mod pal;
+// No documented public API but we have benchmarks that reach in via undocumented private API.
+#[doc(hidden)]
+pub mod pal;

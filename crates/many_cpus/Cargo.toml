@@ -56,6 +56,10 @@ name = "hardware_tracker"
 harness = false
 
 [[bench]]
+name = "pal_windows"
+harness = false
+
+[[bench]]
 name = "processor_set_builder"
 harness = false
 

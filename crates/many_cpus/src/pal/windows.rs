@@ -5,7 +5,7 @@ mod processor;
 
 use bindings::*;
 pub(crate) use group_mask::*;
-pub(crate) use platform::*;
+pub use platform::*;
 pub(crate) use processor::*;
 
 type ProcessorGroupIndex = u16;
