@@ -27,12 +27,37 @@ mod windows {
 
     use criterion::Criterion;
     use many_cpus::pal::BUILD_TARGET_PLATFORM;
+    use windows::Win32::System::SystemInformation::GROUP_AFFINITY;
 
     pub(crate) fn entrypoint(c: &mut Criterion) {
         let mut group = c.benchmark_group("Pal_Windows");
 
         group.bench_function("current_thread_processors", |b| {
             b.iter(|| black_box(BUILD_TARGET_PLATFORM.__private_current_thread_processors()));
+        });
+
+        group.bench_function("affinity_mask_to_processor_id_1", |b| {
+            let mask = GROUP_AFFINITY {
+                Group: 0,
+                Mask: 1,
+                ..Default::default()
+            };
+
+            b.iter(|| {
+                black_box(BUILD_TARGET_PLATFORM.__private_affinity_mask_to_processor_id(&mask))
+            });
+        });
+
+        group.bench_function("affinity_mask_to_processor_id_16", |b| {
+            let mask = GROUP_AFFINITY {
+                Group: 0,
+                Mask: 0xFF,
+                ..Default::default()
+            };
+
+            b.iter(|| {
+                black_box(BUILD_TARGET_PLATFORM.__private_affinity_mask_to_processor_id(&mask))
+            });
         });
 
         group.finish();
