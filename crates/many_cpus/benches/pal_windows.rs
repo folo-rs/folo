@@ -25,8 +25,10 @@ fn entrypoint(c: &mut Criterion) {
 mod windows {
     use std::hint::black_box;
 
+    use benchmark_utils::{ThreadPool, bench_on_threadpool};
     use criterion::Criterion;
-    use many_cpus::pal::BUILD_TARGET_PLATFORM;
+    use folo_utils::nz;
+    use many_cpus::{ProcessorSet, pal::BUILD_TARGET_PLATFORM};
     use windows::Win32::System::SystemInformation::GROUP_AFFINITY;
 
     pub(crate) fn entrypoint(c: &mut Criterion) {
@@ -57,6 +59,23 @@ mod windows {
 
             b.iter(|| {
                 black_box(BUILD_TARGET_PLATFORM.__private_affinity_mask_to_processor_id(&mask))
+            });
+        });
+
+        group.bench_function("pin_thread_to_all", |b| {
+            let all = ProcessorSet::all();
+            let one_processor = ProcessorSet::builder().take(nz!(1)).unwrap();
+            let one_thread = ThreadPool::new(&one_processor);
+
+            b.iter_custom(|iters| {
+                bench_on_threadpool(
+                    &one_thread,
+                    iters,
+                    || (),
+                    |()| {
+                        all.pin_current_thread_to();
+                    },
+                )
             });
         });
 

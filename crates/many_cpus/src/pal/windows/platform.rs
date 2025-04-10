@@ -4,6 +4,7 @@ use foldhash::{HashMap, HashMapExt};
 use folo_ffi::NativeBuffer;
 use itertools::Itertools;
 use nonempty::NonEmpty;
+use smallvec::SmallVec;
 use windows::{
     Win32::{
         Foundation::ERROR_INSUFFICIENT_BUFFER,
@@ -30,6 +31,9 @@ pub static BUILD_TARGET_PLATFORM: BuildTargetPlatform =
 
 const PROCESSOR_GROUP_MAX_SIZE: usize = 64;
 
+// Some of our logic will operate without heap allocations as long as the group count is not higher.
+const ALLOC_FREE_GROUPS_MAX: usize = 16;
+
 /// The platform that matches the crate's build target.
 ///
 /// You would only use a different platform in unit tests that need to mock the platform.
@@ -38,14 +42,16 @@ const PROCESSOR_GROUP_MAX_SIZE: usize = 64;
 pub struct BuildTargetPlatform {
     bindings: BindingsFacade,
 
+    max_processor_id: OnceLock<ProcessorId>,
+
     // We cache these as we expect them to never change. This data is in non-local memory in
     // systems with multiple memory regions, which is not ideal but the bookkeeping to make it
     // local is also not really better. `#[thread_local]` might help but is currently unstable.
+    // All these group arrays are indexed by group index.
     group_max_count: OnceLock<ProcessorGroupIndex>,
     group_max_sizes: OnceLock<Box<[ProcessorIndexInGroup]>>,
     group_active_sizes: OnceLock<Box<[ProcessorIndexInGroup]>>,
     group_start_offsets: OnceLock<Box<[ProcessorId]>>,
-    max_processor_id: OnceLock<ProcessorId>,
 
     // Combines some of the above information to make it easier to work with.
     group_metas: OnceLock<Box<[ProcessorGroupMeta]>>,
@@ -59,11 +65,13 @@ struct ProcessorGroupMeta {
     start_offset: ProcessorId,
 
     // All the theoretical processor IDs, including processors that are offline.
+    // Sorted by value, ascending.
     all_processor_ids: Vec<ProcessorId>,
 
     // All the processor IDs of active processors, without those that are not offline.
     // This is not the same as "available" processors because the operating system
     // resource constraint mechanisms may limit the set we can actually use further.
+    // Sorted by value, ascending.
     active_processor_ids: Vec<ProcessorId>,
 }
 
@@ -80,7 +88,7 @@ impl Platform for BuildTargetPlatform {
 
         // We define one mask per processor group, even if that mask is all clear,
         // to ensure that we overwrite any previous state that may have existed.
-        let mut affinity_masks = Vec::with_capacity(group_count as usize);
+        let mut affinity_masks = SmallVec::<[GROUP_AFFINITY; ALLOC_FREE_GROUPS_MAX]>::new();
 
         for group_index in 0..group_count {
             let mut mask = GroupMask::none();
@@ -551,7 +559,9 @@ impl BuildTargetPlatform {
         result
     }
 
-    fn affinity_mask_to_processor_ids(&self, affinity: &GROUP_AFFINITY) -> heapless::Vec<ProcessorId, PROCESSOR_GROUP_MAX_SIZE> {
+    #[must_use]
+    fn affinity_mask_to_processor_ids(&self, affinity: &GROUP_AFFINITY)
+        -> heapless::Vec<ProcessorId, PROCESSOR_GROUP_MAX_SIZE> {
         let mut result = heapless::Vec::new();
 
         let group_index: ProcessorGroupIndex = affinity.Group;

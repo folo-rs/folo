@@ -30,6 +30,7 @@ libc = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 folo_ffi = { workspace = true }
 heapless = { workspace = true }
+smallvec = { workspace = true }
 windows = { workspace = true, features = [
     "Win32_System_JobObjects",
     "Win32_System_Kernel",
