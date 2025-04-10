@@ -639,44 +639,44 @@ impl BuildTargetPlatform {
         let job_affinity_masks = self.bindings.get_current_job_cpu_set_masks();
 
         if job_affinity_masks.is_empty() {
-            return NonEmpty::from_vec((0..=self.max_processor_id()).collect_vec())
+            return NonEmpty::collect(0..=self.max_processor_id())
                 .expect("range over non-empty set cannot result in empty result");
         }
 
         let group_metas = self.get_processor_group_metas();
 
-        let mut result = Vec::with_capacity(self.max_processor_count());
+        NonEmpty::collect(group_metas
+            .iter()
+            .enumerate()
+            .filter_map(|(group_index, meta)| {        
+                job_affinity_masks.iter().find_map(|a| {
+                    if usize::from(a.Group) == group_index {
+                        Some((a.Mask, group_index, meta))
+                    } else {
+                        // This group was not a member of the defined affinity mask, so we
+                        // do not care about this group and do not consider it allowed.
+                        None
+                    }
+                })
+            })
+            .flat_map(|(mask, group_index, meta)| {
+                let mask = GroupMask::from_components(
+                    mask,
+                    ProcessorGroupIndex::try_from(group_index)
+                        .expect("platform gave us processor group index that was out of bounds"),
+                );
 
-        for (group_index, meta) in group_metas.iter().enumerate() {
-            let Some(affinity_mask) = job_affinity_masks.iter().find_map(|a| {
-                if usize::from(a.Group) == group_index {
-                    Some(a.Mask)
-                } else {
-                    None
-                }
-            }) else {
-                continue;
-            };
-
-            let mask = GroupMask::from_components(
-                affinity_mask,
-                ProcessorGroupIndex::try_from(group_index)
-                    .expect("platform gave us processor group index that was out of bounds"),
-            );
-
-            for index_in_group in 0..meta.max_processors {
-                if !mask.contains_by_index_in_group(index_in_group) {
-                    continue;
-                }
-
-                let global_index = meta.start_offset.checked_add(ProcessorId::from(index_in_group))
-                    .expect("processor ID calculation overflowed - platform must have given us bad inputs");
-
-                result.push(global_index);
-            }
-        }
-
-        NonEmpty::from_vec(result).expect("we are returning the set of processors assigned to the current thread - obviously there must be at least one because the thread is executing")
+                (0..meta.max_processors).filter_map(move |index_in_group| {
+                    if mask.contains_by_index_in_group(index_in_group) {
+                        Some(meta.start_offset
+                            .checked_add(ProcessorId::from(index_in_group))
+                            .expect("processor ID calculation overflowed - platform must have given us bad inputs"))
+                    } else {
+                        None
+                    }                 
+                })
+            }))
+            .expect("we are returning the set of processors assigned to the current thread - obviously there must be at least one because the thread is executing")
     }
 
     // Exposed for benchmarking only, not part of public API surface.
