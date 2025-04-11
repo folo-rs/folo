@@ -249,44 +249,41 @@ impl Platform for BuildTargetPlatform {
 
         let group_metas = self.get_processor_group_metas();
 
-        // We reserve enough capacity for each processor but not all of this capacity will be used.
-        let mut result = Vec::with_capacity(self.max_processor_count());
+        NonEmpty::collect(group_metas.iter().enumerate()
+            .filter_map(move |(group_index, meta)| {
+                let Some(affinity_mask) = current_thread_affinities.iter().find_map(|a| {
+                    if usize::from(a.Group) == group_index {
+                        Some(a.Mask)
+                    } else {
+                        None
+                    }
+                }) else {
+                    // Depending on how we obtained the per-group affinity masks, it may in theory
+                    // be possible that we do not have an affinity mask for some group. In that
+                    // case we consider the group off-limits and skip it.
+                    return None;
+                };
 
-        for (group_index, meta) in group_metas.iter().enumerate() {
-            let Some(affinity_mask) = current_thread_affinities.iter().find_map(|a| {
-                if usize::from(a.Group) == group_index {
-                    Some(a.Mask)
-                } else {
-                    None
-                }
-            }) else {
-                // Depending on how we obtained the per-group affinity masks, it may in theory
-                // be possible that we do not have an affinity mask for some group. In that
-                // case we consider the group off-limits and skip it.
-                continue;
-            };
-
-            let mask = GroupMask::from_components(
-                affinity_mask,
-                ProcessorGroupIndex::try_from(group_index)
-                    .expect("platform gave us processor group index that was out of bounds"),
-            );
-
-            for index_in_group in 0..meta.max_processors {
-                if !mask.contains_by_index_in_group(index_in_group) {
-                    continue;
-                }
-
-                result.push(
-                    *meta
-                        .all_processor_ids
-                        .get(index_in_group as usize)
-                        .expect("we validated the bounds above"),
+                let mask = GroupMask::from_components(
+                    affinity_mask,
+                    ProcessorGroupIndex::try_from(group_index)
+                        .expect("platform gave us processor group index that was out of bounds"),
                 );
-            }
-        }
 
-        NonEmpty::from_vec(result).expect("we are returning the set of processors assigned to the current thread - obviously there must be at least one because the thread is executing")
+                Some((0..meta.max_processors).filter_map(move |index_in_group| {
+                    if mask.contains_by_index_in_group(index_in_group) {
+                        Some(
+                            *meta
+                                .all_processor_ids
+                                .get(index_in_group as usize)
+                                .expect("we validated the bounds above"),
+                        )
+                    } else {
+                        None
+                    }
+                }))
+            }).flatten()
+        ).expect("we are returning the set of processors assigned to the current thread - obviously there must be at least one because the thread is executing")
     }
 }
 

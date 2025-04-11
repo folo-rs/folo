@@ -27,7 +27,7 @@ fn entrypoint(c: &mut Criterion) {
 
 #[cfg(windows)]
 mod windows {
-    use std::hint::black_box;
+    use std::{hint::black_box, time::Duration};
 
     use benchmark_utils::{ThreadPool, bench_on_threadpool};
     use criterion::Criterion;
@@ -37,6 +37,9 @@ mod windows {
 
     pub(crate) fn entrypoint(c: &mut Criterion) {
         let mut group = c.benchmark_group("Pal_Windows");
+
+        // The results are quite jittery. Give it some time to stabilize.
+        group.measurement_time(Duration::from_secs(30));
 
         group.bench_function("current_thread_processors", |b| {
             b.iter(|| black_box(BUILD_TARGET_PLATFORM.__private_current_thread_processors()));
