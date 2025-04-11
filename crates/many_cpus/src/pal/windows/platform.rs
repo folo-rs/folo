@@ -493,7 +493,7 @@ impl BuildTargetPlatform {
         let mut native_efficiency_classes: Vec<u8> = vec![0; self.max_processor_count()];
 
         let core_relationships_raw =
-        self.get_logical_processor_information_raw(RelationProcessorCore);
+            self.get_logical_processor_information_raw(RelationProcessorCore);
 
         // We create a map of processor index to efficiency class. Then we simply take all
         // processors with the max efficiency class (whatever the numeric value) - those are the
@@ -530,21 +530,21 @@ impl BuildTargetPlatform {
             }
         }
 
-        let max_native_efficiency_class = native_efficiency_classes
-            .iter()
-            .max()
-            .copied()
-            .expect(
-                "there must be at least one processor - this code is running on one, after all",
-            );
+        let max_native_efficiency_class = native_efficiency_classes.iter().max().copied().expect(
+            "there must be at least one processor - this code is running on one, after all",
+        );
 
-        native_efficiency_classes.into_iter().map(|native| {
-            if native == max_native_efficiency_class {
-                EfficiencyClass::Performance
-            } else {
-                EfficiencyClass::Efficiency
-            }
-        }).collect_vec().into_boxed_slice()
+        native_efficiency_classes
+            .into_iter()
+            .map(|native| {
+                if native == max_native_efficiency_class {
+                    EfficiencyClass::Performance
+                } else {
+                    EfficiencyClass::Efficiency
+                }
+            })
+            .collect_vec()
+            .into_boxed_slice()
     }
 
     /// Gets the efficiency classes of all processors on the system, ordered by processor ID.
@@ -618,8 +618,10 @@ impl BuildTargetPlatform {
     }
 
     #[must_use]
-    fn affinity_mask_to_processor_ids(&self, affinity: &GROUP_AFFINITY)
-        -> heapless::Vec<ProcessorId, PROCESSOR_GROUP_MAX_SIZE> {
+    fn affinity_mask_to_processor_ids(
+        &self,
+        affinity: &GROUP_AFFINITY,
+    ) -> heapless::Vec<ProcessorId, PROCESSOR_GROUP_MAX_SIZE> {
         let mut result = heapless::Vec::new();
 
         let group_index: ProcessorGroupIndex = affinity.Group;
