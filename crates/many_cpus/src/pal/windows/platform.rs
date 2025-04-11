@@ -400,9 +400,9 @@ impl BuildTargetPlatform {
 
             let mut group_metas = Vec::with_capacity(max_sizes.len());
 
-            for (&max_size, &start_offset) in max_sizes.iter().zip(start_offsets.iter()) {
+            for ((group_index, &max_size), &start_offset) in max_sizes.iter().enumerate().zip(start_offsets.iter()) {
                 let active_size = *active_sizes
-                    .get(start_offset as usize)
+                    .get(group_index)
                     .expect("we validated bounds above");
 
                 let active_id_end = start_offset
@@ -1778,6 +1778,16 @@ mod tests {
             .times(1)
             .withf(|group| *group == 1)
             .return_const(1 as ProcessorId);
+        bindings
+            .expect_get_active_processor_count()
+            .times(1)
+            .withf(|group| *group == 0)
+            .return_const(2 as ProcessorId);
+        bindings
+            .expect_get_active_processor_count()
+            .times(1)
+            .withf(|group| *group == 1)
+            .return_const(1 as ProcessorId);
 
         bindings
             .expect_get_current_thread_cpu_set_masks()
@@ -1819,6 +1829,16 @@ mod tests {
             .return_const(2 as ProcessorId);
         bindings
             .expect_get_maximum_processor_count()
+            .times(1)
+            .withf(|group| *group == 1)
+            .return_const(1 as ProcessorId);
+        bindings
+            .expect_get_active_processor_count()
+            .times(1)
+            .withf(|group| *group == 0)
+            .return_const(2 as ProcessorId);
+        bindings
+            .expect_get_active_processor_count()
             .times(1)
             .withf(|group| *group == 1)
             .return_const(1 as ProcessorId);
@@ -1871,6 +1891,16 @@ mod tests {
             .return_const(2 as ProcessorId);
         bindings
             .expect_get_maximum_processor_count()
+            .times(1)
+            .withf(|group| *group == 1)
+            .return_const(1 as ProcessorId);
+        bindings
+            .expect_get_active_processor_count()
+            .times(1)
+            .withf(|group| *group == 0)
+            .return_const(2 as ProcessorId);
+        bindings
+            .expect_get_active_processor_count()
             .times(1)
             .withf(|group| *group == 1)
             .return_const(1 as ProcessorId);
