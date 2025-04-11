@@ -11,6 +11,10 @@ use criterion::{Criterion, criterion_group, criterion_main};
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
+#[allow(
+    clippy::needless_pass_by_ref_mut,
+    reason = "spurious error on non-Windows"
+)]
 fn entrypoint(c: &mut Criterion) {
     #[cfg(windows)]
     windows::entrypoint(c);
