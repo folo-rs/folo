@@ -666,7 +666,7 @@ impl BuildTargetPlatform {
         NonEmpty::collect(group_metas
             .iter()
             .enumerate()
-            .filter_map(|(group_index, meta)| {        
+            .filter_map(|(group_index, meta)| {
                 job_affinity_masks.iter().find_map(|a| {
                     if usize::from(a.Group) == group_index {
                         Some((a.Mask, group_index, meta))
@@ -691,7 +691,7 @@ impl BuildTargetPlatform {
                             .expect("processor ID calculation overflowed - platform must have given us bad inputs"))
                     } else {
                         None
-                    }                 
+                    }
                 })
             }))
             .expect("we are returning the set of processors assigned to the current thread - obviously there must be at least one because the thread is executing")
