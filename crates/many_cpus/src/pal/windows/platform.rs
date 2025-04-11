@@ -1,6 +1,5 @@
 use std::{hint::black_box, mem::offset_of, num::NonZeroUsize, ptr::NonNull, sync::OnceLock};
 
-use foldhash::{HashMap, HashMapExt};
 use folo_ffi::NativeBuffer;
 use itertools::Itertools;
 use nonempty::NonEmpty;
@@ -80,8 +79,8 @@ impl Platform for BuildTargetPlatform {
     fn get_all_processors(&self) -> NonEmpty<ProcessorFacade> {
         let group_metas = self.get_processor_group_metas();
 
-        let performance_processors = self.get_performance_processor_global_indexes();
-        let processors_by_memory_region = self.get_memory_regions_by_processor();
+        let efficiency_classes = self.get_processor_efficiency_classes();
+        let memory_regions = self.get_processor_memory_regions();
         let allowed_processors = self.processors_allowed_by_job_constraints();
 
         // We are required to return all the processors ordered by the processor ID.
@@ -105,15 +104,11 @@ impl Platform for BuildTargetPlatform {
                     return None;
                 }
 
-                let memory_region_index = *processors_by_memory_region
-                    .get(&processor_id)
-                    .expect("every processor must have a memory region");
+                let memory_region_index = *memory_regions
+                    .get(processor_id as usize)
+                    .expect("we expect to have the memory region for every processor ID unless the platform lied to us at some point");
 
-                let efficiency_class = if performance_processors.contains(&processor_id) {
-                    EfficiencyClass::Performance
-                } else {
-                    EfficiencyClass::Efficiency
-                };
+                let efficiency_class = *efficiency_classes.get(processor_id as usize).expect("we expect to have the efficiency class for every processor ID unless the platform lied to us at some point");
 
                 Some(ProcessorImpl::new(
                     group_index
@@ -122,8 +117,8 @@ impl Platform for BuildTargetPlatform {
                     index_in_group,
                     processor_id,
                     memory_region_index,
-                    efficiency_class,)
-                )
+                    efficiency_class
+                ))
             })
         ).expect(
             "we are returning all processors on the system - obviously there must be at least one",
@@ -492,18 +487,17 @@ impl BuildTargetPlatform {
         }
     }
 
-    // Gets the global index of every performance processor.
-    // Implicitly, anything not on this list is an efficiency processor.
-    #[must_use]
-    fn get_performance_processor_global_indexes(&self) -> Box<[ProcessorId]> {
+    /// Gets the efficiency classes of all processors on the system, ordered by processor ID.
+    /// This also returns data for offline processors but the value for those is unspecified.
+    fn get_processor_efficiency_classes(&self) -> Box<[EfficiencyClass]> {
+        let mut native_efficiency_classes: Vec<u8> = vec![0; self.max_processor_count()];
+
         let core_relationships_raw =
-            self.get_logical_processor_information_raw(RelationProcessorCore);
+        self.get_logical_processor_information_raw(RelationProcessorCore);
 
         // We create a map of processor index to efficiency class. Then we simply take all
         // processors with the max efficiency class (whatever the numeric value) - those are the
         // performance processors.
-
-        let mut processor_to_efficiency_class = HashMap::with_capacity(self.max_processor_count());
 
         // The structures returned by the OS are dynamically sized so we only have various
         // disgusting options for parsing/processing them. Pointer wrangling is the most readable.
@@ -531,37 +525,37 @@ impl BuildTargetPlatform {
             // logical processors via SMT (hyper-threading). We just iterate over all the bits
             // to check them individually without worrying about SMT logic.
             for processor_id in self.affinity_mask_to_processor_ids(&details.GroupMask[0]) {
-                processor_to_efficiency_class.insert(processor_id, details.EfficiencyClass);
+                *native_efficiency_classes.get_mut(processor_id as usize)
+                    .expect("the platform gave us a processor ID that was out of the range of valid processor IDs - it lied about the max ID!") = details.EfficiencyClass;
             }
         }
 
-        let max_efficiency_class = processor_to_efficiency_class
-            .values()
+        let max_native_efficiency_class = native_efficiency_classes
+            .iter()
             .max()
             .copied()
             .expect(
                 "there must be at least one processor - this code is running on one, after all",
             );
 
-        processor_to_efficiency_class
-            .iter()
-            .filter_map(|(&global_index, &efficiency_class)| {
-                if efficiency_class == max_efficiency_class {
-                    Some(global_index)
-                } else {
-                    None
-                }
-            })
-            .collect_vec()
-            .into_boxed_slice()
+        native_efficiency_classes.into_iter().map(|native| {
+            if native == max_native_efficiency_class {
+                EfficiencyClass::Performance
+            } else {
+                EfficiencyClass::Efficiency
+            }
+        }).collect_vec().into_boxed_slice()
     }
 
+    /// Gets the efficiency classes of all processors on the system, ordered by processor ID.
+    /// This also returns data for offline processors.
     #[must_use]
-    fn get_memory_regions_by_processor(&self) -> HashMap<ProcessorId, MemoryRegionId> {
+    fn get_processor_memory_regions(&self) -> Box<[MemoryRegionId]> {
+        // TODO: Verify that this returns correct data for offline processors.
         let memory_region_relationships_raw =
             self.get_logical_processor_information_raw(RelationNumaNodeEx);
 
-        let mut result = HashMap::with_capacity(self.max_processor_count());
+        let mut result = vec![0; self.max_processor_count()];
 
         // The structures returned by the OS are dynamically sized so we only have various
         // disgusting options for parsing/processing them. Pointer wrangling is the most readable.
@@ -610,7 +604,8 @@ impl BuildTargetPlatform {
                 let affinity = unsafe { *group_mask_array.as_ref() };
 
                 for processor_id in self.affinity_mask_to_processor_ids(&affinity) {
-                    result.insert(processor_id, numa_node_number);
+                    *result.get_mut(processor_id as usize)
+                        .expect("the platform gave us a processor ID that was out of the range of valid processor IDs - it lied about the max ID!") = numa_node_number;
                 }
 
                 // SAFETY: The OS promises us that this array contains `GroupCount` elements.
@@ -619,7 +614,7 @@ impl BuildTargetPlatform {
             }
         }
 
-        result
+        result.into_boxed_slice()
     }
 
     #[must_use]
