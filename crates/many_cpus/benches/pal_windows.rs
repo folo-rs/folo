@@ -38,6 +38,10 @@ mod windows {
             b.iter(|| black_box(BUILD_TARGET_PLATFORM.__private_current_thread_processors()));
         });
 
+        group.bench_function("get_all_processors", |b| {
+            b.iter(|| BUILD_TARGET_PLATFORM.__private_get_all_processors());
+        });
+
         group.bench_function("affinity_mask_to_processor_id_1", |b| {
             let mask = GROUP_AFFINITY {
                 Group: 0,

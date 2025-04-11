@@ -1,4 +1,4 @@
-use std::{mem::offset_of, num::NonZeroUsize, ptr::NonNull, sync::OnceLock};
+use std::{hint::black_box, mem::offset_of, num::NonZeroUsize, ptr::NonNull, sync::OnceLock};
 
 use foldhash::{HashMap, HashMapExt};
 use folo_ffi::NativeBuffer;
@@ -32,7 +32,7 @@ pub static BUILD_TARGET_PLATFORM: BuildTargetPlatform =
 const PROCESSOR_GROUP_MAX_SIZE: usize = 64;
 
 // Some of our logic will operate without heap allocations as long as the group count is not higher.
-const ALLOC_FREE_GROUPS_MAX: usize = 16;
+const ALLOC_FREE_GROUPS_MAX: usize = 8;
 
 /// The platform that matches the crate's build target.
 ///
@@ -76,8 +76,58 @@ struct ProcessorGroupMeta {
 }
 
 impl Platform for BuildTargetPlatform {
+    #[must_use]
     fn get_all_processors(&self) -> NonEmpty<ProcessorFacade> {
-        self.get_all()
+        let group_metas = self.get_processor_group_metas();
+
+        let performance_processors = self.get_performance_processor_global_indexes();
+        let processors_by_memory_region = self.get_memory_regions_by_processor();
+        let allowed_processors = self.processors_allowed_by_job_constraints();
+
+        // We are required to return all the processors ordered by the processor ID.
+        // As we know that Windows assigns processor IDs sequentially, we can just
+        // iterate in order through the groups and each processor in each group.
+        NonEmpty::collect(group_metas.iter().enumerate()
+            .flat_map(move |(group_index, meta)| {
+                meta.active_processor_ids.iter().map(move |&processor_id| {
+                    let index_in_group = processor_id
+                        .checked_sub(meta.start_offset)
+                        .and_then(|x| u8::try_from(x).ok())
+                        .expect(
+                        "processor ID calculation overflowed - platform must have given us bad inputs",
+                    );
+
+                    (group_index, index_in_group, processor_id)
+                })
+            })
+            .filter_map(|(group_index, index_in_group, processor_id)| {
+                if !allowed_processors.contains(&processor_id) {
+                    return None;
+                }
+
+                let memory_region_index = *processors_by_memory_region
+                    .get(&processor_id)
+                    .expect("every processor must have a memory region");
+
+                let efficiency_class = if performance_processors.contains(&processor_id) {
+                    EfficiencyClass::Performance
+                } else {
+                    EfficiencyClass::Efficiency
+                };
+
+                Some(ProcessorImpl::new(
+                    group_index
+                        .try_into()
+                        .expect("group index can only overflow if our algorithm has a logic error"),
+                    index_in_group,
+                    processor_id,
+                    memory_region_index,
+                    efficiency_class,)
+                )
+            })
+        ).expect(
+            "we are returning all processors on the system - obviously there must be at least one",
+        ).map(ProcessorFacade::Real)
     }
 
     fn pin_current_thread_to<P>(&self, processors: &NonEmpty<P>)
@@ -112,6 +162,7 @@ impl Platform for BuildTargetPlatform {
             .set_current_thread_cpu_set_masks(&affinity_masks);
     }
 
+    #[must_use]
     fn current_processor_id(&self) -> ProcessorId {
         let current_processor = self.bindings.get_current_processor_number_ex();
 
@@ -126,6 +177,7 @@ impl Platform for BuildTargetPlatform {
             .expect("processor ID calculation overflowed - only possible if platform gives us bad IDs as inputs")
     }
 
+    #[must_use]
     fn max_processor_id(&self) -> ProcessorId {
         *self.max_processor_id.get_or_init(|| {
             let group_max_sizes = self.get_processor_group_max_sizes();
@@ -141,10 +193,12 @@ impl Platform for BuildTargetPlatform {
         })
     }
 
+    #[must_use]
     fn max_memory_region_id(&self) -> MemoryRegionId {
         self.bindings.get_numa_highest_node_number()
     }
 
+    #[must_use]
     fn current_thread_processors(&self) -> NonEmpty<ProcessorId> {
         let mut current_thread_affinities = self.bindings.get_current_thread_cpu_set_masks();
 
@@ -254,12 +308,14 @@ impl BuildTargetPlatform {
         }
     }
 
+    #[must_use]
     fn get_processor_group_max_count(&self) -> ProcessorGroupIndex {
         *self
             .group_max_count
             .get_or_init(|| self.bindings.get_maximum_processor_group_count())
     }
 
+    #[must_use]
     fn max_processor_count(&self) -> usize {
         (self.max_processor_id() as usize).checked_add(1)
             .expect("this could only overflow if the platform has usize::MAX processors, which is unrealistic")
@@ -268,6 +324,7 @@ impl BuildTargetPlatform {
     /// Returns the max number of processors in each processor group, ordered ascending
     /// by group index. This is used to calculate the global index of a processor and/or
     /// the start offset of each processor group.
+    #[must_use]
     fn get_processor_group_max_sizes(&self) -> &[u8] {
         self.group_max_sizes.get_or_init(|| {
             let group_count = self.get_processor_group_max_count();
@@ -289,6 +346,7 @@ impl BuildTargetPlatform {
 
     /// Returns the max number of active in each processor group, ordered ascending
     /// by group index.
+    #[must_use]
     fn get_processor_group_active_sizes(&self) -> &[u8] {
         self.group_active_sizes.get_or_init(|| {
             let group_count = self.get_processor_group_max_count();
@@ -308,6 +366,7 @@ impl BuildTargetPlatform {
         })
     }
 
+    #[must_use]
     fn get_processor_group_start_offsets(&self) -> &[ProcessorId] {
         self.group_start_offsets.get_or_init(|| {
             let group_sizes = self.get_processor_group_max_sizes();
@@ -325,6 +384,7 @@ impl BuildTargetPlatform {
         })
     }
 
+    #[must_use]
     fn get_processor_group_metas(&self) -> &[ProcessorGroupMeta] {
         self.group_metas.get_or_init(|| {
             let max_sizes = self.get_processor_group_max_sizes();
@@ -371,6 +431,7 @@ impl BuildTargetPlatform {
         })
     }
 
+    #[must_use]
     fn get_logical_processor_information_raw(
         &self,
         relationship: LOGICAL_PROCESSOR_RELATIONSHIP,
@@ -433,6 +494,7 @@ impl BuildTargetPlatform {
 
     // Gets the global index of every performance processor.
     // Implicitly, anything not on this list is an efficiency processor.
+    #[must_use]
     fn get_performance_processor_global_indexes(&self) -> Box<[ProcessorId]> {
         let core_relationships_raw =
             self.get_logical_processor_information_raw(RelationProcessorCore);
@@ -494,6 +556,7 @@ impl BuildTargetPlatform {
             .into_boxed_slice()
     }
 
+    #[must_use]
     fn get_memory_regions_by_processor(&self) -> HashMap<ProcessorId, MemoryRegionId> {
         let memory_region_relationships_raw =
             self.get_logical_processor_information_raw(RelationNumaNodeEx);
@@ -590,63 +653,9 @@ impl BuildTargetPlatform {
         result
     }
 
-    fn get_all(&self) -> NonEmpty<ProcessorFacade> {
-        let group_metas = self.get_processor_group_metas();
-
-        let performance_processors = self.get_performance_processor_global_indexes();
-        let processors_by_memory_region = self.get_memory_regions_by_processor();
-        let allowed_processors = self.processors_allowed_by_job_constraints();
-
-        let mut processors = Vec::with_capacity(allowed_processors.len());
-
-        for (group_index, meta) in group_metas.iter().enumerate() {
-            for &processor_id in &meta.active_processor_ids {
-                let index_in_group = processor_id
-                    .checked_sub(meta.start_offset)
-                    .and_then(|x| u8::try_from(x).ok())
-                    .expect(
-                    "processor ID calculation overflowed - platform must have given us bad inputs",
-                );
-
-                if !allowed_processors.contains(&processor_id) {
-                    continue;
-                }
-
-                let memory_region_index = *processors_by_memory_region
-                    .get(&processor_id)
-                    .expect("every processor must have a memory region");
-
-                let efficiency_class = if performance_processors.contains(&processor_id) {
-                    EfficiencyClass::Performance
-                } else {
-                    EfficiencyClass::Efficiency
-                };
-
-                let processor = ProcessorImpl::new(
-                    group_index
-                        .try_into()
-                        .expect("group index can only overflow if our algorithm has a logic error"),
-                    index_in_group,
-                    processor_id,
-                    memory_region_index,
-                    efficiency_class,
-                );
-
-                processors.push(processor);
-            }
-        }
-
-        // We must return the processors sorted by global index. While the above logic may
-        // already ensure this as a side-effect, we will sort here explicitly to be sure.
-        processors.sort();
-
-        NonEmpty::from_vec(processors).expect(
-            "we are returning all processors on the system - obviously there must be at least one",
-        ).map(ProcessorFacade::Real)
-    }
-
     /// The job object (if it exists) defines hard limits for what processors we are allowed to use.
     /// If there is no limit defined, we allow all processors and return all processor IDs.
+    #[must_use]
     fn processors_allowed_by_job_constraints(&self) -> NonEmpty<ProcessorId> {
         let job_affinity_masks = self.bindings.get_current_job_cpu_set_masks();
 
@@ -692,6 +701,7 @@ impl BuildTargetPlatform {
     }
 
     // Exposed for benchmarking only, not part of public API surface.
+    #[must_use]
     pub fn __private_current_thread_processors(&self) -> NonEmpty<ProcessorId> {
         self.current_thread_processors()
     }
@@ -703,6 +713,11 @@ impl BuildTargetPlatform {
         mask: &GROUP_AFFINITY,
     ) -> heapless::Vec<ProcessorId, PROCESSOR_GROUP_MAX_SIZE> {
         self.affinity_mask_to_processor_ids(mask)
+    }
+
+    // Exposed for benchmarking only, not part of public API surface.
+    pub fn __private_get_all_processors(&self) {
+        black_box(self.get_all_processors());
     }
 }
 
