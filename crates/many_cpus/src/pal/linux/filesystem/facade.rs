@@ -68,6 +68,22 @@ impl Filesystem for FilesystemFacade {
             Self::Mock(mock) => mock.get_proc_self_status_contents(),
         }
     }
+
+    fn get_proc_self_cgroup_name(&self) -> Option<String> {
+        match self {
+            Self::Real(filesystem) => filesystem.get_proc_self_cgroup_name(),
+            #[cfg(test)]
+            Self::Mock(mock) => mock.get_proc_self_cgroup_name(),
+        }
+    }
+
+    fn get_cgroup_cpu_quota_and_period_us(&self, name: &str) -> Option<(u64, u64)> {
+        match self {
+            Self::Real(filesystem) => filesystem.get_cgroup_cpu_quota_and_period_us(name),
+            #[cfg(test)]
+            Self::Mock(mock) => mock.get_cgroup_cpu_quota_and_period_us(name),
+        }
+    }
 }
 
 impl Debug for FilesystemFacade {

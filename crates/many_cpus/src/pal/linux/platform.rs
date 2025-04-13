@@ -96,6 +96,28 @@ impl Platform for BuildTargetPlatform {
                 .collect_vec())
                 .expect("current thread has no processors in its affinity mask - impossible because this code is running on an active processor")
     }
+
+    fn max_processor_time(&self) -> f64 {
+        // This is our ceiling - we cannot use more processor time than the number of processors.
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "all realistic values are in safe bounds"
+        )]
+        let max_processor_time = self.get_all_processors().len() as f64;
+
+        // If we are constrained by a cgroup, the ceiling may be lowered.
+        if let Some(cgroup_max_processor_time) = self.cgroups_max_processor_time() {
+            // We are allowed to use at most the minimum of the two.
+            return max_processor_time.min(cgroup_max_processor_time);
+        }
+
+        max_processor_time
+    }
+
+    fn active_processor_count(&self) -> ProcessorId {
+        ProcessorId::try_from(self.get_active_processors().len())
+            .expect("we will never have more than u32::MAX processors")
+    }
 }
 
 impl BuildTargetPlatform {
@@ -357,6 +379,24 @@ impl BuildTargetPlatform {
                 })
                 .collect(),
         )
+    }
+
+    /// Processor time limit in processor-seconds per second.
+    fn cgroups_max_processor_time(&self) -> Option<f64> {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "unavoidable but also unlikely since typical values will be in safe bounds"
+        )]
+        self.fs.get_proc_self_cgroup_name().and_then(|name| {
+            self.fs
+                .get_cgroup_cpu_quota_and_period_us(&name)
+                .map(|(quota, period)| {
+                    let quota = quota as f64;
+                    let period = period as f64;
+
+                    quota / period
+                })
+        })
     }
 }
 
