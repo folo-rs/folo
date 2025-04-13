@@ -49,11 +49,24 @@ pub struct ProcessorSet {
 }
 
 impl ProcessorSet {
-    /// Gets a [`ProcessorSet`] referencing all present and available processors on the system.
+    /// Gets a [`ProcessorSet`] referencing all present and available processors on the system,
+    /// up to the resource quota assigned to the process.
     ///
     /// This set does not include processors that are not available to the current process or those
     /// that are purely theoretical (e.g. processors that may be added later to the system but are
     /// not yet present).
+    /// 
+    /// This processor set is not updated if the operating system enforced constraints applied
+    /// to the current process change at runtime.
+    /// 
+    /// # Resource quota
+    /// 
+    /// If the current process is assigned a resource quota via operating system constraints, this
+    /// set may only include a subset of all processors, to ensure that the quota is not exceeded.
+    /// You can use [`ProcessorSetBuilder::ignoring_resource_quota()`][1] to obtain a processor set
+    /// that ignores the resource quota.
+    /// 
+    /// [1]: ProcessorSetBuilder::ignoring_resource_quota
     #[must_use]
     pub fn all() -> &'static Self {
         &ALL_PROCESSORS

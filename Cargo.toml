@@ -30,7 +30,9 @@ many_cpus = { version = "0.2.4", path = "crates/many_cpus" }
 many_cpus_benchmarking = { version = "0.1.7", path = "crates/many_cpus_benchmarking" }
 
 # Internal packages we do not publish.
+benchmarks = { path = "crates/benchmarks" }
 benchmark_utils = { path = "crates/benchmark_utils" }
+testing = { path = "crates/testing" }
 
 # The packages we consume. We only enable "std" features here, the rest in individual crates.
 arc-swap = { version = "1.7", default-features = false }
@@ -38,6 +40,7 @@ axum = { version = "0.8", default-features = false }
 # Using Git reference here because the published crate is out of date and lacks proper graph support.
 criterion = { version = "0.5", git = "https://github.com/bheisler/criterion.rs.git", default-features = false }
 darling = { version = "0.20", default-features = false }
+deranged = { version = "0.4", default-features = false }
 derive_more = { version = "2.0", default-features = false }
 fake_headers = { version = "0.0", default-features = false }
 foldhash = { version = "0.1", default-features = false, features = ["std"] }

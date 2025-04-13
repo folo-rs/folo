@@ -3,8 +3,7 @@ use std::{cell::RefCell, marker::PhantomData};
 use negative_impl::negative_impl;
 
 use crate::{
-    MemoryRegionId, Processor, ProcessorId,
-    pal::{AbstractProcessor, Platform, PlatformFacade},
+    pal::{AbstractProcessor, Platform, PlatformFacade}, MemoryRegionId, Processor, ProcessorId, ResourceQuota
 };
 
 thread_local! {
@@ -226,6 +225,26 @@ impl HardwareTracker {
     pub fn is_thread_memory_region_pinned() -> bool {
         CURRENT_TRACKER.with_borrow(HardwareTrackerCore::is_thread_memory_region_pinned)
     }
+
+    /// The current hardware resource quota for the current process. This may change over time.
+    #[must_use]
+    pub fn resource_quota() -> ResourceQuota {
+        CURRENT_TRACKER.with_borrow(HardwareTrackerCore::resource_quota)
+    }
+
+    /// The number of active processors on the system, including processors that are not available
+    /// to the current process.
+    /// 
+    /// This may be useful for working with system APIs that deal with system-scoped values,
+    /// instead of process-scoped values that need to consider current process limits.
+    #[must_use]
+    pub fn active_processor_count() -> ProcessorId {
+        // We include this in `HardwareTracker` instead of `HardwareInfo` because it is
+        // theoretically possible for this value to change over time and perhaps in the future
+        // we will detect such changes. For now, we just return a cached value from the PAL
+        // and ignore changes that occur at runtime.
+        CURRENT_TRACKER.with_borrow(HardwareTrackerCore::active_processor_count)
+    }
 }
 
 /// The real implementation of `HardwareTracker`, accepting the PAL facade as a parameter
@@ -325,6 +344,17 @@ impl HardwareTrackerCore {
         self.pinned_processor_id = processor_id;
         self.pinned_memory_region_id = memory_region_id;
     }
+
+    #[must_use]
+    pub(crate) fn resource_quota(&self) -> ResourceQuota {
+        let max_processor_time = self.pal.max_processor_time();
+        ResourceQuota::new(max_processor_time)
+    }
+
+    #[must_use]
+    pub(crate) fn active_processor_count(&self) -> ProcessorId {
+        self.pal.active_processor_count()
+    }
 }
 
 #[negative_impl]
@@ -363,6 +393,8 @@ mod tests {
         // float among all processors); all we care about is that it does not panic.
         _ = tracker.current_processor();
         _ = tracker.current_memory_region_id();
+
+        assert!(tracker.resource_quota().max_processor_time() > 0.0);
     }
 
     #[test]

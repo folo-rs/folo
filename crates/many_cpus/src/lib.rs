@@ -242,6 +242,7 @@ mod primitive_types;
 mod processor;
 mod processor_set;
 mod processor_set_builder;
+mod resource_quota;
 
 pub(crate) use clients::*;
 pub use hardware_info::*;
@@ -250,6 +251,7 @@ pub use primitive_types::*;
 pub use processor::*;
 pub use processor_set::*;
 pub use processor_set_builder::*;
+pub use resource_quota::*;
 
 // No documented public API but we have benchmarks that reach in via undocumented private API.
 #[doc(hidden)]

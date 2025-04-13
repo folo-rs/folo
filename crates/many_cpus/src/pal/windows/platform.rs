@@ -7,9 +7,15 @@ use smallvec::SmallVec;
 use windows::{
     Win32::{
         Foundation::ERROR_INSUFFICIENT_BUFFER,
-        System::SystemInformation::{
-            GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP, RelationNumaNode, RelationNumaNodeEx,
-            RelationProcessorCore, SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
+        System::{
+            JobObjects::{
+                JOB_OBJECT_CPU_RATE_CONTROL_ENABLE, JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
+                JOB_OBJECT_CPU_RATE_CONTROL_MIN_MAX_RATE,
+            },
+            SystemInformation::{
+                GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP, RelationNumaNode,
+                RelationNumaNodeEx, RelationProcessorCore, SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
+            },
         },
     },
     core::HRESULT,
@@ -43,6 +49,8 @@ pub struct BuildTargetPlatform {
 
     max_processor_id: OnceLock<ProcessorId>,
 
+    active_processor_count: OnceLock<ProcessorId>,
+
     // We cache these as we expect them to never change. This data is in non-local memory in
     // systems with multiple memory regions, which is not ideal but the bookkeeping to make it
     // local is also not really better. `#[thread_local]` might help but is currently unstable.
@@ -75,7 +83,6 @@ struct ProcessorGroupMeta {
 }
 
 impl Platform for BuildTargetPlatform {
-    #[must_use]
     fn get_all_processors(&self) -> NonEmpty<ProcessorFacade> {
         let group_metas = self.get_processor_group_metas();
 
@@ -157,7 +164,6 @@ impl Platform for BuildTargetPlatform {
             .set_current_thread_cpu_set_masks(&affinity_masks);
     }
 
-    #[must_use]
     fn current_processor_id(&self) -> ProcessorId {
         let current_processor = self.bindings.get_current_processor_number_ex();
 
@@ -172,7 +178,6 @@ impl Platform for BuildTargetPlatform {
             .expect("processor ID calculation overflowed - only possible if platform gives us bad IDs as inputs")
     }
 
-    #[must_use]
     fn max_processor_id(&self) -> ProcessorId {
         *self.max_processor_id.get_or_init(|| {
             let group_max_sizes = self.get_processor_group_max_sizes();
@@ -188,12 +193,10 @@ impl Platform for BuildTargetPlatform {
         })
     }
 
-    #[must_use]
     fn max_memory_region_id(&self) -> MemoryRegionId {
         self.bindings.get_numa_highest_node_number()
     }
 
-    #[must_use]
     fn current_thread_processors(&self) -> NonEmpty<ProcessorId> {
         let mut current_thread_affinities = self.bindings.get_current_thread_cpu_set_masks();
 
@@ -285,6 +288,66 @@ impl Platform for BuildTargetPlatform {
             }).flatten()
         ).expect("we are returning the set of processors assigned to the current thread - obviously there must be at least one because the thread is executing")
     }
+
+    fn max_processor_time(&self) -> f64 {
+        const HARD_CAP_FLAGS: u32 =
+            JOB_OBJECT_CPU_RATE_CONTROL_ENABLE.0 | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP.0;
+        const SOFT_CAP_FLAGS: u32 =
+            JOB_OBJECT_CPU_RATE_CONTROL_ENABLE.0 | JOB_OBJECT_CPU_RATE_CONTROL_MIN_MAX_RATE.0;
+
+        // The job object processor time limits are relative to the total number of
+        // active processors on the system and do not consider any per-process limitations.
+        let system_processor_count = f64::from(self.active_processor_count());
+
+        // This API, however, speaks in terms of processor time available to the current process,
+        // so we do need to care about per-process limitations. Whatever value we return, it
+        // cannot be greater than this because this is the upper limit available to the process.
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "precision loss will never happen because all realistic values are in safe f64 range"
+        )]
+        let current_process_processor_count = self.get_all_processors().len() as f64;
+
+        let Some(rate_control) = self.bindings.get_current_job_cpu_rate_control() else {
+            // No rate control, so we can use all processors available to the current process.
+            return current_process_processor_count;
+        };
+
+        // There are different rate control modes. We care about the following:
+        // 1. Hard cap, which just gives us a single number.
+        // 2. Soft cap (guaranteed + ceiling), in which case we use the ceiling.
+        // Other modes (e.g. weighted) we ignore because they cannot be expressed in absolutes.
+        if rate_control.ControlFlags.0 & HARD_CAP_FLAGS == HARD_CAP_FLAGS {
+            // SAFETY: Guarded by the flags we validated.
+            let windows_cpu_rate = unsafe { rate_control.Anonymous.CpuRate };
+
+            Self::windows_processor_rate_to_processor_time(windows_cpu_rate, system_processor_count)
+                .min(current_process_processor_count)
+        } else if rate_control.ControlFlags.0 & SOFT_CAP_FLAGS == SOFT_CAP_FLAGS {
+            // SAFETY: Guarded by the flags we validated.
+            let windows_cpu_rate = unsafe { rate_control.Anonymous.Anonymous.MaxRate };
+
+            Self::windows_processor_rate_to_processor_time(
+                windows_cpu_rate.into(),
+                system_processor_count,
+            )
+            .min(current_process_processor_count)
+        } else {
+            // Found no limits, fall back to our internally detected ceiling.
+            current_process_processor_count
+        }
+    }
+
+    fn active_processor_count(&self) -> ProcessorId {
+        *self.active_processor_count.get_or_init(|| {
+            let group_active_sizes = self.get_processor_group_active_sizes();
+
+            group_active_sizes
+                .iter()
+                .map(|&s| ProcessorId::from(s))
+                .sum::<ProcessorId>()
+        })
+    }
 }
 
 impl BuildTargetPlatform {
@@ -297,6 +360,7 @@ impl BuildTargetPlatform {
             group_start_offsets: OnceLock::new(),
             max_processor_id: OnceLock::new(),
             group_metas: OnceLock::new(),
+            active_processor_count: OnceLock::new(),
         }
     }
 
@@ -694,14 +758,34 @@ impl BuildTargetPlatform {
             .expect("we are returning the set of processors assigned to the current thread - obviously there must be at least one because the thread is executing")
     }
 
+    /// Windows measures processor time in 1/100 of a percent (10000 = 100%) of the total available
+    /// processor time available on the system, ignoring any per-process maximums and not counting
+    /// offline processors.
+    ///
+    /// We measure time in seconds of processor time per second of real time.
+    ///
+    /// This converts from Windows to our internal representation.
+    fn windows_processor_rate_to_processor_time(
+        windows_rate: u32,
+        system_processor_count: f64,
+    ) -> f64 {
+        // Get the ratio of processor time on all processors on the system.
+        // 1 means the process can use all processor time on the system (if not otherwise limited).
+        let cpu_ratio = f64::from(windows_rate) / 10_000.0;
+
+        cpu_ratio * system_processor_count
+    }
+
     // Exposed for benchmarking only, not part of public API surface.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Just for benchmarking, not real code.
     pub fn __private_current_thread_processors(&self) -> NonEmpty<ProcessorId> {
         self.current_thread_processors()
     }
 
     // Exposed for benchmarking only, not part of public API surface.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Just for benchmarking, not real code.
     pub fn __private_affinity_mask_to_processor_id(
         &self,
         mask: &GROUP_AFFINITY,
@@ -710,6 +794,7 @@ impl BuildTargetPlatform {
     }
 
     // Exposed for benchmarking only, not part of public API surface.
+    #[cfg_attr(test, mutants::skip)] // Just for benchmarking, not real code.
     pub fn __private_get_all_processors(&self) {
         black_box(self.get_all_processors());
     }

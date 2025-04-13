@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use windows::{
     Win32::System::{
+        JobObjects::JOBOBJECT_CPU_RATE_CONTROL_INFORMATION,
         Kernel::PROCESSOR_NUMBER,
         SystemInformation::{
             GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP, SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
@@ -143,6 +144,14 @@ impl Bindings for BindingsFacade {
             Self::Real(bindings) => bindings.get_current_thread_legacy_group_affinity(),
             #[cfg(test)]
             Self::Mock(bindings) => bindings.get_current_thread_legacy_group_affinity(),
+        }
+    }
+
+    fn get_current_job_cpu_rate_control(&self) -> Option<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION> {
+        match self {
+            Self::Real(bindings) => bindings.get_current_job_cpu_rate_control(),
+            #[cfg(test)]
+            Self::Mock(bindings) => bindings.get_current_job_cpu_rate_control(),
         }
     }
 }

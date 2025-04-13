@@ -78,6 +78,22 @@ impl Platform for PlatformFacade {
             Self::Mock(p) => p.current_thread_processors(),
         }
     }
+
+    fn max_processor_time(&self) -> f64 {
+        match self {
+            Self::Real(p) => p.max_processor_time(),
+            #[cfg(test)]
+            Self::Mock(p) => p.max_processor_time(),
+        }
+    }
+
+    fn active_processor_count(&self) -> crate::ProcessorId {
+        match self {
+            Self::Real(p) => p.active_processor_count(),
+            #[cfg(test)]
+            Self::Mock(p) => p.active_processor_count(),
+        }
+    }
 }
 
 impl From<&'static BuildTargetPlatform> for PlatformFacade {

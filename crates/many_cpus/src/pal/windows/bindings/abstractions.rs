@@ -1,13 +1,11 @@
 use std::fmt::Debug;
 
 use windows::{
-    Win32::System::{
-        Kernel::PROCESSOR_NUMBER,
-        SystemInformation::{
+    core::Result, Win32::System::{
+        JobObjects::JOBOBJECT_CPU_RATE_CONTROL_INFORMATION, Kernel::PROCESSOR_NUMBER, SystemInformation::{
             GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP, SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
-        },
-    },
-    core::Result,
+        }
+    }
 };
 
 /// Bindings for FFI calls into external libraries (either provided by operating system or not).
@@ -37,6 +35,8 @@ pub(crate) trait Bindings: Debug + Send + Sync + 'static {
 
     // JobObjectGroupInformationEx; may return empty list if not affinitized.
     fn get_current_job_cpu_set_masks(&self) -> Vec<GROUP_AFFINITY>;
+
+    fn get_current_job_cpu_rate_control(&self) -> Option<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION>;
 
     fn get_current_thread_legacy_group_affinity(&self) -> GROUP_AFFINITY;
 }

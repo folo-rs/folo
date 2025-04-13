@@ -45,6 +45,7 @@ mockall = { workspace = true }
 mutants = { workspace = true }
 scopeguard = { workspace = true }
 static_assertions = { workspace = true }
+testing = { workspace = true }
 
 [target.'cfg(windows)'.dev-dependencies]
 windows = { workspace = true, features = ["Win32_Security"] }

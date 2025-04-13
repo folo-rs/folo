@@ -44,6 +44,7 @@ There are also some development-only crates in this repo, which are not publishe
 |---------------------------------------------|------------------------------------------------------------------------------------|
 | [`benchmark_utils`](crates/benchmark_utils) | Common benchmarking logic used across the crates in this project                   |
 | [`benchmarks`](crates/benchmarks)           | Random pile of benchmarks to explore relevant scenarios and guide Folo development |
+| [`testing`](crates/testing)                 | Private helpers for testing and examples in Folo crates                            |
 
 # Development environment setup
 

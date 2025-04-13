@@ -2,7 +2,11 @@ use std::fmt::Debug;
 
 use windows::{
     Win32::System::{
-        JobObjects::{IsProcessInJob, JobObjectGroupInformationEx, QueryInformationJobObject},
+        JobObjects::{
+            IsProcessInJob, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION,
+            JobObjectCpuRateControlInformation, JobObjectGroupInformationEx,
+            QueryInformationJobObject,
+        },
         Kernel::PROCESSOR_NUMBER,
         SystemInformation::{
             GROUP_AFFINITY, GetLogicalProcessorInformationEx, LOGICAL_PROCESSOR_RELATIONSHIP,
@@ -205,5 +209,43 @@ impl Bindings for BuildTargetBindings {
             .expect("platform refused to provide the current thread's legacy processor affinity");
 
         aff
+    }
+
+    fn get_current_job_cpu_rate_control(&self) -> Option<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION> {
+        // SAFETY: No safety requirements. Does not require closing the handle.
+        let current_process = unsafe { GetCurrentProcess() };
+
+        let mut result: BOOL = BOOL::default();
+
+        // SAFETY: No safety requirements beyond passing valid inputs.
+        unsafe {
+            IsProcessInJob(current_process, None, &raw mut result).expect(
+                "platform refused to confirm or deny whether the current process is part of a job",
+            );
+        }
+
+        if !result.as_bool() {
+            // If not part of a job, no rate control constraints apply.
+            return None;
+        }
+
+        let mut result = JOBOBJECT_CPU_RATE_CONTROL_INFORMATION::default();
+        let result_size_u32 = size_of::<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION>()
+            .try_into()
+            .expect("struct of known size guaranteed to fit in u32");
+
+        // SAFETY: No safety requirements beyond passing valid inputs.
+        unsafe {
+            QueryInformationJobObject(
+                None,
+                JobObjectCpuRateControlInformation,
+                (&raw mut result).cast(),
+                result_size_u32,
+                None,
+            )
+        }
+        .expect("platform refused to provide the process's current job processor time constraints");
+
+        Some(result)
     }
 }

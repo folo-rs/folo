@@ -14,15 +14,16 @@ use crate::{
 };
 
 /// Builds a [`ProcessorSet`] based on specified criteria. The default criteria include all
-/// available processors.
+/// available processors, with the maximum count determined by the process resource quota.
 ///
 /// You can obtain a builder via [`ProcessorSet::builder()`] or from an existing processor set
 /// via [`ProcessorSet::to_builder()`].
 ///
 /// # External constraints
 ///
-/// The operating system may define constraints that prohibit the application from using all the available
-/// processors (e.g. when the app is containerized and provided limited hardware resources).
+/// The operating system may define constraints that prohibit the application from using all
+/// the available processors (e.g. when the app is containerized and provided limited
+/// hardware resources).
 ///
 /// This crate treats platform constraints as follows:
 ///
@@ -35,13 +36,37 @@ use crate::{
 ///   affinity via `taskset` on Linux, `start.exe /affinity 0xff` on Windows or similar mechanisms
 ///   does not affect the set of processors this crate will use by default, though you can opt in to
 ///   this (see next chapter).
+/// * Limits on processor time are considered an upper bound on the number of processors that can be
+///   included in a processor set. For example, if you configure a processor time limit of
+///   10 seconds per second of real time on a 20-processor system, then the builder may return up
+///   to 10 of the processors in the resulting processor set (though it may be a different 10 every
+///   time you create a new processor set from scratch). This limit is optional and may be disabled
+///   by calling [`ignoring_resource_quota()`][2].
 ///
-/// Note that limits on **processor time** are ignored - they are still enforced by the platform (which
-/// will force idle periods to keep the process within the limits) but have no effect on which actual
-/// processors are available for use. For example, if you configure a processor time limit of 10 seconds
-/// per second of real time on a 20-processor system, then at full utilization this crate may use all 20
-/// processors but only for a maximum of 0.5 seconds of each second (leaving the processors idle for
-/// the remaining 0.5 seconds, potentially smeared around in smaller units over the whole second).
+/// # Working with processor time constraints
+///
+/// If a process exceeds the processor time limit, the operating system will delay executing the
+/// process further until the "debt is paid off". This is undesirable for most workloads because:
+///
+/// 1. There will be random latency spikes from when the operating system decides to apply a delay.
+/// 1. The delay may not be evenly applied across all threads of the process, leading to unbalanced
+///    load between worker threads.
+///
+/// For predictable behavior that does not suffer from delay side-effects, it is important that the
+/// process does not exceed the processor time limit. To keep out of trouble,
+/// follow these guidelines:
+///
+/// * Ensure that all your concurrently executing thread pools are derived from the same processor
+///   set, so there is a single set of processors (up to the resource quota) that all work of the
+///   process will be executed on. Any new processor sets you create should be subsets of this set,
+///   thereby ensuring that all worker threads combined do not exceed the quota.
+/// * Ensure that the master processor set is constructed while obeying the resource quota (which is
+///   enabled by default),
+///
+/// If your resource constraints are active on process startup, you can use `ProcessorSet::all()`
+/// as the master set from which all other processor sets are derived using
+/// `ProcessorSet::all().to_builder()`. This will ensure the processor time quota is always obeyed
+/// because `ProcessorSet::all()` is guaranteed to obey the resource quota.
 ///
 /// # Inheriting processor affinity from current thread
 ///
@@ -54,12 +79,15 @@ use crate::{
 /// processors that the current thread is not configured to execute on.
 ///
 /// [1]: ProcessorSetBuilder::where_available_for_current_thread
+/// [2]: ProcessorSetBuilder::ignoring_resource_quota
 #[derive(Clone, Debug)]
 pub struct ProcessorSetBuilder {
     processor_type_selector: ProcessorTypeSelector,
     memory_region_selector: MemoryRegionSelector,
 
     except_indexes: HashSet<ProcessorId>,
+
+    obey_resource_quota: bool,
 
     // ProcessorSet needs this because it needs to inform the tracker
     // about any changes to the pinning status of the current thread.
@@ -89,6 +117,7 @@ impl ProcessorSetBuilder {
             processor_type_selector: ProcessorTypeSelector::Any,
             memory_region_selector: MemoryRegionSelector::Any,
             except_indexes: HashSet::new(),
+            obey_resource_quota: true,
             tracker_client,
             pal,
         }
@@ -195,6 +224,18 @@ impl ProcessorSetBuilder {
         self
     }
 
+    /// Ignores the process resource quota when determining the maximum number of processors
+    /// that can be included in the created processor set.
+    ///
+    /// This can be valuable to identify the total set of available processors, though is typically
+    /// not a good idea when scheduling work on the processors. See the type-level documentation
+    /// for more details on resource quota handling best practices.
+    #[must_use]
+    pub fn ignoring_resource_quota(mut self) -> Self {
+        self.obey_resource_quota = false;
+        self
+    }
+
     /// Creates a processor set with a specific number of processors that match the
     /// configured criteria.
     ///
@@ -202,8 +243,23 @@ impl ProcessorSetBuilder {
     /// there are six valid candidate processors then `take(4)` may return any four of them.
     ///
     /// Returns `None` if there were not enough candidate processors to satisfy the request.
+    ///
+    /// # Resource quota
+    ///
+    /// Unless overridden by [`ignoring_resource_quota()`][1], the call will fail if the number of
+    /// requested processors is above the process resource quota. See the type-level
+    /// documentation for more details on resource quota handling best practices.
+    ///
+    /// [1]: ProcessorSetBuilder::ignoring_resource_quota
     #[must_use]
     pub fn take(self, count: NonZeroUsize) -> Option<ProcessorSet> {
+        if let Some(max_count) = self.resource_quota_processor_count_limit() {
+            if count.get() > max_count {
+                // We cannot satisfy the request.
+                return None;
+            }
+        }
+
         let candidates = self.candidates_by_memory_region();
 
         if candidates.is_empty() {
@@ -370,6 +426,14 @@ impl ProcessorSetBuilder {
     /// the processors in an arbitrary memory region with at least one qualifying processor.
     ///
     /// Returns `None` if there were no matching processors to satisfy the request.
+    ///
+    /// # Resource quota
+    ///
+    /// Unless overridden by [`ignoring_resource_quota()`][1], the maximum number of processors
+    /// returned is limited by the process resource quota. See the type-level documentation
+    /// for more details on resource quota handling best practices.
+    ///
+    /// [1]: ProcessorSetBuilder::ignoring_resource_quota
     #[must_use]
     pub fn take_all(self) -> Option<ProcessorSet> {
         let candidates = self.candidates_by_memory_region();
@@ -379,12 +443,12 @@ impl ProcessorSetBuilder {
             return None;
         }
 
-        let processors = match self.memory_region_selector {
+        let mut processors = match self.memory_region_selector {
             MemoryRegionSelector::Any
             | MemoryRegionSelector::PreferSame
             | MemoryRegionSelector::PreferDifferent => {
                 // We return all processors in all memory regions because we have no strong
-                // filtering criterium we must follow - all are fine, so we return all.
+                // filtering criterion we must follow - all are fine, so we return all.
                 candidates
                     .values()
                     .flat_map(|x| x.iter().cloned())
@@ -420,6 +484,13 @@ impl ProcessorSetBuilder {
                 processors.collect()
             }
         };
+
+        if let Some(max_count) = self.resource_quota_processor_count_limit() {
+            // If we picked too many, reduce until we are under quota.
+            while processors.len() > max_count {
+                processors.pop();
+            }
+        }
 
         Some(ProcessorSet::new(
             NonEmpty::from_vec(processors)?,
@@ -472,6 +543,24 @@ impl ProcessorSetBuilder {
         // Cheap conversion, reasonable to do it inline since we do not expect
         // processor set logic to be on the hot path anyway.
         self.pal.get_all_processors().map(Processor::new)
+    }
+
+    fn resource_quota_processor_count_limit(&self) -> Option<usize> {
+        if self.obey_resource_quota {
+            let max_processor_time = self.pal.max_processor_time();
+
+            // We round up the quota to get a whole number of processors.
+            #[expect(clippy::cast_sign_loss, reason = "quota cannot be negative")]
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "we are correctly rounding to avoid the problem"
+            )]
+            let max_processor_count = max_processor_time.ceil() as usize;
+
+            Some(max_processor_count)
+        } else {
+            None
+        }
     }
 }
 
