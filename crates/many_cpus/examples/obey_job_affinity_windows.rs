@@ -36,6 +36,6 @@ mod windows {
         let processor_count = ProcessorSet::all().len();
         println!("Current process is allowed to use {processor_count} processors.");
 
-        assert_eq!(processor_count, 2,);
+        assert_eq!(processor_count, 2);
     }
 }
