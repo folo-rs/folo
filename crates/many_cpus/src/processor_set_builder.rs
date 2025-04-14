@@ -184,6 +184,9 @@ impl ProcessorSetBuilder {
     /// being passed to this predicate.
     #[must_use]
     pub fn filter(mut self, predicate: impl Fn(&Processor) -> bool) -> Self {
+        // We invoke the filters immediately because the API gets really annoying if the
+        // predicate has to borrow some stuff because it would need to be 'static and that
+        // is cumbersome (since we do not return a generic-lifetimed thing back to the caller).
         for processor in self.all_processors() {
             if !predicate(&processor) {
                 self.except_indexes.insert(processor.id());
@@ -726,9 +729,8 @@ mod tests_real {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
-
     use crate::pal::{FakeProcessor, MockPlatform, ProcessorFacade};
+    use folo_utils::nz;
     use nonempty::nonempty;
 
     use super::*;
@@ -736,14 +738,8 @@ mod tests {
     // https://github.com/cloudhead/nonempty/issues/68
     extern crate alloc;
 
-    const TWO_USIZE: NonZeroUsize = NonZeroUsize::new(2).unwrap();
-    const THREE_USIZE: NonZeroUsize = NonZeroUsize::new(3).unwrap();
-    const FOUR_USIZE: NonZeroUsize = NonZeroUsize::new(4).unwrap();
-
     #[test]
     fn smoke_test() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -757,11 +753,7 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
@@ -775,8 +767,6 @@ mod tests {
 
     #[test]
     fn efficiency_class_filter_take() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -790,11 +780,7 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
@@ -807,8 +793,6 @@ mod tests {
 
     #[test]
     fn efficiency_class_filter_take_all() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -822,11 +806,7 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
@@ -839,8 +819,6 @@ mod tests {
 
     #[test]
     fn take_n_processors() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -859,24 +837,18 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
             platform.into(),
         );
-        let set = builder.take(TWO_USIZE).unwrap();
+        let set = builder.take(nz!(2)).unwrap();
         assert_eq!(set.len(), 2);
     }
 
     #[test]
     fn take_n_not_enough_processors() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -890,35 +862,83 @@ mod tests {
             }
         ];
 
+        // The "max processor time" call will already abort the build early
+        // because it shows that not enough processor time is available.
+        let platform = new_mock_platform_with_get_count(pal_processors, 0, 1);
+
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
+        let set = builder.take(nz!(3));
+        assert!(set.is_none());
+    }
+
+    #[test]
+    fn take_n_not_enough_processor_time_quota() {
+        let mut platform = MockPlatform::new();
+
+        // There is only 1.0 processors worth of quota available.
+        platform
+            .expect_max_processor_time()
+            .times(1)
+            .return_const(1.0);
+
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
+        let set = builder.take(nz!(2));
+        assert!(set.is_none());
+    }
+
+    #[test]
+    fn take_n_not_enough_processor_time_quota_but_ignoring_quota() {
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let mut platform = MockPlatform::new();
         let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        // There is only 1.0 processors worth of quota available. This limitation should be ignored.
+        // In fact, this call should not even be made - we have it here just to fail the test if
+        // one day the call starts being made.
+        platform.expect_max_processor_time().return_const(1.0);
 
         platform
             .expect_get_all_processors_core()
+            .times(1)
             .return_const(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
             platform.into(),
         );
-        let set = builder.take(THREE_USIZE);
-        assert!(set.is_none());
+        let set = builder.ignoring_resource_quota().take(nz!(2));
+
+        assert_eq!(set.unwrap().len(), 2);
     }
 
     #[test]
     fn take_all_not_enough_processors() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![FakeProcessor {
             index: 0,
             memory_region: 0,
             efficiency_class: EfficiencyClass::Efficiency,
         }];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        // We expect 0 calls to max_processor_time() because we failed early in the build.
+        let platform = new_mock_platform_with_get_count(pal_processors, 1, 0);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
@@ -930,8 +950,6 @@ mod tests {
 
     #[test]
     fn except_filter_take() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -945,11 +963,9 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        // .filter() eagerly evaluates processors, so we need to allow +1 call.
+        // We call .take() twice, so need to allow +1 of each.
+        let platform = new_mock_platform_with_get_count(pal_processors, 3, 2);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
@@ -966,8 +982,6 @@ mod tests {
 
     #[test]
     fn except_filter_take_all() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -981,11 +995,9 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        // .filter() eagerly evaluates processors, so we need to allow +1 call.
+        // We call .take() twice, so need to allow +1 of each.
+        let platform = new_mock_platform_with_get_count(pal_processors, 3, 2);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
@@ -1001,8 +1013,6 @@ mod tests {
 
     #[test]
     fn custom_filter_take() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -1016,11 +1026,8 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        // .filter() eagerly evaluates processors, so we need to allow 2 calls.
+        let platform = new_mock_platform_with_get_count(pal_processors, 2, 1);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
@@ -1033,8 +1040,6 @@ mod tests {
 
     #[test]
     fn custom_filter_take_all() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -1048,11 +1053,8 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        // .filter() eagerly evaluates processors, so we need to allow 2 calls.
+        let platform = new_mock_platform_with_get_count(pal_processors, 2, 1);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
@@ -1065,8 +1067,6 @@ mod tests {
 
     #[test]
     fn same_memory_region_filter_take() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -1080,11 +1080,7 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
@@ -1096,8 +1092,6 @@ mod tests {
 
     #[test]
     fn same_memory_region_filter_take_all() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -1111,11 +1105,7 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
@@ -1127,8 +1117,6 @@ mod tests {
 
     #[test]
     fn different_memory_region_filter_take() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -1152,11 +1140,7 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
@@ -1173,8 +1157,6 @@ mod tests {
 
     #[test]
     fn different_memory_region_filter_take_all() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -1198,11 +1180,7 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
@@ -1219,8 +1197,6 @@ mod tests {
 
     #[test]
     fn filter_combinations() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -1239,11 +1215,9 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        // .filter() eagerly evaluates processors, so we need to allow +1 call.
+        // We call .take() twice, so need to allow +1 of each.
+        let platform = new_mock_platform_with_get_count(pal_processors, 3, 2);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
@@ -1262,8 +1236,6 @@ mod tests {
 
     #[test]
     fn same_memory_region_take_two_processors() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -1282,17 +1254,13 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
             platform.into(),
         );
-        let set = builder.same_memory_region().take(TWO_USIZE).unwrap();
+        let set = builder.same_memory_region().take(nz!(2)).unwrap();
         assert_eq!(set.len(), 2);
         assert!(set.processors().iter().any(|p| p.id() == 1));
         assert!(set.processors().iter().any(|p| p.id() == 2));
@@ -1300,8 +1268,6 @@ mod tests {
 
     #[test]
     fn different_memory_region_and_efficiency_class_filters() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -1325,11 +1291,7 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
@@ -1347,47 +1309,46 @@ mod tests {
 
     #[test]
     fn performance_processors_but_all_efficiency() {
-        let mut platform = MockPlatform::new();
         let pal_processors = nonempty![FakeProcessor {
             index: 0,
             memory_region: 0,
             efficiency_class: EfficiencyClass::Efficiency,
         }];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        // We expect 0 calls to max_processor_time() because we failed early in the build.
+        let platform = new_mock_platform_with_get_count(pal_processors, 1, 0);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
             platform.into(),
         );
+
         let set = builder.performance_processors_only().take_all();
         assert!(set.is_none(), "No performance processors should be found.");
     }
 
     #[test]
     fn require_different_single_region() {
-        let mut platform = MockPlatform::new();
-        let pal_processors = nonempty![FakeProcessor {
-            index: 0,
-            memory_region: 0,
-            efficiency_class: EfficiencyClass::Efficiency,
-        }];
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            }
+        ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
             platform.into(),
         );
-        let set = builder.different_memory_regions().take(TWO_USIZE);
+        let set = builder.different_memory_regions().take(nz!(2));
         assert!(
             set.is_none(),
             "Should fail because there's not enough distinct memory regions."
@@ -1396,8 +1357,6 @@ mod tests {
 
     #[test]
     fn prefer_different_memory_regions_take_all() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -1416,11 +1375,7 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
@@ -1435,8 +1390,6 @@ mod tests {
 
     #[test]
     fn prefer_different_memory_regions_take_n() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -1460,11 +1413,7 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
@@ -1472,7 +1421,7 @@ mod tests {
         );
         let set = builder
             .prefer_different_memory_regions()
-            .take(TWO_USIZE)
+            .take(nz!(2))
             .unwrap();
         assert_eq!(set.len(), 2);
         let regions: HashSet<_> = set
@@ -1485,8 +1434,6 @@ mod tests {
 
     #[test]
     fn prefer_same_memory_regions_take_n() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -1510,17 +1457,13 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
             platform.into(),
         );
-        let set = builder.prefer_same_memory_region().take(TWO_USIZE).unwrap();
+        let set = builder.prefer_same_memory_region().take(nz!(2)).unwrap();
         assert_eq!(set.len(), 2);
         let regions: HashSet<_> = set
             .processors()
@@ -1532,8 +1475,6 @@ mod tests {
 
     #[test]
     fn prefer_different_memory_regions_take_n_not_enough() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -1557,11 +1498,7 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
@@ -1569,15 +1506,13 @@ mod tests {
         );
         let set = builder
             .prefer_different_memory_regions()
-            .take(FOUR_USIZE)
+            .take(nz!(4))
             .unwrap();
         assert_eq!(set.len(), 4);
     }
 
     #[test]
     fn prefer_same_memory_regions_take_n_not_enough() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -1601,20 +1536,13 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
             platform.into(),
         );
-        let set = builder
-            .prefer_same_memory_region()
-            .take(THREE_USIZE)
-            .unwrap();
+        let set = builder.prefer_same_memory_region().take(nz!(3)).unwrap();
         assert_eq!(set.len(), 3);
         let regions: HashSet<_> = set
             .processors()
@@ -1630,8 +1558,6 @@ mod tests {
 
     #[test]
     fn prefer_same_memory_regions_take_n_picks_best_fit() {
-        let mut platform = MockPlatform::new();
-
         let pal_processors = nonempty![
             FakeProcessor {
                 index: 0,
@@ -1655,17 +1581,13 @@ mod tests {
             }
         ];
 
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
-
-        platform
-            .expect_get_all_processors_core()
-            .return_const(pal_processors);
+        let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
             HardwareTrackerClientFacade::default_mock(),
             platform.into(),
         );
-        let set = builder.prefer_same_memory_region().take(TWO_USIZE).unwrap();
+        let set = builder.prefer_same_memory_region().take(nz!(2)).unwrap();
         assert_eq!(set.len(), 2);
         let regions: HashSet<_> = set
             .processors()
@@ -1677,5 +1599,34 @@ mod tests {
             regions.len(),
             "should have picked from memory region 1 which  can accommodate the preference"
         );
+    }
+
+    fn new_mock_platform(processors: NonEmpty<FakeProcessor>) -> MockPlatform {
+        new_mock_platform_with_get_count(processors, 1, 1)
+    }
+
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "unavoidable f64 conversion but all realistic values likely in safe bounds"
+    )]
+    fn new_mock_platform_with_get_count(
+        processors: NonEmpty<FakeProcessor>,
+        get_all_processors_count: usize,
+        get_max_processor_time_count: usize,
+    ) -> MockPlatform {
+        let mut platform = MockPlatform::new();
+        let pal_processors = processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_max_processor_time()
+            .times(get_max_processor_time_count)
+            .return_const(pal_processors.len() as f64);
+
+        platform
+            .expect_get_all_processors_core()
+            .times(get_all_processors_count)
+            .return_const(pal_processors);
+
+        platform
     }
 }

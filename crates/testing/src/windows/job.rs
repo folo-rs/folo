@@ -1,4 +1,8 @@
-use std::{num::NonZero, ptr};
+use std::{
+    num::NonZero,
+    ptr,
+    sync::{Mutex, MutexGuard},
+};
 
 use deranged::int;
 use windows::Win32::{
@@ -16,19 +20,28 @@ use windows::Win32::{
     },
 };
 
+/// Jobs tinker with process-specific configuration so they are mutually exclusive.
+static MUTUALLY_EXCLUSIVE: Mutex<()> = Mutex::new(());
+
 /// Represents the duration over which the current process is subject to custom job limits.
 ///
 /// The limits are applied via `JobBuilder` and released when the `Job` is dropped. Note that
 /// the process remains associated with the job, it simply no longer has any limits applied.
 #[derive(Debug)]
-pub struct Job {
+pub struct Job<'a> {
     rate_control_active: bool,
     affinity_active: bool,
 
     handle: HANDLE,
+
+    #[expect(
+        dead_code,
+        reason = "we just want to keep it alive until we drop the job"
+    )]
+    mutex_guard: MutexGuard<'a, ()>,
 }
 
-impl Job {
+impl Job<'_> {
     /// Starts building a new job to apply to the current process.
     #[must_use]
     pub fn builder() -> JobBuilder {
@@ -36,7 +49,7 @@ impl Job {
     }
 }
 
-impl Drop for Job {
+impl Drop for Job<'_> {
     fn drop(&mut self) {
         // It is not possible to remove a process from a job, so the best we can do in terms
         // of cleanup is to reconfigure the job to remove all limits. This is clunky but
@@ -125,11 +138,20 @@ impl JobBuilder {
 
     /// Creates the job object and assigns the current process to the job.
     ///
+    /// Jobs for testing purposes are mutually exclusive - this function will block if there
+    /// already is a job assigned to the current process (only counting jobs created by this type).
+    ///
+    /// There may also exist externally assigned jobs (e.g. because we are running in a container),
+    /// which we ignore here. If both external and internal jobs define limits, the lowest limits
+    /// will apply.
+    ///
     /// # Panics
     ///
     /// Panics if anything goes wrong.
     #[must_use]
-    pub fn build(self) -> Job {
+    pub fn build<'a>(self) -> Job<'a> {
+        let mutex_guard = MUTUALLY_EXCLUSIVE.lock().unwrap();
+
         // SAFETY: No safety requirements.
         let job = unsafe { CreateJobObjectW(None, None).unwrap() };
         assert!(!job.is_invalid());
@@ -210,6 +232,7 @@ impl JobBuilder {
             handle: job,
             affinity_active: self.processor_count.is_some(),
             rate_control_active: self.max_processor_time_pct.is_some(),
+            mutex_guard,
         }
     }
 }

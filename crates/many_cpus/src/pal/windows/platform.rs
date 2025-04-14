@@ -814,7 +814,14 @@ mod tests {
     use itertools::Itertools;
     use mockall::Sequence;
     use static_assertions::assert_eq_size;
-    use windows::Win32::System::Kernel::PROCESSOR_NUMBER;
+    use testing::f64_diff_abs;
+    use windows::Win32::System::{
+        JobObjects::{
+            JOB_OBJECT_CPU_RATE_CONTROL, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION,
+            JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0_0,
+        },
+        Kernel::PROCESSOR_NUMBER,
+    };
 
     use crate::{
         MemoryRegionId,
@@ -822,6 +829,8 @@ mod tests {
     };
 
     use super::*;
+
+    const PROCESSOR_TIME_CLOSE_ENOUGH: f64 = 0.01;
 
     #[test]
     fn get_all_processors_smoke_test() {
@@ -2055,5 +2064,169 @@ mod tests {
 
         // We do this just to ensure we meet all the expectations declared by the simulation.
         drop(platform.get_all_processors());
+    }
+
+    #[test]
+    fn max_processor_time_without_job() {
+        // If there is no job, max_processor_time is the same as the number of available processors.
+        let mut bindings = MockBindings::new();
+
+        // 4 processors in a single group, 2 more offline processors.
+        simulate_processor_layout(&mut bindings, [4], [6], [vec![0; 4]], [vec![0; 4]], None);
+
+        bindings
+            .expect_get_current_job_cpu_rate_control()
+            .times(1)
+            .return_const(None);
+
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
+
+        // This will internally call "get all processors" to identify the total count,
+        // so our simulation will correctly exercise the mocked simulation calls.
+        let max_processor_time = platform.max_processor_time();
+
+        #[expect(
+            clippy::float_cmp,
+            reason = "we use absolute error, which is the right way to compare"
+        )]
+        {
+            assert_eq!(
+                f64_diff_abs(max_processor_time, 4.0, PROCESSOR_TIME_CLOSE_ENOUGH),
+                0.0
+            );
+        }
+    }
+
+    #[test]
+    fn max_processor_time_below_available_hard_cap() {
+        // If the job limit is less than the number of available processors,
+        // we should use the job limit as the processor time limit.
+        let mut bindings = MockBindings::new();
+
+        // 4 processors in a single group, 2 more offline processors.
+        simulate_processor_layout(&mut bindings, [4], [6], [vec![0; 4]], [vec![0; 4]], None);
+
+        bindings
+            .expect_get_current_job_cpu_rate_control()
+            .times(1)
+            .return_const(Some(JOBOBJECT_CPU_RATE_CONTROL_INFORMATION {
+                ControlFlags: JOB_OBJECT_CPU_RATE_CONTROL(
+                    JOB_OBJECT_CPU_RATE_CONTROL_ENABLE.0 | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP.0,
+                ),
+                Anonymous: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0 {
+                    CpuRate: 5000, // 50% of the available processors (2 out of 4).
+                },
+            }));
+
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
+
+        // This will internally call "get all processors" to identify the total count,
+        // so our simulation will correctly exercise the mocked simulation calls.
+        let max_processor_time = platform.max_processor_time();
+
+        #[expect(
+            clippy::float_cmp,
+            reason = "we use absolute error, which is the right way to compare"
+        )]
+        {
+            assert_eq!(
+                f64_diff_abs(max_processor_time, 2.0, PROCESSOR_TIME_CLOSE_ENOUGH),
+                0.0
+            );
+        }
+    }
+
+    #[test]
+    fn max_processor_time_below_available_soft_cap() {
+        // If the job limit is less than the number of available processors,
+        // we should use the job limit as the processor time limit.
+        let mut bindings = MockBindings::new();
+
+        // 4 processors in a single group, 2 more offline processors.
+        simulate_processor_layout(&mut bindings, [4], [6], [vec![0; 4]], [vec![0; 4]], None);
+
+        bindings
+            .expect_get_current_job_cpu_rate_control()
+            .times(1)
+            .return_const(Some(JOBOBJECT_CPU_RATE_CONTROL_INFORMATION {
+                ControlFlags: JOB_OBJECT_CPU_RATE_CONTROL(
+                    JOB_OBJECT_CPU_RATE_CONTROL_ENABLE.0
+                        | JOB_OBJECT_CPU_RATE_CONTROL_MIN_MAX_RATE.0,
+                ),
+                Anonymous: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0 {
+                    Anonymous: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0_0 {
+                        MinRate: 3000, // 30% - we ignore this.
+                        MaxRate: 7500, // 75% - this is the cap.
+                    },
+                },
+            }));
+
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
+
+        // This will internally call "get all processors" to identify the total count,
+        // so our simulation will correctly exercise the mocked simulation calls.
+        let max_processor_time = platform.max_processor_time();
+
+        #[expect(
+            clippy::float_cmp,
+            reason = "we use absolute error, which is the right way to compare"
+        )]
+        {
+            assert_eq!(
+                f64_diff_abs(max_processor_time, 3.0, PROCESSOR_TIME_CLOSE_ENOUGH),
+                0.0
+            );
+        }
+    }
+
+    #[test]
+    fn max_processor_time_above_available() {
+        // If the job limit is greater than the number of available processors due to affinity,
+        // we should use the number of available processors as the processor time limit.
+        let mut bindings = MockBindings::new();
+
+        // 4 processors in a single group, 2 more offline processors.
+        simulate_processor_layout(
+            &mut bindings,
+            [4],
+            [6],
+            [vec![0; 4]],
+            [vec![0; 4]],
+            // However! We are limited to only 2 processors by affinity!
+            Some([vec![true, true, false, false]]),
+        );
+
+        bindings
+            .expect_get_current_job_cpu_rate_control()
+            .times(1)
+            .return_const(Some(JOBOBJECT_CPU_RATE_CONTROL_INFORMATION {
+                ControlFlags: JOB_OBJECT_CPU_RATE_CONTROL(
+                    JOB_OBJECT_CPU_RATE_CONTROL_ENABLE.0
+                        | JOB_OBJECT_CPU_RATE_CONTROL_MIN_MAX_RATE.0,
+                ),
+                Anonymous: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0 {
+                    Anonymous: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0_0 {
+                        MinRate: 3000, // 30% - we ignore this.
+                        MaxRate: 7500, // 75% - this is the cap.
+                    },
+                },
+            }));
+
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
+
+        // This will internally call "get all processors" to identify the total count,
+        // so our simulation will correctly exercise the mocked simulation calls.
+        let max_processor_time = platform.max_processor_time();
+
+        #[expect(
+            clippy::float_cmp,
+            reason = "we use absolute error, which is the right way to compare"
+        )]
+        {
+            assert_eq!(
+                f64_diff_abs(max_processor_time, 2.0, PROCESSOR_TIME_CLOSE_ENOUGH),
+                0.0
+            );
+        }
     }
 }

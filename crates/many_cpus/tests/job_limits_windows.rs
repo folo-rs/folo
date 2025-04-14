@@ -4,19 +4,21 @@
 
 #![cfg(windows)]
 
-use std::sync::Mutex;
-
 use folo_utils::nz;
 use many_cpus::{HardwareTracker, ProcessorSet};
-use testing::{Job, ProcessorTimePct};
+use testing::{Job, ProcessorTimePct, f64_diff_abs};
 
-/// The tests can only run one at a time because they tinker with process-specific configuration.
-static MUTUALLY_EXCLUSIVE: Mutex<()> = Mutex::new(());
+// Floating point comparison tolerance.
+// https://rust-lang.github.io/rust-clippy/master/index.html#float_cmp
+const CLOSE_ENOUGH: f64 = 0.01;
 
 #[test]
+#[cfg(not(miri))] // Miri cannot talk to the real platform.
+#[expect(
+    clippy::float_cmp,
+    reason = "we use absolute error, which is the right way to compare"
+)]
 fn obeys_processor_selection_limits() {
-    let _guard = MUTUALLY_EXCLUSIVE.lock().unwrap();
-
     if ProcessorSet::builder()
         .ignoring_resource_quota()
         .take_all()
@@ -34,14 +36,29 @@ fn obeys_processor_selection_limits() {
     let processor_count = ProcessorSet::all().len();
     assert_eq!(processor_count, 2);
 
+    // This must also constrain the processor time quota to 2 processors.
+    // We require at least 3 processors to run this test, so without correct
+    // limiting the behavior would round up and say at least 3.
+    let resource_quota = HardwareTracker::resource_quota();
+
+    assert_eq!(
+        f64_diff_abs(resource_quota.max_processor_time(), 2.0, CLOSE_ENOUGH),
+        0.0,
+        "The resource quota should limit the number of processors to 2.0 processor-seconds per second. Expected: 2.0, Actual: {}",
+        resource_quota.max_processor_time()
+    );
+
     drop(job);
 }
 
 #[test]
+#[cfg(not(miri))] // Miri cannot talk to the real platform.
 #[expect(clippy::cast_precision_loss, reason = "unavoidable f64-usize casting")]
+#[expect(
+    clippy::float_cmp,
+    reason = "we use absolute error, which is the right way to compare"
+)]
 fn obeys_processor_time_limits() {
-    let _guard = MUTUALLY_EXCLUSIVE.lock().unwrap();
-
     // Restrict the current process to only use 50% of the system processor time.
     let job = Job::builder()
         .with_max_processor_time_pct(ProcessorTimePct::new_static::<50>())
@@ -62,8 +79,9 @@ fn obeys_processor_time_limits() {
 
     let expected_processor_time = f64::from(system_processor_count) * 0.5;
 
-    assert!(
-        processor_time_eq(max_processor_time, expected_processor_time),
+    assert_eq!(
+        f64_diff_abs(max_processor_time, expected_processor_time, CLOSE_ENOUGH),
+        0.0,
         "The resource quota should be 50% of the available processor time. Expected: {expected_processor_time}, Actual: {max_processor_time}",
     );
 
@@ -72,22 +90,54 @@ fn obeys_processor_time_limits() {
 
     let expected_limited_processor_count = (f64::from(system_processor_count) * 0.5).ceil();
 
-    assert!(
-        processor_time_eq(
+    assert_eq!(
+        f64_diff_abs(
             expected_limited_processor_count,
-            quota_limited_processor_count as f64
+            quota_limited_processor_count as f64,
+            CLOSE_ENOUGH
         ),
+        0.0,
         "The resource quota should limit the number of processors to half of the available processors, rounded up. Expected: {expected_limited_processor_count}, Actual: {quota_limited_processor_count}",
     );
 
     drop(job);
 }
 
-fn processor_time_eq(a: f64, b: f64) -> bool {
-    // Floating point comparison tolerance.
-    // https://rust-lang.github.io/rust-clippy/master/index.html#float_cmp
-    const CLOSE_ENOUGH: f64 = 0.01;
+#[test]
+#[cfg(not(miri))] // Miri cannot talk to the real platform.
+#[expect(
+    clippy::float_cmp,
+    reason = "we use absolute error, which is the right way to compare"
+)]
+fn noop_job_has_no_effect() {
+    let unconstrained_processor_count = ProcessorSet::builder()
+        .ignoring_resource_quota()
+        .take_all()
+        .unwrap()
+        .len();
 
-    let diff = (a - b).abs();
-    diff < CLOSE_ENOUGH
+    // Create a job with no limits. This should not affect the current process.
+    let job = Job::builder().build();
+
+    let processor_count = ProcessorSet::all().len();
+    assert_eq!(processor_count, unconstrained_processor_count);
+
+    let resource_quota = HardwareTracker::resource_quota();
+
+    #[expect(clippy::cast_precision_loss, reason = "unavoidable f64-usize casting")]
+    {
+        assert_eq!(
+            f64_diff_abs(
+                resource_quota.max_processor_time(),
+                unconstrained_processor_count as f64,
+                CLOSE_ENOUGH
+            ),
+            0.0,
+            "The resource quota should match the unconstrained processor count: {}, Actual: {}",
+            unconstrained_processor_count,
+            resource_quota.max_processor_time()
+        );
+    }
+
+    drop(job);
 }
