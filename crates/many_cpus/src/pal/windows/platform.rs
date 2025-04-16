@@ -290,8 +290,10 @@ impl Platform for BuildTargetPlatform {
     }
 
     fn max_processor_time(&self) -> f64 {
+        #[cfg_attr(test, mutants::skip)] // Mutating these constants is not helpful.
         const HARD_CAP_FLAGS: u32 =
             JOB_OBJECT_CPU_RATE_CONTROL_ENABLE.0 | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP.0;
+        #[cfg_attr(test, mutants::skip)] // Mutating these constants is not helpful.
         const SOFT_CAP_FLAGS: u32 =
             JOB_OBJECT_CPU_RATE_CONTROL_ENABLE.0 | JOB_OBJECT_CPU_RATE_CONTROL_MIN_MAX_RATE.0;
 

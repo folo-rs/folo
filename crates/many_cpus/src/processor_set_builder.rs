@@ -446,7 +446,7 @@ impl ProcessorSetBuilder {
             return None;
         }
 
-        let mut processors = match self.memory_region_selector {
+        let processors = match self.memory_region_selector {
             MemoryRegionSelector::Any
             | MemoryRegionSelector::PreferSame
             | MemoryRegionSelector::PreferDifferent => {
@@ -488,18 +488,29 @@ impl ProcessorSetBuilder {
             }
         };
 
-        if let Some(max_count) = self.resource_quota_processor_count_limit() {
-            // If we picked too many, reduce until we are under quota.
-            while processors.len() > max_count {
-                processors.pop();
-            }
-        }
+        let processors = self.reduce_processors_until_under_quota(processors);
 
         Some(ProcessorSet::new(
             NonEmpty::from_vec(processors)?,
             self.tracker_client,
             self.pal,
         ))
+    }
+
+    #[cfg_attr(test, mutants::skip)] // Thanks for the infinite loop, cargo-mutants!
+    fn reduce_processors_until_under_quota(&self, processors: Vec<Processor>) -> Vec<Processor> {
+        let Some(max_count) = self.resource_quota_processor_count_limit() else {
+            return processors;
+        };
+
+        let mut processors = processors;
+
+        // If we picked too many, reduce until we are under quota.
+        while processors.len() > max_count {
+            processors.pop();
+        }
+
+        processors
     }
 
     /// Executes the first stage filters to kick out processors purely based on their individual
