@@ -1105,7 +1105,7 @@ mod tests {
     }
 
     #[test]
-    fn job_limits_applied() {
+    fn job_affinity_limits_applied() {
         let mut bindings = MockBindings::new();
         // Three groups, 3x2 processors. Job constraints limit us to 2+1+0.
         simulate_processor_layout(

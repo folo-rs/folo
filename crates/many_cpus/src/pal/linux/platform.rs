@@ -387,16 +387,46 @@ impl BuildTargetPlatform {
             clippy::cast_precision_loss,
             reason = "unavoidable but also unlikely since typical values will be in safe bounds"
         )]
-        self.fs.get_proc_self_cgroup_name().and_then(|name| {
-            self.fs
-                .get_cgroup_cpu_quota_and_period_us(&name)
-                .map(|(quota, period)| {
-                    let quota = quota as f64;
-                    let period = period as f64;
+        self.fs
+            .get_proc_self_cgroup()
+            .and_then(parse_cgroup_name)
+            .and_then(|name| {
+                self.get_cgroup_cpu_quota_and_period_us(&name)
+                    .map(|(quota, period)| {
+                        let quota = quota as f64;
+                        let period = period as f64;
 
-                    quota / period
-                })
-        })
+                        // If there is a zero in either field, we just accept what the platform is
+                        // telling us. It is nonsense but if the platform gives us nonsense, we
+                        // should eat it. A conversion down the line will probably convert this
+                        // to an integer count of processors (if used), which will be 0 either way
+                        // as NaN is converted to 0 on integer conversion. This 0 will presumbly
+                        // signal an error along the lines of "you cannot have 0 processors". Not
+                        // worth spending our code and tests on such bizarre lies from the platform.
+                        quota / period
+                    })
+            })
+    }
+
+    /// Gets the cgroup CPU quota and period for the given cgroup name.
+    ///
+    /// Probes both v1 and v2 cgroup APIs and returns data from the highest version available.
+    /// Returns `None` if the cgroup does not exist or if a limit is not set.
+    fn get_cgroup_cpu_quota_and_period_us(&self, name: &str) -> Option<(u64, u64)> {
+        self.get_v2_cgroup_cpu_quota_and_period_us(name)
+            .or_else(|| self.get_v1_cgroup_cpu_quota_and_period_us(name))
+    }
+
+    fn get_v2_cgroup_cpu_quota_and_period_us(&self, name: &str) -> Option<(u64, u64)> {
+        let contents = self.fs.get_v2_cgroup_cpu_quota_and_period(name)?;
+        parse_v2_cgroup_cpu_quota_and_period_us(&contents)
+    }
+
+    fn get_v1_cgroup_cpu_quota_and_period_us(&self, name: &str) -> Option<(u64, u64)> {
+        let quota_contents = self.fs.get_v1_cgroup_cpu_quota(name)?;
+        let period_contents = self.fs.get_v1_cgroup_cpu_period(name)?;
+
+        parse_v1_cgroup_cpu_quota_and_period_us(&quota_contents, &period_contents)
     }
 }
 
@@ -411,6 +441,64 @@ struct CpuInfo {
     frequency_mhz: u32,
 }
 
+/// This is the relative path of the cgroup the current process belongs to (e.g. `/foo/bar`)
+/// or `None` if no cgroup is assigned.
+///
+/// The content a plaintest file with one line for each (sub)process visible to the process.
+///
+/// ```text
+/// 17:cpuset:/docker/6a74f501e3b4c9d93ad440a7b73149cf2b5d56073c109a8d774c0793f7fe267f
+/// 16:cpu:/docker/6a74f501e3b4c9d93ad440a7b73149cf2b5d56073c109a8d774c0793f7fe267f
+/// 15:memory:/docker/6a74f501e3b4c9d93ad440a7b73149cf2b5d56073c109a8d774c0793f7fe267f
+/// 0::/docker/6a74f501e3b4c9d93ad440a7b73149cf2b5d56073c109a8d774c0793f7fe267f
+/// ```
+///
+/// This file may contain lines in both cgroups v1 and v2 format. To maintain implementation
+/// simplicity, we are going to assume the cgroup name is the same between v1 and v2 and only look
+/// for the v2 line (even if we try using the v1 API to access it later). In all tested
+/// configurations so far this has been the case.
+fn parse_cgroup_name(cgroup_contents: impl AsRef<str>) -> Option<String> {
+    cgroup_contents.as_ref().lines().find_map(|line| {
+        if !line.starts_with("0::") {
+            return None;
+        }
+
+        Some(line.chars().skip(3).collect::<String>())
+    })
+}
+
+fn parse_v2_cgroup_cpu_quota_and_period_us(contents: &str) -> Option<(u64, u64)> {
+    let contents = contents.trim();
+
+    if contents == "max" || contents.is_empty() {
+        return None;
+    }
+
+    let (quota_str, period_str) = contents.split_once(' ')?;
+
+    let quota = quota_str.parse::<u64>().ok()?;
+    let period = period_str.parse::<u64>().ok()?;
+
+    Some((quota, period))
+}
+
+fn parse_v1_cgroup_cpu_quota_and_period_us(
+    quota_contents: &str,
+    period_contents: &str,
+) -> Option<(u64, u64)> {
+    let quota_contents = quota_contents.trim();
+    let period_contents = period_contents.trim();
+
+    if quota_contents == "-1" || quota_contents.is_empty() {
+        return None;
+    }
+
+    let quota = quota_contents.parse::<u64>().ok()?;
+    let period = period_contents.parse::<u64>().ok()?;
+
+    Some((quota, period))
+}
+
 #[allow(
     clippy::arithmetic_side_effects,
     clippy::cast_possible_truncation,
@@ -422,9 +510,13 @@ struct CpuInfo {
 mod tests {
     use std::fmt::Write;
 
+    use testing::f64_diff_abs;
+
     use crate::pal::linux::{MockBindings, MockFilesystem};
 
     use super::*;
+
+    const PROCESSOR_TIME_CLOSE_ENOUGH: f64 = 0.01;
 
     #[test]
     fn get_all_processors_smoke_test() {
@@ -843,6 +935,70 @@ mod tests {
             .return_const(format!("Cpus_allowed_list: {allowed_cpus}"));
     }
 
+    /// Set quota to -1 for infinity (transformed for v2).
+    fn simulate_cgroup_time_limit(
+        fs: &mut MockFilesystem,
+        quota: i64,
+        period: i64,
+        v1: bool,
+        v2: bool,
+    ) {
+        const CGROUP_NAME: &str = "/foo/bar";
+
+        let cgroup_file_contents = format!(
+            "17:cpuset:{CGROUP_NAME}
+16:cpu:{CGROUP_NAME}
+15:memory:{CGROUP_NAME}
+0::{CGROUP_NAME}
+"
+        );
+
+        fs.expect_get_proc_self_cgroup()
+            .times(1)
+            .return_const(cgroup_file_contents);
+
+        if v1 {
+            fs.expect_get_v1_cgroup_cpu_period()
+                .withf(move |name| name == CGROUP_NAME)
+                .times(1)
+                .return_const(period.to_string());
+            fs.expect_get_v1_cgroup_cpu_quota()
+                .withf(move |name| name == CGROUP_NAME)
+                .times(1)
+                .return_const(quota.to_string());
+        }
+
+        if v2 {
+            if quota == -1 {
+                fs.expect_get_v2_cgroup_cpu_quota_and_period()
+                    .withf(move |name| name == CGROUP_NAME)
+                    .times(1)
+                    .return_const("max".to_string());
+            } else {
+                fs.expect_get_v2_cgroup_cpu_quota_and_period()
+                    .withf(move |name| name == CGROUP_NAME)
+                    .times(1)
+                    .return_const(format!("{quota} {period}"));
+            }
+        } else {
+            // v2 is always checked first, so if only v1 we still
+            // need to return None here.
+            fs.expect_get_v2_cgroup_cpu_quota_and_period()
+                .withf(move |name| name == CGROUP_NAME)
+                .times(1)
+                .return_const(None);
+        }
+
+        // If neither is requested, we also need to return None for v1 quota,
+        // as that is probed to check if data v1 is available.
+        if !v1 && !v2 {
+            fs.expect_get_v1_cgroup_cpu_quota()
+                .withf(move |name| name == CGROUP_NAME)
+                .times(1)
+                .return_const(None);
+        }
+    }
+
     #[test]
     fn pin_current_thread_to_single_processor() {
         let mut bindings = MockBindings::new();
@@ -1021,4 +1177,342 @@ mod tests {
         assert_eq!(current_thread_processors.len(), 1);
         assert_eq!(current_thread_processors[0], 2);
     }
+
+    #[test]
+    fn max_processor_time_without_cgroup() {
+        let mut fs = MockFilesystem::new();
+
+        simulate_processor_layout(
+            &mut fs,
+            [0, 1, 2, 3, 4, 5],
+            // 2 inactive processors.
+            Some([true, true, true, true, false, false]),
+            None,
+            [0, 0, 0, 0, 0, 0],
+            [99.9, 99.9, 99.9, 99.9, 99.9, 99.9],
+        );
+
+        fs.expect_get_proc_self_cgroup().times(1).return_const(None);
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        let max_processor_time = platform.max_processor_time();
+
+        #[expect(
+            clippy::float_cmp,
+            reason = "we use absolute error, which is the right way to compare"
+        )]
+        {
+            assert_eq!(
+                f64_diff_abs(max_processor_time, 4.0, PROCESSOR_TIME_CLOSE_ENOUGH),
+                0.0
+            );
+        }
+    }
+
+    #[test]
+    fn max_processor_time_below_available_v1() {
+        // If the limit is less than the number of available processors,
+        // we should use the cgroup limit as max processor time.
+        let mut fs = MockFilesystem::new();
+
+        simulate_processor_layout(
+            &mut fs,
+            [0, 1, 2, 3, 4, 5],
+            // 2 inactive processors.
+            Some([true, true, true, true, false, false]),
+            None,
+            [0, 0, 0, 0, 0, 0],
+            [99.9, 99.9, 99.9, 99.9, 99.9, 99.9],
+        );
+
+        simulate_cgroup_time_limit(&mut fs, 20, 10, true, false);
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        let max_processor_time = platform.max_processor_time();
+
+        #[expect(
+            clippy::float_cmp,
+            reason = "we use absolute error, which is the right way to compare"
+        )]
+        {
+            assert_eq!(
+                f64_diff_abs(max_processor_time, 2.0, PROCESSOR_TIME_CLOSE_ENOUGH),
+                0.0
+            );
+        }
+    }
+
+    #[test]
+    fn max_processor_time_below_available_v2() {
+        // If the limit is less than the number of available processors,
+        // we should use the cgroup limit as max processor time.
+        let mut fs = MockFilesystem::new();
+
+        simulate_processor_layout(
+            &mut fs,
+            [0, 1, 2, 3, 4, 5],
+            // 2 inactive processors.
+            Some([true, true, true, true, false, false]),
+            None,
+            [0, 0, 0, 0, 0, 0],
+            [99.9, 99.9, 99.9, 99.9, 99.9, 99.9],
+        );
+
+        simulate_cgroup_time_limit(&mut fs, 20, 10, false, true);
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        let max_processor_time = platform.max_processor_time();
+
+        #[expect(
+            clippy::float_cmp,
+            reason = "we use absolute error, which is the right way to compare"
+        )]
+        {
+            assert_eq!(
+                f64_diff_abs(max_processor_time, 2.0, PROCESSOR_TIME_CLOSE_ENOUGH),
+                0.0
+            );
+        }
+    }
+
+    #[test]
+    fn max_processor_time_above_available() {
+        // If the limit is more than the number of available processors,
+        // we should use the available processor count as max processor time.
+        let mut fs = MockFilesystem::new();
+
+        simulate_processor_layout(
+            &mut fs,
+            [0, 1, 2, 3, 4, 5],
+            // 2 inactive processors.
+            Some([true, true, true, true, false, false]),
+            None,
+            [0, 0, 0, 0, 0, 0],
+            [99.9, 99.9, 99.9, 99.9, 99.9, 99.9],
+        );
+
+        simulate_cgroup_time_limit(&mut fs, 99999, 100, false, true);
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        let max_processor_time = platform.max_processor_time();
+
+        #[expect(
+            clippy::float_cmp,
+            reason = "we use absolute error, which is the right way to compare"
+        )]
+        {
+            assert_eq!(
+                f64_diff_abs(max_processor_time, 4.0, PROCESSOR_TIME_CLOSE_ENOUGH),
+                0.0
+            );
+        }
+    }
+
+    #[test]
+    fn max_processor_time_with_infinite_limit_v1() {
+        // If the limit is infinity,
+        // we should use the available processor count as max processor time.
+        let mut fs = MockFilesystem::new();
+
+        simulate_processor_layout(
+            &mut fs,
+            [0, 1, 2, 3, 4, 5],
+            // 2 inactive processors.
+            Some([true, true, true, true, false, false]),
+            None,
+            [0, 0, 0, 0, 0, 0],
+            [99.9, 99.9, 99.9, 99.9, 99.9, 99.9],
+        );
+
+        simulate_cgroup_time_limit(&mut fs, -1, 100, true, false);
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        let max_processor_time = platform.max_processor_time();
+
+        #[expect(
+            clippy::float_cmp,
+            reason = "we use absolute error, which is the right way to compare"
+        )]
+        {
+            assert_eq!(
+                f64_diff_abs(max_processor_time, 4.0, PROCESSOR_TIME_CLOSE_ENOUGH),
+                0.0
+            );
+        }
+    }
+
+    #[test]
+    fn max_processor_time_with_no_limit() {
+        // If there is no data in the limit file,
+        // we should use the available processor count as max processor time.
+        let mut fs = MockFilesystem::new();
+
+        simulate_processor_layout(
+            &mut fs,
+            [0, 1, 2, 3, 4, 5],
+            // 2 inactive processors.
+            Some([true, true, true, true, false, false]),
+            None,
+            [0, 0, 0, 0, 0, 0],
+            [99.9, 99.9, 99.9, 99.9, 99.9, 99.9],
+        );
+
+        simulate_cgroup_time_limit(&mut fs, 50, 100, false, false);
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        let max_processor_time = platform.max_processor_time();
+
+        #[expect(
+            clippy::float_cmp,
+            reason = "we use absolute error, which is the right way to compare"
+        )]
+        {
+            assert_eq!(
+                f64_diff_abs(max_processor_time, 4.0, PROCESSOR_TIME_CLOSE_ENOUGH),
+                0.0
+            );
+        }
+    }
+
+    #[test]
+    fn parse_cgroup_name_typical() {
+        let input =
+            "17:cpuset:/docker/6a74f501e3b4c9d93ad440a7b73149cf2b5d56073c109a8d774c0793f7fe267f
+16:cpu:/docker/6a74f501e3b4c9d93ad440a7b73149cf2b5d56073c109a8d774c0793f7fe267f
+15:memory:/docker/6a74f501e3b4c9d93ad440a7b73149cf2b5d56073c109a8d774c0793f7fe267f
+0::/docker/6a74f501e3b4c9d93ad440a7b73149cf2b5d56073c109a8d774c0793f7fe267f";
+
+        let expected = "/docker/6a74f501e3b4c9d93ad440a7b73149cf2b5d56073c109a8d774c0793f7fe267f";
+
+        let result = parse_cgroup_name(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn parse_cgroup_name_v2_only() {
+        let input = "0::/docker/6a74f501e3b4c9d93ad440a7b73149cf2b5d56073c109a8d774c0793f7fe267f";
+
+        let expected = "/docker/6a74f501e3b4c9d93ad440a7b73149cf2b5d56073c109a8d774c0793f7fe267f";
+
+        let result = parse_cgroup_name(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn parse_cgroup_name_v1_only() {
+        let input =
+            "17:cpuset:/docker/6a74f501e3b4c9d93ad440a7b73149cf2b5d56073c109a8d774c0793f7fe267f
+        16:cpu:/docker/6a74f501e3b4c9d93ad440a7b73149cf2b5d56073c109a8d774c0793f7fe267f
+        15:memory:/docker/6a74f501e3b4c9d93ad440a7b73149cf2b5d56073c109a8d774c0793f7fe267f";
+
+        let result = parse_cgroup_name(input);
+
+        // We do not today support v1-only configurations. In theory, we could add support for this
+        // but we will hold off on supporting a legacy API version until there is a customer need
+        // because all test systems use at least a hybrid v1/v2 configuration where even if the data
+        // is configured via v1 API, the name is still published via v2 API.
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_cgroup_name_garbage() {
+        let input = "this does not appear to be a valid cgroup file";
+
+        let result = parse_cgroup_name(input);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_v2_cgroup_cpu_quota_and_period_us_typical() {
+        let input = "100000 100000";
+        let expected = (100_000, 100_000);
+
+        let result = parse_v2_cgroup_cpu_quota_and_period_us(input).unwrap();
+        assert_eq!(result, expected);
+
+        let input = "3333 1000";
+        let expected = (3333, 1000);
+
+        let result = parse_v2_cgroup_cpu_quota_and_period_us(input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn parse_v2_cgroup_cpu_quota_and_period_us_unlimited() {
+        let input = "max";
+
+        let result = parse_v2_cgroup_cpu_quota_and_period_us(input);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_v2_cgroup_cpu_quota_and_period_us_garbage() {
+        let input = "12345 this is complete garbage";
+
+        let result = parse_v2_cgroup_cpu_quota_and_period_us(input);
+        // We treat errors as missing data and ignore it, little point complaining here.
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_v1_cgroup_cpu_quota_and_period_us_typical() {
+        let quota = "100000";
+        let period = "100000";
+        let expected = (100_000, 100_000);
+
+        let result = parse_v1_cgroup_cpu_quota_and_period_us(quota, period).unwrap();
+        assert_eq!(result, expected);
+
+        let quota = "3333";
+        let period = "1000";
+        let expected = (3333, 1000);
+
+        let result = parse_v1_cgroup_cpu_quota_and_period_us(quota, period).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn parse_v1_cgroup_cpu_quota_and_period_us_unlimited() {
+        let quota = "-1";
+        let period = "100000";
+
+        let result = parse_v1_cgroup_cpu_quota_and_period_us(quota, period);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_v1_cgroup_cpu_quota_and_period_us_garbage() {
+        let quota = "this is garbage";
+        let period = "there is no data here";
+
+        let result = parse_v1_cgroup_cpu_quota_and_period_us(quota, period);
+        // We treat errors as missing data and ignore it, little point complaining here.
+        assert!(result.is_none());
+    }
+
+    // TODO: Tests for v1 versus v2 cgroup retrieval.
 }

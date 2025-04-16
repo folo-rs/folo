@@ -69,19 +69,35 @@ impl Filesystem for FilesystemFacade {
         }
     }
 
-    fn get_proc_self_cgroup_name(&self) -> Option<String> {
+    fn get_proc_self_cgroup(&self) -> Option<String> {
         match self {
-            Self::Real(filesystem) => filesystem.get_proc_self_cgroup_name(),
+            Self::Real(filesystem) => filesystem.get_proc_self_cgroup(),
             #[cfg(test)]
-            Self::Mock(mock) => mock.get_proc_self_cgroup_name(),
+            Self::Mock(mock) => mock.get_proc_self_cgroup(),
         }
     }
 
-    fn get_cgroup_cpu_quota_and_period_us(&self, name: &str) -> Option<(u64, u64)> {
+    fn get_v1_cgroup_cpu_quota(&self, cgroup_name: &str) -> Option<String> {
         match self {
-            Self::Real(filesystem) => filesystem.get_cgroup_cpu_quota_and_period_us(name),
+            Self::Real(filesystem) => filesystem.get_v1_cgroup_cpu_quota(cgroup_name),
             #[cfg(test)]
-            Self::Mock(mock) => mock.get_cgroup_cpu_quota_and_period_us(name),
+            Self::Mock(mock) => mock.get_v1_cgroup_cpu_quota(cgroup_name),
+        }
+    }
+
+    fn get_v1_cgroup_cpu_period(&self, cgroup_name: &str) -> Option<String> {
+        match self {
+            Self::Real(filesystem) => filesystem.get_v1_cgroup_cpu_period(cgroup_name),
+            #[cfg(test)]
+            Self::Mock(mock) => mock.get_v1_cgroup_cpu_period(cgroup_name),
+        }
+    }
+
+    fn get_v2_cgroup_cpu_quota_and_period(&self, cgroup_name: &str) -> Option<String> {
+        match self {
+            Self::Real(filesystem) => filesystem.get_v2_cgroup_cpu_quota_and_period(cgroup_name),
+            #[cfg(test)]
+            Self::Mock(mock) => mock.get_v2_cgroup_cpu_quota_and_period(cgroup_name),
         }
     }
 }
