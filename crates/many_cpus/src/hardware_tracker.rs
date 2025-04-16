@@ -53,7 +53,7 @@ pub struct HardwareTracker {
 }
 
 impl HardwareTracker {
-    /// Obtains a reference to the current processor for the duration of a callback.
+    /// Obtains a reference to the current processor, for the duration of a callback.
     ///
     /// If all you need is the processor ID or memory region ID, you may see better performance
     /// if you query [`current_processor_id()`][1] or [`current_memory_region_id()`][2] directly.
@@ -365,6 +365,7 @@ impl !Sync for HardwareTracker {}
 
 #[cfg(test)]
 mod tests {
+    use folo_utils::nz;
     use itertools::Itertools;
     use mockall::Sequence;
     use nonempty::nonempty;
@@ -665,7 +666,9 @@ mod tests {
     #[cfg(not(miri))] // Miri does not support talking to the real platform.
     fn real_current_processor_id_is_unique_and_matches_expectation() {
         // We spawn a thread on every processor and check that the processor ID is unique.
-        let mut processor_ids = ProcessorSet::all()
+        let mut processor_ids = ProcessorSet::builder()
+            .take_all()
+            .unwrap()
             .spawn_threads(|processor| {
                 let processor_id = processor.id();
 
@@ -684,5 +687,56 @@ mod tests {
         let unique_id_count = processor_ids.iter().dedup().count();
 
         assert_eq!(unique_id_count, processor_ids.len());
+    }
+
+    #[test]
+    fn real_pinning_is_reported() {
+        // We pin to an arbitrary thread and then verify that it says "yep, is pinned".
+        let one = ProcessorSet::builder().take(nz!(1)).unwrap();
+
+        let (is_processor_pinned, is_memory_region_pinned) = one
+            .spawn_thread(|_| {
+                (
+                    HardwareTracker::is_thread_processor_pinned(),
+                    HardwareTracker::is_thread_memory_region_pinned(),
+                )
+            })
+            .join()
+            .unwrap();
+
+        // Pinning to one processor means we are also pinned to one memory region.
+        assert!(is_processor_pinned);
+        assert!(is_memory_region_pinned);
+    }
+
+    #[test]
+    fn real_active_processor_count_is_at_least_processor_set_take_all() {
+        // When we take_all() and build a ProcessorSet, we cannot get more processors
+        // than are actually active on the system. This is a sanity check to compare the two.
+        let all_processors = ProcessorSet::builder().take_all().unwrap();
+
+        let active_processors = usize::try_from(HardwareTracker::active_processor_count())
+            .expect("never going to have more than usize::MAX processors");
+
+        // It is OK if take_all() returns less (there are more constraints than "is active").
+        assert!(active_processors >= all_processors.len());
+    }
+
+    #[test]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "unavoidable f64-usize casting but we know the value is positive"
+    )]
+    fn real_resource_quota_is_not_larger_than_processor_take_all() {
+        // The resource quota we observe cannot be grater than take_all() of processors
+        // because the take_all() default behavior is to use the resource quota as max limit.
+        // This does not tell us which one is wrong on failure, but at least is a signal.
+        let max_processor_time = HardwareTracker::resource_quota().max_processor_time();
+        let all_processors = ProcessorSet::builder().take_all().unwrap();
+
+        let max_processor_time_usize = max_processor_time.floor() as usize;
+
+        assert!(max_processor_time_usize <= all_processors.len(),);
     }
 }

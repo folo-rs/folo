@@ -19,54 +19,7 @@ use crate::{
 /// You can obtain a builder via [`ProcessorSet::builder()`] or from an existing processor set
 /// via [`ProcessorSet::to_builder()`].
 ///
-/// # External constraints
-///
-/// The operating system may define constraints that prohibit the application from using all
-/// the available processors (e.g. when the app is containerized and provided limited
-/// hardware resources).
-///
-/// This crate treats platform constraints as follows:
-///
-/// * Hard limits on which processors are allowed are respected - forbidden processors are mostly
-///   ignored by this crate and cannot be used to spawn threads, though such processors are still
-///   accounted for when inspecting hardware information such as "max processor count".
-///   The mechanisms for defining such limits are cgroups on Linux and job objects on Windows.
-///   See `examples/obey_job_limits_windows.rs` for a Windows-specific example.
-/// * Soft limits on which processors are allowed are ignored by default - specifying a processor
-///   affinity via `taskset` on Linux, `start.exe /affinity 0xff` on Windows or similar mechanisms
-///   does not affect the set of processors this crate will use by default, though you can opt in to
-///   this (see next chapter).
-/// * Limits on processor time are considered an upper bound on the number of processors that can be
-///   included in a processor set. For example, if you configure a processor time limit of
-///   10 seconds per second of real time on a 20-processor system, then the builder may return up
-///   to 10 of the processors in the resulting processor set (though it may be a different 10 every
-///   time you create a new processor set from scratch). This limit is optional and may be disabled
-///   by calling [`ignoring_resource_quota()`][2].
-///
-/// # Working with processor time constraints
-///
-/// If a process exceeds the processor time limit, the operating system will delay executing the
-/// process further until the "debt is paid off". This is undesirable for most workloads because:
-///
-/// 1. There will be random latency spikes from when the operating system decides to apply a delay.
-/// 1. The delay may not be evenly applied across all threads of the process, leading to unbalanced
-///    load between worker threads.
-///
-/// For predictable behavior that does not suffer from delay side-effects, it is important that the
-/// process does not exceed the processor time limit. To keep out of trouble,
-/// follow these guidelines:
-///
-/// * Ensure that all your concurrently executing thread pools are derived from the same processor
-///   set, so there is a single set of processors (up to the resource quota) that all work of the
-///   process will be executed on. Any new processor sets you create should be subsets of this set,
-///   thereby ensuring that all worker threads combined do not exceed the quota.
-/// * Ensure that the master processor set is constructed while obeying the resource quota (which is
-///   enabled by default),
-///
-/// If your resource constraints are active on process startup, you can use `ProcessorSet::all()`
-/// as the master set from which all other processor sets are derived using
-/// `ProcessorSet::all().to_builder()`. This will ensure the processor time quota is always obeyed
-/// because `ProcessorSet::all()` is guaranteed to obey the resource quota.
+#[doc = include_str!("../docs/snippets/external_constraints.md")]
 ///
 /// # Inheriting processor affinity from current thread
 ///
@@ -638,7 +591,7 @@ mod tests_real {
 
     #[test]
     fn spawn_on_any_processor() {
-        let set = ProcessorSet::all();
+        let set = ProcessorSet::builder().take_all().unwrap();
         let result = set.spawn_thread(move |_| 1234).join().unwrap();
 
         assert_eq!(result, 1234);
@@ -646,9 +599,9 @@ mod tests_real {
 
     #[test]
     fn spawn_on_every_processor() {
-        let processor_count = ProcessorSet::all().len();
+        let set = ProcessorSet::builder().take_all().unwrap();
+        let processor_count = set.len();
 
-        let set = ProcessorSet::all();
         let join_handles = set.spawn_threads(move |_| 4567);
 
         assert_eq!(join_handles.len(), processor_count);

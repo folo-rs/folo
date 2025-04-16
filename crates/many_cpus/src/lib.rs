@@ -165,29 +165,7 @@
 //! runtime. For example, if the set of active processors changes at runtime (e.g. due to a change in
 //! hardware resources or OS configuration) then this change may not be visible to the crate.
 //!
-//! # External constraints
-//!
-//! The operating system may define constraints that prohibit the application from using all the available
-//! processors (e.g. when the app is containerized and provided limited hardware resources).
-//!
-//! This crate treats platform constraints as follows:
-//!
-//! * Hard limits on which processors are allowed are respected - forbidden processors are mostly
-//!   ignored by this crate and cannot be used to spawn threads, though such processors are still
-//!   accounted for when inspecting hardware information such as "max processor count".
-//!   The mechanisms for defining such limits are cgroups on Linux and job objects on Windows.
-//!   See `examples/obey_job_limits_windows.rs` for a Windows-specific example.
-//! * Soft limits on which processors are allowed are ignored by default - specifying a processor
-//!   affinity via `taskset` on Linux, `start.exe /affinity 0xff` on Windows or similar mechanisms
-//!   does not affect the set of processors this crate will use by default, though you can opt in to
-//!   this (see next chapter).
-//!
-//! Note that limits on **processor time** are ignored - they are still enforced by the platform (which
-//! will force idle periods to keep the process within the limits) but have no effect on which actual
-//! processors are available for use. For example, if you configure a processor time limit of 10 seconds
-//! per second of real time on a 20-processor system, then at full utilization this crate may use all 20
-//! processors but only for a maximum of 0.5 seconds of each second (leaving the processors idle for
-//! the remaining 0.5 seconds, potentially smeared around in smaller units over the whole second).
+#![doc = include_str!("../docs/snippets/external_constraints.md")]
 //!
 //! # Example: inheriting soft limits on allowed processors
 //!

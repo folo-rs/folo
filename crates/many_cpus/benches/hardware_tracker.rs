@@ -71,7 +71,11 @@ fn entrypoint(c: &mut Criterion) {
     });
 
     // Don't forget to unpin the thread to avoid affecting future benchmarks!
-    ProcessorSet::all().pin_current_thread_to();
+    ProcessorSet::builder()
+        .ignoring_resource_quota()
+        .take_all()
+        .unwrap()
+        .pin_current_thread_to();
 
     group.finish();
 }
