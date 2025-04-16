@@ -10,7 +10,7 @@ use windows::{
         System::{
             JobObjects::{
                 JOB_OBJECT_CPU_RATE_CONTROL_ENABLE, JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
-                JOB_OBJECT_CPU_RATE_CONTROL_MIN_MAX_RATE,
+                JOB_OBJECT_CPU_RATE_CONTROL_MIN_MAX_RATE, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION,
             },
             SystemInformation::{
                 GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP, RelationNumaNode,
@@ -290,13 +290,6 @@ impl Platform for BuildTargetPlatform {
     }
 
     fn max_processor_time(&self) -> f64 {
-        #[cfg_attr(test, mutants::skip)] // Mutating these constants is not helpful.
-        const HARD_CAP_FLAGS: u32 =
-            JOB_OBJECT_CPU_RATE_CONTROL_ENABLE.0 | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP.0;
-        #[cfg_attr(test, mutants::skip)] // Mutating these constants is not helpful.
-        const SOFT_CAP_FLAGS: u32 =
-            JOB_OBJECT_CPU_RATE_CONTROL_ENABLE.0 | JOB_OBJECT_CPU_RATE_CONTROL_MIN_MAX_RATE.0;
-
         // The job object processor time limits are relative to the total number of
         // active processors on the system and do not consider any per-process limitations.
         let system_processor_count = f64::from(self.active_processor_count());
@@ -319,13 +312,13 @@ impl Platform for BuildTargetPlatform {
         // 1. Hard cap, which just gives us a single number.
         // 2. Soft cap (guaranteed + ceiling), in which case we use the ceiling.
         // Other modes (e.g. weighted) we ignore because they cannot be expressed in absolutes.
-        if rate_control.ControlFlags.0 & HARD_CAP_FLAGS == HARD_CAP_FLAGS {
+        if is_hard_capped(rate_control) {
             // SAFETY: Guarded by the flags we validated.
             let windows_cpu_rate = unsafe { rate_control.Anonymous.CpuRate };
 
             Self::windows_processor_rate_to_processor_time(windows_cpu_rate, system_processor_count)
                 .min(current_process_processor_count)
-        } else if rate_control.ControlFlags.0 & SOFT_CAP_FLAGS == SOFT_CAP_FLAGS {
+        } else if is_soft_capped(rate_control) {
             // SAFETY: Guarded by the flags we validated.
             let windows_cpu_rate = unsafe { rate_control.Anonymous.Anonymous.MaxRate };
 
@@ -800,6 +793,22 @@ impl BuildTargetPlatform {
     pub fn __private_get_all_processors(&self) {
         black_box(self.get_all_processors());
     }
+}
+
+#[cfg_attr(test, mutants::skip)] // No-op mutates the constant, not helpful.
+fn is_hard_capped(rate_control: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION) -> bool {
+    const HARD_CAP_FLAGS: u32 =
+        JOB_OBJECT_CPU_RATE_CONTROL_ENABLE.0 | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP.0;
+
+    rate_control.ControlFlags.0 & HARD_CAP_FLAGS == HARD_CAP_FLAGS
+}
+
+#[cfg_attr(test, mutants::skip)] // No-op mutates the constant, not helpful.
+fn is_soft_capped(rate_control: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION) -> bool {
+    const SOFT_CAP_FLAGS: u32 =
+        JOB_OBJECT_CPU_RATE_CONTROL_ENABLE.0 | JOB_OBJECT_CPU_RATE_CONTROL_MIN_MAX_RATE.0;
+
+    rate_control.ControlFlags.0 & SOFT_CAP_FLAGS == SOFT_CAP_FLAGS
 }
 
 #[allow(
@@ -2080,6 +2089,38 @@ mod tests {
             .expect_get_current_job_cpu_rate_control()
             .times(1)
             .return_const(None);
+
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
+
+        // This will internally call "get all processors" to identify the total count,
+        // so our simulation will correctly exercise the mocked simulation calls.
+        let max_processor_time = platform.max_processor_time();
+
+        #[expect(
+            clippy::float_cmp,
+            reason = "we use absolute error, which is the right way to compare"
+        )]
+        {
+            assert_eq!(
+                f64_diff_abs(max_processor_time, 4.0, PROCESSOR_TIME_CLOSE_ENOUGH),
+                0.0
+            );
+        }
+    }
+
+    #[test]
+    fn max_processor_time_without_limits_on_job() {
+        // If there is a job but it has no limits, max_processor_time is
+        // the same as the number of available processors.
+        let mut bindings = MockBindings::new();
+
+        // 4 processors in a single group, 2 more offline processors.
+        simulate_processor_layout(&mut bindings, [4], [6], [vec![0; 4]], [vec![0; 4]], None);
+
+        bindings
+            .expect_get_current_job_cpu_rate_control()
+            .times(1)
+            .return_const(Some(JOBOBJECT_CPU_RATE_CONTROL_INFORMATION::default()));
 
         let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
 

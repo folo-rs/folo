@@ -497,7 +497,6 @@ impl ProcessorSetBuilder {
         ))
     }
 
-    #[cfg_attr(test, mutants::skip)] // Thanks for the infinite loop, cargo-mutants!
     fn reduce_processors_until_under_quota(&self, processors: Vec<Processor>) -> Vec<Processor> {
         let Some(max_count) = self.resource_quota_processor_count_limit() else {
             return processors;
@@ -507,7 +506,9 @@ impl ProcessorSetBuilder {
 
         // If we picked too many, reduce until we are under quota.
         while processors.len() > max_count {
-            processors.pop();
+            processors
+                .pop()
+                .expect("guarded by len-check in loop condition");
         }
 
         processors
