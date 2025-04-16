@@ -1,6 +1,10 @@
 //! Job objects can impose various limits on the Windows processes they govern. These tests
 //! verify that the logic in our crate correctly detects these limits and behaves accordingly
 //! to keep its own behavior within those limits.
+//!
+//! NB! We `ProcessorSet::builder()` in all cases in this file to avoid `ProcessorSet::all()` which
+//! in the current implementation gets cached on first access because the "all" set is assumed
+//! not to change during process execution (which is an imperfect but acceptable simplification).
 
 #![cfg(windows)]
 
@@ -33,7 +37,7 @@ fn obeys_processor_selection_limits() {
     // Restrict the current process to only use 2 processors for the duration of this test.
     let job = Job::builder().with_processor_count(nz!(2)).build();
 
-    let processor_count = ProcessorSet::all().len();
+    let processor_count = ProcessorSet::builder().take_all().unwrap().len();
     assert_eq!(processor_count, 2);
 
     // This must also constrain the processor time quota to 2 processors.
@@ -119,7 +123,7 @@ fn noop_job_has_no_effect() {
     // Create a job with no limits. This should not affect the current process.
     let job = Job::builder().build();
 
-    let processor_count = ProcessorSet::all().len();
+    let processor_count = ProcessorSet::builder().take_all().unwrap().len();
     assert_eq!(processor_count, unconstrained_processor_count);
 
     let resource_quota = HardwareTracker::resource_quota();
