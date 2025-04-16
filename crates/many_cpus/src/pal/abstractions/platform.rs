@@ -59,7 +59,7 @@ pub(crate) trait Platform: Debug + Send + Sync + 'static {
 
     /// Gets the total number of active processors on the system, including ones that are not
     /// necessarily available to the current process (if any such are known).
-    /// 
+    ///
     /// We generally avoid relying on system-scoped data like this but because some platform APIs
     /// speak in terms of system-scoped data, we occasionally need to access such values.
     #[must_use]

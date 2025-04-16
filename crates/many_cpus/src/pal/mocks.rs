@@ -86,11 +86,11 @@ impl Platform for MockPlatform {
     fn current_thread_processors(&self) -> NonEmpty<ProcessorId> {
         self.current_thread_processors()
     }
-    
+
     fn max_processor_time(&self) -> f64 {
         self.max_processor_time()
     }
-    
+
     fn active_processor_count(&self) -> ProcessorId {
         self.active_processor_count()
     }

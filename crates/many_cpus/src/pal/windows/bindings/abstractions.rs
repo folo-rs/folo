@@ -1,11 +1,14 @@
 use std::fmt::Debug;
 
 use windows::{
-    core::Result, Win32::System::{
-        JobObjects::JOBOBJECT_CPU_RATE_CONTROL_INFORMATION, Kernel::PROCESSOR_NUMBER, SystemInformation::{
+    Win32::System::{
+        JobObjects::JOBOBJECT_CPU_RATE_CONTROL_INFORMATION,
+        Kernel::PROCESSOR_NUMBER,
+        SystemInformation::{
             GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP, SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
-        }
-    }
+        },
+    },
+    core::Result,
 };
 
 /// Bindings for FFI calls into external libraries (either provided by operating system or not).

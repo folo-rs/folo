@@ -3,7 +3,8 @@ use std::{cell::RefCell, marker::PhantomData};
 use negative_impl::negative_impl;
 
 use crate::{
-    pal::{AbstractProcessor, Platform, PlatformFacade}, MemoryRegionId, Processor, ProcessorId, ResourceQuota
+    MemoryRegionId, Processor, ProcessorId, ResourceQuota,
+    pal::{AbstractProcessor, Platform, PlatformFacade},
 };
 
 thread_local! {
@@ -234,7 +235,7 @@ impl HardwareTracker {
 
     /// The number of active processors on the system, including processors that are not available
     /// to the current process.
-    /// 
+    ///
     /// This may be useful for working with system APIs that deal with system-scoped values,
     /// instead of process-scoped values that need to consider current process limits.
     #[must_use]
