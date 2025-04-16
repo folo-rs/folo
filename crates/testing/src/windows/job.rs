@@ -238,6 +238,7 @@ impl JobBuilder {
 }
 
 #[cfg(test)]
+#[cfg(not(miri))] // Miri cannot use the real operating system APIs.
 mod tests {
     use folo_utils::nz;
 
