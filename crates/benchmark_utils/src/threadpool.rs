@@ -20,12 +20,6 @@ pub struct ThreadPool {
 }
 
 impl ThreadPool {
-    /// Creates a thread pool with one thread per processor available to the current process.
-    #[must_use]
-    pub fn all() -> Self {
-        Self::new(ProcessorSet::all())
-    }
-
     /// Creates a thread pool with one thread per processor in the provided processor set.
     #[must_use]
     pub fn new(processors: &ProcessorSet) -> Self {
@@ -69,6 +63,13 @@ impl ThreadPool {
     }
 }
 
+impl Default for ThreadPool {
+    /// Creates a thread pool with one thread per processor available to the current process.
+    fn default() -> Self {
+        Self::new(&ProcessorSet::default())
+    }
+}
+
 impl Drop for ThreadPool {
     fn drop(&mut self) {
         for tx in self.command_txs.drain(..) {
@@ -103,10 +104,10 @@ mod tests {
 
     #[test]
     fn smoke_test_all() {
-        let expected_all = ProcessorSet::all();
-        let expected_thread_count = expected_all.len();
+        let expected_default = ProcessorSet::default();
+        let expected_thread_count = expected_default.len();
 
-        let pool = ThreadPool::all();
+        let pool = ThreadPool::default();
 
         assert_eq!(pool.thread_count().get(), expected_thread_count);
 
@@ -119,7 +120,7 @@ mod tests {
             }
         });
 
-        // Waits for all thereads to complete their work.
+        // Waits for all threads to complete their work.
         drop(pool);
 
         assert_eq!(

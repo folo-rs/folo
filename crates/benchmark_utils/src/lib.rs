@@ -30,7 +30,7 @@ where
     P: Fn() -> D + Send + Clone + 'static,
     F: Fn(&D) + Send + Clone + 'static,
 {
-    let pool = ThreadPool::all();
+    let pool = ThreadPool::default();
 
     bench_on_threadpool(&pool, iters, prepare_fn, iter_fn)
 }

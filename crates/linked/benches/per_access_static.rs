@@ -42,7 +42,7 @@ impl TestSubject {
 linked::instance_per_access!(static TARGET: TestSubject = TestSubject::new());
 
 fn entrypoint(c: &mut Criterion) {
-    let thread_pool = ThreadPool::all();
+    let thread_pool = ThreadPool::default();
 
     let mut g = c.benchmark_group("per_access_static::get");
 

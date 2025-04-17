@@ -112,7 +112,7 @@ fn thread_local(c: &mut Criterion) {
 }
 
 fn thread_local_multithreaded(c: &mut Criterion) {
-    let thread_pool = ThreadPool::all();
+    let thread_pool = ThreadPool::default();
 
     let mut g = c.benchmark_group("per_thread::ThreadLocalMultithreaded");
 
@@ -208,7 +208,7 @@ fn thread_local_access(c: &mut Criterion) {
         });
     });
 
-    let thread_pool = ThreadPool::all();
+    let thread_pool = ThreadPool::default();
 
     // For comparison, also the LazyLock in multithreaded mode, as all the other
     // ones are thread-local and have no MT overhead but this may have overhead.

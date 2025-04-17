@@ -58,47 +58,41 @@
 //! The functionality may also work on other operating systems if they offer compatible platform
 //! APIs but this is not actively tested.
 //!
-//! # Quick start: spawn threads on specific processors
+//! # Quick start
 //!
 //! The simplest scenario is when you want to start a thread on every processor
 //! (`examples/spawn_on_all_processors.rs`):
 //!
 //! ```rust
-//! use many_cpus::ProcessorSet;
-//!
-//! let all_threads = ProcessorSet::all().spawn_threads(|processor| {
+//! # use many_cpus::ProcessorSet;
+//! let all_threads = ProcessorSet::default().spawn_threads(|processor| {
 //!     println!("Spawned thread on processor {}", processor.id());
 //!
 //!     // In a real service, you would start some work handler here, e.g. to read
 //!     // and process messages from a channel or to spawn a web handler.
 //! });
-//!
-//! for thread in all_threads {
-//!     thread.join().unwrap();
-//! }
-//!
-//! println!("All threads have finished.");
+//! #for thread in all_threads {
+//! #    thread.join().unwrap();
+//! #}
 //! ```
 //!
-//! # Quick start: define processor selection criteria
+//! # Selection criteria
 //!
-//! Depending on the specific circumstances, you may want to filter the set of processors. For example,
-//! you may want to use only two processors but ensure that they are high-performance processors that
-//! are connected to the same physical memory modules so they can cooperatively perform some processing
-//! on a shared data set (`examples/spawn_on_selected_processors.rs`):
+//! Depending on the specific circumstances, you may want to filter the set of processors.
+//! For example, you may want to use only two processors but ensure that they are high-performance
+//! processors that are connected to the same physical memory modules so they can cooperatively
+//! perform some processing on a shared data set (`examples/spawn_on_selected_processors.rs`):
 //!
 //! ```rust
-//! use std::num::NonZero;
-//!
-//! use many_cpus::ProcessorSet;
-//!
+//! #use std::num::NonZero;
+//! #use many_cpus::ProcessorSet;
 //! const PROCESSOR_COUNT: NonZero<usize> = NonZero::new(2).unwrap();
 //!
 //! let selected_processors = ProcessorSet::builder()
 //!     .same_memory_region()
 //!     .performance_processors_only()
 //!     .take(PROCESSOR_COUNT)
-//!     .expect("could not find required processors on this system");
+//!     .expect("could not find required number of processors that match the selection criteria");
 //!
 //! let all_threads = selected_processors.spawn_threads(|processor| {
 //!     println!("Spawned thread on processor {}", processor.id());
@@ -106,15 +100,12 @@
 //!     // In a real service, you would start some work handler here, e.g. to read
 //!     // and process messages from a channel or to spawn a web handler.
 //! });
-//!
-//! for thread in all_threads {
-//!     thread.join().unwrap();
-//! }
-//!
-//! println!("All threads have finished.");
+//! #for thread in all_threads {
+//! #    thread.join().unwrap();
+//! #}
 //! ```
 //!
-//! # Quick start: inspect the hardware environment
+//! # Inspecting the hardware environment
 //!
 //! Functions are provided to easily inspect the current hardware environment
 //! (`examples/observe_processor.rs`):
@@ -159,38 +150,32 @@
 //! Thread executing on processor 4 in memory region 0
 //! ```
 //!
-//! # Dynamic changes in hardware configuration
-//!
-//! The crate does not support detecting and responding to changes in the hardware environment at
-//! runtime. For example, if the set of active processors changes at runtime (e.g. due to a change in
-//! hardware resources or OS configuration) then this change may not be visible to the crate.
+#![doc = include_str!("../docs/snippets/changes_at_runtime.md")]
 //!
 #![doc = include_str!("../docs/snippets/external_constraints.md")]
 //!
-//! # Example: inheriting soft limits on allowed processors
+//! # Inheriting soft limits on allowed processors
 //!
-//! While the crate does not by default obey soft limits, you can opt in to these limits by inheriting
-//! the allowed processor set in the `main()` entrypoint thread
+//! While the crate does not by default obey soft limits, you can opt in to these limits by
+//! inheriting the allowed processor set in the `main()` entrypoint thread
 //! (`examples/spawn_on_inherited_processors.rs`):
 //!
 //! ```rust
-//! use std::{thread, time::Duration};
-//!
-//! use many_cpus::ProcessorSet;
-//!
+//! #use std::{thread, time::Duration};
+//! #use many_cpus::ProcessorSet;
 //! // The set of processors used here can be adjusted via OS mechanisms.
 //! //
 //! // For example, to select only processors 0 and 1:
-//! // Linux: taskset 0x3 target/debug/examples/spawn_on_inherited_processors
-//! // Windows: start /affinity 0x3 target/debug/examples/spawn_on_inherited_processors.exe
-//!
+//! // Linux: `taskset 0x3 target/debug/examples/spawn_on_inherited_processors`
+//! // Windows: `start /affinity 0x3 target/debug/examples/spawn_on_inherited_processors.exe`
 //! let inherited_processors = ProcessorSet::builder()
+//!     // This causes soft limits on processor affinity to be respected.
 //!     .where_available_for_current_thread()
 //!     .take_all()
 //!     .expect("found no processors usable by the current thread - impossible because the thread is currently running on one");
 //!
 //! println!(
-//!     "The current thread has inherited an affinity to {} processors.",
+//!     "After applying soft limits, we are allowed to use {} processors.",
 //!     inherited_processors.len()
 //! );
 //!
@@ -200,17 +185,9 @@
 //!     // In a real service, you would start some work handler here, e.g. to read
 //!     // and process messages from a channel or to spawn a web handler.
 //! });
-//!
-//! for thread in all_threads {
-//!     thread.join().unwrap();
-//! }
-//!
-//! println!("All threads have finished. Exiting in 10 seconds.");
-//!
-//! // Give some time to exit, as on Windows using "start" will create a new window that would
-//! // otherwise disappear instantly, making it hard to see what happened.
-//! # #[cfg(doc)] // Skip the sleep when testing.
-//! thread::sleep(Duration::from_secs(10));
+//! #for thread in all_threads {
+//! #    thread.join().unwrap();
+//! #}
 //! ```
 
 mod clients;

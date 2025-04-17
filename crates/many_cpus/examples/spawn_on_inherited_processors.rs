@@ -1,5 +1,5 @@
-//! Starts one thread on every processor in the system, allowing the set of allowed processors
-//! to be inherited from the environment (based on user configuration).
+//! Starts one thread on every processor in the system, respecting resource quotas and allowing the
+//! set of allowed processors to be inherited from the environment (based on user configuration).
 //!
 //! The set of processors used here can be adjusted via any suitable OS mechanisms.
 //!
@@ -13,12 +13,13 @@ use many_cpus::ProcessorSet;
 
 fn main() {
     let inherited_processors = ProcessorSet::builder()
+        // This causes soft limits on processor affinity to be respected.
         .where_available_for_current_thread()
         .take_all()
         .expect("found no processors usable by the current thread - impossible because the thread is currently running on one");
 
     println!(
-        "The current thread has inherited an affinity to {} processors.",
+        "After applying soft limits, we are allowed to use {} processors.",
         inherited_processors.len()
     );
 

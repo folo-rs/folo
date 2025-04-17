@@ -32,7 +32,7 @@ fn entrypoint(c: &mut Criterion) {
             .unwrap(),
     );
 
-    let all_threads = ThreadPool::all();
+    let all_threads = ThreadPool::default();
 
     // Not every system is going to have multiple memory regions, so only some can do this.
     let two_memory_regions = ProcessorSet::builder()

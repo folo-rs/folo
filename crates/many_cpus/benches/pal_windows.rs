@@ -27,7 +27,7 @@ fn entrypoint(c: &mut Criterion) {
 
 #[cfg(windows)]
 mod windows {
-    use std::{hint::black_box, time::Duration};
+    use std::{hint::black_box, sync::Arc, time::Duration};
 
     use benchmark_utils::{ThreadPool, bench_on_threadpool};
     use criterion::Criterion;
@@ -73,20 +73,21 @@ mod windows {
             });
         });
 
-        group.bench_function("pin_thread_to_all", |b| {
-            let all = ProcessorSet::all();
+        group.bench_function("pin_thread_to_default_set", |b| {
+            let default_processor_set = Arc::new(ProcessorSet::default());
             let one_processor = ProcessorSet::builder().take(nz!(1)).unwrap();
             let one_thread = ThreadPool::new(&one_processor);
 
-            b.iter_custom(|iters| {
-                bench_on_threadpool(
-                    &one_thread,
-                    iters,
-                    || (),
-                    |()| {
-                        all.pin_current_thread_to();
-                    },
-                )
+            b.iter_custom({
+                |iters| {
+                    bench_on_threadpool(&one_thread, iters, || (), {
+                        let default_processor_set = Arc::clone(&default_processor_set);
+
+                        move |()| {
+                            default_processor_set.pin_current_thread_to();
+                        }
+                    })
+                }
             });
         });
 

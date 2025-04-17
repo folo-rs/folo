@@ -16,7 +16,7 @@ criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
-    let thread_pool = ThreadPool::all();
+    let thread_pool = ThreadPool::default();
 
     let mut group = c.benchmark_group("ProcessorSetBuilder");
 

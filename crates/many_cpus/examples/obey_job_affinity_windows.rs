@@ -33,7 +33,8 @@ mod windows {
     }
 
     fn verify_limits_obeyed() {
-        let processor_count = ProcessorSet::all().len();
+        // The default processor set obeys all the limits that apply to the current process.
+        let processor_count = ProcessorSet::default().len();
         println!("Current process is allowed to use {processor_count} processors.");
 
         assert_eq!(processor_count, 2);

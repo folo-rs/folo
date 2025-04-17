@@ -2,9 +2,10 @@
 //! verify that the logic in our crate correctly detects these limits and behaves accordingly
 //! to keep its own behavior within those limits.
 //!
-//! NB! We `ProcessorSet::builder()` in all cases in this file to avoid `ProcessorSet::all()` which
-//! in the current implementation gets cached on first access because the "all" set is assumed
-//! not to change during process execution (which is an imperfect but acceptable simplification).
+//! NB! We `ProcessorSet::builder()` in all cases in this file to avoid `ProcessorSet::default()`
+//! which in the current implementation gets cached on first access - we do not want to cache
+//! anything from our tests here as they apply weird constants, and we also do not want to use
+//! a cached processor set from some other test, since it will not have had our constraints applied.
 
 #![cfg(windows)]
 

@@ -661,10 +661,16 @@ mod tests_real {
 
     #[test]
     fn filter_in_all() {
-        // If we filter in all processors, we should get all of them.
-        let processors = ProcessorSet::builder().filter(|_| true).take_all().unwrap();
+        // Ensure we use a constant starting set, in case we are running tests under constraints.
+        let starting_set = ProcessorSet::builder().take_all().unwrap();
 
-        let processor_count = ProcessorSet::all().len();
+        // If we filter in all processors, we should get all of them.
+        let processors = starting_set
+            .to_builder()
+            .filter(|_| true)
+            .take_all()
+            .unwrap();
+        let processor_count = starting_set.len();
 
         assert_eq!(processors.len(), processor_count);
     }
@@ -682,10 +688,14 @@ mod tests_real {
 
     #[test]
     fn except_all() {
+        // Ensure we use a constant starting set, in case we are running tests under constraints.
+        let starting_set = ProcessorSet::builder().take_all().unwrap();
+
         // If we exclude all processors, there should be nothing left.
         assert!(
-            ProcessorSet::builder()
-                .except(ProcessorSet::all().processors().iter())
+            starting_set
+                .to_builder()
+                .except(starting_set.processors().iter())
                 .take_all()
                 .is_none()
         );

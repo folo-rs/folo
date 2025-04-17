@@ -56,8 +56,8 @@ mod windows {
             "The resource quota should be 50% of the available processor time. Expected: {expected_processor_time}, Actual: {max_processor_time}",
         );
 
-        // Building a ProcessorSet will obey the resource quota by default.
-        let quota_limited_processor_count = ProcessorSet::builder().take_all().unwrap().len();
+        // The default processor set obeys all the limits that apply to the current process.
+        let quota_limited_processor_count = ProcessorSet::default().len();
 
         println!(
             "The resource quota allows the current process to use {quota_limited_processor_count} out of a total of {system_processor_count} processors."

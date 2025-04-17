@@ -1,5 +1,5 @@
-//! Spawns one thread for each processor in the system but allows the OS to decide what
-//! processor each thread runs on. This can be used to observe how the OS schedules threads
+//! Spawns one thread for each processor in the default processor set but allows the OS to decide
+//! which processor each thread runs on. This can be used to observe how the OS schedules threads
 //! across processors when not provided any constraints.
 //!
 //! Each thread will do a bit of work (10 seconds of spinning CPU) and then terminate.
@@ -13,7 +13,7 @@ fn main() {
     // However, we do not pin them to any specific processor.
     // This means that the OS can schedule them however it likes.
 
-    let processor_set = ProcessorSet::all();
+    let processor_set = ProcessorSet::default();
 
     let mut all_threads = Vec::with_capacity(processor_set.len());
 

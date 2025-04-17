@@ -11,8 +11,9 @@ use crate::{
 // https://github.com/cloudhead/nonempty/issues/68
 extern crate alloc;
 
-/// Exposed via `ProcessorSet::all()`.
-static ALL_PROCESSORS: LazyLock<ProcessorSet> = LazyLock::new(|| {
+/// Lazy-initialized default set that stays around forever once selected and does not get updated
+/// even if constraints are updated over time. Exposed via `ProcessorSet::default()`.
+static DEFAULT_PROCESSORS: LazyLock<ProcessorSet> = LazyLock::new(|| {
     ProcessorSetBuilder::default()
         .take_all()
         .expect("there must be at least one processor - how could this code run if not")
@@ -20,23 +21,24 @@ static ALL_PROCESSORS: LazyLock<ProcessorSet> = LazyLock::new(|| {
 
 /// One or more processors present on the system and available for use.
 ///
-/// You can obtain the full set of available processors via [`ProcessorSet::all()`] or specify more
-/// fine-grained selection criteria via [`ProcessorSet::builder()`]. You can use
-/// [`ProcessorSet::to_builder()`] to further narrow down an existing set.
+/// You can obtain a default set of available processors via [`ProcessorSet::default()`]. The
+/// default set is designed to make efficient use of all available processors.
+///
+/// To specify more fine-grained processor selection criteria, use [`ProcessorSet::builder()`].
+/// You can also call [`ProcessorSet::to_builder()`] to further narrow down an existing set.
 ///
 /// One you have a [`ProcessorSet`], you can iterate over [`ProcessorSet::processors()`]
-/// to inspect the individual processors in the set or use [`ProcessorSet::spawn_threads()`] to
-/// spawn a set of threads pinned to each of the processors in the set, one thread per processor.
-/// You may also use [`ProcessorSet::spawn_thread()`] to spawn a single thread pinned to all
-/// processors in the set, allowing the thread to move but only between the processors in the set.
+/// to inspect the individual processors in the set. There are several ways to apply the processor
+/// set to threads:
 ///
-/// # Changes at runtime
+/// 1. If you created a thread manually, you can call [`ProcessorSet::pin_current_thread_to()`],
+///    which will configure the thread to only run on the processors in the set.
+/// 2. You can use [`ProcessorSet::spawn_thread()`] to spawn a thread pinned to the set, which
+///    will only be scheduled to run on the processors in the set.
+/// 3. You can use [`ProcessorSet::spawn_threads()`] to spawn a set of threads, with one thread
+///    for each of the processors in the set. Each thread will be pinned to its own processor.
 ///
-/// It is possible that a system will have processors added or removed at runtime. This is not
-/// supported - any hardware changes made at runtime will not be visible to the `ProcessorSet`
-/// instances. Operations attempted on removed processors may fail with an error or panic or
-/// silently misbehave (e.g. threads never starting). Added processors will not be considered a
-/// member of any set.
+#[doc = include_str!("../docs/snippets/changes_at_runtime.md")]
 #[derive(Clone, Debug)]
 pub struct ProcessorSet {
     processors: NonEmpty<Processor>,
@@ -49,29 +51,6 @@ pub struct ProcessorSet {
 }
 
 impl ProcessorSet {
-    /// Gets a [`ProcessorSet`] referencing all present and available processors on the system,
-    /// up to the resource quota assigned to the process.
-    ///
-    /// This set does not include processors that are not available to the current process or those
-    /// that are purely theoretical (e.g. processors that may be added later to the system but are
-    /// not yet present).
-    ///
-    /// This processor set is not updated if the operating system enforced constraints applied
-    /// to the current process change at runtime.
-    ///
-    /// # Resource quota
-    ///
-    /// If the current process is assigned a resource quota via operating system constraints, this
-    /// set may only include a subset of all processors, to ensure that the quota is not exceeded.
-    /// You can use [`ProcessorSetBuilder::ignoring_resource_quota()`][1] to obtain a processor set
-    /// that ignores the resource quota.
-    ///
-    /// [1]: ProcessorSetBuilder::ignoring_resource_quota
-    #[must_use]
-    pub fn all() -> &'static Self {
-        &ALL_PROCESSORS
-    }
-
     /// Creates a builder that can be used to construct a processor set with specific criteria.
     #[cfg_attr(test, mutants::skip)] // Mutates to itself via Default::default().
     #[must_use]
@@ -235,6 +214,32 @@ impl ProcessorSet {
             set.pin_current_thread_to();
             entrypoint(set)
         })
+    }
+}
+
+impl Default for ProcessorSet {
+    /// Gets a [`ProcessorSet`] referencing all present and available processors on the
+    /// system, up to the resource quota assigned to the process.
+    ///
+    /// This is equivalent to calling `ProcessorSet::builder().take_all()`, except that the default
+    /// processor set is initialized on first use and never updated. If you expect the constraints
+    /// applied to the process to change at runtime, you should manually build a new processor set
+    /// via `ProcessorSet::builder().take_all()` whenever you wish to apply any updated constraints.
+    ///
+    /// # Resource quota
+    ///
+    /// If the current process is assigned a resource quota via operating system constraints, this
+    /// set may only include a random subset of all processors, to ensure that the quota is not
+    /// exceeded. You can use [`ProcessorSetBuilder::ignoring_resource_quota()`][1] to obtain a
+    /// processor set that ignores the resource quota.
+    ///
+    /// [1]: ProcessorSetBuilder::ignoring_resource_quota
+    fn default() -> Self {
+        // We clone the default set here, even though it is static. This is to better conform to
+        // Rust standard conventions where `Default::default()` is expected to return a new
+        // instance. If this is on a hot loop and the caller wants to cache this (which is fine),
+        // they can do their own caching.
+        DEFAULT_PROCESSORS.clone()
     }
 }
 

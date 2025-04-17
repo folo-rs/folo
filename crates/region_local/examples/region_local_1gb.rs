@@ -13,14 +13,16 @@ region_local! {
 }
 
 fn main() {
-    ProcessorSet::all()
+    let processor_set = ProcessorSet::default();
+
+    processor_set
         .spawn_threads(|_| DATA.with_local(|data| _ = black_box(data.len())))
         .into_iter()
         .for_each(|x| x.join().unwrap());
 
     println!(
         "All {} threads have accessed the region-local data. Terminating in 60 seconds.",
-        ProcessorSet::all().len()
+        processor_set.len()
     );
 
     thread::sleep(Duration::from_secs(60));

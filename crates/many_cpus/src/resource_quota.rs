@@ -1,7 +1,9 @@
 /// Information about the resource quota that the operating system enforces for the current process.
 ///
-/// The active resource quota may change over time. You can use [`HardwareTracker`] to obtain
+/// The active resource quota may change over time. You can use [`HardwareTracker`][1] to obtain
 /// fresh information about the current resource quota at any time.
+///
+/// [1]: crate::HardwareTracker
 #[derive(Debug)]
 pub struct ResourceQuota {
     max_processor_time: f64,
