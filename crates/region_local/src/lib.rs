@@ -139,7 +139,7 @@
 //!
 //! fn main() {
 //!     let processor_set = ProcessorSet::default();
-//! 
+//!
 //!     processor_set
 //!         .spawn_threads(|_| DATA.with_local(|data| _ = black_box(data.len())))
 //!         .into_iter()

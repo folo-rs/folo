@@ -71,9 +71,9 @@
 //!     // In a real service, you would start some work handler here, e.g. to read
 //!     // and process messages from a channel or to spawn a web handler.
 //! });
-//! #for thread in all_threads {
+//! # for thread in all_threads {
 //! #    thread.join().unwrap();
-//! #}
+//! # }
 //! ```
 //!
 //! # Selection criteria
@@ -84,8 +84,8 @@
 //! perform some processing on a shared data set (`examples/spawn_on_selected_processors.rs`):
 //!
 //! ```rust
-//! #use std::num::NonZero;
-//! #use many_cpus::ProcessorSet;
+//! # use std::num::NonZero;
+//! # use many_cpus::ProcessorSet;
 //! const PROCESSOR_COUNT: NonZero<usize> = NonZero::new(2).unwrap();
 //!
 //! let selected_processors = ProcessorSet::builder()
@@ -100,9 +100,9 @@
 //!     // In a real service, you would start some work handler here, e.g. to read
 //!     // and process messages from a channel or to spawn a web handler.
 //! });
-//! #for thread in all_threads {
+//! # for thread in all_threads {
 //! #    thread.join().unwrap();
-//! #}
+//! # }
 //! ```
 //!
 //! # Inspecting the hardware environment
@@ -111,9 +111,8 @@
 //! (`examples/observe_processor.rs`):
 //!
 //! ```rust
-//! use many_cpus::{HardwareInfo, HardwareTracker};
-//! use std::{thread, time::Duration};
-//!
+//! # use many_cpus::{HardwareInfo, HardwareTracker};
+//! # use std::{thread, time::Duration};
 //! let max_processors = HardwareInfo::max_processor_count();
 //! let max_memory_regions = HardwareInfo::max_memory_region_count();
 //! println!(
@@ -161,8 +160,8 @@
 //! (`examples/spawn_on_inherited_processors.rs`):
 //!
 //! ```rust
-//! #use std::{thread, time::Duration};
-//! #use many_cpus::ProcessorSet;
+//! # use std::{thread, time::Duration};
+//! # use many_cpus::ProcessorSet;
 //! // The set of processors used here can be adjusted via OS mechanisms.
 //! //
 //! // For example, to select only processors 0 and 1:
@@ -185,9 +184,9 @@
 //!     // In a real service, you would start some work handler here, e.g. to read
 //!     // and process messages from a channel or to spawn a web handler.
 //! });
-//! #for thread in all_threads {
+//! # for thread in all_threads {
 //! #    thread.join().unwrap();
-//! #}
+//! # }
 //! ```
 
 mod clients;
