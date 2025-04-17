@@ -517,13 +517,15 @@ impl ProcessorSetBuilder {
         if self.obey_resource_quota {
             let max_processor_time = self.pal.max_processor_time();
 
-            // We round up the quota to get a whole number of processors.
+            // We round down the quota to get a whole number of processors.
+            // We specifically round down because our goal with the resource quota is to never
+            // exceed it, even by a fraction, as that would cause quality of service degradation.
             #[expect(clippy::cast_sign_loss, reason = "quota cannot be negative")]
             #[expect(
                 clippy::cast_possible_truncation,
                 reason = "we are correctly rounding to avoid the problem"
             )]
-            let max_processor_count = max_processor_time.ceil() as usize;
+            let max_processor_count = max_processor_time.floor() as usize;
 
             Some(max_processor_count)
         } else {
@@ -886,8 +888,8 @@ mod tests {
         let pal_processors = pal_processors.map(ProcessorFacade::Fake);
 
         // There is only 1.0 processors worth of quota available. This limitation should be ignored.
-        // In fact, this call should not even be made - we have it here just to fail the test if
-        // one day the call starts being made.
+        // In fact, this call should not even be made - we have it here just to fail the test with
+        // 1.0 (which is too low) if one day the call starts being made.
         platform.expect_max_processor_time().return_const(1.0);
 
         platform
@@ -902,6 +904,43 @@ mod tests {
         let set = builder.ignoring_resource_quota().take(nz!(2));
 
         assert_eq!(set.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn take_all_rounds_down_quota() {
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let mut platform = MockPlatform::new();
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        // There is 1.999 processors worth of quota available, which gets rounded to 1.0.
+        platform
+            .expect_max_processor_time()
+            .times(1)
+            .return_const(1.999);
+
+        platform
+            .expect_get_all_processors_core()
+            .times(1)
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
+        let set = builder.take_all().unwrap();
+        assert_eq!(set.len(), 1);
     }
 
     #[test]
