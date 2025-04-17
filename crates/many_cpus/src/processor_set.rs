@@ -463,6 +463,17 @@ mod tests {
 
     #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]
+    fn from_processors_with_one_preserves_processors() {
+        let one = ProcessorSet::builder().take(nz!(1)).unwrap();
+        let processors = one.processors().clone();
+        let one_again = ProcessorSet::from_processors(processors);
+
+        assert_eq!(one_again.len(), 1);
+        assert_eq!(one_again.processors().first(), one.processors().first());
+    }
+
+    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    #[test]
     fn to_builder_preserves_processors() {
         let set = ProcessorSet::builder().take(nz!(1)).unwrap();
 
