@@ -18,6 +18,7 @@ impl ResourceQuota {
     ///
     /// This will never be more than the number of processors available to the current process.
     #[must_use]
+    #[inline]
     pub fn max_processor_time(&self) -> f64 {
         self.max_processor_time
     }

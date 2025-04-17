@@ -535,6 +535,7 @@ impl ProcessorSetBuilder {
 }
 
 impl Default for ProcessorSetBuilder {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }

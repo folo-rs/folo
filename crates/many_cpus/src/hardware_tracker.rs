@@ -229,6 +229,7 @@ impl HardwareTracker {
 
     /// The current hardware resource quota for the current process. This may change over time.
     #[must_use]
+    #[inline]
     pub fn resource_quota() -> ResourceQuota {
         CURRENT_TRACKER.with_borrow(HardwareTrackerCore::resource_quota)
     }
@@ -239,6 +240,7 @@ impl HardwareTracker {
     /// This may be useful for working with system APIs that deal with system-scoped values,
     /// instead of process-scoped values that need to consider current process limits.
     #[must_use]
+    #[inline]
     pub fn active_processor_count() -> ProcessorId {
         // We include this in `HardwareTracker` instead of `HardwareInfo` because it is
         // theoretically possible for this value to change over time and perhaps in the future

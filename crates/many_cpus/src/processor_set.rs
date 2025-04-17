@@ -54,6 +54,7 @@ impl ProcessorSet {
     /// Creates a builder that can be used to construct a processor set with specific criteria.
     #[cfg_attr(test, mutants::skip)] // Mutates to itself via Default::default().
     #[must_use]
+    #[inline]
     pub fn builder() -> ProcessorSetBuilder {
         ProcessorSetBuilder::default()
     }
@@ -114,12 +115,14 @@ impl ProcessorSet {
     /// Returns the number of processors in the set. A processor set is never empty.
     #[expect(clippy::len_without_is_empty, reason = "never empty by definition")]
     #[must_use]
+    #[inline]
     pub fn len(&self) -> usize {
         self.processors.len()
     }
 
     /// Returns a reference to a collection containing all the processors in the set.
     #[must_use]
+    #[inline]
     pub fn processors(&self) -> &NonEmpty<Processor> {
         &self.processors
     }
@@ -234,6 +237,7 @@ impl Default for ProcessorSet {
     /// processor set that ignores the resource quota.
     ///
     /// [1]: ProcessorSetBuilder::ignoring_resource_quota
+    #[inline]
     fn default() -> Self {
         // We clone the default set here, even though it is static. This is to better conform to
         // Rust standard conventions where `Default::default()` is expected to return a new
@@ -244,12 +248,14 @@ impl Default for ProcessorSet {
 }
 
 impl From<Processor> for ProcessorSet {
+    #[inline]
     fn from(value: Processor) -> Self {
         Self::from_processor(value)
     }
 }
 
 impl From<NonEmpty<Processor>> for ProcessorSet {
+    #[inline]
     fn from(value: NonEmpty<Processor>) -> Self {
         Self::from_processors(value)
     }
@@ -257,6 +263,7 @@ impl From<NonEmpty<Processor>> for ProcessorSet {
 
 impl Display for ProcessorSet {
     #[cfg_attr(test, mutants::skip)] // We have no API contract to test here.
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let list = cpulist::emit(self.processors.iter().map(Processor::id));
         write!(f, " {list} ({} processors)", self.len())
