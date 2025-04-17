@@ -391,6 +391,7 @@ impl ProcessorSetBuilder {
     ///
     /// [1]: ProcessorSetBuilder::ignoring_resource_quota
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Hangs due to recursive access of OnceLock.
     pub fn take_all(self) -> Option<ProcessorSet> {
         let candidates = self.candidates_by_memory_region();
 

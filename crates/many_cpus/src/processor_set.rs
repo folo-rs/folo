@@ -439,7 +439,12 @@ mod tests {
     fn from_processor_preserves_processor() {
         let one = ProcessorSet::builder().take(nz!(1)).unwrap();
         let processor = one.processors().first().clone();
-        let one_again = ProcessorSet::from_processor(processor);
+        let one_again = ProcessorSet::from_processor(processor.clone());
+
+        assert_eq!(one_again.len(), 1);
+        assert_eq!(one_again.processors().first(), one.processors().first());
+
+        let one_again = ProcessorSet::from(processor);
 
         assert_eq!(one_again.len(), 1);
         assert_eq!(one_again.processors().first(), one.processors().first());
@@ -450,7 +455,17 @@ mod tests {
     fn from_processors_preserves_processors() {
         let all = ProcessorSet::builder().take_all().unwrap();
         let processors = NonEmpty::collect(all.processors().iter().cloned()).unwrap();
-        let all_again = ProcessorSet::from_processors(processors);
+        let all_again = ProcessorSet::from_processors(processors.clone());
+
+        assert_eq!(all_again.len(), all.len());
+
+        // The public API does not make guarantees about the order of processors, so we do this
+        // clumsy contains() based check that does not make assumptions about the order.
+        for processor in all.processors() {
+            assert!(all_again.processors().contains(processor));
+        }
+
+        let all_again = ProcessorSet::from(processors);
 
         assert_eq!(all_again.len(), all.len());
 
