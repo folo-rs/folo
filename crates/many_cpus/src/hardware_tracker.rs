@@ -689,6 +689,7 @@ mod tests {
         assert_eq!(unique_id_count, processor_ids.len());
     }
 
+    #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]
     fn real_pinning_is_reported() {
         // We pin to an arbitrary thread and then verify that it says "yep, is pinned".
@@ -709,6 +710,7 @@ mod tests {
         assert!(is_memory_region_pinned);
     }
 
+    #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]
     fn real_active_processor_count_is_at_least_processor_set_take_all() {
         // When we take_all() and build a ProcessorSet, we cannot get more processors
@@ -722,6 +724,7 @@ mod tests {
         assert!(active_processors >= all_processors.len());
     }
 
+    #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]
     #[expect(
         clippy::cast_possible_truncation,
