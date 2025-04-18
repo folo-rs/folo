@@ -114,9 +114,8 @@ impl Platform for BuildTargetPlatform {
         max_processor_time
     }
 
-    fn active_processor_count(&self) -> ProcessorId {
-        ProcessorId::try_from(self.get_active_processors().len())
-            .expect("we will never have more than u32::MAX processors")
+    fn active_processor_count(&self) -> usize {
+        self.get_active_processors().len()
     }
 }
 
