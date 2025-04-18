@@ -341,17 +341,19 @@ impl Platform for BuildTargetPlatform {
     }
 
     fn active_processor_count(&self) -> usize {
-        self.active_processor_count.get_or_init(|| {
-            let group_active_sizes = self.get_processor_group_active_sizes();
+        self.active_processor_count
+            .get_or_init(|| {
+                let group_active_sizes = self.get_processor_group_active_sizes();
 
-            NonZero::new(
-                group_active_sizes
-                    .iter()
-                    .map(|&s| usize::from(s))
-                    .sum::<usize>(),
-            )
-            .expect("a system with 0 active processors is impossible")
-        }).get()
+                NonZero::new(
+                    group_active_sizes
+                        .iter()
+                        .map(|&s| usize::from(s))
+                        .sum::<usize>(),
+                )
+                .expect("a system with 0 active processors is impossible")
+            })
+            .get()
     }
 }
 
