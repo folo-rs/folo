@@ -666,12 +666,43 @@ mod tests {
 
     #[test]
     #[cfg(not(miri))] // Miri does not support talking to the real platform.
-    fn real_current_processor_id_is_unique_and_matches_expectation() {
+    fn real_pinned_current_processor_id_is_unique_and_matches_expectation() {
         // We spawn a thread on every processor and check that the processor ID is unique.
         let mut processor_ids = ProcessorSet::builder()
             .take_all()
             .unwrap()
             .spawn_threads(|processor| {
+                let processor_id = processor.id();
+
+                let current_processor_id = HardwareTracker::current_processor_id();
+                assert_eq!(processor_id, current_processor_id);
+
+                current_processor_id
+            })
+            .into_iter()
+            .map(|x| x.join().unwrap())
+            .collect_vec();
+
+        // We expect the processor IDs to be unique.
+        processor_ids.sort();
+
+        let unique_id_count = processor_ids.iter().dedup().count();
+
+        assert_eq!(unique_id_count, processor_ids.len());
+    }
+
+    #[test]
+    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    fn real_unpinned_current_processor_id_is_unique_and_matches_expectation() {
+        // We spawn a thread on every processor and check that the processor ID is unique.
+        let mut processor_ids = ProcessorSet::builder()
+            .take_all()
+            .unwrap()
+            .spawn_threads(|processor| {
+                // We lie here and claim that the thread is not pinned (it actually is)
+                // so we exercise the "get real time information" path, instead of "pinned" path.
+                CURRENT_TRACKER.with_borrow_mut(|tracker| tracker.update_pin_status(None, None));
+
                 let processor_id = processor.id();
 
                 let current_processor_id = HardwareTracker::current_processor_id();

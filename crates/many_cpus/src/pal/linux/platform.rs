@@ -1513,6 +1513,4 @@ mod tests {
         // We treat errors as missing data and ignore it, little point complaining here.
         assert!(result.is_none());
     }
-
-    // TODO: Tests for v1 versus v2 cgroup retrieval.
 }
