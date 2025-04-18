@@ -453,26 +453,33 @@ mod tests {
     #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]
     fn from_processors_preserves_processors() {
-        let all = ProcessorSet::builder().take_all().unwrap();
-        let processors = NonEmpty::collect(all.processors().iter().cloned()).unwrap();
-        let all_again = ProcessorSet::from_processors(processors.clone());
-
-        assert_eq!(all_again.len(), all.len());
-
-        // The public API does not make guarantees about the order of processors, so we do this
-        // clumsy contains() based check that does not make assumptions about the order.
-        for processor in all.processors() {
-            assert!(all_again.processors().contains(processor));
+        if ProcessorSet::builder().take_all().unwrap().len() < 2 {
+            eprintln!("Skipping test because there are not enough processors");
+            return;
         }
 
-        let all_again = ProcessorSet::from(processors);
+        // We use 2 instead of just "all" because "all" interacts with
+        // ProcessorSet::default() in ways we want to isolate the test from.
+        let two = ProcessorSet::builder().take(nz!(2)).unwrap();
+        let processors = NonEmpty::collect(two.processors().iter().cloned()).unwrap();
+        let two_again = ProcessorSet::from_processors(processors.clone());
 
-        assert_eq!(all_again.len(), all.len());
+        assert_eq!(two_again.len(), two.len());
 
         // The public API does not make guarantees about the order of processors, so we do this
         // clumsy contains() based check that does not make assumptions about the order.
-        for processor in all.processors() {
-            assert!(all_again.processors().contains(processor));
+        for processor in two.processors() {
+            assert!(two_again.processors().contains(processor));
+        }
+
+        let two_again = ProcessorSet::from(processors);
+
+        assert_eq!(two_again.len(), two.len());
+
+        // The public API does not make guarantees about the order of processors, so we do this
+        // clumsy contains() based check that does not make assumptions about the order.
+        for processor in two.processors() {
+            assert!(two_again.processors().contains(processor));
         }
     }
 
