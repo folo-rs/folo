@@ -60,30 +60,35 @@
 //!
 //! # Quick start
 //!
-//! The simplest scenario is when you want to start a thread on every processor
-//! (`examples/spawn_on_all_processors.rs`):
+//! The simplest scenario is when you want to start a thread on every processor in the default
+//! processor set:
 //!
 //! ```rust
+//! // examples/spawn_on_all_processors.rs
 //! # use many_cpus::ProcessorSet;
-//! let all_threads = ProcessorSet::default().spawn_threads(|processor| {
+//! let threads = ProcessorSet::default().spawn_threads(|processor| {
 //!     println!("Spawned thread on processor {}", processor.id());
 //!
 //!     // In a real service, you would start some work handler here, e.g. to read
 //!     // and process messages from a channel or to spawn a web handler.
 //! });
-//! # for thread in all_threads {
+//! # for thread in threads {
 //! #    thread.join().unwrap();
 //! # }
 //! ```
+//! 
+//! If there are no operating system enforced constraints active, the default processor set
+//! includes all processors.
 //!
 //! # Selection criteria
 //!
 //! Depending on the specific circumstances, you may want to filter the set of processors.
 //! For example, you may want to use only two processors but ensure that they are high-performance
 //! processors that are connected to the same physical memory modules so they can cooperatively
-//! perform some processing on a shared data set (`examples/spawn_on_selected_processors.rs`):
+//! perform some processing on a shared data set:
 //!
 //! ```rust
+//! // examples/spawn_on_selected_processors.rs
 //! # use std::num::NonZero;
 //! # use many_cpus::ProcessorSet;
 //! const PROCESSOR_COUNT: NonZero<usize> = NonZero::new(2).unwrap();
@@ -94,23 +99,23 @@
 //!     .take(PROCESSOR_COUNT)
 //!     .expect("could not find required number of processors that match the selection criteria");
 //!
-//! let all_threads = selected_processors.spawn_threads(|processor| {
+//! let threads = selected_processors.spawn_threads(|processor| {
 //!     println!("Spawned thread on processor {}", processor.id());
 //!
 //!     // In a real service, you would start some work handler here, e.g. to read
 //!     // and process messages from a channel or to spawn a web handler.
 //! });
-//! # for thread in all_threads {
+//! # for thread in threads {
 //! #    thread.join().unwrap();
 //! # }
 //! ```
 //!
 //! # Inspecting the hardware environment
 //!
-//! Functions are provided to easily inspect the current hardware environment
-//! (`examples/observe_processor.rs`):
+//! Functions are provided to easily inspect the current hardware environment:
 //!
 //! ```rust
+//! // examples/observe_processor.rs
 //! # use many_cpus::{HardwareInfo, HardwareTracker};
 //! # use std::{thread, time::Duration};
 //! let max_processors = HardwareInfo::max_processor_count();
@@ -149,17 +154,17 @@
 //! Thread executing on processor 4 in memory region 0
 //! ```
 //!
-#![doc = include_str!("../docs/snippets/changes_at_runtime.md")]
-//!
 #![doc = include_str!("../docs/snippets/external_constraints.md")]
 //!
+#![doc = include_str!("../docs/snippets/changes_at_runtime.md")]
+//! 
 //! # Inheriting soft limits on allowed processors
 //!
 //! While the crate does not by default obey soft limits, you can opt in to these limits by
-//! inheriting the allowed processor set in the `main()` entrypoint thread
-//! (`examples/spawn_on_inherited_processors.rs`):
+//! inheriting the allowed processor set in the `main()` entrypoint thread:
 //!
 //! ```rust
+//! // examples/spawn_on_inherited_processors.rs
 //! # use std::{thread, time::Duration};
 //! # use many_cpus::ProcessorSet;
 //! // The set of processors used here can be adjusted via OS mechanisms.
@@ -178,13 +183,13 @@
 //!     inherited_processors.len()
 //! );
 //!
-//! let all_threads = inherited_processors.spawn_threads(|processor| {
+//! let threads = inherited_processors.spawn_threads(|processor| {
 //!     println!("Spawned thread on processor {}", processor.id());
 //!
 //!     // In a real service, you would start some work handler here, e.g. to read
 //!     // and process messages from a channel or to spawn a web handler.
 //! });
-//! # for thread in all_threads {
+//! # for thread in threads {
 //! #    thread.join().unwrap();
 //! # }
 //! ```

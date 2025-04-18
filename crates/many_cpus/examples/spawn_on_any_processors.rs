@@ -15,7 +15,7 @@ fn main() {
 
     let processor_set = ProcessorSet::default();
 
-    let mut all_threads = Vec::with_capacity(processor_set.len());
+    let mut threads = Vec::with_capacity(processor_set.len());
 
     for _ in 0..processor_set.len() {
         let thread = std::thread::spawn(move || {
@@ -36,12 +36,12 @@ fn main() {
             }
         });
 
-        all_threads.push(thread);
+        threads.push(thread);
     }
 
-    println!("Spawned {} threads", all_threads.len());
+    println!("Spawned {} threads", threads.len());
 
-    for thread in all_threads {
+    for thread in threads {
         thread.join().unwrap();
     }
 
