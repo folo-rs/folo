@@ -58,7 +58,10 @@ fn obeys_processor_selection_limits() {
 
 #[test]
 #[cfg(not(miri))] // Miri cannot talk to the real platform.
-#[expect(clippy::cast_precision_loss, reason = "unavoidable f64-usize casting")]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "all expected values are in safe range"
+)]
 #[expect(
     clippy::float_cmp,
     reason = "we use absolute error, which is the right way to compare"
@@ -82,7 +85,7 @@ fn obeys_processor_time_limits() {
     // test not having process-specific limits that bring it lower than the 50% here.
     let max_processor_time = resource_quota.max_processor_time();
 
-    let expected_processor_time = f64::from(system_processor_count) * 0.5;
+    let expected_processor_time = system_processor_count as f64 * 0.5;
 
     assert_eq!(
         f64_diff_abs(max_processor_time, expected_processor_time, CLOSE_ENOUGH),
@@ -93,7 +96,7 @@ fn obeys_processor_time_limits() {
     // Building a ProcessorSet will obey the resource quota by default.
     let quota_limited_processor_count = ProcessorSet::builder().take_all().unwrap().len();
 
-    let expected_limited_processor_count = (f64::from(system_processor_count) * 0.5).ceil();
+    let expected_limited_processor_count = (system_processor_count as f64 * 0.5).ceil();
 
     assert_eq!(
         f64_diff_abs(

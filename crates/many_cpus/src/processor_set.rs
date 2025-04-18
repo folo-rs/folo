@@ -113,9 +113,9 @@ impl ProcessorSet {
     }
 
     /// Returns the number of processors in the set. A processor set is never empty.
-    #[expect(clippy::len_without_is_empty, reason = "never empty by definition")]
     #[must_use]
     #[inline]
+    #[expect(clippy::len_without_is_empty, reason = "never empty by definition")]
     pub fn len(&self) -> usize {
         self.processors.len()
     }

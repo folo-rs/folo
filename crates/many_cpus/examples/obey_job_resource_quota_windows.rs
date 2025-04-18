@@ -30,7 +30,10 @@ mod windows {
         verify_limits_obeyed();
     }
 
-    #[expect(clippy::cast_precision_loss, reason = "unavoidable f64-usize casting")]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "all expected values are in safe range"
+    )]
     fn verify_limits_obeyed() {
         // This is "100%". This count may also include processors that are not available to the
         // current process (e.g. when job objects already constrain our processors due to
@@ -49,7 +52,7 @@ mod windows {
             "Current process is allowed to use {max_processor_time} seconds of processor time per second of real time."
         );
 
-        let expected_processor_time = f64::from(system_processor_count) * 0.5;
+        let expected_processor_time = system_processor_count as f64 * 0.5;
 
         assert!(
             processor_time_eq(max_processor_time, expected_processor_time),
@@ -63,14 +66,14 @@ mod windows {
             "The resource quota allows the current process to use {quota_limited_processor_count} out of a total of {system_processor_count} processors."
         );
 
-        let expected_limited_processor_count = (f64::from(system_processor_count) * 0.5).ceil();
+        let expected_limited_processor_count = (system_processor_count as f64 * 0.5).floor();
 
         assert!(
             processor_time_eq(
                 expected_limited_processor_count,
                 quota_limited_processor_count as f64
             ),
-            "The resource quota should limit the number of processors to half of the available processors, rounded up. Expected: {expected_limited_processor_count}, Actual: {quota_limited_processor_count}",
+            "The resource quota should limit the number of processors to half of the available processors, rounded down. Expected: {expected_limited_processor_count}, Actual: {quota_limited_processor_count}",
         );
     }
 

@@ -241,7 +241,7 @@ impl HardwareTracker {
     /// instead of process-scoped values that need to consider current process limits.
     #[must_use]
     #[inline]
-    pub fn active_processor_count() -> ProcessorId {
+    pub fn active_processor_count() -> usize {
         // We include this in `HardwareTracker` instead of `HardwareInfo` because it is
         // theoretically possible for this value to change over time and perhaps in the future
         // we will detect such changes. For now, we just return a cached value from the PAL
@@ -355,7 +355,7 @@ impl HardwareTrackerCore {
     }
 
     #[must_use]
-    pub(crate) fn active_processor_count(&self) -> ProcessorId {
+    pub(crate) fn active_processor_count(&self) -> usize {
         self.pal.active_processor_count()
     }
 }
@@ -804,8 +804,7 @@ mod tests {
         // than are actually active on the system. This is a sanity check to compare the two.
         let all_processors = ProcessorSet::builder().take_all().unwrap();
 
-        let active_processors = usize::try_from(HardwareTracker::active_processor_count())
-            .expect("never going to have more than usize::MAX processors");
+        let active_processors = HardwareTracker::active_processor_count();
 
         // It is OK if take_all() returns less (there are more constraints than "is active").
         assert!(active_processors >= all_processors.len());
@@ -827,6 +826,6 @@ mod tests {
 
         let max_processor_time_usize = max_processor_time.floor() as usize;
 
-        assert!(max_processor_time_usize <= all_processors.len(),);
+        assert!(max_processor_time_usize <= all_processors.len());
     }
 }

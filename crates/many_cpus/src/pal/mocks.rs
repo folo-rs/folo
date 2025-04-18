@@ -54,7 +54,7 @@ mock! {
         pub fn max_memory_region_id(&self) -> MemoryRegionId;
         pub fn current_thread_processors(&self) -> NonEmpty<ProcessorId>;
         pub fn max_processor_time(&self) -> f64;
-        pub fn active_processor_count(&self) -> ProcessorId;
+        pub fn active_processor_count(&self) -> usize;
     }
 }
 
@@ -91,7 +91,7 @@ impl Platform for MockPlatform {
         self.max_processor_time()
     }
 
-    fn active_processor_count(&self) -> ProcessorId {
+    fn active_processor_count(&self) -> usize {
         self.active_processor_count()
     }
 }

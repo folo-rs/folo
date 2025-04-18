@@ -63,5 +63,5 @@ pub(crate) trait Platform: Debug + Send + Sync + 'static {
     /// We generally avoid relying on system-scoped data like this but because some platform APIs
     /// speak in terms of system-scoped data, we occasionally need to access such values.
     #[must_use]
-    fn active_processor_count(&self) -> ProcessorId;
+    fn active_processor_count(&self) -> usize;
 }

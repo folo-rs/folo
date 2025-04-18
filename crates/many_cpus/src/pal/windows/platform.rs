@@ -1,4 +1,10 @@
-use std::{hint::black_box, mem::offset_of, num::NonZeroUsize, ptr::NonNull, sync::OnceLock};
+use std::{
+    hint::black_box,
+    mem::offset_of,
+    num::{NonZero, NonZeroUsize},
+    ptr::NonNull,
+    sync::OnceLock,
+};
 
 use folo_ffi::NativeBuffer;
 use itertools::Itertools;
@@ -49,7 +55,7 @@ pub struct BuildTargetPlatform {
 
     max_processor_id: OnceLock<ProcessorId>,
 
-    active_processor_count: OnceLock<ProcessorId>,
+    active_processor_count: OnceLock<NonZero<usize>>,
 
     // We cache these as we expect them to never change. This data is in non-local memory in
     // systems with multiple memory regions, which is not ideal but the bookkeeping to make it
@@ -292,7 +298,8 @@ impl Platform for BuildTargetPlatform {
     fn max_processor_time(&self) -> f64 {
         // The job object processor time limits are relative to the total number of
         // active processors on the system and do not consider any per-process limitations.
-        let system_processor_count = f64::from(self.active_processor_count());
+        #[expect(clippy::cast_precision_loss, reason = "value is always in safe range")]
+        let system_processor_count = self.active_processor_count() as f64;
 
         // This API, however, speaks in terms of processor time available to the current process,
         // so we do need to care about per-process limitations. Whatever value we return, it
@@ -333,15 +340,18 @@ impl Platform for BuildTargetPlatform {
         }
     }
 
-    fn active_processor_count(&self) -> ProcessorId {
-        *self.active_processor_count.get_or_init(|| {
+    fn active_processor_count(&self) -> usize {
+        self.active_processor_count.get_or_init(|| {
             let group_active_sizes = self.get_processor_group_active_sizes();
 
-            group_active_sizes
-                .iter()
-                .map(|&s| ProcessorId::from(s))
-                .sum::<ProcessorId>()
-        })
+            NonZero::new(
+                group_active_sizes
+                    .iter()
+                    .map(|&s| usize::from(s))
+                    .sum::<usize>(),
+            )
+            .expect("a system with 0 active processors is impossible")
+        }).get()
     }
 }
 

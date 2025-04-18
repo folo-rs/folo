@@ -87,7 +87,7 @@ impl Platform for PlatformFacade {
         }
     }
 
-    fn active_processor_count(&self) -> crate::ProcessorId {
+    fn active_processor_count(&self) -> usize {
         match self {
             Self::Real(p) => p.active_processor_count(),
             #[cfg(test)]
