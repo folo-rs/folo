@@ -61,6 +61,18 @@ mutants:
 
     # We deliberately do not use nextest here because it cannot run doctests.
 
+    # Multi-job mutation on Linux does not appear to work well - it seems to cause some interference
+    # between the jobs. Perhaps due to our CARGO_TARGET_DIR being shared between jobs? One job is
+    # executing tests from the wrong job because they are overwriting each other? Simple fix is
+    # to just use 1 job on Linux, which is good enough for now.
+    if ($IsLinux) {
+        $args += "--jobs"
+        $args += "1"
+    } else {
+        $args += "--jobs"
+        $args += "4"
+    }
+
     # We must use Invoke-Expression to preserve the quotes around the wildcarded arguments on Linux.
     $expanded_args = [String]::join(" ", $args)
-    Invoke-Expression "cargo mutants {{ target_package }} --profile=mutants --jobs 4 $expanded_args"
+    Invoke-Expression "cargo mutants {{ target_package }} --profile=mutants $expanded_args"

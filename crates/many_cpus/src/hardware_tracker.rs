@@ -372,6 +372,7 @@ mod tests {
     use mockall::Sequence;
     use nonempty::nonempty;
     use static_assertions::assert_not_impl_any;
+    use testing::f64_diff_abs;
 
     use crate::{
         EfficiencyClass, ProcessorSet,
@@ -638,6 +639,59 @@ mod tests {
 
         // Note that this is a third query to the platform.
         assert_eq!(1, tracker.current_processor_id());
+    }
+
+    #[test]
+    fn resource_quota_is_accurately_represented() {
+        const CLOSE_ENOUGH: f64 = 0.01;
+
+        let mut platform = MockPlatform::new();
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Performance
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Performance
+            }
+        ];
+
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        platform
+            .expect_max_processor_id()
+            .times(1)
+            .return_const(1_u32);
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(pal_processors);
+
+        platform
+            .expect_max_processor_time()
+            .times(1)
+            .return_const(2.5);
+
+        let tracker = HardwareTrackerCore::new(PlatformFacade::from_mock(platform));
+
+        #[expect(
+            clippy::float_cmp,
+            reason = "we use absolute error, which is the right thing to do"
+        )]
+        {
+            assert_eq!(
+                f64_diff_abs(
+                    tracker.resource_quota().max_processor_time(),
+                    2.5,
+                    CLOSE_ENOUGH
+                ),
+                0.0
+            );
+        }
     }
 
     // Unpinning from memory region while pinning to a processor is nonsense.

@@ -470,12 +470,9 @@ fn parse_cgroup_name(cgroup_contents: impl AsRef<str>) -> Option<String> {
 fn parse_v2_cgroup_cpu_quota_and_period_us(contents: &str) -> Option<(u64, u64)> {
     let contents = contents.trim();
 
-    if contents == "max" || contents.is_empty() {
-        return None;
-    }
-
+    // There are actual rules about what constitutes "unlimited" but we just treat anything
+    // that does not successfully parse as "unlimited" because complaining about it will not help.
     let (quota_str, period_str) = contents.split_once(' ')?;
-
     let quota = quota_str.parse::<u64>().ok()?;
     let period = period_str.parse::<u64>().ok()?;
 
@@ -489,10 +486,8 @@ fn parse_v1_cgroup_cpu_quota_and_period_us(
     let quota_contents = quota_contents.trim();
     let period_contents = period_contents.trim();
 
-    if quota_contents == "-1" || quota_contents.is_empty() {
-        return None;
-    }
-
+    // There are actual rules about what constitutes "unlimited" but we just treat anything
+    // that does not successfully parse as "unlimited" because complaining about it will not help.
     let quota = quota_contents.parse::<u64>().ok()?;
     let period = period_contents.parse::<u64>().ok()?;
 
@@ -1512,5 +1507,33 @@ mod tests {
         let result = parse_v1_cgroup_cpu_quota_and_period_us(quota, period);
         // We treat errors as missing data and ignore it, little point complaining here.
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn basic_facts_are_represented() {
+        let mut fs = MockFilesystem::new();
+
+        //  3 memory regions, each containing 3 processors.
+        simulate_processor_layout(
+            &mut fs,
+            [0, 1, 2, 3, 4, 5, 6, 7, 8],
+            None,
+            None,
+            [0, 1, 2, 0, 1, 2, 0, 1, 2],
+            [2000.0; 9],
+        );
+
+        let mut bindings = MockBindings::new();
+
+        bindings.expect_sched_getcpu().times(1).return_const(5);
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(bindings),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        assert_eq!(platform.current_processor_id(), 5);
+        assert_eq!(platform.max_processor_id(), 8);
+        assert_eq!(platform.max_memory_region_id(), 2);
     }
 }
