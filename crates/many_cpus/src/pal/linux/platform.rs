@@ -382,28 +382,25 @@ impl BuildTargetPlatform {
 
     /// Processor time limit in processor-seconds per second.
     fn cgroups_max_processor_time(&self) -> Option<f64> {
+        let name = self.fs.get_proc_self_cgroup().and_then(parse_cgroup_name)?;
+
         #[expect(
             clippy::cast_precision_loss,
             reason = "unavoidable but also unlikely since typical values will be in safe bounds"
         )]
-        self.fs
-            .get_proc_self_cgroup()
-            .and_then(parse_cgroup_name)
-            .and_then(|name| {
-                self.get_cgroup_cpu_quota_and_period_us(&name)
-                    .map(|(quota, period)| {
-                        let quota = quota as f64;
-                        let period = period as f64;
+        self.get_cgroup_cpu_quota_and_period_us(&name)
+            .map(|(quota, period)| {
+                let quota = quota as f64;
+                let period = period as f64;
 
-                        // If there is a zero in either field, we just accept what the platform is
-                        // telling us. It is nonsense but if the platform gives us nonsense, we
-                        // should eat it. A conversion down the line will probably convert this
-                        // to an integer count of processors (if used), which will be 0 either way
-                        // as NaN is converted to 0 on integer conversion. This 0 will presumbly
-                        // signal an error along the lines of "you cannot have 0 processors". Not
-                        // worth spending our code and tests on such bizarre lies from the platform.
-                        quota / period
-                    })
+                // If there is a zero in either field, we just accept what the platform is
+                // telling us. It is nonsense but if the platform gives us nonsense, we
+                // should eat it. A conversion down the line will probably convert this
+                // to an integer count of processors (if used), which will be 0 either way
+                // as NaN is converted to 0 on integer conversion. This 0 will presumbly
+                // signal an error along the lines of "you cannot have 0 processors". Not
+                // worth spending our code and tests on such bizarre lies from the platform.
+                quota / period
             })
     }
 
