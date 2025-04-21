@@ -23,11 +23,11 @@ debug = "none"
 cpulist = { version = "0.2.0", path = "crates/cpulist" }
 folo_ffi = { version = "0.1.2", path = "crates/folo_ffi" }
 folo_utils = { version = "0.1.0", path = "crates/folo_utils" }
-linked = { version = "0.1.8", path = "crates/linked" }
+linked = { version = "0.1.9", path = "crates/linked" }
 linked_macros = { version = "0.1.8", path = "crates/linked_macros" }
 linked_macros_impl = { version = "0.1.8", path = "crates/linked_macros_impl" }
-many_cpus = { version = "0.3.0", path = "crates/many_cpus" }
-many_cpus_benchmarking = { version = "0.1.8", path = "crates/many_cpus_benchmarking" }
+many_cpus = { version = "0.3.1", path = "crates/many_cpus" }
+many_cpus_benchmarking = { version = "0.1.9", path = "crates/many_cpus_benchmarking" }
 
 # Internal packages we do not publish.
 benchmarks = { path = "crates/benchmarks" }
