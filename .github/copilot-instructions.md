@@ -69,3 +69,7 @@ We prefer to keep the public API relatively flat - even if we create separate Ru
 types, we re-export them all at the parent, so while we have modules like
 `crates/many_cpus/src/hardware_tracker.rs` the type itself is exported at the crate root as
 `many_cpus::HardwareTracker` instead of at the module as `many_cpus::hardware_tracker::HardwareTracker`.
+
+# Scripting
+
+You can assume PowerShell is available. Prefer PowerShell over Bash.
