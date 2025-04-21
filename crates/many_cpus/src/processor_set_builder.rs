@@ -528,7 +528,10 @@ impl ProcessorSetBuilder {
             )]
             let max_processor_count = max_processor_time.floor() as usize;
 
-            Some(max_processor_count)
+            // We can never restrict to less than 1 processor by quota because that would be
+            // nonsense - there is always some available processor time, so at least one
+            // processor must be usable. Therefore, we round below 1, and round down above 1.
+            Some(max_processor_count.max(1))
         } else {
             None
         }
@@ -909,6 +912,44 @@ mod tests {
     }
 
     #[test]
+    fn take_n_quota_limit_min_1() {
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let mut platform = MockPlatform::new();
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        // There is 0.001 processors worth of quota available, which gets rounded UP to 1.0.
+        // While we normally round down due to quality of service considerations. However, we still
+        // need to return at least 1 processor because there is at least some some processor time
+        // available that we must allow to be spent - rounding to zero would be nonsense.
+        platform.expect_max_processor_time().return_const(0.001);
+
+        platform
+            .expect_get_all_processors_core()
+            .times(1)
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
+        let set = builder.take(nz!(1));
+
+        assert_eq!(set.unwrap().len(), 1);
+    }
+
+    #[test]
     fn take_all_rounds_down_quota() {
         let pal_processors = nonempty![
             FakeProcessor {
@@ -931,6 +972,46 @@ mod tests {
             .expect_max_processor_time()
             .times(1)
             .return_const(1.999);
+
+        platform
+            .expect_get_all_processors_core()
+            .times(1)
+            .return_const(pal_processors);
+
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
+        let set = builder.take_all().unwrap();
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn take_all_min_1_despite_quota() {
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let mut platform = MockPlatform::new();
+        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+
+        // There is 0.001 processors worth of quota available, which gets rounded UP to 1.0.
+        // While we normally round down due to quality of service considerations. However, we still
+        // need to return at least 1 processor because there is at least some some processor time
+        // available that we must allow to be spent - rounding to zero would be nonsense.
+        platform
+            .expect_max_processor_time()
+            .times(1)
+            .return_const(0.001);
 
         platform
             .expect_get_all_processors_core()
