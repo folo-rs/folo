@@ -76,7 +76,7 @@
 //! #    thread.join().unwrap();
 //! # }
 //! ```
-//! 
+//!
 //! If there are no operating system enforced constraints active, the default processor set
 //! includes all processors.
 //!
@@ -157,7 +157,7 @@
 #![doc = include_str!("../docs/snippets/external_constraints.md")]
 //!
 #![doc = include_str!("../docs/snippets/changes_at_runtime.md")]
-//! 
+//!
 //! # Inheriting soft limits on allowed processors
 //!
 //! While the crate does not by default obey soft limits, you can opt in to these limits by
