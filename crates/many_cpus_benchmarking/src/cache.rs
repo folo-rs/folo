@@ -20,7 +20,7 @@ static CACHE_CLEANER_SOURCE: LazyLock<Vec<u64>> =
 
 // To a thread-specific destination (just to avoid overlap/conflict).
 // The existing values here do not matter, we will overwrite them (potentially multiple times).
-thread_local! {
+thread_local_rc! {
     static CACHE_CLEANER_DESTINATION: RefCell<Vec<u64>> =
         RefCell::new(vec![0xFFFFFFFFFFFFFFFF; CACHE_CLEANER_LEN_U64]);
 }

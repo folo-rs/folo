@@ -3,28 +3,28 @@
 
 use std::{rc::Rc, thread::LocalKey};
 
-/// This is the real type of variables wrapped in the [`linked::instance_per_thread!` macro][1].
+/// This is the real type of variables wrapped in the [`linked::thread_local_rc!` macro][1].
 /// See macro documentation for more details.
 ///
-/// Instances of this type are created by the [`linked::instance_per_thread!` macro][1],
-/// never directly by user code. User code will simply call `.with()` or `.get()` on this
-/// type when it wants to work with or obtain an instance of the linked object `T`.
+/// Instances of this type are created by the [`linked::thread_local_rc!` macro][1],
+/// never directly by user code, which can call `.with()` or `.to_rc()`
+/// to work with or obtain a linked instance of `T`.
 ///
-/// [1]: [crate::instance_per_thread]
+/// [1]: [crate::thread_local_rc]
 #[derive(Debug)]
-pub struct PerThreadStatic<T>
+pub struct StaticInstancePerThread<T>
 where
     T: linked::Object,
 {
     get_storage: fn() -> &'static LocalKey<Rc<T>>,
 }
 
-impl<T> PerThreadStatic<T>
+impl<T> StaticInstancePerThread<T>
 where
     T: linked::Object,
 {
     /// Note: this function exists to serve the inner workings of the
-    /// `linked::instance_per_thread!` macro and should not be used directly.
+    /// `linked::thread_local_rc!` macro and should not be used directly.
     /// It is not part of the public API and may be removed or changed at any time.
     #[doc(hidden)]
     #[must_use]
@@ -32,12 +32,16 @@ where
         Self { get_storage }
     }
 
-    /// Executes a closure with the current thread's instance of the linked object.
+    /// Executes a closure with the current thread's linked instance from
+    /// the object family referenced by the static variable.
     ///
     /// # Performance
     ///
-    /// This is typically the most efficient way to access the current thread's instance of the
-    /// linked object.
+    /// For repeated access to the current thread's linked instance, prefer reusing an `Rc<T>`
+    /// obtained from `.to_rc()`.
+    ///
+    /// If your code is not in a situation where it can reuse an existing `Rc<T>`, this method is
+    /// the optimal way to access the current thread's linked instance of `T`.
     #[inline]
     pub fn with<F, R>(&self, f: F) -> R
     where
@@ -46,18 +50,23 @@ where
         (self.get_storage)().with(f)
     }
 
-    /// Gets an `Rc` to the current thread's instance of the linked object.
+    /// Gets an `Rc<T>` to the current thread's linked instance from
+    /// the object family referenced by the static variable.
     ///
     /// The instance behind this `Rc` is the same one accessed by all other calls through the static
     /// variable on this thread. Note that it is still possible to create multiple instances on a
-    /// single thread, e.g. by cloning the `T` within.
+    /// single thread, e.g. by cloning the `T` within. The "one instance per thread" logic only
+    /// applies when the instances are accessed through the static variable.
     ///
     /// # Performance
     ///
     /// This function merely clones an `Rc`, which is relatively fast but still more work than
-    /// doing nothing. If all you need is to execute some logic on the inner type `T`, you may
-    /// want to use [`.with()`][Self::with] instead, which does not create the `Rc` and saves
-    /// a few nanoseconds.
+    /// doing nothing. The most efficient way to access the current thread's linked instance is
+    /// to reuse the `Rc<T>` returned from this method.
+    ///
+    /// If you are not in a situation where you can reuse the `Rc<T>` and a shared reference is
+    /// satisfactory, prefer calling [`.with()`][Self::with] instead, which does not create an
+    /// `Rc` and thereby saves a few nanoseconds.
     #[must_use]
     #[inline]
     pub fn to_rc(&self) -> Rc<T> {
@@ -65,11 +74,11 @@ where
     }
 }
 
-/// Declares that all static variables within the macro body
-/// contain thread-local [linked objects][crate].
+/// Declares that all static variables within the macro body contain thread-local
+/// [linked objects][crate].
 ///
-/// A single instance from the same family is maintained per-thread (at least by this
-/// macro - user code may still create additional instances via cloning).
+/// A single instance from the same family is maintained per-thread, represented
+/// as an `Rc<T>`.
 ///
 /// Call [`.with()`][2] to execute a closure with a shared reference to the current thread's
 /// instance of the linked object. This is the most efficient way to use the static variable,
@@ -80,13 +89,14 @@ where
 /// call returns an `Rc` for the same instance per thread (though you may clone the `T` inside to
 /// create additional instances not governed by the mechanics of this macro).
 ///
-/// # Dynamic family relationships
+/// # Accessing linked instances
 ///
-/// If you need `Arc`-style dynamic multithreaded storage (i.e. not a single static variable),
-/// pass instances of [`Handle<T>`][3] between threads instead of (or in addition to)
-/// using this macro. You can obtain a [`Handle<T>`][3] from any linked object via the
-/// [`.handle()`][4] method of the [`linked::Object` trait][5], even if the instance of the
-/// linked object originally came from a static variable.
+/// If you are making multiple calls from the same thread, prefer calling [`.to_rc()`][1] and
+/// reusing the returned `Rc<T>` for optimal performance.
+///
+/// If you are not making multiple calls or are not in a situation where you can store an `Rc<T>`,
+/// you may yield optimal performance by calling [`.with()`][2] to execute a closure with a shared
+/// reference to the current thread's linked instance.
 ///
 /// # Example
 ///
@@ -94,36 +104,41 @@ where
 /// # #[linked::object]
 /// # struct TokenCache { }
 /// # impl TokenCache { fn with_capacity(capacity: usize) -> Self { linked::new!(Self { } ) } fn get_token(&self) -> usize { 42 } }
-/// linked::instance_per_thread!(static TOKEN_CACHE: TokenCache = TokenCache::with_capacity(1000));
+/// linked::thread_local_rc!(static TOKEN_CACHE: TokenCache = TokenCache::with_capacity(1000));
 ///
 /// fn do_something() {
 ///     // `.with()` is the most efficient way to access the instance of the current thread.
 ///     let token = TOKEN_CACHE.with(|cache| cache.get_token());
 /// }
 /// ```
+/// 
+/// # Dynamic family relationships
 ///
-/// [1]: PerThreadStatic::to_rc
-/// [2]: PerThreadStatic::with
-/// [3]: crate::Handle
-/// [4]: crate::Object::handle
-/// [5]: crate::Object
+/// If you need fully `Rc`-style dynamic storage (i.e. not a single static variable) then consider
+/// either passing instances of [`InstancePerThread<T>`][4] between threads or using
+/// [`Family`][3] to manually control instance creation.
+///
+/// [1]: StaticInstancePerThread::to_rc
+/// [2]: StaticInstancePerThread::with
+/// [3]: crate::Family
+/// [4]: crate::InstancePerThread
 #[macro_export]
-macro_rules! instance_per_thread {
+macro_rules! thread_local_rc {
     () => {};
 
     ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $e:expr; $($rest:tt)*) => (
-        $crate::instance_per_thread!($(#[$attr])* $vis static $NAME: $t = $e);
-        $crate::instance_per_thread!($($rest)*);
+        $crate::thread_local_rc!($(#[$attr])* $vis static $NAME: $t = $e);
+        $crate::thread_local_rc!($($rest)*);
     );
 
     ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $e:expr) => {
         $crate::__private::paste! {
-            $crate::instance_per_access!(#[doc(hidden)] static [< $NAME _INITIALIZER >]: $t = $e;);
+            $crate::instances!(#[doc(hidden)] static [< $NAME _INITIALIZER >]: $t = $e;);
 
-            thread_local!(#[doc(hidden)] static [< $NAME _RC >]: ::std::rc::Rc<$t> = ::std::rc::Rc::new([< $NAME _INITIALIZER >].get()));
+            ::std::thread_local!(#[doc(hidden)] static [< $NAME _RC >]: ::std::rc::Rc<$t> = ::std::rc::Rc::new([< $NAME _INITIALIZER >].get()));
 
-            $(#[$attr])* $vis const $NAME: $crate::PerThreadStatic<$t> =
-                $crate::PerThreadStatic::new(move || &[< $NAME _RC >]);
+            $(#[$attr])* $vis const $NAME: $crate::StaticInstancePerThread<$t> =
+                $crate::StaticInstancePerThread::new(move || &[< $NAME _RC >]);
         }
     };
 }
@@ -156,7 +171,7 @@ mod tests {
 
     #[test]
     fn smoke_test() {
-        linked::instance_per_thread! {
+        linked::thread_local_rc! {
             static BLUE_TOKEN_CACHE: TokenCache = TokenCache::new(1000);
             static YELLOW_TOKEN_CACHE: TokenCache = TokenCache::new(2000);
         }

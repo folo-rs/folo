@@ -3,15 +3,19 @@
 
 //! This is a variation of `linked_basic.rs` - familiarize yourself with that example first.
 //!
-//! Demonstrates how to use linked objects across threads without using the `link!` macro. This is
-//! useful because sometimes it might not be convenient for you to define a static variable. This
-//! example instead creates linked instances from handles that are passed between threads.
+//! Demonstrates how to use linked objects across threads by manually establishing the linked
+//! object family relationships via passing a reference to the family across threads and manually
+//! creating instances from the family. This is useful because sometimes it might not be convenient
+//! for you to define a static variable or use one of the standard instance-per-thread mechanisms.
+//!
+//! This example creates linked instances directly from the linked object family. This is
+//! the most flexible approach but also requires the most code from you.
 
 #![allow(clippy::new_without_default, reason = "Not relevant for example")]
 
 use std::thread;
 
-// This trait provides the methods for obtaining handles from linked objects.
+// This trait allows you to access the family of a linked object.
 use linked::Object;
 
 // Everything in the "counters" module is the same as in `linked_basic.rs`.
@@ -63,26 +67,30 @@ fn main() {
     // regular structs and are not limited to static variables in any way.
     let counter = EventCounter::new();
 
+    // Every linked object belongs to a family, which you can access like this.
+    // The family reference this returns is always thread-safe, even if the linked
+    // object instances themselves are not. This allows you to pass it between threads.
+    let counter_family = counter.family();
+
     for _ in 0..THREAD_COUNT {
-        // While linked objects themselves are always single-threaded objects (you would get a
-        // compile error if you tried to pass `counter.clone()`), we can take thread-safe
-        // handles from them. This mechanism is provided by `folo::linked::Linked` (which must
-        // be imported) for all types that implement the linked object pattern.
-        let counter_handle = counter.handle();
+        threads.push(thread::spawn({
+            // We create a new clone of the family reference for each thread we spawn.
+            let counter_family = counter_family.clone();
 
-        threads.push(thread::spawn(move || {
-            // We can convert the handle back into a linked object in the new thread.
-            let mut counter: EventCounter = counter_handle.into();
+            move || {
+                // The family reference can be converted to a new instance on demand.
+                let mut counter: EventCounter = counter_family.into();
 
-            for _ in 0..RECORDS_PER_THREAD {
-                counter.increment();
+                for _ in 0..RECORDS_PER_THREAD {
+                    counter.increment();
+                }
+
+                println!(
+                    "Thread completed work; local count: {}, global count: {}",
+                    counter.local_count(),
+                    counter.global_count()
+                );
             }
-
-            println!(
-                "Thread completed work; local count: {}, global count: {}",
-                counter.local_count(),
-                counter.global_count()
-            );
         }));
     }
 

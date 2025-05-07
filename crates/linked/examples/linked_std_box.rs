@@ -11,7 +11,7 @@
 //! 1. The regular instances of type T, which are ordinary linked objects.
 //! 2. Instances of `std::boxed::Box<dyn Xyz>` where `T: Xyz`. These remain linked internally but
 //!    cannot be used to create additional linked instances (there is no `.clone()` and
-//!    no `.handle()` on these objects).
+//!    no `.family()` on these objects).
 //!
 //! If you want to be able to create additional linked instances of `dyn Xyz` from an existing
 //! instance of `dyn Xyz`, you must create **all** instances (starting from the constructor) as
@@ -67,7 +67,7 @@ mod counters {
 
 use counters::{CountResult, EventCounter};
 
-linked::instance_per_access!(static RECORDS_PROCESSED: EventCounter = EventCounter::new());
+linked::instances!(static RECORDS_PROCESSED: EventCounter = EventCounter::new());
 
 // Here we have some code that takes ownership of abstract count results. In this simple example
 // there is of course no real "need" for us to use an abstraction but let's pretend we have a
@@ -97,7 +97,7 @@ fn main() {
 
             // You can take a regular instance of a linked object and stuff it into a Box any time.
             // Note, however, that you cannot use this instance anymore to create additional linked
-            // instances because now it lacks the `.clone()` and `.handle()` required for that.
+            // instances because now it lacks the `.clone()` and `.family()` required for that.
             let boxed_count_result = Box::new(counter);
             finalize_counter_processing(boxed_count_result);
         }));

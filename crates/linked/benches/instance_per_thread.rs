@@ -1,4 +1,4 @@
-//! Basic operations on the `PerThread` wrapper type, used directly for dynamic storage.
+//! Basic operations on the `InstancePerThread` wrapper type, used directly for dynamic storage.
 
 #![allow(
     missing_docs,
@@ -16,7 +16,7 @@ use std::{
 
 use benchmark_utils::{ThreadPool, bench_on_threadpool};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use linked::PerThread;
+use linked::InstancePerThread;
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
@@ -43,24 +43,24 @@ impl TestSubject {
 }
 
 fn entrypoint(c: &mut Criterion) {
-    per_thread(c);
-    thread_local(c);
-    thread_local_multithreaded(c);
-    thread_local_access(c);
+    local(c);
+    local_ref(c);
+    local_ref_multithreaded(c);
+    local_ref_access(c);
 }
 
-fn per_thread(c: &mut Criterion) {
-    let mut g = c.benchmark_group("per_thread::PerThread");
+fn local(c: &mut Criterion) {
+    let mut g = c.benchmark_group("instance_per_thread::InstancePerThread");
 
     g.bench_function("new", |b| {
         b.iter_batched(
             || (),
-            |()| black_box(PerThread::new(TestSubject::new())),
+            |()| black_box(InstancePerThread::new(TestSubject::new())),
             BatchSize::SmallInput,
         );
     });
 
-    let per_thread = PerThread::new(TestSubject::new());
+    let per_thread = InstancePerThread::new(TestSubject::new());
 
     g.bench_function("clone", |b| {
         b.iter_batched(
@@ -73,27 +73,27 @@ fn per_thread(c: &mut Criterion) {
     g.finish();
 }
 
-fn thread_local(c: &mut Criterion) {
-    let mut g = c.benchmark_group("per_thread::ThreadLocal");
+fn local_ref(c: &mut Criterion) {
+    let mut g = c.benchmark_group("instance_per_thread::Ref");
 
-    let per_thread = PerThread::new(TestSubject::new());
+    let per_thread = InstancePerThread::new(TestSubject::new());
 
     g.bench_function("new_single", |b| {
         b.iter_batched(
             || (),
-            |()| black_box(per_thread.local()),
+            |()| black_box(per_thread.acquire()),
             BatchSize::SmallInput,
         );
     });
 
     {
-        // We keep one ThreadLocal here so the ones we create in iterations are not the only ones.
-        let _first = per_thread.local();
+        // We keep one Local here so the ones we create in iterations are not the only ones.
+        let _first = per_thread.acquire();
 
         g.bench_function("new_not_single", |b| {
             b.iter_batched(
                 || (),
-                |()| black_box(per_thread.local()),
+                |()| black_box(per_thread.acquire()),
                 BatchSize::SmallInput,
             );
         });
@@ -101,7 +101,7 @@ fn thread_local(c: &mut Criterion) {
 
     {
         // This is the one we clone.
-        let first = per_thread.local();
+        let first = per_thread.acquire();
 
         g.bench_function("clone", |b| {
             b.iter_batched(|| (), |()| black_box(first.clone()), BatchSize::SmallInput);
@@ -111,19 +111,19 @@ fn thread_local(c: &mut Criterion) {
     g.finish();
 }
 
-fn thread_local_multithreaded(c: &mut Criterion) {
+fn local_ref_multithreaded(c: &mut Criterion) {
     let thread_pool = ThreadPool::default();
 
-    let mut g = c.benchmark_group("per_thread::ThreadLocalMultithreaded");
+    let mut g = c.benchmark_group("instance_per_thread::Ref::multithreaded");
 
-    let per_thread = PerThread::new(TestSubject::new());
+    let per_thread = InstancePerThread::new(TestSubject::new());
 
     g.bench_function("new_single", |b| {
         b.iter_custom(|iters| {
             bench_on_threadpool(&thread_pool, iters, || (), {
                 let per_thread = per_thread.clone();
                 move |()| {
-                    black_box(per_thread.local());
+                    black_box(per_thread.acquire());
                 }
             })
         });
@@ -138,13 +138,13 @@ fn thread_local_multithreaded(c: &mut Criterion) {
                     let per_thread = per_thread.clone();
                     move || {
                         // This is the first one, we just keep it around for all the iterations.
-                        per_thread.local()
+                        per_thread.acquire()
                     }
                 },
                 {
                     let per_thread = per_thread.clone();
                     move |_| {
-                        black_box(per_thread.local());
+                        black_box(per_thread.acquire());
                     }
                 },
             )
@@ -160,7 +160,7 @@ fn thread_local_multithreaded(c: &mut Criterion) {
                     let per_thread = per_thread.clone();
                     move || {
                         // This is the first one that we clone.
-                        per_thread.local()
+                        per_thread.acquire()
                     }
                 },
                 {
@@ -175,20 +175,20 @@ fn thread_local_multithreaded(c: &mut Criterion) {
     g.finish();
 }
 
-fn thread_local_access(c: &mut Criterion) {
-    let mut g = c.benchmark_group("per_thread::ThreadLocalAccess");
+fn local_ref_access(c: &mut Criterion) {
+    let mut g = c.benchmark_group("instance_per_thread::Ref::access");
 
-    let per_thread = PerThread::new(TestSubject::new());
+    let per_thread = InstancePerThread::new(TestSubject::new());
 
     g.bench_function("deref", |b| {
-        let local = per_thread.local();
+        let local = per_thread.acquire();
 
         b.iter(|| {
             black_box(local.local_state.get());
         });
     });
 
-    // For comparison, we also include a thread_local! LazyCell.
+    // For comparison, we also include a thread_local_rc! LazyCell.
     g.bench_function("vs_std_thread_local", |b| {
         b.iter(|| {
             TEST_SUBJECT_THREAD_LOCAL.with(|local| {

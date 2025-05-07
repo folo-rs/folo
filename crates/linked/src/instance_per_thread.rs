@@ -10,83 +10,87 @@ use simple_mermaid::mermaid;
 
 use crate::{BuildThreadIdHasher, ERR_POISONED_LOCK};
 
-/// A wrapper that manages instances of linked objects of type `T`, ensuring that only one
+/// A wrapper that manages linked instances of `T`, ensuring that only one
 /// instance of `T` is created per thread.
 ///
-/// This is a conceptual equivalent of the [`linked::instance_per_thread!` macro][1], with the main
-/// difference being that this type operates entirely at runtime using dynamic storage and does
+/// This is similar to the [`linked::thread_local_rc!` macro][1], with the main difference
+/// being that this type operates entirely at runtime using dynamic storage and does
 /// not require a static variable to be defined.
 ///
 /// # Usage
 ///
-/// Create an instance of `PerThread` and provide it an initial instance of a linked object `T`.
-/// This initial instance will be used to create additional instances on demand. Any instance
-/// of `T` retrieved through the same `PerThread` or a clone will be linked to the same family
-/// of `T` instances.
+/// Create an instance of `InstancePerThread` and provide it the initial instance of a linked
+/// object `T`. Any instance of `T` accessed through the same `InstancePerThread` or a clone of it
+/// will be linked to the same family.
 ///
-#[ doc=mermaid!( "../doc/per_thread.mermaid") ]
+#[ doc=mermaid!( "../doc/instance_per_thread.mermaid") ]
 ///
 /// To access the current thread's instance of `T`, you must first obtain a
-/// [`ThreadLocal<T>`][ThreadLocal] which works in a manner similar to `Rc<T>`, allowing you to
-/// reference the value within. You can obtain a [`ThreadLocal<T>`][ThreadLocal] by calling
-/// [`PerThread::local()`][Self::local].
+/// [`Ref<T>`][Ref] by calling [`.acquire()`][Self::acquire]. Then you can
+/// access the `T` within by simply dereferencing via the `Deref<Target = T>` trait.
 ///
-/// Once you have a [`ThreadLocal<T>`][ThreadLocal], you can access the `T` within by simply
-/// dereferencing via the `Deref<Target = T>` trait.
-///
-/// # Long-lived thread-specific instances
-///
-/// Note that the `ThreadLocal` type is `!Send`, which means you cannot store it in places that
-/// need to be thread-mobile. For example, in web framework request handlers the compiler might
-/// not permit you to let a `ThreadLocal` live across an `await`, depending on the web framework,
-/// the async task runtime used and its specific configuration.
+/// `Ref<T>` is a thread-isolated type, meaning you cannot move it to a different
+/// thread nor access it from a different thread. To access linked instances on other threads,
+/// you must transfer the `InstancePerThread<T>` instance across threads and obtain a new `Ref<T>`
+/// on the destination thread.
 ///
 /// # Resource management
 ///
-/// A thread-specific instance of `T` is dropped when the last `ThreadLocal` on that thread is
-/// dropped. If a new `ThreadLocal` is later obtained, it is initialized with a new instance
-/// of the linked object.
+/// A thread-specific instance of `T` is dropped when the last `Ref` on that thread
+/// is dropped, similar to how `Rc<T>` would behave. If a new `Ref` is later obtained,
+/// it is initialized with a new instance of the linked object.
 ///
-/// It is important to emphasize that this means if you only create temporary `ThreadLocal`
-/// instances then you will get a new instance of `T` every time. The performance impact of
-/// this depends on how `T` works internally but you are recommended to keep `ThreadLocal`
+/// It is important to emphasize that this means if you only acquire temporary `Ref`
+/// objects then you will get a new instance of `T` every time. The performance impact of
+/// this depends on how `T` works internally but you are recommended to keep `Ref`
 /// instances around for reuse when possible.
 ///
-/// # Advanced scenarios
+/// # `Ref` storage
 ///
-/// Use of `PerThread` does not close the door on other ways to use linked objects.
-/// For example, you always have the possibility of manually taking the `T` and creating
-/// additional clones of it to break out the one-per-thread limitation. The `PerThread` type
-/// only controls what happens through the `PerThread` type.
+/// `Ref` is a thread-isolated type, which means you cannot store it in places that require types
+/// to be thread-mobile. For example, in web framework request handlers the compiler might not
+/// permit you to let a `Ref` live across an `await`, depending on the web framework, the async
+/// task runtime used and its specific configuration.
 ///
-/// [1]: crate::instance_per_thread
+/// Consider using `InstancePerThreadSync<T>` if you need a thread-mobile variant of `Ref`.
+///
+/// [1]: crate::thread_local_rc
 #[derive(Debug)]
-pub struct PerThread<T>
+pub struct InstancePerThread<T>
 where
     T: linked::Object,
 {
     family: FamilyStateReference<T>,
 }
 
-impl<T> PerThread<T>
+impl<T> InstancePerThread<T>
 where
     T: linked::Object,
 {
-    /// Creates a new `PerThread` with an existing instance of `T`. Any further access to the `T`
-    /// via the `PerThread` (or its clones) will return instances of `T` from the same family.
+    /// Creates a new `InstancePerThread` with an existing instance of `T`.
+    ///
+    /// Any further access of `T` instances via the `InstancePerThread` (or its clones) will return
+    /// instances of `T` from the same family.
     #[expect(
         clippy::needless_pass_by_value,
-        reason = "intentional needless consume to encourage all access to go via ThreadLocal<T>"
+        reason = "intentional needless consume to encourage all access to go via InstancePerThread<T>"
     )]
     #[must_use]
     pub fn new(inner: T) -> Self {
-        let family = FamilyStateReference::new(inner.handle());
+        let family = FamilyStateReference::new(inner.family());
 
         Self { family }
     }
 
-    /// Returns a `ThreadLocal<T>` that can be used to efficiently access the current
-    /// thread's `T` instance.
+    /// Returns a `Ref<T>` that can be used to access the current thread's instance of `T`.
+    ///
+    /// Creating multiple concurrent `Ref<T>` instances from the same `InstancePerThread<T>`
+    /// on the same thread is allowed. Every `Ref<T>` instance will reference the same
+    /// instance of `T` per thread.
+    ///
+    /// There are no constraints on the lifetime of the returned `Ref<T>` but it is a
+    /// thread-isolated type and cannot be moved across threads or accessed from a different thread,
+    /// which may impose some limits.
     ///
     /// # Example
     ///
@@ -112,24 +116,27 @@ where
     /// #     }
     /// # }
     /// #
-    /// let per_thread_thing = linked::PerThread::new(Thing::new());
+    /// use linked::InstancePerThread;
     ///
-    /// let local_thing = per_thread_thing.local();
-    /// local_thing.increment();
-    /// assert_eq!(local_thing.local_value(), 1);
+    /// let per_thread_thing = InstancePerThread::new(Thing::new());
+    ///
+    /// let thing = per_thread_thing.acquire();
+    /// thing.increment();
+    /// assert_eq!(thing.local_value(), 1);
     /// ```
     ///
     /// # Efficiency
     ///
-    /// Reuse the returned instance as much as possible. Every call to this function has some
-    /// overhead, especially if there are no other `ThreadLocal<T>` instances from the same family
-    /// active on the current thread.
+    /// Reuse the returned `Ref<T>` when possible. Every call to this function has
+    /// some overhead, especially if there are no other `Ref<T>` instances from the
+    /// same family active on the current thread.
     ///
     /// # Instance lifecycle
     ///
-    /// A thread-specific instance of `T` is dropped when the last `ThreadLocal` on that thread is
-    /// dropped. If a new `ThreadLocal` is later obtained, it is initialized with a new instance
-    /// of the linked object.
+    /// A thread-specific instance of `T` is dropped when the last `Ref` on that
+    /// thread is dropped. If a new `Ref` is later obtained, it is initialized
+    /// with a new linked instance of `T` linked to the same family as the
+    /// originating `InstancePerThread<T>`.
     ///
     /// ```
     /// # use std::cell::Cell;
@@ -153,38 +160,42 @@ where
     /// #     }
     /// # }
     /// #
-    /// let per_thread_thing = linked::PerThread::new(Thing::new());
+    /// use linked::InstancePerThread;
     ///
-    /// let local_thing = per_thread_thing.local();
-    /// local_thing.increment();
-    /// assert_eq!(local_thing.local_value(), 1);
+    /// let per_thread_thing = InstancePerThread::new(Thing::new());
     ///
-    /// drop(local_thing);
+    /// let thing = per_thread_thing.acquire();
+    /// thing.increment();
+    /// assert_eq!(thing.local_value(), 1);
     ///
-    /// // Dropping the only thread-local instance above will have reset the thread-local state.
-    /// let local_thing = per_thread_thing.local();
-    /// assert_eq!(local_thing.local_value(), 0);
+    /// drop(thing);
+    ///
+    /// // Dropping the only acquired instance above will have reset the thread-local state.
+    /// let thing = per_thread_thing.acquire();
+    /// assert_eq!(thing.local_value(), 0);
     /// ```
     ///
     /// To minimize the effort spent on re-creating the thread-local state, ensure that you reuse
-    /// the `ThreadLocal<T>` instances as much as possible.
+    /// the `Ref<T>` instances as much as possible.
     ///
     /// # Thread safety
     ///
-    /// The returned value is single-threaded and cannot be moved or used across threads. For
-    /// transfer across threads, you need to preserve and share/send a `PerThread<T>` instance.
+    /// The returned value is single-threaded and cannot be moved or used across threads. To extend
+    /// the linked object family across threads, transfer `InstancePerThread<T>` instances across threads.
+    /// You can obtain additional `InstancePerThread<T>` instances by cloning the original. Every clone
+    /// is equivalent.
     #[must_use]
-    pub fn local(&self) -> ThreadLocal<T> {
+    pub fn acquire(&self) -> Ref<T> {
         let inner = self.family.current_thread_instance();
 
-        ThreadLocal {
+        Ref {
             inner,
             family: self.family.clone(),
         }
     }
 }
 
-impl<T> Clone for PerThread<T>
+impl<T> Clone for InstancePerThread<T>
 where
     T: linked::Object,
 {
@@ -196,23 +207,23 @@ where
     }
 }
 
-/// A thread-local instance of a linked object of type `T`. This acts in a manner similar to
-/// `Rc<T>` for a type `T` that implements the [linked object pattern][crate].
+/// An acquired thread-local instance of a linked object of type `T`,
+/// implementing `Deref<Target = T>`.
 ///
-/// For details, see [`PerThread<T>`][PerThread] which is the type used to create instances
-/// of `ThreadLocal<T>`.
+/// For details, see [`InstancePerThread<T>`][InstancePerThread] which is the type used
+/// to create instances of `Ref<T>`.
 #[derive(Debug)]
-pub struct ThreadLocal<T>
+pub struct Ref<T>
 where
     T: linked::Object,
 {
     // We really are just a wrapper around an Rc<T>. The only other duty we have
-    // is to clean up the thread-local instance when the last ThreadLocal is dropped.
+    // is to clean up the thread-local instance when the last `Ref` is dropped.
     inner: Rc<T>,
     family: FamilyStateReference<T>,
 }
 
-impl<T> Deref for ThreadLocal<T>
+impl<T> Deref for Ref<T>
 where
     T: linked::Object,
 {
@@ -224,7 +235,7 @@ where
     }
 }
 
-impl<T> Clone for ThreadLocal<T>
+impl<T> Clone for Ref<T>
 where
     T: linked::Object,
 {
@@ -237,15 +248,15 @@ where
     }
 }
 
-impl<T> Drop for ThreadLocal<T>
+impl<T> Drop for Ref<T>
 where
     T: linked::Object,
 {
     fn drop(&mut self) {
-        // If we were the last ThreadLocal on this thread then we need to drop the thread-local
+        // If we were the last Ref on this thread then we need to drop the thread-local
         // state for this thread. Note that there are 2 references - ourselves and the family state.
         if Rc::strong_count(&self.inner) != 2 {
-            // No - there is another ThreadLocal, so we do not need to clean up.
+            // No - there is another Ref, so we do not need to clean up.
             return;
         }
 
@@ -263,8 +274,8 @@ struct FamilyStateReference<T>
 where
     T: linked::Object,
 {
-    // If a thread needs a new instance, we create it via this handle.
-    handle: linked::Handle<T>,
+    // If a thread needs a new instance, we create it via the family.
+    family: linked::Family<T>,
 
     // We store the state of each thread here. See safety comments on ThreadSpecificState!
     // NB! While it is legal to manipulate the HashMap from any thread, including to move
@@ -274,8 +285,8 @@ where
     // is dropped, because each value must be dropped on the thread that created it and dropping is
     // logic executed on that thread-specific value!
     //
-    // This is done in the `ThreadLocal` destructor. By the time this map is dropped, it must be
-    // empty, which we assert in our own drop().
+    // This is done in the `Ref` destructor. By the time this map is dropped,
+    // it must be empty, which we assert in our own drop().
     //
     // The write lock here is only held when initializing the thread-specific state for a thread
     // for the first time, which should generally be rare, especially as user code will also be
@@ -289,9 +300,9 @@ where
     T: linked::Object,
 {
     #[must_use]
-    fn new(handle: linked::Handle<T>) -> Self {
+    fn new(family: linked::Family<T>) -> Self {
         Self {
-            handle,
+            family,
             thread_specific: Arc::new(RwLock::new(HashMap::with_hasher(BuildThreadIdHasher))),
         }
     }
@@ -316,7 +327,7 @@ where
         // Note that we create this instance outside any locks, both to reduce the
         // lock durations but also because cloning a linked object may execute arbitrary code,
         // including potentially code that tries to grab the same lock.
-        let instance: Rc<T> = Rc::new(self.handle.clone().into());
+        let instance: Rc<T> = Rc::new(self.family.clone().into());
 
         // Let's add the new instance to the map.
         let mut map = self.thread_specific.write().expect(ERR_POISONED_LOCK);
@@ -364,7 +375,7 @@ where
 {
     fn clone(&self) -> Self {
         Self {
-            handle: self.handle.clone(),
+            family: self.family.clone(),
             thread_specific: Arc::clone(&self.thread_specific),
         }
     }
@@ -383,6 +394,12 @@ where
         if Arc::strong_count(&self.thread_specific) > 1 {
             // We are not the last reference to the family state,
             // so no state dropping will occur - having state in the map is fine.
+            return;
+        }
+
+        if thread::panicking() {
+            // If we are already panicking, there is no point in asserting anything,
+            // as another panic may disrupt the handling of the original panic.
             return;
         }
 
@@ -505,63 +522,63 @@ mod tests {
 
     #[test]
     fn per_thread_smoke_test() {
-        let per_thread = PerThread::new(TokenCache::new());
+        let per_thread_cache = InstancePerThread::new(TokenCache::new());
 
-        let thread_local1 = per_thread.local();
-        thread_local1.increment();
+        let cache1 = per_thread_cache.acquire();
+        cache1.increment();
 
-        assert_eq!(thread_local1.local_value(), 1);
-        assert_eq!(thread_local1.shared_value(), 1);
+        assert_eq!(cache1.local_value(), 1);
+        assert_eq!(cache1.shared_value(), 1);
 
         // This must refer to the same instance.
-        let thread_local2 = per_thread.local();
+        let cache2 = per_thread_cache.acquire();
 
-        assert_eq!(thread_local2.local_value(), 1);
-        assert_eq!(thread_local2.shared_value(), 1);
+        assert_eq!(cache2.local_value(), 1);
+        assert_eq!(cache2.shared_value(), 1);
 
-        thread_local2.increment();
+        cache2.increment();
 
-        assert_eq!(thread_local1.local_value(), 2);
-        assert_eq!(thread_local1.shared_value(), 2);
+        assert_eq!(cache1.local_value(), 2);
+        assert_eq!(cache1.shared_value(), 2);
 
         thread::spawn(move || {
-            // You can move PerThread across threads.
-            let thread_local3 = per_thread.local();
+            // You can move Local across threads.
+            let cache3 = per_thread_cache.acquire();
 
             // This is a different thread's instance, so the local value is fresh.
-            assert_eq!(thread_local3.local_value(), 0);
-            assert_eq!(thread_local3.shared_value(), 2);
+            assert_eq!(cache3.local_value(), 0);
+            assert_eq!(cache3.shared_value(), 2);
 
-            thread_local3.increment();
+            cache3.increment();
 
-            assert_eq!(thread_local3.local_value(), 1);
-            assert_eq!(thread_local3.shared_value(), 3);
+            assert_eq!(cache3.local_value(), 1);
+            assert_eq!(cache3.shared_value(), 3);
 
             // You can clone this and every clone works the same.
-            let per_thread_clone = per_thread.clone();
+            let thread_local_clone = per_thread_cache.clone();
 
-            let thread_local4 = per_thread_clone.local();
+            let cache4 = thread_local_clone.acquire();
 
-            assert_eq!(thread_local4.local_value(), 1);
-            assert_eq!(thread_local4.shared_value(), 3);
+            assert_eq!(cache4.local_value(), 1);
+            assert_eq!(cache4.shared_value(), 3);
 
-            // Every PerThread instance from the same family is equivalent.
-            let thread_local5 = per_thread.local();
+            // Every Local instance from the same family is equivalent.
+            let cache5 = per_thread_cache.acquire();
 
-            assert_eq!(thread_local5.local_value(), 1);
-            assert_eq!(thread_local5.shared_value(), 3);
+            assert_eq!(cache5.local_value(), 1);
+            assert_eq!(cache5.shared_value(), 3);
 
             thread::spawn(move || {
-                let thread_local5 = per_thread_clone.local();
+                let cache6 = thread_local_clone.acquire();
 
                 // This is a different thread's instance, so the local value is fresh.
-                assert_eq!(thread_local5.local_value(), 0);
-                assert_eq!(thread_local5.shared_value(), 3);
+                assert_eq!(cache6.local_value(), 0);
+                assert_eq!(cache6.shared_value(), 3);
 
-                thread_local5.increment();
+                cache6.increment();
 
-                assert_eq!(thread_local5.local_value(), 1);
-                assert_eq!(thread_local5.shared_value(), 4);
+                assert_eq!(cache6.local_value(), 1);
+                assert_eq!(cache6.shared_value(), 4);
             })
             .join()
             .unwrap();
@@ -569,47 +586,47 @@ mod tests {
         .join()
         .unwrap();
 
-        assert_eq!(thread_local1.local_value(), 2);
-        assert_eq!(thread_local1.shared_value(), 4);
+        assert_eq!(cache1.local_value(), 2);
+        assert_eq!(cache1.shared_value(), 4);
     }
 
     #[test]
     fn thread_state_dropped_on_last_thread_local_drop() {
-        let per_thread = PerThread::new(TokenCache::new());
+        let per_thread_cache = InstancePerThread::new(TokenCache::new());
 
-        let local = per_thread.local();
-        local.increment();
+        let cache = per_thread_cache.acquire();
+        cache.increment();
 
-        assert_eq!(local.local_value(), 1);
+        assert_eq!(cache.local_value(), 1);
 
         // This will drop the local state.
-        drop(local);
+        drop(cache);
 
         // We get a fresh instance now, initialized from scratch for this thread.
-        let local = per_thread.local();
-        assert_eq!(local.local_value(), 0);
+        let cache = per_thread_cache.acquire();
+        assert_eq!(cache.local_value(), 0);
     }
 
     #[test]
     fn thread_state_dropped_on_thread_exit() {
         // At the start, no thread-specific state has been created. The link embedded into the
-        // PerThread holds one reference to the inner shared value of the TokenCache.
-        let per_thread = PerThread::new(TokenCache::new());
+        // Local holds one reference to the inner shared value of the TokenCache.
+        let per_thread_cache = InstancePerThread::new(TokenCache::new());
 
-        let local = per_thread.local();
+        let cache = per_thread_cache.acquire();
 
         // We now have two references to the inner shared value - the link + this fn.
-        assert_eq!(Arc::strong_count(&local.shared_value), 2);
+        assert_eq!(Arc::strong_count(&cache.shared_value), 2);
 
         thread::spawn(move || {
-            let local = per_thread.local();
+            let cache = per_thread_cache.acquire();
 
-            assert_eq!(Arc::strong_count(&local.shared_value), 3);
+            assert_eq!(Arc::strong_count(&cache.shared_value), 3);
         })
         .join()
         .unwrap();
 
         // Should be back to 2 here - the thread-local state was dropped when the thread exited.
-        assert_eq!(Arc::strong_count(&local.shared_value), 2);
+        assert_eq!(Arc::strong_count(&cache.shared_value), 2);
     }
 }

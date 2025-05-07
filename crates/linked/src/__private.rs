@@ -7,16 +7,14 @@
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
-use negative_impl::negative_impl;
-
-use crate::{Handle, Object};
+use crate::{Family, Object};
 
 /// Re-export so we can use it via macros in projects that do not have a reference to `paste`.
 pub use ::paste::paste;
 
 /// This is meant to be used via the [`linked::new!`][crate::new] macro, never directly called.
 ///
-/// Creates a family of linked objects, the instances for which are created using a callback whose
+/// Creates a family of linked objects, the instances of which are created using a callback whose
 /// captured state connects all members of the linked object family.
 ///
 /// The instance factory must be thread-safe, which implies that all captured state in this factory
@@ -34,9 +32,9 @@ pub fn new<T>(instance_factory: impl Fn(Link<T>) -> T + Send + Sync + 'static) -
 #[inline]
 pub fn clone<T>(value: &T) -> T
 where
-    T: Object + From<Handle<T>>,
+    T: Object + From<Family<T>>,
 {
-    value.handle().into()
+    value.family().into()
 }
 
 pub(crate) type InstanceFactory<T> = Arc<dyn Fn(Link<T>) -> T + Send + Sync + 'static>;
@@ -64,13 +62,6 @@ impl<T> Debug for Link<T> {
     }
 }
 
-// A `Link` is a single-threaded object to avoid accidentally passing a linked object across
-// threads. Instead, use `Handle` (from `Linked::handle()`) to send instances across threads.
-#[negative_impl]
-impl<T> !Send for Link<T> {}
-#[negative_impl]
-impl<T> !Sync for Link<T> {}
-
 impl<T> Link<T> {
     #[must_use]
     pub(super) fn new(instance_factory: InstanceFactory<T>) -> Self {
@@ -95,7 +86,7 @@ impl<T> Link<T> {
 
     #[inline]
     #[must_use]
-    pub fn handle(&self) -> Handle<T> {
-        Handle::new(self.clone())
+    pub fn family(&self) -> Family<T> {
+        Family::new(self.clone())
     }
 }

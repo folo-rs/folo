@@ -232,7 +232,7 @@ mod windows {
 
     thread_local!(static PER_THREAD_HEAP_THREAD_SAFE: ThreadSafeCustomHeap = ThreadSafeCustomHeap::new());
     thread_local!(static PER_THREAD_HEAP: SingleThreadedCustomHeap = SingleThreadedCustomHeap::new());
-    linked::instance_per_thread!(static PER_REGION_HEAP: MemoryRegionSpecificHeap = MemoryRegionSpecificHeap::new());
+    linked::thread_local_rc!(static PER_REGION_HEAP: MemoryRegionSpecificHeap = MemoryRegionSpecificHeap::new());
 
     struct SingleThreadedCustomHeap {
         heap: HANDLE,

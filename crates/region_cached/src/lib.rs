@@ -74,13 +74,13 @@
 //! can be manually used via the [`PerThread<T>`][4] wrapper type, as `PerThread<RegionCached<T>>`.
 //!
 //! ```
-//! use linked::PerThread;
+//! use linked::InstancePerThread;
 //! use region_cached::RegionCached;
 //!
-//! let favorite_color_regional = PerThread::new(RegionCached::new("blue".to_string()));
+//! let favorite_color_regional = Local::new(RegionCached::new("blue".to_string()));
 //!
 //! // This localizes the object to the current thread. Reuse this object when possible.
-//! let favorite_color = favorite_color_regional.local();
+//! let favorite_color = favorite_color_regional.acquire();
 //!
 //! favorite_color.with_cached(|color| {
 //!     println!("My favorite color is {color}");
@@ -161,12 +161,12 @@
 //!
 //! The [`region_local`][6] crate provides a similar mechanism but limits the visibility of values
 //! to only a single memory region - updates do not propagate across region boundaries. This may be
-//! a useful alternative if you want unique values per memory region, similar to `thread_local!`.
+//! a useful alternative if you want unique values per memory region, similar to `thread_local_rc!`.
 //!
 //! [1]: crate::RegionCachedExt
 //! [2]: crate::region_cached
 //! [3]: linked
-//! [4]: linked::PerThread
+//! [4]: linked::InstancePerThread
 //! [5]: crate::RegionCached
 //! [6]: https://docs.rs/region_local/latest/region_local/
 

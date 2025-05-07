@@ -46,8 +46,8 @@ fn core(mut item: ItemStruct) -> Result<TokenStream, syn::Error> {
         #item
 
         impl #impl_generics ::linked::Object for #name #type_generics #where_clause {
-            fn handle(&self) -> ::linked::Handle<Self> {
-                self.__private_linked_link.handle()
+            fn family(&self) -> ::linked::Family<Self> {
+                self.__private_linked_link.family()
             }
         }
 
@@ -57,9 +57,9 @@ fn core(mut item: ItemStruct) -> Result<TokenStream, syn::Error> {
             }
         }
 
-        impl #impl_generics ::std::convert::From<::linked::Handle<#name #type_generics>> for #name #type_generics #where_clause {
-            fn from(handle: ::linked::Handle<#name #type_generics>) -> Self {
-                handle.__private_into()
+        impl #impl_generics ::std::convert::From<::linked::Family<#name #type_generics>> for #name #type_generics #where_clause {
+            fn from(family: ::linked::Family<#name #type_generics>) -> Self {
+                family.__private_into()
             }
         }
     };
@@ -90,8 +90,8 @@ mod tests {
             }
 
             impl ::linked::Object for Foo {
-                fn handle(&self) -> ::linked::Handle<Self> {
-                    self.__private_linked_link.handle()
+                fn family(&self) -> ::linked::Family<Self> {
+                    self.__private_linked_link.family()
                 }
             }
 
@@ -101,9 +101,9 @@ mod tests {
                 }
             }
 
-            impl ::std::convert::From<::linked::Handle<Foo>> for Foo {
-                fn from(handle: ::linked::Handle<Foo>) -> Self {
-                    handle.__private_into()
+            impl ::std::convert::From<::linked::Family<Foo>> for Foo {
+                fn from(family: ::linked::Family<Foo>) -> Self {
+                    family.__private_into()
                 }
             }
         };
@@ -140,8 +140,8 @@ mod tests {
             where
                 X: Debug
             {
-                fn handle(&self) -> ::linked::Handle<Self> {
-                    self.__private_linked_link.handle()
+                fn family(&self) -> ::linked::Family<Self> {
+                    self.__private_linked_link.family()
                 }
             }
 
@@ -154,12 +154,12 @@ mod tests {
                 }
             }
 
-            impl<'y, T: Clone, X> ::std::convert::From<::linked::Handle<Foo<'y, T, X> >> for Foo<'y, T, X>
+            impl<'y, T: Clone, X> ::std::convert::From<::linked::Family<Foo<'y, T, X> >> for Foo<'y, T, X>
             where
                 X: Debug
             {
-                fn from(handle: ::linked::Handle<Foo<'y, T, X> >) -> Self {
-                    handle.__private_into()
+                fn from(family: ::linked::Family<Foo<'y, T, X> >) -> Self {
+                    family.__private_into()
                 }
             }
         };

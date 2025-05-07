@@ -1,6 +1,6 @@
 [package]
 name = "region_local"
-description = "Isolated variable storage per memory region, similar to `thread_local!`"
+description = "Isolated variable storage per memory region, similar to `thread_local_rc!`"
 publish = true
 version = "0.1.10"
 

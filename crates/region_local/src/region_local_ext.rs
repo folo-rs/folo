@@ -95,7 +95,7 @@ where
     fn get_local(&self) -> T;
 }
 
-impl<T> RegionLocalExt<T> for linked::PerThreadStatic<RegionLocal<T>>
+impl<T> RegionLocalExt<T> for linked::StaticInstancePerThread<RegionLocal<T>>
 where
     T: Clone + Send + Sync + 'static,
 {
@@ -113,7 +113,7 @@ where
     }
 }
 
-impl<T> RegionLocalCopyExt<T> for linked::PerThreadStatic<RegionLocal<T>>
+impl<T> RegionLocalCopyExt<T> for linked::StaticInstancePerThread<RegionLocal<T>>
 where
     T: Clone + Copy + Send + Sync + 'static,
 {

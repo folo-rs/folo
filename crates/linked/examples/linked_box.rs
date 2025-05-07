@@ -72,7 +72,7 @@ mod counters {
 
 use counters::{Counter, EventCounter};
 
-linked::instance_per_access!(static RECORDS_PROCESSED: linked::Box<dyn Counter> = EventCounter::new_as_counter());
+linked::instances!(static RECORDS_PROCESSED: linked::Box<dyn Counter> = EventCounter::new_as_counter());
 
 fn main() {
     const THREAD_COUNT: usize = 4;

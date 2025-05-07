@@ -1,4 +1,4 @@
-//! Basic operations on the `instance_per_thread!` macro and underlying type.
+//! Basic operations on the `thread_local_rc!` macro and underlying type.
 
 #![allow(
     missing_docs,
@@ -41,12 +41,12 @@ impl TestSubject {
     }
 }
 
-linked::instance_per_thread!(static TARGET: TestSubject = TestSubject::new());
+linked::thread_local_rc!(static TARGET: TestSubject = TestSubject::new());
 
 fn entrypoint(c: &mut Criterion) {
     let thread_pool = ThreadPool::default();
 
-    let mut g = c.benchmark_group("per_thread_static::access_single_threaded");
+    let mut g = c.benchmark_group("thread_local_static::access_single_threaded");
 
     g.bench_function("with", |b| {
         b.iter(|| black_box(TARGET.with(|val| val.local_state.get())));
@@ -56,7 +56,7 @@ fn entrypoint(c: &mut Criterion) {
         b.iter(|| black_box(TARGET.to_rc().local_state.get()));
     });
 
-    // For comparison, we also include a thread_local! LazyCell.
+    // For comparison, we also include a thread_local_rc! LazyCell.
     g.bench_function("vs_std_thread_local", |b| {
         b.iter(|| {
             TEST_SUBJECT_THREAD_LOCAL.with(|local| {
@@ -78,7 +78,7 @@ fn entrypoint(c: &mut Criterion) {
 
     g.finish();
 
-    let mut g = c.benchmark_group("per_thread_static::access_multi_threaded");
+    let mut g = c.benchmark_group("thread_local_static::access_multi_threaded");
 
     g.bench_function("with", |b| {
         b.iter_custom(|iters| {

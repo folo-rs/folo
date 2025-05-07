@@ -1,0 +1,23 @@
+graph TD
+    subgraph Thread1[Thread 1]
+        Task1a[Local task] -->|"::acquire()"| Local1a[Ref]
+        Task1b[Local task] -->|"::acquire()"| Local1b[Ref]
+
+        Local1a --> SharedOwnership((Shared<br/>ownership))
+        Local1b --> SharedOwnership
+
+        SharedOwnership --> Instance1[Linked object instance]
+    end
+
+    subgraph Thread2[Thread 2]
+        Task2a[Local task] -->|"::acquire()"| Local2a[Ref]
+        Task2b[Local task] -->|"::acquire()"| Local2b[Ref]
+
+        Local2a --> SharedOwnership2((Shared<br/>ownership))
+        Local2b --> SharedOwnership2
+
+        SharedOwnership2 --> Instance2[Linked object instance]
+    end
+
+    Instance1 --> SharedState[Family state]
+    Instance2 --> SharedState

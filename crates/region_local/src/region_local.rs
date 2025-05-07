@@ -47,7 +47,7 @@ where
     /// manages the per-thread instance lifecycle and delivery across threads.
     ///
     /// [1]: crate::region_local
-    /// [2]: linked::PerThread
+    /// [2]: linked::InstancePerThread
     /// [3]: linked
     #[must_use]
     pub fn new(initializer: fn() -> T) -> Self {
@@ -95,13 +95,13 @@ where
     /// # Example
     ///
     /// ```
-    /// use linked::PerThread;
+    /// use linked::InstancePerThread;
     /// use region_local::{RegionLocal};
     ///
-    /// let favorite_color_regional = PerThread::new(RegionLocal::new(|| "blue".to_string()));
+    /// let favorite_color_regional = Local::new(RegionLocal::new(|| "blue".to_string()));
     ///
     /// // This localizes the object to the current thread. Reuse this object when possible.
-    /// let favorite_color = favorite_color_regional.local();
+    /// let favorite_color = favorite_color_regional.acquire();
     ///
     /// let len = favorite_color.with_local(|color| color.len());
     /// assert_eq!(len, 4);
@@ -153,13 +153,13 @@ where
     /// # Example
     ///
     /// ```
-    /// use linked::PerThread;
+    /// use linked::InstancePerThread;
     /// use region_local::{RegionLocal};
     ///
-    /// let favorite_color_regional = PerThread::new(RegionLocal::new(|| "blue".to_string()));
+    /// let favorite_color_regional = Local::new(RegionLocal::new(|| "blue".to_string()));
     ///
     /// // This localizes the object to the current thread. Reuse this object when possible.
-    /// let favorite_color = favorite_color_regional.local();
+    /// let favorite_color = favorite_color_regional.acquire();
     ///
     /// favorite_color.set_local("red".to_string());
     /// ```
@@ -169,12 +169,12 @@ where
     /// immediately visible if the thread is pinned to a specific memory region.
     ///
     /// ```
-    /// use linked::PerThread;
+    /// use linked::InstancePerThread;
     /// use many_cpus::ProcessorSet;
     /// use region_local::{RegionLocal};
     /// use std::num::NonZero;
     ///
-    /// let favorite_color_regional = PerThread::new(RegionLocal::new(|| "blue".to_string()));
+    /// let favorite_color_regional = Local::new(RegionLocal::new(|| "blue".to_string()));
     ///
     /// // We can use this to pin a thread to a specific processor, to demonstrate a
     /// // situation where you can rely on consistency guarantees for immediate visibility.
@@ -190,7 +190,7 @@ where
     ///     );
     ///
     ///     // This localizes the object to the current thread. Reuse this object when possible.
-    ///     let favorite_color = favorite_color_regional.local();
+    ///     let favorite_color = favorite_color_regional.acquire();
     ///
     ///     favorite_color.set_local("red".to_string());
     ///
@@ -224,13 +224,13 @@ where
     /// # Example
     ///
     /// ```
-    /// use linked::PerThread;
+    /// use linked::InstancePerThread;
     /// use region_local::{RegionLocal};
     ///
-    /// let current_access_token_regional = PerThread::new(RegionLocal::new(|| 0x123100));
+    /// let current_access_token_regional = Local::new(RegionLocal::new(|| 0x123100));
     ///
     /// // This localizes the object to the current thread. Reuse this object when possible.
-    /// let current_access_token = current_access_token_regional.local();
+    /// let current_access_token = current_access_token_regional.acquire();
     ///
     /// let token = current_access_token.get_local();
     /// assert_eq!(token, 0x123100);

@@ -60,7 +60,7 @@ fn linked_objects_smoke_test() {
     assert_eq!(clone.get_local_value(), 42);
     assert_eq!(clone.get_global_value(), "world");
 
-    let handle = linked_object.handle();
+    let handle = linked_object.family();
 
     thread::spawn(move || {
         let mut linked_object: Thing = handle.into();

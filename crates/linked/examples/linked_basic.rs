@@ -54,9 +54,9 @@ mod counters {
 use counters::EventCounter;
 
 // A static variable provides linked instances of the event counter on any thread.
-// The `linked::variable!` macro gives all necessary superpowers to this static variable.
+// The `linked::instances!` macro gives all necessary superpowers to this static variable.
 // This is the simplest way to create instances that are linked across threads.
-linked::instance_per_access!(static RECORDS_PROCESSED: EventCounter = EventCounter::new());
+linked::instances!(static RECORDS_PROCESSED: EventCounter = EventCounter::new());
 
 fn main() {
     const THREAD_COUNT: usize = 4;

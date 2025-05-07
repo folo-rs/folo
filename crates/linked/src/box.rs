@@ -9,24 +9,28 @@ use std::ops::{Deref, DerefMut};
 /// Intended to represent linked instances of `T` where `T: MyTrait`. This is for use with types
 /// that are always exposed to user code as trait objects via `linked::Box<dyn MyTrait>`.
 ///
-/// The `Box` itself implements the linked object mechanics from [`#[linked::object]`][3]. The type
-/// `T` does not need to implement the mechanics of the linked object pattern itself and must not
-/// be decorated with the [`#[linked::object]`][3] attribute.
+/// The `Box` itself implements the linked object API from [`#[linked::object]`][3]. The type
+/// `T` is not decorated with the [`#[linked::object]`][3] attribute when using `Box` and simply
+/// uses linked object patterns in its constructor.
 ///
 /// # Usage
 ///
 /// Use it like a regular `std::boxed::Box<T>` that also happens to support the linked object
-/// mechanisms via the [`linked::instance_per_access!`][1] or [`linked::instance_per_thread!`][2]
-/// macros or [`PerThread<T>`][crate::PerThread] and offers the API surface for handle-based
-/// transfer across threads via `.handle()`.
+/// patterns. The box can be used via all the standard mechanisms such as:
+///
+/// * [`linked::instances!`][1]
+/// * [`linked::thread_local_rc!`][2]
+/// * [`linked::thread_local_arc!`][4] (if `T: Sync`)
+/// * [`linked::InstancePerThread<T>`][5]
+/// * [`linked::InstancePerThreadSync<T>`][6] (if `T: Sync`)
+/// * [`linked::Family<T>`][7]
 ///
 /// # Implementation
 ///
 /// Instead of a typical constructor, create one that returns `linked::Box<dyn MyTrait>`. Inside
-/// this constructor, create a `linked::Box` instance using the
-/// [`linked::new_box!` macro][crate::new_box]. The first macro parameter is the type inside the
-/// box, and the second is a `Self` struct-expression to create one instance of the implementation
-/// type.
+/// this constructor, create a `linked::Box` instance using the [`linked::new_box!` macro][8].
+/// The first macro parameter is the type of the trait object inside the box, and the second is a
+/// `Self` struct-expression to create one linked instance of the implementation type.
 ///
 /// ```
 /// # trait ConfigSource {}
@@ -103,15 +107,20 @@ use std::ops::{Deref, DerefMut};
 /// let xml_config = XmlConfig::new_as_config_source();
 /// let ini_config = IniConfig::new_as_config_source();
 ///
-/// let configs = [xml_config, ini_config];
+/// let configs: [linked::Box<dyn ConfigSource>; 2] = [xml_config, ini_config];
 ///
 /// assert_eq!(configs[0].config(), "xml".to_string());
 /// assert_eq!(configs[1].config(), "ini".to_string());
 /// ```
 ///
-/// [1]: crate::instance_per_access
-/// [2]: crate::instance_per_thread
+/// [1]: crate::instances
+/// [2]: crate::thread_local_rc
 /// [3]: crate::object
+/// [4]: crate::thread_local_arc
+/// [5]: crate::InstancePerThread
+/// [6]: crate::InstancePerThreadSync
+/// [7]: crate::Family
+/// [8]: crate::new_box
 #[linked::object]
 #[derive(Debug)]
 pub struct Box<T: ?Sized + 'static> {
@@ -148,14 +157,14 @@ impl<T: ?Sized + 'static> DerefMut for Box<T> {
 
 /// Defines the template used to create every instance in a `linked::Box<T>` object family.
 ///
-/// This macro is meant to be used in the context of creating a new instance of a linked object
-/// type `T` that is meant to be always expressed via an abstraction (`dyn SomeTrait`).
+/// This macro is meant to be used in the context of creating a new linked instance of
+/// `T` that is meant to be always expressed via an abstraction (`dyn SomeTrait`).
 ///
 /// # Arguments
 ///
 /// * `$dyn_trait` - The trait object that the linked object is to be used as (e.g. `dyn SomeTrait`).
-/// * `$ctor` - The template for constructing new instances of the linked object on demand. This
-///   will be used in a factory function and it will move-capture any referenced state. All captured
+/// * `$ctor` - The Self-expression that serves as the template for constructing new linked
+///   instances on demand. This will move-capture any referenced state. All captured
 ///   values must be thread-safe (`Send` + `Sync` + `'static`).
 ///
 /// # Example
@@ -266,12 +275,12 @@ mod tests {
         assert_eq!(configs[0].config(), "xml2".to_string());
         assert_eq!(configs[1].config(), "ini2".to_string());
 
-        let xml_config_handle = configs[0].handle();
-        let ini_config_handle = configs[1].handle();
+        let xml_config_family = configs[0].family();
+        let ini_config_family = configs[1].family();
 
         thread::spawn(move || {
-            let xml_config: linked::Box<dyn ConfigSource> = xml_config_handle.into();
-            let ini_config: linked::Box<dyn ConfigSource> = ini_config_handle.into();
+            let xml_config: linked::Box<dyn ConfigSource> = xml_config_family.into();
+            let ini_config: linked::Box<dyn ConfigSource> = ini_config_family.into();
 
             // Note that the "config" is local to each instance, so it reset to the initial value.
             assert_eq!(xml_config.config(), "xml".to_string());

@@ -3,11 +3,11 @@
 
 use std::thread;
 
-use linked::{PerThread, ThreadLocal};
+use linked::{InstancePerThread, Ref};
 use region_cached::RegionCached;
 
 /// The current thread's view of the region-cached filter keys instance.
-type CachedFilterKeys = ThreadLocal<RegionCached<Vec<String>>>;
+type CachedFilterKeys = Ref<RegionCached<Vec<String>>>;
 
 /// Returns true if the log line contains any of the filter keys.
 fn process_log_line(line: &str, filter_keys: &CachedFilterKeys) -> bool {
@@ -37,7 +37,7 @@ static SAMPLE_LOG_LINES: &[&str] = &[
 ];
 
 fn main() {
-    let filters = PerThread::new(RegionCached::new(load_initial_filters()));
+    let filters = InstancePerThread::new(RegionCached::new(load_initial_filters()));
 
     // Start a bunch of threads that will process log lines.
     let mut threads = Vec::new();
@@ -49,7 +49,7 @@ fn main() {
 
             move || {
                 // This localizes the `PerThread` instance, giving us the current thread's view.
-                let filters = filters.local();
+                let filters = filters.acquire();
 
                 for line in SAMPLE_LOG_LINES {
                     if process_log_line(line, &filters) {
@@ -70,7 +70,7 @@ fn main() {
     // In terminal output, you may see the first threads act on the initial data set and later
     // threads act on the updated data set, simply because the first threads already finish before
     // getting the updated value.
-    update_filters(new_filters, &filters.local());
+    update_filters(new_filters, &filters.acquire());
 
     for thread in threads {
         thread.join().unwrap();

@@ -13,7 +13,7 @@
 //!
 #![doc = mermaid!("../doc/region_local.mermaid")]
 //!
-//! Think of this as an equivalent of [`thread_local!`][2], except operating on the memory
+//! Think of this as an equivalent of [`thread_local_rc!`][2], except operating on the memory
 //! region boundary instead of the thread boundary.
 //!
 //! This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
@@ -77,13 +77,13 @@
 //! can be manually used via the [`PerThread<T>`][4] wrapper type, as `PerThread<RegionLocal<T>>`.
 //!
 //! ```rust
-//! use linked::PerThread;
+//! use linked::InstancePerThread;
 //! use region_local::RegionLocal;
 //!
-//! let favorite_color_regional = PerThread::new(RegionLocal::new(|| "blue".to_string()));
+//! let favorite_color_regional = Local::new(RegionLocal::new(|| "blue".to_string()));
 //!
 //! // This localizes the object to the current thread. Reuse this object when possible.
-//! let favorite_color = favorite_color_regional.local();
+//! let favorite_color = favorite_color_regional.acquire();
 //!
 //! favorite_color.with_local(|color| {
 //!     println!("My favorite color is {color}");

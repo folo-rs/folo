@@ -16,7 +16,6 @@ default = []
 [dependencies]
 hash_hasher = { workspace = true }
 linked_macros = { workspace = true }
-negative-impl = { workspace = true }
 paste = { workspace = true }
 simple-mermaid = { workspace = true }
 
@@ -28,15 +27,15 @@ mutants = { workspace = true }
 seq-macro = { workspace = true }
 
 [[bench]]
-name = "per_access_static"
+name = "instances"
 harness = false
 
 [[bench]]
-name = "per_thread_static"
+name = "instance_per_thread"
 harness = false
 
 [[bench]]
-name = "per_thread"
+name = "static_thread_local_rc"
 harness = false
 
 [lints]

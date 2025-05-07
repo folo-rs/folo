@@ -10,7 +10,7 @@ memory region. This may be useful in circumstances where state needs to be share
 each memory region (e.g. because you intentionally want to avoid the overhead of cross-memory-region
 transfers and want to isolate the data sets).
 
-Think of this as an equivalent of `thread_local!`, except operating on the memory region boundary
+Think of this as an equivalent of `thread_local_rc!`, except operating on the memory region boundary
 instead of the thread boundary.
 
 More details in the [crate documentation](https://docs.rs/region_local/).

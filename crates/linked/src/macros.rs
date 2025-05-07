@@ -49,12 +49,12 @@
 /// # trait TokenSource {}
 ///
 /// impl TokenCache {
-///     fn new(source_handles: Vec<linked::Handle<linked::Box<dyn TokenSource>>>) -> Self {
+///     fn new(source_families: Vec<linked::Family<linked::Box<dyn TokenSource>>>) -> Self {
 ///         linked::new!(Self {
-///             token_sources: source_handles
+///             token_sources: source_families
 ///                 .iter()
 ///                 .cloned()
-///                 .map(linked::Handle::into)
+///                 .map(linked::Family::into)
 ///                 .collect()
 ///         })
 ///     }

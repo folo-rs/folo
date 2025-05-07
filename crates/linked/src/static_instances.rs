@@ -8,25 +8,24 @@ use std::sync::{LazyLock, RwLock};
 
 use hash_hasher::HashedMap;
 
-use crate::{ERR_POISONED_LOCK, Handle};
+use crate::{ERR_POISONED_LOCK, Family};
 
-/// This is the real type of variables wrapped in the [`linked::instance_per_access!` macro][1].
+/// This is the real type of variables wrapped in the [`linked::instances!` macro][1].
 /// See macro documentation for more details.
 ///
-/// Instances of this type are created by the [`linked::instance_per_access!` macro][1],
-/// never directly by user code. User code will simply call `.get()` on this type when it
-/// wants to obtain an instance of the linked object `T`.
+/// Instances of this type are created by the [`linked::instances!` macro][1],
+/// never directly by user code, which can use `.get()` to obtain a linked instance of `T`.
 ///
-/// [1]: [crate::instance_per_access]
+/// [1]: [crate::instances]
 #[derive(Debug)]
-pub struct PerAccessStatic<T>
+pub struct StaticInstances<T>
 where
     T: linked::Object,
 {
     /// A function we can call to obtain the lookup key for the family of linked objects.
     ///
     /// The family key is a `TypeId` because the expectation is that a unique empty type is
-    /// generated for each static variable in a `linked::instance_per_access!` block, to be used
+    /// generated for each static variable in a `linked::instances!` block, to be used
     /// as the family key for all instances linked to each other via that static variable.
     family_key_provider: fn() -> TypeId,
 
@@ -38,12 +37,12 @@ where
     first_instance_provider: fn() -> T,
 }
 
-impl<T> PerAccessStatic<T>
+impl<T> StaticInstances<T>
 where
     T: linked::Object,
 {
-    /// Note: this function exists to serve the inner workings of the
-    /// `linked::instance_per_access!` macro and should not be used directly.
+    /// This function exists to serve the inner workings of the
+    /// `linked::instances!` macro and should not be used directly.
     /// It is not part of the public API and may be removed or changed at any time.
     #[doc(hidden)]
     #[must_use]
@@ -57,17 +56,19 @@ where
         }
     }
 
-    /// Gets a new `T` instance from the family of linked objects.
+    /// Creates a new linked instance of `T` from the same family of linked objects as other
+    /// instances created via the same static variable.
     ///
     /// # Performance
     ///
     /// This creates a new instance of `T` on every call so caching the return value is
     /// performance-critical.
     ///
-    /// Consider using the [`linked::instance_per_thread!` macro][1] if you want to
-    /// maintain only one instance per thread and return shared references to it.
+    /// If you only need one instance per thread, consider using the [`linked::thread_local_rc!`][1]
+    /// or [`linked::thread_local_arc!`][2] macro for a more efficient solution.
     ///
-    /// [1]: [crate::instance_per_thread]
+    /// [1]: [crate::thread_local_rc]
+    /// [2]: [crate::thread_local_arc]
     #[must_use]
     pub fn get(&self) -> T {
         if let Some(instance) = self.new_from_local_registry() {
@@ -78,18 +79,18 @@ where
         // Can we draw it together into one step under one lock?
         self.try_initialize_global_registry(self.first_instance_provider);
 
-        let handle = self
-            .get_handle_global()
-            .expect("we just initialized it, the handle must exist");
+        let family = self
+            .get_family_global()
+            .expect("we just initialized it, the family must exist");
 
-        self.set_local(handle);
+        self.set_local(family);
 
         // We can now be certain the local registry has the value.
         self.new_from_local_registry()
             .expect("we just set the value, it must be there")
     }
 
-    fn set_local(&self, value: Handle<T>) {
+    fn set_local(&self, value: Family<T>) {
         LOCAL_REGISTRY.with(|local_registry| {
             local_registry
                 .borrow_mut()
@@ -97,12 +98,12 @@ where
         });
     }
 
-    fn get_handle_global(&self) -> Option<Handle<T>> {
+    fn get_family_global(&self) -> Option<Family<T>> {
         GLOBAL_REGISTRY
             .read()
             .expect(ERR_POISONED_LOCK)
             .get(&(self.family_key_provider)())
-            .and_then(|w| w.downcast_ref::<Handle<T>>())
+            .and_then(|w| w.downcast_ref::<Family<T>>())
             .cloned()
     }
 
@@ -135,9 +136,9 @@ where
             hash_map::Entry::Occupied(_) => (),
             hash_map::Entry::Vacant(entry) => {
                 // TODO: We create an instance here, only to immediately transform it back to
-                // a handle. Can we skip the middle step and just create a handle?
+                // a family. Can we skip the middle step and just create a family directly?
                 let first_instance = first_instance_provider();
-                entry.insert(Box::new(first_instance.handle()));
+                entry.insert(Box::new(first_instance.family()));
             }
         }
     }
@@ -151,25 +152,19 @@ where
 
             registry
                 .get(&family_key)
-                .and_then(|w| w.downcast_ref::<Handle<T>>())
-                .map(|handle| handle.clone().into())
+                .and_then(|w| w.downcast_ref::<Family<T>>())
+                // TODO: We clone the family here, only to immediately transform it to a
+                // T instance. Can we skip the middle step and just create an instance directly?
+                .map(|family| family.clone().into())
         })
     }
 }
 
-/// Declares that all static variables within the macro body contain [linked objects][crate],
-/// with each access to this variable returning a new instance from the same family.
+/// Declares that all static variables within the macro body define unique
+/// families of [linked objects][crate].
 ///
 /// Each [`.get()`][1] on an included static variable returns a new linked object instance,
 /// with all instances obtained from the same static variable being part of the same family.
-///
-/// # Dynamic family relationships
-///
-/// If you need `Arc`-style dynamic multithreaded storage (i.e. not a single static variable),
-/// pass instances of [`Handle<T>`][3] between threads instead of (or in addition to)
-/// using this macro. You can obtain a [`Handle<T>`][3] from any linked object via the
-/// [`.handle()`][4] method of the [`linked::Object` trait][5], even if the instance of the
-/// linked object originally came from a static variable.
 ///
 /// # Example
 ///
@@ -177,27 +172,40 @@ where
 /// # #[linked::object]
 /// # struct TokenCache { }
 /// # impl TokenCache { fn with_capacity(capacity: usize) -> Self { linked::new!(Self { } ) } fn get_token(&self) -> usize { 42 } }
-/// linked::instance_per_access!(static TOKEN_CACHE: TokenCache = TokenCache::with_capacity(1000));
+/// linked::instances!(static TOKEN_CACHE: TokenCache = TokenCache::with_capacity(1000));
 ///
 /// fn do_something() {
-///     // `.get()` returns a unique instance of the linked object on every call.
+///     // `.get()` returns a unique linked instance on every call,
+///     // so you are expected to reuse the instance for efficiency.
 ///     let token_cache = TOKEN_CACHE.get();
 ///
-///     let token = token_cache.get_token();
+///     let token1 = token_cache.get_token();
+///     let token2 = token_cache.get_token();
 /// }
 /// ```
 ///
-/// [1]: PerAccessStatic::get
-/// [3]: crate::Handle
+/// # Dynamic family definition
+///
+/// If you do not know in advance how many object families are necessary and need to define them
+/// at runtime, consider using these alternatives:
+///
+/// * [`linked::InstancePerThread<T>`][6]
+/// * [`linked::InstancePerThreadSync<T>`][7] (if `T: Sync`)
+/// * [`linked::Family<T>`][3]
+///
+/// [1]: StaticInstances::get
+/// [3]: crate::Family
 /// [4]: crate::Object::handle
 /// [5]: crate::Object
+/// [6]: crate::InstancePerThread
+/// [7]: crate::InstancePerThreadSync
 #[macro_export]
-macro_rules! instance_per_access {
+macro_rules! instances {
     () => {};
 
     ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $e:expr; $($rest:tt)*) => (
-        $crate::instance_per_access!($(#[$attr])* $vis static $NAME: $t = $e);
-        $crate::instance_per_access!($($rest)*);
+        $crate::instances!($(#[$attr])* $vis static $NAME: $t = $e);
+        $crate::instances!($($rest)*);
     );
 
     ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $e:expr) => {
@@ -206,10 +214,10 @@ macro_rules! instance_per_access {
             #[expect(non_camel_case_types, reason = "intentionally uglified macro generated code")]
             struct [<__lookup_key_ $NAME>];
 
-            $(#[$attr])* $vis const $NAME: $crate::PerAccessStatic<$t> =
-            $crate::PerAccessStatic::new(
-                    ::std::any::TypeId::of::<[<__lookup_key_ $NAME>]>,
-                    move || $e);
+            $(#[$attr])* $vis const $NAME: $crate::StaticInstances<$t> =
+            $crate::StaticInstances::new(
+                ::std::any::TypeId::of::<[<__lookup_key_ $NAME>]>,
+                move || $e);
         }
     };
 }
@@ -217,20 +225,22 @@ macro_rules! instance_per_access {
 // We use HashedMap which takes the raw value from Hash::hash() and uses it directly as the key.
 // This is OK because TypeId already returns a hashed value as its raw value, no need to hash more.
 // We also do not care about any hash manipulation because none of this is untrusted user input.
-type HandleRegistry = HashedMap<TypeId, Box<dyn Any + Send + Sync>>;
+type FamilyRegistry = HashedMap<TypeId, Box<dyn Any + Send + Sync>>;
 
-// Global registry that is the ultimate authority where all linked variables are registered.
-// The values inside are `Handle<T>` where T may be different for each entry.
-static GLOBAL_REGISTRY: LazyLock<RwLock<HandleRegistry>> =
-    LazyLock::new(|| RwLock::new(HandleRegistry::default()));
+// Global registry that is the ultimate authority where all static variable based linked object
+// families are registered. Values inside are type-occluded `Family<T>` where T may be different
+// for each entry.
+static GLOBAL_REGISTRY: LazyLock<RwLock<FamilyRegistry>> =
+    LazyLock::new(|| RwLock::new(FamilyRegistry::default()));
 
 thread_local! {
-    // Thread-local registry where we cache any linked variables that have been seen by the current
-    // thread. The values inside are `Handle<T>` where T may be different for each entry.
-    static LOCAL_REGISTRY: RefCell<HandleRegistry> = RefCell::new(HandleRegistry::default());
+    // Thread-local registry where we cache any families that have been seen by the current
+    // thread. Values inside are type-occluded `Family<T>` where T may be different for each entry.
+    static LOCAL_REGISTRY: RefCell<FamilyRegistry> = RefCell::new(FamilyRegistry::default());
 }
 
-/// Clears all data stored in the linked variable system from the current thread's point of view.
+/// Clears all data stored in the static variable based linked object family system
+/// from the current thread's point of view.
 ///
 /// This is intended for use in tests only. It is publicly exposed because it may need to be called
 /// from integration tests and benchmarks, which cannot access private functions.
@@ -252,7 +262,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::thread;
 
-    use crate::PerAccessStatic;
+    use crate::StaticInstances;
 
     #[linked::object]
     struct TokenCache {
@@ -283,70 +293,88 @@ mod tests {
     }
 
     #[test]
-    fn linked_lazy() {
-        // Here we test the inner logic of the variable! macro without applying the macro.
+    fn instances_non_macro() {
+        // Here we test the inner logic of the instances! macro without applying the macro.
         // There is a separate test for executing the same logic via the macro itself.
         struct RedKey;
         struct GreenKey;
 
-        const RED_TOKEN_CACHE: PerAccessStatic<TokenCache> =
-            PerAccessStatic::new(TypeId::of::<RedKey>, || TokenCache::new(42));
-        const GREEN_TOKEN_CACHE: PerAccessStatic<TokenCache> =
-            PerAccessStatic::new(TypeId::of::<GreenKey>, || TokenCache::new(99));
+        const RED_TOKEN_CACHE: StaticInstances<TokenCache> =
+            StaticInstances::new(TypeId::of::<RedKey>, || TokenCache::new(42));
+        const GREEN_TOKEN_CACHE: StaticInstances<TokenCache> =
+            StaticInstances::new(TypeId::of::<GreenKey>, || TokenCache::new(99));
 
-        assert_eq!(RED_TOKEN_CACHE.get().value(), 42);
-        assert_eq!(GREEN_TOKEN_CACHE.get().value(), 99);
+        let red = RED_TOKEN_CACHE.get();
+        let green = GREEN_TOKEN_CACHE.get();
 
-        RED_TOKEN_CACHE.get().increment();
-        GREEN_TOKEN_CACHE.get().increment();
+        assert_eq!(red.value(), 42);
+        assert_eq!(green.value(), 99);
+
+        red.increment();
+        green.increment();
 
         thread::spawn(move || {
-            assert_eq!(RED_TOKEN_CACHE.get().value(), 43);
-            assert_eq!(GREEN_TOKEN_CACHE.get().value(), 100);
+            let red = RED_TOKEN_CACHE.get();
+            let green = GREEN_TOKEN_CACHE.get();
 
-            RED_TOKEN_CACHE.get().increment();
-            GREEN_TOKEN_CACHE.get().increment();
+            assert_eq!(red.value(), 43);
+            assert_eq!(green.value(), 100);
+
+            red.increment();
+            green.increment();
         })
         .join()
         .unwrap();
+
+        assert_eq!(red.value(), 44);
+        assert_eq!(green.value(), 101);
 
         assert_eq!(RED_TOKEN_CACHE.get().value(), 44);
         assert_eq!(GREEN_TOKEN_CACHE.get().value(), 101);
     }
 
     #[test]
-    fn linked_smoke_test() {
-        linked::instance_per_access! {
+    fn instances_macro() {
+        linked::instances! {
             static BLUE_TOKEN_CACHE: TokenCache = TokenCache::new(1000);
             static YELLOW_TOKEN_CACHE: TokenCache = TokenCache::new(2000);
         }
 
-        assert_eq!(BLUE_TOKEN_CACHE.get().value(), 1000);
-        assert_eq!(YELLOW_TOKEN_CACHE.get().value(), 2000);
+        let blue = BLUE_TOKEN_CACHE.get();
+        let yellow = YELLOW_TOKEN_CACHE.get();
 
-        assert_eq!(BLUE_TOKEN_CACHE.get().value(), 1000);
-        assert_eq!(YELLOW_TOKEN_CACHE.get().value(), 2000);
+        assert_eq!(blue.value(), 1000);
+        assert_eq!(yellow.value(), 2000);
 
-        BLUE_TOKEN_CACHE.get().increment();
-        YELLOW_TOKEN_CACHE.get().increment();
+        blue.increment();
+        yellow.increment();
 
         thread::spawn(move || {
-            assert_eq!(BLUE_TOKEN_CACHE.get().value(), 1001);
-            assert_eq!(YELLOW_TOKEN_CACHE.get().value(), 2001);
+            let blue = BLUE_TOKEN_CACHE.get();
+            let yellow = YELLOW_TOKEN_CACHE.get();
 
-            BLUE_TOKEN_CACHE.get().increment();
-            YELLOW_TOKEN_CACHE.get().increment();
+            assert_eq!(blue.value(), 1001);
+            assert_eq!(yellow.value(), 2001);
+
+            blue.increment();
+            yellow.increment();
         })
         .join()
         .unwrap();
+
+        assert_eq!(blue.value(), 1002);
+        assert_eq!(yellow.value(), 2002);
 
         assert_eq!(BLUE_TOKEN_CACHE.get().value(), 1002);
         assert_eq!(YELLOW_TOKEN_CACHE.get().value(), 2002);
     }
 
     #[test]
-    fn thread_local_from_linked() {
-        linked::instance_per_access!(static LINKED_CACHE: TokenCache = TokenCache::new(1000));
+    fn stored_in_thread_local() {
+        // We demonstrate that what we get from `instances!` can be stored in thread-local storage
+        // while still remaining part of the same linked object family.
+
+        linked::instances!(static LINKED_CACHE: TokenCache = TokenCache::new(1000));
         thread_local!(static LOCAL_CACHE: Rc<TokenCache> = Rc::new(LINKED_CACHE.get()));
 
         let cache = LOCAL_CACHE.with(Rc::clone);

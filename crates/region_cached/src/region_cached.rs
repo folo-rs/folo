@@ -47,7 +47,7 @@ where
     /// manages the per-thread instance lifecycle and delivery across threads.
     ///
     /// [1]: crate::region_cached
-    /// [2]: linked::PerThread
+    /// [2]: linked::InstancePerThread
     /// [3]: linked
     #[must_use]
     pub fn new(initial_value: T) -> Self {
@@ -95,13 +95,13 @@ where
     /// # Example
     ///
     /// ```
-    /// use linked::PerThread;
+    /// use linked::InstancePerThread;
     /// use region_cached::{RegionCached};
     ///
-    /// let favorite_color_global = PerThread::new(RegionCached::new("blue".to_string()));
+    /// let favorite_color_global = Local::new(RegionCached::new("blue".to_string()));
     ///
     /// // This localizes the object to the current thread. Reuse this object when possible.
-    /// let favorite_color = favorite_color_global.local();
+    /// let favorite_color = favorite_color_global.acquire();
     ///
     /// let len = favorite_color.with_cached(|color| color.len());
     /// assert_eq!(len, 4);
@@ -174,13 +174,13 @@ where
     /// # Example
     ///
     /// ```
-    /// use linked::PerThread;
+    /// use linked::InstancePerThread;
     /// use region_cached::{RegionCached};
     ///
-    /// let favorite_color_global = PerThread::new(RegionCached::new("blue".to_string()));
+    /// let favorite_color_global = Local::new(RegionCached::new("blue".to_string()));
     ///
     /// // This localizes the object to the current thread. Reuse this object when possible.
-    /// let favorite_color = favorite_color_global.local();
+    /// let favorite_color = favorite_color_global.acquire();
     ///
     /// favorite_color.set_global("red".to_string());
     /// ```
@@ -190,12 +190,12 @@ where
     /// immediately visible if the thread is pinned to a specific memory region.
     ///
     /// ```
-    /// use linked::PerThread;
+    /// use linked::InstancePerThread;
     /// use many_cpus::ProcessorSet;
     /// use region_cached::{RegionCached};
     /// use std::num::NonZero;
     ///
-    /// let favorite_color_global = PerThread::new(RegionCached::new("blue".to_string()));
+    /// let favorite_color_global = Local::new(RegionCached::new("blue".to_string()));
     ///
     /// // We can use this to pin a thread to a specific processor, to demonstrate a
     /// // situation where you can rely on consistency guarantees for immediate visibility.
@@ -211,7 +211,7 @@ where
     ///     );
     ///
     ///     // This localizes the object to the current thread. Reuse this object when possible.
-    ///     let favorite_color = favorite_color_global.local();
+    ///     let favorite_color = favorite_color_global.acquire();
     ///
     ///     favorite_color.set_global("red".to_string());
     ///
@@ -252,13 +252,13 @@ where
     /// # Example
     ///
     /// ```
-    /// use linked::PerThread;
+    /// use linked::InstancePerThread;
     /// use region_cached::{RegionCached};
     ///
-    /// let current_access_token_global = PerThread::new(RegionCached::new(0x123100));
+    /// let current_access_token_global = Local::new(RegionCached::new(0x123100));
     ///
     /// // This localizes the object to the current thread. Reuse this object when possible.
-    /// let current_access_token = current_access_token_global.local();
+    /// let current_access_token = current_access_token_global.acquire();
     ///
     /// let token = current_access_token.get_cached();
     /// assert_eq!(token, 0x123100);

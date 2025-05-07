@@ -1,4 +1,4 @@
-//! Basic operations on the `instance_per_access!` macro and underlying type.
+//! Basic operations on the `instances!` macro and underlying type.
 
 #![allow(
     missing_docs,
@@ -39,12 +39,12 @@ impl TestSubject {
     }
 }
 
-linked::instance_per_access!(static TARGET: TestSubject = TestSubject::new());
+linked::instances!(static TARGET: TestSubject = TestSubject::new());
 
 fn entrypoint(c: &mut Criterion) {
     let thread_pool = ThreadPool::default();
 
-    let mut g = c.benchmark_group("per_access_static::get");
+    let mut g = c.benchmark_group("instances::get");
 
     g.bench_function("single-threaded", |b| {
         b.iter(|| black_box(TARGET.get().local_state.get()));
@@ -65,7 +65,7 @@ fn entrypoint(c: &mut Criterion) {
 
     g.finish();
 
-    let mut g = c.benchmark_group("per_access_static::get_1000");
+    let mut g = c.benchmark_group("instances::get_1000");
 
     g.bench_function("single-threaded", |b| {
         b.iter_batched_ref(
@@ -108,8 +108,8 @@ seq!(N in 0..1000 {
     #[expect(non_camel_case_types, reason = "manually replicating uglified macro internals for benchmark")]
     struct __lookup_key_~N;
 
-    const TARGET_MANY_~N : ::linked::PerAccessStatic<TestSubject> =
-        ::linked::PerAccessStatic::new(
+    const TARGET_MANY_~N : ::linked::StaticInstances<TestSubject> =
+        ::linked::StaticInstances::new(
             ::std::any::TypeId::of::<__lookup_key_~N>,
             TestSubject::new
         );

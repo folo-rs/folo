@@ -93,7 +93,7 @@ where
     fn get_cached(&self) -> T;
 }
 
-impl<T> RegionCachedExt<T> for linked::PerThreadStatic<RegionCached<T>>
+impl<T> RegionCachedExt<T> for linked::StaticInstancePerThread<RegionCached<T>>
 where
     T: Clone + Send + Sync + 'static,
 {
@@ -111,7 +111,7 @@ where
     }
 }
 
-impl<T> RegionCachedCopyExt<T> for linked::PerThreadStatic<RegionCached<T>>
+impl<T> RegionCachedCopyExt<T> for linked::StaticInstancePerThread<RegionCached<T>>
 where
     T: Clone + Copy + Send + Sync + 'static,
 {

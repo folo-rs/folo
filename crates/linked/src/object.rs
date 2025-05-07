@@ -1,15 +1,14 @@
 // Copyright (c) Microsoft Corporation.
 // Copyright (c) Folo authors.
 
-use crate::Handle;
+use crate::Family;
 
 /// Operations available on every instance of a [linked object][crate].
 ///
 /// The only supported way to implement this is via [`#[linked::object]`][crate::object].
-pub trait Object: From<Handle<Self>> + Sized + Clone + 'static {
-    /// Gets a thread-safe handle that can be used to create linked instances on other threads.
+pub trait Object: From<Family<Self>> + Sized + Clone + 'static {
+    /// The object family that the current instance is linked to.
     ///
-    /// The returned handle can be converted into a new instance of a linked object via
-    /// the `From<Handle<T>> for T` implementation (i.e. `let foo: Foo = handle.into()`).
-    fn handle(&self) -> Handle<Self>;
+    /// The returned object can be used to create additional instances linked to the same family.
+    fn family(&self) -> Family<Self>;
 }

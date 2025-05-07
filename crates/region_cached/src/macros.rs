@@ -33,7 +33,7 @@ macro_rules! region_cached {
     );
 
     ($(#[$attr:meta])* $vis:vis static $NAME:ident: $t:ty = $initial_value:expr) => {
-        $crate::__private::linked::instance_per_thread! {
+        $crate::__private::linked::thread_local_rc! {
             $(#[$attr])* $vis static $NAME: $crate::RegionCached<$t> =
                 $crate::RegionCached::new($initial_value);
         }
