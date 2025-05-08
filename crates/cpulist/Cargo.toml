@@ -15,11 +15,11 @@ default = []
 
 [dependencies]
 folo_utils = { workspace = true }
-include-doc = { workspace = true }
 itertools = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+include-doc = { workspace = true }
 
 [lints]
 workspace = true
