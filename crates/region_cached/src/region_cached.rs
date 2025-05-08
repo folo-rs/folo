@@ -98,7 +98,7 @@ where
     /// use linked::InstancePerThread;
     /// use region_cached::{RegionCached};
     ///
-    /// let favorite_color_global = Local::new(RegionCached::new("blue".to_string()));
+    /// let favorite_color_global = InstancePerThread::new(RegionCached::new("blue".to_string()));
     ///
     /// // This localizes the object to the current thread. Reuse this object when possible.
     /// let favorite_color = favorite_color_global.acquire();
@@ -177,7 +177,7 @@ where
     /// use linked::InstancePerThread;
     /// use region_cached::{RegionCached};
     ///
-    /// let favorite_color_global = Local::new(RegionCached::new("blue".to_string()));
+    /// let favorite_color_global = InstancePerThread::new(RegionCached::new("blue".to_string()));
     ///
     /// // This localizes the object to the current thread. Reuse this object when possible.
     /// let favorite_color = favorite_color_global.acquire();
@@ -195,7 +195,7 @@ where
     /// use region_cached::{RegionCached};
     /// use std::num::NonZero;
     ///
-    /// let favorite_color_global = Local::new(RegionCached::new("blue".to_string()));
+    /// let favorite_color_global = InstancePerThread::new(RegionCached::new("blue".to_string()));
     ///
     /// // We can use this to pin a thread to a specific processor, to demonstrate a
     /// // situation where you can rely on consistency guarantees for immediate visibility.
@@ -255,7 +255,7 @@ where
     /// use linked::InstancePerThread;
     /// use region_cached::{RegionCached};
     ///
-    /// let current_access_token_global = Local::new(RegionCached::new(0x123100));
+    /// let current_access_token_global = InstancePerThread::new(RegionCached::new(0x123100));
     ///
     /// // This localizes the object to the current thread. Reuse this object when possible.
     /// let current_access_token = current_access_token_global.acquire();

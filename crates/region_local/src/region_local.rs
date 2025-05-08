@@ -98,7 +98,7 @@ where
     /// use linked::InstancePerThread;
     /// use region_local::{RegionLocal};
     ///
-    /// let favorite_color_regional = Local::new(RegionLocal::new(|| "blue".to_string()));
+    /// let favorite_color_regional = InstancePerThread::new(RegionLocal::new(|| "blue".to_string()));
     ///
     /// // This localizes the object to the current thread. Reuse this object when possible.
     /// let favorite_color = favorite_color_regional.acquire();
@@ -156,7 +156,7 @@ where
     /// use linked::InstancePerThread;
     /// use region_local::{RegionLocal};
     ///
-    /// let favorite_color_regional = Local::new(RegionLocal::new(|| "blue".to_string()));
+    /// let favorite_color_regional = InstancePerThread::new(RegionLocal::new(|| "blue".to_string()));
     ///
     /// // This localizes the object to the current thread. Reuse this object when possible.
     /// let favorite_color = favorite_color_regional.acquire();
@@ -174,7 +174,7 @@ where
     /// use region_local::{RegionLocal};
     /// use std::num::NonZero;
     ///
-    /// let favorite_color_regional = Local::new(RegionLocal::new(|| "blue".to_string()));
+    /// let favorite_color_regional = InstancePerThread::new(RegionLocal::new(|| "blue".to_string()));
     ///
     /// // We can use this to pin a thread to a specific processor, to demonstrate a
     /// // situation where you can rely on consistency guarantees for immediate visibility.
