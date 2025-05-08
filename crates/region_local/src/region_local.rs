@@ -227,7 +227,7 @@ where
     /// use linked::InstancePerThread;
     /// use region_local::{RegionLocal};
     ///
-    /// let current_access_token_regional = Local::new(RegionLocal::new(|| 0x123100));
+    /// let current_access_token_regional = InstancePerThread::new(RegionLocal::new(|| 0x123100));
     ///
     /// // This localizes the object to the current thread. Reuse this object when possible.
     /// let current_access_token = current_access_token_regional.acquire();
