@@ -35,6 +35,14 @@ name = "instance_per_thread"
 harness = false
 
 [[bench]]
+name = "instance_per_thread_sync"
+harness = false
+
+[[bench]]
+name = "static_thread_local_arc"
+harness = false
+
+[[bench]]
 name = "static_thread_local_rc"
 harness = false
 

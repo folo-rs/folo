@@ -111,7 +111,7 @@ where
 ///     let token = TOKEN_CACHE.with(|cache| cache.get_token());
 /// }
 /// ```
-/// 
+///
 /// # Dynamic family relationships
 ///
 /// If you need fully `Rc`-style dynamic storage (i.e. not a single static variable) then consider

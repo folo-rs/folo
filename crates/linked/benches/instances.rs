@@ -6,7 +6,6 @@
 )]
 
 use std::{
-    cell::Cell,
     hint::black_box,
     sync::{Arc, atomic::AtomicUsize},
 };
@@ -24,7 +23,7 @@ criterion_main!(benches);
 )]
 #[linked::object]
 struct TestSubject {
-    local_state: Cell<usize>,
+    local_state: AtomicUsize,
     shared_state: Arc<AtomicUsize>,
 }
 
@@ -33,7 +32,7 @@ impl TestSubject {
         let shared_state = Arc::new(AtomicUsize::new(0));
 
         linked::new!(Self {
-            local_state: Cell::new(0),
+            local_state: AtomicUsize::new(0),
             shared_state: Arc::clone(&shared_state),
         })
     }
@@ -47,7 +46,7 @@ fn entrypoint(c: &mut Criterion) {
     let mut g = c.benchmark_group("instances::get");
 
     g.bench_function("single-threaded", |b| {
-        b.iter(|| black_box(TARGET.get().local_state.get()));
+        b.iter(|| black_box(Arc::weak_count(&TARGET.get().shared_state)));
     });
 
     g.bench_function("multi-threaded", |b| {
@@ -57,7 +56,7 @@ fn entrypoint(c: &mut Criterion) {
                 iters,
                 || (),
                 |()| {
-                    black_box(TARGET.get().local_state.get());
+                    black_box(Arc::weak_count(&TARGET.get().shared_state));
                 },
             )
         });
@@ -72,7 +71,7 @@ fn entrypoint(c: &mut Criterion) {
             LinkedVariableClearGuard::default,
             |_| {
                 seq!(N in 0..1000 {
-                    black_box(TARGET_MANY_~N.get().local_state.get());
+                    black_box(Arc::weak_count(&TARGET_MANY_~N.get().shared_state));
                 });
             },
             BatchSize::SmallInput,
@@ -87,7 +86,7 @@ fn entrypoint(c: &mut Criterion) {
                 || (),
                 |()| {
                     seq!(N in 0..1000 {
-                        black_box(TARGET_MANY_~N.get().local_state.get());
+                        black_box(Arc::weak_count(&TARGET_MANY_~N.get().shared_state));
                     });
                 },
             );

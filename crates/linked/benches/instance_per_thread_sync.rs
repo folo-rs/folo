@@ -1,4 +1,4 @@
-//! Basic operations on the `InstancePerThread` wrapper type, used directly for dynamic storage.
+//! Basic operations on the `InstancePerThreadSync` wrapper type, used directly for dynamic storage.
 
 #![allow(
     missing_docs,
@@ -12,7 +12,7 @@ use std::{
 
 use benchmark_utils::{ThreadPool, bench_on_threadpool};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use linked::InstancePerThread;
+use linked::InstancePerThreadSync;
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
@@ -46,17 +46,17 @@ fn entrypoint(c: &mut Criterion) {
 }
 
 fn local(c: &mut Criterion) {
-    let mut g = c.benchmark_group("instance_per_thread::InstancePerThread");
+    let mut g = c.benchmark_group("instance_per_thread_sync::InstancePerThreadSync");
 
     g.bench_function("new", |b| {
         b.iter_batched(
             || (),
-            |()| black_box(InstancePerThread::new(TestSubject::new())),
+            |()| black_box(InstancePerThreadSync::new(TestSubject::new())),
             BatchSize::SmallInput,
         );
     });
 
-    let per_thread = InstancePerThread::new(TestSubject::new());
+    let per_thread = InstancePerThreadSync::new(TestSubject::new());
 
     g.bench_function("clone", |b| {
         b.iter_batched(
@@ -70,9 +70,9 @@ fn local(c: &mut Criterion) {
 }
 
 fn local_ref(c: &mut Criterion) {
-    let mut g = c.benchmark_group("instance_per_thread::Ref");
+    let mut g = c.benchmark_group("instance_per_thread_sync::Ref");
 
-    let per_thread = InstancePerThread::new(TestSubject::new());
+    let per_thread = InstancePerThreadSync::new(TestSubject::new());
 
     g.bench_function("new_single", |b| {
         b.iter_batched(
@@ -110,9 +110,9 @@ fn local_ref(c: &mut Criterion) {
 fn local_ref_multithreaded(c: &mut Criterion) {
     let thread_pool = ThreadPool::default();
 
-    let mut g = c.benchmark_group("instance_per_thread::Ref::multithreaded");
+    let mut g = c.benchmark_group("instance_per_thread_sync::Ref::multithreaded");
 
-    let per_thread = InstancePerThread::new(TestSubject::new());
+    let per_thread = InstancePerThreadSync::new(TestSubject::new());
 
     g.bench_function("new_single", |b| {
         b.iter_custom(|iters| {
@@ -172,9 +172,9 @@ fn local_ref_multithreaded(c: &mut Criterion) {
 }
 
 fn local_ref_access(c: &mut Criterion) {
-    let mut g = c.benchmark_group("instance_per_thread::Ref::access");
+    let mut g = c.benchmark_group("instance_per_thread_sync::Ref::access");
 
-    let per_thread = InstancePerThread::new(TestSubject::new());
+    let per_thread = InstancePerThreadSync::new(TestSubject::new());
 
     g.bench_function("deref", |b| {
         let local = per_thread.acquire();

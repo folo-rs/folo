@@ -1,4 +1,4 @@
-//! Basic operations on the `thread_local_rc!` macro and underlying type.
+//! Basic operations on the `thread_local_arc!` macro and underlying type.
 
 #![allow(
     missing_docs,
@@ -37,22 +37,22 @@ impl TestSubject {
     }
 }
 
-linked::thread_local_rc!(static TARGET: TestSubject = TestSubject::new());
+linked::thread_local_arc!(static TARGET: TestSubject = TestSubject::new());
 
 fn entrypoint(c: &mut Criterion) {
     let thread_pool = ThreadPool::default();
 
-    let mut g = c.benchmark_group("thread_local_rc::access_single_threaded");
+    let mut g = c.benchmark_group("thread_local_arc::access_single_threaded");
 
     g.bench_function("with", |b| {
         b.iter(|| black_box(TARGET.with(|val| Arc::weak_count(&val.shared_state))));
     });
 
-    g.bench_function("to_rc", |b| {
-        b.iter(|| black_box(Arc::weak_count(&TARGET.to_rc().shared_state)));
+    g.bench_function("to_arc", |b| {
+        b.iter(|| black_box(Arc::weak_count(&TARGET.to_arc().shared_state)));
     });
 
-    // For comparison, we also include a thread_local_rc! LazyCell.
+    // For comparison, we also include a thread_local_arc! LazyCell.
     g.bench_function("vs_std_thread_local", |b| {
         b.iter(|| {
             TEST_SUBJECT_THREAD_LOCAL.with(|local| {
@@ -70,7 +70,7 @@ fn entrypoint(c: &mut Criterion) {
 
     g.finish();
 
-    let mut g = c.benchmark_group("thread_local_rc::access_multi_threaded");
+    let mut g = c.benchmark_group("thread_local_arc::access_multi_threaded");
 
     g.bench_function("with", |b| {
         b.iter_custom(|iters| {
@@ -85,14 +85,14 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    g.bench_function("to_rc", |b| {
+    g.bench_function("to_arc", |b| {
         b.iter_custom(|iters| {
             bench_on_threadpool(
                 &thread_pool,
                 iters,
                 || (),
                 |()| {
-                    black_box(Arc::weak_count(&TARGET.to_rc().shared_state));
+                    black_box(Arc::weak_count(&TARGET.to_arc().shared_state));
                 },
             )
         });

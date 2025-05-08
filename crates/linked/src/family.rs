@@ -55,7 +55,7 @@ use crate::__private::{InstanceFactory, Link};
 ///
 /// thread::spawn({
 ///     let thing_family = thing.family();
-/// 
+///
 ///     move || {
 ///         let thing: Thing = thing_family.into();
 ///         assert_eq!(thing.value(), "world");
