@@ -36,15 +36,16 @@
 //! There are two ways to create region-local values:
 //!
 //! 1. Define a static variable in a [`region_local!`][2] block.
-//! 2. Use the [`RegionLocal`][5] type inside a [`PerThread`][4] wrapper.
+//! 2. Use the [`RegionLocal`][4] type inside a [`linked::InstancePerThread<T>`][6]
+//!    or [`linked::InstancePerThreadSync<T>`][7] wrapper.
 //!
 //! The difference is only a question of convenience - static variables are easier to use but come
 //! with language-driven limitations, such as needing to know in advance how many you need and
 //! defining them in the code.
 //!
-//! In contrast, `PerThread<RegionLocal<T>>` is more flexible and you can create any number of
-//! instances at runtime, at a cost of having to manually deliver instances to the right place
-//! in the code.
+//! In contrast, `linked::InstancePerThread<RegionLocal<T>>` is more flexible and you can create
+//! any number of instances at runtime, at a cost of having to manually deliver instances to
+//! the right place in the code.
 //!
 //! ## Usage via static variables
 //!
@@ -66,7 +67,7 @@
 //! FAVORITE_COLOR.set_local("red".to_string());
 //! ```
 //!
-//! ## Usage via `PerThread<RegionLocal<T>>`
+//! ## Usage via `InstancePerThreadSync<RegionLocal<T>>`
 //!
 //! There exist situations where a static variable is not suitable. For example, the number of
 //! different region-local objects may be determined at runtime (e.g. a separate value
@@ -74,15 +75,16 @@
 //!
 //! In this case, you can directly use the [`RegionLocal`][4] type which underpins the mechanisms
 //! exposed by the macro. This type is implemented using the [linked object pattern][3] and
-//! can be manually used via the [`PerThread<T>`][4] wrapper type, as `PerThread<RegionLocal<T>>`.
+//! can be manually used via the [`InstancePerThread<T>`][6] or
+//! [`InstancePerThreadSync<T>`][7] wrapper type, as `InstancePerThreadSync<RegionLocal<T>>`.
 //!
 //! ```rust
-//! use linked::InstancePerThread;
+//! use linked::InstancePerThreadSync;
 //! use region_local::RegionLocal;
 //!
-//! let favorite_color_regional = Local::new(RegionLocal::new(|| "blue".to_string()));
+//! let favorite_color_regional = InstancePerThreadSync::new(RegionLocal::new(|| "blue".to_string()));
 //!
-//! // This localizes the object to the current thread. Reuse this object when possible.
+//! // This localizes the object to the current thread. Reuse this value when possible.
 //! let favorite_color = favorite_color_regional.acquire();
 //!
 //! favorite_color.with_local(|color| {
@@ -167,6 +169,8 @@
 //! [3]: crate::region_local
 //! [4]: crate::RegionLocal
 //! [5]: https://docs.rs/region_cached/latest/region_cached/
+//! [6]: linked::InstancePerThread
+//! [7]: linked::InstancePerThreadSync
 
 use simple_mermaid::mermaid;
 

@@ -32,15 +32,16 @@
 //! There are two ways to create region-cached values:
 //!
 //! 1. Define a static variable in a [`region_cached!`][2] block.
-//! 2. Use the [`RegionCached`][5] type inside a [`PerThread`][4] wrapper.
+//! 2. Use the [`RegionCached`][5] type inside a [`linked::InstancePerThread<T>`][4]
+//!    or [`linked::InstancePerThreadSync<T>`][7] wrapper.
 //!
 //! The difference is only a question of convenience - static variables are easier to use but come
 //! with language-driven limitations, such as needing to know in advance how many you need and
 //! defining them in the code.
 //!
-//! In contrast, `PerThread<RegionCached<T>>` is more flexible and you can create any number
-//! of instances at runtime, at a cost of having to manually deliver instances to the right
-//! place in the code.
+//! In contrast, `linked::InstancePerThread<RegionCached<T>>` is more flexible and you can create
+//! any number of instances at runtime, at a cost of having to manually deliver instances to
+//! the right place in the code.
 //!
 //! ## Usage via static variables
 //!
@@ -63,7 +64,7 @@
 //!
 //! See `examples/region_cached_log_filtering.rs` for a more complete example of using this macro.
 //!
-//! ## Usage via `PerThread<RegionCached<T>>`
+//! ## Usage via `InstancePerThreadSync<RegionCached<T>>`
 //!
 //! There exist situations where a static variable is not suitable. For example, the number of
 //! different region-cached objects may be determined at runtime (e.g. a separate value
@@ -71,15 +72,16 @@
 //!
 //! In this case, you can directly use the [`RegionCached`][5] type which underpins the mechanisms
 //! exposed by the macro. This type is implemented using the [linked object pattern][3] and
-//! can be manually used via the [`PerThread<T>`][4] wrapper type, as `PerThread<RegionCached<T>>`.
+//! can be manually used via the [`InstancePerThread<T>`][4] or
+//! [`InstancePerThreadSync<T>`][7] wrapper type, as `InstancePerThreadSync<RegionCached<T>>`.
 //!
 //! ```
-//! use linked::InstancePerThread;
+//! use linked::InstancePerThreadSync;
 //! use region_cached::RegionCached;
 //!
-//! let favorite_color_regional = Local::new(RegionCached::new("blue".to_string()));
+//! let favorite_color_regional = InstancePerThreadSync::new(RegionCached::new("blue".to_string()));
 //!
-//! // This localizes the object to the current thread. Reuse this object when possible.
+//! // This localizes the object to the current thread. Reuse this value when possible.
 //! let favorite_color = favorite_color_regional.acquire();
 //!
 //! favorite_color.with_cached(|color| {
@@ -169,6 +171,7 @@
 //! [4]: linked::InstancePerThread
 //! [5]: crate::RegionCached
 //! [6]: https://docs.rs/region_local/latest/region_local/
+//! [7]: linked::InstancePerThreadSync
 
 use simple_mermaid::mermaid;
 

@@ -109,9 +109,9 @@ where
     /// #
     /// use linked::InstancePerThreadSync;
     ///
-    /// let per_thread_thing = InstancePerThreadSync::new(Thing::new());
+    /// let linked_thing = InstancePerThreadSync::new(Thing::new());
     ///
-    /// let thing = per_thread_thing.acquire();
+    /// let thing = linked_thing.acquire();
     /// thing.increment();
     /// assert_eq!(thing.local_value(), 1);
     /// ```
@@ -153,16 +153,16 @@ where
     /// #
     /// use linked::InstancePerThreadSync;
     ///
-    /// let per_thread_thing = InstancePerThreadSync::new(Thing::new());
+    /// let linked_thing = InstancePerThreadSync::new(Thing::new());
     ///
-    /// let thing = per_thread_thing.acquire();
+    /// let thing = linked_thing.acquire();
     /// thing.increment();
     /// assert_eq!(thing.local_value(), 1);
     ///
     /// drop(thing);
     ///
     /// // Dropping the only acquired instance above will have reset the thread-local state.
-    /// let thing = per_thread_thing.acquire();
+    /// let thing = linked_thing.acquire();
     /// assert_eq!(thing.local_value(), 0);
     /// ```
     ///
@@ -451,16 +451,16 @@ mod tests {
 
     #[test]
     fn per_thread_smoke_test() {
-        let per_thread_cache = InstancePerThreadSync::new(TokenCache::new());
+        let linked_cache = InstancePerThreadSync::new(TokenCache::new());
 
-        let cache1 = per_thread_cache.acquire();
+        let cache1 = linked_cache.acquire();
         cache1.increment();
 
         assert_eq!(cache1.local_value(), 1);
         assert_eq!(cache1.shared_value(), 1);
 
         // This must refer to the same instance.
-        let cache2 = per_thread_cache.acquire();
+        let cache2 = linked_cache.acquire();
 
         assert_eq!(cache2.local_value(), 1);
         assert_eq!(cache2.shared_value(), 1);
@@ -472,7 +472,7 @@ mod tests {
 
         thread::spawn(move || {
             // You can move Aligned across threads.
-            let cache3 = per_thread_cache.acquire();
+            let cache3 = linked_cache.acquire();
 
             // This is a different thread's instance, so the local value is fresh.
             assert_eq!(cache3.local_value(), 0);
@@ -484,7 +484,7 @@ mod tests {
             assert_eq!(cache3.shared_value(), 3);
 
             // You can clone this and every clone works the same.
-            let thread_aligned_clone = per_thread_cache.clone();
+            let thread_aligned_clone = linked_cache.clone();
 
             let cache4 = thread_aligned_clone.acquire();
 
@@ -492,7 +492,7 @@ mod tests {
             assert_eq!(cache4.shared_value(), 3);
 
             // Every Aligned instance from the same family is equivalent.
-            let cache5 = per_thread_cache.acquire();
+            let cache5 = linked_cache.acquire();
 
             assert_eq!(cache5.local_value(), 1);
             assert_eq!(cache5.shared_value(), 3);
@@ -521,9 +521,9 @@ mod tests {
 
     #[test]
     fn thread_state_dropped_on_last_thread_aligned_drop() {
-        let per_thread_cache = InstancePerThreadSync::new(TokenCache::new());
+        let linked_cache = InstancePerThreadSync::new(TokenCache::new());
 
-        let cache = per_thread_cache.acquire();
+        let cache = linked_cache.acquire();
         cache.increment();
 
         assert_eq!(cache.local_value(), 1);
@@ -532,7 +532,7 @@ mod tests {
         drop(cache);
 
         // We get a fresh instance now, initialized from scratch for this thread.
-        let cache = per_thread_cache.acquire();
+        let cache = linked_cache.acquire();
         assert_eq!(cache.local_value(), 0);
     }
 
@@ -540,15 +540,15 @@ mod tests {
     fn thread_state_dropped_on_thread_exit() {
         // At the start, no thread-specific state has been created. The link embedded into the
         // Aligned holds one reference to the inner shared value of the TokenCache.
-        let per_thread_cache = InstancePerThreadSync::new(TokenCache::new());
+        let linked_cache = InstancePerThreadSync::new(TokenCache::new());
 
-        let cache = per_thread_cache.acquire();
+        let cache = linked_cache.acquire();
 
         // We now have two references to the inner shared value - the link + this fn.
         assert_eq!(Arc::strong_count(&cache.shared_value), 2);
 
         thread::spawn(move || {
-            let cache = per_thread_cache.acquire();
+            let cache = linked_cache.acquire();
 
             assert_eq!(Arc::strong_count(&cache.shared_value), 3);
         })

@@ -273,20 +273,20 @@
 //! use linked::InstancePerThread;
 //! use std::thread;
 //!
-//! let per_thread_thing = InstancePerThread::new(Thing::new("hello".to_string()));
+//! let linked_thing = InstancePerThread::new(Thing::new("hello".to_string()));
 //!
 //! // Obtain a local instance on demand.
-//! let thing = per_thread_thing.acquire();
+//! let thing = linked_thing.acquire();
 //! assert_eq!(thing.value(), "hello");
 //!
 //! thing.set_value("world".to_string());
 //!
 //! thread::spawn({
 //!     // The new thread gets its own clone of the InstancePerThread<T>.
-//!     let per_thread_thing = per_thread_thing.clone();
+//!     let linked_thing = linked_thing.clone();
 //!
 //!     move || {
-//!         let thing = per_thread_thing.acquire();
+//!         let thing = linked_thing.acquire();
 //!         assert_eq!(thing.value(), "world");
 //!     }
 //! }).join().unwrap();

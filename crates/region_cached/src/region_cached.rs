@@ -484,6 +484,7 @@ enum RegionalValue<T> {
 mod tests {
     use std::ptr;
     use std::sync::Arc;
+    use std::thread;
 
     use crate::{
         MockHardwareInfoClient, MockHardwareTrackerClient, RegionCachedCopyExt, RegionCachedExt,
@@ -520,6 +521,72 @@ mod tests {
 
         FAVORITE_COLOR.with_cached(|color| {
             assert_eq!(**color, "blue");
+        });
+    }
+
+    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    #[test]
+    fn non_static() {
+        let favorite_color_linked =
+            linked::InstancePerThread::new(RegionCached::new("blue".to_string()));
+
+        let favorite_color = favorite_color_linked.acquire();
+
+        favorite_color.with_cached(|color| {
+            assert_eq!(*color, "blue");
+        });
+
+        thread::spawn(move || {
+            let favorite_color = favorite_color_linked.acquire();
+
+            favorite_color.with_cached(|color| {
+                assert_eq!(*color, "blue");
+            });
+
+            favorite_color.set_global("red".to_string());
+
+            favorite_color.with_cached(|color| {
+                assert_eq!(*color, "red");
+            });
+        })
+        .join()
+        .unwrap();
+
+        favorite_color.with_cached(|color| {
+            assert_eq!(*color, "red");
+        });
+    }
+
+    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    #[test]
+    fn non_static_sync() {
+        let favorite_color_linked =
+            linked::InstancePerThreadSync::new(RegionCached::new("blue".to_string()));
+
+        let favorite_color = favorite_color_linked.acquire();
+
+        favorite_color.with_cached(|color| {
+            assert_eq!(*color, "blue");
+        });
+
+        thread::spawn(move || {
+            let favorite_color = favorite_color_linked.acquire();
+
+            favorite_color.with_cached(|color| {
+                assert_eq!(*color, "blue");
+            });
+
+            favorite_color.set_global("red".to_string());
+
+            favorite_color.with_cached(|color| {
+                assert_eq!(*color, "red");
+            });
+        })
+        .join()
+        .unwrap();
+
+        favorite_color.with_cached(|color| {
+            assert_eq!(*color, "red");
         });
     }
 

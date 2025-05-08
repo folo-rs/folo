@@ -1,11 +1,25 @@
-Mechanisms for creating families of linked objects that can collaborate across threads while being
-internally single-threaded.
+Mechanisms for creating families of linked objects that can collaborate across threads,
+with each instance only used from a single thread.
 
-The linked object pattern ensures that cross-thread state sharing is always explicit, as well as
-cross-thread transfer of linked object instances, facilitated by the mechanisms in this crate. Each
-individual instance of a linked object and the mechanisms for obtaining new instances are 
-structured in a manner that helps avoid accidental or implicit shared state, by making each instance
-thread-local while the entire family can act together to provide a multithreaded API to user code.
+The problem this crate solves is that while writing highly efficient lock-free thread-local
+code can yield great performance, it comes with serious drawbacks in terms of usability and
+developer experience.
+
+This crate bridges the gap by providing patterns and mechanisms that facilitate thread-local
+behavior while presenting a simple and reasonably ergonomic API to user code:
+
+* Internally, a linked object can take advantage of lock-free thread-isolated logic for **high
+  performance and efficiency** because it operates as a multithreaded family of thread-isolated
+  objects, each of which implements local behavior on a single thread.
+* Externally, the linked object family can look and act very much like a single Rust object and
+  can hide the fact that there is collaboration happening on multiple threads,
+  providing **a reasonably simple API with minimal extra complexity** for both the author
+  and the user of a type.
+
+The patterns and mechanisms provided by this crate are designed to make it easy to create linked
+object families and to provide primitives that allow these object families to be used without
+the user code having to understand how the objects are wired up inside or keeping track of which
+instance is meant to be used on which thread.
 
 More details in the [crate documentation](https://docs.rs/linked/).
 
