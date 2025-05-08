@@ -471,7 +471,7 @@ mod tests {
         assert_eq!(cache1.shared_value(), 2);
 
         thread::spawn(move || {
-            // You can move Aligned across threads.
+            // You can move InstancePerThreadSync across threads.
             let cache3 = linked_cache.acquire();
 
             // This is a different thread's instance, so the local value is fresh.
@@ -491,7 +491,7 @@ mod tests {
             assert_eq!(cache4.local_value(), 1);
             assert_eq!(cache4.shared_value(), 3);
 
-            // Every Aligned instance from the same family is equivalent.
+            // Every InstancePerThreadSync instance from the same family is equivalent.
             let cache5 = linked_cache.acquire();
 
             assert_eq!(cache5.local_value(), 1);
@@ -539,7 +539,7 @@ mod tests {
     #[test]
     fn thread_state_dropped_on_thread_exit() {
         // At the start, no thread-specific state has been created. The link embedded into the
-        // Aligned holds one reference to the inner shared value of the TokenCache.
+        // InstancePerThreadSync holds one reference to the inner shared value of the TokenCache.
         let linked_cache = InstancePerThreadSync::new(TokenCache::new());
 
         let cache = linked_cache.acquire();

@@ -117,7 +117,6 @@
 //! [5]: crate::Payload::process
 //! [6]: crate::execute_runs
 
-#[cfg(all(not(debug_assertions), not(test)))]
 pub(crate) mod cache;
 mod payload;
 mod run;

@@ -83,7 +83,7 @@ fn local_ref(c: &mut Criterion) {
     });
 
     {
-        // We keep one Local here so the ones we create in iterations are not the only ones.
+        // We keep one InstancePerThreadSync here so the ones we create in iterations are not the only ones.
         let _first = per_thread.acquire();
 
         g.bench_function("new_not_single", |b| {

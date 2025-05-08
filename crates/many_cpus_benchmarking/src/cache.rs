@@ -1,3 +1,8 @@
+#![allow(
+    dead_code,
+    reason = "code is conditionally used only in non-test builds"
+)]
+
 use std::{cell::RefCell, hint::black_box, ptr, sync::LazyLock};
 
 // Large servers can make hundreds of MBs of L3 cache available to a single core, though it
@@ -20,7 +25,7 @@ static CACHE_CLEANER_SOURCE: LazyLock<Vec<u64>> =
 
 // To a thread-specific destination (just to avoid overlap/conflict).
 // The existing values here do not matter, we will overwrite them (potentially multiple times).
-thread_local_rc! {
+thread_local! {
     static CACHE_CLEANER_DESTINATION: RefCell<Vec<u64>> =
         RefCell::new(vec![0xFFFFFFFFFFFFFFFF; CACHE_CLEANER_LEN_U64]);
 }
