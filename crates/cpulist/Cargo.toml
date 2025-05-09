@@ -12,14 +12,14 @@ rust-version.workspace = true
 
 [features]
 default = []
+doc = ["include-doc"]
 
 [dependencies]
 folo_utils = { workspace = true }
 itertools = { workspace = true }
 thiserror = { workspace = true }
+include-doc = { workspace = true, optional = true }
 
-[dev-dependencies]
-include-doc = { workspace = true }
 
 [lints]
 workspace = true
