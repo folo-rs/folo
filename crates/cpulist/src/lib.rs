@@ -25,15 +25,16 @@
 //! Basic conversion from/to strings:
 //!
 //! ```
-#![doc = source_file!("examples/cpulist_basic.rs")]
+#![cfg_attr(doc, doc = source_file!("examples/cpulist_basic.rs"))]
 //! ```
 //!
 //! The stride operator is also supported for parsing:
 //!
 //! ```
-#![doc = source_file!("examples/cpulist_stride.rs")]
+//!
+#![cfg_attr(doc, doc = source_file!("examples/cpulist_stride.rs"))]
 //! ```
-
+#[cfg(doc)]
 use include_doc::source_file;
 
 mod emit;
