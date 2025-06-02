@@ -1,0 +1,25 @@
+[package]
+name = "nm"
+description = "Minimalistic high-performance metrics collection in highly concurrent environments"
+publish = true
+version = "0.1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+foldhash = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_System_SystemInformation"] }
+
+[dev-dependencies]
+
+[lints]
+workspace = true

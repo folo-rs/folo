@@ -10,7 +10,10 @@ use std::{
     cell::{Cell, LazyCell, OnceCell, RefCell, UnsafeCell},
     hint::black_box,
     rc::{Rc, Weak as RcWeak},
-    sync::{Arc, LazyLock, Mutex, OnceLock, RwLock, Weak as ArcWeak},
+    sync::{
+        Arc, LazyLock, Mutex, OnceLock, RwLock, Weak as ArcWeak,
+        atomic::{self, AtomicU64},
+    },
 };
 
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -195,6 +198,26 @@ fn entrypoint(c: &mut Criterion) {
         b.iter(|| {
             let strong = black_box(local_rc_weak.upgrade().unwrap());
             assert_eq!(black_box(*strong), EXPECTED_VALUE);
+        });
+    });
+
+    let atomic = AtomicU64::new(EXPECTED_VALUE);
+
+    group.bench_function("local_atomic_relaxed", |b| {
+        b.iter(|| {
+            assert_eq!(
+                black_box(atomic.load(atomic::Ordering::Relaxed)),
+                EXPECTED_VALUE
+            );
+        });
+    });
+
+    group.bench_function("local_atomic_acquire", |b| {
+        b.iter(|| {
+            assert_eq!(
+                black_box(atomic.load(atomic::Ordering::Acquire)),
+                EXPECTED_VALUE
+            );
         });
     });
 
