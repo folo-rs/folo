@@ -20,6 +20,11 @@ foldhash = { workspace = true }
 windows = { workspace = true, features = ["Win32_System_SystemInformation"] }
 
 [dev-dependencies]
+criterion = { workspace = true }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "nm_observation"
+harness = false
