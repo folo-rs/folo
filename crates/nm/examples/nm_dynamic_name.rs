@@ -1,4 +1,9 @@
-//! Minimal example of observing simple events and reporting the metrics at exit.
+//! Example of observing an event whose name is dynamically constructed at runtime.
+//! This is a modified variant of the `nm_basic.rs` example - familiarize with that first.
+//!
+//! This is useful, for example, if you have a configuration file that provides some
+//! data set and you want a separate event for each entry in the data set, named after
+//! that entry.
 
 use nm::{Event, Report};
 
@@ -9,13 +14,21 @@ fn main() {
     const LARGE_BAGEL_WEIGHT_GRAMS: i64 = 510;
     const SMALL_BAGEL_WEIGHT_GRAMS: i64 = 180;
 
+    let large_bagel_event = Event::builder()
+        .name(format!("bagels_cooked_{LARGE_BAGEL_WEIGHT_GRAMS}"))
+        .build();
+
+    let small_bagel_event = Event::builder()
+        .name(format!("bagels_cooked_{SMALL_BAGEL_WEIGHT_GRAMS}"))
+        .build();
+
     for _ in 0..LARGE_BAGEL_COUNT {
-        LARGE_BAGELS_COOKED.with(Event::observe_unit);
+        large_bagel_event.observe_unit();
         BAGELS_COOKED_WEIGHT_GRAMS.with(|x| x.observe(LARGE_BAGEL_WEIGHT_GRAMS));
     }
 
     for _ in 0..SMALL_BAGEL_COUNT {
-        SMALL_BAGELS_COOKED.with(Event::observe_unit);
+        small_bagel_event.observe_unit();
         BAGELS_COOKED_WEIGHT_GRAMS.with(|x| x.observe(SMALL_BAGEL_WEIGHT_GRAMS));
     }
 
@@ -26,13 +39,5 @@ fn main() {
 thread_local! {
     static BAGELS_COOKED_WEIGHT_GRAMS: Event = Event::builder()
         .name("bagels_cooked_weight_grams")
-        .build();
-
-    static SMALL_BAGELS_COOKED: Event = Event::builder()
-        .name("bagels_cooked_small")
-        .build();
-
-    static LARGE_BAGELS_COOKED: Event = Event::builder()
-        .name("bagels_cooked_large")
         .build();
 }
