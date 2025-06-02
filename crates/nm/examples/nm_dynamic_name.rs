@@ -14,6 +14,8 @@ fn main() {
     const LARGE_BAGEL_WEIGHT_GRAMS: i64 = 510;
     const SMALL_BAGEL_WEIGHT_GRAMS: i64 = 180;
 
+    // Note that it is not required to place `Event` instances in thread-local static variables,
+    // though that is the simplest pattern to use if the event name is known at that point.
     let large_bagel_event = Event::builder()
         .name(format!("bagels_cooked_{LARGE_BAGEL_WEIGHT_GRAMS}"))
         .build();

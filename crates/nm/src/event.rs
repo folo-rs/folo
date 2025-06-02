@@ -6,9 +6,11 @@ use std::{
 
 use crate::{EventName, LOCAL_REGISTRY, Magnitude, ObservationBag};
 
-/// Measures the rate and magnitude of events.
+/// Observes the occurrences of a specific type of event, capturing the count and magnitude of
+/// each occurrence.
 ///
-/// You are expected to observe events via static thread-local variables.
+/// The typical pattern is to observe events via static thread-local variables, though creating
+/// ad-hoc instances is also possible and supported (but only once per thread per event).
 ///
 /// # Example
 ///
@@ -23,9 +25,9 @@ use crate::{EventName, LOCAL_REGISTRY, Magnitude, ObservationBag};
 /// }
 ///
 /// pub fn http_connect() {
-///     CONNECT_TIME_NS.with(|e| { e.observe_duration_millis(|| {
+///     CONNECT_TIME_NS.with(|e| e.observe_duration_millis(|| {
 ///         do_http_connect();
-///     })});
+///     }));
 /// }
 /// # http_connect();
 /// # fn do_http_connect() {}
@@ -164,6 +166,10 @@ impl EventBuilder {
         assert!(!self.name.is_empty());
 
         let observation_bag = Arc::new(ObservationBag::new(self.histogram_buckets));
+
+        // This will panic if it is already registered. This is not strictly required and
+        // we may relax this constraint in the future but for now we keep it here to help
+        // uncover problematic patterns and learn when/where relaxed constraints may be useful.
         LOCAL_REGISTRY.with_borrow(|r| r.register(self.name, Arc::clone(&observation_bag)));
 
         Event {
