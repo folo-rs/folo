@@ -16,9 +16,6 @@ default = []
 [dependencies]
 foldhash = { workspace = true }
 
-[target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = ["Win32_System_SystemInformation"] }
-
 [dev-dependencies]
 benchmark_utils = { workspace = true }
 criterion = { workspace = true }
