@@ -87,7 +87,7 @@
 //! #         .build();
 //! # }
 //! use std::time::Duration;
-//! 
+//!
 //! // observe(x) observes an event with a magnitude of `x`.
 //! PACKAGES_RECEIVED_WEIGHT_GRAMS.with(|e| e.observe(900));
 //!
@@ -141,10 +141,10 @@
 //!
 //! To collect a report of all observations, call `Report::collect()`. This implements the
 //! `Display` trait, so you can print it to the terminal:
-//! 
+//!
 //! ```
 //! use nm::Report;
-//! 
+//!
 //! let report = Report::collect();
 //! println!("{report}");
 //! ```
@@ -178,15 +178,15 @@
 //! mangled data. For example, attempting to observe events with magnitudes near `i64::MAX`. There
 //! is no guarantee made about what the specific outcome will be in this case (though the panic
 //! policy above still applies). Do not stray near `i64` boundaries and you should be fine.
-//! 
+//!
 //! # Performance tradeoffs
-//! 
+//!
 //! While this crate aims for high performance and high scalability to many processors, it also
 //! targets general-purpose usage and therefore must make some tradeoffs for generality and
 //! convenience of usage.
-//! 
+//!
 //! Some explicit tradeoffs include:
-//! 
+//!
 //! * There is some overhead in how the metrics are stored, both in terms of indirection layers and
 //!   the use of atomic operations. This is necessary to ensure that metrics can be reported without
 //!   any action required from the thread that observed the event (i.e. a "pull" model). Better
@@ -198,7 +198,7 @@
 //!   Rust implements them and due to how the `Event` type is structured internally to support the
 //!   "pull" model of reporting observations. Avoiding thread-local statics can offer better
 //!   performance in some cases.
-//! 
+//!
 //! It is likely possible to achieve better performance with entirely custom logic that avoids these
 //! tradeoffs.
 

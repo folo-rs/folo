@@ -4,7 +4,7 @@ use std::borrow::Cow;
 ///
 /// We use integers because they are the fastest data type - floating point math is too slow
 /// for high-frequency observations.
-/// 
+///
 /// If you are measuring fractional data, scale it up to be representable as integers.
 /// For example, instead of counting seconds, count milliseconds or nanoseconds.
 pub type Magnitude = i64;
