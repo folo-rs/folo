@@ -6,11 +6,9 @@ use std::{
 
 use crate::{EventName, LOCAL_REGISTRY, Magnitude, ObservationBag};
 
-/// Observes the occurrences of a specific type of event, capturing the count and magnitude of
-/// each occurrence.
+/// Allows you to capture the occurrence of events in your code.
 ///
-/// The typical pattern is to observe events via static thread-local variables, though creating
-/// ad-hoc instances is also possible and supported (but only once per thread per event).
+/// The typical pattern is to observe events via static thread-local variables.
 ///
 /// # Example
 ///
@@ -19,13 +17,13 @@ use crate::{EventName, LOCAL_REGISTRY, Magnitude, ObservationBag};
 /// use std::time::Instant;
 ///
 /// thread_local! {
-///     static CONNECT_TIME_NS: Event = Event::builder()
+///     static CONNECT_TIME_MS: Event = Event::builder()
 ///         .name("net_http_connect_time_ms")
 ///         .build();
 /// }
 ///
 /// pub fn http_connect() {
-///     CONNECT_TIME_NS.with(|e| e.observe_duration_millis(|| {
+///     CONNECT_TIME_MS.with(|e| e.observe_duration_millis(|| {
 ///         do_http_connect();
 ///     }));
 /// }
@@ -99,23 +97,6 @@ impl Event {
         let start = Instant::now();
 
         let result = f();
-
-        self.observe_millis(start.elapsed());
-
-        result
-    }
-
-    /// Observes the duration of an asynchronous function call, in milliseconds.
-    #[inline]
-    pub async fn observe_duration_millis_async<F, FF, R>(&self, f: F) -> R
-    where
-        F: FnOnce() -> FF,
-        FF: Future<Output = R>,
-    {
-        // TODO: Use low precision time
-        let start = Instant::now();
-
-        let result = f().await;
 
         self.observe_millis(start.elapsed());
 
