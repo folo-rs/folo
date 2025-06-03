@@ -20,11 +20,14 @@ foldhash = { workspace = true }
 windows = { workspace = true, features = ["Win32_System_SystemInformation"] }
 
 [dev-dependencies]
+benchmark_utils = { workspace = true }
 criterion = { workspace = true }
+folo_utils = { workspace = true }
+many_cpus = { workspace = true }
 
 [lints]
 workspace = true
 
 [[bench]]
-name = "nm_observation"
+name = "nm_performance"
 harness = false

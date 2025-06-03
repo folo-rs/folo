@@ -57,11 +57,13 @@ impl Event {
     }
 
     /// Observes an event with a magnitude of 1.
+    #[inline]
     pub fn observe_unit(&self) {
         self.observe(1);
     }
 
     /// Observes an event with a specific magnitude.
+    #[inline]
     pub fn observe(&self, magnitude: Magnitude) {
         self.observe_many(magnitude, 1);
     }
@@ -70,6 +72,7 @@ impl Event {
     ///
     /// Only the whole number part of the duration is used - fractional milliseconds are ignored.
     /// Values outside the i64 range are not guaranteed to be correctly represented.
+    #[inline]
     pub fn observe_millis(&self, duration: Duration) {
         #[expect(
             clippy::cast_possible_truncation,
@@ -81,11 +84,13 @@ impl Event {
     }
 
     /// Observes a number of events, all with the specified magnitude.
+    #[inline]
     pub fn observe_many(&self, magnitude: Magnitude, count: usize) {
         self.observations.insert(magnitude, count);
     }
 
     /// Observes the duration of a function call, in milliseconds.
+    #[inline]
     pub fn observe_duration_millis<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R,
@@ -101,6 +106,7 @@ impl Event {
     }
 
     /// Observes the duration of an asynchronous function call, in milliseconds.
+    #[inline]
     pub async fn observe_duration_millis_async<F, FF, R>(&self, f: F) -> R
     where
         F: FnOnce() -> FF,
