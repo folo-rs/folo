@@ -199,8 +199,7 @@
 //!   performance in some cases but requires more elaborate bookkeeping from application code.
 //!
 //! It is likely possible to achieve better performance with entirely custom logic that avoids these
-//! tradeoffs. A future version of this crate may offer a "push" model as an opt-in feature for
-//! extra performance in scenarios where that model is applicable.
+//! tradeoffs.
 
 mod constants;
 mod data_types;
