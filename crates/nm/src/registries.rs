@@ -16,18 +16,20 @@ type ObservationBagMap = HashMap<EventName, Arc<ObservationBag>>;
 /// Facilitates event registration and unregistration from the global registry. An
 /// event is automatically registered globally for as long as it is registered locally.
 #[derive(Debug)]
-pub(crate) struct LocalEventRegistry {
+pub(crate) struct LocalEventRegistry<'g> {
     observation_bags: RefCell<ObservationBagMap>,
     thread_id: ThreadId,
+    global_registry: &'g GlobalEventRegistry,
 
     _single_threaded: PhantomData<*const ()>,
 }
 
-impl LocalEventRegistry {
-    fn new() -> Self {
+impl<'g> LocalEventRegistry<'g> {
+    fn new(global_registry: &'g GlobalEventRegistry) -> Self {
         Self {
             observation_bags: RefCell::new(HashMap::new()),
             thread_id: thread::current().id(),
+            global_registry,
             _single_threaded: PhantomData,
         }
     }
@@ -44,13 +46,15 @@ impl LocalEventRegistry {
             self.thread_id
         );
 
-        GLOBAL_REGISTRY.register(self.thread_id, name, observation_bag);
+        self.global_registry
+            .register(self.thread_id, name, observation_bag);
     }
 }
 
-impl Drop for LocalEventRegistry {
+impl Drop for LocalEventRegistry<'_> {
     fn drop(&mut self) {
-        GLOBAL_REGISTRY.unregister_thread(thread::current().id());
+        self.global_registry
+            .unregister_thread(thread::current().id());
     }
 }
 
@@ -146,8 +150,113 @@ thread_local! {
     ///
     /// This is only accessed when creating and collecting metrics,
     /// so it is not on the hot path.
-    pub(crate) static LOCAL_REGISTRY: RefCell<LocalEventRegistry> = RefCell::new(LocalEventRegistry::new());
+    pub(crate) static LOCAL_REGISTRY: RefCell<LocalEventRegistry<'static>>
+        = RefCell::new(LocalEventRegistry::new(&GLOBAL_REGISTRY));
 }
 
 pub(crate) static GLOBAL_REGISTRY: LazyLock<GlobalEventRegistry> =
     LazyLock::new(GlobalEventRegistry::new);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_EVENT_NAME: &str = "test_event";
+
+    #[test]
+    fn register_unregister_smoke_test() {
+        let observations = Arc::new(ObservationBag::new(&[]));
+
+        let global_registry = GlobalEventRegistry::new();
+        let local_registry = LocalEventRegistry::new(&global_registry);
+
+        local_registry.register(TEST_EVENT_NAME.into(), Arc::clone(&observations));
+
+        assert_eq!(local_registry.observation_bags.borrow().len(), 1);
+        assert!(
+            global_registry
+                .thread_observation_bags
+                .read()
+                .expect(ERR_POISONED_LOCK)
+                .contains_key(&local_registry.thread_id)
+        );
+        assert!(
+            global_registry
+                .thread_observation_bags
+                .read()
+                .expect(ERR_POISONED_LOCK)
+                .get(&local_registry.thread_id)
+                .unwrap()
+                .read()
+                .expect(ERR_POISONED_LOCK)
+                .contains_key(TEST_EVENT_NAME)
+        );
+
+        let thread_id = local_registry.thread_id;
+
+        // This should unregister from the global registry, as well.
+        drop(local_registry);
+
+        assert!(
+            global_registry
+                .thread_observation_bags
+                .read()
+                .expect(ERR_POISONED_LOCK)
+                .get(&thread_id)
+                .is_none()
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn duplicate_registration_panics() {
+        let observations = Arc::new(ObservationBag::new(&[]));
+
+        let global_registry = GlobalEventRegistry::new();
+        let local_registry = LocalEventRegistry::new(&global_registry);
+
+        local_registry.register(TEST_EVENT_NAME.into(), Arc::clone(&observations));
+        local_registry.register(TEST_EVENT_NAME.into(), Arc::clone(&observations));
+    }
+
+    #[test]
+    fn inspect_global_inspects_all() {
+        let thread1_observations = Arc::new(ObservationBag::new(&[]));
+
+        let global_registry = GlobalEventRegistry::new();
+
+        let thread1_local_registry = LocalEventRegistry::new(&global_registry);
+        thread1_local_registry.register(TEST_EVENT_NAME.into(), Arc::clone(&thread1_observations));
+
+        let thread1_id = thread::current().id();
+
+        thread::scope(|s| {
+            // Now let's switch to a new thread, register the event there, and inspect.
+            // We expect to see the observation bags of both threads when inspecting.
+            s.spawn(|| {
+                let thread2_observations = Arc::new(ObservationBag::new(&[]));
+
+                let thread2_local_registry = LocalEventRegistry::new(&global_registry);
+                thread2_local_registry
+                    .register(TEST_EVENT_NAME.into(), Arc::clone(&thread2_observations));
+
+                let thread2_id = thread::current().id();
+
+                let mut seen_thread_ids = Vec::new();
+
+                global_registry.inspect(|thread_id, observation_bags| {
+                    seen_thread_ids.push(*thread_id);
+
+                    assert!(observation_bags.contains_key(TEST_EVENT_NAME));
+                    assert_eq!(observation_bags.len(), 1);
+                });
+
+                assert_eq!(seen_thread_ids.len(), 2);
+                assert!(seen_thread_ids.contains(&thread1_id));
+                assert!(seen_thread_ids.contains(&thread2_id));
+            })
+            .join()
+            .unwrap();
+        });
+    }
+}
