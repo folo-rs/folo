@@ -49,6 +49,7 @@ pub struct Event {
 impl Event {
     /// Creates a new event builder with the default configuration.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Gets replaced with itself by different name, bad mutation.
     pub fn builder() -> EventBuilder {
         EventBuilder::default()
     }

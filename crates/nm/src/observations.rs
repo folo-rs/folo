@@ -279,6 +279,40 @@ mod tests {
     }
 
     #[test]
+    fn bag_merge_merges_data() {
+        let observations1 = ObservationBag::new(&[-100, -10, 0, 10, 100]);
+
+        observations1.insert(-1000, 1);
+        observations1.insert(0, 2);
+        observations1.insert(11, 3);
+        observations1.insert(1111, 4);
+
+        let observations2 = ObservationBag::new(&[-100, -10, 0, 10, 100]);
+
+        observations2.insert(-1000, 10);
+        observations2.insert(0, 10);
+        observations2.insert(11, 10);
+        observations2.insert(1111, 10);
+
+        observations1.merge_from(&observations2);
+
+        let snapshot = observations1.snapshot();
+
+        assert_eq!(snapshot.count, 10 + 40);
+        assert_eq!(
+            snapshot.sum,
+            (1111 * 4 + 11 * 3 - 1000) + 10 * (1111 + 11 - 1000)
+        );
+
+        assert_eq!(snapshot.bucket_counts.len(), 5);
+        assert_eq!(snapshot.bucket_counts[0], 11); // -1000
+        assert_eq!(snapshot.bucket_counts[1], 0); // nothing
+        assert_eq!(snapshot.bucket_counts[2], 12); // 0
+        assert_eq!(snapshot.bucket_counts[3], 0); // nothing
+        assert_eq!(snapshot.bucket_counts[4], 13); // 11
+    }
+
+    #[test]
     #[should_panic]
     fn snapshot_merge_with_mismatched_bucket_counts_panics() {
         let observations1 = ObservationBag::new(&[-100, -10, 0, 10, 100]);
@@ -302,5 +336,26 @@ mod tests {
 
         // This should panic because the bucket magnitudes do not match.
         snapshot1.merge_from(&snapshot2);
+    }
+
+    // TODO: Mismatched bag merges.
+    #[test]
+    #[should_panic]
+    fn bag_merge_with_mismatched_bucket_counts_panics() {
+        let observations1 = ObservationBag::new(&[-100, -10, 0, 10, 100]);
+        let observations2 = ObservationBag::new(&[-100, -10, 0]);
+
+        // This should panic because the bucket counts do not match.
+        observations1.merge_from(&observations2);
+    }
+
+    #[test]
+    #[should_panic]
+    fn bag_merge_with_mismatched_bucket_magnitudes_panics() {
+        let observations1 = ObservationBag::new(&[-100, -10, 0, 10, 100]);
+        let observations2 = ObservationBag::new(&[-100, -10, 0, 20, 100]);
+
+        // This should panic because the bucket magnitudes do not match.
+        observations1.merge_from(&observations2);
     }
 }
