@@ -32,14 +32,14 @@ fn entrypoint(c: &mut Criterion) {
                 &one_processor,
                 iters,
                 || (),
-                |()| COUNTER.with(Event::observe_unit),
+                |()| COUNTER.with(Event::observe_once),
             )
         });
     });
 
     group.bench_function("counter_mt", |b| {
         b.iter_custom(|iters| {
-            bench_on_every_processor(iters, || (), |()| COUNTER.with(Event::observe_unit))
+            bench_on_every_processor(iters, || (), |()| COUNTER.with(Event::observe_once))
         });
     });
 

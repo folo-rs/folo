@@ -10,12 +10,12 @@ fn main() {
     const SMALL_BAGEL_WEIGHT_GRAMS: i64 = 180;
 
     for _ in 0..LARGE_BAGEL_COUNT {
-        LARGE_BAGELS_COOKED.with(Event::observe_unit);
+        LARGE_BAGELS_COOKED.with(Event::observe_once);
         BAGELS_COOKED_WEIGHT_GRAMS.with(|x| x.observe(LARGE_BAGEL_WEIGHT_GRAMS));
     }
 
     for _ in 0..SMALL_BAGEL_COUNT {
-        SMALL_BAGELS_COOKED.with(Event::observe_unit);
+        SMALL_BAGELS_COOKED.with(Event::observe_once);
         BAGELS_COOKED_WEIGHT_GRAMS.with(|x| x.observe(SMALL_BAGEL_WEIGHT_GRAMS));
     }
 

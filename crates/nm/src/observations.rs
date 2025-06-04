@@ -64,7 +64,8 @@ impl ObservationBag {
         self.sum.fetch_add(sum_increment, BAG_ACCESS_ORDERING);
 
         // This may be none if we have no buckets (i.e. the event is a bare counter, no histogram).
-        // TODO: Explore optimizing this lookup - SIMD can potentially help us here.
+        // TODO: Explore optimizing this lookup - SIMD can potentially help us here if not
+        // automatically applied already by the compiler.
         if let Some(bucket_index) =
             self.bucket_magnitudes
                 .iter()
@@ -83,7 +84,7 @@ impl ObservationBag {
             // SAFETY: Type invariant: there are always the same number of bucket counts
             // as there are bucket magnitudes.
             unsafe { self.bucket_counts.get_unchecked(bucket_index) }
-                .fetch_add(1, BAG_ACCESS_ORDERING);
+                .fetch_add(count_u64, BAG_ACCESS_ORDERING);
         }
     }
 
@@ -141,5 +142,132 @@ impl ObservationBagSnapshot {
 
             *target = target.wrapping_add(other_bucket_count);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
+
+    use super::*;
+
+    #[test]
+    fn observations_are_recorded() {
+        let observations = ObservationBag::new(&[]);
+
+        // A quick sanity check first.
+        observations.insert(7, 2);
+
+        let snapshot = observations.snapshot();
+
+        assert_eq!(snapshot.count, 2);
+        assert_eq!(snapshot.sum, 14);
+
+        // Zero is a perfectly fine magnitude.
+        observations.insert(0, 3);
+
+        let snapshot = observations.snapshot();
+
+        assert_eq!(snapshot.count, 5);
+        assert_eq!(snapshot.sum, 14);
+
+        // Negative magnitudes are also fine.
+        observations.insert(-30, 4);
+
+        let snapshot = observations.snapshot();
+        assert_eq!(snapshot.count, 9);
+        assert_eq!(snapshot.sum, -106);
+    }
+
+    #[test]
+    fn observations_are_recorded_in_histogram() {
+        let observations = ObservationBag::new(&[-100, -10, 0, 10, 100]);
+
+        observations.insert(-1000, 1);
+        observations.insert(0, 2);
+        observations.insert(11, 3);
+        observations.insert(1111, 4);
+
+        let snapshot = observations.snapshot();
+
+        assert_eq!(snapshot.count, 10);
+        assert_eq!(snapshot.sum, 1111 * 4 + 11 * 3 - 1000);
+
+        assert_eq!(snapshot.bucket_counts.len(), 5);
+        assert_eq!(snapshot.bucket_counts[0], 1); // -1000
+        assert_eq!(snapshot.bucket_counts[1], 0); // nothing
+        assert_eq!(snapshot.bucket_counts[2], 2); // 0
+        assert_eq!(snapshot.bucket_counts[3], 0); // nothing
+        assert_eq!(snapshot.bucket_counts[4], 3); // 11
+
+        // 1111 is outside any bucket ranges, so only present in the totals.
+    }
+
+    #[test]
+    fn existing_snapshots_do_not_change() {
+        let observations = ObservationBag::new(&[]);
+        observations.insert(7, 2);
+
+        let snapshot = observations.snapshot();
+        assert_eq!(snapshot.count, 2);
+        assert_eq!(snapshot.sum, 14);
+
+        observations.insert(123, 123);
+
+        // The existing snapshot should not have changed.
+        assert_eq!(snapshot.count, 2);
+        assert_eq!(snapshot.sum, 14);
+    }
+
+    #[test]
+    fn snapshot_merge_merges_data() {
+        let observations = ObservationBag::new(&[-100, -10, 0, 10, 100]);
+
+        observations.insert(-1000, 1);
+        observations.insert(0, 2);
+        observations.insert(11, 3);
+        observations.insert(1111, 4);
+
+        // We just merge the same snapshot into itself to test the merge logic.
+        let mut snapshot1 = observations.snapshot();
+        let snapshot2 = observations.snapshot();
+
+        snapshot1.merge(&snapshot2);
+
+        assert_eq!(snapshot1.count, 2 * 10);
+        assert_eq!(snapshot1.sum, 2 * (1111 * 4 + 11 * 3 - 1000));
+
+        assert_eq!(snapshot1.bucket_counts.len(), 5);
+        assert_eq!(snapshot1.bucket_counts[0], 2); // -1000
+        assert_eq!(snapshot1.bucket_counts[1], 0); // nothing
+        assert_eq!(snapshot1.bucket_counts[2], 4); // 0
+        assert_eq!(snapshot1.bucket_counts[3], 0); // nothing
+        assert_eq!(snapshot1.bucket_counts[4], 6); // 11
+    }
+
+    #[test]
+    #[should_panic]
+    fn snapshot_merge_with_mismatched_bucket_counts_panics() {
+        let observations1 = ObservationBag::new(&[-100, -10, 0, 10, 100]);
+        let observations2 = ObservationBag::new(&[-100, -10, 0]);
+
+        let mut snapshot1 = observations1.snapshot();
+        let snapshot2 = observations2.snapshot();
+
+        // This should panic because the bucket counts do not match.
+        snapshot1.merge(&snapshot2);
+    }
+
+    #[test]
+    #[should_panic]
+    fn snapshot_merge_with_mismatched_bucket_magnitudes_panics() {
+        let observations1 = ObservationBag::new(&[-100, -10, 0, 10, 100]);
+        let observations2 = ObservationBag::new(&[-100, -10, 0, 20, 100]);
+
+        let mut snapshot1 = observations1.snapshot();
+        let snapshot2 = observations2.snapshot();
+
+        // This should panic because the bucket magnitudes do not match.
+        snapshot1.merge(&snapshot2);
     }
 }

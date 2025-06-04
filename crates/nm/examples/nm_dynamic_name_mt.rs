@@ -1,21 +1,34 @@
-//! Example of observing an event whose name is dynamically constructed at runtime.
-//! This is a modified variant of the `nm_basic.rs` example - familiarize with that first.
-//!
-//! This is useful, for example, if you have a configuration file that provides some
-//! data set and you want a separate event for each entry in the data set, named after
-//! that entry.
+//! This is a multithreaded variant of the `nm_dynamic_name.rs` example, showcasing how to
+//! deal with the fact that `Event` instances are single-threaded.
+
+use std::{iter, thread};
 
 use nm::{Event, Report};
 
 fn main() {
-    // We just process a fixed amount of data here.
+    const THREAD_COUNT: usize = 4;
+
+    // Each thread will cook some bagels.
+    let threads = iter::repeat_with(|| thread::spawn(cook_bagels))
+        .take(THREAD_COUNT)
+        .collect::<Vec<_>>();
+
+    for thread in threads {
+        thread.join().unwrap();
+    }
+
+    let report = Report::collect();
+    println!("{report}");
+}
+
+fn cook_bagels() {
     const LARGE_BAGEL_COUNT: usize = 1000;
     const SMALL_BAGEL_COUNT: usize = 1300;
     const LARGE_BAGEL_WEIGHT_GRAMS: i64 = 510;
     const SMALL_BAGEL_WEIGHT_GRAMS: i64 = 180;
 
-    // Note that it is not required to place `Event` instances in thread-local static variables,
-    // though that is the simplest pattern to use if the event name is known at that point.
+    // While `Event` instances are single-threaded, we can still use them on multiple threads.
+    // Simply create separate instances of `Event` on each thread, with the same configuration.
     let large_bagel_event = Event::builder()
         .name(format!("bagels_cooked_{LARGE_BAGEL_WEIGHT_GRAMS}"))
         .build();
@@ -33,9 +46,6 @@ fn main() {
         small_bagel_event.observe_once();
         BAGELS_COOKED_WEIGHT_GRAMS.with(|x| x.observe(SMALL_BAGEL_WEIGHT_GRAMS));
     }
-
-    let report = Report::collect();
-    println!("{report}");
 }
 
 thread_local! {

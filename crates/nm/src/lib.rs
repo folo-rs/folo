@@ -91,17 +91,17 @@
 //! // observe(x) observes an event with a magnitude of `x`.
 //! PACKAGES_RECEIVED_WEIGHT_GRAMS.with(|e| e.observe(900));
 //!
-//! // observe_many(x, count) observes `count` events, each with a magnitude of `x`.
-//! PACKAGES_RECEIVED_WEIGHT_GRAMS.with(|e| e.observe_many(500, 8));
-//!
-//! // observe_unit() observes an event with a magnitude of 1, to clearly express that
+//! // observe_once() observes an event with a nominal magnitude of 1, to clearly express that
 //! // this event has no concept of magnitude and we fall back to the convention of 1.
-//! PACKAGES_RECEIVED.with(|e| e.observe_unit());
+//! PACKAGES_RECEIVED.with(|e| e.observe_once());
 //!
 //! // observe_millis(x) observes an event with a magnitude of `x` in milliseconds
 //! // while ensuring that any data type conversions respect the crate mathematics policy.
 //! let send_duration = Duration::from_millis(150);
 //! PACKAGE_SEND_DURATION_MS.with(|e| e.observe_millis(send_duration));
+//! 
+//! // batch(count).observe(x) observes `count` events, each with a magnitude of `x`.
+//! PACKAGES_RECEIVED_WEIGHT_GRAMS.with(|e| e.batch(500).observe(8));
 //! ```
 //!
 //! ## Observing durations of operations

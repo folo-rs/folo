@@ -6,15 +6,14 @@ use std::{
 
 use crate::{EventName, LOCAL_REGISTRY, Magnitude, ObservationBag};
 
-/// Allows you to capture the occurrence of events in your code.
+/// Allows you to observe the occurrences of an event in your code.
 ///
-/// The typical pattern is to observe events via static thread-local variables.
+/// The typical pattern is to observe events via thread-local static variables.
 ///
 /// # Example
 ///
 /// ```
 /// use nm::Event;
-/// use std::time::Instant;
 ///
 /// thread_local! {
 ///     static CONNECT_TIME_MS: Event = Event::builder()
@@ -33,7 +32,7 @@ use crate::{EventName, LOCAL_REGISTRY, Magnitude, ObservationBag};
 ///
 /// # Thread safety
 ///
-/// This type is single-threaded. You are expected to put this in a
+/// This type is single-threaded. You would typically create instances in a
 /// `thread_local!` block, so each thread gets its own instance.
 #[derive(Debug)]
 pub struct Event {
@@ -48,22 +47,25 @@ pub struct Event {
 }
 
 impl Event {
-    /// Creates a new builder with the default configuration.
+    /// Creates a new event builder with the default configuration.
     #[must_use]
     pub fn builder() -> EventBuilder {
         EventBuilder::default()
     }
 
-    /// Observes an event with a magnitude of 1.
+    /// Observes an event that has no explicit magnitude.
+    ///
+    /// By convention, this is represented as a magnitude of 1. We expose a separate
+    /// method for this to make it clear that the magnitude has no inherent meaning.
     #[inline]
-    pub fn observe_unit(&self) {
+    pub fn observe_once(&self) {
         self.observe(1);
     }
 
     /// Observes an event with a specific magnitude.
     #[inline]
     pub fn observe(&self, magnitude: Magnitude) {
-        self.observe_many(magnitude, 1);
+        self.observations.insert(magnitude, 1);
     }
 
     /// Observes an event with the magnitude being the indicated duration in milliseconds.
@@ -81,12 +83,6 @@ impl Event {
         self.observe(millis);
     }
 
-    /// Observes a number of events, all with the specified magnitude.
-    #[inline]
-    pub fn observe_many(&self, magnitude: Magnitude, count: usize) {
-        self.observations.insert(magnitude, count);
-    }
-
     /// Observes the duration of a function call, in milliseconds.
     #[inline]
     pub fn observe_duration_millis<F, R>(&self, f: F) -> R
@@ -101,6 +97,41 @@ impl Event {
         self.observe_millis(start.elapsed());
 
         result
+    }
+
+    /// Prepares to observe a batch of events with the same magnitude.
+    #[must_use]
+    pub fn batch(&self, count: usize) -> ObservationBatch<'_> {
+        ObservationBatch { event: self, count }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn snapshot(&self) -> crate::ObservationBagSnapshot {
+        self.observations.snapshot()
+    }
+}
+
+/// A batch of pending observations for an event, waiting for the magnitude to be specified.
+#[derive(Debug)]
+pub struct ObservationBatch<'a> {
+    event: &'a Event,
+    count: usize,
+}
+
+impl ObservationBatch<'_> {
+    /// Observes a batch of events that have no explicit magnitude.
+    ///
+    /// By convention, this is represented as a magnitude of 1. We expose a separate
+    /// method for this to make it clear that the magnitude has no inherent meaning.
+    #[inline]
+    pub fn observe_once(self) {
+        self.event.observations.insert(1, self.count);
+    }
+
+    /// Observes a batch of events with a specific magnitude.
+    #[inline]
+    pub fn observe(self, magnitude: Magnitude) {
+        self.event.observations.insert(magnitude, self.count);
     }
 }
 
@@ -163,5 +194,101 @@ impl EventBuilder {
             observations: observation_bag,
             _single_threaded: PhantomData,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use static_assertions::assert_not_impl_any;
+
+    use super::*;
+
+    #[test]
+    fn observations_are_recorded() {
+        // Histogram logic is tested as part of ObservationBag tests, so we do not bother
+        // with it here - we assume that if data is correctly recorded, it will reach the histogram.
+        let observations = Arc::new(ObservationBag::new(&[]));
+
+        let event = Event {
+            observations: Arc::clone(&observations),
+            _single_threaded: PhantomData,
+        };
+
+        let snapshot = observations.snapshot();
+
+        assert_eq!(snapshot.count, 0);
+        assert_eq!(snapshot.sum, 0);
+
+        event.observe_once();
+
+        let snapshot = observations.snapshot();
+
+        assert_eq!(snapshot.count, 1);
+        assert_eq!(snapshot.sum, 1);
+
+        event.batch(3).observe_once();
+
+        let snapshot = observations.snapshot();
+        assert_eq!(snapshot.count, 4);
+        assert_eq!(snapshot.sum, 4);
+
+        event.observe(5);
+
+        let snapshot = observations.snapshot();
+        assert_eq!(snapshot.count, 5);
+        assert_eq!(snapshot.sum, 9);
+
+        event.observe_millis(Duration::from_millis(100));
+
+        let snapshot = observations.snapshot();
+        assert_eq!(snapshot.count, 6);
+        assert_eq!(snapshot.sum, 109);
+
+        event.batch(2).observe(10);
+
+        let snapshot = observations.snapshot();
+        assert_eq!(snapshot.count, 8);
+        assert_eq!(snapshot.sum, 129);
+    }
+
+    #[test]
+    #[should_panic]
+    fn build_without_name_panics() {
+        drop(Event::builder().build());
+    }
+
+    #[test]
+    #[should_panic]
+    fn build_with_empty_name_panics() {
+        drop(Event::builder().name("").build());
+    }
+
+    #[test]
+    fn build_correctly_configures_histogram() {
+        let no_histogram = Event::builder().name("no_histogram").build();
+        assert!(no_histogram.snapshot().bucket_magnitudes.is_empty());
+        assert!(no_histogram.snapshot().bucket_counts.is_empty());
+
+        let empty_buckets = Event::builder()
+            .name("empty_buckets")
+            .histogram(&[])
+            .build();
+        assert!(empty_buckets.snapshot().bucket_magnitudes.is_empty());
+        assert!(empty_buckets.snapshot().bucket_counts.is_empty());
+
+        let buckets = &[1, 10, 100, 1000];
+        let event_with_buckets = Event::builder()
+            .name("with_buckets")
+            .histogram(buckets)
+            .build();
+
+        let snapshot = event_with_buckets.snapshot();
+        assert_eq!(snapshot.bucket_magnitudes, buckets);
+        assert_eq!(snapshot.bucket_counts.len(), buckets.len());
+    }
+
+    #[test]
+    fn single_threaded_type() {
+        assert_not_impl_any!(Event: Send, Sync);
     }
 }

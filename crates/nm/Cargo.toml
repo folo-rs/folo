@@ -21,6 +21,7 @@ benchmark_utils = { workspace = true }
 criterion = { workspace = true }
 folo_utils = { workspace = true }
 many_cpus = { workspace = true }
+static_assertions = { workspace = true }
 
 [lints]
 workspace = true
