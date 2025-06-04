@@ -63,40 +63,48 @@ impl Drop for LocalEventRegistry<'_> {
 /// This is typically used for collecting and reporting on metrics data from the entire process.
 #[derive(Debug)]
 pub(crate) struct GlobalEventRegistry {
+    state: RwLock<GlobalObservationBagsState>,
+}
+
+#[derive(Debug)]
+struct GlobalObservationBagsState {
     // We essentially add a thread level to the hierarchy maintained by each local registry.
     // The data in here is duplicated - it is not merely a list of existing registries, since
     // those are single-threaded data types and we want to minimize any locking we perform.
-    thread_observation_bags: RwLock<HashMap<ThreadId, RwLock<ObservationBagMap>>>,
+    thread_observation_bags: HashMap<ThreadId, RwLock<ObservationBagMap>>,
+
+    // If a thread is unregistered, its observations are merged into this map. It is normal
+    // for thread to go away but this should not cause data loss - observations made on
+    // past threads remain valid until end of the process.
+    archived_observation_bags: ObservationBagMap,
 }
 
 impl GlobalEventRegistry {
     fn new() -> Self {
         Self {
-            thread_observation_bags: RwLock::new(HashMap::new()),
+            state: RwLock::new(GlobalObservationBagsState {
+                thread_observation_bags: HashMap::new(),
+                archived_observation_bags: HashMap::new(),
+            }),
         }
     }
 
     fn register(&self, thread_id: ThreadId, name: EventName, observation_bag: Arc<ObservationBag>) {
         // Most likely the thread is already registered, so we try being optimistic.
         {
-            let threads = self
-                .thread_observation_bags
-                .read()
-                .expect(ERR_POISONED_LOCK);
+            let state = self.state.read().expect(ERR_POISONED_LOCK);
 
-            if let Some(thread_bags) = threads.get(&thread_id) {
+            if let Some(thread_bags) = state.thread_observation_bags.get(&thread_id) {
                 register_core(thread_id, name, observation_bag, thread_bags);
                 return;
             }
         }
 
         // The thread was not registered. Let's register it now.
-        let mut threads = self
-            .thread_observation_bags
-            .write()
-            .expect(ERR_POISONED_LOCK);
+        let mut state = self.state.write().expect(ERR_POISONED_LOCK);
 
-        let thread_bags = threads
+        let thread_bags = state
+            .thread_observation_bags
             .entry(thread_id)
             .or_insert_with(|| RwLock::new(HashMap::new()));
 
@@ -104,27 +112,48 @@ impl GlobalEventRegistry {
     }
 
     fn unregister_thread(&self, thread_id: ThreadId) {
-        let mut threads = self
-            .thread_observation_bags
-            .write()
-            .expect(ERR_POISONED_LOCK);
+        let mut state = self.state.write().expect(ERR_POISONED_LOCK);
 
-        threads.remove(&thread_id);
+        // After removing the data of the unregistered thread, we need to
+        // merge its observations into the archived observation bags.
+        if let Some(removed_bags) = state.thread_observation_bags.remove(&thread_id) {
+            let bags = removed_bags.read().expect(ERR_POISONED_LOCK);
+
+            for (name, observation_bag) in bags.iter() {
+                let archived_bag = state
+                    .archived_observation_bags
+                    .entry(name.clone())
+                    .or_insert_with(|| {
+                        Arc::new(ObservationBag::new(observation_bag.bucket_magnitudes()))
+                    });
+
+                archived_bag.merge_from(observation_bag);
+            }
+        }
     }
 
-    /// Inspects the observation bags of all threads via a callback.
+    /// Inspects all known observation bags via callback, including those
+    /// containing archived data from threads that no longer exist.
+    ///
+    /// The callback may be called any number of times (including zero) and each call may provide
+    /// data for any nonempty set of events (with no, partial or full overlap between events
+    /// inspected in different calls).
     ///
     /// This takes read locks, so the callback must not attempt to perform any operations
     /// that may want to register new events, under threat of deadlock.
-    pub(crate) fn inspect(&self, mut f: impl FnMut(&ThreadId, &ObservationBagMap)) {
-        let threads = self
-            .thread_observation_bags
-            .read()
-            .expect(ERR_POISONED_LOCK);
+    pub(crate) fn inspect(&self, mut f: impl FnMut(&ObservationBagMap)) {
+        let state = self.state.read().expect(ERR_POISONED_LOCK);
 
-        for (thread_id, thread_bags) in threads.iter() {
+        for thread_bags in state.thread_observation_bags.values() {
             let bags = thread_bags.read().expect(ERR_POISONED_LOCK);
-            f(thread_id, &bags);
+
+            // We do not want to make a useless callback for an empty map but we know that these
+            // maps are lazy-registered, so we know that if it exists, it is non-empty.
+            f(&bags);
+        }
+
+        if !state.archived_observation_bags.is_empty() {
+            f(&state.archived_observation_bags);
         }
     }
 }
@@ -175,16 +204,18 @@ mod tests {
         assert_eq!(local_registry.observation_bags.borrow().len(), 1);
         assert!(
             global_registry
-                .thread_observation_bags
+                .state
                 .read()
                 .expect(ERR_POISONED_LOCK)
+                .thread_observation_bags
                 .contains_key(&local_registry.thread_id)
         );
         assert!(
             global_registry
-                .thread_observation_bags
+                .state
                 .read()
                 .expect(ERR_POISONED_LOCK)
+                .thread_observation_bags
                 .get(&local_registry.thread_id)
                 .unwrap()
                 .read()
@@ -198,12 +229,12 @@ mod tests {
         drop(local_registry);
 
         assert!(
-            global_registry
-                .thread_observation_bags
+            !global_registry
+                .state
                 .read()
                 .expect(ERR_POISONED_LOCK)
-                .get(&thread_id)
-                .is_none()
+                .thread_observation_bags
+                .contains_key(&thread_id)
         );
     }
 
@@ -228,8 +259,6 @@ mod tests {
         let thread1_local_registry = LocalEventRegistry::new(&global_registry);
         thread1_local_registry.register(TEST_EVENT_NAME.into(), Arc::clone(&thread1_observations));
 
-        let thread1_id = thread::current().id();
-
         thread::scope(|s| {
             // Now let's switch to a new thread, register the event there, and inspect.
             // We expect to see the observation bags of both threads when inspecting.
@@ -240,23 +269,51 @@ mod tests {
                 thread2_local_registry
                     .register(TEST_EVENT_NAME.into(), Arc::clone(&thread2_observations));
 
-                let thread2_id = thread::current().id();
+                let mut seen_bags: usize = 0;
 
-                let mut seen_thread_ids = Vec::new();
-
-                global_registry.inspect(|thread_id, observation_bags| {
-                    seen_thread_ids.push(*thread_id);
+                global_registry.inspect(|observation_bags| {
+                    seen_bags += observation_bags.len();
 
                     assert!(observation_bags.contains_key(TEST_EVENT_NAME));
                     assert_eq!(observation_bags.len(), 1);
                 });
 
-                assert_eq!(seen_thread_ids.len(), 2);
-                assert!(seen_thread_ids.contains(&thread1_id));
-                assert!(seen_thread_ids.contains(&thread2_id));
+                assert_eq!(seen_bags, 2);
             })
             .join()
             .unwrap();
         });
+    }
+
+    #[test]
+    fn data_remains_after_thread_terminates() {
+        let global_registry = GlobalEventRegistry::new();
+
+        // We observe some data on another thread, then verify that we still see it on the
+        // entrypoint thread once the other thread terminates.
+        thread::scope(|s| {
+            s.spawn(|| {
+                let observations = Arc::new(ObservationBag::new(&[]));
+
+                let local_registry = LocalEventRegistry::new(&global_registry);
+                local_registry.register(TEST_EVENT_NAME.into(), Arc::clone(&observations));
+
+                // We do not actually need to observe any data, as soon as the event
+                // is registered, it becomes visible in the records with a count of 0.
+            })
+            .join()
+            .unwrap();
+        });
+
+        let mut seen_bags: usize = 0;
+
+        global_registry.inspect(|observation_bags| {
+            seen_bags += observation_bags.len();
+
+            assert!(observation_bags.contains_key(TEST_EVENT_NAME));
+            assert_eq!(observation_bags.len(), 1);
+        });
+
+        assert_eq!(seen_bags, 1);
     }
 }

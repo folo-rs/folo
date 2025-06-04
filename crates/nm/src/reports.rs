@@ -23,15 +23,15 @@ impl Report {
     pub fn collect() -> Self {
         let mut event_name_to_merged_snapshot = HashMap::new();
 
-        GLOBAL_REGISTRY.inspect(|_, thread_observation_bags| {
-            for (event_name, observation_bag) in thread_observation_bags {
+        GLOBAL_REGISTRY.inspect(|observation_bags| {
+            for (event_name, observation_bag) in observation_bags {
                 let snapshot = observation_bag.snapshot();
 
                 // Merge the snapshot into the existing one for this event name.
                 event_name_to_merged_snapshot
                     .entry(event_name.clone())
                     .and_modify(|existing_snapshot: &mut ObservationBagSnapshot| {
-                        existing_snapshot.merge(&snapshot);
+                        existing_snapshot.merge_from(&snapshot);
                     })
                     .or_insert(snapshot);
             }

@@ -106,6 +106,39 @@ impl ObservationBag {
             bucket_magnitudes: self.bucket_magnitudes,
         }
     }
+
+    /// Merges another observation into this one, combining their data set.
+    ///
+    /// This is typically used when archiving data from unregistered threads,
+    /// at which point it gets merged into a single archive bag.
+    pub(crate) fn merge_from(&self, other: &Self) {
+        self.count
+            .fetch_add(other.count.load(BAG_ACCESS_ORDERING), BAG_ACCESS_ORDERING);
+        self.sum
+            .fetch_add(other.sum.load(BAG_ACCESS_ORDERING), BAG_ACCESS_ORDERING);
+
+        // We cannot merge bags with different bucket magnitudes.
+        assert_eq!(self.bucket_magnitudes, other.bucket_magnitudes);
+
+        // Extra sanity check for maximum paranoia.
+        assert!(self.bucket_counts.len() == other.bucket_counts.len());
+
+        for (i, other_bucket_count) in other.bucket_counts.iter().enumerate() {
+            let target = self
+                .bucket_counts
+                .get(i)
+                .expect("guarded by assertion above");
+
+            target.fetch_add(
+                other_bucket_count.load(BAG_ACCESS_ORDERING),
+                BAG_ACCESS_ORDERING,
+            );
+        }
+    }
+
+    pub(crate) fn bucket_magnitudes(&self) -> &'static [Magnitude] {
+        self.bucket_magnitudes
+    }
 }
 
 /// A point in time snapshot of a single event's observations.
@@ -124,7 +157,7 @@ impl ObservationBagSnapshot {
     /// Merges another snapshot into this one, combining their data set.
     ///
     /// This is typically used to combine the data from multiple threads for reporting.
-    pub(crate) fn merge(&mut self, other: &Self) {
+    pub(crate) fn merge_from(&mut self, other: &Self) {
         self.count = self.count.wrapping_add(other.count);
         self.sum = self.sum.wrapping_add(other.sum);
 
@@ -232,7 +265,7 @@ mod tests {
         let mut snapshot1 = observations.snapshot();
         let snapshot2 = observations.snapshot();
 
-        snapshot1.merge(&snapshot2);
+        snapshot1.merge_from(&snapshot2);
 
         assert_eq!(snapshot1.count, 2 * 10);
         assert_eq!(snapshot1.sum, 2 * (1111 * 4 + 11 * 3 - 1000));
@@ -255,7 +288,7 @@ mod tests {
         let snapshot2 = observations2.snapshot();
 
         // This should panic because the bucket counts do not match.
-        snapshot1.merge(&snapshot2);
+        snapshot1.merge_from(&snapshot2);
     }
 
     #[test]
@@ -268,6 +301,6 @@ mod tests {
         let snapshot2 = observations2.snapshot();
 
         // This should panic because the bucket magnitudes do not match.
-        snapshot1.merge(&snapshot2);
+        snapshot1.merge_from(&snapshot2);
     }
 }
