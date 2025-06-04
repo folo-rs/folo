@@ -166,6 +166,31 @@ fn entrypoint(c: &mut Criterion) {
     });
 
     group.finish();
+
+    let mut group = c.benchmark_group("nm_timing");
+
+    group.bench_function("timing_st", |b| {
+        b.iter_custom(|iters| {
+            bench_on_threadpool(
+                &one_processor,
+                iters,
+                || (),
+                |()| COUNTER.with(|x| x.observe_duration_millis(|| black_box(()))),
+            )
+        });
+    });
+
+    group.bench_function("timing_mt", |b| {
+        b.iter_custom(|iters| {
+            bench_on_every_processor(
+                iters,
+                || (),
+                |()| COUNTER.with(|x| x.observe_duration_millis(|| black_box(()))),
+            )
+        });
+    });
+
+    group.finish();
 }
 
 const SMALL_HISTOGRAM_BUCKETS: &[Magnitude] = &[0, 10, 100, 1000, 10000];
