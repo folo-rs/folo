@@ -93,7 +93,7 @@ impl Display for ObservationBagSnapshot {
             )]
             writeln!(
                 f,
-                "{}; sum {}; avg {}",
+                "{}; sum {}; mean {}",
                 self.count,
                 self.sum,
                 self.sum.wrapping_div(count_as_magnitude)

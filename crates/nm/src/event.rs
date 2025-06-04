@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{EventName, LOCAL_REGISTRY, Magnitude, ObservationBag};
+use crate::{EventName, LOCAL_REGISTRY, Magnitude, ObservationBag, Observe};
 
 /// Allows you to observe the occurrences of an event in your code.
 ///
@@ -59,13 +59,13 @@ impl Event {
     /// method for this to make it clear that the magnitude has no inherent meaning.
     #[inline]
     pub fn observe_once(&self) {
-        self.observe(1);
+        self.batch(1).observe(1);
     }
 
     /// Observes an event with a specific magnitude.
     #[inline]
     pub fn observe(&self, magnitude: Magnitude) {
-        self.observations.insert(magnitude, 1);
+        self.batch(1).observe(magnitude);
     }
 
     /// Observes an event with the magnitude being the indicated duration in milliseconds.
@@ -74,13 +74,7 @@ impl Event {
     /// Values outside the i64 range are not guaranteed to be correctly represented.
     #[inline]
     pub fn observe_millis(&self, duration: Duration) {
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "intentional - nothing we can do about it; typical values are in safe range"
-        )]
-        let millis = duration.as_millis() as i64;
-
-        self.observe(millis);
+        self.batch(1).observe_millis(duration);
     }
 
     /// Observes the duration of a function call, in milliseconds.
@@ -89,14 +83,7 @@ impl Event {
     where
         F: FnOnce() -> R,
     {
-        // TODO: Use low precision time
-        let start = Instant::now();
-
-        let result = f();
-
-        self.observe_millis(start.elapsed());
-
-        result
+        self.batch(1).observe_duration_millis(f)
     }
 
     /// Prepares to observe a batch of events with the same magnitude.
@@ -124,14 +111,95 @@ impl ObservationBatch<'_> {
     /// By convention, this is represented as a magnitude of 1. We expose a separate
     /// method for this to make it clear that the magnitude has no inherent meaning.
     #[inline]
-    pub fn observe_once(self) {
+    pub fn observe_once(&self) {
         self.event.observations.insert(1, self.count);
     }
 
     /// Observes a batch of events with a specific magnitude.
     #[inline]
-    pub fn observe(self, magnitude: Magnitude) {
+    pub fn observe(&self, magnitude: Magnitude) {
         self.event.observations.insert(magnitude, self.count);
+    }
+
+    /// Observes an event with the magnitude being the indicated duration in milliseconds.
+    ///
+    /// Only the whole number part of the duration is used - fractional milliseconds are ignored.
+    /// Values outside the i64 range are not guaranteed to be correctly represented.
+    #[inline]
+    pub fn observe_millis(&self, duration: Duration) {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "intentional - nothing we can do about it; typical values are in safe range"
+        )]
+        let millis = duration.as_millis() as i64;
+
+        self.event.observations.insert(millis, self.count);
+    }
+
+    /// Observes the duration of a function call, in milliseconds.
+    #[inline]
+    pub fn observe_duration_millis<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        // TODO: Use low precision time
+        let start = Instant::now();
+
+        let result = f();
+
+        self.observe_millis(start.elapsed());
+
+        result
+    }
+}
+
+impl Observe for Event {
+    #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    fn observe_once(&self) {
+        self.observe_once();
+    }
+
+    #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    fn observe(&self, magnitude: Magnitude) {
+        self.observe(magnitude);
+    }
+
+    #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    fn observe_millis(&self, duration: Duration) {
+        self.observe_millis(duration);
+    }
+
+    #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    fn observe_duration_millis<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        self.observe_duration_millis(f)
+    }
+}
+
+impl Observe for ObservationBatch<'_> {
+    #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    fn observe_once(&self) {
+        self.observe_once();
+    }
+
+    #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    fn observe(&self, magnitude: Magnitude) {
+        self.observe(magnitude);
+    }
+
+    #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    fn observe_millis(&self, duration: Duration) {
+        self.observe_millis(duration);
+    }
+
+    #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    fn observe_duration_millis<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        self.observe_duration_millis(f)
     }
 }
 

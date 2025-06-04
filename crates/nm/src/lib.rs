@@ -1,6 +1,6 @@
 //! # nm - nanometer
 //!
-//! Collect metrics about observed events with minimal collection overhead even in
+//! Collect metrics about observed events with low collection overhead even in
 //! highly multithreaded applications running on 100+ processors.
 //!
 //! # Collected metrics
@@ -9,14 +9,11 @@
 //!
 //! * Count of observations (`u64`).
 //! * Mean magnitude of observations (`i64`).
-//! * (Optional) Histogram of magnitudes, with configurable bucket boundaries (`i64`).
-//!
-//! If there is no applicable magnitude (e.g. the event is simply "received an HTTP request") then
-//! the magnitude of each observation is 1, by convention.
+//! * (Optional) Histogram of magnitudes, with configurable bucket boundaries (`[i64]`).
 //!
 //! # Defining events
 //!
-//! Define the events to observe via thread-local static variables:
+//! Use thread-local static variables to define the events to observe:
 //!
 //! ```
 //! use nm::Event;
@@ -92,16 +89,18 @@
 //! PACKAGES_RECEIVED_WEIGHT_GRAMS.with(|e| e.observe(900));
 //!
 //! // observe_once() observes an event with a nominal magnitude of 1, to clearly express that
-//! // this event has no concept of magnitude and we fall back to the convention of 1.
+//! // this event has no concept of magnitude and we use 1 as a nominal placeholder.
 //! PACKAGES_RECEIVED.with(|e| e.observe_once());
 //!
 //! // observe_millis(x) observes an event with a magnitude of `x` in milliseconds
 //! // while ensuring that any data type conversions respect the crate mathematics policy.
 //! let send_duration = Duration::from_millis(150);
 //! PACKAGE_SEND_DURATION_MS.with(|e| e.observe_millis(send_duration));
-//! 
-//! // batch(count).observe(x) observes `count` events, each with a magnitude of `x`.
+//!
+//! // batch(count).observe... observes `count` events, each with the same magnitude.
 //! PACKAGES_RECEIVED_WEIGHT_GRAMS.with(|e| e.batch(500).observe(8));
+//! PACKAGES_RECEIVED.with(|e| e.batch(500).observe_once());
+//! PACKAGE_SEND_DURATION_MS.with(|e| e.batch(500).observe_millis(send_duration));
 //! ```
 //!
 //! ## Observing durations of operations
@@ -197,15 +196,17 @@
 //! * There is some inherent overhead in using thread-local static variables, both due to the way
 //!   Rust implements them and due to how the `Event` type is structured internally to support the
 //!   "pull" model of reporting observations. Avoiding thread-local statics can offer better
-//!   performance in some cases.
+//!   performance in some cases but requires more elaborate bookkeeping from application code.
 //!
 //! It is likely possible to achieve better performance with entirely custom logic that avoids these
-//! tradeoffs.
+//! tradeoffs. A future version of this crate may offer a "push" model as an opt-in feature for
+//! extra performance in scenarios where that model is applicable.
 
 mod constants;
 mod data_types;
 mod event;
 mod observations;
+mod observe;
 mod registries;
 mod reports;
 
@@ -213,5 +214,6 @@ pub(crate) use constants::*;
 pub use data_types::*;
 pub use event::*;
 pub(crate) use observations::*;
+pub use observe::*;
 pub(crate) use registries::*;
 pub use reports::*;

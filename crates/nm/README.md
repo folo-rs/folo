@@ -1,6 +1,6 @@
 # nm - nanometer
 
-Collect metrics about observed events with minimal collection overhead even in
+Collect metrics about observed events with low collection overhead even in
 highly multithreaded applications running on 100+ processors.
 
 # Collected metrics
