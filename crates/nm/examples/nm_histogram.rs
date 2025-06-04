@@ -2,8 +2,7 @@
 //! This is a modified variant of the `nm_basic.rs` example - familiarize with that first.
 //!
 //! Histograms are often the most valuable part of the metrics, as they allow you to see
-//! the distribution of the event magnitudes, not just the count and average. The distribution
-//! of event magnitudes is often the most insightful part of the data.
+//! the distribution of the event magnitudes, not just the count and average.
 
 use nm::{Event, Magnitude, Report};
 
