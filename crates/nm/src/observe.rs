@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::Magnitude;
 
-/// Exposes operations for observing the occurrences of an event.
+/// Operations for observing the occurrences of an event.
 ///
 /// This is implemented primarily by [`Event`][1] but also by an event batch, thereby providing
 /// an abstraction for callers that wish to support both single and batch events.
