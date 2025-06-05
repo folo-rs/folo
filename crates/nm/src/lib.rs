@@ -60,7 +60,7 @@
 //!
 //! # Capturing observations
 //!
-//! To capture an observation, use the `observe()` method (or one of its variants) on the event.
+//! To capture an observation, call `observe()` on the event.
 //! Different variants of this method are provided to capture observations with different
 //! characteristics:
 //!
@@ -92,12 +92,13 @@
 //! // this event has no concept of magnitude and we use 1 as a nominal placeholder.
 //! PACKAGES_RECEIVED.with(|e| e.observe_once());
 //!
-//! // observe_millis(x) observes an event with a magnitude of `x` in milliseconds
-//! // while ensuring that any data type conversions respect the crate mathematics policy.
+//! // observe_millis(x) observes an event with a magnitude of `x` in milliseconds while
+//! // ensuring that any data type conversions respect the crate panic and mathematics policies.
 //! let send_duration = Duration::from_millis(150);
 //! PACKAGE_SEND_DURATION_MS.with(|e| e.observe_millis(send_duration));
 //!
-//! // batch(count).observe... observes `count` events, each with the same magnitude.
+//! // batch(count) allows you to observe `count` occurrences in one call,
+//! // each with the same magnitude, for greater efficiency in batch operations.
 //! PACKAGES_RECEIVED_WEIGHT_GRAMS.with(|e| e.batch(500).observe(8));
 //! PACKAGES_RECEIVED.with(|e| e.batch(500).observe_once());
 //! PACKAGE_SEND_DURATION_MS.with(|e| e.batch(500).observe_millis(send_duration));
@@ -128,13 +129,14 @@
 //! # fn do_http_connect() {}
 //! ```
 //!
-//! This captures the duration of the function call in milliseconds, with
-//! a platform-defined measurement granularity (typically around 1-20 ms).
+//! This captures the duration of the function call in milliseconds. The measurement has
+//! a platform-defined measurement granularity (typically around 1-20 ms). This means that
+//! faster operations may indicate a duration of zero.
 //!
-//! It is not practical to measure the duration of individual events at a finer level of precision
-//! because the measurement overhead becomes prohibitive. If you are observing operations that last
-//! nanoseconds or microseconds, you should only measure them in aggregate (e.g. duration per
-//! batch of 10000).
+//! It is not practical to measure the duration of individual operations at a finer level of
+//! precision because the measurement overhead becomes prohibitive. If you are observing
+//! operations that last nanoseconds or microseconds, you should only measure them in
+//! aggregate (e.g. duration per batch of 10000).
 //!
 //! # Reporting to terminal
 //!
