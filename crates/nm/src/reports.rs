@@ -390,6 +390,9 @@ impl HistogramScale {
         )]
         let histogram_bar_width = count / self.count_per_char;
 
+        // Sanity check.
+        assert!(histogram_bar_width <= HISTOGRAM_BAR_WIDTH_CHARS);
+
         for _ in 0..histogram_bar_width {
             f.write_char('∎')?;
         }

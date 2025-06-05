@@ -136,6 +136,7 @@ impl ObservationBag {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Can violate counts.len() == magnitudes.len() invariant.
     pub(crate) fn bucket_magnitudes(&self) -> &'static [Magnitude] {
         self.bucket_magnitudes
     }
