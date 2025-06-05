@@ -525,6 +525,36 @@ mod tests {
     }
 
     #[test]
+    fn report_properties_reflect_reality() {
+        let event1 = EventMetrics {
+            name: "event1".to_string().into(),
+            count: 10,
+            sum: Magnitude::from(100),
+            mean: Magnitude::from(10),
+            histogram: None,
+        };
+
+        let event2 = EventMetrics {
+            name: "event2".to_string().into(),
+            count: 5,
+            sum: Magnitude::from(50),
+            mean: Magnitude::from(10),
+            histogram: None,
+        };
+
+        let report = Report {
+            events: vec![event1, event2].into_boxed_slice(),
+        };
+
+        // This is very boring because the Report type is very boring.
+        let events = report.events().collect::<Vec<_>>();
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].name(), "event1");
+        assert_eq!(events[1].name(), "event2");
+    }
+
+    #[test]
     fn report_display_contains_expected_events() {
         let event1 = EventMetrics {
             name: "event1".to_string().into(),
@@ -554,5 +584,72 @@ mod tests {
         // We expect the output to contain both events.
         assert!(output.contains("event1"));
         assert!(output.contains("event2"));
+    }
+
+    #[test]
+    fn event_displayed_as_counter_if_unit_values_and_no_histogram() {
+        // The Display output should be heuristically detected as a "counter"
+        // and undergo simplified printing if the sum equals the count and if
+        // there is no histogram to report.
+
+        let counter = EventMetrics {
+            name: "test_event".to_string().into(),
+            count: 100,
+            sum: Magnitude::from(100),
+            mean: Magnitude::from(1),
+            histogram: None,
+        };
+
+        // sum != count - cannot be a counter.
+        let not_counter = EventMetrics {
+            name: "test_event".to_string().into(),
+            count: 100,
+            sum: Magnitude::from(200),
+            mean: Magnitude::from(2),
+            histogram: None,
+        };
+
+        // Has a histogram - cannot be a counter.
+        let also_not_counter = EventMetrics {
+            name: "test_event".to_string().into(),
+            count: 100,
+            sum: Magnitude::from(100),
+            mean: Magnitude::from(1),
+            histogram: Some(Histogram {
+                magnitudes: &[],
+                counts: Box::new([]),
+                plus_infinity_bucket_count: 100,
+            }),
+        };
+
+        // Neither condition is a match.
+        let still_not_counter = EventMetrics {
+            name: "test_event".to_string().into(),
+            count: 100,
+            sum: Magnitude::from(200),
+            mean: Magnitude::from(2),
+            histogram: Some(Histogram {
+                magnitudes: &[],
+                counts: Box::new([]),
+                plus_infinity_bucket_count: 200,
+            }),
+        };
+
+        let mut output = String::new();
+
+        write!(&mut output, "{counter}").unwrap();
+        assert!(output.contains("100 (counter)"));
+        output.clear();
+
+        write!(&mut output, "{not_counter}").unwrap();
+        assert!(output.contains("100; sum 200; mean 2"));
+        output.clear();
+
+        write!(&mut output, "{also_not_counter}").unwrap();
+        assert!(output.contains("100; sum 100; mean 1"));
+        output.clear();
+
+        write!(&mut output, "{still_not_counter}").unwrap();
+        assert!(output.contains("100; sum 200; mean 2"));
     }
 }
