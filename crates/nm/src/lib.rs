@@ -157,7 +157,7 @@
 //!
 //! ```
 //! use nm::Report;
-//! 
+//!
 //! let report = Report::collect();
 //!
 //! for event in report.events() {
