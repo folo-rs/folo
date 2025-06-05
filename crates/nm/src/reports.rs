@@ -1,6 +1,6 @@
 use std::{
     cmp,
-    fmt::{Display, Write},
+    fmt::{self, Display, Write},
     iter,
     num::NonZero,
 };
@@ -67,7 +67,7 @@ impl Report {
 }
 
 impl Display for Report {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for event in &self.events {
             writeln!(f, "{event}")?;
         }
@@ -174,7 +174,7 @@ impl EventMetrics {
 }
 
 impl Display for EventMetrics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}: ", self.name)?;
 
         if self.count == 0 {
@@ -280,25 +280,8 @@ impl Histogram {
 const HISTOGRAM_BAR_WIDTH_CHARS: u64 = 50;
 
 impl Display for Histogram {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let buckets = self.buckets().collect::<Vec<_>>();
-
-        // We use the maximum bucket value to auto-scale the histogram bars.
-        let max_bucket_value = buckets
-            .iter()
-            .map(|(_, count)| *count)
-            .max()
-            .expect("a histogram always has at least one bucket by definition (+inf)");
-
-        // Each character in the histogram bar represents this many events for auto-scaling
-        // purposes. We use integers, so this can suffer from aliasing effects if there are
-        // not many events. That's fine - the relative sizes will still be fine and the numbers
-        // will give the ground truth even if the rendering is not perfect.
-        #[expect(
-            clippy::integer_division,
-            reason = "we accept the loss of precision here - the bar might not always reach 100% of desired width"
-        )]
-        let count_per_char = cmp::max(max_bucket_value / HISTOGRAM_BAR_WIDTH_CHARS, 1);
 
         // We measure the dynamic parts of the string to know how much padding to add.
 
@@ -332,6 +315,8 @@ impl Display for Histogram {
             cmp::max(current, upper_bound_str.len())
         });
 
+        let histogram_scale = HistogramScale::new(self);
+
         for (magnitude, count) in buckets {
             upper_bound_str.clear();
 
@@ -357,20 +342,56 @@ impl Display for Histogram {
             }
 
             write!(f, "value <= {upper_bound_str} [ {count_str} ]: ")?;
+            histogram_scale.write_bar(count, f)?;
 
-            #[expect(
-                clippy::arithmetic_side_effects,
-                reason = "guarded by count_per_char being max'ed to at least 1 above"
-            )]
-            #[expect(
-                clippy::integer_division,
-                reason = "intentional loss of precision - this is a vibe render, not intended for fine accuracy"
-            )]
-            let histogram_bar_width = count / count_per_char;
-            for _ in 0..histogram_bar_width {
-                write!(f, "∎")?;
-            }
             writeln!(f)?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Represent the auto-scaling logic of the histogram bars, identifying the step size for rendering.
+#[derive(Debug)]
+struct HistogramScale {
+    /// The number of events that each character in the histogram bar represents.
+    /// One character is rendered for each `count_per_char` events (rounded down).
+    count_per_char: u64,
+}
+
+impl HistogramScale {
+    fn new(snapshot: &Histogram) -> Self {
+        let max_count = snapshot
+            .counts()
+            .max()
+            .expect("a histogram always has at least one bucket by definition (+inf)");
+
+        // Each character in the histogram bar represents this many events for auto-scaling
+        // purposes. We use integers, so this can suffer from aliasing effects if there are
+        // not many events. That's fine - the relative sizes will still be fine and the numbers
+        // will give the ground truth even if the rendering is not perfect.
+        #[expect(
+            clippy::integer_division,
+            reason = "we accept the loss of precision here - the bar might not always reach 100% of desired width"
+        )]
+        let count_per_char = cmp::max(max_count / HISTOGRAM_BAR_WIDTH_CHARS, 1);
+
+        Self { count_per_char }
+    }
+
+    fn write_bar(&self, count: u64, f: &mut impl Write) -> fmt::Result {
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "guarded by count_per_char being max'ed to at least 1 above"
+        )]
+        #[expect(
+            clippy::integer_division,
+            reason = "intentional loss of precision due to rounding down"
+        )]
+        let histogram_bar_width = count / self.count_per_char;
+
+        for _ in 0..histogram_bar_width {
+            f.write_char('∎')?;
         }
 
         Ok(())
@@ -651,5 +672,136 @@ mod tests {
 
         write!(&mut output, "{still_not_counter}").unwrap();
         assert!(output.contains("100; sum 200; mean 2"));
+    }
+
+    #[test]
+    fn histogram_scale_zero() {
+        // Everything is zero, so we render zero bar segments.
+        let histogram = Histogram {
+            magnitudes: &[1, 2, 3],
+            counts: Box::new([0, 0, 0]),
+            plus_infinity_bucket_count: 0,
+        };
+
+        let histogram_scale = HistogramScale::new(&histogram);
+
+        let mut output = String::new();
+        histogram_scale.write_bar(0, &mut output).unwrap();
+
+        assert_eq!(output, "");
+    }
+
+    #[test]
+    fn histogram_scale_small() {
+        // All the buckets have small values, so we do not reach 100% bar width.
+        let histogram = Histogram {
+            magnitudes: &[1, 2, 3],
+            counts: Box::new([1, 2, 3]),
+            plus_infinity_bucket_count: 0,
+        };
+
+        let histogram_scale = HistogramScale::new(&histogram);
+
+        let mut output = String::new();
+
+        histogram_scale.write_bar(0, &mut output).unwrap();
+        assert_eq!(output, "");
+        output.clear();
+
+        histogram_scale.write_bar(1, &mut output).unwrap();
+        assert_eq!(output, "∎");
+        output.clear();
+
+        histogram_scale.write_bar(2, &mut output).unwrap();
+        assert_eq!(output, "∎∎");
+        output.clear();
+
+        histogram_scale.write_bar(3, &mut output).unwrap();
+        assert_eq!(output, "∎∎∎");
+    }
+
+    #[test]
+    fn histogram_scale_large_exact() {
+        // The scale is large enough that we render long segments.
+        // The numbers divide just right so the bar reaches the desired width.
+        let histogram = Histogram {
+            magnitudes: &[1, 2, 3],
+            counts: Box::new([
+                79,
+                HISTOGRAM_BAR_WIDTH_CHARS * 100,
+                HISTOGRAM_BAR_WIDTH_CHARS * 1000,
+            ]),
+            plus_infinity_bucket_count: 0,
+        };
+
+        let histogram_scale = HistogramScale::new(&histogram);
+
+        let mut output = String::new();
+
+        histogram_scale.write_bar(0, &mut output).unwrap();
+        assert_eq!(output, "");
+        output.clear();
+
+        histogram_scale
+            .write_bar(histogram_scale.count_per_char, &mut output)
+            .unwrap();
+        assert_eq!(output, "∎");
+        output.clear();
+
+        histogram_scale
+            .write_bar(HISTOGRAM_BAR_WIDTH_CHARS * 1000, &mut output)
+            .unwrap();
+        assert_eq!(
+            output,
+            "∎".repeat(usize::try_from(HISTOGRAM_BAR_WIDTH_CHARS).expect("safe range, tiny value"))
+        );
+    }
+
+    #[test]
+    fn histogram_scale_large_inexact() {
+        // The scale is large enough that we render long segments.
+        // The numbers divide with a remainder, so we do not reach 100% width.
+        let histogram = Histogram {
+            magnitudes: &[1, 2, 3],
+            counts: Box::new([
+                79,
+                HISTOGRAM_BAR_WIDTH_CHARS * 100,
+                HISTOGRAM_BAR_WIDTH_CHARS * 1000,
+            ]),
+            plus_infinity_bucket_count: 0,
+        };
+
+        let histogram_scale = HistogramScale::new(&histogram);
+
+        let mut output = String::new();
+        histogram_scale.write_bar(3, &mut output).unwrap();
+
+        let mut output = String::new();
+
+        histogram_scale.write_bar(0, &mut output).unwrap();
+        assert_eq!(output, "");
+        output.clear();
+
+        histogram_scale
+            .write_bar(histogram_scale.count_per_char - 1, &mut output)
+            .unwrap();
+        assert_eq!(output, "");
+        output.clear();
+
+        histogram_scale
+            .write_bar(histogram_scale.count_per_char, &mut output)
+            .unwrap();
+        assert_eq!(output, "∎");
+        output.clear();
+
+        histogram_scale
+            .write_bar(HISTOGRAM_BAR_WIDTH_CHARS * 1000 - 1, &mut output)
+            .unwrap();
+        assert_eq!(
+            output,
+            "∎".repeat(
+                usize::try_from(HISTOGRAM_BAR_WIDTH_CHARS).expect("safe range, tiny value") - 1
+            )
+        );
     }
 }
