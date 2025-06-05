@@ -150,7 +150,27 @@
 //!
 //! # Reporting to external systems
 //!
-//! TODO
+//! A report can be inspected to extract the data within and deliver it to an external system,
+//! such as an OpenTelemetry exporter for storage in a metrics database.
+//!
+//! ```
+//! use nm::Report;
+//! 
+//! let report = Report::collect();
+//!
+//! for event in report.events() {
+//!     println!(
+//!         "Event {} has occurred {} times with a total magnitude of {}",
+//!         event.name(),
+//!         event.count(),
+//!         event.sum()
+//!     );
+//! }
+//! ```
+//!
+//! Note that the report accumulates data from the start of the process. This means the
+//! data does not reset between reports. If you only want to record differences, you need
+//! to account for the previous state of the event yourself.
 //!
 //! # Dynamically registered events
 //!
