@@ -7,8 +7,8 @@ prepare-release:
     release-plz update
 
 [group('release')]
+[script]
 release:
-    #!{{ shebang }}
     $env:GIT_TOKEN = gh auth token
     try {
         release-plz release

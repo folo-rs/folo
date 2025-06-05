@@ -1,7 +1,6 @@
 [group('quality')]
+[script]
 mutants:
-    #!{{ shebang }}
-
     function Escape-Wildcards ($s) {
         if (!$IsLinux) {
             return $s

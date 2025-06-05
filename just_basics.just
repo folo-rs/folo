@@ -11,13 +11,13 @@ clean:
     cargo clean
 
 [group('basics')]
+[script]
 docs:
-    #!{{ shebang }}
     $env:RUSTDOCFLAGS = "-D warnings"
     cargo doc {{ target_package }} --no-deps --all-features
 
 [group('basics')]
+[script]
 docs-open:
-    #!{{ shebang }}
     $env:RUSTDOCFLAGS = "-D warnings"
     cargo doc {{ target_package }} --no-deps --all-features --open

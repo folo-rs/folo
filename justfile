@@ -1,5 +1,8 @@
+# Required by [script], which is required due to https://github.com/casey/just/issues/2702
+set unstable
+
 set windows-shell := ["pwsh.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
-shebang := if os() == "windows" { "pwsh.exe" } else { "/usr/bin/env pwsh" }
+set script-interpreter := ["pwsh"]
 
 package := ""
 target_package := if package == "" { " --workspace" } else { " -p " + package }

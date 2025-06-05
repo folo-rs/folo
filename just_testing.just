@@ -1,6 +1,6 @@
 [group('testing')]
+[script]
 bench TARGET="":
-    #!{{ shebang }}
     $target_selector = @()
 
     if ("{{ TARGET }}" -ne "") {
