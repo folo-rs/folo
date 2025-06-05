@@ -25,7 +25,7 @@ pub(crate) struct LocalEventRegistry<'g> {
 }
 
 impl<'g> LocalEventRegistry<'g> {
-    fn new(global_registry: &'g GlobalEventRegistry) -> Self {
+    pub(crate) fn new(global_registry: &'g GlobalEventRegistry) -> Self {
         Self {
             observation_bags: RefCell::new(HashMap::new()),
             thread_id: thread::current().id(),
@@ -80,7 +80,7 @@ struct GlobalObservationBagsState {
 }
 
 impl GlobalEventRegistry {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             state: RwLock::new(GlobalObservationBagsState {
                 thread_observation_bags: HashMap::new(),

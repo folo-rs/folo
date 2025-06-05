@@ -149,8 +149,12 @@ impl ObservationBag {
 pub(crate) struct ObservationBagSnapshot {
     pub(crate) count: u64,
     pub(crate) sum: Magnitude,
-    pub(crate) bucket_counts: Box<[u64]>,
+
+    /// Ascending order, not including the final `Magnitude::MAX` bucket.
     pub(crate) bucket_magnitudes: &'static [Magnitude],
+
+    /// Not including the final `Magnitude::MAX` bucket.
+    pub(crate) bucket_counts: Box<[u64]>,
 }
 
 impl ObservationBagSnapshot {

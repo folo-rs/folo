@@ -51,7 +51,7 @@ impl Event {
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Gets replaced with itself by different name, bad mutation.
     pub fn builder() -> EventBuilder {
-        EventBuilder::default()
+        EventBuilder::new()
     }
 
     /// Observes an event that has no explicit magnitude.
@@ -208,16 +208,26 @@ impl Observe for ObservationBatch<'_> {
 ///
 /// Required parameters:
 /// * `name`
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct EventBuilder {
     name: EventName,
 
     /// Upper bounds (inclusive) of histogram buckets to use.
     /// Defaults to empty, which means no histogram for this event.
+    ///
+    /// Must be in ascending order if provided.
+    /// Must not have a `Magnitude::MAX` bucket (automatically synthesized).
     histogram_buckets: &'static [Magnitude],
 }
 
 impl EventBuilder {
+    fn new() -> Self {
+        Self {
+            name: EventName::default(),
+            histogram_buckets: &[],
+        }
+    }
+
     /// Sets the name of the event.
     ///
     /// Recommended format: `big_medium_small_units`
@@ -234,8 +244,34 @@ impl EventBuilder {
     /// when creating a histogram of event magnitudes.
     ///
     /// The default is to not create a histogram.
+    ///
+    /// # Panics
+    ///
+    /// Panics if bucket magnitudes are not in ascending order.
+    ///
+    /// Panics if one of the values is `Magnitude::MAX`. You do not need to specify this
+    /// bucket yourself - it is automatically synthesized for all histograms to catch values
+    /// that exceed all user-defined buckets.
     #[must_use]
     pub fn histogram(self, buckets: &'static [Magnitude]) -> Self {
+        if !buckets.is_empty() {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "windows() guarantees that we have exactly two elements"
+            )]
+            {
+                assert!(
+                    buckets.windows(2).all(|w| w[0] < w[1]),
+                    "histogram buckets must be in ascending order"
+                );
+            }
+
+            assert!(
+                !buckets.contains(&Magnitude::MAX),
+                "histogram buckets must not contain Magnitude::MAX"
+            );
+        }
+
         Self {
             histogram_buckets: buckets,
             ..self
@@ -248,6 +284,8 @@ impl EventBuilder {
     ///
     /// Panics if an event with this name is already registered.
     /// You can only create an event with each name once (per thread).
+    ///
+    /// [1]: EventBuilder::histogram
     #[must_use]
     pub fn build(self) -> Event {
         assert!(!self.name.is_empty());
@@ -330,6 +368,28 @@ mod tests {
     #[should_panic]
     fn build_with_empty_name_panics() {
         drop(Event::builder().name("").build());
+    }
+
+    #[test]
+    #[should_panic]
+    fn build_with_magnitude_max_in_histogram_panics() {
+        drop(
+            Event::builder()
+                .name("build_with_magnitude_max_in_histogram_panics")
+                .histogram(&[1, 2, Magnitude::MAX])
+                .build(),
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn build_with_non_ascending_histogram_buckets_panics() {
+        drop(
+            Event::builder()
+                .name("build_with_non_ascending_histogram_buckets")
+                .histogram(&[3, 2, 1])
+                .build(),
+        );
     }
 
     #[test]
