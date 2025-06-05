@@ -195,7 +195,6 @@ where
 ///
 /// [1]: StaticInstances::get
 /// [3]: crate::Family
-/// [4]: crate::Object::handle
 /// [5]: crate::Object
 /// [6]: crate::InstancePerThread
 /// [7]: crate::InstancePerThreadSync

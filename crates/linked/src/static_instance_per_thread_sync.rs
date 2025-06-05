@@ -129,7 +129,6 @@ where
 /// [1]: StaticInstancePerThreadSync::to_arc
 /// [2]: StaticInstancePerThreadSync::with
 /// [3]: crate::Family
-/// [4]: crate::Object::handle
 /// [5]: crate::Object
 /// [6]: crate::InstancePerThreadSync
 #[macro_export]
