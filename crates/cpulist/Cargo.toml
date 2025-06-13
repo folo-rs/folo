@@ -14,9 +14,9 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
-folo_utils = { workspace = true }
 include-doc = { workspace = true }
 itertools = { workspace = true }
+new_zealand = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

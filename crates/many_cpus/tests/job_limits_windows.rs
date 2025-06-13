@@ -9,8 +9,8 @@
 
 #![cfg(windows)]
 
-use folo_utils::nz;
 use many_cpus::{HardwareTracker, ProcessorSet};
+use new_zealand::nz;
 use testing::{Job, ProcessorTimePct, f64_diff_abs};
 
 // Floating point comparison tolerance.

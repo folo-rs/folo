@@ -17,9 +17,9 @@ default = []
 cpulist = { workspace = true }
 derive_more = { workspace = true, features = ["as_ref", "display"] }
 foldhash = { workspace = true }
-folo_utils = { workspace = true }
 itertools = { workspace = true }
 negative-impl = { workspace = true }
+new_zealand = { workspace = true }
 nonempty = { workspace = true }
 rand = { workspace = true, features = ["thread_rng"] }
 

@@ -20,7 +20,7 @@ default = []
 
 [target.'cfg(windows)'.dependencies]
 deranged = { workspace = true, features = ["macros"] }
-folo_utils = { workspace = true }
+new_zealand = { workspace = true }
 windows = { workspace = true, features = [
     "Win32_System_JobObjects",
     "Win32_System_Threading",

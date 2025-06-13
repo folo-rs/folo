@@ -1,0 +1,24 @@
+[package]
+name = "new_zealand"
+description = "Utilizing for working with non-zero integers"
+publish = true
+version = "0.1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+doc = false
+
+[features]
+default = []
+
+[dependencies]
+
+[dev-dependencies]
+
+[lints]
+workspace = true

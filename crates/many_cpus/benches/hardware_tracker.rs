@@ -8,8 +8,8 @@
 use std::{hint::black_box, time::Duration};
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use folo_utils::nz;
 use many_cpus::{HardwareTracker, ProcessorSet};
+use new_zealand::nz;
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);

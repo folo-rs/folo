@@ -31,8 +31,8 @@ mod windows {
 
     use benchmark_utils::{ThreadPool, bench_on_threadpool};
     use criterion::Criterion;
-    use folo_utils::nz;
     use many_cpus::{ProcessorSet, pal::BUILD_TARGET_PLATFORM};
+    use new_zealand::nz;
     use windows::Win32::System::SystemInformation::GROUP_AFFINITY;
 
     pub(crate) fn entrypoint(c: &mut Criterion) {

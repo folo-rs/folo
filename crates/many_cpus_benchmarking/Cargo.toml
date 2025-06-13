@@ -17,9 +17,9 @@ default = []
 cpulist = { workspace = true }
 criterion = { workspace = true }
 derive_more = { workspace = true, features = ["display"] }
-folo_utils = { workspace = true }
 itertools = { workspace = true }
 many_cpus = { workspace = true }
+new_zealand = { workspace = true }
 nonempty = { workspace = true }
 rand = { workspace = true }
 

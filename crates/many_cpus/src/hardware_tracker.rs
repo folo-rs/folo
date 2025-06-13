@@ -367,9 +367,9 @@ impl !Sync for HardwareTracker {}
 
 #[cfg(test)]
 mod tests {
-    use folo_utils::nz;
     use itertools::Itertools;
     use mockall::Sequence;
+    use new_zealand::nz;
     use nonempty::nonempty;
     use static_assertions::assert_not_impl_any;
     use testing::f64_diff_abs;

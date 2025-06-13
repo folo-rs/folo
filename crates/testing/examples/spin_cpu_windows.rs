@@ -12,7 +12,7 @@ fn main() {
 mod windows {
     use std::{thread, time::Duration};
 
-    use folo_utils::nz;
+    use new_zealand::nz;
     use testing::{Job, ProcessorTimePct};
     use windows::Win32::System::Threading::{
         GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_IDLE,

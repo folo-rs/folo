@@ -1,5 +1,5 @@
-use folo_utils::nz;
 use itertools::{FoldWhile, Itertools};
+use new_zealand::nz;
 
 use std::fmt::Write;
 use std::{collections::VecDeque, num::NonZero};

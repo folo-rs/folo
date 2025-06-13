@@ -14,9 +14,8 @@ rust-version.workspace = true
 doc = false
 
 [dependencies]
-folo_utils = { workspace = true }
 many_cpus = { workspace = true }
-
+new_zealand = { workspace = true }
 oneshot = { workspace = true }
 
 [dev-dependencies]
