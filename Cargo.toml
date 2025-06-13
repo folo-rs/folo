@@ -20,14 +20,14 @@ debug = "none"
 
 [workspace.dependencies]
 # The packages we publish.
-cpulist = { version = "0.2.0", path = "crates/cpulist" }
+cpulist = { version = "0.2.1", path = "crates/cpulist" }
 folo_ffi = { version = "0.1.2", path = "crates/folo_ffi" }
-folo_utils = { version = "0.1.0", path = "crates/folo_utils" }
-linked = { version = "0.2.1", path = "crates/linked" }
-linked_macros = { version = "0.2.1", path = "crates/linked_macros" }
-linked_macros_impl = { version = "0.2.1", path = "crates/linked_macros_impl" }
-many_cpus = { version = "0.3.2", path = "crates/many_cpus" }
-many_cpus_benchmarking = { version = "0.1.11", path = "crates/many_cpus_benchmarking" }
+folo_utils = { version = "0.1.1", path = "crates/folo_utils" }
+linked = { version = "0.2.2", path = "crates/linked" }
+linked_macros = { version = "0.2.2", path = "crates/linked_macros" }
+linked_macros_impl = { version = "0.2.2", path = "crates/linked_macros_impl" }
+many_cpus = { version = "0.3.3", path = "crates/many_cpus" }
+many_cpus_benchmarking = { version = "0.1.12", path = "crates/many_cpus_benchmarking" }
 new_zealand = { version = "0.1.0", path = "crates/new_zealand" }
 
 # Internal packages we do not publish.
