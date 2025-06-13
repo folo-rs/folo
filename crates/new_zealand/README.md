@@ -1,6 +1,13 @@
-Utilities for internal use in Folo crates; no stable API surface. 
-This exists to serve the internal FFI needs of Folo crates.
-Accordingly, the crate has no stable API surface.
+Utilizing for working with non-zero integers.
 
-This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
-high-performance hardware-aware programming in Rust.
+Currently this implements a shorthand macro for creating non-zero integers
+from literals at compile time:
+
+```
+use std::num::NonZero;
+use new_zealand::nz;
+
+fn foo(x: NonZero<u32>) { println!("NonZero value: {x}"); }
+
+foo(nz!(42));
+```
