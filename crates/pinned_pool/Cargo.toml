@@ -1,0 +1,23 @@
+[package]
+name = "pinned_pool"
+description = "An object pool that guarantees pinning of its items"
+publish = true
+version = "0.1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+num = { workspace = true }
+
+[dev-dependencies]
+mutants = { workspace = true }
+
+[lints]
+workspace = true
