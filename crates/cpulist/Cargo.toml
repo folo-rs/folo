@@ -2,7 +2,7 @@
 name = "cpulist"
 description = "Parse and emit the Linux 'cpulist' data format used to list processors, memory regions and similar entities"
 publish = true
-version = "0.2.0"
+version = "0.2.1"
 
 authors.workspace = true
 edition.workspace = true
@@ -14,9 +14,9 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
-folo_utils = { workspace = true }
 include-doc = { workspace = true }
 itertools = { workspace = true }
+new_zealand = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

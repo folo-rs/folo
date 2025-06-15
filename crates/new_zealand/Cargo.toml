@@ -1,8 +1,8 @@
 [package]
-name = "folo_utils"
-description = "Utilities for internal use in Folo crates; no stable API surface"
+name = "new_zealand"
+description = "Utilizing for working with non-zero integers"
 publish = true
-version = "0.1.1"
+version = "0.1.0"
 
 authors.workspace = true
 edition.workspace = true
@@ -19,7 +19,6 @@ default = []
 [dependencies]
 
 [dev-dependencies]
-mutants = { workspace = true }
 
 [lints]
 workspace = true

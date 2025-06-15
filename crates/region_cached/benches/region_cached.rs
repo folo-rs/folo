@@ -9,8 +9,8 @@ use std::{hint::black_box, thread};
 
 use benchmark_utils::{AbWorker, ThreadPool, bench_on_threadpool, bench_on_threadpool_ab};
 use criterion::{Criterion, criterion_group, criterion_main};
-use folo_utils::nz;
 use many_cpus::ProcessorSet;
+use new_zealand::nz;
 use region_cached::{RegionCachedCopyExt, RegionCachedExt, region_cached};
 
 criterion_group!(benches, entrypoint);

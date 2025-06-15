@@ -190,8 +190,8 @@ where
 mod tests {
     use std::sync::atomic::{self, AtomicBool};
 
-    use folo_utils::nz;
     use many_cpus::ProcessorSet;
+    use new_zealand::nz;
 
     use super::*;
 

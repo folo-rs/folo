@@ -277,7 +277,7 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
     };
 
-    use folo_utils::nz;
+    use new_zealand::nz;
     use nonempty::nonempty;
 
     use crate::{

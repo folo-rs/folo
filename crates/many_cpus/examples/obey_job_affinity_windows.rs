@@ -21,8 +21,8 @@ fn main() {
 
 #[cfg(windows)]
 mod windows {
-    use folo_utils::nz;
     use many_cpus::ProcessorSet;
+    use new_zealand::nz;
     use testing::Job;
 
     pub(crate) fn main() {

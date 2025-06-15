@@ -11,9 +11,9 @@ use std::{
 };
 
 use criterion::{BenchmarkGroup, Criterion, SamplingMode, measurement::WallTime};
-use folo_utils::nz;
 use itertools::Itertools;
 use many_cpus::{Processor, ProcessorSet};
+use new_zealand::nz;
 use nonempty::{NonEmpty, nonempty};
 use rand::{rng, seq::SliceRandom};
 

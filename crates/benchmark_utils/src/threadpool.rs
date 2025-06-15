@@ -98,7 +98,7 @@ fn worker_entrypoint(rx: &mpsc::Receiver<Command>) {
 mod tests {
     use std::sync::atomic::{self, AtomicUsize};
 
-    use folo_utils::nz;
+    use new_zealand::nz;
 
     use super::*;
 

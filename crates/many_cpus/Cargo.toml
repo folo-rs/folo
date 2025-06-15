@@ -2,7 +2,7 @@
 name = "many_cpus"
 description = "Efficiently schedule work and inspect the hardware environment on many-processor systems"
 publish = true
-version = "0.3.2"
+version = "0.3.3"
 
 authors.workspace = true
 edition.workspace = true
@@ -17,9 +17,9 @@ default = []
 cpulist = { workspace = true }
 derive_more = { workspace = true, features = ["as_ref", "display"] }
 foldhash = { workspace = true }
-folo_utils = { workspace = true }
 itertools = { workspace = true }
 negative-impl = { workspace = true }
+new_zealand = { workspace = true }
 nonempty = { workspace = true }
 rand = { workspace = true, features = ["thread_rng"] }
 

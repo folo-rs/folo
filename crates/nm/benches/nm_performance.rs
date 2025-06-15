@@ -9,8 +9,8 @@ use std::hint::black_box;
 
 use benchmark_utils::{ThreadPool, bench_on_every_processor, bench_on_threadpool};
 use criterion::{Criterion, criterion_group, criterion_main};
-use folo_utils::nz;
 use many_cpus::ProcessorSet;
+use new_zealand::nz;
 use nm::{Event, Magnitude, Report};
 
 criterion_group!(benches, entrypoint);

@@ -592,7 +592,7 @@ enum ProcessorTypeSelector {
 #[cfg(not(miri))] // Talking to the operating system is not possible under Miri.
 #[cfg(test)]
 mod tests_real {
-    use folo_utils::nz;
+    use new_zealand::nz;
 
     use super::*;
 
@@ -712,7 +712,7 @@ mod tests_real {
 #[cfg(test)]
 mod tests {
     use crate::pal::{FakeProcessor, MockPlatform, ProcessorFacade};
-    use folo_utils::nz;
+    use new_zealand::nz;
     use nonempty::nonempty;
 
     use super::*;
