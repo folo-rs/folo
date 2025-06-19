@@ -57,6 +57,13 @@ pub struct PinnedPool<T> {
     /// by removing empty slabs (we cannot touch non-empty slabs because we made a promise to pin).
     slabs: Vec<PinnedSlab<T, SLAB_CAPACITY>>,
 
+    /// Lowest index of any slab that has a vacant slot, if known. We use this to avoid scanning
+    /// the entire collection for vacant slots when inserting an item. This being `None` does not
+    /// imply that there are no vacant slots, it just means we do not know what slab they are in.
+    /// In other words, this is a cache, not the ground truth - we set it to `None` when we lose
+    /// confidence that the data is still valid but when we have no need to look up the new value.
+    slab_with_vacant_slot_index: Option<usize>,
+
     drop_policy: DropPolicy,
 }
 
@@ -90,6 +97,7 @@ impl<T> PinnedPool<T> {
         Self {
             slabs: Vec::new(),
             drop_policy,
+            slab_with_vacant_slot_index: None,
         }
     }
 
@@ -173,6 +181,19 @@ impl<T> PinnedPool<T> {
             .get_mut(slab_index)
             .expect("we just verified that there is a slab with a vacant slot at this index");
 
+        // We invalidate the "slab with vacant slot" cache here if this is the last vacant slot.
+        // It is true that just creating an inserter does not mean we will insert an item. After
+        // all, the inserter may be abandoned. However, we do this invalidation preemptively
+        // because Rust lifetimes make it hard to modify the pool from the inserter (as we are
+        // already borrowing the slab exclusively). Since it is just a cache, this is no big deal.
+        let predicted_slab_filled_slots = slab.len()
+            .checked_add(1)
+            .expect("we cannot overflow because there is at least one free slot, so it means there must be room to increment");
+
+        if predicted_slab_filled_slots == SLAB_CAPACITY {
+            self.slab_with_vacant_slot_index = None;
+        }
+
         let slab_inserter = slab.begin_insert();
 
         PinnedPoolInserter {
@@ -201,14 +222,28 @@ impl<T> PinnedPool<T> {
         };
 
         slab.remove(index.index_in_slab);
+
+        // There is now a vacant slot in this slab! We may want to remember this for fast inserts.
+        // We try to remember the lowest index of a slab with a vacant slot, so we
+        // fill the collection from the start (to enable easier shrinking later).
+        if self
+            .slab_with_vacant_slot_index
+            .is_none_or(|current| current > index.slab_index)
+        {
+            self.slab_with_vacant_slot_index = Some(index.slab_index);
+        }
     }
 
     #[must_use]
     fn index_of_slab_with_vacant_slot(&mut self) -> usize {
+        if let Some(index) = self.slab_with_vacant_slot_index {
+            // If we have this cached, we return it immediately.
+            // This is a performance optimization to avoid scanning the entire collection.
+            return index;
+        }
+
         // We lookup the first slab with some free space, filling the collection from the start.
-        // TODO: We might perhaps benefit from caching this lookup for reuse?
-        // Odds are that the same slab will have many vacant slots.
-        if let Some((index, _)) = self
+        let index = if let Some((index, _)) = self
             .slabs
             .iter()
             .enumerate()
@@ -218,11 +253,16 @@ impl<T> PinnedPool<T> {
         } else {
             // All slabs are full, so we need to expand capacity.
             self.slabs.push(PinnedSlab::new(self.drop_policy));
+
             self.slabs
                 .len()
                 .checked_sub(1)
                 .expect("we just pushed a slab, so this cannot overflow because len >= 1")
-        }
+        };
+
+        // We update the cache. The caller is responsible for invalidating this when needed.
+        self.slab_with_vacant_slot_index = Some(index);
+        index
     }
 
     #[cfg_attr(test, mutants::skip)] // This is essentially test logic, mutation is meaningless.
