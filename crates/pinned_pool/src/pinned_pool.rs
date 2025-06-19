@@ -1,6 +1,6 @@
 use num::Integer;
 
-use crate::{DropPolicy, PinnedSlab, PinnedSlabInserter};
+use crate::{DropPolicy, PinnedPoolBuilder, PinnedSlab, PinnedSlabInserter};
 use std::{mem::MaybeUninit, pin::Pin, ptr::NonNull};
 
 /// An object pool of unbounded size that guarantees pinning of its items.
@@ -77,12 +77,11 @@ pub struct Key {
 const SLAB_CAPACITY: usize = 128;
 
 impl<T> PinnedPool<T> {
-    // TODO: expose a builder
     /// # Panics
     ///
     /// Panics if `T` is zero-sized.
     #[must_use]
-    pub(crate) fn new(drop_policy: DropPolicy) -> Self {
+    pub(crate) fn new_inner(drop_policy: DropPolicy) -> Self {
         assert!(
             size_of::<T>() > 0,
             "PinnedPool must have non-zero item size"
@@ -92,6 +91,21 @@ impl<T> PinnedPool<T> {
             slabs: Vec::new(),
             drop_policy,
         }
+    }
+
+    /// Creates a new [`PinnedPool`] with the default configuration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `T` is zero-sized.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::builder().build()
+    }
+
+    /// Starts building a new [`PinnedPool`].
+    pub fn builder() -> PinnedPoolBuilder<T> {
+        PinnedPoolBuilder::new()
     }
 
     /// The number of items in the pool.
@@ -220,6 +234,17 @@ impl<T> PinnedPool<T> {
     }
 }
 
+impl<T> Default for PinnedPool<T> {
+    /// Creates a new [`PinnedPool`] with the default configuration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `T` is zero-sized.
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// An inserter for a [`PinnedPool`], enabling more item insertion scenarios than afforded by
 /// [`PinnedPool::insert()`][1].
 ///
@@ -303,7 +328,7 @@ mod tests {
 
     #[test]
     fn smoke_test() {
-        let mut pool = PinnedPool::<u32>::new(DropPolicy::MayDropItems);
+        let mut pool = PinnedPool::<u32>::new();
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
@@ -332,7 +357,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn panic_when_empty_oob_get() {
-        let pool = PinnedPool::<u32>::new(DropPolicy::MayDropItems);
+        let pool = PinnedPool::<u32>::new();
 
         _ = pool.get(Key { index_in_pool: 0 });
     }
@@ -340,7 +365,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn panic_when_oob_get() {
-        let mut pool = PinnedPool::<u32>::new(DropPolicy::MayDropItems);
+        let mut pool = PinnedPool::<u32>::new();
 
         _ = pool.insert(42);
         _ = pool.get(Key {
@@ -350,7 +375,7 @@ mod tests {
 
     #[test]
     fn begin_insert_returns_correct_key() {
-        let mut pool = PinnedPool::<u32>::new(DropPolicy::MayDropItems);
+        let mut pool = PinnedPool::<u32>::new();
 
         // We expect that we insert items in order, from the start (0, 1, 2, ...).
 
@@ -375,7 +400,7 @@ mod tests {
 
     #[test]
     fn abandoned_inserter_is_noop() {
-        let mut pool = PinnedPool::<u32>::new(DropPolicy::MayDropItems);
+        let mut pool = PinnedPool::<u32>::new();
 
         // If you abandon an inserter, nothing happens.
         _ = pool.begin_insert();
@@ -393,7 +418,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn remove_empty_panics() {
-        let mut pool = PinnedPool::<u32>::new(DropPolicy::MayDropItems);
+        let mut pool = PinnedPool::<u32>::new();
 
         pool.remove(Key { index_in_pool: 0 });
     }
@@ -401,7 +426,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn remove_vacant_panics() {
-        let mut pool = PinnedPool::<u32>::new(DropPolicy::MayDropItems);
+        let mut pool = PinnedPool::<u32>::new();
 
         // Ensure the first slab is created, so collection is not empty.
         _ = pool.insert(1234);
@@ -413,7 +438,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn remove_oob_panics() {
-        let mut pool = PinnedPool::<u32>::new(DropPolicy::MayDropItems);
+        let mut pool = PinnedPool::<u32>::new();
 
         // Ensure the first slab is created, so collection is not empty.
         _ = pool.insert(1234);
@@ -427,7 +452,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn get_vacant_panics() {
-        let mut pool = PinnedPool::<u32>::new(DropPolicy::MayDropItems);
+        let mut pool = PinnedPool::<u32>::new();
 
         // Ensure the first slab is created, so collection is not empty.
         _ = pool.insert(1234);
@@ -439,7 +464,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn get_mut_vacant_panics() {
-        let mut pool = PinnedPool::<u32>::new(DropPolicy::MayDropItems);
+        let mut pool = PinnedPool::<u32>::new();
 
         // Ensure the first slab is created, so collection is not empty.
         _ = pool.insert(1234);
@@ -450,7 +475,7 @@ mod tests {
 
     #[test]
     fn in_refcell_works_fine() {
-        let pool = RefCell::new(PinnedPool::<u32>::new(DropPolicy::MayDropItems));
+        let pool = RefCell::new(PinnedPool::<u32>::new());
 
         let key_a = {
             let mut pool = pool.borrow_mut();
@@ -481,7 +506,7 @@ mod tests {
 
     #[test]
     fn multithreaded_via_mutex() {
-        let shared_pool = Arc::new(Mutex::new(PinnedPool::<u32>::new(DropPolicy::MayDropItems)));
+        let shared_pool = Arc::new(Mutex::new(PinnedPool::<u32>::new()));
 
         let key_a;
         let key_b;
@@ -520,12 +545,18 @@ mod tests {
     #[test]
     #[should_panic]
     fn drop_item_with_forbidden_to_drop_policy_panics() {
-        let mut pool = PinnedPool::<u32>::new(DropPolicy::MustNotDropItems);
+        let mut pool = PinnedPool::<u32>::builder()
+            .drop_policy(DropPolicy::MustNotDropItems)
+            .build();
         _ = pool.insert(123);
     }
 
     #[test]
     fn drop_itemless_with_forbidden_to_drop_policy_ok() {
-        drop(PinnedPool::<u32>::new(DropPolicy::MustNotDropItems));
+        drop(
+            PinnedPool::<u32>::builder()
+                .drop_policy(DropPolicy::MustNotDropItems)
+                .build(),
+        );
     }
 }

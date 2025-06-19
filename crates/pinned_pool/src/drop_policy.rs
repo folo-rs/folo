@@ -1,7 +1,11 @@
 /// Determines container behavior when the container is dropped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DropPolicy {
-    /// The container will drop its items when the container is dropped.
+///
+/// By default, the container will drop its items when it is dropped.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DropPolicy {
+    /// The container will drop its items when the container is dropped. This is the default.
+    #[default]
     MayDropItems,
 
     /// The contains will panic if it still contains items when it is dropped.

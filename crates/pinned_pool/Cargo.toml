@@ -17,7 +17,12 @@ default = []
 num = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 mutants = { workspace = true }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "pp_basic"
+harness = false

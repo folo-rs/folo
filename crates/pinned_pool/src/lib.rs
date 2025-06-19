@@ -7,7 +7,7 @@ mod drop_policy;
 mod pinned_pool;
 mod pinned_slab;
 
-pub(crate) use builder::*;
-pub(crate) use drop_policy::*;
+pub use builder::*;
+pub use drop_policy::*;
 pub use pinned_pool::*;
 pub(crate) use pinned_slab::*;
