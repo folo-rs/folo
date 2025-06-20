@@ -717,4 +717,16 @@ mod tests {
     fn drop_itemless_with_forbidden_to_drop_policy_ok() {
         drop(PinnedSlab::<u32, 3>::new(DropPolicy::MustNotDropItems));
     }
+
+    #[test]
+    #[should_panic]
+    fn zst_is_panic() {
+        drop(PinnedSlab::<(), 3>::new(DropPolicy::MayDropItems));
+    }
+
+    #[test]
+    #[should_panic]
+    fn zero_capacity_is_panic() {
+        drop(PinnedSlab::<usize, 0>::new(DropPolicy::MayDropItems));
+    }
 }

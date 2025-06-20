@@ -662,6 +662,30 @@ mod tests {
     }
 
     #[test]
+    fn fill_first_slab_even_after_abandoned_insert() {
+        let mut pool = PinnedPool::<u32>::new();
+
+        // Leave space for 1 item.
+        for _ in 0..(SLAB_CAPACITY - 1) {
+            _ = pool.insert(1234);
+        }
+
+        assert_eq!(pool.slabs.len(), 1);
+        assert!(!pool.slabs[0].is_full());
+
+        // Begin an insert but do not complete it.
+        _ = pool.begin_insert();
+
+        // Ensure that the next inserted item still goes into the first slab.
+        // That is, we did not "waste" the vacant slot in the first slab
+        // due to the abandoned insert.
+        _ = pool.insert(1234);
+
+        assert_eq!(pool.slabs.len(), 1);
+        assert!(pool.slabs[0].is_full());
+    }
+
+    #[test]
     fn fill_hole_before_allocating_new_slab() {
         let mut pool = PinnedPool::<u32>::new();
 
@@ -753,5 +777,39 @@ mod tests {
 
         assert_eq!(key_filled.index_in_pool, 0);
         assert_eq!(*pool.get(key_filled), 91011);
+    }
+
+    #[test]
+    #[should_panic]
+    fn zst_is_panic() {
+        drop(PinnedPool::<()>::new());
+    }
+
+    #[test]
+    fn insert_mut_then_get_is_correct_value() {
+        let mut pool = PinnedPool::<u32>::new();
+
+        let inserter = pool.begin_insert();
+        let key = inserter.key();
+        let mut item = inserter.insert_mut(42);
+        *item = 99;
+
+        assert_eq!(*pool.get(key), 99);
+    }
+
+    #[test]
+    fn default_works_fine() {
+        let mut pool: PinnedPool<u32> = PinnedPool::default();
+        assert!(pool.is_empty());
+        assert_eq!(pool.len(), 0);
+        assert_eq!(pool.capacity(), 0);
+
+        let key = pool.insert(1234);
+        assert!(!pool.is_empty());
+        assert_eq!(pool.len(), 1);
+
+        assert_eq!(pool.get(key).get_ref(), &1234);
+
+        pool.remove(key);
     }
 }
