@@ -1,7 +1,7 @@
 use num::Integer;
 
 use crate::{DropPolicy, PinnedPoolBuilder, PinnedSlab, PinnedSlabInserter};
-use std::{mem::MaybeUninit, pin::Pin, ptr::NonNull};
+use std::pin::Pin;
 
 /// An object pool of unbounded size that guarantees pinning of its items.
 ///
@@ -267,6 +267,7 @@ impl<T> PinnedPool<T> {
 
     #[cfg_attr(test, mutants::skip)] // This is essentially test logic, mutation is meaningless.
     #[cfg(debug_assertions)]
+    #[expect(dead_code, reason = "we will probably use it later")]
     pub(crate) fn integrity_check(&self) {
         for slab in &self.slabs {
             slab.integrity_check();
@@ -362,6 +363,7 @@ mod tests {
     use super::*;
     use std::{
         cell::RefCell,
+        ptr,
         sync::{Arc, Mutex},
         thread,
     };
@@ -598,5 +600,40 @@ mod tests {
                 .drop_policy(DropPolicy::MustNotDropItems)
                 .build(),
         );
+    }
+
+    #[test]
+    fn out_of_band_access() {
+        // We grab pointers to items and access them without having borrowed the pool itself.
+        // This is valid because the pool does not keep references to the items. The test will
+        // pass even if we do something invalid but Miri will catch it - this test exists for Miri.
+        let mut pool = PinnedPool::<u32>::new();
+
+        let key_a = pool.insert(42);
+
+        // It is valid to access pool items directly via pointers, as long as you do
+        // not attempt to concurrently access them via pool methods.
+        let a_ptr = ptr::from_mut(pool.get_mut(key_a).get_mut());
+
+        // Modify item directly - pool is not borrowed here.
+        // SAFETY: The pool allows us to touch items out of band.
+        unsafe {
+            *a_ptr += 1;
+        }
+
+        // We can even have a pending insert while we touch the item out of band.
+        let inserter = pool.begin_insert();
+
+        // SAFETY: The pool allows us to touch items out of band.
+        unsafe {
+            *a_ptr += 1;
+        }
+
+        _ = inserter.insert(123);
+
+        // After this, we are not allowed to touch this item, because we have removed it.
+        // That is, a_ptr now points to invalid memory. The pool does not know anything about
+        // it, just our pointer is no longer valid for reads or writes - everything is out of band.
+        pool.remove(key_a);
     }
 }

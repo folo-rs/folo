@@ -2,7 +2,7 @@ use crate::DropPolicy;
 use core::panic;
 use std::alloc::{Layout, alloc, dealloc};
 use std::any::type_name;
-use std::mem::{self, MaybeUninit};
+use std::mem;
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::thread;
@@ -237,6 +237,10 @@ impl<T, const CAPACITY: usize> PinnedSlab<T, CAPACITY> {
     ///
     /// Panics if the collection is full.
     #[must_use]
+    #[allow(
+        dead_code,
+        reason = "not used for now but likely will be if we expose parent publicly"
+    )]
     pub(crate) fn insert(&mut self, value: T) -> usize {
         let inserter = self.begin_insert();
         let index = inserter.index();

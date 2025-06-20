@@ -1,6 +1,6 @@
 [package]
 name = "pinned_pool"
-description = "An object pool that guarantees pinning of its items"
+description = "An object pool that guarantees pinning of its items and enables easy item access via unsafe code by not maintaining any Rust references to its items"
 publish = true
 version = "0.1.0"
 

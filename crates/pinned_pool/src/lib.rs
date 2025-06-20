@@ -1,6 +1,5 @@
-//! An object pool that guarantees pinning of its items
-
-#![allow(dead_code, unused_imports, reason = "temporary")]
+//! An object pool that guarantees pinning of its items and enables easy item access
+//! via unsafe code by not maintaining any Rust references to its items.
 
 mod builder;
 mod drop_policy;
