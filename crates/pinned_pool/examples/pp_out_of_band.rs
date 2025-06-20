@@ -42,7 +42,7 @@ fn main() {
     // We can do whatever we want to the items through the pointers, including writing
     // to them (as long as we got the pointer from `insert_mut()`), provided that we
     // do not access the item via the pool methods concurrently (e.g. `remove()` but
-    // also `get()` because `get()` may create conflicting references, which are not valid).
+    // also `get()` and `get_mut()` because they may create conflicting references).
 
     // SAFETY: See above comment.
     unsafe {
