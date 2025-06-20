@@ -30,14 +30,6 @@ use std::pin::Pin;
 /// [`get()`][1] and [`get_mut()`][2] methods, respectively. These pointers are guaranteed to
 /// be valid until the item is removed from the collection or the collection itself is dropped.
 ///
-/// # Multithreaded usage
-///  
-/// To share the collection between threads, wrapping in `Mutex` is the recommended approach.
-///
-/// # Pinning
-///
-/// The collection itself does not need to be pinned - only the contents are pinned.
-///
 /// # Resource usage
 ///
 /// As of today, the collection never shrinks, though future versions may offer facilities to do so.

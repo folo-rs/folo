@@ -38,14 +38,6 @@ use std::thread;
 /// [`get()`][1] and [`get_mut()`][2] methods, respectively. These pointers are guaranteed to
 /// be valid until the item is removed from the collection or the collection itself is dropped.
 ///
-/// # Multithreaded usage
-///  
-/// To share the collection between threads, wrapping in `Mutex` is the recommended approach.
-///
-/// # Pinning
-///
-/// The collection itself does not need to be pinned - only the contents are pinned.
-///
 /// [1]: Self::get
 /// [2]: Self::get_mut
 /// [3]: Self::insert
