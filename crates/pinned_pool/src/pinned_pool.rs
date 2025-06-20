@@ -70,7 +70,7 @@ pub struct PinnedPool<T> {
 /// A key that can be used to reference up an item in a [`PinnedPool`].
 ///
 /// Keys may be reused by the pool after an item is removed.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Key {
     index_in_pool: usize,
 }
