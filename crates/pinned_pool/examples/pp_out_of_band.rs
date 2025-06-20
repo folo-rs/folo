@@ -73,9 +73,13 @@ fn main() {
     let charlie = pool.get(charlie_key);
     println!("Retrieved item: {charlie}");
 
-    // The reference `charlie` is not used after this point, so we can safely access
-    // the item via pointers again. If we had still used `charlie` after this `println!`,
-    // this would be invalid code.
+    // SAFETY: The reference `charlie` is not used after this point, so we can safely mutate
+    // the item via the pointer again. If we had still used `charlie` after this `println!`,
+    // this would be invalid code because this pointer dereference creates an exclusive reference.
+    unsafe {
+        (*charlie_ptr).push_str(" von Neumann");
+    }
+
     println!(
         "Items accessed via pointers: Alice = {}, Charlie = {}",
         // SAFETY: See above comments.
