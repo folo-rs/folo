@@ -81,7 +81,12 @@ pub struct Key {
 /// based on the size of T in order to match a memory page size, or another similar criterion.
 /// This is why the parameter is also not exposed in the public API - we may want to change how we
 /// perform the memory layout in a future version.
+#[cfg(not(miri))]
 const SLAB_CAPACITY: usize = 128;
+
+// Under Miri, we use a smaller slab capacity because Miri test runtime scales by memory usage.
+#[cfg(miri)]
+const SLAB_CAPACITY: usize = 4;
 
 impl<T> PinnedPool<T> {
     /// # Panics
@@ -360,6 +365,8 @@ impl<const SLAB_CAPACITY: usize> ItemCoordinates<SLAB_CAPACITY> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing, reason = "panic is fine in test code")]
+
     use super::*;
     use std::{
         cell::RefCell,
@@ -635,5 +642,116 @@ mod tests {
         // That is, a_ptr now points to invalid memory. The pool does not know anything about
         // it, just our pointer is no longer valid for reads or writes - everything is out of band.
         pool.remove(key_a);
+    }
+
+    #[test]
+    fn fill_first_slab_before_allocating_second() {
+        let mut pool = PinnedPool::<u32>::new();
+
+        for _ in 0..SLAB_CAPACITY {
+            _ = pool.insert(1234);
+        }
+
+        assert_eq!(pool.slabs.len(), 1);
+        assert!(pool.slabs[0].is_full());
+
+        // This will allocate a second slab.
+        _ = pool.insert(1234);
+
+        assert_eq!(pool.slabs.len(), 2);
+    }
+
+    #[test]
+    fn fill_hole_before_allocating_new_slab() {
+        let mut pool = PinnedPool::<u32>::new();
+
+        // Fill the first slab.
+        for _ in 0..SLAB_CAPACITY {
+            _ = pool.insert(1234);
+        }
+
+        // Remove the first item to create a hole.
+        let key_to_remove = Key { index_in_pool: 0 };
+        pool.remove(key_to_remove);
+
+        // This will fill the hole instead of allocating a new slab.
+        let key_filled = pool.insert(5678);
+
+        assert_eq!(key_filled.index_in_pool, 0);
+        assert_eq!(*pool.get(key_filled), 5678);
+    }
+
+    #[test]
+    fn fill_first_hole_ascending() {
+        // If two slabs have a hole, we always fill a hole in the first (index-wise) slab.
+        // We do not care which hole we fill (there may be multiple per slab), we just care
+        // about which slab it is in.
+        //
+        // We create the holes in ascending order (first slab first, then second slab).
+
+        let mut pool = PinnedPool::<u32>::new();
+
+        // Fill the first slab.
+        for _ in 0..SLAB_CAPACITY {
+            _ = pool.insert(1234);
+        }
+
+        // Fill the second slab.
+        for _ in 0..SLAB_CAPACITY {
+            _ = pool.insert(5678);
+        }
+
+        // Remove the first item in the first slab to create a hole.
+        let key_to_remove = Key { index_in_pool: 0 };
+        pool.remove(key_to_remove);
+
+        // Remove the first item in the second slab to create a hole.
+        let key_to_remove = Key {
+            index_in_pool: SLAB_CAPACITY,
+        };
+        pool.remove(key_to_remove);
+
+        // This will fill the hole in the first slab instead of allocating a new slab.
+        let key_filled = pool.insert(91011);
+
+        assert_eq!(key_filled.index_in_pool, 0);
+        assert_eq!(*pool.get(key_filled), 91011);
+    }
+
+    #[test]
+    fn fill_first_hole_descending() {
+        // If two slabs have a hole, we always fill a hole in the first (index-wise) slab.
+        // We do not care which hole we fill (there may be multiple per slab), we just care
+        // about which slab it is in.
+        //
+        // We create the holes in descending order (second slab first, then first slab).
+
+        let mut pool = PinnedPool::<u32>::new();
+
+        // Fill the first slab.
+        for _ in 0..SLAB_CAPACITY {
+            _ = pool.insert(1234);
+        }
+
+        // Fill the second slab.
+        for _ in 0..SLAB_CAPACITY {
+            _ = pool.insert(5678);
+        }
+
+        // Remove the first item in the second slab to create a hole.
+        let key_to_remove = Key {
+            index_in_pool: SLAB_CAPACITY,
+        };
+        pool.remove(key_to_remove);
+
+        // Remove the first item in the first slab to create a hole.
+        let key_to_remove = Key { index_in_pool: 0 };
+        pool.remove(key_to_remove);
+
+        // This will fill the hole in the first slab instead of allocating a new slab.
+        let key_filled = pool.insert(91011);
+
+        assert_eq!(key_filled.index_in_pool, 0);
+        assert_eq!(*pool.get(key_filled), 91011);
     }
 }
