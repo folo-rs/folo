@@ -29,6 +29,10 @@ linked_macros_impl = { version = "0.2.2", path = "crates/linked_macros_impl" }
 many_cpus = { version = "0.3.3", path = "crates/many_cpus" }
 many_cpus_benchmarking = { version = "0.1.12", path = "crates/many_cpus_benchmarking" }
 new_zealand = { version = "0.1.0", path = "crates/new_zealand" }
+nm = { version = "0.1.1", path = "crates/nm" }
+pinned_pool = { version = "0.1.0", path = "crates/pinned_pool" }
+region_cached = { version = "0.1.13", path = "crates/region_cached" }
+region_local = { version = "0.1.13", path = "crates/region_local" }
 
 # Internal packages we do not publish.
 benchmarks = { path = "crates/benchmarks" }
