@@ -3,7 +3,9 @@
 //! You can observe memory usage to prove that the data is not being copied an unexpected
 //! number of times (one copy per memory region is expected).
 
-use std::{hint::black_box, thread, time::Duration};
+use std::hint::black_box;
+use std::thread;
+use std::time::Duration;
 
 use many_cpus::ProcessorSet;
 use region_local::{RegionLocalExt, region_local};

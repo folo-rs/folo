@@ -5,7 +5,8 @@
     reason = "No need for API documentation in benchmark code"
 )]
 
-use std::{hint::black_box, thread};
+use std::hint::black_box;
+use std::thread;
 
 use benchmark_utils::{AbWorker, ThreadPool, bench_on_threadpool, bench_on_threadpool_ab};
 use criterion::{Criterion, criterion_group, criterion_main};

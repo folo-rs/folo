@@ -2,7 +2,7 @@
 //!
 //! Collect metrics about observed events with low overhead even in
 //! highly multithreaded applications running on 100+ processors.
-//! 
+//!
 //! Using arbitrary development hardware, we measure between 2 and 20 nanoseconds per
 //! observation, depending on how the event is configured. Benchmarks are included.
 //!
@@ -43,8 +43,7 @@
 //! ```
 //! use nm::{Event, Magnitude};
 //!
-//! const PACKAGE_WEIGHT_GRAMS_BUCKETS: &[Magnitude] =
-//!     &[0, 100, 200, 500, 1000, 2000, 5000, 10000];
+//! const PACKAGE_WEIGHT_GRAMS_BUCKETS: &[Magnitude] = &[0, 100, 200, 500, 1000, 2000, 5000, 10000];
 //!
 //! thread_local! {
 //!     static PACKAGES_RECEIVED_WEIGHT_GRAMS: Event = Event::builder()
@@ -124,9 +123,11 @@
 //! }
 //!
 //! pub fn http_connect() {
-//!     CONNECT_TIME_MS.with(|e| e.observe_duration_millis(|| {
-//!         do_http_connect();
-//!     }));
+//!     CONNECT_TIME_MS.with(|e| {
+//!         e.observe_duration_millis(|| {
+//!             do_http_connect();
+//!         })
+//!     });
 //! }
 //! # http_connect();
 //! # fn do_http_connect() {}
@@ -192,9 +193,9 @@
 //! The push model has lower measurement overhead due to a more optimal internal data layout
 //! but requires action from you to ensure that data is published. If you never push the data,
 //! it will never show up in a report.
-//! 
+//!
 //! The previous examples all use the default pull model. Here is an example with the push model:
-//! 
+//!
 //! ```
 //! use nm::{Event, MetricsPusher, Push};
 //!
@@ -208,9 +209,11 @@
 //! }
 //!
 //! pub fn http_connect() {
-//!     CONNECT_TIME_MS.with(|e| e.observe_duration_millis(|| {
-//!         do_http_connect();
-//!     }));
+//!     CONNECT_TIME_MS.with(|e| {
+//!         e.observe_duration_millis(|| {
+//!             do_http_connect();
+//!         })
+//!     });
 //! }
 //!
 //! loop {
@@ -225,7 +228,7 @@
 //! # fn do_http_connect() {}
 //! # fn is_time_to_push() -> bool { true }
 //! ```
-//! 
+//!
 //! You should consider using the push model when an event is only used under controlled conditions
 //! where you are certain that every thread that will be observing an event is guaranteed to call
 //! [`MetricsPusher::push()`][MetricsPusher::push] at some point.

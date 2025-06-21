@@ -1,4 +1,5 @@
-use std::{rc::Rc, sync::Arc};
+use std::rc::Rc;
+use std::sync::Arc;
 
 #[cfg(test)]
 use crate::ObservationBagSnapshot;

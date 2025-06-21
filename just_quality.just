@@ -19,8 +19,9 @@ coverage-report:
     cargo llvm-cov report {{ coverage-package }} --open
 
 [group('quality')]
+[no-cd]
 format:
-    cargo fmt --verbose --all
+    cargo +nightly fmt --verbose --all -- --config-path ./unstable-rustfmt.toml
     cargo sort-derives
 
 [group('quality')]

@@ -1,9 +1,7 @@
-use std::{
-    cell::RefCell,
-    marker::PhantomData,
-    sync::{Arc, LazyLock, RwLock},
-    thread::{self, ThreadId},
-};
+use std::cell::RefCell;
+use std::marker::PhantomData;
+use std::sync::{Arc, LazyLock, RwLock};
+use std::thread::{self, ThreadId};
 
 use foldhash::{HashMap, HashMapExt};
 

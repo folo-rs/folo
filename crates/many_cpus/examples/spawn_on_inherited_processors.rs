@@ -7,7 +7,8 @@
 //! Linux: `taskset 0x3 target/debug/examples/spawn_on_inherited_processors`
 //! Windows: `start /affinity 0x3 target/debug/examples/spawn_on_inherited_processors.exe`
 
-use std::{thread, time::Duration};
+use std::thread;
+use std::time::Duration;
 
 use many_cpus::ProcessorSet;
 

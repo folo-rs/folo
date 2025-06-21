@@ -1,9 +1,11 @@
 //! Showcase basic use of the `region_cached!` macro in a multithreaded web app.
 
-use axum::{Router, routing::get};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use axum::Router;
+use axum::routing::get;
 use many_cpus::HardwareInfo;
 use region_cached::{RegionCachedCopyExt, RegionCachedExt, region_cached};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 // A global variable whose latest value is cached in each memory region for fast local read access.
 // Writes to this variable are weakly consistent across all memory regions.

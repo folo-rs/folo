@@ -1,26 +1,21 @@
 use std::fmt::Debug;
 
-use windows::{
-    Win32::System::{
-        JobObjects::{
-            IsProcessInJob, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION,
-            JobObjectCpuRateControlInformation, JobObjectGroupInformationEx,
-            QueryInformationJobObject,
-        },
-        Kernel::PROCESSOR_NUMBER,
-        SystemInformation::{
-            GROUP_AFFINITY, GetLogicalProcessorInformationEx, LOGICAL_PROCESSOR_RELATIONSHIP,
-            SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
-        },
-        Threading::{
-            GetActiveProcessorCount, GetCurrentProcess, GetCurrentProcessorNumberEx,
-            GetCurrentThread, GetMaximumProcessorCount, GetMaximumProcessorGroupCount,
-            GetNumaHighestNodeNumber, GetProcessDefaultCpuSetMasks, GetThreadGroupAffinity,
-            GetThreadSelectedCpuSetMasks, SetThreadSelectedCpuSetMasks,
-        },
-    },
-    core::{BOOL, Result},
+use windows::Win32::System::JobObjects::{
+    IsProcessInJob, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION, JobObjectCpuRateControlInformation,
+    JobObjectGroupInformationEx, QueryInformationJobObject,
 };
+use windows::Win32::System::Kernel::PROCESSOR_NUMBER;
+use windows::Win32::System::SystemInformation::{
+    GROUP_AFFINITY, GetLogicalProcessorInformationEx, LOGICAL_PROCESSOR_RELATIONSHIP,
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
+};
+use windows::Win32::System::Threading::{
+    GetActiveProcessorCount, GetCurrentProcess, GetCurrentProcessorNumberEx, GetCurrentThread,
+    GetMaximumProcessorCount, GetMaximumProcessorGroupCount, GetNumaHighestNodeNumber,
+    GetProcessDefaultCpuSetMasks, GetThreadGroupAffinity, GetThreadSelectedCpuSetMasks,
+    SetThreadSelectedCpuSetMasks,
+};
+use windows::core::{BOOL, Result};
 
 use crate::pal::windows::Bindings;
 

@@ -1,10 +1,8 @@
-use std::{
-    collections::{HashMap, hash_map},
-    ops::Deref,
-    rc::Rc,
-    sync::{Arc, RwLock},
-    thread::{self, ThreadId},
-};
+use std::collections::{HashMap, hash_map};
+use std::ops::Deref;
+use std::rc::Rc;
+use std::sync::{Arc, RwLock};
+use std::thread::{self, ThreadId};
 
 use simple_mermaid::mermaid;
 
@@ -22,7 +20,6 @@ use crate::{BuildThreadIdHasher, ERR_POISONED_LOCK};
 /// Create an instance of `InstancePerThread` and provide it the initial instance of a linked
 /// object `T`. Any instance of `T` accessed through the same `InstancePerThread` or a clone of it
 /// will be linked to the same family.
-///
 #[ doc=mermaid!( "../doc/instance_per_thread.mermaid") ]
 ///
 /// To access the current thread's instance of `T`, you must first obtain a
@@ -476,11 +473,9 @@ unsafe impl<T> Send for ThreadSpecificState<T> where T: linked::Object {}
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        cell::Cell,
-        sync::{Arc, Mutex},
-        thread,
-    };
+    use std::cell::Cell;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
 
     use super::*;
 

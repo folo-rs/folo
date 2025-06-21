@@ -8,7 +8,6 @@
 //! This crate provides the capability to cache frequently accessed shared data sets
 //! in the local memory region, speeding up reads when the data is not already in the
 //! local processor caches.
-//!
 #![doc = mermaid!("../doc/region_cached.mermaid")]
 //!
 //! Think of this as an extra level of caching between L3 processor caches and main memory.

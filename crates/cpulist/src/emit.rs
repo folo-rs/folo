@@ -1,8 +1,9 @@
+use std::collections::VecDeque;
+use std::fmt::Write;
+use std::num::NonZero;
+
 use itertools::{FoldWhile, Itertools};
 use new_zealand::nz;
-
-use std::fmt::Write;
-use std::{collections::VecDeque, num::NonZero};
 
 use crate::Item;
 

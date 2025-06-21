@@ -6,15 +6,11 @@
 )]
 #![allow(clippy::mutex_integer, reason = "Dummy data, does not matter")]
 
-use std::{
-    cell::{Cell, LazyCell, OnceCell, RefCell, UnsafeCell},
-    hint::black_box,
-    rc::{Rc, Weak as RcWeak},
-    sync::{
-        Arc, LazyLock, Mutex, OnceLock, RwLock, Weak as ArcWeak,
-        atomic::{self, AtomicU64},
-    },
-};
+use std::cell::{Cell, LazyCell, OnceCell, RefCell, UnsafeCell};
+use std::hint::black_box;
+use std::rc::{Rc, Weak as RcWeak};
+use std::sync::atomic::{self, AtomicU64};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock, Weak as ArcWeak};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 

@@ -1,7 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Copyright (c) Folo authors.
 
-use std::{rc::Rc, thread::LocalKey};
+use std::rc::Rc;
+use std::thread::LocalKey;
 
 /// This is the real type of variables wrapped in the [`linked::thread_local_rc!` macro][1].
 /// See macro documentation for more details.
@@ -145,7 +146,8 @@ macro_rules! thread_local_rc {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, thread};
+    use std::cell::Cell;
+    use std::thread;
 
     #[linked::object]
     struct TokenCache {

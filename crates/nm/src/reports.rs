@@ -1,9 +1,6 @@
-use std::{
-    cmp,
-    fmt::{self, Display, Write},
-    iter,
-    num::NonZero,
-};
+use std::fmt::{self, Display, Write};
+use std::num::NonZero;
+use std::{cmp, iter};
 
 use foldhash::{HashMap, HashMapExt};
 

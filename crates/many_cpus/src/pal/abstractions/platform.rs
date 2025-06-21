@@ -2,7 +2,8 @@ use std::fmt::Debug;
 
 use nonempty::NonEmpty;
 
-use crate::{MemoryRegionId, ProcessorId, pal::ProcessorFacade};
+use crate::pal::ProcessorFacade;
+use crate::{MemoryRegionId, ProcessorId};
 
 pub(crate) trait Platform: Debug + Send + Sync + 'static {
     /// Returns all processors available to the current process.

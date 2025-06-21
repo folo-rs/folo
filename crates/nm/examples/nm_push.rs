@@ -6,7 +6,8 @@
 //! You can choose per event and/or per thread which model you use. Data from both regular
 //! events and push events will end up merged into the same data set for reporting.
 
-use std::{thread, time::Duration};
+use std::thread;
+use std::time::Duration;
 
 use nm::{Event, MetricsPusher, Push, Report};
 

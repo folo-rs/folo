@@ -4,10 +4,8 @@ use derive_more::derive::Display;
 use mockall::mock;
 use nonempty::NonEmpty;
 
-use crate::{
-    EfficiencyClass, MemoryRegionId, ProcessorId,
-    pal::{AbstractProcessor, Platform, ProcessorFacade},
-};
+use crate::pal::{AbstractProcessor, Platform, ProcessorFacade};
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
 
 #[derive(Clone, Copy, Debug, Display, Eq, Hash, PartialEq)]
 #[display("FakeProcessor({index} in node {memory_region}, {efficiency_class:?})")]

@@ -7,13 +7,11 @@
     reason = "No need for API documentation in benchmark code"
 )]
 
+use std::collections::HashMap;
 use std::fmt::Write;
+use std::hint::black_box;
 use std::iter::repeat_with;
-use std::{
-    collections::HashMap,
-    hint::black_box,
-    sync::{Arc, RwLock, mpsc},
-};
+use std::sync::{Arc, RwLock, mpsc};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use fake_headers::Headers;

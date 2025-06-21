@@ -1,8 +1,6 @@
-use std::{
-    cell::Cell,
-    iter,
-    sync::atomic::{self, AtomicI64, AtomicU64},
-};
+use std::cell::Cell;
+use std::iter;
+use std::sync::atomic::{self, AtomicI64, AtomicU64};
 
 use crate::Magnitude;
 

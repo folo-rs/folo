@@ -1,4 +1,5 @@
-use std::{fmt::Debug, io, mem};
+use std::fmt::Debug;
+use std::{io, mem};
 
 use libc::cpu_set_t;
 

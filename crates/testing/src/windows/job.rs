@@ -1,24 +1,18 @@
-use std::{
-    num::NonZero,
-    ptr,
-    sync::{Mutex, MutexGuard},
-};
+use std::num::NonZero;
+use std::ptr;
+use std::sync::{Mutex, MutexGuard};
 
 use deranged::int;
-use windows::Win32::{
-    Foundation::{CloseHandle, HANDLE},
-    System::{
-        JobObjects::{
-            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_CPU_RATE_CONTROL,
-            JOB_OBJECT_CPU_RATE_CONTROL_ENABLE, JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
-            JOB_OBJECT_LIMIT_AFFINITY, JOBOBJECT_BASIC_LIMIT_INFORMATION,
-            JOBOBJECT_CPU_RATE_CONTROL_INFORMATION, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0,
-            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectCpuRateControlInformation,
-            JobObjectExtendedLimitInformation, SetInformationJobObject,
-        },
-        Threading::GetCurrentProcess,
-    },
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_CPU_RATE_CONTROL,
+    JOB_OBJECT_CPU_RATE_CONTROL_ENABLE, JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
+    JOB_OBJECT_LIMIT_AFFINITY, JOBOBJECT_BASIC_LIMIT_INFORMATION,
+    JOBOBJECT_CPU_RATE_CONTROL_INFORMATION, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectCpuRateControlInformation,
+    JobObjectExtendedLimitInformation, SetInformationJobObject,
 };
+use windows::Win32::System::Threading::GetCurrentProcess;
 
 /// Jobs tinker with process-specific configuration so they are mutually exclusive.
 static MUTUALLY_EXCLUSIVE: Mutex<()> = Mutex::new(());

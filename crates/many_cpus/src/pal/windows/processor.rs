@@ -1,12 +1,8 @@
 use std::fmt::Display;
 
-use crate::{
-    EfficiencyClass, MemoryRegionId, ProcessorId,
-    pal::{
-        AbstractProcessor,
-        windows::{ProcessorGroupIndex, ProcessorIndexInGroup},
-    },
-};
+use crate::pal::AbstractProcessor;
+use crate::pal::windows::{ProcessorGroupIndex, ProcessorIndexInGroup};
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ProcessorImpl {

@@ -1,10 +1,9 @@
 #[cfg(test)]
 use std::sync::Arc;
 
-use crate::{HardwareInfoClient, HardwareInfoClientImpl};
-
 #[cfg(test)]
 use crate::MockHardwareInfoClient;
+use crate::{HardwareInfoClient, HardwareInfoClientImpl};
 
 #[derive(Clone, Debug)]
 pub(crate) enum HardwareInfoClientFacade {

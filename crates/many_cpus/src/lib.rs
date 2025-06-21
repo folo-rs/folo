@@ -153,7 +153,6 @@
 //! Thread executing on processor 4 in memory region 0
 //! Thread executing on processor 4 in memory region 0
 //! ```
-//!
 #![doc = include_str!("../docs/snippets/external_constraints.md")]
 //!
 #![doc = include_str!("../docs/snippets/changes_at_runtime.md")]

@@ -1,39 +1,27 @@
-use std::{
-    hint::black_box,
-    mem::offset_of,
-    num::{NonZero, NonZeroUsize},
-    ptr::NonNull,
-    sync::OnceLock,
-};
+use std::hint::black_box;
+use std::mem::offset_of;
+use std::num::{NonZero, NonZeroUsize};
+use std::ptr::NonNull;
+use std::sync::OnceLock;
 
 use folo_ffi::NativeBuffer;
 use itertools::Itertools;
 use nonempty::NonEmpty;
 use smallvec::SmallVec;
-use windows::{
-    Win32::{
-        Foundation::ERROR_INSUFFICIENT_BUFFER,
-        System::{
-            JobObjects::{
-                JOB_OBJECT_CPU_RATE_CONTROL_ENABLE, JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
-                JOB_OBJECT_CPU_RATE_CONTROL_MIN_MAX_RATE, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION,
-            },
-            SystemInformation::{
-                GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP, RelationNumaNode,
-                RelationNumaNodeEx, RelationProcessorCore, SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
-            },
-        },
-    },
-    core::HRESULT,
+use windows::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+use windows::Win32::System::JobObjects::{
+    JOB_OBJECT_CPU_RATE_CONTROL_ENABLE, JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
+    JOB_OBJECT_CPU_RATE_CONTROL_MIN_MAX_RATE, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION,
 };
+use windows::Win32::System::SystemInformation::{
+    GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP, RelationNumaNode, RelationNumaNodeEx,
+    RelationProcessorCore, SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
+};
+use windows::core::HRESULT;
 
-use crate::{
-    EfficiencyClass, MemoryRegionId, ProcessorId,
-    pal::{
-        GroupMask, Platform, ProcessorFacade, ProcessorImpl,
-        windows::{Bindings, BindingsFacade, ProcessorGroupIndex, ProcessorIndexInGroup},
-    },
-};
+use crate::pal::windows::{Bindings, BindingsFacade, ProcessorGroupIndex, ProcessorIndexInGroup};
+use crate::pal::{GroupMask, Platform, ProcessorFacade, ProcessorImpl};
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
 
 /// Singleton instance of `BuildTargetPlatform`, used by public API types
 /// to hook up to the correct PAL implementation.
@@ -832,26 +820,22 @@ fn is_soft_capped(rate_control: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION) -> bool 
 )]
 #[cfg(test)]
 mod tests {
-    use std::{mem::offset_of, sync::Arc};
+    use std::mem::offset_of;
+    use std::sync::Arc;
 
     use itertools::Itertools;
     use mockall::Sequence;
     use static_assertions::assert_eq_size;
     use testing::f64_diff_abs;
-    use windows::Win32::System::{
-        JobObjects::{
-            JOB_OBJECT_CPU_RATE_CONTROL, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION,
-            JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0_0,
-        },
-        Kernel::PROCESSOR_NUMBER,
+    use windows::Win32::System::JobObjects::{
+        JOB_OBJECT_CPU_RATE_CONTROL, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION,
+        JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0_0,
     };
-
-    use crate::{
-        MemoryRegionId,
-        pal::windows::{MockBindings, ProcessorIndexInGroup},
-    };
+    use windows::Win32::System::Kernel::PROCESSOR_NUMBER;
 
     use super::*;
+    use crate::MemoryRegionId;
+    use crate::pal::windows::{MockBindings, ProcessorIndexInGroup};
 
     const PROCESSOR_TIME_CLOSE_ENOUGH: f64 = 0.01;
 

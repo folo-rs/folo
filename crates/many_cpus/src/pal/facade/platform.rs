@@ -1,12 +1,10 @@
 use std::fmt::Debug;
-
 #[cfg(test)]
 use std::sync::Arc;
 
-use crate::pal::{BUILD_TARGET_PLATFORM, BuildTargetPlatform, Platform, ProcessorFacade};
-
 #[cfg(test)]
 use crate::pal::MockPlatform;
+use crate::pal::{BUILD_TARGET_PLATFORM, BuildTargetPlatform, Platform, ProcessorFacade};
 
 #[derive(Clone)]
 pub(crate) enum PlatformFacade {

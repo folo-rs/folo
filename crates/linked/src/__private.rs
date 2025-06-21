@@ -7,10 +7,10 @@
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
-use crate::{Family, Object};
-
 /// Re-export so we can use it via macros in projects that do not have a reference to `paste`.
 pub use ::paste::paste;
+
+use crate::{Family, Object};
 
 /// This is meant to be used via the [`linked::new!`][crate::new] macro, never directly called.
 ///

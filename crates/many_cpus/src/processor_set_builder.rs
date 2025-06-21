@@ -1,16 +1,17 @@
-use std::{collections::VecDeque, fmt::Debug, num::NonZeroUsize};
+use std::collections::VecDeque;
+use std::fmt::Debug;
+use std::num::NonZeroUsize;
 
-use foldhash::HashMapExt;
-use foldhash::{HashMap, HashSet, HashSetExt};
+use foldhash::{HashMap, HashMapExt, HashSet, HashSetExt};
 use itertools::Itertools;
 use nonempty::NonEmpty;
 use rand::prelude::*;
 use rand::rng;
 
-use crate::HardwareTrackerClientFacade;
+use crate::pal::{Platform, PlatformFacade};
 use crate::{
-    EfficiencyClass, MemoryRegionId, Processor, ProcessorId, ProcessorSet,
-    pal::{Platform, PlatformFacade},
+    EfficiencyClass, HardwareTrackerClientFacade, MemoryRegionId, Processor, ProcessorId,
+    ProcessorSet,
 };
 
 /// Builds a [`ProcessorSet`] based on specified criteria. The default criteria include all
@@ -18,7 +19,6 @@ use crate::{
 ///
 /// You can obtain a builder via [`ProcessorSet::builder()`] or from an existing processor set
 /// via [`ProcessorSet::to_builder()`].
-///
 #[doc = include_str!("../docs/snippets/external_constraints.md")]
 ///
 /// # Inheriting processor affinity from current thread
@@ -711,11 +711,11 @@ mod tests_real {
 
 #[cfg(test)]
 mod tests {
-    use crate::pal::{FakeProcessor, MockPlatform, ProcessorFacade};
     use new_zealand::nz;
     use nonempty::nonempty;
 
     use super::*;
+    use crate::pal::{FakeProcessor, MockPlatform, ProcessorFacade};
 
     // https://github.com/cloudhead/nonempty/issues/68
     extern crate alloc;

@@ -1,4 +1,7 @@
-use std::{cell::RefCell, marker::PhantomData, rc::Rc, sync::Arc};
+use std::cell::RefCell;
+use std::marker::PhantomData;
+use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::{EventName, LOCAL_REGISTRY, ObservationBag, ObservationBagSync, Observations};
 

@@ -1,9 +1,10 @@
 //! Showcase basic use of the `region_local!` macro in a multithreaded web app.
-//!
-use axum::{Router, routing::get};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use axum::Router;
+use axum::routing::get;
 use many_cpus::HardwareInfo;
 use region_local::{RegionLocalCopyExt, RegionLocalExt, region_local};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 // A global variable whose value is unique in each memory region for fast local access.
 // Writes to this variable are eventually consistent across all threads in the same memory region.

@@ -1,16 +1,15 @@
-use std::{iter::once, mem, sync::OnceLock};
+use std::iter::once;
+use std::mem;
+use std::sync::OnceLock;
 
 use foldhash::HashMap;
 use itertools::Itertools;
 use nonempty::NonEmpty;
 
-use crate::{
-    EfficiencyClass, MemoryRegionId, ProcessorId,
-    pal::{
-        Platform, ProcessorFacade, ProcessorImpl,
-        linux::{Bindings, BindingsFacade, Filesystem, filesystem::FilesystemFacade},
-    },
-};
+use crate::pal::linux::filesystem::FilesystemFacade;
+use crate::pal::linux::{Bindings, BindingsFacade, Filesystem};
+use crate::pal::{Platform, ProcessorFacade, ProcessorImpl};
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
 
 // https://github.com/cloudhead/nonempty/issues/68
 extern crate alloc;
@@ -503,9 +502,8 @@ mod tests {
 
     use testing::f64_diff_abs;
 
-    use crate::pal::linux::{MockBindings, MockFilesystem};
-
     use super::*;
+    use crate::pal::linux::{MockBindings, MockFilesystem};
 
     const PROCESSOR_TIME_CLOSE_ENOUGH: f64 = 0.01;
 

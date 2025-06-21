@@ -1,11 +1,11 @@
-use crate::DropPolicy;
 use core::panic;
 use std::alloc::{Layout, alloc, dealloc};
 use std::any::type_name;
-use std::mem;
 use std::pin::Pin;
 use std::ptr::NonNull;
-use std::thread;
+use std::{mem, thread};
+
+use crate::DropPolicy;
 
 /// This is the backing storage of a `PinnedPool`. It is currently an implementation detail,
 /// though could conceivably be made public in the future to support fixed-size pool needs.
@@ -469,13 +469,12 @@ impl<'s, T, const CAPACITY: usize> PinnedSlabInserter<'s, T, CAPACITY> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+
     use super::*;
-    use std::{
-        cell::{Cell, RefCell},
-        rc::Rc,
-        sync::{Arc, Mutex},
-        thread,
-    };
 
     #[test]
     fn smoke_test() {

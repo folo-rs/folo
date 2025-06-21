@@ -1,12 +1,10 @@
 use std::fmt::Debug;
-
 #[cfg(test)]
 use std::sync::Arc;
 
-use crate::pal::linux::{BuildTargetFilesystem, Filesystem};
-
 #[cfg(test)]
 use crate::pal::linux::MockFilesystem;
+use crate::pal::linux::{BuildTargetFilesystem, Filesystem};
 
 /// Enum to hide the different filesystem implementations behind a single wrapper type.
 #[derive(Clone)]

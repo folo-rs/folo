@@ -27,9 +27,8 @@
 //! ```
 #![doc = source_file!("examples/cpulist_basic.rs")]
 //! ```
-//!
+//! 
 //! The stride operator is also supported for parsing:
-//!
 //! ```
 #![doc = source_file!("examples/cpulist_stride.rs")]
 //! ```

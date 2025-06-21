@@ -3,7 +3,10 @@
     reason = "code is conditionally used only in non-test builds"
 )]
 
-use std::{cell::RefCell, hint::black_box, ptr, sync::LazyLock};
+use std::cell::RefCell;
+use std::hint::black_box;
+use std::ptr;
+use std::sync::LazyLock;
 
 // Large servers can make hundreds of MBs of L3 cache available to a single core, though it
 // depends on the specific model and hardware configuration. We use a sufficiently large data set

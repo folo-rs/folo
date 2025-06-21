@@ -1,7 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Copyright (c) Folo authors.
 
-use std::{sync::Arc, thread::LocalKey};
+use std::sync::Arc;
+use std::thread::LocalKey;
 
 /// This is the real type of variables wrapped in the [`linked::thread_local_arc!` macro][1].
 /// See macro documentation for more details.
@@ -154,10 +155,8 @@ macro_rules! thread_local_arc {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::atomic::{self, AtomicUsize},
-        thread,
-    };
+    use std::sync::atomic::{self, AtomicUsize};
+    use std::thread;
 
     #[linked::object]
     struct TokenCache {

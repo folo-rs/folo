@@ -18,7 +18,6 @@
 //!   can hide the fact that there is collaboration happening on multiple threads,
 //!   providing **a reasonably simple API with minimal extra complexity** for both the author
 //!   and the user of a type.
-//!
 #![ doc=mermaid!( "../doc/linked.mermaid") ]
 //!
 //! The patterns and mechanisms provided by this crate are designed to make it easy to create linked
@@ -270,8 +269,9 @@
 //! #         *self.value.lock().unwrap() = value;
 //! #     }
 //! # }
-//! use linked::InstancePerThread;
 //! use std::thread;
+//!
+//! use linked::InstancePerThread;
 //!
 //! let linked_thing = InstancePerThread::new(Thing::new("hello".to_string()));
 //!
@@ -289,7 +289,9 @@
 //!         let thing = linked_thing.acquire();
 //!         assert_eq!(thing.value(), "world");
 //!     }
-//! }).join().unwrap();
+//! })
+//! .join()
+//! .unwrap();
 //! ```
 //!
 //! Example of using a [`linked::Family`][11] to manually create an instance on a different thread:
@@ -314,8 +316,9 @@
 //! #         *self.value.lock().unwrap() = value;
 //! #     }
 //! # }
-//! use linked::Object; // This brings .family() into scope.
 //! use std::thread;
+//!
+//! use linked::Object; // This brings .family() into scope.
 //!
 //! let thing = Thing::new("hello".to_string());
 //! assert_eq!(thing.value(), "hello");
@@ -331,7 +334,9 @@
 //!         let thing: Thing = thing_family.into();
 //!         assert_eq!(thing.value(), "world");
 //!     }
-//! }).join().unwrap();
+//! })
+//! .join()
+//! .unwrap();
 //! ```
 //!
 //! # Implementing local behavior
@@ -375,7 +380,7 @@
 //!
 //!     pub fn set_value(&mut self, value: String) {
 //!         *self.value.lock().unwrap() = value;
-//!          self.update_count += 1;
+//!         self.update_count += 1;
 //!     }
 //!
 //!     pub fn update_count(&self) -> usize {
@@ -431,7 +436,7 @@
 //!
 //!     pub fn set_value(&self, value: String) {
 //!         *self.value.lock().unwrap() = value;
-//!          self.update_count.set(self.update_count.get() + 1);
+//!         self.update_count.set(self.update_count.get() + 1);
 //!     }
 //!
 //!     pub fn update_count(&self) -> usize {
@@ -484,8 +489,8 @@
 //! Example extending the above example using [`AtomicUsize`][10] to become `Sync`:
 //!
 //! ```rust
-//! use std::sync::{Arc, Mutex};
 //! use std::sync::atomic::{self, AtomicUsize};
+//! use std::sync::{Arc, Mutex};
 //!
 //! #[linked::object]
 //! pub struct Thing {
@@ -515,7 +520,7 @@
 //!
 //!     pub fn set_value(&self, value: String) {
 //!         *self.value.lock().unwrap() = value;
-//!          self.update_count.fetch_add(1, atomic::Ordering::Relaxed);
+//!         self.update_count.fetch_add(1, atomic::Ordering::Relaxed);
 //!     }
 //!
 //!     pub fn update_count(&self) -> usize {
@@ -564,7 +569,7 @@
 //! // If using linked::Box, do not put `#[linked::object]` on the struct.
 //! // The linked::Box itself is the linked object and our struct is only its contents.
 //! struct XmlConfig {
-//!     config: String
+//!     config: String,
 //! }
 //!
 //! impl XmlConfig {
@@ -592,17 +597,15 @@
 //! # impl ConfigSource for XmlConfig {}
 //! #[linked::object]
 //! struct XmlConfig {
-//!     config: String
+//!     config: String,
 //! }
 //!
 //! impl XmlConfig {
 //!     // XmlConfig itself is a regular linked object, nothing special about it.
 //!     pub fn new() -> XmlConfig {
-//!         linked::new!(
-//!             Self {
-//!                 config: "xml".to_string(),
-//!             }
-//!         )
+//!         linked::new!(Self {
+//!             config: "xml".to_string(),
+//!         })
 //!     }
 //!
 //!     // When the caller wants a `dyn ConfigSource`, we can convert this specific instance into
@@ -681,9 +684,7 @@ mod macros;
 ///
 /// impl TokenCache {
 ///     pub fn new(some_value: usize) -> Self {
-///         linked::new!(Self {
-///             some_value,
-///         })
+///         linked::new!(Self { some_value })
 ///     }
 /// }
 /// ```

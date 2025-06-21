@@ -96,7 +96,7 @@ where
     ///
     /// ```
     /// use linked::InstancePerThread;
-    /// use region_local::{RegionLocal};
+    /// use region_local::RegionLocal;
     ///
     /// let favorite_color_regional = InstancePerThread::new(RegionLocal::new(|| "blue".to_string()));
     ///
@@ -154,7 +154,7 @@ where
     ///
     /// ```
     /// use linked::InstancePerThread;
-    /// use region_local::{RegionLocal};
+    /// use region_local::RegionLocal;
     ///
     /// let favorite_color_regional = InstancePerThread::new(RegionLocal::new(|| "blue".to_string()));
     ///
@@ -169,10 +169,11 @@ where
     /// immediately visible if the thread is pinned to a specific memory region.
     ///
     /// ```
+    /// use std::num::NonZero;
+    ///
     /// use linked::InstancePerThread;
     /// use many_cpus::ProcessorSet;
-    /// use region_local::{RegionLocal};
-    /// use std::num::NonZero;
+    /// use region_local::RegionLocal;
     ///
     /// let favorite_color_regional = InstancePerThread::new(RegionLocal::new(|| "blue".to_string()));
     ///
@@ -182,24 +183,28 @@ where
     ///     .take(NonZero::new(1).unwrap())
     ///     .unwrap();
     ///
-    /// one_processor.spawn_thread(move |processor_set| {
-    ///     let processor = processor_set.processors().first();
-    ///     println!("Thread pinned to processor {} in memory region {}",
-    ///         processor.id(),
-    ///         processor.memory_region_id()
-    ///     );
+    /// one_processor
+    ///     .spawn_thread(move |processor_set| {
+    ///         let processor = processor_set.processors().first();
+    ///         println!(
+    ///             "Thread pinned to processor {} in memory region {}",
+    ///             processor.id(),
+    ///             processor.memory_region_id()
+    ///         );
     ///
-    ///     // This localizes the object to the current thread. Reuse this object when possible.
-    ///     let favorite_color = favorite_color_regional.acquire();
+    ///         // This localizes the object to the current thread. Reuse this object when possible.
+    ///         let favorite_color = favorite_color_regional.acquire();
     ///
-    ///     favorite_color.set_local("red".to_string());
+    ///         favorite_color.set_local("red".to_string());
     ///
-    ///     // This thread is pinned to a specific processor, so it is guaranteed to stay
-    ///     // within the same memory region (== on the same physical hardware). This means
-    ///     // that an update to a region-local value is immediately visible.
-    ///     let color = favorite_color.with_local(|color| color.clone());
-    ///     assert_eq!(color, "red");
-    /// }).join().unwrap();
+    ///         // This thread is pinned to a specific processor, so it is guaranteed to stay
+    ///         // within the same memory region (== on the same physical hardware). This means
+    ///         // that an update to a region-local value is immediately visible.
+    ///         let color = favorite_color.with_local(|color| color.clone());
+    ///         assert_eq!(color, "red");
+    ///     })
+    ///     .join()
+    ///     .unwrap();
     /// ```
     ///
     /// [1]: crate#consistency-guarantees
@@ -225,7 +230,7 @@ where
     ///
     /// ```
     /// use linked::InstancePerThread;
-    /// use region_local::{RegionLocal};
+    /// use region_local::RegionLocal;
     ///
     /// let current_access_token_regional = InstancePerThread::new(RegionLocal::new(|| 0x123100));
     ///
@@ -416,13 +421,11 @@ enum RegionalValue<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::ptr;
     use std::sync::Arc;
-    use std::thread;
-
-    use crate::{MockHardwareInfoClient, MockHardwareTrackerClient, RegionLocalExt, region_local};
+    use std::{ptr, thread};
 
     use super::*;
+    use crate::{MockHardwareInfoClient, MockHardwareTrackerClient, RegionLocalExt, region_local};
 
     #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]

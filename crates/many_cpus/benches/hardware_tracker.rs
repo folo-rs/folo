@@ -5,7 +5,8 @@
     reason = "No need for API documentation in benchmark code"
 )]
 
-use std::{hint::black_box, time::Duration};
+use std::hint::black_box;
+use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus::{HardwareTracker, ProcessorSet};

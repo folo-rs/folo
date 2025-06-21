@@ -10,7 +10,8 @@ fn main() {
 
 #[cfg(windows)]
 mod windows {
-    use std::{thread, time::Duration};
+    use std::thread;
+    use std::time::Duration;
 
     use new_zealand::nz;
     use testing::{Job, ProcessorTimePct};

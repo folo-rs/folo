@@ -5,7 +5,8 @@
     reason = "No need for API documentation in benchmark code"
 )]
 
-use std::{hint::black_box, ptr};
+use std::hint::black_box;
+use std::ptr;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus_benchmarking::{Payload, WorkDistribution, execute_runs};

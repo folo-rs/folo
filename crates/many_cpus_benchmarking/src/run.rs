@@ -1,21 +1,20 @@
-use std::{
-    any::type_name,
-    collections::VecDeque,
-    env,
-    iter::{once, repeat_with},
-    mem,
-    num::NonZero,
-    sync::{Arc, Barrier, Mutex, mpsc},
-    thread::JoinHandle,
-    time::{Duration, Instant},
-};
+use std::any::type_name;
+use std::collections::VecDeque;
+use std::iter::{once, repeat_with};
+use std::num::NonZero;
+use std::sync::{Arc, Barrier, Mutex, mpsc};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+use std::{env, mem};
 
-use criterion::{BenchmarkGroup, Criterion, SamplingMode, measurement::WallTime};
+use criterion::measurement::WallTime;
+use criterion::{BenchmarkGroup, Criterion, SamplingMode};
 use itertools::Itertools;
 use many_cpus::{Processor, ProcessorSet};
 use new_zealand::nz;
 use nonempty::{NonEmpty, nonempty};
-use rand::{rng, seq::SliceRandom};
+use rand::rng;
+use rand::seq::SliceRandom;
 
 use crate::{Payload, WorkDistribution};
 

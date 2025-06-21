@@ -1,7 +1,5 @@
-use std::{
-    fmt::{Debug, Display},
-    hash::Hash,
-};
+use std::fmt::{Debug, Display};
+use std::hash::Hash;
 
 use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
 

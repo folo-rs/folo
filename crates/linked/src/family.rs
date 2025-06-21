@@ -45,8 +45,9 @@ use crate::__private::{InstanceFactory, Link};
 /// #         *self.value.lock().unwrap() = value;
 /// #     }
 /// # }
-/// use linked::Object; // This brings .family() into scope.
 /// use std::thread;
+///
+/// use linked::Object; // This brings .family() into scope.
 ///
 /// let thing = Thing::new("hello".to_string());
 /// assert_eq!(thing.value(), "hello");
@@ -60,7 +61,9 @@ use crate::__private::{InstanceFactory, Link};
 ///         let thing: Thing = thing_family.into();
 ///         assert_eq!(thing.value(), "world");
 ///     }
-/// }).join().unwrap();
+/// })
+/// .join()
+/// .unwrap();
 /// ```
 ///
 /// [1]: crate::instances

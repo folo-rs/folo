@@ -1,6 +1,9 @@
-use std::{
-    alloc::Layout, marker::PhantomData, mem::MaybeUninit, num::NonZero, ops::Range, ptr::NonNull,
-};
+use std::alloc::Layout;
+use std::marker::PhantomData;
+use std::mem::MaybeUninit;
+use std::num::NonZero;
+use std::ops::Range;
+use std::ptr::NonNull;
 
 /// Windows often wants us to provide a buffer of arbitrary size aligned for a type `T`, in which
 /// it wants to place instances of `T` or `T`-like types (not necessarily at integer `T` offsets).

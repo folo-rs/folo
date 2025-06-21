@@ -1,14 +1,10 @@
-use std::{
-    fmt::{Debug, Display},
-    hash::{Hash, Hasher},
-};
+use std::fmt::{Debug, Display};
+use std::hash::{Hash, Hasher};
 
 use derive_more::derive::AsRef;
 
-use crate::{
-    EfficiencyClass, MemoryRegionId, ProcessorId,
-    pal::{AbstractProcessor, ProcessorFacade},
-};
+use crate::pal::{AbstractProcessor, ProcessorFacade};
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
 
 /// A processor present on the system and available to the current process.
 #[derive(AsRef, Clone)]
@@ -98,9 +94,8 @@ impl Debug for Processor {
 mod tests {
     use std::hash::DefaultHasher;
 
-    use crate::pal::FakeProcessor;
-
     use super::*;
+    use crate::pal::FakeProcessor;
 
     #[test]
     fn smoke_test() {

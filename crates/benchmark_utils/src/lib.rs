@@ -3,13 +3,11 @@
 //! See also `many_cpus_benchmarking`, which provides public benchmarking utilities
 //! that may have value even outside this project.
 
-use std::{
-    iter::repeat_with,
-    num::NonZero,
-    sync::{Arc, Barrier, Mutex},
-    time::{Duration, Instant},
-    vec,
-};
+use std::iter::repeat_with;
+use std::num::NonZero;
+use std::sync::{Arc, Barrier, Mutex};
+use std::time::{Duration, Instant};
+use std::vec;
 
 mod threadpool;
 pub use threadpool::*;

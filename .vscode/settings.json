@@ -18,7 +18,10 @@
         "taskset",
         "withf"
     ],
+    // The point here is to take "miri" out of the default set of features,
+    // so not(miri) tests are not always greyed out.
     "rust-analyzer.cargo.cfgs": [
         "debug_assertions"
-    ]
+    ],
+    "rust-analyzer.rustfmt.extraArgs": ["+nightly", "--config-path", "${workspaceFolder}/unstable-rustfmt.toml"],
 }

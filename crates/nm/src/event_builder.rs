@@ -1,4 +1,7 @@
-use std::{marker::PhantomData, rc::Rc, sync::Arc, thread::LocalKey};
+use std::marker::PhantomData;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::thread::LocalKey;
 
 use crate::{
     Event, EventName, LOCAL_REGISTRY, Magnitude, MetricsPusher, ObservationBag, ObservationBagSync,
@@ -197,9 +200,8 @@ impl EventBuilder<Push> {
 mod tests {
     use static_assertions::assert_not_impl_any;
 
-    use crate::LocalEventRegistry;
-
     use super::*;
+    use crate::LocalEventRegistry;
 
     #[test]
     #[should_panic]

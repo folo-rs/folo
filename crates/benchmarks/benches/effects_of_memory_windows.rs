@@ -25,22 +25,17 @@ mod not_windows {
 
 #[cfg(windows)]
 mod windows {
-    use std::{
-        cell::RefCell,
-        hint::black_box,
-        iter::repeat_with,
-        sync::{Arc, Mutex},
-    };
+    use std::cell::RefCell;
+    use std::hint::black_box;
+    use std::iter::repeat_with;
+    use std::sync::{Arc, Mutex};
 
     use criterion::Criterion;
     use many_cpus::{HardwareInfo, HardwareTracker};
     use many_cpus_benchmarking::{Payload, WorkDistribution, execute_runs};
-    use windows::Win32::{
-        Foundation::HANDLE,
-        System::Memory::{
-            GetProcessHeap, HEAP_FLAGS, HEAP_NO_SERIALIZE, HeapAlloc, HeapCreate, HeapDestroy,
-            HeapFree,
-        },
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::Memory::{
+        GetProcessHeap, HEAP_FLAGS, HEAP_NO_SERIALIZE, HeapAlloc, HeapCreate, HeapDestroy, HeapFree,
     };
 
     // https://github.com/cloudhead/nonempty/issues/68

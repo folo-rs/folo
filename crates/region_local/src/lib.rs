@@ -10,7 +10,6 @@
 //! Region-local storage may be useful in circumstances where state needs to be shared but
 //! it is fine to do so only within each memory region (e.g. because you intentionally want
 //! to avoid the overhead of cross-memory-region transfers and want to isolate the data sets).
-//!
 #![doc = mermaid!("../doc/region_local.mermaid")]
 //!
 //! Think of this as an equivalent of [`thread_local_rc!`][2], except operating on the memory
@@ -82,7 +81,8 @@
 //! use linked::InstancePerThreadSync;
 //! use region_local::RegionLocal;
 //!
-//! let favorite_color_regional = InstancePerThreadSync::new(RegionLocal::new(|| "blue".to_string()));
+//! let favorite_color_regional =
+//!     InstancePerThreadSync::new(RegionLocal::new(|| "blue".to_string()));
 //!
 //! // This localizes the object to the current thread. Reuse this value when possible.
 //! let favorite_color = favorite_color_regional.acquire();

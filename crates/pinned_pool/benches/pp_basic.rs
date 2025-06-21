@@ -5,7 +5,8 @@
     reason = "No need for API documentation in benchmark code"
 )]
 
-use std::{collections::VecDeque, hint::black_box};
+use std::collections::VecDeque;
+use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use pinned_pool::PinnedPool;

@@ -1,7 +1,5 @@
-use std::{
-    marker::PhantomData,
-    time::{Duration, Instant},
-};
+use std::marker::PhantomData;
+use std::time::{Duration, Instant};
 
 use crate::{EventBuilder, Magnitude, Observe, PublishModel, Pull};
 
@@ -38,9 +36,11 @@ use crate::{EventBuilder, Magnitude, Observe, PublishModel, Pull};
 /// }
 ///
 /// pub fn http_connect() {
-///     CONNECT_TIME_MS.with(|e| e.observe_duration_millis(|| {
-///         do_http_connect();
-///     }));
+///     CONNECT_TIME_MS.with(|e| {
+///         e.observe_duration_millis(|| {
+///             do_http_connect();
+///         })
+///     });
 /// }
 /// # http_connect();
 /// # fn do_http_connect() {}
@@ -61,9 +61,11 @@ use crate::{EventBuilder, Magnitude, Observe, PublishModel, Pull};
 /// }
 ///
 /// pub fn http_connect() {
-///     CONNECT_TIME_MS.with(|e| e.observe_duration_millis(|| {
-///         do_http_connect();
-///     }));
+///     CONNECT_TIME_MS.with(|e| {
+///         e.observe_duration_millis(|| {
+///             do_http_connect();
+///         })
+///     });
 /// }
 ///
 /// loop {
@@ -283,13 +285,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{rc::Rc, sync::Arc};
+    use std::rc::Rc;
+    use std::sync::Arc;
 
     use static_assertions::assert_not_impl_any;
 
-    use crate::{ObservationBag, ObservationBagSync, Push};
-
     use super::*;
+    use crate::{ObservationBag, ObservationBagSync, Push};
 
     #[test]
     fn pull_event_observations_are_recorded() {

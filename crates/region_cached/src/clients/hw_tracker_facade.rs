@@ -3,10 +3,9 @@ use std::sync::Arc;
 
 use many_cpus::MemoryRegionId;
 
-use crate::{HardwareTrackerClient, HardwareTrackerClientImpl};
-
 #[cfg(test)]
 use crate::MockHardwareTrackerClient;
+use crate::{HardwareTrackerClient, HardwareTrackerClientImpl};
 
 #[derive(Clone, Debug)]
 pub(crate) enum HardwareTrackerClientFacade {

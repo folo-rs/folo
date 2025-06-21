@@ -1,7 +1,5 @@
-use crate::pal::{
-    ProcessorImpl,
-    windows::{ProcessorGroupIndex, ProcessorIndexInGroup},
-};
+use crate::pal::ProcessorImpl;
+use crate::pal::windows::{ProcessorGroupIndex, ProcessorIndexInGroup};
 
 /// Collects processors from the same group into a mask.
 #[derive(Debug)]
@@ -57,9 +55,8 @@ impl GroupMask {
 
 #[cfg(test)]
 mod tests {
-    use crate::EfficiencyClass;
-
     use super::*;
+    use crate::EfficiencyClass;
 
     #[test]
     fn smoke_test() {

@@ -55,6 +55,7 @@
 //!
 //! ```
 //! use std::ptr;
+//!
 //! use pinned_pool::{DropPolicy, PinnedPool};
 //!
 //! let mut pool = PinnedPool::<String>::builder()

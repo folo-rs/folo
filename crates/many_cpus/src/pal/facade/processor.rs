@@ -2,10 +2,9 @@ use std::fmt::Debug;
 
 use derive_more::derive::Display;
 
-use crate::pal::{AbstractProcessor, ProcessorImpl};
-
 #[cfg(test)]
 use crate::pal::FakeProcessor;
+use crate::pal::{AbstractProcessor, ProcessorImpl};
 
 #[derive(Clone, Copy, Display, Eq, Hash, PartialEq)]
 pub(crate) enum ProcessorFacade {

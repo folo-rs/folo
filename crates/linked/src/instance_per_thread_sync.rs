@@ -1,9 +1,7 @@
-use std::{
-    collections::{HashMap, hash_map},
-    ops::Deref,
-    sync::{Arc, RwLock},
-    thread::{self, ThreadId},
-};
+use std::collections::{HashMap, hash_map};
+use std::ops::Deref;
+use std::sync::{Arc, RwLock};
+use std::thread::{self, ThreadId};
 
 use simple_mermaid::mermaid;
 
@@ -23,7 +21,6 @@ use crate::{BuildThreadIdHasher, ERR_POISONED_LOCK};
 /// Create an instance of `InstancePerThreadSync` and provide it the initial instance of a linked
 /// object `T`. Any instance of `T` accessed through the same `InstancePerThreadSync` or a clone
 /// of it will be linked to the same family.
-///
 #[ doc=mermaid!( "../doc/instance_per_thread_sync.mermaid") ]
 ///
 /// To access the current thread's instance of `T`, you must first obtain a
@@ -403,13 +400,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::{
-            Arc, Mutex,
-            atomic::{self, AtomicUsize},
-        },
-        thread,
-    };
+    use std::sync::atomic::{self, AtomicUsize};
+    use std::sync::{Arc, Mutex};
+    use std::thread;
 
     use super::*;
 

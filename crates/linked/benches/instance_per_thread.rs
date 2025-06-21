@@ -5,10 +5,9 @@
     reason = "No need for API documentation in benchmark code"
 )]
 
-use std::{
-    hint::black_box,
-    sync::{Arc, LazyLock, atomic::AtomicUsize},
-};
+use std::hint::black_box;
+use std::sync::atomic::AtomicUsize;
+use std::sync::{Arc, LazyLock};
 
 use benchmark_utils::{ThreadPool, bench_on_threadpool};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};

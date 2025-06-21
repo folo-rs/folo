@@ -38,7 +38,7 @@ use std::ops::{Deref, DerefMut};
 /// // If using linked::Box, do not put `#[linked::object]` on the struct.
 /// // The linked::Box itself is the linked object and our struct is only its contents.
 /// struct XmlConfig {
-///     config: String
+///     config: String,
 /// }
 ///
 /// impl XmlConfig {
@@ -88,19 +88,13 @@ use std::ops::{Deref, DerefMut};
 ///
 /// impl XmlConfig {
 ///     pub fn new_as_config_source() -> linked::Box<dyn ConfigSource> {
-///         linked::new_box!(
-///             dyn ConfigSource,
-///             XmlConfig {}
-///         )
+///         linked::new_box!(dyn ConfigSource, XmlConfig {})
 ///     }
 /// }
 ///
 /// impl IniConfig {
 ///     pub fn new_as_config_source() -> linked::Box<dyn ConfigSource> {
-///         linked::new_box!(
-///             dyn ConfigSource,
-///             IniConfig {}
-///         )
+///         linked::new_box!(dyn ConfigSource, IniConfig {})
 ///     }
 /// }
 ///
@@ -175,7 +169,7 @@ impl<T: ?Sized + 'static> DerefMut for Box<T> {
 /// // If using linked::Box, do not put `#[linked::object]` on the struct.
 /// // The linked::Box itself is the linked object and our struct is only its contents.
 /// struct XmlConfig {
-///     config: String
+///     config: String,
 /// }
 ///
 /// impl XmlConfig {

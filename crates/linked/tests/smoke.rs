@@ -1,9 +1,7 @@
 //! Basic operations on linked objects.
 
-use std::{
-    sync::{Arc, Mutex},
-    thread,
-};
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 use linked::Object;
 

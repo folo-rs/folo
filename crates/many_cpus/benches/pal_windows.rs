@@ -27,11 +27,14 @@ fn entrypoint(c: &mut Criterion) {
 
 #[cfg(windows)]
 mod windows {
-    use std::{hint::black_box, sync::Arc, time::Duration};
+    use std::hint::black_box;
+    use std::sync::Arc;
+    use std::time::Duration;
 
     use benchmark_utils::{ThreadPool, bench_on_threadpool};
     use criterion::Criterion;
-    use many_cpus::{ProcessorSet, pal::BUILD_TARGET_PLATFORM};
+    use many_cpus::ProcessorSet;
+    use many_cpus::pal::BUILD_TARGET_PLATFORM;
     use new_zealand::nz;
     use windows::Win32::System::SystemInformation::GROUP_AFFINITY;
 

@@ -1,11 +1,10 @@
-use std::{cell::RefCell, marker::PhantomData};
+use std::cell::RefCell;
+use std::marker::PhantomData;
 
 use negative_impl::negative_impl;
 
-use crate::{
-    MemoryRegionId, Processor, ProcessorId, ResourceQuota,
-    pal::{AbstractProcessor, Platform, PlatformFacade},
-};
+use crate::pal::{AbstractProcessor, Platform, PlatformFacade};
+use crate::{MemoryRegionId, Processor, ProcessorId, ResourceQuota};
 
 thread_local! {
     /// Thread-local default instance of the hardware tracker core.
@@ -27,7 +26,9 @@ thread_local! {
 ///     let efficiency_class = p.efficiency_class();
 ///     let id = p.id();
 ///
-///     println!("Executing on processor {id}, which has the efficiency class {efficiency_class:?}");
+///     println!(
+///         "Executing on processor {id}, which has the efficiency class {efficiency_class:?}"
+///     );
 /// });
 /// ```
 ///
@@ -70,7 +71,9 @@ impl HardwareTracker {
     ///     let efficiency_class = p.efficiency_class();
     ///     let id = p.id();
     ///
-    ///     println!("Executing on processor {id}, which has the efficiency class {efficiency_class:?}");
+    ///     println!(
+    ///         "Executing on processor {id}, which has the efficiency class {efficiency_class:?}"
+    ///     );
     /// });
     /// ```
     #[cfg_attr(test, mutants::skip)] // Trivial layer, only the core is tested.
@@ -118,9 +121,10 @@ impl HardwareTracker {
     /// # Example (pinned to one processor)
     ///
     /// ```
-    /// use many_cpus::{HardwareTracker, ProcessorSet};
     /// use std::num::NonZero;
     /// use std::thread;
+    ///
+    /// use many_cpus::{HardwareTracker, ProcessorSet};
     ///
     /// let one_processor = ProcessorSet::builder()
     ///     .take(NonZero::new(1).unwrap())
@@ -130,18 +134,20 @@ impl HardwareTracker {
     ///     one_processor.pin_current_thread_to();
     ///
     ///     assert!(HardwareTracker::is_thread_processor_pinned());
-    /// }).join().unwrap();
+    /// })
+    /// .join()
+    /// .unwrap();
     /// ```
     ///
     /// # Example (pinned to multiple processors)
     ///
     /// ```
-    /// use many_cpus::{HardwareTracker, ProcessorSet};
     /// use std::num::NonZero;
     /// use std::thread;
     ///
-    /// let two_processors = ProcessorSet::builder()
-    ///     .take(NonZero::new(2).unwrap());
+    /// use many_cpus::{HardwareTracker, ProcessorSet};
+    ///
+    /// let two_processors = ProcessorSet::builder().take(NonZero::new(2).unwrap());
     ///
     /// let Some(two_processors) = two_processors else {
     ///     eprintln!("This example requires at least two processors");
@@ -152,7 +158,9 @@ impl HardwareTracker {
     ///     two_processors.pin_current_thread_to();
     ///
     ///     assert!(!HardwareTracker::is_thread_processor_pinned());
-    /// }).join().unwrap();
+    /// })
+    /// .join()
+    /// .unwrap();
     /// ```
     #[cfg_attr(test, mutants::skip)] // Trivial layer, only the core is tested.
     #[inline]
@@ -179,9 +187,10 @@ impl HardwareTracker {
     /// # Example (pinned to one processor)
     ///
     /// ```
-    /// use many_cpus::{HardwareTracker, ProcessorSet};
     /// use std::num::NonZero;
     /// use std::thread;
+    ///
+    /// use many_cpus::{HardwareTracker, ProcessorSet};
     ///
     /// let one_processor = ProcessorSet::builder()
     ///     .take(NonZero::new(1).unwrap())
@@ -193,15 +202,18 @@ impl HardwareTracker {
     ///     // Each processor is in exactly one memory region, so as we are
     ///     // pinned to one processor, we are also pinned to one memory region.
     ///     assert!(HardwareTracker::is_thread_memory_region_pinned());
-    /// }).join().unwrap();
+    /// })
+    /// .join()
+    /// .unwrap();
     /// ```
     ///
     /// # Example (pinned to multiple processors)
     ///
     /// ```
-    /// use many_cpus::{HardwareTracker, ProcessorSet};
     /// use std::num::NonZero;
     /// use std::thread;
+    ///
+    /// use many_cpus::{HardwareTracker, ProcessorSet};
     ///
     /// let two_processors = ProcessorSet::builder()
     ///     .same_memory_region()
@@ -218,7 +230,9 @@ impl HardwareTracker {
     ///     // While we are not pinned to a single processor, all processors we are pinned to
     ///     // are in the same memory region, so we are still pinned to one memory region.
     ///     assert!(HardwareTracker::is_thread_memory_region_pinned());
-    /// }).join().unwrap();
+    /// })
+    /// .join()
+    /// .unwrap();
     /// ```
     #[cfg_attr(test, mutants::skip)] // Trivial layer, only the core is tested.
     #[inline]
@@ -374,12 +388,9 @@ mod tests {
     use static_assertions::assert_not_impl_any;
     use testing::f64_diff_abs;
 
-    use crate::{
-        EfficiencyClass, ProcessorSet,
-        pal::{FakeProcessor, MockPlatform, ProcessorFacade},
-    };
-
     use super::*;
+    use crate::pal::{FakeProcessor, MockPlatform, ProcessorFacade};
+    use crate::{EfficiencyClass, ProcessorSet};
 
     // https://github.com/cloudhead/nonempty/issues/68
     extern crate alloc;

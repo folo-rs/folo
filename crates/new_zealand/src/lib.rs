@@ -5,9 +5,12 @@
 //!
 //! ```
 //! use std::num::NonZero;
+//!
 //! use new_zealand::nz;
 //!
-//! fn foo(x: NonZero<u32>) { println!("NonZero value: {x}"); }
+//! fn foo(x: NonZero<u32>) {
+//!     println!("NonZero value: {x}");
+//! }
 //!
 //! foo(nz!(42));
 //! ```

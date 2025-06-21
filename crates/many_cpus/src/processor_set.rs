@@ -1,12 +1,12 @@
-use std::{fmt::Display, sync::LazyLock, thread};
+use std::fmt::Display;
+use std::sync::LazyLock;
+use std::thread;
 
 use itertools::Itertools;
 use nonempty::NonEmpty;
 
-use crate::{
-    HardwareTrackerClient, HardwareTrackerClientFacade, Processor, ProcessorSetBuilder,
-    pal::{Platform, PlatformFacade},
-};
+use crate::pal::{Platform, PlatformFacade};
+use crate::{HardwareTrackerClient, HardwareTrackerClientFacade, Processor, ProcessorSetBuilder};
 
 // https://github.com/cloudhead/nonempty/issues/68
 extern crate alloc;
@@ -37,7 +37,6 @@ static DEFAULT_PROCESSORS: LazyLock<ProcessorSet> = LazyLock::new(|| {
 ///    will only be scheduled to run on the processors in the set.
 /// 3. You can use [`ProcessorSet::spawn_threads()`] to spawn a set of threads, with one thread
 ///    for each of the processors in the set. Each thread will be pinned to its own processor.
-///
 #[doc = include_str!("../docs/snippets/changes_at_runtime.md")]
 #[derive(Clone, Debug)]
 pub struct ProcessorSet {
@@ -272,20 +271,15 @@ impl Display for ProcessorSet {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use new_zealand::nz;
     use nonempty::nonempty;
 
-    use crate::{
-        EfficiencyClass, MockHardwareTrackerClient,
-        pal::{FakeProcessor, MockPlatform},
-    };
-
     use super::*;
+    use crate::pal::{FakeProcessor, MockPlatform};
+    use crate::{EfficiencyClass, MockHardwareTrackerClient};
 
     #[test]
     fn smoke_test() {

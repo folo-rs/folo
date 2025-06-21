@@ -1,9 +1,7 @@
 use std::marker::PhantomData;
 
-use crate::{
-    MemoryRegionId, ProcessorId,
-    pal::{BUILD_TARGET_PLATFORM, Platform},
-};
+use crate::pal::{BUILD_TARGET_PLATFORM, Platform};
+use crate::{MemoryRegionId, ProcessorId};
 
 /// Reports non-changing information about the system hardware.
 ///

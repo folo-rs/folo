@@ -1,22 +1,16 @@
 use std::fmt::Debug;
-
 #[cfg(test)]
 use std::sync::Arc;
 
-use windows::{
-    Win32::System::{
-        JobObjects::JOBOBJECT_CPU_RATE_CONTROL_INFORMATION,
-        Kernel::PROCESSOR_NUMBER,
-        SystemInformation::{
-            GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP, SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
-        },
-    },
-    core::Result,
+use windows::Win32::System::JobObjects::JOBOBJECT_CPU_RATE_CONTROL_INFORMATION;
+use windows::Win32::System::Kernel::PROCESSOR_NUMBER;
+use windows::Win32::System::SystemInformation::{
+    GROUP_AFFINITY, LOGICAL_PROCESSOR_RELATIONSHIP, SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
 };
+use windows::core::Result;
 
 #[cfg(test)]
 use crate::pal::windows::MockBindings;
-
 use crate::pal::windows::{Bindings, BuildTargetBindings};
 
 /// Hide the real/mock bindings choice behind a single type.

@@ -1,12 +1,9 @@
 #[cfg(test)]
 use std::sync::Arc;
 
-use crate::{MemoryRegionId, ProcessorId};
-
-use crate::{HardwareTrackerClient, HardwareTrackerClientImpl};
-
 #[cfg(test)]
 use crate::MockHardwareTrackerClient;
+use crate::{HardwareTrackerClient, HardwareTrackerClientImpl, MemoryRegionId, ProcessorId};
 
 #[derive(Clone, Debug)]
 pub(crate) enum HardwareTrackerClientFacade {

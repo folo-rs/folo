@@ -1,14 +1,13 @@
-use std::{fmt::Debug, io};
-
+use std::fmt::Debug;
+use std::io;
 #[cfg(test)]
 use std::sync::Arc;
 
 use libc::cpu_set_t;
 
-use crate::pal::linux::{Bindings, BuildTargetBindings};
-
 #[cfg(test)]
 use crate::pal::linux::MockBindings;
+use crate::pal::linux::{Bindings, BuildTargetBindings};
 
 /// Enum to hide the real/mock choice behind a single wrapper type.
 #[derive(Clone)]

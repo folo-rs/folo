@@ -1,7 +1,8 @@
+use std::pin::Pin;
+
 use num::Integer;
 
 use crate::{DropPolicy, PinnedPoolBuilder, PinnedSlab, PinnedSlabInserter};
-use std::pin::Pin;
 
 /// An object pool of unbounded size that guarantees pinning of its items.
 ///
@@ -359,13 +360,11 @@ impl<const SLAB_CAPACITY: usize> ItemCoordinates<SLAB_CAPACITY> {
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in test code")]
 
+    use std::cell::RefCell;
+    use std::sync::{Arc, Mutex};
+    use std::{ptr, thread};
+
     use super::*;
-    use std::{
-        cell::RefCell,
-        ptr,
-        sync::{Arc, Mutex},
-        thread,
-    };
 
     #[test]
     fn smoke_test() {

@@ -1,9 +1,7 @@
-use std::{
-    iter::repeat_with,
-    num::NonZero,
-    sync::{Arc, Mutex, mpsc},
-    thread::JoinHandle,
-};
+use std::iter::repeat_with;
+use std::num::NonZero;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread::JoinHandle;
 
 use many_cpus::ProcessorSet;
 
