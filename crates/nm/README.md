@@ -1,7 +1,10 @@
 # nm - nanometer
 
-Collect metrics about observed events with low collection overhead even in
+Collect metrics about observed events with low overhead even in
 highly multithreaded applications running on 100+ processors.
+
+Using arbitrary development hardware, we measure between 2 and 20 nanoseconds per
+observation, depending on how the event is configured. Benchmarks are included.
 
 # Collected metrics
 

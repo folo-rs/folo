@@ -1,16 +1,32 @@
 use std::{
     marker::PhantomData,
-    sync::Arc,
     time::{Duration, Instant},
 };
 
-use crate::{EventName, LOCAL_REGISTRY, Magnitude, ObservationBag, Observe};
+use crate::{EventBuilder, Magnitude, Observe, PublishModel, Pull};
 
 /// Allows you to observe the occurrences of an event in your code.
 ///
 /// The typical pattern is to observe events via thread-local static variables.
 ///
-/// # Example
+/// # Publishing models
+///
+/// The ultimate goal of the metrics collected by an [`Event`] is to end up in a [`Report`][1].
+/// There are two models by which this can happen:
+///
+/// - **Pull** model - the reporting system queries each event in the process for its latest data
+///   set when generating a report. This is the default and requires no action from you.
+/// - **Push** model - data from an event only flows to a thread-local [`MetricsPusher`][2], which
+///   publishes the data into the reporting system on demand. This requires you to periodically
+///   trigger the publishing via [`MetricsPusher::push()`][3].
+///
+/// The push model has lower overhead but requires action from you to ensure that data is published.
+/// You may consider using it under controlled conditions, such as when you are certain that every
+/// thread that will be reporting data will also call the pusher at some point.
+///
+/// The choice of publishing model can be made separately for each event.
+///
+/// # Example (pull model)
 ///
 /// ```
 /// use nm::Event;
@@ -30,28 +46,76 @@ use crate::{EventName, LOCAL_REGISTRY, Magnitude, ObservationBag, Observe};
 /// # fn do_http_connect() {}
 /// ```
 ///
+/// # Example (push model)
+///
+/// ```
+/// use nm::{Event, MetricsPusher, Push};
+///
+/// thread_local! {
+///     static HTTP_EVENTS_PUSHER: MetricsPusher = MetricsPusher::new();
+///
+///     static CONNECT_TIME_MS: Event<Push> = Event::builder()
+///         .name("net_http_connect_time_ms")
+///         .pusher_local(&HTTP_EVENTS_PUSHER)
+///         .build();
+/// }
+///
+/// pub fn http_connect() {
+///     CONNECT_TIME_MS.with(|e| e.observe_duration_millis(|| {
+///         do_http_connect();
+///     }));
+/// }
+///
+/// loop {
+///     http_connect();
+///
+///     // Periodically push the data to the reporting system.
+///     if is_time_to_push() {
+///         HTTP_EVENTS_PUSHER.with(MetricsPusher::push);
+///     }
+///     # break; // Avoid infinite loop when running example.
+/// }
+/// # fn do_http_connect() {}
+/// # fn is_time_to_push() -> bool { true }
+/// ```
+///
 /// # Thread safety
 ///
 /// This type is single-threaded. You would typically create instances in a
 /// `thread_local!` block, so each thread gets its own instance.
+///
+/// [1]: crate::Report
+/// [2]: crate::MetricsPusher
+/// [3]: crate::MetricsPusher::push
 #[derive(Debug)]
-pub struct Event {
-    // While an event is a single-threaded type, we need to use an Arc here because the
-    // observations may still be read (without locking) from other threads. We could
-    // theoretically do that without sharing but only conditionally, if each thread actively
-    // pushed its data to a central repository. That would be impractical, so we must enable
-    // reading of the data from other threads, painful as that may be.
-    observations: Arc<ObservationBag>,
+pub struct Event<P = Pull>
+where
+    P: PublishModel,
+{
+    publish_model: P,
 
     _single_threaded: PhantomData<*const ()>,
 }
 
-impl Event {
-    /// Creates a new event builder with the default configuration.
+impl Event<Pull> {
+    /// Creates a new event builder with the default builder configuration.
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Gets replaced with itself by different name, bad mutation.
-    pub fn builder() -> EventBuilder {
+    pub fn builder() -> EventBuilder<Pull> {
         EventBuilder::new()
+    }
+}
+
+impl<P> Event<P>
+where
+    P: PublishModel,
+{
+    #[must_use]
+    pub(crate) fn new(publish_model: P) -> Self {
+        Self {
+            publish_model,
+            _single_threaded: PhantomData,
+        }
     }
 
     /// Observes an event that has no explicit magnitude.
@@ -89,37 +153,43 @@ impl Event {
 
     /// Prepares to observe a batch of events with the same magnitude.
     #[must_use]
-    pub fn batch(&self, count: usize) -> ObservationBatch<'_> {
+    pub fn batch(&self, count: usize) -> ObservationBatch<'_, P> {
         ObservationBatch { event: self, count }
     }
 
     #[cfg(test)]
     pub(crate) fn snapshot(&self) -> crate::ObservationBagSnapshot {
-        self.observations.snapshot()
+        self.publish_model.snapshot()
     }
 }
 
 /// A batch of pending observations for an event, waiting for the magnitude to be specified.
 #[derive(Debug)]
-pub struct ObservationBatch<'a> {
-    event: &'a Event,
+pub struct ObservationBatch<'a, P>
+where
+    P: PublishModel,
+{
+    event: &'a Event<P>,
     count: usize,
 }
 
-impl ObservationBatch<'_> {
+impl<P> ObservationBatch<'_, P>
+where
+    P: PublishModel,
+{
     /// Observes a batch of events that have no explicit magnitude.
     ///
     /// By convention, this is represented as a magnitude of 1. We expose a separate
     /// method for this to make it clear that the magnitude has no inherent meaning.
     #[inline]
     pub fn observe_once(&self) {
-        self.event.observations.insert(1, self.count);
+        self.event.publish_model.insert(1, self.count);
     }
 
     /// Observes a batch of events with a specific magnitude.
     #[inline]
     pub fn observe(&self, magnitude: Magnitude) {
-        self.event.observations.insert(magnitude, self.count);
+        self.event.publish_model.insert(magnitude, self.count);
     }
 
     /// Observes an event with the magnitude being the indicated duration in milliseconds.
@@ -134,7 +204,7 @@ impl ObservationBatch<'_> {
         )]
         let millis = duration.as_millis() as i64;
 
-        self.event.observations.insert(millis, self.count);
+        self.event.publish_model.insert(millis, self.count);
     }
 
     /// Observes the duration of a function call, in milliseconds.
@@ -143,7 +213,8 @@ impl ObservationBatch<'_> {
     where
         F: FnOnce() -> R,
     {
-        // TODO: Use low precision time
+        // TODO: Use low precision time to make this faster.
+        // TODO: Consider supporting ultra low precision time from external source.
         let start = Instant::now();
 
         let result = f();
@@ -154,7 +225,10 @@ impl ObservationBatch<'_> {
     }
 }
 
-impl Observe for Event {
+impl<P> Observe for Event<P>
+where
+    P: PublishModel,
+{
     #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
     fn observe_once(&self) {
         self.observe_once();
@@ -179,7 +253,10 @@ impl Observe for Event {
     }
 }
 
-impl Observe for ObservationBatch<'_> {
+impl<P> Observe for ObservationBatch<'_, P>
+where
+    P: PublishModel,
+{
     #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
     fn observe_once(&self) {
         self.observe_once();
@@ -201,219 +278,113 @@ impl Observe for ObservationBatch<'_> {
         F: FnOnce() -> R,
     {
         self.observe_duration_millis(f)
-    }
-}
-
-/// Creates instances of [`Event`].
-///
-/// Required parameters:
-/// * `name`
-#[derive(Debug)]
-pub struct EventBuilder {
-    name: EventName,
-
-    /// Upper bounds (inclusive) of histogram buckets to use.
-    /// Defaults to empty, which means no histogram for this event.
-    ///
-    /// Must be in ascending order if provided.
-    /// Must not have a `Magnitude::MAX` bucket (automatically synthesized).
-    histogram_buckets: &'static [Magnitude],
-}
-
-impl EventBuilder {
-    fn new() -> Self {
-        Self {
-            name: EventName::default(),
-            histogram_buckets: &[],
-        }
-    }
-
-    /// Sets the name of the event.
-    ///
-    /// Recommended format: `big_medium_small_units`
-    /// For example: `net_http_connect_time_ns`
-    #[must_use]
-    pub fn name(self, name: impl Into<EventName>) -> Self {
-        Self {
-            name: name.into(),
-            ..self
-        }
-    }
-
-    /// Sets the upper bounds (inclusive) of histogram buckets to use
-    /// when creating a histogram of event magnitudes.
-    ///
-    /// The default is to not create a histogram.
-    ///
-    /// # Panics
-    ///
-    /// Panics if bucket magnitudes are not in ascending order.
-    ///
-    /// Panics if one of the values is `Magnitude::MAX`. You do not need to specify this
-    /// bucket yourself - it is automatically synthesized for all histograms to catch values
-    /// that exceed all user-defined buckets.
-    #[must_use]
-    pub fn histogram(self, buckets: &'static [Magnitude]) -> Self {
-        if !buckets.is_empty() {
-            #[expect(
-                clippy::indexing_slicing,
-                reason = "windows() guarantees that we have exactly two elements"
-            )]
-            {
-                assert!(
-                    buckets.windows(2).all(|w| w[0] < w[1]),
-                    "histogram buckets must be in ascending order"
-                );
-            }
-
-            assert!(
-                !buckets.contains(&Magnitude::MAX),
-                "histogram buckets must not contain Magnitude::MAX"
-            );
-        }
-
-        Self {
-            histogram_buckets: buckets,
-            ..self
-        }
-    }
-
-    /// # Panics
-    ///
-    /// Panics if a required parameter is not set.
-    ///
-    /// Panics if an event with this name is already registered.
-    /// You can only create an event with each name once (per thread).
-    ///
-    /// [1]: EventBuilder::histogram
-    #[must_use]
-    pub fn build(self) -> Event {
-        assert!(!self.name.is_empty());
-
-        let observation_bag = Arc::new(ObservationBag::new(self.histogram_buckets));
-
-        // This will panic if it is already registered. This is not strictly required and
-        // we may relax this constraint in the future but for now we keep it here to help
-        // uncover problematic patterns and learn when/where relaxed constraints may be useful.
-        LOCAL_REGISTRY.with_borrow(|r| r.register(self.name, Arc::clone(&observation_bag)));
-
-        Event {
-            observations: observation_bag,
-            _single_threaded: PhantomData,
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{rc::Rc, sync::Arc};
+
     use static_assertions::assert_not_impl_any;
+
+    use crate::{ObservationBag, ObservationBagSync, Push};
 
     use super::*;
 
     #[test]
-    fn observations_are_recorded() {
+    fn pull_event_observations_are_recorded() {
         // Histogram logic is tested as part of ObservationBag tests, so we do not bother
         // with it here - we assume that if data is correctly recorded, it will reach the histogram.
-        let observations = Arc::new(ObservationBag::new(&[]));
+        let observations = Arc::new(ObservationBagSync::new(&[]));
 
         let event = Event {
-            observations: Arc::clone(&observations),
+            publish_model: Pull { observations },
             _single_threaded: PhantomData,
         };
 
-        let snapshot = observations.snapshot();
+        let snapshot = event.snapshot();
 
         assert_eq!(snapshot.count, 0);
         assert_eq!(snapshot.sum, 0);
 
         event.observe_once();
 
-        let snapshot = observations.snapshot();
+        let snapshot = event.snapshot();
 
         assert_eq!(snapshot.count, 1);
         assert_eq!(snapshot.sum, 1);
 
         event.batch(3).observe_once();
 
-        let snapshot = observations.snapshot();
+        let snapshot = event.snapshot();
         assert_eq!(snapshot.count, 4);
         assert_eq!(snapshot.sum, 4);
 
         event.observe(5);
 
-        let snapshot = observations.snapshot();
+        let snapshot = event.snapshot();
         assert_eq!(snapshot.count, 5);
         assert_eq!(snapshot.sum, 9);
 
         event.observe_millis(Duration::from_millis(100));
 
-        let snapshot = observations.snapshot();
+        let snapshot = event.snapshot();
         assert_eq!(snapshot.count, 6);
         assert_eq!(snapshot.sum, 109);
 
         event.batch(2).observe(10);
 
-        let snapshot = observations.snapshot();
+        let snapshot = event.snapshot();
         assert_eq!(snapshot.count, 8);
         assert_eq!(snapshot.sum, 129);
     }
 
     #[test]
-    #[should_panic]
-    fn build_without_name_panics() {
-        drop(Event::builder().build());
-    }
+    fn push_event_observations_are_recorded() {
+        // Histogram logic is tested as part of ObservationBag tests, so we do not bother
+        // with it here - we assume that if data is correctly recorded, it will reach the histogram.
+        let observations = Rc::new(ObservationBag::new(&[]));
 
-    #[test]
-    #[should_panic]
-    fn build_with_empty_name_panics() {
-        drop(Event::builder().name("").build());
-    }
+        let event = Event {
+            publish_model: Push { observations },
+            _single_threaded: PhantomData,
+        };
 
-    #[test]
-    #[should_panic]
-    fn build_with_magnitude_max_in_histogram_panics() {
-        drop(
-            Event::builder()
-                .name("build_with_magnitude_max_in_histogram_panics")
-                .histogram(&[1, 2, Magnitude::MAX])
-                .build(),
-        );
-    }
+        let snapshot = event.snapshot();
 
-    #[test]
-    #[should_panic]
-    fn build_with_non_ascending_histogram_buckets_panics() {
-        drop(
-            Event::builder()
-                .name("build_with_non_ascending_histogram_buckets")
-                .histogram(&[3, 2, 1])
-                .build(),
-        );
-    }
+        assert_eq!(snapshot.count, 0);
+        assert_eq!(snapshot.sum, 0);
 
-    #[test]
-    fn build_correctly_configures_histogram() {
-        let no_histogram = Event::builder().name("no_histogram").build();
-        assert!(no_histogram.snapshot().bucket_magnitudes.is_empty());
-        assert!(no_histogram.snapshot().bucket_counts.is_empty());
+        event.observe_once();
 
-        let empty_buckets = Event::builder()
-            .name("empty_buckets")
-            .histogram(&[])
-            .build();
-        assert!(empty_buckets.snapshot().bucket_magnitudes.is_empty());
-        assert!(empty_buckets.snapshot().bucket_counts.is_empty());
+        let snapshot = event.snapshot();
 
-        let buckets = &[1, 10, 100, 1000];
-        let event_with_buckets = Event::builder()
-            .name("with_buckets")
-            .histogram(buckets)
-            .build();
+        assert_eq!(snapshot.count, 1);
+        assert_eq!(snapshot.sum, 1);
 
-        let snapshot = event_with_buckets.snapshot();
-        assert_eq!(snapshot.bucket_magnitudes, buckets);
-        assert_eq!(snapshot.bucket_counts.len(), buckets.len());
+        event.batch(3).observe_once();
+
+        let snapshot = event.snapshot();
+        assert_eq!(snapshot.count, 4);
+        assert_eq!(snapshot.sum, 4);
+
+        event.observe(5);
+
+        let snapshot = event.snapshot();
+        assert_eq!(snapshot.count, 5);
+        assert_eq!(snapshot.sum, 9);
+
+        event.observe_millis(Duration::from_millis(100));
+
+        let snapshot = event.snapshot();
+        assert_eq!(snapshot.count, 6);
+        assert_eq!(snapshot.sum, 109);
+
+        event.batch(2).observe(10);
+
+        let snapshot = event.snapshot();
+        assert_eq!(snapshot.count, 8);
+        assert_eq!(snapshot.sum, 129);
     }
 
     #[test]

@@ -1,7 +1,10 @@
 //! # nm - nanometer
 //!
-//! Collect metrics about observed events with low collection overhead even in
+//! Collect metrics about observed events with low overhead even in
 //! highly multithreaded applications running on 100+ processors.
+//! 
+//! Using arbitrary development hardware, we measure between 2 and 20 nanoseconds per
+//! observation, depending on how the event is configured. Benchmarks are included.
 //!
 //! # Collected metrics
 //!
@@ -174,6 +177,61 @@
 //! data does not reset between reports. If you only want to record differences, you need
 //! to account for the previous state of the event yourself.
 //!
+//! # Minimizing overhead by on-demand publishing
+//!
+//! The ultimate goal of the metrics collected by an [`Event`] is to end up in a [`Report`].
+//!
+//! There are two models by which this can happen:
+//!
+//! - **Pull** model - the reporting system queries each event in the process for its latest data
+//!   set when generating a report. This is the default and requires no action from you.
+//! - **Push** model - data from an event only flows to a thread-local [`MetricsPusher`], which
+//!   publishes the data into the reporting system on demand. This requires you to periodically
+//!   trigger the publishing via [`MetricsPusher::push()`][MetricsPusher::push].
+//!
+//! The push model has lower measurement overhead due to a more optimal internal data layout
+//! but requires action from you to ensure that data is published. If you never push the data,
+//! it will never show up in a report.
+//! 
+//! The previous examples all use the default pull model. Here is an example with the push model:
+//! 
+//! ```
+//! use nm::{Event, MetricsPusher, Push};
+//!
+//! thread_local! {
+//!     static HTTP_EVENTS_PUSHER: MetricsPusher = MetricsPusher::new();
+//!
+//!     static CONNECT_TIME_MS: Event<Push> = Event::builder()
+//!         .name("net_http_connect_time_ms")
+//!         .pusher_local(&HTTP_EVENTS_PUSHER)
+//!         .build();
+//! }
+//!
+//! pub fn http_connect() {
+//!     CONNECT_TIME_MS.with(|e| e.observe_duration_millis(|| {
+//!         do_http_connect();
+//!     }));
+//! }
+//!
+//! loop {
+//!     http_connect();
+//!
+//!     // Periodically push the data to the reporting system.
+//!     if is_time_to_push() {
+//!         HTTP_EVENTS_PUSHER.with(MetricsPusher::push);
+//!     }
+//!     # break; // Avoid infinite loop when running example.
+//! }
+//! # fn do_http_connect() {}
+//! # fn is_time_to_push() -> bool { true }
+//! ```
+//! 
+//! You should consider using the push model when an event is only used under controlled conditions
+//! where you are certain that every thread that will be observing an event is guaranteed to call
+//! [`MetricsPusher::push()`][MetricsPusher::push] at some point.
+//!
+//! The choice of publishing model can be made separately for each event.
+//!
 //! # Dynamically registered events
 //!
 //! It is not strictly required to define events as thread-local statics. You can also create
@@ -199,42 +257,27 @@
 //! mangled data. For example, attempting to observe events with magnitudes near `i64::MAX`. There
 //! is no guarantee made about what the specific outcome will be in this case (though the panic
 //! policy above still applies). Do not stray near `i64` boundaries and you should be fine.
-//!
-//! # Performance tradeoffs
-//!
-//! While this crate aims for high performance and high scalability to many processors, it also
-//! targets general-purpose usage and therefore must make some tradeoffs for generality and
-//! convenience of usage.
-//!
-//! Some explicit tradeoffs include:
-//!
-//! * There is some overhead in how the metrics are stored, both in terms of indirection layers and
-//!   the use of atomic operations. This is necessary to ensure that metrics can be reported without
-//!   any action required from the thread that observed the event (i.e. a "pull" model). Better
-//!   performance can be achieved by using a "push" model, where each thread pushes its observations
-//!   to a central repository. However, that is not a general-purpose solution as not every thread
-//!   is under the control of the application logic and has the capability to "push" data at the
-//!   appropriate moments in time.
-//! * There is some inherent overhead in using thread-local static variables, both due to the way
-//!   Rust implements them and due to how the `Event` type is structured internally to support the
-//!   "pull" model of reporting observations. Avoiding thread-local statics can offer better
-//!   performance in some cases but requires more elaborate bookkeeping from application code.
-//!
-//! It is likely possible to achieve better performance with entirely custom logic that avoids these
-//! tradeoffs.
 
 mod constants;
 mod data_types;
 mod event;
+mod event_builder;
 mod observations;
 mod observe;
+mod publish_model;
+mod pusher;
 mod registries;
 mod reports;
+mod sealed;
 
 pub(crate) use constants::*;
 pub use data_types::*;
 pub use event::*;
+pub use event_builder::*;
 pub(crate) use observations::*;
 pub use observe::*;
+pub use publish_model::*;
+pub use pusher::*;
 pub(crate) use registries::*;
 pub use reports::*;
+pub(crate) use sealed::*;

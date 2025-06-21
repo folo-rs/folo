@@ -7,9 +7,9 @@ use std::{
 
 use foldhash::{HashMap, HashMapExt};
 
-use crate::{ERR_POISONED_LOCK, EventName, ObservationBag};
+use crate::{ERR_POISONED_LOCK, EventName, ObservationBagSync, Observations};
 
-type ObservationBagMap = HashMap<EventName, Arc<ObservationBag>>;
+type ObservationBagMap = HashMap<EventName, Arc<ObservationBagSync>>;
 
 /// Keeps track of the events registered on a single thread, for local access only.
 ///
@@ -34,7 +34,7 @@ impl<'g> LocalEventRegistry<'g> {
         }
     }
 
-    pub(crate) fn register(&self, name: EventName, observation_bag: Arc<ObservationBag>) {
+    pub(crate) fn register(&self, name: EventName, observation_bag: Arc<ObservationBagSync>) {
         let previous = self
             .observation_bags
             .borrow_mut()
@@ -48,6 +48,12 @@ impl<'g> LocalEventRegistry<'g> {
 
         self.global_registry
             .register(self.thread_id, name, observation_bag);
+    }
+
+    /// The count of events registered in the local registry.
+    #[cfg(test)]
+    pub(crate) fn event_count(&self) -> usize {
+        self.observation_bags.borrow().len()
     }
 }
 
@@ -89,7 +95,12 @@ impl GlobalEventRegistry {
         }
     }
 
-    fn register(&self, thread_id: ThreadId, name: EventName, observation_bag: Arc<ObservationBag>) {
+    fn register(
+        &self,
+        thread_id: ThreadId,
+        name: EventName,
+        observation_bag: Arc<ObservationBagSync>,
+    ) {
         // Most likely the thread is already registered, so we try being optimistic.
         {
             let state = self.state.read().expect(ERR_POISONED_LOCK);
@@ -124,7 +135,7 @@ impl GlobalEventRegistry {
                     .archived_observation_bags
                     .entry(name.clone())
                     .or_insert_with(|| {
-                        Arc::new(ObservationBag::new(observation_bag.bucket_magnitudes()))
+                        Arc::new(ObservationBagSync::new(observation_bag.bucket_magnitudes()))
                     });
 
                 archived_bag.merge_from(observation_bag);
@@ -161,7 +172,7 @@ impl GlobalEventRegistry {
 fn register_core(
     thread_id: ThreadId,
     name: EventName,
-    observation_bag: Arc<ObservationBag>,
+    observation_bag: Arc<ObservationBagSync>,
     thread_bags: &RwLock<ObservationBagMap>,
 ) {
     let mut bags = thread_bags.write().expect(ERR_POISONED_LOCK);
@@ -194,7 +205,7 @@ mod tests {
 
     #[test]
     fn register_unregister_smoke_test() {
-        let observations = Arc::new(ObservationBag::new(&[]));
+        let observations = Arc::new(ObservationBagSync::new(&[]));
 
         let global_registry = GlobalEventRegistry::new();
         let local_registry = LocalEventRegistry::new(&global_registry);
@@ -241,7 +252,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn duplicate_registration_panics() {
-        let observations = Arc::new(ObservationBag::new(&[]));
+        let observations = Arc::new(ObservationBagSync::new(&[]));
 
         let global_registry = GlobalEventRegistry::new();
         let local_registry = LocalEventRegistry::new(&global_registry);
@@ -252,7 +263,7 @@ mod tests {
 
     #[test]
     fn inspect_global_inspects_all() {
-        let thread1_observations = Arc::new(ObservationBag::new(&[]));
+        let thread1_observations = Arc::new(ObservationBagSync::new(&[]));
 
         let global_registry = GlobalEventRegistry::new();
 
@@ -263,7 +274,7 @@ mod tests {
             // Now let's switch to a new thread, register the event there, and inspect.
             // We expect to see the observation bags of both threads when inspecting.
             s.spawn(|| {
-                let thread2_observations = Arc::new(ObservationBag::new(&[]));
+                let thread2_observations = Arc::new(ObservationBagSync::new(&[]));
 
                 let thread2_local_registry = LocalEventRegistry::new(&global_registry);
                 thread2_local_registry
@@ -293,7 +304,7 @@ mod tests {
         // entrypoint thread once the other thread terminates.
         thread::scope(|s| {
             s.spawn(|| {
-                let observations = Arc::new(ObservationBag::new(&[]));
+                let observations = Arc::new(ObservationBagSync::new(&[]));
 
                 let local_registry = LocalEventRegistry::new(&global_registry);
                 local_registry.register(TEST_EVENT_NAME.into(), Arc::clone(&observations));

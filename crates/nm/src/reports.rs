@@ -7,7 +7,7 @@ use std::{
 
 use foldhash::{HashMap, HashMapExt};
 
-use crate::{EventName, GLOBAL_REGISTRY, Magnitude, ObservationBagSnapshot};
+use crate::{EventName, GLOBAL_REGISTRY, Magnitude, ObservationBagSnapshot, Observations};
 
 /// A human- and machine-readable report about observed occurrences of events.
 ///

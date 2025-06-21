@@ -11,7 +11,7 @@ use benchmark_utils::{ThreadPool, bench_on_every_processor, bench_on_threadpool}
 use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus::ProcessorSet;
 use new_zealand::nz;
-use nm::{Event, Magnitude, Report};
+use nm::{Event, Magnitude, MetricsPusher, Push, Report};
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
@@ -26,75 +26,83 @@ fn entrypoint(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("nm_observation");
 
-    group.bench_function("counter_st", |b| {
+    group.bench_function("counter_st_pull", |b| {
         b.iter_custom(|iters| {
             bench_on_threadpool(
                 &one_processor,
                 iters,
                 || (),
-                |()| COUNTER.with(Event::observe_once),
+                |()| PULL_COUNTER.with(Event::observe_once),
             )
         });
     });
 
-    group.bench_function("counter_mt", |b| {
+    group.bench_function("counter_mt_pull", |b| {
         b.iter_custom(|iters| {
-            bench_on_every_processor(iters, || (), |()| COUNTER.with(Event::observe_once))
+            bench_on_every_processor(iters, || (), |()| PULL_COUNTER.with(Event::observe_once))
         });
     });
 
-    group.bench_function("plain_st", |b| {
+    group.bench_function("plain_st_pull", |b| {
         b.iter_custom(|iters| {
             bench_on_threadpool(
                 &one_processor,
                 iters,
                 || (),
-                |()| COUNTER.with(|x| x.observe(2)),
+                |()| PULL_COUNTER.with(|x| x.observe(2)),
             )
         });
     });
 
-    group.bench_function("plain_mt", |b| {
+    group.bench_function("plain_mt_pull", |b| {
         b.iter_custom(|iters| {
-            bench_on_every_processor(iters, || (), |()| COUNTER.with(|x| x.observe(2)))
+            bench_on_every_processor(iters, || (), |()| PULL_COUNTER.with(|x| x.observe(2)))
         });
     });
 
-    group.bench_function("small_histogram_zero_st", |b| {
+    group.bench_function("small_histogram_zero_st_pull", |b| {
         b.iter_custom(|iters| {
             bench_on_threadpool(
                 &one_processor,
                 iters,
                 || (),
-                |()| SMALL_HISTOGRAM.with(|x| x.observe(0)),
+                |()| PULL_SMALL_HISTOGRAM.with(|x| x.observe(0)),
             )
         });
     });
 
-    group.bench_function("small_histogram_zero_mt", |b| {
+    group.bench_function("small_histogram_zero_mt_pull", |b| {
         b.iter_custom(|iters| {
-            bench_on_every_processor(iters, || (), |()| SMALL_HISTOGRAM.with(|x| x.observe(0)))
+            bench_on_every_processor(
+                iters,
+                || (),
+                |()| PULL_SMALL_HISTOGRAM.with(|x| x.observe(0)),
+            )
         });
     });
 
-    group.bench_function("large_histogram_zero_st", |b| {
+    group.bench_function("large_histogram_zero_st_pull", |b| {
         b.iter_custom(|iters| {
             bench_on_threadpool(
                 &one_processor,
                 iters,
                 || (),
-                |()| LARGE_HISTOGRAM.with(|x| x.observe(0)),
+                |()| PULL_LARGE_HISTOGRAM.with(|x| x.observe(0)),
             )
         });
     });
 
-    group.bench_function("large_histogram_zero_mt", |b| {
+    group.bench_function("large_histogram_zero_mt_pull", |b| {
         b.iter_custom(|iters| {
-            bench_on_every_processor(iters, || (), |()| LARGE_HISTOGRAM.with(|x| x.observe(0)))
+            bench_on_every_processor(
+                iters,
+                || (),
+                |()| PULL_LARGE_HISTOGRAM.with(|x| x.observe(0)),
+            )
         });
     });
 
-    group.bench_function("small_histogram_max_st", |b| {
+    group.bench_function("small_histogram_max_st_pull", |b| {
         // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
         // through all the buckets for a matching one and finding none).
         b.iter_custom(|iters| {
@@ -102,24 +110,24 @@ fn entrypoint(c: &mut Criterion) {
                 &one_processor,
                 iters,
                 || (),
-                |()| SMALL_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
+                |()| PULL_SMALL_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
             )
         });
     });
 
-    group.bench_function("small_histogram_max_mt", |b| {
+    group.bench_function("small_histogram_max_mt_pull", |b| {
         // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
         // through all the buckets for a matching one and finding none).
         b.iter_custom(|iters| {
             bench_on_every_processor(
                 iters,
                 || (),
-                |()| SMALL_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
+                |()| PULL_SMALL_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
             )
         });
     });
 
-    group.bench_function("large_histogram_max_st", |b| {
+    group.bench_function("large_histogram_max_st_pull", |b| {
         // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
         // through all the buckets for a matching one and finding none).
         b.iter_custom(|iters| {
@@ -127,19 +135,145 @@ fn entrypoint(c: &mut Criterion) {
                 &one_processor,
                 iters,
                 || (),
-                |()| LARGE_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
+                |()| PULL_LARGE_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
             )
         });
     });
 
-    group.bench_function("large_histogram_max_mt", |b| {
+    group.bench_function("large_histogram_max_mt_pull", |b| {
         // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
         // through all the buckets for a matching one and finding none).
         b.iter_custom(|iters| {
             bench_on_every_processor(
                 iters,
                 || (),
-                |()| LARGE_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
+                |()| PULL_LARGE_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
+            )
+        });
+    });
+
+    group.bench_function("counter_st_push", |b| {
+        b.iter_custom(|iters| {
+            bench_on_threadpool(
+                &one_processor,
+                iters,
+                || (),
+                |()| PUSH_COUNTER.with(Event::observe_once),
+            )
+        });
+    });
+
+    group.bench_function("counter_mt_push", |b| {
+        b.iter_custom(|iters| {
+            bench_on_every_processor(iters, || (), |()| PUSH_COUNTER.with(Event::observe_once))
+        });
+    });
+
+    group.bench_function("plain_st_push", |b| {
+        b.iter_custom(|iters| {
+            bench_on_threadpool(
+                &one_processor,
+                iters,
+                || (),
+                |()| PUSH_COUNTER.with(|x| x.observe(2)),
+            )
+        });
+    });
+
+    group.bench_function("plain_mt_push", |b| {
+        b.iter_custom(|iters| {
+            bench_on_every_processor(iters, || (), |()| PUSH_COUNTER.with(|x| x.observe(2)))
+        });
+    });
+
+    group.bench_function("small_histogram_zero_st_push", |b| {
+        b.iter_custom(|iters| {
+            bench_on_threadpool(
+                &one_processor,
+                iters,
+                || (),
+                |()| PUSH_SMALL_HISTOGRAM.with(|x| x.observe(0)),
+            )
+        });
+    });
+
+    group.bench_function("small_histogram_zero_mt_push", |b| {
+        b.iter_custom(|iters| {
+            bench_on_every_processor(
+                iters,
+                || (),
+                |()| PUSH_SMALL_HISTOGRAM.with(|x| x.observe(0)),
+            )
+        });
+    });
+
+    group.bench_function("large_histogram_zero_st_push", |b| {
+        b.iter_custom(|iters| {
+            bench_on_threadpool(
+                &one_processor,
+                iters,
+                || (),
+                |()| PUSH_LARGE_HISTOGRAM.with(|x| x.observe(0)),
+            )
+        });
+    });
+
+    group.bench_function("large_histogram_zero_mt_push", |b| {
+        b.iter_custom(|iters| {
+            bench_on_every_processor(
+                iters,
+                || (),
+                |()| PUSH_LARGE_HISTOGRAM.with(|x| x.observe(0)),
+            )
+        });
+    });
+
+    group.bench_function("small_histogram_max_st_push", |b| {
+        // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
+        // through all the buckets for a matching one and finding none).
+        b.iter_custom(|iters| {
+            bench_on_threadpool(
+                &one_processor,
+                iters,
+                || (),
+                |()| PUSH_SMALL_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
+            )
+        });
+    });
+
+    group.bench_function("small_histogram_max_mt_push", |b| {
+        // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
+        // through all the buckets for a matching one and finding none).
+        b.iter_custom(|iters| {
+            bench_on_every_processor(
+                iters,
+                || (),
+                |()| PUSH_SMALL_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
+            )
+        });
+    });
+
+    group.bench_function("large_histogram_max_st_push", |b| {
+        // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
+        // through all the buckets for a matching one and finding none).
+        b.iter_custom(|iters| {
+            bench_on_threadpool(
+                &one_processor,
+                iters,
+                || (),
+                |()| PUSH_LARGE_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
+            )
+        });
+    });
+
+    group.bench_function("large_histogram_max_mt_push", |b| {
+        // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
+        // through all the buckets for a matching one and finding none).
+        b.iter_custom(|iters| {
+            bench_on_every_processor(
+                iters,
+                || (),
+                |()| PUSH_LARGE_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
             )
         });
     });
@@ -167,25 +301,67 @@ fn entrypoint(c: &mut Criterion) {
 
     group.finish();
 
-    let mut group = c.benchmark_group("nm_timing");
+    let mut group = c.benchmark_group("nm_push");
 
-    group.bench_function("timing_st", |b| {
+    group.bench_function("push_st", |b| {
         b.iter_custom(|iters| {
             bench_on_threadpool(
                 &one_processor,
                 iters,
                 || (),
-                |()| COUNTER.with(|x| x.observe_duration_millis(|| black_box(()))),
+                |()| PUSHER.with(MetricsPusher::push),
             )
         });
     });
 
-    group.bench_function("timing_mt", |b| {
+    group.bench_function("push_mt", |b| {
+        b.iter_custom(|iters| {
+            bench_on_every_processor(iters, || (), |()| PUSHER.with(MetricsPusher::push))
+        });
+    });
+
+    group.finish();
+
+    let mut group = c.benchmark_group("nm_timing");
+
+    group.bench_function("timing_st_pull", |b| {
+        b.iter_custom(|iters| {
+            bench_on_threadpool(
+                &one_processor,
+                iters,
+                || (),
+                |()| PULL_COUNTER.with(|x| x.observe_duration_millis(|| black_box(()))),
+            )
+        });
+    });
+
+    group.bench_function("timing_mt_pull", |b| {
         b.iter_custom(|iters| {
             bench_on_every_processor(
                 iters,
                 || (),
-                |()| COUNTER.with(|x| x.observe_duration_millis(|| black_box(()))),
+                |()| PULL_COUNTER.with(|x| x.observe_duration_millis(|| black_box(()))),
+            )
+        });
+    });
+
+    group.bench_function("timing_st_push", |b| {
+        b.iter_custom(|iters| {
+            bench_on_threadpool(
+                &one_processor,
+                iters,
+                || (),
+                |()| PUSH_COUNTER.with(|x| x.observe_duration_millis(|| black_box(()))),
+            )
+        });
+    });
+
+    group.bench_function("timing_mt_push", |b| {
+        b.iter_custom(|iters| {
+            bench_on_every_processor(
+                iters,
+                || (),
+                |()| PUSH_COUNTER.with(|x| x.observe_duration_millis(|| black_box(()))),
             )
         });
     });
@@ -201,21 +377,45 @@ const LARGE_HISTOGRAM_BUCKETS: &[Magnitude] = &[
 ];
 
 thread_local! {
-    static COUNTER: Event = Event::builder()
-        .name("counter")
+    static PULL_COUNTER: Event = Event::builder()
+        .name("pull_counter")
         .build();
 
-    static PLAIN: Event = Event::builder()
-        .name("plain")
+    static PULL_PLAIN: Event = Event::builder()
+        .name("pull_plain")
         .build();
 
-    static SMALL_HISTOGRAM: Event = Event::builder()
-        .name("small_histogram")
+    static PULL_SMALL_HISTOGRAM: Event = Event::builder()
+        .name("pull_small_histogram")
         .histogram(SMALL_HISTOGRAM_BUCKETS)
         .build();
 
-    static LARGE_HISTOGRAM: Event = Event::builder()
-        .name("large_histogram")
+    static PULL_LARGE_HISTOGRAM: Event = Event::builder()
+        .name("pull_large_histogram")
         .histogram(LARGE_HISTOGRAM_BUCKETS)
+        .build();
+
+    static PUSHER: MetricsPusher = MetricsPusher::new();
+
+    static PUSH_COUNTER: Event<Push> = Event::builder()
+        .name("push_counter")
+        .pusher_local(&PUSHER)
+        .build();
+
+    static PUSH_PLAIN: Event<Push> = Event::builder()
+        .name("push_plain")
+        .pusher_local(&PUSHER)
+        .build();
+
+    static PUSH_SMALL_HISTOGRAM: Event<Push> = Event::builder()
+        .name("push_small_histogram")
+        .histogram(SMALL_HISTOGRAM_BUCKETS)
+        .pusher_local(&PUSHER)
+        .build();
+
+    static PUSH_LARGE_HISTOGRAM: Event<Push> = Event::builder()
+        .name("push_large_histogram")
+        .histogram(LARGE_HISTOGRAM_BUCKETS)
+        .pusher_local(&PUSHER)
         .build();
 }

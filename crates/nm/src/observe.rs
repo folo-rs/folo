@@ -4,10 +4,11 @@ use crate::Magnitude;
 
 /// Operations for observing the occurrences of an event.
 ///
-/// This is implemented primarily by [`Event`][1] but also by an event batch, thereby providing
-/// an abstraction for callers that wish to support both single and batch events.
+/// This is implemented primarily by [`Event`][1] but also by [`ObservationBatch`][2],
+/// thereby providing an abstraction for callers that wish to support both single and batch events.
 ///
 /// [1]: crate::Event
+/// [2]: crate::ObservationBatch
 pub trait Observe {
     /// Observes an event that has no explicit magnitude.
     ///
