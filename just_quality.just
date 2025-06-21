@@ -26,7 +26,7 @@ format:
 
 [group('quality')]
 format-check:
-    cargo fmt --verbose --all --check
+    cargo +nightly fmt --verbose --all --check
     cargo sort-derives --check
 
 [group('quality')]
