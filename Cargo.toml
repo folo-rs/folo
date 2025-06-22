@@ -42,7 +42,10 @@ testing = { path = "crates/testing" }
 # The packages we consume. We only enable "std" features here, the rest in individual crates.
 arc-swap = { version = "1.7", default-features = false }
 axum = { version = "0.8", default-features = false }
-criterion = { version = "0.6", default-features = false }
+criterion = { version = "0.6", default-features = false, features = [
+    # https://github.com/bheisler/criterion.rs/issues/849
+    "plotters",
+] }
 darling = { version = "0.20", default-features = false }
 deranged = { version = "0.4", default-features = false }
 derive_more = { version = "2.0", default-features = false }
