@@ -164,18 +164,23 @@ impl Observations for ObservationBag {
     fn insert(&self, magnitude: Magnitude, count: usize) {
         // Crate policy is to not panic but instead to mangle data upon mathematical
         // challenges and edge cases that cannot be correctly handled. We apply this here
-        // by defaulting to 0 in case of out-of-range values and by using wrapping arithmetic.
+        // by using "as" yolo-casting. If it works, great. If not, too bad.
+        let count_u64 = count as u64;
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "wrapping is intentional - see above comment"
+        )]
+        let count_i64 = count as i64;
 
-        let count_u64 = u64::try_from(count).unwrap_or_default();
-        let count_i64 = i64::try_from(count_u64).unwrap_or_default();
-
+        // For arithmetic, we use wrapping because it is the fastest and we are allowed to mangle.
         let sum_increment = magnitude.wrapping_mul(count_i64);
 
-        // We use wrapping arithmetic because it is the fastest (and we are allowed to mangle).
         self.count.set(self.count.get().wrapping_add(count_u64));
         self.sum.set(self.sum.get().wrapping_add(sum_increment));
 
         // This may be none if we have no buckets (i.e. the event is a bare counter, no histogram).
+        // TODO: Explore optimizing this lookup - SIMD can potentially help us here if not
+        // automatically applied already by the compiler.
         if let Some(bucket_index) =
             self.bucket_magnitudes
                 .iter()
@@ -188,8 +193,6 @@ impl Observations for ObservationBag {
                     }
                 })
         {
-            // We use wrapping arithmetic because it is the fastest (and we are allowed to mangle).
-            //
             // We do this unsafely because we need minimal overhead in the hot path from
             // collecting observations and this will be a very hot path.
             //
@@ -224,11 +227,15 @@ impl Observations for ObservationBagSync {
     fn insert(&self, magnitude: Magnitude, count: usize) {
         // Crate policy is to not panic but instead to mangle data upon mathematical
         // challenges and edge cases that cannot be correctly handled. We apply this here
-        // by defaulting to 0 in case of out-of-range values and by using wrapping arithmetic.
+        // by using "as" yolo-casting. If it works, great. If not, too bad.
+        let count_u64 = count as u64;
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "wrapping is intentional - see above comment"
+        )]
+        let count_i64 = count as i64;
 
-        let count_u64 = u64::try_from(count).unwrap_or_default();
-        let count_i64 = i64::try_from(count_u64).unwrap_or_default();
-
+        // For arithmetic, we use wrapping because it is the fastest and we are allowed to mangle.
         let sum_increment = magnitude.wrapping_mul(count_i64);
 
         // These operations always use wrapping arithmetic.
@@ -250,8 +257,6 @@ impl Observations for ObservationBagSync {
                     }
                 })
         {
-            // We use wrapping arithmetic because it is the fastest (and we are allowed to mangle).
-            //
             // We do this unsafely because we need minimal overhead in the hot path from
             // collecting observations and this will be a very hot path.
             //
