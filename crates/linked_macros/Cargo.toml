@@ -2,7 +2,7 @@
 name = "linked_macros"
 description = "Internal dependency of the 'linked' crate - do not reference directly"
 publish = true
-version = "0.2.3"
+version = "0.2.4"
 
 authors.workspace = true
 edition.workspace = true

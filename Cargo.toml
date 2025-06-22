@@ -20,19 +20,19 @@ debug = "none"
 
 [workspace.dependencies]
 # The packages we publish.
-cpulist = { version = "0.2.2", path = "crates/cpulist" }
+cpulist = { version = "0.2.3", path = "crates/cpulist" }
 folo_ffi = { version = "0.1.3", path = "crates/folo_ffi" }
 folo_utils = { version = "0.1.1", path = "crates/folo_utils" }
-linked = { version = "0.2.3", path = "crates/linked" }
-linked_macros = { version = "0.2.3", path = "crates/linked_macros" }
-linked_macros_impl = { version = "0.2.3", path = "crates/linked_macros_impl" }
-many_cpus = { version = "0.3.4", path = "crates/many_cpus" }
-many_cpus_benchmarking = { version = "0.1.13", path = "crates/many_cpus_benchmarking" }
-new_zealand = { version = "0.1.1", path = "crates/new_zealand" }
-nm = { version = "0.1.2", path = "crates/nm" }
-pinned_pool = { version = "0.1.1", path = "crates/pinned_pool" }
-region_cached = { version = "0.1.14", path = "crates/region_cached" }
-region_local = { version = "0.1.14", path = "crates/region_local" }
+linked = { version = "0.2.4", path = "crates/linked" }
+linked_macros = { version = "0.2.4", path = "crates/linked_macros" }
+linked_macros_impl = { version = "0.2.4", path = "crates/linked_macros_impl" }
+many_cpus = { version = "0.3.5", path = "crates/many_cpus" }
+many_cpus_benchmarking = { version = "0.1.14", path = "crates/many_cpus_benchmarking" }
+new_zealand = { version = "0.1.2", path = "crates/new_zealand" }
+nm = { version = "0.1.3", path = "crates/nm" }
+pinned_pool = { version = "0.1.2", path = "crates/pinned_pool" }
+region_cached = { version = "0.1.15", path = "crates/region_cached" }
+region_local = { version = "0.1.15", path = "crates/region_local" }
 
 # Internal packages we do not publish.
 benchmarks = { path = "crates/benchmarks" }
