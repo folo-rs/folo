@@ -59,6 +59,66 @@ where
     /// Creates a new linked instance of `T` from the same family of linked objects as other
     /// instances created via the same static variable.
     ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::{Arc, Mutex};
+    /// #
+    /// # #[linked::object]
+    /// # struct Counter {
+    /// #     local_count: usize,
+    /// #     global_count: Arc<Mutex<usize>>,
+    /// # }
+    /// #
+    /// # impl Counter {
+    /// #     pub fn new() -> Self {
+    /// #         let global_count = Arc::new(Mutex::new(0));
+    /// #         linked::new!(Self {
+    /// #             local_count: 0,
+    /// #             global_count: Arc::clone(&global_count),
+    /// #         })
+    /// #     }
+    /// #     
+    /// #     pub fn increment(&mut self) {
+    /// #         self.local_count += 1;
+    /// #         *self.global_count.lock().unwrap() += 1;
+    /// #     }
+    /// #     
+    /// #     pub fn local_count(&self) -> usize {
+    /// #         self.local_count
+    /// #     }
+    /// #     
+    /// #     pub fn global_count(&self) -> usize {
+    /// #         *self.global_count.lock().unwrap()
+    /// #     }
+    /// # }
+    /// use std::thread;
+    ///
+    /// linked::instances!(static COUNTER: Counter = Counter::new());
+    ///
+    /// // Each call to get() creates a new linked instance
+    /// let mut counter1 = COUNTER.get();
+    /// let mut counter2 = COUNTER.get();
+    ///
+    /// counter1.increment();
+    /// counter2.increment();
+    ///
+    /// // Local counts are independent per instance
+    /// assert_eq!(counter1.local_count(), 1);
+    /// assert_eq!(counter2.local_count(), 1);
+    ///
+    /// // But global state is shared across the family
+    /// assert_eq!(counter1.global_count(), 2);
+    /// assert_eq!(counter2.global_count(), 2);
+    ///
+    /// // Works across threads too
+    /// thread::spawn(|| {
+    ///     let mut counter3 = COUNTER.get();
+    ///     counter3.increment();
+    ///     assert_eq!(counter3.global_count(), 3);
+    /// }).join().unwrap();
+    /// ```
+    ///
     /// # Performance
     ///
     /// This creates a new instance of `T` on every call so caching the return value is

@@ -36,6 +36,76 @@ where
     /// Executes a closure with the current thread's linked instance from
     /// the object family referenced by the static variable.
     ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::atomic::{AtomicUsize, Ordering};
+    /// # use std::sync::{Arc, Mutex};
+    /// #
+    /// # #[linked::object]
+    /// # struct MetricsCollector {
+    /// #     local_requests: AtomicUsize,
+    /// #     global_total: Arc<Mutex<usize>>,
+    /// # }
+    /// #
+    /// # impl MetricsCollector {
+    /// #     pub fn new() -> Self {
+    /// #         let global_total = Arc::new(Mutex::new(0));
+    /// #         linked::new!(Self {
+    /// #             local_requests: AtomicUsize::new(0),
+    /// #             global_total: Arc::clone(&global_total),
+    /// #         })
+    /// #     }
+    /// #     
+    /// #     pub fn record_request(&self) {
+    /// #         self.local_requests.fetch_add(1, Ordering::Relaxed);
+    /// #         *self.global_total.lock().unwrap() += 1;
+    /// #     }
+    /// #     
+    /// #     pub fn local_count(&self) -> usize {
+    /// #         self.local_requests.load(Ordering::Relaxed)
+    /// #     }
+    /// #     
+    /// #     pub fn global_count(&self) -> usize {
+    /// #         *self.global_total.lock().unwrap()
+    /// #     }
+    /// # }
+    /// use std::thread;
+    ///
+    /// linked::thread_local_arc!(static METRICS: MetricsCollector = MetricsCollector::new());
+    ///
+    /// // Use .with() for efficient access when you don't need to store the Arc
+    /// METRICS.with(|metrics| {
+    ///     metrics.record_request();
+    ///     assert_eq!(metrics.local_count(), 1);
+    ///     assert_eq!(metrics.global_count(), 1);
+    /// });
+    ///
+    /// // Multiple calls to .with() access the same thread-local instance
+    /// METRICS.with(|metrics| {
+    ///     assert_eq!(metrics.local_count(), 1); // Still 1 from previous call
+    ///     assert_eq!(metrics.global_count(), 1); // Still 1 globally
+    /// });
+    ///
+    /// // Each thread gets its own instance with fresh local state but shared global state
+    /// thread::spawn(|| {
+    ///     METRICS.with(|metrics| {
+    ///         assert_eq!(metrics.local_count(), 0); // Fresh local count for this thread
+    ///         assert_eq!(metrics.global_count(), 1); // But sees global count from main thread
+    ///         
+    ///         metrics.record_request();
+    ///         assert_eq!(metrics.local_count(), 1); // Local count incremented
+    ///         assert_eq!(metrics.global_count(), 2); // Global count now 2
+    ///     });
+    /// }).join().unwrap();
+    ///
+    /// // Back on main thread: local state unchanged, global state updated
+    /// METRICS.with(|metrics| {
+    ///     assert_eq!(metrics.local_count(), 1); // Still 1 locally
+    ///     assert_eq!(metrics.global_count(), 2); // But sees update from other thread
+    /// });
+    /// ```
+    ///
     /// # Performance
     ///
     /// For repeated access to the current thread's linked instance, prefer reusing an `Arc<T>`
@@ -58,6 +128,89 @@ where
     /// variable on this thread. Note that it is still possible to create multiple instances on a
     /// single thread, e.g. by cloning the `T` within. The "one instance per thread" logic only
     /// applies when the instances are accessed through the static variable.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::atomic::{AtomicUsize, Ordering};
+    /// # use std::sync::{Arc, Mutex};
+    /// #
+    /// # #[linked::object]
+    /// # struct ServiceMonitor {
+    /// #     local_checks: AtomicUsize,
+    /// #     global_failures: Arc<Mutex<usize>>,
+    /// # }
+    /// #
+    /// # impl ServiceMonitor {
+    /// #     pub fn new() -> Self {
+    /// #         let global_failures = Arc::new(Mutex::new(0));
+    /// #         linked::new!(Self {
+    /// #             local_checks: AtomicUsize::new(0),
+    /// #             global_failures: Arc::clone(&global_failures),
+    /// #         })
+    /// #     }
+    /// #     
+    /// #     pub fn check_service(&self, success: bool) {
+    /// #         self.local_checks.fetch_add(1, Ordering::Relaxed);
+    /// #         if !success {
+    /// #             *self.global_failures.lock().unwrap() += 1;
+    /// #         }
+    /// #     }
+    /// #     
+    /// #     pub fn local_checks(&self) -> usize {
+    /// #         self.local_checks.load(Ordering::Relaxed)
+    /// #     }
+    /// #     
+    /// #     pub fn global_failures(&self) -> usize {
+    /// #         *self.global_failures.lock().unwrap()
+    /// #     }
+    /// # }
+    /// use std::thread;
+    ///
+    /// linked::thread_local_arc!(static MONITOR: ServiceMonitor = ServiceMonitor::new());
+    ///
+    /// // Get an Arc to reuse across multiple operations
+    /// let monitor = MONITOR.to_arc();
+    /// monitor.check_service(true);
+    /// monitor.check_service(false); // This will increment global failures
+    /// assert_eq!(monitor.local_checks(), 2);
+    /// assert_eq!(monitor.global_failures(), 1);
+    ///
+    /// // Multiple calls to to_arc() return Arc to the same instance
+    /// let monitor2 = MONITOR.to_arc();
+    /// assert_eq!(monitor2.local_checks(), 2); // Same instance as monitor
+    /// assert_eq!(monitor2.global_failures(), 1);
+    ///
+    /// // Clone the Arc for efficiency when passing around
+    /// let monitor_clone = Arc::clone(&monitor);
+    /// monitor_clone.check_service(true);
+    /// assert_eq!(monitor.local_checks(), 3);
+    /// assert_eq!(monitor.global_failures(), 1);
+    ///
+    /// // You can send the Arc to other threads (since T: Send + Sync)
+    /// let monitor_for_thread = Arc::clone(&monitor);
+    /// thread::spawn(move || {
+    ///     // This Arc still refers to the original thread's instance
+    ///     monitor_for_thread.check_service(false);
+    /// }).join().unwrap();
+    /// assert_eq!(monitor.local_checks(), 4); // Local checks on main thread: 4
+    /// assert_eq!(monitor.global_failures(), 2); // Global failures from both threads: 2
+    ///
+    /// // But each thread gets its own instance when accessing through the static
+    /// thread::spawn(|| {
+    ///     let thread_monitor = MONITOR.to_arc();
+    ///     assert_eq!(thread_monitor.local_checks(), 0); // Fresh local state
+    ///     assert_eq!(thread_monitor.global_failures(), 2); // But sees shared global state
+    ///     
+    ///     thread_monitor.check_service(false);
+    ///     assert_eq!(thread_monitor.local_checks(), 1); // Local: 1
+    ///     assert_eq!(thread_monitor.global_failures(), 3); // Global: 3
+    /// }).join().unwrap();
+    ///
+    /// // Back on main thread: local state unchanged, global state updated
+    /// assert_eq!(monitor.local_checks(), 4); // Still 4 locally
+    /// assert_eq!(monitor.global_failures(), 3); // But sees update from other thread
+    /// ```
     ///
     /// # Performance
     ///
