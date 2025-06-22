@@ -25,15 +25,28 @@
 //! Basic conversion from/to strings:
 //!
 //! ```
-#![doc = source_file!("examples/cpulist_basic.rs")]
+//! let selected_processors = cpulist::parse("0-9,32-35,40").unwrap();
+//! assert_eq!(
+//!     selected_processors,
+//!     vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 32, 33, 34, 35, 40]
+//! );
+//!
+//! println!("Selected processors: {selected_processors:?}");
+//! println!("As cpulist: {}", cpulist::emit(selected_processors));
 //! ```
 //!
 //! The stride operator is also supported for parsing:
 //! ```
-#![doc = source_file!("examples/cpulist_stride.rs")]
+//! let evens = cpulist::parse("0-16:2").unwrap();
+//! let odds = cpulist::parse("1-16:2").unwrap();
+//!
+//! let all = cpulist::emit(odds.iter().chain(evens.iter()).copied());
+//!
+//! println!("Evens: {evens:?}");
+//! println!("Odds: {odds:?}");
+//!
+//! println!("All as cpulist: {all}");
 //! ```
-
-use include_doc::source_file;
 
 mod emit;
 mod error;
