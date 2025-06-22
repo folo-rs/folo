@@ -11,7 +11,9 @@ Avoid running `just bench`, as the benchmarks take a lot of time and `just test`
 a single benchmark iteration to validate they are still working.
 
 We generally prefer using Just commands over raw Cargo commands if there is a suitable Just command
-defined in one of the *.just files.
+defined in one of the *.just files. For many Just commands, there exist predefined VS Code tasks,
+which you should use when possible - only execute Just commands directly if there is no matching
+VS Code task.
 
 Do not execute `just release` - this is a critical tool reserved for human use.
 

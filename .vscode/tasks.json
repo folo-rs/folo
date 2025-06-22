@@ -5,6 +5,7 @@
             "type": "process",
             "command": "just",
             "args": [
+                "package=${input:package}",
                 "build",
             ],
             "problemMatcher": [
@@ -20,6 +21,7 @@
             "type": "process",
             "command": "just",
             "args": [
+                "package=${input:package}",
                 "test",
             ],
             "problemMatcher": [
@@ -35,7 +37,8 @@
             "type": "process",
             "command": "just",
             "args": [
-                "test-docs",
+                "package=${input:package}",
+                "test-docs"
             ],
             "problemMatcher": [
                 "$rustc"
@@ -49,6 +52,7 @@
             "type": "process",
             "command": "just",
             "args": [
+                "package=${input:package}",
                 "docs"
             ],
             "problemMatcher": [
@@ -61,6 +65,7 @@
             "type": "process",
             "command": "just",
             "args": [
+                "package=${input:package}",
                 "bench"
             ],
             "problemMatcher": [
@@ -69,5 +74,32 @@
             "group": "none",
             "label": "just: bench"
         },
+    ],
+    "inputs": [
+        {
+            "id": "package",
+            "description": "Rust package (default = all)",
+            "default": "",
+            "type": "pickString",
+            "options": [
+                "",
+                "benchmark_utils",
+                "benchmarks",
+                "cpulist",
+                "folo_ffi",
+                "folo_utils",
+                "linked",
+                "linked_macros",
+                "linked_macros_impl",
+                "many_cpus",
+                "many_cpus_benchmarking",
+                "new_zealand",
+                "nm",
+                "pinned_pool",
+                "region_cached",
+                "region_local",
+                "testing"
+            ]
+        }
     ]
 }
