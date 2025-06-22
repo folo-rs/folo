@@ -22,6 +22,16 @@ pub struct MetricsPusher {
 
 impl MetricsPusher {
     /// Creates a new `MetricsPusher` instance.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nm::MetricsPusher;
+    ///
+    /// thread_local! {
+    ///     static PUSHER: MetricsPusher = MetricsPusher::new();
+    /// }
+    /// ```
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -33,6 +43,27 @@ impl MetricsPusher {
     /// Pushes the metrics to a storage location where they can be included in reports.
     ///
     /// This method should be called periodically to ensure that push-model metrics are published.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nm::{Event, MetricsPusher, Push};
+    ///
+    /// thread_local! {
+    ///     static PUSHER: MetricsPusher = MetricsPusher::new();
+    ///
+    ///     static PUSH_EVENT: Event<Push> = Event::builder()
+    ///         .name("push_example")
+    ///         .pusher_local(&PUSHER)
+    ///         .build();
+    /// }
+    ///
+    /// // Observe some events first
+    /// PUSH_EVENT.with(|e| e.observe_once());
+    ///
+    /// // Periodically push the accumulated metrics
+    /// PUSHER.with(MetricsPusher::push);
+    /// ```
     pub fn push(&self) {
         for pair in self.push_registry.borrow().iter() {
             let local_snapshot = pair.local.snapshot();

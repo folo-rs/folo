@@ -56,6 +56,18 @@ where
     ///
     /// Recommended format: `big_medium_small_units`
     /// For example: `net_http_connect_time_ns`
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nm::Event;
+    ///
+    /// thread_local! {
+    ///     static MY_EVENT: Event = Event::builder()
+    ///         .name("http_requests_duration_ms")
+    ///         .build();
+    /// }
+    /// ```
     #[must_use]
     pub fn name(self, name: impl Into<EventName>) -> Self {
         Self {
@@ -68,6 +80,21 @@ where
     /// when creating a histogram of event magnitudes.
     ///
     /// The default is to not create a histogram.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nm::{Event, Magnitude};
+    ///
+    /// const RESPONSE_TIME_BUCKETS_MS: &[Magnitude] = &[1, 10, 50, 100, 500, 1000];
+    ///
+    /// thread_local! {
+    ///     static HTTP_RESPONSE_TIME_MS: Event = Event::builder()
+    ///         .name("http_response_time_ms")
+    ///         .histogram(RESPONSE_TIME_BUCKETS_MS)
+    ///         .build();
+    /// }
+    /// ```
     ///
     /// # Panics
     ///
@@ -115,6 +142,19 @@ impl EventBuilder<Pull> {
     /// Note that if nothing ever calls the pusher on a thread,
     /// the data from that thread will never be published.
     ///
+    /// # Example
+    ///
+    /// ```
+    /// use nm::{Event, MetricsPusher, Push};
+    ///
+    /// let pusher = MetricsPusher::new();
+    /// let push_event: Event<Push> = Event::builder()
+    ///     .name("push_example")
+    ///     .pusher(&pusher)
+    ///     .build();
+    /// # // Example usage would require calling pusher.push()
+    /// ```
+    ///
     /// [1]: crate::MetricsPusher::push
     #[must_use]
     pub fn pusher(self, pusher: &MetricsPusher) -> EventBuilder<Push> {
@@ -137,6 +177,22 @@ impl EventBuilder<Pull> {
     /// at the cost of delaying data updates until the pusher is invoked.
     /// Note that if nothing ever calls the pusher on a thread,
     /// the data from that thread will never be published.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nm::{Event, MetricsPusher, Push};
+    ///
+    /// thread_local! {
+    ///     static PUSHER: MetricsPusher = MetricsPusher::new();
+    ///
+    ///     static PUSH_EVENT: Event<Push> = Event::builder()
+    ///         .name("push_local_example")
+    ///         .pusher_local(&PUSHER)
+    ///         .build();
+    /// }
+    /// # // Example usage would require calling PUSHER.with(MetricsPusher::push)
+    /// ```
     ///
     /// [1]: crate::MetricsPusher::push
     #[must_use]

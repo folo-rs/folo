@@ -154,6 +154,31 @@ where
     }
 
     /// Prepares to observe a batch of events with the same magnitude.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nm::Event;
+    ///
+    /// thread_local! {
+    ///     static REQUESTS_PROCESSED: Event = Event::builder()
+    ///         .name("requests_processed")
+    ///         .build();
+    ///     static HTTP_RESPONSE_TIME_MS: Event = Event::builder()
+    ///         .name("http_response_time_ms")
+    ///         .build();
+    /// }
+    ///
+    /// // Record 100 HTTP responses, each taking 50ms
+    /// HTTP_RESPONSE_TIME_MS.with(|event| {
+    ///     event.batch(100).observe(50);
+    /// });
+    ///
+    /// // Record 50 simple count events
+    /// REQUESTS_PROCESSED.with(|event| {
+    ///     event.batch(50).observe_once();
+    /// });
+    /// ```
     #[must_use]
     pub fn batch(&self, count: usize) -> ObservationBatch<'_, P> {
         ObservationBatch { event: self, count }

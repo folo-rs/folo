@@ -21,6 +21,24 @@ pub struct Report {
 impl Report {
     /// Generates a report by collecting all metrics for all events.
     ///
+    /// # Example
+    ///
+    /// ```
+    /// use nm::{Event, Report};
+    ///
+    /// thread_local! {
+    ///     static TEST_EVENT: Event = Event::builder()
+    ///         .name("test_event")
+    ///         .build();
+    /// }
+    ///
+    /// // Observe some events first
+    /// TEST_EVENT.with(|e| e.observe_once());
+    ///
+    /// let report = Report::collect();
+    /// println!("{}", report);
+    /// ```
+    ///
     /// # Panics
     ///
     /// Panics if the same event is registered on different threads with a different configuration.
@@ -58,6 +76,27 @@ impl Report {
     }
 
     /// Iterates through all the events in the report, allowing access to their metrics.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nm::{Event, Report};
+    ///
+    /// thread_local! {
+    ///     static TEST_EVENT: Event = Event::builder()
+    ///         .name("test_event")
+    ///         .build();
+    /// }
+    ///
+    /// // Observe some events first
+    /// TEST_EVENT.with(|e| e.observe_once());
+    ///
+    /// let report = Report::collect();
+    ///
+    /// for event in report.events() {
+    ///     println!("Event: {}, Count: {}", event.name(), event.count());
+    /// }
+    /// ```
     pub fn events(&self) -> impl Iterator<Item = &EventMetrics> {
         self.events.iter()
     }
@@ -134,18 +173,77 @@ impl EventMetrics {
     }
 
     /// The name of the event associated with these metrics.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nm::{Event, Report};
+    ///
+    /// thread_local! {
+    ///     static HTTP_REQUESTS: Event = Event::builder()
+    ///         .name("http_requests")
+    ///         .build();
+    /// }
+    ///
+    /// HTTP_REQUESTS.with(|e| e.observe_once());
+    /// let report = Report::collect();
+    ///
+    /// for event in report.events() {
+    ///     println!("Event name: {}", event.name());
+    /// }
+    /// ```
     #[must_use]
     pub fn name(&self) -> &EventName {
         &self.name
     }
 
     /// Total number of occurrences that have been observed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nm::{Event, Report};
+    ///
+    /// thread_local! {
+    ///     static HTTP_REQUESTS: Event = Event::builder()
+    ///         .name("http_requests")
+    ///         .build();
+    /// }
+    ///
+    /// HTTP_REQUESTS.with(|e| e.observe_once());
+    /// HTTP_REQUESTS.with(|e| e.observe_once());
+    /// let report = Report::collect();
+    ///
+    /// for event in report.events() {
+    ///     println!("Total count: {}", event.count());
+    /// }
+    /// ```
     #[must_use]
     pub fn count(&self) -> u64 {
         self.count
     }
 
     /// Sum of the magnitudes of all observed occurrences.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nm::{Event, Report};
+    ///
+    /// thread_local! {
+    ///     static SENT_BYTES: Event = Event::builder()
+    ///         .name("sent_bytes")
+    ///         .build();
+    /// }
+    ///
+    /// SENT_BYTES.with(|e| e.observe(1024));
+    /// SENT_BYTES.with(|e| e.observe(2048));
+    /// let report = Report::collect();
+    ///
+    /// for event in report.events() {
+    ///     println!("Total bytes: {}", event.sum());
+    /// }
+    /// ```
     #[must_use]
     pub fn sum(&self) -> Magnitude {
         self.sum
@@ -154,6 +252,26 @@ impl EventMetrics {
     /// Mean magnitude of all observed occurrences.
     ///
     /// If there are no observations, this will be zero.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nm::{Event, Report};
+    ///
+    /// thread_local! {
+    ///     static RESPONSE_TIME: Event = Event::builder()
+    ///         .name("response_time_ms")
+    ///         .build();
+    /// }
+    ///
+    /// RESPONSE_TIME.with(|e| e.observe(100));
+    /// RESPONSE_TIME.with(|e| e.observe(200));
+    /// let report = Report::collect();
+    ///
+    /// for event in report.events() {
+    ///     println!("Average response time: {}ms", event.mean());
+    /// }
+    /// ```
     #[must_use]
     pub fn mean(&self) -> Magnitude {
         self.mean
@@ -162,6 +280,33 @@ impl EventMetrics {
     /// The histogram of observed magnitudes (if configured).
     ///
     /// `None` if the event [was not configured to generate a histogram][1].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nm::{Event, Magnitude, Report};
+    ///
+    /// const RESPONSE_TIME_BUCKETS_MS: &[Magnitude] = &[10, 50, 100, 500];
+    ///
+    /// thread_local! {
+    ///     static HTTP_RESPONSE_TIME_MS: Event = Event::builder()
+    ///         .name("http_response_time_ms")
+    ///         .histogram(RESPONSE_TIME_BUCKETS_MS)
+    ///         .build();
+    /// }
+    ///
+    /// HTTP_RESPONSE_TIME_MS.with(|e| e.observe(75));
+    /// let report = Report::collect();
+    ///
+    /// for event in report.events() {
+    ///     if let Some(histogram) = event.histogram() {
+    ///         println!("Histogram for {}", event.name());
+    ///         for (bucket_upper_bound, count) in histogram.buckets() {
+    ///             println!("  ≤{}: {}", bucket_upper_bound, count);
+    ///         }
+    ///     }
+    /// }
+    /// ```
     ///
     /// [1]: crate::EventBuilder::histogram
     #[must_use]
