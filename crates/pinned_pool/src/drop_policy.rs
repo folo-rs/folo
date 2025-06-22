@@ -3,10 +3,10 @@
 /// By default, the container will drop its items when it is dropped.
 ///
 /// # Examples
-/// 
+///
 /// ```
-/// use pinned_pool::{PinnedPool, DropPolicy};
-/// 
+/// use pinned_pool::{DropPolicy, PinnedPool};
+///
 /// // The drop policy is set at pool creation time.
 /// let pool = PinnedPool::<u32>::builder()
 ///     .drop_policy(DropPolicy::MustNotDropItems)

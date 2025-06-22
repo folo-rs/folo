@@ -82,3 +82,9 @@ types, we re-export them all at the parent, so while we have modules like
 # Scripting
 
 You can assume PowerShell is available. Prefer PowerShell over Bash.
+
+# Code style
+
+There are many Clippy rules defined in `./Cargo.toml`. Try to follow these even in doctests.
+Note that Clippy does not actually run on doctests, so you will need to manually check what
+rules we enable and try your best to follow them in the inline examples in API documentation.

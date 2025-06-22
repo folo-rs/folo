@@ -129,6 +129,39 @@ impl ProcessorSet {
     /// Modifies the affinity of the current thread to execute
     /// only on the processors in this processor set.
     ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::num::NonZero;
+    /// use std::thread;
+    ///
+    /// use many_cpus::{HardwareTracker, ProcessorSet};
+    ///
+    /// // Create a processor set with specific processors
+    /// let processors = ProcessorSet::builder()
+    ///     .take(NonZero::new(2).unwrap())
+    ///     .unwrap_or_else(|| ProcessorSet::default());
+    ///
+    /// // Pin the current thread to those processors
+    /// processors.pin_current_thread_to();
+    ///
+    /// println!("Thread pinned to {} processor(s)", processors.len());
+    ///
+    /// // For single-processor sets, we can verify processor-level pinning
+    /// let single_processor = ProcessorSet::builder()
+    ///     .take(NonZero::new(1).unwrap())
+    ///     .unwrap();
+    ///
+    /// thread::spawn(move || {
+    ///     single_processor.pin_current_thread_to();
+    ///     
+    ///     // This thread is now pinned to exactly one processor
+    ///     assert!(HardwareTracker::is_thread_processor_pinned());
+    ///     println!("Thread pinned to processor {}", 
+    ///              single_processor.processors().first().id());
+    /// }).join().unwrap();
+    /// ```
+    ///
     /// # Behavior with multiple processors
     ///
     /// If multiple processors are present in the processor set, they might not be evenly used.
@@ -199,6 +232,31 @@ impl ProcessorSet {
 
     /// Spawns a single thread pinned to the set. The thread will only be scheduled to execute on
     /// the processors in the processor set and may freely move between the processors in the set.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::num::NonZero;
+    ///
+    /// use many_cpus::ProcessorSet;
+    ///
+    /// // Create a processor set with multiple processors
+    /// let processors = ProcessorSet::builder()
+    ///     .take(NonZero::new(2).unwrap())
+    ///     .unwrap_or_else(|| ProcessorSet::default());
+    ///
+    /// // Spawn a single thread that can use any processor in the set
+    /// let handle = processors.spawn_thread(|processor_set| {
+    ///     println!("Thread can execute on {} processors", processor_set.len());
+    ///
+    ///     // The thread can move between processors in the set
+    ///     // but is restricted to only those processors
+    ///     42
+    /// });
+    ///
+    /// let result = handle.join().unwrap();
+    /// assert_eq!(result, 42);
+    /// ```
     ///
     /// # Behavior with multiple processors
     ///

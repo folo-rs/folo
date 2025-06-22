@@ -45,6 +45,22 @@ impl HardwareInfo {
     ///
     /// This includes memory regions that are not currently active and memory regions that
     /// are active but not available to the current process.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use many_cpus::HardwareInfo;
+    ///
+    /// let max_memory_region_id = HardwareInfo::max_memory_region_id();
+    /// let max_memory_region_count = HardwareInfo::max_memory_region_count();
+    ///
+    /// println!("Memory region IDs range from 0 to {max_memory_region_id}");
+    /// println!("System can have up to {max_memory_region_count} memory regions");
+    ///
+    /// // Useful for creating arrays indexed by memory region ID
+    /// let mut data_per_region = vec![0; max_memory_region_count];
+    /// println!("Created array with {} slots for memory region data", data_per_region.len());
+    /// ```
     #[cfg_attr(test, mutants::skip)] // Trivial layer, we only test the underlying logic.
     #[inline]
     #[must_use]
@@ -71,6 +87,22 @@ impl HardwareInfo {
     ///
     /// This includes memory regions that are not currently active and memory regions that
     /// are active but not available to the current process.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use many_cpus::HardwareInfo;
+    ///
+    /// let max_regions = HardwareInfo::max_memory_region_count();
+    /// let max_processors = HardwareInfo::max_processor_count();
+    ///
+    /// println!("System architecture supports:");
+    /// println!("  Up to {max_processors} processors");
+    /// println!("  Up to {max_regions} memory regions");
+    ///
+    /// let avg_processors_per_region = max_processors as f64 / max_regions as f64;
+    /// println!("  Average of {:.1} processors per memory region", avg_processors_per_region);
+    /// ```
     #[cfg_attr(test, mutants::skip)] // Trivial layer, we only test the underlying logic.
     #[inline]
     #[must_use]

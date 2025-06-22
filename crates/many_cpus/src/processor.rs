@@ -23,6 +23,19 @@ impl Processor {
     ///
     /// You can obtain the upper bound via [`HardwareInfo::max_processor_id()`][1].
     ///
+    /// # Example
+    ///
+    /// ```
+    /// use many_cpus::ProcessorSet;
+    ///
+    /// let processors = ProcessorSet::default();
+    /// 
+    /// for processor in processors.processors() {
+    ///     let id = processor.id();
+    ///     println!("Default processor set includes processor {id}");
+    /// }
+    /// ```
+    ///
     /// [1]: crate::HardwareInfo::max_processor_id
     #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     #[inline]
@@ -48,6 +61,34 @@ impl Processor {
     /// This is a relative measure - the fastest processors on any given system are always
     /// considered performance processors, while any that are slower are considered efficiency
     /// processors.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use many_cpus::{EfficiencyClass, ProcessorSet};
+    ///
+    /// let processors = ProcessorSet::default();
+    /// let mut performance_count = 0;
+    /// let mut efficiency_count = 0;
+    ///
+    /// for processor in processors.processors() {
+    ///     match processor.efficiency_class() {
+    ///         EfficiencyClass::Performance => {
+    ///             performance_count += 1;
+    ///             println!("Processor {} is a performance processor", processor.id());
+    ///         }
+    ///         EfficiencyClass::Efficiency => {
+    ///             efficiency_count += 1;
+    ///             println!("Processor {} is an efficiency processor", processor.id());
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// println!(
+    ///     "System has {} performance and {} efficiency processors",
+    ///     performance_count, efficiency_count
+    /// );
+    /// ```
     #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     #[inline]
     #[must_use]

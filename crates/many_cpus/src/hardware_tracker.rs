@@ -242,6 +242,23 @@ impl HardwareTracker {
     }
 
     /// The current hardware resource quota for the current process. This may change over time.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use many_cpus::HardwareTracker;
+    ///
+    /// let quota = HardwareTracker::resource_quota();
+    /// 
+    /// let max_time = quota.max_processor_time();
+    /// let active_count = HardwareTracker::active_processor_count();
+    ///
+    /// println!("System has {active_count} active processors");
+    /// println!("Process quota allows {max_time:.2} processor-seconds per second");
+    ///
+    /// let quota_percentage = (max_time / active_count as f64) * 100.0;
+    /// println!("Process can use {quota_percentage:.1}% of total system processing power");
+    /// ```
     #[must_use]
     #[inline]
     pub fn resource_quota() -> ResourceQuota {
@@ -253,6 +270,22 @@ impl HardwareTracker {
     ///
     /// This may be useful for working with system APIs that deal with system-scoped values,
     /// instead of process-scoped values that need to consider current process limits.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use many_cpus::{HardwareTracker, ProcessorSet};
+    ///
+    /// let system_processors = HardwareTracker::active_processor_count();
+    /// let available_processors = ProcessorSet::default().len();
+    ///
+    /// println!("System has {system_processors} total active processors");
+    /// println!("Process can use {available_processors} of them");
+    ///
+    /// if available_processors < system_processors {
+    ///     println!("Process is limited to a subset of system processors");
+    /// }
+    /// ```
     #[must_use]
     #[inline]
     pub fn active_processor_count() -> usize {

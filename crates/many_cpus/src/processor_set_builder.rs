@@ -78,6 +78,25 @@ impl ProcessorSetBuilder {
 
     /// Requires that all processors in the set be marked as [performance processors][1].
     ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::num::NonZero;
+    ///
+    /// use many_cpus::ProcessorSet;
+    ///
+    /// // Get up to 4 performance processors (or fewer if not available)
+    /// let performance_processors = ProcessorSet::builder()
+    ///     .performance_processors_only()
+    ///     .take(NonZero::new(4).unwrap());
+    ///
+    /// if let Some(processors) = performance_processors {
+    ///     println!("Found {} performance processors", processors.len());
+    /// } else {
+    ///     println!("Could not find 4 performance processors");
+    /// }
+    /// ```
+    ///
     /// [1]: EfficiencyClass::Performance
     #[must_use]
     pub fn performance_processors_only(mut self) -> Self {
@@ -86,6 +105,36 @@ impl ProcessorSetBuilder {
     }
 
     /// Requires that all processors in the set be marked as [efficiency processors][1].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::num::NonZero;
+    ///
+    /// use many_cpus::ProcessorSet;
+    ///
+    /// // Get all available efficiency processors for background tasks
+    /// let efficiency_processors = ProcessorSet::builder()
+    ///     .efficiency_processors_only()
+    ///     .take_all();
+    ///
+    /// if let Some(processors) = efficiency_processors {
+    ///     println!(
+    ///         "Using {} efficiency processors for background work",
+    ///         processors.len()
+    ///     );
+    ///
+    ///     // Spawn threads on efficiency processors to handle background tasks
+    ///     let threads = processors.spawn_threads(|processor| {
+    ///         println!(
+    ///             "Background worker started on efficiency processor {}",
+    ///             processor.id()
+    ///         );
+    ///         // Background work here...
+    ///     });
+    /// # for thread in threads { thread.join().unwrap(); }
+    /// }
+    /// ```
     ///
     /// [1]: EfficiencyClass::Efficiency
     #[must_use]
@@ -96,6 +145,36 @@ impl ProcessorSetBuilder {
 
     /// Requires that all processors in the set be from different memory regions, selecting a
     /// maximum of 1 processor from each memory region.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::num::NonZero;
+    ///
+    /// use many_cpus::ProcessorSet;
+    ///
+    /// // Get one processor from each memory region for distributed processing
+    /// let distributed_processors = ProcessorSet::builder()
+    ///     .different_memory_regions()
+    ///     .take(NonZero::new(4).unwrap());
+    ///
+    /// if let Some(processors) = distributed_processors {
+    ///     println!(
+    ///         "Selected {} processors from different memory regions",
+    ///         processors.len()
+    ///     );
+    ///
+    ///     // Each processor will be in a different memory region,
+    ///     // ideal for parallel work on separate data sets
+    ///     for processor in processors.processors() {
+    ///         println!(
+    ///             "Processor {} in memory region {}",
+    ///             processor.id(),
+    ///             processor.memory_region_id()
+    ///         );
+    ///     }
+    /// }
+    /// ```
     #[must_use]
     pub fn different_memory_regions(mut self) -> Self {
         self.memory_region_selector = MemoryRegionSelector::RequireDifferent;
@@ -103,6 +182,41 @@ impl ProcessorSetBuilder {
     }
 
     /// Requires that all processors in the set be from the same memory region.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::num::NonZero;
+    ///
+    /// use many_cpus::ProcessorSet;
+    ///
+    /// // Get processors from the same memory region for data locality
+    /// let local_processors = ProcessorSet::builder()
+    ///     .same_memory_region()
+    ///     .take(NonZero::new(3).unwrap());
+    ///
+    /// if let Some(processors) = local_processors {
+    ///     println!(
+    ///         "Selected {} processors from the same memory region",
+    ///         processors.len()
+    ///     );
+    ///
+    ///     // All processors share the same memory region for optimal data sharing
+    ///     let memory_region = processors.processors().first().memory_region_id();
+    ///     println!("All processors are in memory region {}", memory_region);
+    ///
+    ///     // Ideal for cooperative processing of shared data
+    ///     let threads = processors.spawn_threads(|processor| {
+    ///         println!(
+    ///             "Worker on processor {} accessing shared memory region {}",
+    ///             processor.id(),
+    ///             processor.memory_region_id()
+    ///         );
+    ///         // Process shared data here...
+    ///     });
+    /// # for thread in threads { thread.join().unwrap(); }
+    /// }
+    /// ```
     #[must_use]
     pub fn same_memory_region(mut self) -> Self {
         self.memory_region_selector = MemoryRegionSelector::RequireSame;
@@ -135,6 +249,28 @@ impl ProcessorSetBuilder {
     /// conditions - even if this predicate returns `true`, the processor may end up being filtered
     /// out by other conditions. Conversely, some candidates may already be filtered out before
     /// being passed to this predicate.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::num::NonZero;
+    ///
+    /// use many_cpus::{EfficiencyClass, ProcessorSet};
+    ///
+    /// // Select only even-numbered performance processors
+    /// let filtered_processors = ProcessorSet::builder()
+    ///     .filter(|p| p.efficiency_class() == EfficiencyClass::Performance && p.id() % 2 == 0)
+    ///     .take(NonZero::new(2).unwrap());
+    ///
+    /// if let Some(processors) = filtered_processors {
+    ///     for processor in processors.processors() {
+    ///         println!(
+    ///             "Selected processor {} (performance, even ID)",
+    ///             processor.id()
+    ///         );
+    ///     }
+    /// }
+    /// ```
     #[must_use]
     pub fn filter(mut self, predicate: impl Fn(&Processor) -> bool) -> Self {
         // We invoke the filters immediately because the API gets really annoying if the
@@ -150,6 +286,31 @@ impl ProcessorSetBuilder {
     }
 
     /// Removes specific processors from the set of candidates.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::num::NonZero;
+    ///
+    /// use many_cpus::ProcessorSet;
+    ///
+    /// // Get the default set and remove the first processor
+    /// let all_processors = ProcessorSet::default();
+    /// let first_processor = all_processors.processors().first().clone();
+    ///
+    /// let remaining_processors = all_processors
+    ///     .to_builder()
+    ///     .except([&first_processor])
+    ///     .take_all();
+    ///
+    /// if let Some(processors) = remaining_processors {
+    ///     println!(
+    ///         "Using {} processors (excluding processor {})",
+    ///         processors.len(),
+    ///         first_processor.id()
+    ///     );
+    /// }
+    /// ```
     #[must_use]
     pub fn except<'a, I>(mut self, processors: I) -> Self
     where
@@ -167,6 +328,35 @@ impl ProcessorSetBuilder {
     ///
     /// This is a convenient way to identify the set of processors the platform prefers a process
     /// to use when called from a non-customized thread such as the `main()` entrypoint.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use many_cpus::ProcessorSet;
+    ///
+    /// // Get processors available to the current thread (respects OS affinity settings)
+    /// let available_processors = ProcessorSet::builder()
+    ///     .where_available_for_current_thread()
+    ///     .take_all()
+    ///     .expect("current thread must be running on at least one processor");
+    ///
+    /// println!(
+    ///     "Current thread can use {} processors",
+    ///     available_processors.len()
+    /// );
+    ///
+    /// // Compare with all processors on the system
+    /// let all_processors = ProcessorSet::builder()
+    ///     .ignoring_resource_quota()
+    ///     .take_all()
+    ///     .unwrap();
+    ///
+    /// if available_processors.len() < all_processors.len() {
+    ///     println!("Thread affinity is restricting processor usage");
+    ///     println!("  Total system processors: {}", all_processors.len());
+    ///     println!("  Available to this thread: {}", available_processors.len());
+    /// }
+    /// ```
     #[must_use]
     pub fn where_available_for_current_thread(mut self) -> Self {
         let current_thread_processors = self.pal.current_thread_processors();
@@ -186,6 +376,28 @@ impl ProcessorSetBuilder {
     /// This can be valuable to identify the total set of available processors, though is typically
     /// not a good idea when scheduling work on the processors. See the type-level documentation
     /// for more details on resource quota handling best practices.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use many_cpus::ProcessorSet;
+    ///
+    /// // Get all processors regardless of resource quota
+    /// let all_processors = ProcessorSet::builder()
+    ///     .ignoring_resource_quota()
+    ///     .take_all()
+    ///     .unwrap();
+    ///
+    /// // Compare with quota-respecting set
+    /// let quota_processors = ProcessorSet::default();
+    ///
+    /// println!("Total processors available: {}", all_processors.len());
+    /// println!("Processors within quota: {}", quota_processors.len());
+    ///
+    /// if all_processors.len() > quota_processors.len() {
+    ///     println!("Resource quota is limiting processor usage");
+    /// }
+    /// ```
     #[must_use]
     pub fn ignoring_resource_quota(mut self) -> Self {
         self.obey_resource_quota = false;
@@ -382,6 +594,38 @@ impl ProcessorSetBuilder {
     /// the processors in an arbitrary memory region with at least one qualifying processor.
     ///
     /// Returns `None` if there were no matching processors to satisfy the request.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use many_cpus::ProcessorSet;
+    ///
+    /// // Try to get all efficiency processors, but exclude the first two
+    /// let all_processors = ProcessorSet::default();
+    /// let first_two: Vec<_> = all_processors.processors().iter().take(2).collect();
+    ///
+    /// let filtered_processors = ProcessorSet::builder()
+    ///     .efficiency_processors_only()
+    ///     .except(first_two)
+    ///     .take_all();
+    ///
+    /// match filtered_processors {
+    ///     Some(processors) => {
+    ///         println!("Found {} efficiency processors (excluding first two)", processors.len());
+    ///         
+    ///         // Use remaining efficiency processors for background work
+    ///         let threads = processors.spawn_threads(|processor| {
+    ///             println!("Background worker on processor {}", processor.id());
+    ///             // Background processing here...
+    ///         });
+    /// # for thread in threads { thread.join().unwrap(); }
+    ///     }
+    ///     None => {
+    ///         // This can happen if all efficiency processors were excluded by the filter
+    ///         println!("No efficiency processors remaining after filtering");
+    ///     }
+    /// }
+    /// ```
     ///
     /// # Resource quota
     ///

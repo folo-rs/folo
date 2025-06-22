@@ -17,6 +17,25 @@ impl ResourceQuota {
     /// How many seconds of processor time the process is allowed to use per second of real time.
     ///
     /// This will never be more than the number of processors available to the current process.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use many_cpus::HardwareTracker;
+    ///
+    /// let quota = HardwareTracker::resource_quota();
+    /// let max_time = quota.max_processor_time();
+    ///
+    /// println!("Process is allowed {max_time:.2} seconds of processor time per second");
+    ///
+    /// if max_time < 1.0 {
+    ///     println!("Process is significantly resource-constrained");
+    /// } else if max_time.fract() == 0.0 {
+    ///     println!("Process can use {} full processors", max_time as usize);
+    /// } else {
+    ///     println!("Process has fractional processor allocation");
+    /// }
+    /// ```
     #[must_use]
     #[inline]
     pub fn max_processor_time(&self) -> f64 {
