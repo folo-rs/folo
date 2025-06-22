@@ -1,6 +1,17 @@
 /// Determines container behavior when the container is dropped.
 ///
 /// By default, the container will drop its items when it is dropped.
+///
+/// # Examples
+/// 
+/// ```
+/// use pinned_pool::{PinnedPool, DropPolicy};
+/// 
+/// // The drop policy is set at pool creation time.
+/// let pool = PinnedPool::<u32>::builder()
+///     .drop_policy(DropPolicy::MustNotDropItems)
+///     .build();
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum DropPolicy {

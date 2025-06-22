@@ -3,6 +3,21 @@ use std::marker::PhantomData;
 use crate::{DropPolicy, PinnedPool};
 
 /// Builder for creating an instance of [`PinnedPool`].
+///
+/// You only need to use this builder if you want to customize the pool configuration.
+/// The default configuration used by [`PinnedPool::new()`][1] is sufficient for most use cases.
+///
+/// # Examples
+///
+/// ```
+/// use pinned_pool::{DropPolicy, PinnedPool};
+///
+/// let pool = PinnedPool::<u32>::builder()
+///     .drop_policy(DropPolicy::MayDropItems)
+///     .build();
+/// ```
+///
+/// [1]: PinnedPool::new
 #[derive(Debug)]
 #[must_use]
 pub struct PinnedPoolBuilder<T> {
@@ -19,7 +34,18 @@ impl<T> PinnedPoolBuilder<T> {
         }
     }
 
-    /// Sets the drop policy for the pool.
+    /// Sets the [drop policy][DropPolicy] for the pool. This governs how
+    /// to treat remaining items in the pool when the pool is dropped.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pinned_pool::{DropPolicy, PinnedPool};
+    ///
+    /// let pool = PinnedPool::<u32>::builder()
+    ///     .drop_policy(DropPolicy::MustNotDropItems)
+    ///     .build();
+    /// ```
     pub fn drop_policy(mut self, policy: DropPolicy) -> Self {
         self.drop_policy = policy;
         self
@@ -30,6 +56,14 @@ impl<T> PinnedPoolBuilder<T> {
     /// # Panics
     ///
     /// Panics if `T` is zero-sized.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pinned_pool::PinnedPool;
+    ///
+    /// let pool = PinnedPool::<u32>::builder().build();
+    /// ```
     #[must_use]
     pub fn build(self) -> PinnedPool<T> {
         PinnedPool::new_inner(self.drop_policy)
