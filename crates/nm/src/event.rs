@@ -180,6 +180,7 @@ where
     /// });
     /// ```
     #[must_use]
+    #[inline]
     pub fn batch(&self, count: usize) -> ObservationBatch<'_, P> {
         ObservationBatch { event: self, count }
     }
@@ -257,21 +258,25 @@ where
     P: PublishModel,
 {
     #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    #[inline]
     fn observe_once(&self) {
         self.observe_once();
     }
 
     #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    #[inline]
     fn observe(&self, magnitude: Magnitude) {
         self.observe(magnitude);
     }
 
     #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    #[inline]
     fn observe_millis(&self, duration: Duration) {
         self.observe_millis(duration);
     }
 
     #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    #[inline]
     fn observe_duration_millis<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R,
@@ -285,21 +290,25 @@ where
     P: PublishModel,
 {
     #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    #[inline]
     fn observe_once(&self) {
         self.observe_once();
     }
 
     #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    #[inline]
     fn observe(&self, magnitude: Magnitude) {
         self.observe(magnitude);
     }
 
     #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    #[inline]
     fn observe_millis(&self, duration: Duration) {
         self.observe_millis(duration);
     }
 
     #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    #[inline]
     fn observe_duration_millis<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R,
