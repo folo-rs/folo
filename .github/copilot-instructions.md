@@ -4,8 +4,11 @@ We use the Just command runner for many common commands - look inside *.just fil
 list of available commands. Some relevant ones are:
 
 * `just build` - build the entire workspace
-* `just package=many_cpus build` - build a single workspace (most commands accept a `package` parameter)
-* `just test` - test the entire workspace
+* `just package=many_cpus build` - build a single package (most commands accept a `package` parameter)
+* `just test` - test the entire workspace; this does NOT run doctests, use `just test-docs` for that
+* `just docs` - build API documentation
+
+The `package` argument must be the first argument to any `just` command, if used.
 
 Avoid running `just bench`, as the benchmarks take a lot of time and `just test` will anyway run
 a single benchmark iteration to validate they are still working.
