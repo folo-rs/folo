@@ -249,7 +249,7 @@ impl HardwareTracker {
     /// use many_cpus::HardwareTracker;
     ///
     /// let quota = HardwareTracker::resource_quota();
-    /// 
+    ///
     /// let max_time = quota.max_processor_time();
     /// let active_count = HardwareTracker::active_processor_count();
     ///

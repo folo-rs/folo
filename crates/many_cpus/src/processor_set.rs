@@ -154,12 +154,16 @@ impl ProcessorSet {
     ///
     /// thread::spawn(move || {
     ///     single_processor.pin_current_thread_to();
-    ///     
+    ///
     ///     // This thread is now pinned to exactly one processor
     ///     assert!(HardwareTracker::is_thread_processor_pinned());
-    ///     println!("Thread pinned to processor {}", 
-    ///              single_processor.processors().first().id());
-    /// }).join().unwrap();
+    ///     println!(
+    ///         "Thread pinned to processor {}",
+    ///         single_processor.processors().first().id()
+    ///     );
+    /// })
+    /// .join()
+    /// .unwrap();
     /// ```
     ///
     /// # Behavior with multiple processors

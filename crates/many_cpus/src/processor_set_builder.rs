@@ -611,8 +611,11 @@ impl ProcessorSetBuilder {
     ///
     /// match filtered_processors {
     ///     Some(processors) => {
-    ///         println!("Found {} efficiency processors (excluding first two)", processors.len());
-    ///         
+    ///         println!(
+    ///             "Found {} efficiency processors (excluding first two)",
+    ///             processors.len()
+    ///         );
+    ///
     ///         // Use remaining efficiency processors for background work
     ///         let threads = processors.spawn_threads(|processor| {
     ///             println!("Background worker on processor {}", processor.id());

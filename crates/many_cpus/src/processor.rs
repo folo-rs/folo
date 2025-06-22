@@ -29,7 +29,7 @@ impl Processor {
     /// use many_cpus::ProcessorSet;
     ///
     /// let processors = ProcessorSet::default();
-    /// 
+    ///
     /// for processor in processors.processors() {
     ///     let id = processor.id();
     ///     println!("Default processor set includes processor {id}");

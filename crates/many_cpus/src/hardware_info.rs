@@ -59,7 +59,10 @@ impl HardwareInfo {
     ///
     /// // Useful for creating arrays indexed by memory region ID
     /// let mut data_per_region = vec![0; max_memory_region_count];
-    /// println!("Created array with {} slots for memory region data", data_per_region.len());
+    /// println!(
+    ///     "Created array with {} slots for memory region data",
+    ///     data_per_region.len()
+    /// );
     /// ```
     #[cfg_attr(test, mutants::skip)] // Trivial layer, we only test the underlying logic.
     #[inline]
@@ -101,7 +104,10 @@ impl HardwareInfo {
     /// println!("  Up to {max_regions} memory regions");
     ///
     /// let avg_processors_per_region = max_processors as f64 / max_regions as f64;
-    /// println!("  Average of {:.1} processors per memory region", avg_processors_per_region);
+    /// println!(
+    ///     "  Average of {:.1} processors per memory region",
+    ///     avg_processors_per_region
+    /// );
     /// ```
     #[cfg_attr(test, mutants::skip)] // Trivial layer, we only test the underlying logic.
     #[inline]
