@@ -2,22 +2,36 @@ use std::alloc::Layout;
 use std::num::NonZero;
 use std::ptr::NonNull;
 
-use num::Integer;
-
 use crate::MemorySlab;
+
+/// The result of reserving memory in a [`MemoryPool`].
+///
+/// Contains both the coordinates for accessing the memory and a pointer to the reserved memory.
+/// Acts as both the reservation and the key - the user must return this to the pool to release
+/// the memory capacity.
+#[derive(Debug)]
+pub struct PoolReservation {
+    /// The coordinates of the memory block within the pool structure.
+    coordinates: MemoryBlockCoordinates,
+
+    /// A pointer to the reserved memory block.
+    ptr: NonNull<()>,
+}
+
+impl PoolReservation {
+    /// Returns a pointer to the reserved memory block.
+    #[must_use]
+    pub fn ptr(&self) -> NonNull<()> {
+        self.ptr
+    }
+}
 
 /// An object pool of unbounded size that provides type-erased memory allocation.
 ///
 /// A dynamically growing memory pool that manages multiple fixed-capacity slabs internally
 /// and automatically allocates new slabs when needed.
 ///
-/// There are multiple ways to reserve memory in the collection:
-///
-/// * [`reserve()`][3] - reserves memory and returns both the key and a pointer to the reserved memory.
-///   This is the primary way to reserve memory and provides both the stable key for later lookup and
-///   immediate access to the memory.
-///
-/// The pool returns a key for each reserved memory block, with blocks being keyed by this.
+/// The pool returns a key for each reserved memory block.
 ///
 /// # Out of band access
 ///
@@ -25,20 +39,13 @@ use crate::MemorySlab;
 /// memory via pointers and to create custom references to memory from unsafe code even when not
 /// holding an exclusive reference to the collection.
 ///
-/// You can obtain pointers to the memory blocks via the `NonNull<()>` returned by the
-/// [`get()`][1] method. These pointers are guaranteed to be valid until the memory is released
-/// from the collection or the collection itself is dropped.
-///
 /// # Resource usage
 ///
 /// As of today, the collection never shrinks, though future versions may offer facilities to do so.
-///
-/// [1]: Self::get
-/// [3]: Self::reserve
 #[derive(Debug)]
 pub struct MemoryPool {
     /// The layout of memory blocks managed by this pool.
-    layout: Layout,
+    item_layout: Layout,
 
     /// The capacity of each individual slab in the pool.
     slab_capacity: NonZero<usize>,
@@ -57,38 +64,6 @@ pub struct MemoryPool {
     /// confidence that the data is still valid but when we have no need to look up the new value.
     slab_with_vacant_slot_index: Option<usize>,
 }
-///
-/// There are multiple ways to reserve memory in the collection:
-///
-/// * [`reserve()`][3] - reserves memory and returns both the key and a pointer to the reserved memory.
-///   This is the primary way to reserve memory and provides both the stable key for later lookup and
-///   immediate access to the memory.
-///
-/// The pool returns a key for each reserved memory block, with blocks being keyed by this.
-///
-/// # Out of band access
-///
-/// The collection does not create or keep references to the memory blocks, so it is valid to access
-/// memory via pointers and to create custom references to memory from unsafe code even when not
-/// holding an exclusive reference to the collection.
-///
-/// You can obtain pointers to the memory blocks via the `NonNull<()>` returned by the
-/// [`get()`][1] method. These pointers are guaranteed to be valid until the memory is released
-/// from the collection or the collection itself is dropped.
-///
-/// # Resource usage
-///
-/// As of today, the collection never shrinks, though future versions may offer facilities to do so.
-///
-/// [1]: MemoryPool::get
-/// [3]: MemoryPool::reserve
-/// A key that can be used to reference up a memory block in a [`MemoryPool`].
-///
-/// Keys may be reused by the pool after a memory block is released.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Key {
-    index_in_pool: usize,
-}
 
 /// Today, we assemble the pool from memory slabs, each containing a fixed number of memory blocks.
 ///
@@ -104,14 +79,14 @@ const DEFAULT_SLAB_CAPACITY: usize = 128;
 const DEFAULT_SLAB_CAPACITY: usize = 16;
 
 impl MemoryPool {
-    /// Creates a new [`MemoryPool`] with the specified memory layout.
+    /// Creates a new [`MemoryPool`] with the specified item memory layout.
     ///
     /// # Panics
     ///
     /// Panics if the layout has zero size.
     #[must_use]
-    pub fn new(layout: Layout) -> Self {
-        Self::with_slab_capacity(layout, NonZero::new(DEFAULT_SLAB_CAPACITY).unwrap())
+    pub fn new(item_layout: Layout) -> Self {
+        Self::with_slab_capacity(item_layout, NonZero::new(DEFAULT_SLAB_CAPACITY).unwrap())
     }
 
     /// Creates a new [`MemoryPool`] with the specified memory layout and slab capacity.
@@ -120,33 +95,35 @@ impl MemoryPool {
     ///
     /// Panics if the layout has zero size.
     #[must_use]
-    pub fn with_slab_capacity(layout: Layout, slab_capacity: NonZero<usize>) -> Self {
+    pub fn with_slab_capacity(item_layout: Layout, slab_capacity: NonZero<usize>) -> Self {
         assert!(
-            layout.size() > 0,
+            item_layout.size() > 0,
             "MemoryPool must have non-zero memory block size"
         );
 
         Self {
-            layout,
+            item_layout,
             slab_capacity,
             slabs: Vec::new(),
             slab_with_vacant_slot_index: None,
         }
     }
 
-    /// Returns the memory layout used by this pool.
+    /// Returns the memory layout used by items in this pool.
     #[must_use]
-    pub fn layout(&self) -> Layout {
-        self.layout
+    pub fn item_layout(&self) -> Layout {
+        self.item_layout
     }
 
-    /// The number of reserved memory blocks in the pool.
+    /// The number of memory blocks in the pool that have been reserved.
     #[must_use]
     pub fn len(&self) -> usize {
         self.slabs.iter().map(MemorySlab::len).sum()
     }
 
     /// The number of memory blocks the pool can accommodate without additional resource allocation.
+    ///
+    /// This is the total capacity, including any existing reservations.
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.slabs
@@ -155,29 +132,17 @@ impl MemoryPool {
             .expect("capacity calculation cannot overflow for reasonable slab counts")
     }
 
-    /// Whether the pool is empty.
+    /// Whether the pool has no reservations.
+    ///
+    /// An empty pool may still be holding unused memory capacity.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.slabs.iter().all(MemorySlab::is_empty)
     }
 
-    /// Gets a pointer to a memory block in the pool by its key.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the key is not associated with a memory block.
+    /// Reserves memory in the pool and returns a reservation that acts as both the key and pointer.
     #[must_use]
-    pub fn get(&self, key: Key) -> NonNull<()> {
-        let coordinates = MemoryBlockCoordinates::from_key(key, self.slab_capacity.get());
-
-        self.slabs
-            .get(coordinates.slab_index)
-            .map(|s| s.get(coordinates.index_in_slab))
-            .expect("key was not associated with a memory block in the pool")
-    }
-    /// Reserves memory in the pool and returns both the key and a pointer to the memory.
-    #[must_use]
-    pub fn reserve(&mut self) -> (Key, NonNull<()>) {
+    pub fn reserve(&mut self) -> PoolReservation {
         let slab_index = self.index_of_slab_with_vacant_slot();
         let slab = self
             .slabs
@@ -195,38 +160,40 @@ impl MemoryPool {
         }
 
         let reservation = slab.reserve();
-        let key = MemoryBlockCoordinates::from_parts(
+        let coordinates = MemoryBlockCoordinates::from_parts(
             slab_index,
             reservation.index(),
             self.slab_capacity.get(),
-        )
-        .to_key(self.slab_capacity.get());
+        );
 
-        (key, reservation.ptr())
+        PoolReservation {
+            coordinates,
+            ptr: reservation.ptr(),
+        }
     }
 
-    /// Releases memory previously reserved with the given key.
+    /// Releases memory previously reserved.
     ///
     /// # Panics
     ///
-    /// Panics if the key is not associated with a memory block.
-    pub fn release(&mut self, key: Key) {
-        let index = MemoryBlockCoordinates::from_key(key, self.slab_capacity.get());
+    /// Panics if the reservation is not associated with a memory block.
+    pub fn release(&mut self, reservation: PoolReservation) {
+        let coordinates = reservation.coordinates;
 
-        let Some(slab) = self.slabs.get_mut(index.slab_index) else {
-            panic!("key was not associated with a memory block in the pool")
+        let Some(slab) = self.slabs.get_mut(coordinates.slab_index) else {
+            panic!("reservation was not associated with a memory block in the pool")
         };
 
-        slab.release(index.index_in_slab);
+        slab.release(coordinates.index_in_slab);
 
         // There is now a vacant slot in this slab! We may want to remember this for fast reservations.
         // We try to remember the lowest index of a slab with a vacant slot, so we
         // fill the collection from the start (to enable easier shrinking later).
         if self
             .slab_with_vacant_slot_index
-            .is_none_or(|current| current > index.slab_index)
+            .is_none_or(|current| current > coordinates.slab_index)
         {
-            self.slab_with_vacant_slot_index = Some(index.slab_index);
+            self.slab_with_vacant_slot_index = Some(coordinates.slab_index);
         }
     }
 
@@ -249,7 +216,7 @@ impl MemoryPool {
         } else {
             // All slabs are full, so we need to expand capacity.
             self.slabs
-                .push(MemorySlab::new(self.layout, self.slab_capacity));
+                .push(MemorySlab::new(self.item_layout, self.slab_capacity));
 
             self.slabs
                 .len()
@@ -286,27 +253,6 @@ impl MemoryBlockCoordinates {
             index_in_slab,
         }
     }
-
-    #[must_use]
-    fn from_key(key: Key, slab_capacity: usize) -> Self {
-        let (slab_index, index_in_slab) = key.index_in_pool.div_rem(&slab_capacity);
-
-        Self {
-            slab_index,
-            index_in_slab,
-        }
-    }
-
-    #[must_use]
-    fn to_key(&self, slab_capacity: usize) -> Key {
-        Key {
-            index_in_pool: self
-                .slab_index
-                .checked_mul(slab_capacity)
-                .and_then(|x| x.checked_add(self.index_in_slab))
-                .expect("key indicates a memory block beyond the range of virtual memory - impossible to reach this point from a valid history"),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -330,9 +276,9 @@ mod tests {
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
 
-        let (key_a, ptr_a) = pool.reserve();
-        let (key_b, ptr_b) = pool.reserve();
-        let (key_c, ptr_c) = pool.reserve();
+        let reservation_a = pool.reserve();
+        let reservation_b = pool.reserve();
+        let reservation_c = pool.reserve();
 
         assert_eq!(pool.len(), 3);
         assert!(!pool.is_empty());
@@ -340,38 +286,28 @@ mod tests {
 
         // Write some values
         unsafe {
-            ptr_a.cast::<u32>().as_ptr().write(42);
-            ptr_b.cast::<u32>().as_ptr().write(43);
-            ptr_c.cast::<u32>().as_ptr().write(44);
+            reservation_a.ptr().cast::<u32>().as_ptr().write(42);
+            reservation_b.ptr().cast::<u32>().as_ptr().write(43);
+            reservation_c.ptr().cast::<u32>().as_ptr().write(44);
         }
 
-        // Read them back via get
+        // Read them back via reservation pointer
         unsafe {
-            assert_eq!(pool.get(key_a).cast::<u32>().as_ptr().read(), 42);
-            assert_eq!(pool.get(key_b).cast::<u32>().as_ptr().read(), 43);
-            assert_eq!(pool.get(key_c).cast::<u32>().as_ptr().read(), 44);
+            assert_eq!(reservation_a.ptr().cast::<u32>().as_ptr().read(), 42);
+            assert_eq!(reservation_b.ptr().cast::<u32>().as_ptr().read(), 43);
+            assert_eq!(reservation_c.ptr().cast::<u32>().as_ptr().read(), 44);
         }
 
-        pool.release(key_b);
+        pool.release(reservation_b);
 
-        let (key_d, ptr_d) = pool.reserve();
+        let reservation_d = pool.reserve();
 
         unsafe {
-            ptr_d.cast::<u32>().as_ptr().write(45);
-            assert_eq!(pool.get(key_a).cast::<u32>().as_ptr().read(), 42);
-            assert_eq!(pool.get(key_c).cast::<u32>().as_ptr().read(), 44);
-            assert_eq!(pool.get(key_d).cast::<u32>().as_ptr().read(), 45);
+            reservation_d.ptr().cast::<u32>().as_ptr().write(45);
+            assert_eq!(reservation_a.ptr().cast::<u32>().as_ptr().read(), 42);
+            assert_eq!(reservation_c.ptr().cast::<u32>().as_ptr().read(), 44);
+            assert_eq!(reservation_d.ptr().cast::<u32>().as_ptr().read(), 45);
         }
-    }
-
-    #[test]
-    #[should_panic]
-    fn panic_when_empty_oob_get() {
-        let layout = Layout::new::<u32>();
-        let pool = MemoryPool::new(layout);
-
-        let fake_key = Key { index_in_pool: 0 };
-        _ = pool.get(fake_key);
     }
 
     #[test]
@@ -380,20 +316,31 @@ mod tests {
         let layout = Layout::new::<u32>();
         let mut pool = MemoryPool::new(layout);
 
-        let fake_key = Key { index_in_pool: 0 };
-        pool.release(fake_key);
+        // Create a fake reservation with invalid coordinates
+        let fake_reservation = PoolReservation {
+            coordinates: MemoryBlockCoordinates {
+                slab_index: 0,
+                index_in_slab: 0,
+            },
+            ptr: NonNull::dangling(),
+        };
+        pool.release(fake_reservation);
     }
     #[test]
     fn reservater_works() {
         let layout = Layout::new::<u64>();
         let mut pool = MemoryPool::new(layout);
 
-        let (key, ptr) = pool.reserve();
+        let reservation = pool.reserve();
 
         unsafe {
-            ptr.cast::<u64>().as_ptr().write(0x1234567890ABCDEF);
+            reservation
+                .ptr()
+                .cast::<u64>()
+                .as_ptr()
+                .write(0x1234567890ABCDEF);
             assert_eq!(
-                pool.get(key).cast::<u64>().as_ptr().read(),
+                reservation.ptr().cast::<u64>().as_ptr().read(),
                 0x1234567890ABCDEF
             );
         }
@@ -408,22 +355,22 @@ mod tests {
         let mut pool = MemoryPool::new(layout);
 
         // Reserve more items than a single slab can hold to test growth
-        let mut keys = Vec::new();
+        let mut reservations = Vec::new();
         for i in 0..200 {
-            let (key, ptr) = pool.reserve();
+            let reservation = pool.reserve();
             unsafe {
-                ptr.cast::<u32>().as_ptr().write(i);
+                reservation.ptr().cast::<u32>().as_ptr().write(i);
             }
-            keys.push(key);
+            reservations.push(reservation);
         }
 
         assert_eq!(pool.len(), 200);
         assert!(pool.capacity() >= 200);
 
         // Verify all values are still accessible
-        for (i, &key) in keys.iter().enumerate() {
+        for (i, reservation) in reservations.iter().enumerate() {
             unsafe {
-                assert_eq!(pool.get(key).cast::<u32>().as_ptr().read(), i as u32);
+                assert_eq!(reservation.ptr().cast::<u32>().as_ptr().read(), i as u32);
             }
         }
     }
@@ -432,11 +379,15 @@ mod tests {
         // Test with different sized types
         let layout_u64 = Layout::new::<u64>();
         let mut pool_u64 = MemoryPool::new(layout_u64);
-        let (key, ptr) = pool_u64.reserve();
+        let reservation = pool_u64.reserve();
         unsafe {
-            ptr.cast::<u64>().as_ptr().write(0x1234567890ABCDEF);
+            reservation
+                .ptr()
+                .cast::<u64>()
+                .as_ptr()
+                .write(0x1234567890ABCDEF);
             assert_eq!(
-                pool_u64.get(key).cast::<u64>().as_ptr().read(),
+                reservation.ptr().cast::<u64>().as_ptr().read(),
                 0x1234567890ABCDEF
             );
         }
@@ -453,15 +404,19 @@ mod tests {
         let layout_large = Layout::new::<LargeStruct>();
         let mut pool_large = MemoryPool::new(layout_large);
 
-        let (key, ptr) = pool_large.reserve();
+        let reservation = pool_large.reserve();
         unsafe {
-            ptr.cast::<LargeStruct>().as_ptr().write(LargeStruct {
-                a: 1,
-                b: 2,
-                c: 3,
-                d: 4,
-            });
-            let value = pool_large.get(key).cast::<LargeStruct>().as_ptr().read();
+            reservation
+                .ptr()
+                .cast::<LargeStruct>()
+                .as_ptr()
+                .write(LargeStruct {
+                    a: 1,
+                    b: 2,
+                    c: 3,
+                    d: 4,
+                });
+            let value = reservation.ptr().cast::<LargeStruct>().as_ptr().read();
             assert_eq!(value.a, 1);
             assert_eq!(value.b, 2);
             assert_eq!(value.c, 3);
@@ -482,33 +437,43 @@ mod tests {
 
         // Reserve and release many items to test slab management
         for iteration in 0..10 {
-            let mut keys = Vec::new();
+            let mut reservations = Vec::new();
             for i in 0..50 {
-                let (key, ptr) = pool.reserve();
+                let reservation = pool.reserve();
                 unsafe {
-                    ptr.cast::<usize>().as_ptr().write(iteration * 100 + i);
+                    reservation
+                        .ptr()
+                        .cast::<usize>()
+                        .as_ptr()
+                        .write(iteration * 100 + i);
                 }
-                keys.push(key);
+                reservations.push(reservation);
             }
 
             // Release every other item
-            for i in (0..50).step_by(2) {
-                pool.release(keys[i]);
+            let mut remaining_reservations = Vec::new();
+            for (index, reservation) in reservations.into_iter().enumerate() {
+                if index % 2 == 0 {
+                    pool.release(reservation);
+                } else {
+                    remaining_reservations.push(reservation);
+                }
             }
 
             // Verify remaining items
-            for i in (1..50).step_by(2) {
+            for (index, reservation) in remaining_reservations.iter().enumerate() {
+                let expected_value = iteration * 100 + (index * 2 + 1); // Odd indices
                 unsafe {
                     assert_eq!(
-                        pool.get(keys[i]).cast::<usize>().as_ptr().read(),
-                        iteration * 100 + i
+                        reservation.ptr().cast::<usize>().as_ptr().read(),
+                        expected_value
                     );
                 }
             }
 
             // Release remaining items
-            for i in (1..50).step_by(2) {
-                pool.release(keys[i]);
+            for reservation in remaining_reservations {
+                pool.release(reservation);
             }
         }
 

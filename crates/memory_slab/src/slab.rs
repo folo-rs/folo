@@ -7,7 +7,7 @@ use std::{mem, ptr};
 ///
 /// Contains both the stable index for later operations and a pointer to the reserved memory.
 #[derive(Debug)]
-pub(crate) struct MemoryReservation {
+pub(crate) struct SlabReservation {
     /// The stable index that can be used to retrieve or release this memory later.
     index: usize,
 
@@ -15,7 +15,7 @@ pub(crate) struct MemoryReservation {
     ptr: NonNull<()>,
 }
 
-impl MemoryReservation {
+impl SlabReservation {
     /// Returns the stable index that can be used to retrieve or release this memory later.
     #[must_use]
     pub(crate) fn index(&self) -> usize {
@@ -254,6 +254,7 @@ impl MemorySlab {
     ///
     /// Panics if the index is out of bounds or is not associated with reserved memory.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn get(&self, index: usize) -> NonNull<()> {
         match self.entry(index) {
             Entry::Occupied => self.data_ptr(index),
@@ -263,6 +264,7 @@ impl MemorySlab {
             ),
         }
     }
+
     /// Reserves memory in the slab and returns both the index and a pointer to the memory.
     ///
     /// Returns a [`MemorySlabReservation`] containing the stable index that can be used for later
@@ -275,7 +277,7 @@ impl MemorySlab {
     /// [`get()`]: Self::get
     /// [`release()`]: Self::release
     #[must_use]
-    pub(crate) fn reserve(&mut self) -> MemoryReservation {
+    pub(crate) fn reserve(&mut self) -> SlabReservation {
         #[cfg(debug_assertions)]
         self.integrity_check();
 
@@ -310,7 +312,7 @@ impl MemorySlab {
             .checked_add(1)
             .expect("count cannot overflow because it is bounded by capacity which is bounded by usize::MAX");
 
-        MemoryReservation {
+        SlabReservation {
             index,
             ptr: data_ptr,
         }

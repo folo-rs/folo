@@ -15,37 +15,37 @@ fn main() {
     println!("Created MemoryPool with capacity: {}", pool.capacity());
 
     // Reserve some values
-    let (key1, ptr1) = pool.reserve();
-    let (key2, ptr2) = pool.reserve();
-    let (key3, ptr3) = pool.reserve();
+    let reservation1 = pool.reserve();
+    let reservation2 = pool.reserve();
+    let reservation3 = pool.reserve();
 
     // Write values through the pointers
     // SAFETY: We just reserved these pointers and are writing the correct type
     unsafe {
-        ptr1.cast::<u32>().as_ptr().write(0xdeadbeef);
+        reservation1.ptr().cast::<u32>().as_ptr().write(0xdeadbeef);
     }
     // SAFETY: We just reserved these pointers and are writing the correct type
     unsafe {
-        ptr2.cast::<u32>().as_ptr().write(0xcafebabe);
+        reservation2.ptr().cast::<u32>().as_ptr().write(0xcafebabe);
     }
     // SAFETY: We just reserved these pointers and are writing the correct type
     unsafe {
-        ptr3.cast::<u32>().as_ptr().write(0xfeedface);
+        reservation3.ptr().cast::<u32>().as_ptr().write(0xfeedface);
     }
 
-    println!("Reserved 3 items at keys: {key1:?}, {key2:?}, {key3:?}");
+    println!("Reserved 3 items");
 
-    // Read values back through the keys
+    // Read values back through the reservations
     // SAFETY: We just wrote these values and are reading the correct type
-    let value1 = unsafe { pool.get(key1).cast::<u32>().as_ptr().read() };
+    let value1 = unsafe { reservation1.ptr().cast::<u32>().as_ptr().read() };
     // SAFETY: We just wrote these values and are reading the correct type
-    let value2 = unsafe { pool.get(key2).cast::<u32>().as_ptr().read() };
+    let value2 = unsafe { reservation2.ptr().cast::<u32>().as_ptr().read() };
     // SAFETY: We just wrote these values and are reading the correct type
-    let value3 = unsafe { pool.get(key3).cast::<u32>().as_ptr().read() };
+    let value3 = unsafe { reservation3.ptr().cast::<u32>().as_ptr().read() };
 
-    println!("Value 1 via key: {value1:#x}");
-    println!("Value 2 via key: {value2:#x}");
-    println!("Value 3 via key: {value3:#x}");
+    println!("Value 1: {value1:#x}");
+    println!("Value 2: {value2:#x}");
+    println!("Value 3: {value3:#x}");
 
     println!(
         "Pool now has {} items with capacity {}",
@@ -54,20 +54,20 @@ fn main() {
     );
 
     // Release one item
-    pool.release(key2);
-    println!("Released item at key {key2:?}");
+    pool.release(reservation2);
+    println!("Released item");
 
     // The pool automatically grows as needed
-    let mut keys = Vec::new();
+    let mut reservations = Vec::new();
     for i in 0..100 {
-        let (key, ptr) = pool.reserve();
+        let reservation = pool.reserve();
 
         // SAFETY: We just reserved this pointer and are writing the correct type
         unsafe {
-            ptr.cast::<u32>().as_ptr().write(i);
+            reservation.ptr().cast::<u32>().as_ptr().write(i);
         }
 
-        keys.push(key);
+        reservations.push(reservation);
     }
 
     println!(
@@ -81,11 +81,11 @@ fn main() {
         clippy::cast_possible_truncation,
         reason = "test uses small values that fit in u32"
     )]
-    for (i, &key) in keys.iter().take(5).enumerate() {
+    for (i, reservation) in reservations.iter().take(5).enumerate() {
         // SAFETY: We just wrote these values and are reading the correct type
         unsafe {
-            let value = pool.get(key).cast::<u32>().as_ptr().read();
-            println!("Key {key:?} contains value: {value}");
+            let value = reservation.ptr().cast::<u32>().as_ptr().read();
+            println!("Reservation contains value: {value}");
             assert_eq!(value, i as u32);
         }
     }
