@@ -1,12 +1,24 @@
-//! An object pool that guarantees pinning of its items and enables easy item access
-//! via unsafe code by not maintaining any Rust references to its items.
+//! A high-performance object pool that guarantees pinning of its items and enables safe
+//! out-of-band access via unsafe code.
 //!
-//! Features:
+//! This crate provides [`PinnedPool`], a collection that stores items with guaranteed stable
+//! memory addresses. Once an item is inserted, it remains pinned in memory until explicitly
+//! removed, making it safe to create pointers to items for out-of-band access.
 //!
-//! * All items are guaranteed to be pinned for as long as they are in the pool.
-//! * Fast lookup by opaque key returned from the pool.
-//! * Out of band concurrent access to multiple items via pointers while
-//!   simultaneously adding/removing items from the pool.
+//! # Key Features
+//!
+//! * **Guaranteed pinning**: All items remain at stable memory addresses until removed
+//! * **Fast key-based lookup**: Efficient access via opaque [`Key`] handles
+//! * **Out-of-band access**: Safe concurrent access to multiple items via pointers
+//! * **Dynamic capacity**: Automatic growth as needed with no upfront allocation
+//! * **Zero-copy insertion**: Advanced insertion API for immediate item access
+//!
+//! # Use Cases
+//!
+//! - High-performance data structures requiring stable pointers
+//! - Concurrent systems where items need out-of-band access
+//! - Memory pools for objects that must not move in memory
+//! - Collections where pinning guarantees are essential
 //!
 //! The pool is designed to offer efficient pinned storage for large collections. The exact
 //! storage mechanism/layout is not part of the API contract and may change in future versions.
@@ -92,16 +104,24 @@
 //! // do not access the item via the pool methods concurrently (e.g. `remove()` but
 //! // also `get()` and `get_mut()` because they may create conflicting references).
 //!
-//! // SAFETY: See above comment.
+//! // Modify Alice's name
 //! unsafe {
+//!     // SAFETY: We have exclusive access to this item via the pointer, and no
+//!     // concurrent access via pool methods. The pointer is valid until removed.
 //!     (*alice_ptr).push_str(" Smith");
 //! }
-//! // SAFETY: See above comment.
+//!
+//! // Modify Bob's name
 //! unsafe {
+//!     // SAFETY: We have exclusive access to this item via the pointer, and no
+//!     // concurrent access via pool methods. The pointer is valid until removed.
 //!     (*bob_ptr).push_str(" Johnson");
 //! }
-//! // SAFETY: See above comment.
+//!
+//! // Modify Charlie's name
 //! unsafe {
+//!     // SAFETY: We have exclusive access to this item via the pointer, and no
+//!     // concurrent access via pool methods. The pointer is valid until removed.
 //!     (*charlie_ptr).push_str(" Brown");
 //! }
 //!
@@ -125,15 +145,24 @@
 //! // the item via the pointer again. If we had still used `charlie` after this `println!`,
 //! // this would be invalid code because this pointer dereference creates an exclusive reference.
 //! unsafe {
+//!     // SAFETY: No conflicting references exist to this item - the `charlie` reference
+//!     // is no longer used and we have exclusive access via the pointer.
 //!     (*charlie_ptr).push_str(" von Neumann");
 //! }
 //!
+//! // Read items via pointers for display
+//! let alice_name = unsafe {
+//!     // SAFETY: We have valid pointers to these items and no conflicting references.
+//!     &*alice_ptr
+//! };
+//! let charlie_name = unsafe {
+//!     // SAFETY: We have valid pointers to these items and no conflicting references.
+//!     &*charlie_ptr
+//! };
+//!
 //! println!(
 //!     "Items accessed via pointers: Alice = {}, Charlie = {}",
-//!     // SAFETY: See above comments.
-//!     unsafe { &*alice_ptr },
-//!     // SAFETY: See above comments.
-//!     unsafe { &*charlie_ptr }
+//!     alice_name, charlie_name
 //! );
 //!
 //! // The policy we set at the beginning requires us to remove all items from the pool

@@ -60,7 +60,39 @@ pub struct PinnedPool<T> {
     drop_policy: DropPolicy,
 }
 
-/// A key that can be used to reference up an item in a [`PinnedPool`].
+/// A key that can be used to reference an item in a [`PinnedPool`].
+///
+/// Keys are opaque handles returned by [`PinnedPool::insert()`] and related methods.
+/// They provide efficient access to items in the pool via [`PinnedPool::get()`] and
+/// [`PinnedPool::get_mut()`].
+///
+/// # Key Reuse
+///
+/// Keys may be reused by the pool after an item is removed. This means that using a key
+/// after its associated item has been removed may access a different item or panic.
+///
+/// # Example
+///
+/// ```rust
+/// use pinned_pool::{Key, PinnedPool};
+///
+/// let mut pool = PinnedPool::<i32>::new();
+///
+/// // Insert items and store their keys
+/// let key1 = pool.insert(42);
+/// let key2 = pool.insert(24);
+///
+/// // Keys can be copied and stored
+/// let stored_keys = vec![key1, key2];
+///
+/// // Use keys to access items
+/// for &key in &stored_keys {
+///     let item = pool.get(key);
+///     println!("Item: {}", *item);
+/// }
+/// # pool.remove(key1);
+/// # pool.remove(key2);
+/// ```
 ///
 /// Keys may be reused by the pool after an item is removed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,6 +133,26 @@ impl<T> PinnedPool<T> {
 
     /// Creates a new [`PinnedPool`] with the default configuration.
     ///
+    /// The pool starts empty and will automatically grow as needed when items are inserted.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pinned_pool::PinnedPool;
+    ///
+    /// let mut pool = PinnedPool::<String>::new();
+    ///
+    /// assert_eq!(pool.len(), 0);
+    /// assert!(pool.is_empty());
+    ///
+    /// let key = pool.insert("Hello".to_string());
+    /// assert_eq!(pool.len(), 1);
+    /// assert!(!pool.is_empty());
+    ///
+    /// let item = pool.get(key);
+    /// assert_eq!(&*item, "Hello");
+    /// ```
+    ///
     /// # Panics
     ///
     /// Panics if `T` is zero-sized.
@@ -110,17 +162,71 @@ impl<T> PinnedPool<T> {
     }
 
     /// Starts building a new [`PinnedPool`].
+    ///
+    /// Use this when you want to customize the pool configuration beyond the defaults.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pinned_pool::{DropPolicy, PinnedPool};
+    ///
+    /// let pool = PinnedPool::<u32>::builder()
+    ///     .drop_policy(DropPolicy::MustNotDropItems)
+    ///     .build();
+    ///
+    /// assert_eq!(pool.len(), 0);
+    /// assert!(pool.is_empty());
+    /// ```
     pub fn builder() -> PinnedPoolBuilder<T> {
         PinnedPoolBuilder::new()
     }
 
     /// The number of items in the pool.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pinned_pool::PinnedPool;
+    ///
+    /// let mut pool = PinnedPool::<i32>::new();
+    /// assert_eq!(pool.len(), 0);
+    ///
+    /// let key1 = pool.insert(42);
+    /// assert_eq!(pool.len(), 1);
+    ///
+    /// let key2 = pool.insert(24);
+    /// assert_eq!(pool.len(), 2);
+    ///
+    /// pool.remove(key1);
+    /// assert_eq!(pool.len(), 1);
+    /// # pool.remove(key2);
+    /// ```
     #[must_use]
     pub fn len(&self) -> usize {
         self.slabs.iter().map(PinnedSlab::len).sum()
     }
 
     /// The number of items the pool can accommodate without additional resource allocation.
+    ///
+    /// This is the total capacity, including any existing items. The capacity may grow
+    /// automatically when items are inserted and no space is available.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pinned_pool::PinnedPool;
+    ///
+    /// let mut pool = PinnedPool::<u8>::new();
+    ///
+    /// // New pool starts with zero capacity
+    /// assert_eq!(pool.capacity(), 0);
+    ///
+    /// // Inserting items may increase capacity
+    /// let key = pool.insert(42);
+    /// assert!(pool.capacity() > 0);
+    /// assert!(pool.capacity() >= pool.len());
+    /// # pool.remove(key);
+    /// ```
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.slabs.len()
@@ -129,12 +235,48 @@ impl<T> PinnedPool<T> {
     }
 
     /// Whether the pool is empty.
+    ///
+    /// An empty pool may still be holding unused capacity.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pinned_pool::PinnedPool;
+    ///
+    /// let mut pool = PinnedPool::<u16>::new();
+    /// assert!(pool.is_empty());
+    ///
+    /// let key = pool.insert(123);
+    /// assert!(!pool.is_empty());
+    ///
+    /// pool.remove(key);
+    /// assert!(pool.is_empty());
+    /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.slabs.iter().all(PinnedSlab::is_empty)
     }
 
     /// Gets a pinned reference to an item in the pool by its key.
+    ///
+    /// The returned reference is pinned, guaranteeing that the item will not be moved
+    /// in memory. This enables safe creation of pointers to the item.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pinned_pool::PinnedPool;
+    ///
+    /// let mut pool = PinnedPool::<String>::new();
+    /// let key = pool.insert("Hello, World!".to_string());
+    ///
+    /// let item = pool.get(key);
+    /// assert_eq!(&*item, "Hello, World!");
+    ///
+    /// // The item is pinned, so we can safely get a pointer to it
+    /// let ptr = item.as_ref().get_ref() as *const String;
+    /// # pool.remove(key);
+    /// ```
     ///
     /// # Panics
     ///
@@ -151,6 +293,28 @@ impl<T> PinnedPool<T> {
 
     /// Gets an exclusive pinned reference to an item in the pool by its key.
     ///
+    /// The returned reference is pinned and mutable, guaranteeing that the item will not
+    /// be moved in memory while allowing modification. This enables safe creation of
+    /// mutable pointers to the item.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pinned_pool::PinnedPool;
+    ///
+    /// let mut pool = PinnedPool::<String>::new();
+    /// let key = pool.insert("Hello".to_string());
+    ///
+    /// // Get a mutable reference and modify the item
+    /// let mut item = pool.get_mut(key);
+    /// item.as_mut().get_mut().push_str(", World!");
+    ///
+    /// // Verify the modification
+    /// let item = pool.get(key);
+    /// assert_eq!(&*item, "Hello, World!");
+    /// # pool.remove(key);
+    /// ```
+    ///
     /// # Panics
     ///
     /// Panics if the key is not associated with an item.
@@ -166,8 +330,35 @@ impl<T> PinnedPool<T> {
 
     /// Creates an inserter that enables advanced techniques for inserting an item into the pool.
     ///
+    /// Using an inserter allows you to obtain the key before the item is inserted and
+    /// immediately obtain a pinned reference to the item. This can be more efficient than
+    /// [`insert()`] when you need immediate access to the inserted item.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pinned_pool::PinnedPool;
+    ///
+    /// let mut pool = PinnedPool::<String>::new();
+    ///
+    /// // Get the key before insertion
+    /// let inserter = pool.begin_insert();
+    /// let key = inserter.key();
+    ///
+    /// // Insert and get immediate access to the item
+    /// let item = inserter.insert("Hello".to_string());
+    /// assert_eq!(&*item, "Hello");
+    ///
+    /// // The key can be used for later access
+    /// let same_item = pool.get(key);
+    /// assert_eq!(&*same_item, "Hello");
+    /// # pool.remove(key);
+    /// ```
+    ///
     /// For example, using an inserter allows you to obtain the key before the item is inserted
     /// and allows you to immediately obtain a pinned reference to the item.
+    ///
+    /// [`insert()`]: Self::insert
     #[must_use]
     pub fn begin_insert<'a, 'b>(&'a mut self) -> PinnedPoolInserter<'b, T>
     where
@@ -201,6 +392,30 @@ impl<T> PinnedPool<T> {
     }
 
     /// Inserts an item into the pool and returns its key.
+    ///
+    /// The item is guaranteed to remain pinned in memory until it is removed from the pool.
+    /// The returned key can be used to access the item via [`get()`] or [`get_mut()`].
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pinned_pool::PinnedPool;
+    ///
+    /// let mut pool = PinnedPool::<i32>::new();
+    ///
+    /// let key = pool.insert(42);
+    /// let item = pool.get(key);
+    /// assert_eq!(*item, 42);
+    ///
+    /// // Keys can be stored and used later
+    /// let another_key = pool.insert(24);
+    /// assert_eq!(*pool.get(another_key), 24);
+    /// # pool.remove(key);
+    /// # pool.remove(another_key);
+    /// ```
+    ///
+    /// [`get()`]: Self::get
+    /// [`get_mut()`]: Self::get_mut
     #[must_use]
     pub fn insert(&mut self, value: T) -> Key {
         let inserter = self.begin_insert();
@@ -209,6 +424,28 @@ impl<T> PinnedPool<T> {
         key
     }
 
+    /// Removes an item from the pool by its key.
+    ///
+    /// After an item is removed, any pointers to it become invalid and must not be used.
+    /// The key may be reused for future insertions.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pinned_pool::PinnedPool;
+    ///
+    /// let mut pool = PinnedPool::<String>::new();
+    /// let key = pool.insert("Hello".to_string());
+    ///
+    /// assert_eq!(pool.len(), 1);
+    /// assert!(!pool.is_empty());
+    ///
+    /// pool.remove(key);
+    ///
+    /// assert_eq!(pool.len(), 0);
+    /// assert!(pool.is_empty());
+    /// ```
+    ///
     /// # Panics
     ///
     /// Panics if the key is not associated with an item.
@@ -284,8 +521,42 @@ impl<T> Default for PinnedPool<T> {
     }
 }
 
-/// An inserter for a [`PinnedPool`], enabling more item insertion scenarios than afforded by
-/// [`PinnedPool::insert()`][1].
+/// An inserter for a [`PinnedPool`], enabling advanced item insertion scenarios.
+///
+/// The inserter allows you to:
+/// - Obtain the key before inserting the item via [`key()`]
+/// - Insert an item and get immediate access via [`insert()`] or [`insert_mut()`]
+/// - Avoid separate lookup operations when immediate access is needed
+///
+/// Created by calling [`PinnedPool::begin_insert()`].
+///
+/// # Example
+///
+/// ```rust
+/// use pinned_pool::PinnedPool;
+///
+/// let mut pool = PinnedPool::<String>::new();
+///
+/// // Create an inserter
+/// let inserter = pool.begin_insert();
+///
+/// // Get the key that will be assigned
+/// let key = inserter.key();
+///
+/// // Insert and get immediate mutable access
+/// let mut item = inserter.insert_mut("Hello".to_string());
+/// item.as_mut().get_mut().push_str(", World!");
+///
+/// // The item can also be accessed later via the key
+/// let same_item = pool.get(key);
+/// assert_eq!(&*same_item, "Hello, World!");
+/// # pool.remove(key);
+/// ```
+///
+/// [`key()`]: Self::key
+/// [`insert()`]: Self::insert
+/// [`insert_mut()`]: Self::insert_mut
+/// [`PinnedPool::begin_insert()`]: PinnedPool::begin_insert
 ///
 /// [1]: PinnedPool::insert
 #[derive(Debug)]
@@ -296,6 +567,27 @@ pub struct PinnedPoolInserter<'s, T> {
 
 impl<'s, T> PinnedPoolInserter<'s, T> {
     /// Inserts an item and returns a pinned reference to it.
+    ///
+    /// This provides immediate access to the inserted item without requiring a separate lookup.
+    /// The item is guaranteed to remain pinned in memory until removed from the pool.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pinned_pool::PinnedPool;
+    ///
+    /// let mut pool = PinnedPool::<String>::new();
+    /// let inserter = pool.begin_insert();
+    /// let key = inserter.key();
+    ///
+    /// let item = inserter.insert("Hello, World!".to_string());
+    /// assert_eq!(&*item, "Hello, World!");
+    ///
+    /// // The item can also be accessed later via the key
+    /// let same_item = pool.get(key);
+    /// assert_eq!(&*same_item, "Hello, World!");
+    /// # pool.remove(key);
+    /// ```
     pub fn insert<'v>(self, value: T) -> Pin<&'v T>
     where
         's: 'v,
@@ -304,6 +596,27 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
     }
 
     /// Inserts an item and returns a pinned exclusive reference to it.
+    ///
+    /// This provides immediate mutable access to the inserted item without requiring a separate lookup.
+    /// The item is guaranteed to remain pinned in memory until removed from the pool.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pinned_pool::PinnedPool;
+    ///
+    /// let mut pool = PinnedPool::<String>::new();
+    /// let inserter = pool.begin_insert();
+    /// let key = inserter.key();
+    ///
+    /// let mut item = inserter.insert_mut("Hello".to_string());
+    /// item.as_mut().get_mut().push_str(", World!");
+    ///
+    /// // Verify the modification
+    /// let item = pool.get(key);
+    /// assert_eq!(&*item, "Hello, World!");
+    /// # pool.remove(key);
+    /// ```
     pub fn insert_mut<'v>(self, value: T) -> Pin<&'v mut T>
     where
         's: 'v,
@@ -313,7 +626,30 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
 
     /// The key of the item that will be inserted by this inserter.
     ///
-    /// If the inserted is abandoned, the key may be used by a different item inserted later.
+    /// This allows you to obtain the key before actually inserting the item, which can be
+    /// useful when the item needs to know its own key during construction or initialization.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pinned_pool::PinnedPool;
+    ///
+    /// let mut pool = PinnedPool::<String>::new();
+    /// let inserter = pool.begin_insert();
+    ///
+    /// // Get the key before insertion
+    /// let key = inserter.key();
+    ///
+    /// // Use the key to create the item (useful for self-referential data)
+    /// let item_content = format!("Item with key: {:?}", key);
+    /// let item = inserter.insert(item_content);
+    ///
+    /// // Verify the item was inserted correctly
+    /// assert!(item.contains("Item with key:"));
+    /// # pool.remove(key);
+    /// ```
+    ///
+    /// If the inserter is abandoned, the key may be used by a different item inserted later.
     #[must_use]
     pub fn key(&self) -> Key {
         ItemCoordinates::<SLAB_CAPACITY>::from_parts(self.slab_index, self.slab_inserter.index())

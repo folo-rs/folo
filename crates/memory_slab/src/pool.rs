@@ -10,33 +10,33 @@ use crate::MemorySlab;
 /// Acts as both the reservation and the key - the user must return this to the pool to release
 /// the memory capacity.
 ///    /// # Example
-    ///
-    /// ```rust
-    /// use std::alloc::Layout;
-    ///
-    /// use memory_slab::MemoryPool;
-    ///
-    /// let layout = Layout::new::<i64>();
-    /// let mut pool = MemoryPool::new(layout);
-    ///
-    /// let reservation = pool.reserve();
-    ///
-    /// // Write to the memory pointer
-    /// unsafe {
-    ///     // SAFETY: The pointer is valid and aligned for i64, and we own the memory.
-    ///     reservation.ptr().cast::<i64>().as_ptr().write(-123);
-    /// }
-    ///
-    /// // Read from the memory pointer
-    /// let value = unsafe {
-    ///     // SAFETY: The pointer is valid and the memory was just initialized.
-    ///     reservation.ptr().cast::<i64>().as_ptr().read()
-    /// };
-    /// assert_eq!(value, -123);
-    ///
-    /// // The reservation must be returned to release the memory
-    /// pool.release(reservation);
-    /// ```
+///
+/// ```rust
+/// use std::alloc::Layout;
+///
+/// use memory_slab::MemoryPool;
+///
+/// let layout = Layout::new::<i64>();
+/// let mut pool = MemoryPool::new(layout);
+///
+/// let reservation = pool.reserve();
+///
+/// // Write to the memory pointer
+/// unsafe {
+///     // SAFETY: The pointer is valid and aligned for i64, and we own the memory.
+///     reservation.ptr().cast::<i64>().as_ptr().write(-123);
+/// }
+///
+/// // Read from the memory pointer
+/// let value = unsafe {
+///     // SAFETY: The pointer is valid and the memory was just initialized.
+///     reservation.ptr().cast::<i64>().as_ptr().read()
+/// };
+/// assert_eq!(value, -123);
+///
+/// // The reservation must be returned to release the memory
+/// pool.release(reservation);
+/// ```
 #[derive(Debug)]
 pub struct PoolReservation {
     /// The coordinates of the memory block within the pool structure.
@@ -100,34 +100,34 @@ impl PoolReservation {
 ///
 /// As of today, the collection never shrinks, though future versions may offer facilities to do so.
 ///    /// # Example
-    ///
-    /// ```rust
-    /// use std::alloc::Layout;
-    ///
-    /// use memory_slab::MemoryPool;
-    ///
-    /// let layout = Layout::new::<u32>();
-    /// let mut pool = MemoryPool::new(layout);
-    ///
-    /// // Reserve memory and get a reservation
-    /// let reservation = pool.reserve();
-    ///
-    /// // Write to the memory
-    /// unsafe {
-    ///     // SAFETY: The pointer is valid and aligned for u32, and we own the memory.
-    ///     reservation.ptr().cast::<u32>().as_ptr().write(42);
-    /// }
-    ///
-    /// // Read from the memory
-    /// let value = unsafe {
-    ///     // SAFETY: The pointer is valid and the memory was just initialized.
-    ///     reservation.ptr().cast::<u32>().as_ptr().read()
-    /// };
-    /// assert_eq!(value, 42);
-    ///
-    /// // Release the memory back to the pool
-    /// pool.release(reservation);
-    /// ```
+///
+/// ```rust
+/// use std::alloc::Layout;
+///
+/// use memory_slab::MemoryPool;
+///
+/// let layout = Layout::new::<u32>();
+/// let mut pool = MemoryPool::new(layout);
+///
+/// // Reserve memory and get a reservation
+/// let reservation = pool.reserve();
+///
+/// // Write to the memory
+/// unsafe {
+///     // SAFETY: The pointer is valid and aligned for u32, and we own the memory.
+///     reservation.ptr().cast::<u32>().as_ptr().write(42);
+/// }
+///
+/// // Read from the memory
+/// let value = unsafe {
+///     // SAFETY: The pointer is valid and the memory was just initialized.
+///     reservation.ptr().cast::<u32>().as_ptr().read()
+/// };
+/// assert_eq!(value, 42);
+///
+/// // Release the memory back to the pool
+/// pool.release(reservation);
+/// ```
 #[derive(Debug)]
 pub struct MemoryPool {
     /// The layout of memory blocks managed by this pool.
