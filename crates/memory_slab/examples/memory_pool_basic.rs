@@ -14,26 +14,26 @@ fn main() {
 
     println!("Created MemoryPool with capacity: {}", pool.capacity());
 
-    // Insert some values
-    let (key1, ptr1) = pool.insert();
-    let (key2, ptr2) = pool.insert();
-    let (key3, ptr3) = pool.insert();
+    // Reserve some values
+    let (key1, ptr1) = pool.reserve();
+    let (key2, ptr2) = pool.reserve();
+    let (key3, ptr3) = pool.reserve();
 
     // Write values through the pointers
-    // SAFETY: We just allocated these pointers and are writing the correct type
+    // SAFETY: We just reserved these pointers and are writing the correct type
     unsafe {
         ptr1.cast::<u32>().as_ptr().write(0xdeadbeef);
     }
-    // SAFETY: We just allocated these pointers and are writing the correct type
+    // SAFETY: We just reserved these pointers and are writing the correct type
     unsafe {
         ptr2.cast::<u32>().as_ptr().write(0xcafebabe);
     }
-    // SAFETY: We just allocated these pointers and are writing the correct type
+    // SAFETY: We just reserved these pointers and are writing the correct type
     unsafe {
         ptr3.cast::<u32>().as_ptr().write(0xfeedface);
     }
 
-    println!("Allocated 3 items at keys: {key1:?}, {key2:?}, {key3:?}");
+    println!("Reserved 3 items at keys: {key1:?}, {key2:?}, {key3:?}");
 
     // Read values back through the keys
     // SAFETY: We just wrote these values and are reading the correct type
@@ -53,16 +53,16 @@ fn main() {
         pool.capacity()
     );
 
-    // Remove one item
-    pool.remove(key2);
-    println!("Removed item at key {key2:?}");
+    // Release one item
+    pool.release(key2);
+    println!("Released item at key {key2:?}");
 
     // The pool automatically grows as needed
     let mut keys = Vec::new();
     for i in 0..100 {
-        let (key, ptr) = pool.insert();
+        let (key, ptr) = pool.reserve();
 
-        // SAFETY: We just allocated this pointer and are writing the correct type
+        // SAFETY: We just reserved this pointer and are writing the correct type
         unsafe {
             ptr.cast::<u32>().as_ptr().write(i);
         }
@@ -77,7 +77,10 @@ fn main() {
     );
 
     // Verify some values
-    #[allow(clippy::cast_possible_truncation, reason = "test uses small values that fit in u32")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "test uses small values that fit in u32"
+    )]
     for (i, &key) in keys.iter().take(5).enumerate() {
         // SAFETY: We just wrote these values and are reading the correct type
         unsafe {

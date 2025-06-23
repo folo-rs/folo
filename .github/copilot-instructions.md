@@ -81,7 +81,7 @@ types, we re-export them all at the parent, so while we have modules like
 
 # Scripting
 
-You can assume PowerShell is available. Prefer PowerShell over Bash.
+You can assume PowerShell 7 (`pwsh`) is available. Prefer PowerShell 7 over Bash.
 
 # Code style
 
@@ -92,3 +92,30 @@ rules we enable and try your best to follow them in the inline examples in API d
 # Language
 
 Use proper English grammar, spelling and punctuation. Sentences end with punctuation.
+
+# Use of unwrap() and expect()
+
+Only use `unwrap()` in test code.
+
+You may use `expect()` in non-test code but only if there is a reason to believe that the expectation
+will never fail. That is, we do not use `expect()` as an assertion, we use it to cut off unreachable
+code paths. The message inside `expect()` should explain why we can be certain that code path is
+unreachable - it is not an error message saying what went wrong!
+
+Using `assert!()` or other panic-inducing macros in non-test code is fine as long as it is documented
+in API documentation (in a `# Panics` section).
+
+# Safety comments
+
+Safety comments must explain how we satisfy the safety requirements of the unsafe function we are
+calling. Safety comments are not there just to re-state the requirements, they must explain how
+we satisfy them (e.g. by referencing an assertion, a type invariant, earlier logic or other mechanism).
+
+# Whitespace
+
+There should be an empty line between functions.
+
+# Non-zero integers
+
+Whenever a numeric value must be non-zero, prefer `NonZero<usize>` over `usize`,
+in both private APIs/logic and public APIs. Prefer `NonZero<usize>` over `NonZeroUsize`.

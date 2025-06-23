@@ -1,11 +1,11 @@
-//! A memory slab allocation library for fixed-capacity collections.
+//! A memory pool allocation library for type-erased memory management.
 //!
-//! This crate provides `MemorySlab`, a fixed-capacity heap-allocated collection that works
-//! with opaque memory blocks. It offers stable memory addresses and efficient index-based
+//! This crate provides `MemoryPool`, a dynamically growing memory pool that works
+//! with opaque memory blocks. It offers stable memory addresses and efficient key-based
 //! lookup for memory management scenarios.
 
 mod pool;
 mod slab;
 
-pub use pool::*;
-pub use slab::*;
+pub use pool::{Key, MemoryPool};
+pub(crate) use slab::MemorySlab;
