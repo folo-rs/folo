@@ -19,6 +19,4 @@ impl BlindPool {
 }
 
 /// Holds memory for a specific kind of memory allocation.
-struct BucketOfMemory {
-
-}
+struct BucketOfMemory {}
