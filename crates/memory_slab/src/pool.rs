@@ -9,6 +9,34 @@ use crate::MemorySlab;
 /// Contains both the coordinates for accessing the memory and a pointer to the reserved memory.
 /// Acts as both the reservation and the key - the user must return this to the pool to release
 /// the memory capacity.
+///    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    ///
+    /// use memory_slab::MemoryPool;
+    ///
+    /// let layout = Layout::new::<i64>();
+    /// let mut pool = MemoryPool::new(layout);
+    ///
+    /// let reservation = pool.reserve();
+    ///
+    /// // Write to the memory pointer
+    /// unsafe {
+    ///     // SAFETY: The pointer is valid and aligned for i64, and we own the memory.
+    ///     reservation.ptr().cast::<i64>().as_ptr().write(-123);
+    /// }
+    ///
+    /// // Read from the memory pointer
+    /// let value = unsafe {
+    ///     // SAFETY: The pointer is valid and the memory was just initialized.
+    ///     reservation.ptr().cast::<i64>().as_ptr().read()
+    /// };
+    /// assert_eq!(value, -123);
+    ///
+    /// // The reservation must be returned to release the memory
+    /// pool.release(reservation);
+    /// ```
 #[derive(Debug)]
 pub struct PoolReservation {
     /// The coordinates of the memory block within the pool structure.
@@ -20,6 +48,34 @@ pub struct PoolReservation {
 
 impl PoolReservation {
     /// Returns a pointer to the reserved memory block.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    ///
+    /// use memory_slab::MemoryPool;
+    ///
+    /// let layout = Layout::new::<f64>();
+    /// let mut pool = MemoryPool::new(layout);
+    /// let reservation = pool.reserve();
+    ///
+    /// // Write data to the reserved memory
+    /// unsafe {
+    ///     // SAFETY: The pointer is valid and aligned for f64, and we own the memory.
+    ///     let ptr = reservation.ptr().cast::<f64>();
+    ///     ptr.as_ptr().write(3.14159);
+    /// }
+    ///
+    /// // Read data back from the memory
+    /// let value = unsafe {
+    ///     // SAFETY: The pointer is valid and the memory was just initialized.
+    ///     let ptr = reservation.ptr().cast::<f64>();
+    ///     ptr.as_ptr().read()
+    /// };
+    /// assert_eq!(value, 3.14159);
+    /// # pool.release(reservation);
+    /// ```
     #[must_use]
     pub fn ptr(&self) -> NonNull<()> {
         self.ptr
@@ -31,7 +87,8 @@ impl PoolReservation {
 /// A dynamically growing memory pool that manages multiple fixed-capacity slabs internally
 /// and automatically allocates new slabs when needed.
 ///
-/// The pool returns a key for each reserved memory block.
+/// The pool returns a [`PoolReservation`] for each reserved memory block, which acts as both
+/// the key and provides direct access to the memory pointer.
 ///
 /// # Out of band access
 ///
@@ -42,6 +99,35 @@ impl PoolReservation {
 /// # Resource usage
 ///
 /// As of today, the collection never shrinks, though future versions may offer facilities to do so.
+///    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    ///
+    /// use memory_slab::MemoryPool;
+    ///
+    /// let layout = Layout::new::<u32>();
+    /// let mut pool = MemoryPool::new(layout);
+    ///
+    /// // Reserve memory and get a reservation
+    /// let reservation = pool.reserve();
+    ///
+    /// // Write to the memory
+    /// unsafe {
+    ///     // SAFETY: The pointer is valid and aligned for u32, and we own the memory.
+    ///     reservation.ptr().cast::<u32>().as_ptr().write(42);
+    /// }
+    ///
+    /// // Read from the memory
+    /// let value = unsafe {
+    ///     // SAFETY: The pointer is valid and the memory was just initialized.
+    ///     reservation.ptr().cast::<u32>().as_ptr().read()
+    /// };
+    /// assert_eq!(value, 42);
+    ///
+    /// // Release the memory back to the pool
+    /// pool.release(reservation);
+    /// ```
 #[derive(Debug)]
 pub struct MemoryPool {
     /// The layout of memory blocks managed by this pool.
@@ -81,6 +167,24 @@ const DEFAULT_SLAB_CAPACITY: usize = 16;
 impl MemoryPool {
     /// Creates a new [`MemoryPool`] with the specified item memory layout.
     ///
+    /// The pool starts empty and will automatically grow as needed when memory is reserved.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    ///
+    /// use memory_slab::MemoryPool;
+    ///
+    /// // Create a pool for storing u64 values
+    /// let layout = Layout::new::<u64>();
+    /// let pool = MemoryPool::new(layout);
+    ///
+    /// assert_eq!(pool.len(), 0);
+    /// assert!(pool.is_empty());
+    /// assert_eq!(pool.item_layout(), layout);
+    /// ```
+    ///
     /// # Panics
     ///
     /// Panics if the layout has zero size.
@@ -90,6 +194,27 @@ impl MemoryPool {
     }
 
     /// Creates a new [`MemoryPool`] with the specified memory layout and slab capacity.
+    ///
+    /// The slab capacity determines how many items each internal slab can hold. This can be
+    /// useful for performance tuning in specific scenarios, though the default capacity
+    /// should work well for most use cases.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    /// use std::num::NonZero;
+    ///
+    /// use memory_slab::MemoryPool;
+    ///
+    /// // Create a pool with custom slab capacity
+    /// let layout = Layout::new::<u32>();
+    /// let slab_capacity = NonZero::new(64).unwrap();
+    /// let pool = MemoryPool::with_slab_capacity(layout, slab_capacity);
+    ///
+    /// assert_eq!(pool.len(), 0);
+    /// assert!(pool.is_empty());
+    /// ```
     ///
     /// # Panics
     ///
@@ -110,12 +235,49 @@ impl MemoryPool {
     }
 
     /// Returns the memory layout used by items in this pool.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    ///
+    /// use memory_slab::MemoryPool;
+    ///
+    /// let layout = Layout::new::<u128>();
+    /// let pool = MemoryPool::new(layout);
+    ///
+    /// assert_eq!(pool.item_layout(), layout);
+    /// assert_eq!(pool.item_layout().size(), std::mem::size_of::<u128>());
+    /// ```
     #[must_use]
     pub fn item_layout(&self) -> Layout {
         self.item_layout
     }
 
     /// The number of memory blocks in the pool that have been reserved.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    ///
+    /// use memory_slab::MemoryPool;
+    ///
+    /// let layout = Layout::new::<i32>();
+    /// let mut pool = MemoryPool::new(layout);
+    ///
+    /// assert_eq!(pool.len(), 0);
+    ///
+    /// let reservation1 = pool.reserve();
+    /// assert_eq!(pool.len(), 1);
+    ///
+    /// let reservation2 = pool.reserve();
+    /// assert_eq!(pool.len(), 2);
+    ///
+    /// pool.release(reservation1);
+    /// assert_eq!(pool.len(), 1);
+    /// # pool.release(reservation2);
+    /// ```
     #[must_use]
     pub fn len(&self) -> usize {
         self.slabs.iter().map(MemorySlab::len).sum()
@@ -123,7 +285,30 @@ impl MemoryPool {
 
     /// The number of memory blocks the pool can accommodate without additional resource allocation.
     ///
-    /// This is the total capacity, including any existing reservations.
+    /// This is the total capacity, including any existing reservations. The capacity may grow
+    /// automatically when [`reserve()`] is called and no space is available.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    ///
+    /// use memory_slab::MemoryPool;
+    ///
+    /// let layout = Layout::new::<u8>();
+    /// let mut pool = MemoryPool::new(layout);
+    ///
+    /// // New pool starts with zero capacity
+    /// assert_eq!(pool.capacity(), 0);
+    ///
+    /// // Reserving memory may increase capacity
+    /// let reservation = pool.reserve();
+    /// assert!(pool.capacity() > 0);
+    /// assert!(pool.capacity() >= pool.len());
+    /// # pool.release(reservation);
+    /// ```
+    ///
+    /// [`reserve()`]: Self::reserve
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.slabs
@@ -135,12 +320,70 @@ impl MemoryPool {
     /// Whether the pool has no reservations.
     ///
     /// An empty pool may still be holding unused memory capacity.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    ///
+    /// use memory_slab::MemoryPool;
+    ///
+    /// let layout = Layout::new::<u16>();
+    /// let mut pool = MemoryPool::new(layout);
+    ///
+    /// assert!(pool.is_empty());
+    ///
+    /// let reservation = pool.reserve();
+    /// assert!(!pool.is_empty());
+    ///
+    /// pool.release(reservation);
+    /// assert!(pool.is_empty());
+    /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.slabs.iter().all(MemorySlab::is_empty)
     }
 
     /// Reserves memory in the pool and returns a reservation that acts as both the key and pointer.
+    ///
+    /// The returned [`PoolReservation`] provides direct access to the memory via [`PoolReservation::ptr()`]
+    /// and must be returned to the pool via [`release()`] to free the memory.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    ///
+    /// use memory_slab::MemoryPool;
+    ///
+    /// let layout = Layout::new::<u64>();
+    /// let mut pool = MemoryPool::new(layout);
+    ///
+    /// // Reserve memory
+    /// let reservation = pool.reserve();
+    ///
+    /// // Write data to the reserved memory
+    /// unsafe {
+    ///     // SAFETY: The pointer is valid and aligned for u64, and we own the memory.
+    ///     reservation
+    ///         .ptr()
+    ///         .cast::<u64>()
+    ///         .as_ptr()
+    ///         .write(0xDEADBEEF_CAFEBABE);
+    /// }
+    ///
+    /// // Read data back
+    /// let value = unsafe {
+    ///     // SAFETY: The pointer is valid and the memory was just initialized.
+    ///     reservation.ptr().cast::<u64>().as_ptr().read()
+    /// };
+    /// assert_eq!(value, 0xDEADBEEF_CAFEBABE);
+    ///
+    /// // Must release the reservation to free the memory
+    /// pool.release(reservation);
+    /// ```
+    ///
+    /// [`release()`]: Self::release
     #[must_use]
     pub fn reserve(&mut self) -> PoolReservation {
         let slab_index = self.index_of_slab_with_vacant_slot();
@@ -173,6 +416,28 @@ impl MemoryPool {
     }
 
     /// Releases memory previously reserved.
+    ///
+    /// The [`PoolReservation`] is consumed by this operation and cannot be used afterward.
+    /// The memory becomes available for future reservations.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    ///
+    /// use memory_slab::MemoryPool;
+    ///
+    /// let layout = Layout::new::<i32>();
+    /// let mut pool = MemoryPool::new(layout);
+    ///
+    /// let reservation = pool.reserve();
+    /// assert_eq!(pool.len(), 1);
+    ///
+    /// // Release the reservation
+    /// pool.release(reservation);
+    /// assert_eq!(pool.len(), 0);
+    /// assert!(pool.is_empty());
+    /// ```
     ///
     /// # Panics
     ///
