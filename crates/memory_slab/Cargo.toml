@@ -1,0 +1,23 @@
+[package]
+name = "memory_slab"
+description = "Slabs and pools of untyped memory to be used for constructing typed pools"
+publish = true
+version = "0.1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+
+[dev-dependencies]
+criterion = { workspace = true }
+mutants = { workspace = true }
+
+[lints]
+workspace = true

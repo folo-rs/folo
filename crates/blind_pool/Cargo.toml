@@ -1,0 +1,24 @@
+[package]
+name = "blind_pool"
+description = "A pool of pinned objects with opaque types - it can contain anything while pooling the memory for it"
+publish = true
+version = "0.1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+pinned_pool = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+mutants = { workspace = true }
+
+[lints]
+workspace = true
