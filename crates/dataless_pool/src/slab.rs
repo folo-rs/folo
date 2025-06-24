@@ -20,14 +20,10 @@ use std::{mem, ptr, thread};
 /// holding an exclusive reference to the collection.
 #[derive(Debug)]
 pub(crate) struct DatalessSlab {
-    /// The maximum number of items this slab can hold.
     capacity: NonZero<usize>,
 
-    /// Layout calculations for this slab.
     layout_info: SlabLayoutInfo,
 
-    /// Pointer to the first entry in the allocated slab memory.
-    ///
     /// This points to the beginning of the allocated memory block that contains all entries.
     /// Each entry is a combination of `EntryMeta` and the actual item data, with padding.
     first_entry_meta_ptr: NonNull<EntryMeta>,
@@ -37,27 +33,20 @@ pub(crate) struct DatalessSlab {
     /// Also known as intrusive freelist. This will point out of bounds if the collection is full.
     next_free_index: usize,
 
-    /// The total number of items in the collection. This is not used by the collection itself but
-    /// may be valuable to callers who want to know if the collection is empty because in many use
-    /// cases the collection is the backing store for a custom reservation/pinning scheme for items
-    /// used from unsafe code and may not be valid to drop when any items are still present.
+    /// Enables callers to detect if any items are still present when dropping the backing store,
+    /// which is critical for unsafe code that may have pointers to items in the collection.
     count: usize,
 }
 
 /// The result of reserving a memory block in a [`DatalessSlab`].
-///
-/// Contains both the stable index for later operations and a pointer to the reserved memory block.
 #[derive(Debug)]
 pub(crate) struct SlabReservation {
-    /// The stable index that can be used to retrieve or release this memory block later.
     index: usize,
 
-    /// A pointer to the reserved memory block.
     ptr: NonNull<()>,
 }
 
 impl SlabReservation {
-    /// Returns the stable index that can be used to retrieve or release this memory block later.
     #[must_use]
     pub(crate) fn index(&self) -> usize {
         self.index
@@ -71,8 +60,6 @@ impl SlabReservation {
 }
 
 /// Layout calculations for a [`DatalessSlab`].
-///
-/// Contains the computed memory layouts needed to construct and operate a slab.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SlabLayoutInfo {
     /// Layout of the `EntryMeta` and the item it owns combined, padded to alignment.

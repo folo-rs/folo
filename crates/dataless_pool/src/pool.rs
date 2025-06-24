@@ -63,16 +63,15 @@ fn generate_pool_id() -> u64 {
 /// ```
 #[derive(Debug)]
 pub struct DatalessPool {
-    /// Unique identifier for this pool instance.
+    /// We need to uniquely identify each pool to ensure that memory is not returned to the
+    /// wrong pool. If the pool ID does not match when returning memory, we panic.
     pool_id: u64,
 
     /// The layout of memory blocks managed by this pool.
     item_layout: Layout,
 
-    /// The capacity of each individual slab in the pool.
     slab_capacity: NonZero<usize>,
 
-    /// The slabs that provide the storage of the pool.
     /// We use a Vec here to allow for dynamic capacity growth.
     ///
     /// For now, we only grow this Vec but in theory, one could implement shrinking as well
@@ -126,7 +125,11 @@ impl DatalessPool {
     /// Panics if the layout has zero size.
     #[must_use]
     pub fn new(item_layout: Layout) -> Self {
-        Self::with_slab_capacity(item_layout, NonZero::new(DEFAULT_SLAB_CAPACITY).unwrap())
+        Self::with_slab_capacity(
+            item_layout,
+            NonZero::new(DEFAULT_SLAB_CAPACITY)
+                .expect("DEFAULT_SLAB_CAPACITY is a non-zero constant"),
+        )
     }
 
     /// Creates a new [`DatalessPool`] with the specified memory layout and internal capacity.
@@ -453,7 +456,6 @@ impl DatalessPool {
 
 /// The result of reserving memory in a [`DatalessPool`].
 ///
-/// Contains both the coordinates for accessing the memory and a pointer to the reserved memory.
 /// Acts as both the reservation and the key - the user must return this to the pool to release
 /// the memory capacity.
 ///
@@ -489,13 +491,11 @@ impl DatalessPool {
 /// ```
 #[derive(Debug)]
 pub struct PoolReservation {
-    /// The unique ID of the pool this reservation belongs to.
+    /// Ensures this reservation can only be released to the pool it came from.
     pool_id: u64,
 
-    /// The coordinates of the memory block within the pool structure.
     coordinates: MemoryBlockCoordinates,
 
-    /// A pointer to the reserved memory block.
     ptr: NonNull<()>,
 }
 
