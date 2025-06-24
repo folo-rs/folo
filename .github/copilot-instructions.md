@@ -227,3 +227,9 @@ Good comment:
 /// wrong pool. If the pool ID does not match when returning memory, we panic.
 pool_id: u64,
 ```
+
+# Testing for panics and errors
+
+It is good to create tests that verify expected panics/errors are returned. However, never
+check for a specific error/panic message - these are not part of the public API and create
+fragile tests. Just verify that an error of an expected type occurs or any panic occurs.
