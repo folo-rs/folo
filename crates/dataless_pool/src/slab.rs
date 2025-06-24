@@ -23,14 +23,8 @@ pub(crate) struct DatalessSlab {
     /// The maximum number of items this slab can hold.
     capacity: NonZero<usize>,
 
-    /// Layout of one item in the slab. This is only the "contents", not including the `Entry`.
-    item_layout: Layout,
-
-    /// Offset to add to an `Entry` pointer to get to the actual item inside the entry.
-    ///
-    /// Essentially, each item in the slab is a combination of `Entry` and the actual item contents,
-    /// pseudo-concatenated together in memory (respecting all relevant memory layout rules).
-    item_offset: usize,
+    /// Layout calculations for this slab.
+    layout_info: SlabLayoutInfo,
 
     /// Pointer to the first entry in the allocated slab memory.
     ///
@@ -50,12 +44,12 @@ pub(crate) struct DatalessSlab {
     count: usize,
 }
 
-/// The result of reserving memory in a [`DatalessSlab`].
+/// The result of reserving a memory block in a [`DatalessSlab`].
 ///
-/// Contains both the stable index for later operations and a pointer to the reserved memory.
+/// Contains both the stable index for later operations and a pointer to the reserved memory block.
 #[derive(Debug)]
 pub(crate) struct SlabReservation {
-    /// The stable index that can be used to retrieve or release this memory later.
+    /// The stable index that can be used to retrieve or release this memory block later.
     index: usize,
 
     /// A pointer to the reserved memory block.
@@ -63,7 +57,7 @@ pub(crate) struct SlabReservation {
 }
 
 impl SlabReservation {
-    /// Returns the stable index that can be used to retrieve or release this memory later.
+    /// Returns the stable index that can be used to retrieve or release this memory block later.
     #[must_use]
     pub(crate) fn index(&self) -> usize {
         self.index
@@ -80,15 +74,15 @@ impl SlabReservation {
 ///
 /// Contains the computed memory layouts needed to construct and operate a slab.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SlabLayoutInfo {
+struct SlabLayoutInfo {
     /// Layout of the `Entry` and the item it owns combined.
-    pub(crate) combined_entry_layout: Layout,
+    combined_entry_layout: Layout,
 
     /// Offset to add to an `Entry` pointer to get to the actual item inside the entry.
-    pub(crate) item_offset: usize,
+    item_offset: usize,
 
-    /// Layout of the entire slab (all entries for the given capacity).
-    pub(crate) slab_layout: Layout,
+    /// Layout of the entire slab (array of all the entries for the given capacity).
+    slab_layout: Layout,
 }
 
 impl SlabLayoutInfo {
@@ -97,7 +91,7 @@ impl SlabLayoutInfo {
     /// # Panics
     ///
     /// Panics if the item layout has zero size or if layout calculations overflow.
-    pub(crate) fn calculate(item_layout: Layout, capacity: NonZero<usize>) -> Self {
+    fn calculate(item_layout: Layout, capacity: NonZero<usize>) -> Self {
         assert!(
             item_layout.size() > 0,
             "SlabLayoutInfo cannot be calculated for zero-sized item layout"
@@ -186,25 +180,12 @@ impl DatalessSlab {
         }
 
         Self {
-            item_layout,
             capacity,
-            item_offset: layout_info.item_offset,
+            layout_info,
             first_entry_ptr: ptr,
             next_free_index: 0,
             count: 0,
         }
-    }
-
-    /// Layout of the `Entry` and the item it owns.
-    #[must_use]
-    fn combined_entry_layout(&self) -> Layout {
-        SlabLayoutInfo::calculate(self.item_layout, self.capacity).combined_entry_layout
-    }
-
-    /// Layout of the entire slab (all `capacity` entries).
-    #[must_use]
-    fn slab_layout(&self) -> Layout {
-        SlabLayoutInfo::calculate(self.item_layout, self.capacity).slab_layout
     }
 
     /// Returns the number of reserved memory blocks in the slab.
@@ -248,7 +229,7 @@ impl DatalessSlab {
             "entry {index} index out of bounds in slab of capacity {}",
             self.capacity.get()
         );
-        let combined_layout = self.combined_entry_layout();
+        let combined_layout = self.layout_info.combined_entry_layout;
 
         // Guarded by bounds check above, so we are guaranteed that the pointer is valid.
         // The arithmetic is checked to prevent overflow.
@@ -274,7 +255,12 @@ impl DatalessSlab {
         let entry_ptr = self.entry_ptr(index); // SAFETY: The item_offset is calculated correctly during construction to point to
         // the item contents portion of the entry+item combined layout.
         // SAFETY: entry_ptr is valid and item_offset is calculated correctly.
-        let data_ptr = unsafe { entry_ptr.as_ptr().cast::<u8>().add(self.item_offset) };
+        let data_ptr = unsafe {
+            entry_ptr
+                .as_ptr()
+                .cast::<u8>()
+                .add(self.layout_info.item_offset)
+        };
 
         // SAFETY: The data_ptr is valid and non-null due to the calculations above.
         unsafe { NonNull::new_unchecked(data_ptr.cast::<()>()) }
@@ -287,7 +273,7 @@ impl DatalessSlab {
     /// Panics if the index is out of bounds or is not associated with reserved memory.
     #[must_use]
     #[cfg(test)]
-    pub(crate) fn get(&self, index: usize) -> NonNull<()> {
+    fn get(&self, index: usize) -> NonNull<()> {
         match self.entry(index) {
             Entry::Occupied => self.data_ptr(index),
             Entry::Vacant { .. } => panic!(
@@ -468,7 +454,10 @@ impl Drop for DatalessSlab {
 
         // SAFETY: The layout matches between alloc and dealloc.
         unsafe {
-            dealloc(self.first_entry_ptr.as_ptr().cast(), self.slab_layout());
+            dealloc(
+                self.first_entry_ptr.as_ptr().cast(),
+                self.layout_info.slab_layout,
+            );
         }
 
         // We do this check at the end so we clean up the memory first. Mostly to make Miri happy.

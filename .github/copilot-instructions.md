@@ -140,3 +140,10 @@ Public API types go higher in the file, private types go lower.
 
 The implementation of a type should stay close to the definition of the type (e.g. `impl` blocks
 of a type follow the `struct` block).
+
+# Visibility
+
+Types, fields, functions and methods should have the minimum required visibility, only being
+visible in the same file by default if not part of the public API surface.
+
+Use `pub(crate)` only when a type actually needs to be accessible in other files of the same crate.
