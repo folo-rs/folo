@@ -1,9 +1,18 @@
 use std::alloc::Layout;
 use std::num::NonZero;
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
 use crate::DatalessSlab;
+
+/// Global counter for generating unique pool IDs.
+static POOL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// Generates a unique pool ID.
+fn generate_pool_id() -> u64 {
+    POOL_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
 
 /// A memory pool of unbounded size that reserves pinned memory without placing any data in it,
 /// leaving that up to the owner.
@@ -54,6 +63,9 @@ use crate::DatalessSlab;
 /// ```
 #[derive(Debug)]
 pub struct DatalessPool {
+    /// Unique identifier for this pool instance.
+    pool_id: u64,
+
     /// The layout of memory blocks managed by this pool.
     item_layout: Layout,
 
@@ -117,40 +129,23 @@ impl DatalessPool {
         Self::with_slab_capacity(item_layout, NonZero::new(DEFAULT_SLAB_CAPACITY).unwrap())
     }
 
-    /// Creates a new [`DatalessPool`] with the specified memory layout and slab capacity.
+    /// Creates a new [`DatalessPool`] with the specified memory layout and internal capacity.
     ///
-    /// The slab capacity determines how many items each internal slab can hold. This can be
-    /// useful for performance tuning in specific scenarios, though the default capacity
-    /// should work well for most use cases.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use std::alloc::Layout;
-    /// use std::num::NonZero;
-    ///
-    /// use dataless_pool::DatalessPool;
-    ///
-    /// // Create a pool with custom slab capacity.
-    /// let layout = Layout::new::<u32>();
-    /// let slab_capacity = NonZero::new(64).unwrap();
-    /// let pool = DatalessPool::with_slab_capacity(layout, slab_capacity);
-    ///
-    /// assert_eq!(pool.len(), 0);
-    /// assert!(pool.is_empty());
-    /// ```
+    /// This is intended for internal use and testing scenarios where fine-tuning of the
+    /// internal memory organization is required.
     ///
     /// # Panics
     ///
     /// Panics if the layout has zero size.
     #[must_use]
-    pub fn with_slab_capacity(item_layout: Layout, slab_capacity: NonZero<usize>) -> Self {
+    pub(crate) fn with_slab_capacity(item_layout: Layout, slab_capacity: NonZero<usize>) -> Self {
         assert!(
             item_layout.size() > 0,
             "DatalessPool must have non-zero memory block size"
         );
 
         Self {
+            pool_id: generate_pool_id(),
             item_layout,
             slab_capacity,
             slabs: Vec::new(),
@@ -344,6 +339,7 @@ impl DatalessPool {
         );
 
         PoolReservation {
+            pool_id: self.pool_id,
             coordinates,
             ptr: reservation.ptr(),
         }
@@ -384,6 +380,13 @@ impl DatalessPool {
     /// If the reserved memory was initialized with data, the caller is responsible for calling
     /// the destructor on the data before releasing the memory.
     pub unsafe fn release(&mut self, reservation: PoolReservation) {
+        assert!(
+            reservation.pool_id == self.pool_id,
+            "attempted to release a reservation from a different pool (reservation pool ID: {}, current pool ID: {})",
+            reservation.pool_id,
+            self.pool_id
+        );
+
         let coordinates = reservation.coordinates;
 
         let Some(slab) = self.slabs.get_mut(coordinates.slab_index) else {
@@ -486,6 +489,9 @@ impl DatalessPool {
 /// ```
 #[derive(Debug)]
 pub struct PoolReservation {
+    /// The unique ID of the pool this reservation belongs to.
+    pool_id: u64,
+
     /// The coordinates of the memory block within the pool structure.
     coordinates: MemoryBlockCoordinates,
 
@@ -635,6 +641,7 @@ mod tests {
 
         // Create a fake reservation with invalid coordinates.
         let fake_reservation = PoolReservation {
+            pool_id: pool.pool_id, // Use correct pool ID but invalid coordinates
             coordinates: MemoryBlockCoordinates {
                 slab_index: 0,
                 index_in_slab: 0,
@@ -880,5 +887,48 @@ mod tests {
 
         // Pool should still panic since we have active reservations.
         drop(pool);
+    }
+
+    #[test]
+    #[should_panic(expected = "attempted to release a reservation from a different pool")]
+    fn release_reservation_from_different_pool_panics() {
+        let layout = Layout::new::<u32>();
+        let mut pool1 = DatalessPool::new(layout);
+        let mut pool2 = DatalessPool::new(layout);
+
+        // Reserve from pool1 but try to release to pool2.
+        let reservation = pool1.reserve();
+        unsafe {
+            pool2.release(reservation); // Should panic
+        }
+    }
+
+    #[test]
+    fn pool_ids_are_unique() {
+        let layout = Layout::new::<u32>();
+        let pool1 = DatalessPool::new(layout);
+        let pool2 = DatalessPool::new(layout);
+        let pool3 = DatalessPool::new(layout);
+
+        // Pool IDs should be different for each pool instance.
+        assert_ne!(pool1.pool_id, pool2.pool_id);
+        assert_ne!(pool2.pool_id, pool3.pool_id);
+        assert_ne!(pool1.pool_id, pool3.pool_id);
+    }
+
+    #[test]
+    fn reservation_belongs_to_correct_pool() {
+        let layout = Layout::new::<u64>();
+        let mut pool = DatalessPool::new(layout);
+
+        let reservation = pool.reserve();
+
+        // The reservation should have the same pool ID as the pool it came from.
+        assert_eq!(reservation.pool_id, pool.pool_id);
+
+        // Releasing to the same pool should work fine.
+        unsafe {
+            pool.release(reservation);
+        }
     }
 }

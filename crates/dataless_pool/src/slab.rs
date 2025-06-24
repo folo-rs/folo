@@ -433,11 +433,12 @@ impl Drop for DatalessSlab {
         let was_empty = self.is_empty();
         let capacity_value = self.capacity.get();
 
-        // Set them all to `Vacant` to ensure any cleanup is done.
+        // Set them all to `Vacant` for form's sake. There is no real data
+        // stored in the `EntryMeta` so this does not actually do much.
         for index in 0..capacity_value {
-            let entry = self.entry_meta_mut(index);
+            let entry_meta = self.entry_meta_mut(index);
 
-            *entry = EntryMeta::Vacant {
+            *entry_meta = EntryMeta::Vacant {
                 next_free_index: capacity_value,
             };
         }
@@ -484,6 +485,7 @@ mod tests {
     use std::num::NonZero;
 
     use super::*;
+
     #[test]
     fn smoke_test() {
         let layout = Layout::new::<u32>();
@@ -509,18 +511,9 @@ mod tests {
 
         // Also verify direct ptr usage works.
         unsafe {
-            assert_eq!(
-                reservation_a.ptr.cast::<u32>().as_ptr().read(),
-                42
-            );
-            assert_eq!(
-                reservation_b.ptr.cast::<u32>().as_ptr().read(),
-                43
-            );
-            assert_eq!(
-                reservation_c.ptr.cast::<u32>().as_ptr().read(),
-                44
-            );
+            assert_eq!(reservation_a.ptr.cast::<u32>().as_ptr().read(), 42);
+            assert_eq!(reservation_b.ptr.cast::<u32>().as_ptr().read(), 43);
+            assert_eq!(reservation_c.ptr.cast::<u32>().as_ptr().read(), 44);
         }
 
         assert_eq!(slab.len(), 3);
@@ -535,18 +528,9 @@ mod tests {
 
         unsafe {
             reservation_d.ptr.cast::<u32>().as_ptr().write(45);
-            assert_eq!(
-                reservation_a.ptr.cast::<u32>().as_ptr().read(),
-                42
-            );
-            assert_eq!(
-                reservation_c.ptr.cast::<u32>().as_ptr().read(),
-                44
-            );
-            assert_eq!(
-                reservation_d.ptr.cast::<u32>().as_ptr().read(),
-                45
-            );
+            assert_eq!(reservation_a.ptr.cast::<u32>().as_ptr().read(), 42);
+            assert_eq!(reservation_c.ptr.cast::<u32>().as_ptr().read(), 44);
+            assert_eq!(reservation_d.ptr.cast::<u32>().as_ptr().read(), 45);
         }
 
         assert!(slab.is_full());
@@ -578,7 +562,7 @@ mod tests {
 
         _ = slab.reserve();
         // This test verified that getting an out of bounds index panics.
-        // Since we removed get(), we test that creating a pointer to index 1234 
+        // Since we removed get(), we test that creating a pointer to index 1234
         // would panic if we had a way to access arbitrary indices.
         // For now, we'll use entry_meta_ptr as it has bounds checking.
         _ = slab.entry_meta_ptr(1234);
@@ -644,18 +628,9 @@ mod tests {
         unsafe {
             reservation_d.ptr.cast::<u32>().as_ptr().write(45);
 
-            assert_eq!(
-                reservation_a.ptr.cast::<u32>().as_ptr().read(),
-                42
-            );
-            assert_eq!(
-                reservation_c.ptr.cast::<u32>().as_ptr().read(),
-                44
-            );
-            assert_eq!(
-                reservation_d.ptr.cast::<u32>().as_ptr().read(),
-                45
-            );
+            assert_eq!(reservation_a.ptr.cast::<u32>().as_ptr().read(), 42);
+            assert_eq!(reservation_c.ptr.cast::<u32>().as_ptr().read(), 44);
+            assert_eq!(reservation_d.ptr.cast::<u32>().as_ptr().read(), 45);
         }
 
         // Clean up remaining reservations before drop.
@@ -771,18 +746,9 @@ mod tests {
                 reservation_b.ptr.cast::<u32>().as_ptr().write(43);
                 reservation_c.ptr.cast::<u32>().as_ptr().write(44);
 
-                assert_eq!(
-                    reservation_a.ptr.cast::<u32>().as_ptr().read(),
-                    42
-                );
-                assert_eq!(
-                    reservation_b.ptr.cast::<u32>().as_ptr().read(),
-                    43
-                );
-                assert_eq!(
-                    reservation_c.ptr.cast::<u32>().as_ptr().read(),
-                    44
-                );
+                assert_eq!(reservation_a.ptr.cast::<u32>().as_ptr().read(), 42);
+                assert_eq!(reservation_b.ptr.cast::<u32>().as_ptr().read(), 43);
+                assert_eq!(reservation_c.ptr.cast::<u32>().as_ptr().read(), 44);
             }
 
             unsafe {
@@ -794,18 +760,9 @@ mod tests {
 
             unsafe {
                 reservation_d.ptr.cast::<u32>().as_ptr().write(45);
-                assert_eq!(
-                    reservation_a.ptr.cast::<u32>().as_ptr().read(),
-                    42
-                );
-                assert_eq!(
-                    reservation_c.ptr.cast::<u32>().as_ptr().read(),
-                    44
-                );
-                assert_eq!(
-                    reservation_d.ptr.cast::<u32>().as_ptr().read(),
-                    45
-                );
+                assert_eq!(reservation_a.ptr.cast::<u32>().as_ptr().read(), 42);
+                assert_eq!(reservation_c.ptr.cast::<u32>().as_ptr().read(), 44);
+                assert_eq!(reservation_d.ptr.cast::<u32>().as_ptr().read(), 45);
             }
         }
 
@@ -874,10 +831,7 @@ mod tests {
                 reservation_d.ptr.cast::<u32>().as_ptr().write(45);
                 assert_eq!(slab.item_ptr(a).cast::<u32>().as_ptr().read(), 42);
                 assert_eq!(slab.item_ptr(c).cast::<u32>().as_ptr().read(), 44);
-                assert_eq!(
-                    reservation_d.ptr.cast::<u32>().as_ptr().read(),
-                    45
-                );
+                assert_eq!(reservation_d.ptr.cast::<u32>().as_ptr().read(), 45);
             }
 
             // Return the index for cleanup.

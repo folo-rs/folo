@@ -164,3 +164,24 @@ Rendering Mermaid diagrams in Rust API documentation requires the `simple-mermai
 be referenced. The syntax for embedding a Mermaid diagram is
 `#![doc = mermaid!("../doc/region_cached.mermaid")]`. See existing examples for a detailed
 reference (e.g. the `region_local` package).
+
+# Comments must add value not re-state the code
+
+Comments that merely restate the obvious are not desired. Comments should add value by explaining
+why something is done, what it does, or how it works. Avoid comments that simply repeat what the
+code does.
+
+Bad comment:
+
+```rust
+/// Unique identifier for this pool instance.
+pool_id: u64,
+```
+
+Good comment:
+
+```rust
+/// We need to uniquely identify each pool to ensure that memory is not returned to the
+/// wrong pool. If the pool ID does not match when returning memory, we panic.
+pool_id: u64,
+```
