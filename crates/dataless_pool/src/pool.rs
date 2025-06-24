@@ -57,7 +57,8 @@ fn generate_pool_id() -> u64 {
 /// assert_eq!(value, 42);
 ///
 /// // Release the memory back to the pool.
-/// // SAFETY: The reservation is valid and came from this pool, so it's safe to release.
+/// // SAFETY: The reserved memory contains u32 data which is Copy and has no destructor,
+/// // so no cleanup is required before releasing.
 /// unsafe {
 ///     pool.release(reservation);
 /// }
@@ -197,12 +198,12 @@ impl DatalessPool {
     /// let reservation2 = pool.reserve();
     /// assert_eq!(pool.len(), 2);
     ///
-    /// // SAFETY: reservation1 is valid and came from this pool.
+    /// // SAFETY: The memory was never initialized, so no destructor needs to be called.
     /// unsafe {
     ///     pool.release(reservation1);
     /// }
     /// assert_eq!(pool.len(), 1);
-    /// # // SAFETY: reservation2 is valid and came from this pool.
+    /// # // SAFETY: The memory was never initialized, so no destructor needs to be called.
     /// # unsafe {
     /// #     pool.release(reservation2);
     /// # }
@@ -234,7 +235,7 @@ impl DatalessPool {
     /// let reservation = pool.reserve();
     /// assert!(pool.capacity() > 0);
     /// assert!(pool.capacity() >= pool.len());
-    /// # // SAFETY: reservation is valid and came from this pool.
+    /// # // SAFETY: The memory was never initialized, so no destructor needs to be called.
     /// # unsafe {
     /// #     pool.release(reservation);
     /// # }
@@ -268,7 +269,7 @@ impl DatalessPool {
     /// let reservation = pool.reserve();
     /// assert!(!pool.is_empty());
     ///
-    /// // SAFETY: reservation is valid and came from this pool.
+    /// // SAFETY: The memory was never initialized, so no destructor needs to be called.
     /// unsafe {
     ///     pool.release(reservation);
     /// }
@@ -314,7 +315,7 @@ impl DatalessPool {
     /// assert_eq!(value, 0xDEADBEEF_CAFEBABE);
     ///
     /// // Must release the reservation to free the memory.
-    /// // SAFETY: reservation is valid and came from this pool.
+    /// // SAFETY: The reserved memory contains u64 data which is Copy and has no destructor.
     /// unsafe {
     ///     pool.release(reservation);
     /// }
@@ -372,7 +373,7 @@ impl DatalessPool {
     /// assert_eq!(pool.len(), 1);
     ///
     /// // Release the reservation.
-    /// // SAFETY: reservation is valid and came from this pool.
+    /// // SAFETY: The memory was never initialized, so no destructor needs to be called.
     /// unsafe {
     ///     pool.release(reservation);
     /// }
@@ -402,7 +403,8 @@ impl DatalessPool {
             panic!("reservation was not associated with a memory block in the pool")
         };
 
-        // SAFETY: We already validated that this reservation exists in the slab.
+        // SAFETY: The caller is responsible for ensuring any data destructors have been
+        // called before releasing the memory, which satisfies the safety requirement of slab.release().
         unsafe {
             slab.release(coordinates.index_in_slab);
         }
@@ -491,7 +493,7 @@ impl DatalessPool {
 /// assert_eq!(value, -123);
 ///
 /// // The reservation must be returned to release the memory.
-/// // SAFETY: reservation is valid and came from this pool.
+/// // SAFETY: The reserved memory contains i64 data which is Copy and has no destructor.
 /// unsafe {
 ///     pool.release(reservation);
 /// }
@@ -534,7 +536,7 @@ impl PoolReservation {
     ///     ptr.read()
     /// };
     /// assert_eq!(value, 3.14159);
-    /// # // SAFETY: reservation is valid and came from this pool.
+    /// # // SAFETY: The reserved memory contains f64 data which is Copy and has no destructor.
     /// # unsafe {
     /// #     pool.release(reservation);
     /// # }
@@ -620,6 +622,7 @@ mod tests {
             assert_eq!(reservation_c.ptr().cast::<u32>().read(), 44);
         }
 
+        // SAFETY: The reserved memory contains u32 data which is Copy and has no destructor.
         unsafe {
             pool.release(reservation_b);
         }
@@ -634,6 +637,8 @@ mod tests {
         }
 
         // Clean up remaining reservations.
+        // SAFETY: The reserved memory contains u32 data which is Copy and has no destructor,
+        // so no destructors need to be called before releasing the memory.
         unsafe {
             pool.release(reservation_a);
             pool.release(reservation_c);
@@ -672,6 +677,8 @@ mod tests {
             assert_eq!(reservation.ptr().cast::<u64>().read(), 0x1234567890ABCDEF);
         }
 
+        // SAFETY: The reserved memory contains u64 data which is Copy and has no destructor,
+        // so no destructors need to be called before releasing the memory.
         unsafe {
             pool.release(reservation);
         }
@@ -707,6 +714,8 @@ mod tests {
 
         // Clean up all reservations.
         for reservation in reservations {
+            // SAFETY: The reserved memory contains u32 data which is Copy and has no destructor,
+            // so no destructors need to be called before releasing the memory.
             unsafe {
                 pool.release(reservation);
             }
@@ -819,6 +828,8 @@ mod tests {
 
             // Release remaining items.
             for reservation in remaining_reservations {
+                // SAFETY: The reserved memory contains u32 data which is Copy and has no destructor,
+                // so no destructors need to be called before releasing the memory.
                 unsafe {
                     pool.release(reservation);
                 }
@@ -835,6 +846,8 @@ mod tests {
 
         // Reserve and then release immediately.
         let reservation = pool.reserve();
+        // SAFETY: The reserved memory was never initialized, so no destructors need to be called
+        // before releasing the memory.
         unsafe {
             pool.release(reservation);
         }
@@ -882,6 +895,8 @@ mod tests {
         let _reservation3 = pool.reserve();
 
         // Release one reservation but keep two.
+        // SAFETY: The reserved memory was never initialized, so no destructors need to be called
+        // before releasing the memory.
         unsafe {
             pool.release(reservation1);
         }
@@ -928,6 +943,8 @@ mod tests {
         assert_eq!(reservation.pool_id, pool.pool_id);
 
         // Releasing to the same pool should work fine.
+        // SAFETY: The reserved memory was never initialized, so no destructors need to be called
+        // before releasing the memory.
         unsafe {
             pool.release(reservation);
         }

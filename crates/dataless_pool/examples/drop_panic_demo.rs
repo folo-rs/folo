@@ -24,7 +24,8 @@ fn main() {
         let value = unsafe { reservation.ptr().cast::<u64>().read() };
         println!("   Read value: {value}");
 
-        // SAFETY: We know the reservation is valid since we just created it.
+        // SAFETY: The reserved memory contains u64 data which is Copy and has no destructor,
+        // so no destructors need to be called before releasing the memory.
         unsafe {
             pool.release(reservation);
         }

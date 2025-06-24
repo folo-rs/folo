@@ -67,7 +67,8 @@
 //! assert_eq!(value2, 123);
 //!
 //! // Release memory back to the pool.
-//! // SAFETY: We know these reservations are valid.
+//! // SAFETY: The reserved memory contains u64 data which is Copy and has no destructor,
+//! // so no destructors need to be called before releasing the memory.
 //! unsafe {
 //!     pool.release(reservation1);
 //!     pool.release(reservation2);

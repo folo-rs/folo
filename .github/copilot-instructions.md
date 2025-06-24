@@ -130,8 +130,12 @@ in API documentation (in a `# Panics` section).
 # Safety comments
 
 Safety comments must explain how we satisfy the safety requirements of the unsafe function we are
-calling. Safety comments are not there just to re-state the requirements, they must explain how
-we satisfy them (e.g. by referencing an assertion, a type invariant, earlier logic or other mechanism).
+calling. The API documentation of an unsafe function has a "Safety" section that poses a challenge
+and the safety comment is the response - the two must be paired and correspond to each other.
+
+Safety comments are not there just to re-state the requirements or make generic claims, they must
+specifically explain how we satisfy the safety requirements of the function we are calling (e.g.
+by referencing an assertion, a type invariant, earlier logic or other mechanism).
 
 Safety comments are also required in examples and doctests that use `unsafe` blocks.
 

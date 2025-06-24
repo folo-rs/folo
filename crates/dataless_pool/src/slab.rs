@@ -505,6 +505,8 @@ mod tests {
 
         assert_eq!(slab.len(), 3);
 
+        // SAFETY: The reserved memory was never initialized, so no destructors need to be called
+        // before releasing the memory.
         unsafe {
             slab.release(reservation_b.index);
         }
@@ -523,6 +525,8 @@ mod tests {
         assert!(slab.is_full());
 
         // Clean up remaining reservations.
+        // SAFETY: The reserved memory was never initialized, so no destructors need to be called
+        // before releasing the memory.
         unsafe {
             slab.release(reservation_a.index);
             slab.release(reservation_c.index);
@@ -648,6 +652,8 @@ mod tests {
             reservation.ptr().cast::<u64>().write(0x1234567890ABCDEF);
             assert_eq!(reservation.ptr().cast::<u64>().read(), 0x1234567890ABCDEF);
         }
+        // SAFETY: The reserved memory contains u64 data which is Copy and has no destructor,
+        // so no destructors need to be called before releasing the memory.
         unsafe {
             slab_u64.release(reservation.index());
         }
