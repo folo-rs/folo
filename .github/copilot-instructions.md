@@ -168,8 +168,8 @@ reference (e.g. the `region_local` package).
 # Comments must add value not re-state the code
 
 Comments that merely restate the obvious are not desired. Comments should add value by explaining
-why something is done, what it does, or how it works. Avoid comments that simply repeat what the
-code does.
+why something is done, what it accomplishes, or how it works. Avoid comments that simply repeat
+what the code does.
 
 Bad comment:
 
