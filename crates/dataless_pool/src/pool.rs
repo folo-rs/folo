@@ -10,7 +10,8 @@ use crate::DatalessSlab;
 /// Contains both the coordinates for accessing the memory and a pointer to the reserved memory.
 /// Acts as both the reservation and the key - the user must return this to the pool to release
 /// the memory capacity.
-///    /// # Example
+///
+/// # Example
 ///
 /// ```rust
 /// use std::alloc::Layout;
@@ -98,7 +99,8 @@ impl PoolReservation {
 /// # Resource usage
 ///
 /// As of today, the collection never shrinks, though future versions may offer facilities to do so.
-///    /// # Example
+///
+/// # Example
 ///
 /// ```rust
 /// use std::alloc::Layout;
@@ -564,14 +566,14 @@ mod tests {
         assert!(!pool.is_empty());
         assert!(pool.capacity() >= 3);
 
-        // Write some values
+        // Write some values.
         unsafe {
             reservation_a.ptr().cast::<u32>().as_ptr().write(42);
             reservation_b.ptr().cast::<u32>().as_ptr().write(43);
             reservation_c.ptr().cast::<u32>().as_ptr().write(44);
         }
 
-        // Read them back via reservation pointer
+        // Read them back via reservation pointer.
         unsafe {
             assert_eq!(reservation_a.ptr().cast::<u32>().as_ptr().read(), 42);
             assert_eq!(reservation_b.ptr().cast::<u32>().as_ptr().read(), 43);
@@ -589,7 +591,7 @@ mod tests {
             assert_eq!(reservation_d.ptr().cast::<u32>().as_ptr().read(), 45);
         }
 
-        // Clean up remaining reservations
+        // Clean up remaining reservations.
         pool.release(reservation_a);
         pool.release(reservation_c);
         pool.release(reservation_d);
@@ -601,7 +603,7 @@ mod tests {
         let layout = Layout::new::<u32>();
         let mut pool = DatalessPool::new(layout);
 
-        // Create a fake reservation with invalid coordinates
+        // Create a fake reservation with invalid coordinates.
         let fake_reservation = PoolReservation {
             coordinates: MemoryBlockCoordinates {
                 slab_index: 0,
@@ -641,7 +643,7 @@ mod tests {
         let layout = Layout::new::<u32>();
         let mut pool = DatalessPool::new(layout);
 
-        // Reserve more items than a single slab can hold to test growth
+        // Reserve more items than a single slab can hold to test growth.
         let mut reservations = Vec::new();
         for i in 0..200 {
             let reservation = pool.reserve();
@@ -654,21 +656,21 @@ mod tests {
         assert_eq!(pool.len(), 200);
         assert!(pool.capacity() >= 200);
 
-        // Verify all values are still accessible
+        // Verify all values are still accessible.
         for (i, reservation) in reservations.iter().enumerate() {
             unsafe {
                 assert_eq!(reservation.ptr().cast::<u32>().as_ptr().read(), i as u32);
             }
         }
 
-        // Clean up all reservations
+        // Clean up all reservations.
         for reservation in reservations {
             pool.release(reservation);
         }
     }
     #[test]
     fn different_layouts() {
-        // Test with different sized types
+        // Test with different sized types.
         let layout_u64 = Layout::new::<u64>();
         let mut pool_u64 = DatalessPool::new(layout_u64);
         let reservation = pool_u64.reserve();
@@ -685,7 +687,7 @@ mod tests {
         }
         pool_u64.release(reservation);
 
-        // Test with larger struct
+        // Test with larger struct.
         #[repr(C)]
         struct LargeStruct {
             a: u64,
@@ -729,7 +731,7 @@ mod tests {
         let layout = Layout::new::<usize>();
         let mut pool = DatalessPool::new(layout);
 
-        // Reserve and release many items to test slab management
+        // Reserve and release many items to test slab management.
         for iteration in 0..10 {
             let mut reservations = Vec::new();
             for i in 0..50 {
@@ -744,7 +746,7 @@ mod tests {
                 reservations.push(reservation);
             }
 
-            // Release every other item
+            // Release every other item.
             let mut remaining_reservations = Vec::new();
             for (index, reservation) in reservations.into_iter().enumerate() {
                 if index % 2 == 0 {
@@ -754,7 +756,7 @@ mod tests {
                 }
             }
 
-            // Verify remaining items
+            // Verify remaining items.
             for (index, reservation) in remaining_reservations.iter().enumerate() {
                 let expected_value = iteration * 100 + (index * 2 + 1); // Odd indices
                 unsafe {
@@ -765,7 +767,7 @@ mod tests {
                 }
             }
 
-            // Release remaining items
+            // Release remaining items.
             for reservation in remaining_reservations {
                 pool.release(reservation);
             }
@@ -779,13 +781,13 @@ mod tests {
         let layout = Layout::new::<u64>();
         let mut pool = DatalessPool::new(layout);
 
-        // Reserve and then release immediately
+        // Reserve and then release immediately.
         let reservation = pool.reserve();
         pool.release(reservation);
 
         assert!(pool.is_empty());
 
-        // Pool should drop without panic
+        // Pool should drop without panic.
         drop(pool);
     }
 
@@ -797,7 +799,7 @@ mod tests {
 
         let _reservation = pool.reserve();
 
-        // Pool should panic on drop since we still have an active reservation
+        // Pool should panic on drop since we still have an active reservation.
         drop(pool);
     }
 
@@ -811,7 +813,7 @@ mod tests {
         let _reservation2 = pool.reserve();
         let _reservation3 = pool.reserve();
 
-        // Pool should panic on drop since we have multiple active reservations
+        // Pool should panic on drop since we have multiple active reservations.
         drop(pool);
     }
 
@@ -825,10 +827,10 @@ mod tests {
         let _reservation2 = pool.reserve();
         let _reservation3 = pool.reserve();
 
-        // Release one reservation but keep two
+        // Release one reservation but keep two.
         pool.release(reservation1);
 
-        // Pool should still panic since we have active reservations
+        // Pool should still panic since we have active reservations.
         drop(pool);
     }
 }

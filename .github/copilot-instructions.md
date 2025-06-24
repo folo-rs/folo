@@ -20,18 +20,9 @@ Do not execute `just release` - this is a critical tool reserved for human use.
 
 # Validating changes
 
-After making changes to the codebase, you are expected to validate the basics.
+After making changes to the codebase, you are expected to validate the essentials via `just validate-quick`.
 
-Use `just test` to verify that the code compiles and tests pass.
-
-Use `just test-docs` to verify that doctests pass.
-
-Use `just docs` to verify that the API documentation builds without errors.
-
-Use `just clippy` to verify that all linter rules pass. We operate under a "zero warnings allowed"
-requirement - fix all warnings that Clippy generates.
-
-Use `just format` to apply auto-formatting to code files, ensuring consistent code style.
+We operate under a "zero warnings allowed" requirement - fix all warnings that validation generates.
 
 # Multiplatform codebase
 

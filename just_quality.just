@@ -58,8 +58,8 @@ validate-local:
     cargo generate-lockfile
     just machete
     just format-check
-    just clippy dev
     just check dev
+    just clippy dev
     just test
     just test-docs
     just test-benches
@@ -83,3 +83,24 @@ validate-extra-linux:
 # Performs validation on the current platform, whatever that may be.
 [group('quality')]
 validate-extra-local: mutants
+
+# Quick validation suitable for AI iteration, which skips some lengthy checks.
+# We assume this is executed on Windows, and will also perform the full validation on Linux.
+[group('quality')]
+validate-quick: validate-quick-local validate-quick-linux
+
+# Performs the part of the `validate-quick` recipe that must run on Linux, when commanded from Windows.
+[group('quality')]
+validate-quick-linux:
+    wsl -e bash -l -c "just validate-quick-local"
+
+# Quick validation suitable for AI iteration, which skips some lengthy checks.
+# Performs validation on the current platform, whatever that may be.
+[group('quality')]
+validate-quick-local:
+    just format-check
+    just check dev
+    just clippy dev
+    just test
+    just test-docs
+    just docs

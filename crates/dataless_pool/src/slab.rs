@@ -91,13 +91,13 @@ impl DatalessSlab {
 
         let capacity_value = capacity.get();
 
-        // Calculate the combined layout for Entry + item
+        // Calculate the combined layout for Entry + item.
         let entry_layout = Layout::new::<Entry>();
         let (combined_layout, item_offset) = entry_layout
             .extend(item_layout)
             .expect("layout extension cannot fail for valid layouts with reasonable sizes");
 
-        // Calculate the layout for the entire slab (array of combined layouts)
+        // Calculate the layout for the entire slab (array of combined layouts).
         let slab_layout = Layout::from_size_align(
             combined_layout
                 .size()
@@ -241,7 +241,7 @@ impl DatalessSlab {
     fn data_ptr(&self, index: usize) -> NonNull<()> {
         let entry_ptr = self.entry_ptr(index); // SAFETY: The item_offset is calculated correctly during construction to point to
         // the item contents portion of the entry+item combined layout.
-        // SAFETY: entry_ptr is valid and item_offset is calculated correctly
+        // SAFETY: entry_ptr is valid and item_offset is calculated correctly.
         let data_ptr = unsafe { entry_ptr.as_ptr().cast::<u8>().add(self.item_offset) };
 
         // SAFETY: The data_ptr is valid and non-null due to the calculations above.
@@ -482,21 +482,21 @@ mod tests {
         let reservation_b = slab.reserve();
         let reservation_c = slab.reserve();
 
-        // Write some values
+        // Write some values.
         unsafe {
             reservation_a.ptr.cast::<u32>().as_ptr().write(42);
             reservation_b.ptr.cast::<u32>().as_ptr().write(43);
             reservation_c.ptr.cast::<u32>().as_ptr().write(44);
         }
 
-        // Read them back
+        // Read them back.
         unsafe {
             assert_eq!(reservation_a.ptr.cast::<u32>().as_ptr().read(), 42);
             assert_eq!(reservation_b.ptr.cast::<u32>().as_ptr().read(), 43);
             assert_eq!(reservation_c.ptr.cast::<u32>().as_ptr().read(), 44);
         }
 
-        // Also verify get() works
+        // Also verify get() works.
         unsafe {
             assert_eq!(
                 slab.get(reservation_a.index).cast::<u32>().as_ptr().read(),
@@ -538,7 +538,7 @@ mod tests {
 
         assert!(slab.is_full());
 
-        // Clean up remaining reservations
+        // Clean up remaining reservations.
         slab.release(reservation_a.index);
         slab.release(reservation_c.index);
         slab.release(reservation_d.index);
@@ -595,7 +595,7 @@ mod tests {
         }
         let index_2 = reservation.index();
 
-        // Clean up reservations before drop
+        // Clean up reservations before drop.
         slab.release(index_0);
         slab.release(index_1);
         slab.release(index_2);
@@ -635,7 +635,7 @@ mod tests {
             );
         }
 
-        // Clean up remaining reservations before drop
+        // Clean up remaining reservations before drop.
         slab.release(reservation_a.index);
         slab.release(reservation_c.index);
         slab.release(reservation_d.index);
@@ -660,7 +660,7 @@ mod tests {
 
     #[test]
     fn different_layouts() {
-        // Test with different sized types
+        // Test with different sized types.
         let layout_u64 = Layout::new::<u64>();
         let mut slab_u64 = DatalessSlab::new(layout_u64, NonZero::new(2).unwrap());
         let reservation = slab_u64.reserve();
@@ -677,7 +677,7 @@ mod tests {
         }
         slab_u64.release(reservation.index());
 
-        // Test with larger struct
+        // Test with larger struct.
         #[repr(C)]
         struct LargeStruct {
             a: u64,
@@ -793,7 +793,7 @@ mod tests {
             assert!(slab.is_full());
         }
 
-        // Clean up remaining reservations before drop
+        // Clean up remaining reservations before drop.
         {
             let mut slab = slab.borrow_mut();
             slab.release(index_a);
@@ -852,7 +852,7 @@ mod tests {
                 );
             }
 
-            // Return the index for cleanup
+            // Return the index for cleanup.
             d
         });
 
@@ -863,7 +863,7 @@ mod tests {
             assert!(slab.is_full());
         }
 
-        // Clean up remaining reservations before drop
+        // Clean up remaining reservations before drop.
         {
             let mut slab = slab.lock().unwrap();
             slab.release(a);
@@ -879,7 +879,7 @@ mod tests {
 
         let reservation = slab.reserve();
 
-        // Verify the pointer works and points to the right location
+        // Verify the pointer works and points to the right location.
         unsafe {
             reservation.ptr().cast::<u64>().as_ptr().write(0xDEADBEEF);
             assert_eq!(
@@ -897,7 +897,7 @@ mod tests {
         let layout = Layout::new::<usize>();
         let mut slab = DatalessSlab::new(layout, NonZero::new(10).unwrap());
 
-        // Fill the slab
+        // Fill the slab.
         let mut indices = Vec::new();
         for i in 0..10 {
             let reservation = slab.reserve();
@@ -909,14 +909,14 @@ mod tests {
 
         assert!(slab.is_full());
 
-        // Release every other item
+        // Release every other item.
         for i in (0..10).step_by(2) {
             slab.release(indices[i]);
         }
 
         assert_eq!(slab.len(), 5);
 
-        // Fill again
+        // Fill again.
         for i in (0..10).step_by(2) {
             let reservation = slab.reserve();
             unsafe {
@@ -931,7 +931,7 @@ mod tests {
 
         assert!(slab.is_full());
 
-        // Verify all values are correct
+        // Verify all values are correct.
         for i in 0..10 {
             let expected = if i % 2 == 0 { i * 100 + 50 } else { i * 100 };
             unsafe {
@@ -942,7 +942,7 @@ mod tests {
             }
         }
 
-        // Clean up all reservations before drop
+        // Clean up all reservations before drop.
         for &index in &indices {
             slab.release(index);
         }
@@ -950,7 +950,7 @@ mod tests {
 
     #[test]
     fn different_alignments() {
-        // Test with a type that has specific alignment requirements
+        // Test with a type that has specific alignment requirements.
         #[repr(align(16))]
         struct AlignedStruct {
             data: [u8; 32],
@@ -961,7 +961,7 @@ mod tests {
 
         let reservation = slab.reserve();
 
-        // Verify alignment
+        // Verify alignment.
         assert_eq!(reservation.ptr().as_ptr() as usize % 16, 0);
 
         unsafe {
@@ -982,13 +982,13 @@ mod tests {
         let capacity = NonZero::new(10).unwrap();
         let mut slab = DatalessSlab::new(layout, capacity);
 
-        // Reserve and then release immediately
+        // Reserve and then release immediately.
         let reservation = slab.reserve();
         slab.release(reservation.index());
 
         assert!(slab.is_empty());
 
-        // Slab should drop without panic
+        // Slab should drop without panic.
         drop(slab);
     }
 
@@ -1001,7 +1001,7 @@ mod tests {
 
         let _reservation = slab.reserve();
 
-        // Slab should panic on drop since we still have an active reservation
+        // Slab should panic on drop since we still have an active reservation.
         drop(slab);
     }
 
@@ -1016,7 +1016,7 @@ mod tests {
         let _reservation2 = slab.reserve();
         let _reservation3 = slab.reserve();
 
-        // Slab should panic on drop since we have multiple active reservations
+        // Slab should panic on drop since we have multiple active reservations.
         drop(slab);
     }
 
@@ -1031,10 +1031,10 @@ mod tests {
         let _reservation2 = slab.reserve();
         let _reservation3 = slab.reserve();
 
-        // Release one reservation but keep two
+        // Release one reservation but keep two.
         slab.release(reservation1.index());
 
-        // Slab should still panic since we have active reservations
+        // Slab should still panic since we have active reservations.
         drop(slab);
     }
 }
