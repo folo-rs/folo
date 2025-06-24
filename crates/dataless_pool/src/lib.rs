@@ -67,8 +67,11 @@
 //! assert_eq!(value2, 123);
 //!
 //! // Release memory back to the pool.
-//! pool.release(reservation1);
-//! pool.release(reservation2);
+//! // SAFETY: We know these reservations are valid.
+//! unsafe {
+//!     pool.release(reservation1);
+//!     pool.release(reservation2);
+//! }
 //!
 //! assert!(pool.is_empty());
 //! ```

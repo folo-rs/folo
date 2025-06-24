@@ -24,7 +24,10 @@ fn main() {
         let value = unsafe { reservation.ptr().cast::<u64>().as_ptr().read() };
         println!("   Read value: {value}");
 
-        pool.release(reservation);
+        // SAFETY: We know the reservation is valid since we just created it.
+        unsafe {
+            pool.release(reservation);
+        }
         println!("   Released reservation - pool should drop cleanly");
         // Pool drops here without panic.
     }

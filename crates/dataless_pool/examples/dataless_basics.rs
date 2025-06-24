@@ -54,7 +54,10 @@ fn main() {
     );
 
     // Release one item.
-    pool.release(reservation2);
+    // SAFETY: We know reservation2 is valid since we just created it.
+    unsafe {
+        pool.release(reservation2);
+    }
     println!("Released item");
 
     // The pool automatically grows as needed.

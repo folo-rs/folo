@@ -34,6 +34,11 @@ be faster than doing the individual validation steps one by one.
 
 We operate under a "zero warnings allowed" requirement - fix all warnings that validation generates.
 
+# Extra validation for unsafe code
+
+If a package you are modifying requires unsafe code, you are expected to run the tests under Miri
+to confirm that there are no memory safety violations that the compiler alone cannot catch.
+
 # Multiplatform codebase
 
 This is a multiplatform codebase. In some crates you will find folders named `linux` and `windows`,

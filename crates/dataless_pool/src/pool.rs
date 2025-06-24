@@ -48,7 +48,9 @@ use crate::DatalessSlab;
 /// assert_eq!(value, 42);
 ///
 /// // Release the memory back to the pool.
-/// pool.release(reservation);
+/// unsafe {
+///     pool.release(reservation);
+/// }
 /// ```
 #[derive(Debug)]
 pub struct DatalessPool {
@@ -196,9 +198,13 @@ impl DatalessPool {
     /// let reservation2 = pool.reserve();
     /// assert_eq!(pool.len(), 2);
     ///
-    /// pool.release(reservation1);
+    /// unsafe {
+    ///     pool.release(reservation1);
+    /// }
     /// assert_eq!(pool.len(), 1);
-    /// # pool.release(reservation2);
+    /// # unsafe {
+    /// #     pool.release(reservation2);
+    /// # }
     /// ```
     #[must_use]
     pub fn len(&self) -> usize {
@@ -227,7 +233,9 @@ impl DatalessPool {
     /// let reservation = pool.reserve();
     /// assert!(pool.capacity() > 0);
     /// assert!(pool.capacity() >= pool.len());
-    /// # pool.release(reservation);
+    /// # unsafe {
+    /// #     pool.release(reservation);
+    /// # }
     /// ```
     ///
     /// [`reserve()`]: Self::reserve
@@ -258,7 +266,9 @@ impl DatalessPool {
     /// let reservation = pool.reserve();
     /// assert!(!pool.is_empty());
     ///
-    /// pool.release(reservation);
+    /// unsafe {
+    ///     pool.release(reservation);
+    /// }
     /// assert!(pool.is_empty());
     /// ```
     #[must_use]
@@ -302,7 +312,9 @@ impl DatalessPool {
     /// assert_eq!(value, 0xDEADBEEF_CAFEBABE);
     ///
     /// // Must release the reservation to free the memory.
-    /// pool.release(reservation);
+    /// unsafe {
+    ///     pool.release(reservation);
+    /// }
     /// ```
     ///
     /// [`release()`]: Self::release
@@ -356,7 +368,9 @@ impl DatalessPool {
     /// assert_eq!(pool.len(), 1);
     ///
     /// // Release the reservation.
-    /// pool.release(reservation);
+    /// unsafe {
+    ///     pool.release(reservation);
+    /// }
     /// assert_eq!(pool.len(), 0);
     /// assert!(pool.is_empty());
     /// ```
@@ -364,14 +378,22 @@ impl DatalessPool {
     /// # Panics
     ///
     /// Panics if the reservation is not associated with a memory block.
-    pub fn release(&mut self, reservation: PoolReservation) {
+    ///
+    /// # Safety
+    ///
+    /// If the reserved memory was initialized with data, the caller is responsible for calling
+    /// the destructor on the data before releasing the memory.
+    pub unsafe fn release(&mut self, reservation: PoolReservation) {
         let coordinates = reservation.coordinates;
 
         let Some(slab) = self.slabs.get_mut(coordinates.slab_index) else {
             panic!("reservation was not associated with a memory block in the pool")
         };
 
-        slab.release(coordinates.index_in_slab);
+        // SAFETY: We already validated that this reservation exists in the slab.
+        unsafe {
+            slab.release(coordinates.index_in_slab);
+        }
 
         // There is now a vacant slot in this slab! We may want to remember this for fast reservations.
         // We try to remember the lowest index of a slab with a vacant slot, so we
@@ -458,7 +480,9 @@ impl DatalessPool {
 /// assert_eq!(value, -123);
 ///
 /// // The reservation must be returned to release the memory.
-/// pool.release(reservation);
+/// unsafe {
+///     pool.release(reservation);
+/// }
 /// ```
 #[derive(Debug)]
 pub struct PoolReservation {
@@ -497,7 +521,9 @@ impl PoolReservation {
     ///     ptr.as_ptr().read()
     /// };
     /// assert_eq!(value, 3.14159);
-    /// # pool.release(reservation);
+    /// # unsafe {
+    /// #     pool.release(reservation);
+    /// # }
     /// ```
     #[must_use]
     pub fn ptr(&self) -> NonNull<()> {
@@ -580,7 +606,9 @@ mod tests {
             assert_eq!(reservation_c.ptr().cast::<u32>().as_ptr().read(), 44);
         }
 
-        pool.release(reservation_b);
+        unsafe {
+            pool.release(reservation_b);
+        }
 
         let reservation_d = pool.reserve();
 
@@ -592,9 +620,11 @@ mod tests {
         }
 
         // Clean up remaining reservations.
-        pool.release(reservation_a);
-        pool.release(reservation_c);
-        pool.release(reservation_d);
+        unsafe {
+            pool.release(reservation_a);
+            pool.release(reservation_c);
+            pool.release(reservation_d);
+        }
     }
 
     #[test]
@@ -611,7 +641,9 @@ mod tests {
             },
             ptr: NonNull::dangling(),
         };
-        pool.release(fake_reservation);
+        unsafe {
+            pool.release(fake_reservation);
+        }
     }
     #[test]
     fn reservater_works() {
@@ -632,7 +664,9 @@ mod tests {
             );
         }
 
-        pool.release(reservation);
+        unsafe {
+            pool.release(reservation);
+        }
     }
     #[test]
     #[allow(
@@ -665,7 +699,9 @@ mod tests {
 
         // Clean up all reservations.
         for reservation in reservations {
-            pool.release(reservation);
+            unsafe {
+                pool.release(reservation);
+            }
         }
     }
     #[test]
@@ -685,7 +721,9 @@ mod tests {
                 0x1234567890ABCDEF
             );
         }
-        pool_u64.release(reservation);
+        unsafe {
+            pool_u64.release(reservation);
+        }
 
         // Test with larger struct.
         #[repr(C)]
@@ -717,7 +755,9 @@ mod tests {
             assert_eq!(value.c, 3);
             assert_eq!(value.d, 4);
         }
-        pool_large.release(reservation);
+        unsafe {
+            pool_large.release(reservation);
+        }
     }
 
     #[test]
@@ -750,7 +790,9 @@ mod tests {
             let mut remaining_reservations = Vec::new();
             for (index, reservation) in reservations.into_iter().enumerate() {
                 if index % 2 == 0 {
-                    pool.release(reservation);
+                    unsafe {
+                        pool.release(reservation);
+                    }
                 } else {
                     remaining_reservations.push(reservation);
                 }
@@ -769,7 +811,9 @@ mod tests {
 
             // Release remaining items.
             for reservation in remaining_reservations {
-                pool.release(reservation);
+                unsafe {
+                    pool.release(reservation);
+                }
             }
         }
 
@@ -783,7 +827,9 @@ mod tests {
 
         // Reserve and then release immediately.
         let reservation = pool.reserve();
-        pool.release(reservation);
+        unsafe {
+            pool.release(reservation);
+        }
 
         assert!(pool.is_empty());
 
@@ -828,7 +874,9 @@ mod tests {
         let _reservation3 = pool.reserve();
 
         // Release one reservation but keep two.
-        pool.release(reservation1);
+        unsafe {
+            pool.release(reservation1);
+        }
 
         // Pool should still panic since we have active reservations.
         drop(pool);

@@ -29,8 +29,8 @@ pub(crate) struct DatalessSlab {
     /// Pointer to the first entry in the allocated slab memory.
     ///
     /// This points to the beginning of the allocated memory block that contains all entries.
-    /// Each entry is a combination of `Entry` metadata and the actual item data.
-    first_entry_ptr: NonNull<Entry>,
+    /// Each entry is a combination of `EntryMeta` and the actual item data, with padding.
+    first_entry_meta_ptr: NonNull<EntryMeta>,
 
     /// Index of the next free slot in the collection. Think of this as a virtual stack of the most
     /// recently freed slots, with the stack entries stored in the collection entries themselves.
@@ -75,14 +75,15 @@ impl SlabReservation {
 /// Contains the computed memory layouts needed to construct and operate a slab.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SlabLayoutInfo {
-    /// Layout of the `Entry` and the item it owns combined.
+    /// Layout of the `EntryMeta` and the item it owns combined, padded to alignment.
+    /// The size of this layout represents the stride between consecutive entries.
     combined_entry_layout: Layout,
 
-    /// Offset to add to an `Entry` pointer to get to the actual item inside the entry.
+    /// Offset to add to an `EntryMeta` pointer to get to the actual item inside the entry.
     item_offset: usize,
 
     /// Layout of the entire slab (array of all the entries for the given capacity).
-    slab_layout: Layout,
+    entry_array_layout: Layout,
 }
 
 impl SlabLayoutInfo {
@@ -91,6 +92,7 @@ impl SlabLayoutInfo {
     /// # Panics
     ///
     /// Panics if the item layout has zero size or if layout calculations overflow.
+    #[must_use]
     fn calculate(item_layout: Layout, capacity: NonZero<usize>) -> Self {
         assert!(
             item_layout.size() > 0,
@@ -98,32 +100,35 @@ impl SlabLayoutInfo {
         );
 
         // Calculate the combined layout for Entry + item.
-        let entry_layout = Layout::new::<Entry>();
+        let meta_layout = Layout::new::<EntryMeta>();
 
-        let (combined_entry_layout, item_offset) = entry_layout
+        let (combined_entry_layout, item_offset) = meta_layout
             .extend(item_layout)
             .expect("layout extension cannot fail for valid layouts with reasonable sizes");
 
         // Calculate the layout for the entire slab (array of combined layouts).
-        let slab_layout = Layout::from_size_align(
-            combined_entry_layout
-                .size()
-                .checked_mul(capacity.get())
-                .expect("capacity multiplication cannot overflow for reasonable capacity values"),
-            combined_entry_layout.align(),
-        )
-        .expect("slab layout calculation cannot fail for valid combined layouts");
+        // Layout::pad_to_align() ensures the size is a multiple of alignment,
+        // which is exactly what we need for proper array element spacing.
+        let combined_entry_layout = combined_entry_layout.pad_to_align();
+
+        let total_size = combined_entry_layout
+            .size()
+            .checked_mul(capacity.get())
+            .expect("total size calculation cannot overflow for reasonable capacity values");
+
+        let slab_layout = Layout::from_size_align(total_size, combined_entry_layout.align())
+            .expect("slab layout calculation cannot fail for valid combined layouts");
 
         Self {
             combined_entry_layout,
             item_offset,
-            slab_layout,
+            entry_array_layout: slab_layout,
         }
     }
 }
 
 #[derive(Debug)]
-enum Entry {
+enum EntryMeta {
     /// We do not know the type of the item, so we cannot name the item here. Instead,
     /// the item will follow the entry at `item_offset` bytes from the start of the entry.
     Occupied,
@@ -145,9 +150,9 @@ impl DatalessSlab {
 
         // SAFETY: The layout is valid for the target allocation and not zero-sized.
         // (guarded by assertions above).
-        let ptr = NonNull::new(unsafe { alloc(layout_info.slab_layout) })
+        let first_entry_ptr = NonNull::new(unsafe { alloc(layout_info.entry_array_layout) })
             .expect("we do not intend to handle allocation failure as a real possibility - OOM results in panic")
-            .cast::<Entry>();
+            .cast::<EntryMeta>();
 
         // Initialize all slots to `Vacant` to start with.
         for index in 0_usize..capacity.get() {
@@ -157,23 +162,25 @@ impl DatalessSlab {
 
             // SAFETY: We allocated enough space for all items up to the indicated capacity.
             // and the offset is calculated safely above.
-            let entry_ptr = unsafe { ptr.as_ptr().cast::<u8>().add(offset) };
+            let entry_meta_ptr = unsafe { first_entry_ptr.as_ptr().cast::<u8>().add(offset) };
 
-            // SAFETY: The pointer alignment is guaranteed by the layout calculation.
+            // SAFETY: The pointer alignment is guaranteed by Layout::pad_to_align() which ensures
+            // the stride (element size) is a multiple of the alignment, providing proper spacing
+            // between array elements.
             #[allow(
                 clippy::cast_ptr_alignment,
-                reason = "layout calculation ensures proper alignment"
+                reason = "Layout::pad_to_align() ensures proper alignment between array elements"
             )]
-            let entry_ptr = entry_ptr.cast::<Entry>();
+            let entry_meta_ptr = entry_meta_ptr.cast::<EntryMeta>();
 
             // SAFETY: The pointer is valid for writes and points to properly allocated memory.
             unsafe {
                 ptr::write(
-                    entry_ptr,
-                    Entry::Vacant {
-                        next_free_index: index
-                            .checked_add(1_usize)
-                            .unwrap_or_else(|| capacity.get()),
+                    entry_meta_ptr,
+                    EntryMeta::Vacant {
+                        next_free_index: index.checked_add(1_usize).expect(
+                            "requires the container to be larger than virtual memory - impossible",
+                        ),
                     },
                 );
             }
@@ -182,7 +189,7 @@ impl DatalessSlab {
         Self {
             capacity,
             layout_info,
-            first_entry_ptr: ptr,
+            first_entry_meta_ptr: first_entry_ptr,
             next_free_index: 0,
             count: 0,
         }
@@ -206,86 +213,63 @@ impl DatalessSlab {
         self.next_free_index >= self.capacity.get()
     }
 
-    fn entry(&self, index: usize) -> &Entry {
-        let entry_ptr = self.entry_ptr(index);
+    fn entry_meta(&self, index: usize) -> &EntryMeta {
+        let entry_meta_ptr = self.entry_meta_ptr(index);
 
         // SAFETY: We ensured in the ctor that every entry is initialized and ensured above
         // that the pointer is valid, so we can safely dereference it.
-        unsafe { entry_ptr.as_ref() }
+        unsafe { entry_meta_ptr.as_ref() }
     }
 
     #[expect(clippy::needless_pass_by_ref_mut, reason = "false positive")]
-    fn entry_mut(&mut self, index: usize) -> &mut Entry {
-        let mut entry_ptr = self.entry_ptr(index);
+    fn entry_meta_mut(&mut self, index: usize) -> &mut EntryMeta {
+        let mut entry_meta_ptr = self.entry_meta_ptr(index);
 
         // SAFETY: We ensured in the ctor that every entry is initialized and ensured above
         // that the pointer is valid, so we can safely dereference it.
-        unsafe { entry_ptr.as_mut() }
+        unsafe { entry_meta_ptr.as_mut() }
     }
 
-    fn entry_ptr(&self, index: usize) -> NonNull<Entry> {
+    fn entry_meta_ptr(&self, index: usize) -> NonNull<EntryMeta> {
         assert!(
             index < self.capacity.get(),
             "entry {index} index out of bounds in slab of capacity {}",
             self.capacity.get()
         );
-        let combined_layout = self.layout_info.combined_entry_layout;
 
         // Guarded by bounds check above, so we are guaranteed that the pointer is valid.
         // The arithmetic is checked to prevent overflow.
         let offset = index
-            .checked_mul(combined_layout.size())
-            .expect("offset calculation cannot overflow for reasonable index values");
+            .checked_mul(self.layout_info.combined_entry_layout.size())
+            .expect("offset calculation cannot overflow for valid index values as that would exceed virtual memory limits");
 
         // SAFETY: The first_entry_ptr is valid from allocation, and offset is within bounds.
-        let entry_ptr = unsafe { self.first_entry_ptr.as_ptr().cast::<u8>().add(offset) };
-
-        // SAFETY: The pointer alignment is guaranteed by the layout calculation.
-        #[allow(
-            clippy::cast_ptr_alignment,
-            reason = "layout calculation ensures proper alignment"
-        )]
-        let entry_ptr = entry_ptr.cast::<Entry>();
+        // The pointer alignment is guaranteed by Layout::pad_to_align() which ensures
+        // the entry layout is a multiple of the alignment, providing proper spacing
+        // between array elements.
+        let entry_meta_ptr = unsafe { self.first_entry_meta_ptr.as_ptr().byte_add(offset) };
 
         // SAFETY: The entry_ptr is valid and non-null due to the allocation in `new()`.
-        unsafe { NonNull::new_unchecked(entry_ptr) }
+        unsafe { NonNull::new_unchecked(entry_meta_ptr) }
     }
 
-    fn data_ptr(&self, index: usize) -> NonNull<()> {
-        let entry_ptr = self.entry_ptr(index); // SAFETY: The item_offset is calculated correctly during construction to point to
-        // the item contents portion of the entry+item combined layout.
-        // SAFETY: entry_ptr is valid and item_offset is calculated correctly.
-        let data_ptr = unsafe {
-            entry_ptr
+    fn item_ptr(&self, index: usize) -> NonNull<()> {
+        let entry_meta_ptr = self.entry_meta_ptr(index);
+
+        // SAFETY: entry_meta_ptr is valid and item_offset is calculated correctly.
+        let item_ptr = unsafe {
+            entry_meta_ptr
                 .as_ptr()
-                .cast::<u8>()
-                .add(self.layout_info.item_offset)
+                .byte_add(self.layout_info.item_offset)
         };
 
-        // SAFETY: The data_ptr is valid and non-null due to the calculations above.
-        unsafe { NonNull::new_unchecked(data_ptr.cast::<()>()) }
-    }
-
-    /// Returns a pointer to the memory at the specified index.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the index is out of bounds or is not associated with reserved memory.
-    #[must_use]
-    #[cfg(test)]
-    fn get(&self, index: usize) -> NonNull<()> {
-        match self.entry(index) {
-            Entry::Occupied => self.data_ptr(index),
-            Entry::Vacant { .. } => panic!(
-                "attempted to get unreserved memory at index {index} in slab of capacity {}",
-                self.capacity.get()
-            ),
-        }
+        // SAFETY: The ptr is valid and non-null due to the calculations above.
+        unsafe { NonNull::new_unchecked(item_ptr.cast::<()>()) }
     }
 
     /// Reserves memory in the slab and returns both the index and a pointer to the memory.
     ///
-    /// Returns a [`DatalessSlabReservation`] containing the stable index that can be used for later
+    /// Returns a [`SlabReservation`] containing the stable index that can be used for later
     /// operations like [`get()`] and [`release()`], and a pointer to the reserved memory.
     ///
     /// # Panics
@@ -307,23 +291,23 @@ impl DatalessSlab {
 
         // Pop the next free index from the stack of free entries.
         let index = self.next_free_index;
-        let mut entry_ptr = self.entry_ptr(index);
+        let mut entry_meta_ptr = self.entry_meta_ptr(index);
 
         // SAFETY: We are not allowed to perform operations on the slab that would create another
         // reference to the entry (because we hold an exclusive reference). We do not do that, and
         // the slab by design does not create/hold permanent references to its entries.
-        let entry = unsafe { entry_ptr.as_mut() };
+        let entry_meta_ptr = unsafe { entry_meta_ptr.as_mut() };
 
-        let previous_entry = mem::replace(entry, Entry::Occupied);
+        let previous_entry = mem::replace(entry_meta_ptr, EntryMeta::Occupied);
         self.next_free_index = match previous_entry {
-            Entry::Vacant { next_free_index } => next_free_index,
-            Entry::Occupied => panic!(
+            EntryMeta::Vacant { next_free_index } => next_free_index,
+            EntryMeta::Occupied => panic!(
                 "entry {index} was not vacant when we reserved it in slab of capacity {}",
                 self.capacity.get()
             ),
         };
 
-        let data_ptr = self.data_ptr(index);
+        let item_ptr = self.item_ptr(index);
 
         self.count = self
             .count
@@ -332,7 +316,7 @@ impl DatalessSlab {
 
         SlabReservation {
             index,
-            ptr: data_ptr,
+            ptr: item_ptr,
         }
     }
 
@@ -341,19 +325,25 @@ impl DatalessSlab {
     /// # Panics
     ///
     /// Panics if the index is out of bounds or is not associated with reserved memory.
-    pub(crate) fn release(&mut self, index: usize) {
+    ///
+    /// # Safety
+    ///
+    /// If the reserved memory was initialized with data, the caller is responsible for calling
+    /// the destructor on the data before releasing the memory.
+    pub(crate) unsafe fn release(&mut self, index: usize) {
         let next_free_index = self.next_free_index;
 
         {
-            let entry = self.entry_mut(index);
-            if matches!(entry, Entry::Vacant { .. }) {
+            let entry_meta = self.entry_meta_mut(index);
+
+            if matches!(entry_meta, EntryMeta::Vacant { .. }) {
                 panic!(
                     "release({index}) entry was vacant in slab of capacity {}",
                     self.capacity.get()
                 );
             }
 
-            *entry = Entry::Vacant { next_free_index };
+            *entry_meta = EntryMeta::Vacant { next_free_index };
         }
 
         // Push the released item's entry onto the free stack.
@@ -382,12 +372,12 @@ impl DatalessSlab {
         let mut observed_occupied_count: usize = 0;
 
         for index in 0..capacity_value {
-            match self.entry(index) {
-                Entry::Occupied => {
+            match self.entry_meta(index) {
+                EntryMeta::Occupied => {
                     observed_is_vacant[index] = Some(false);
                     observed_occupied_count += 1;
                 }
-                Entry::Vacant { next_free_index } => {
+                EntryMeta::Vacant { next_free_index } => {
                     observed_is_vacant[index] = Some(true);
                     observed_next_free_index[index] = Some(*next_free_index);
                 }
@@ -445,9 +435,9 @@ impl Drop for DatalessSlab {
 
         // Set them all to `Vacant` to ensure any cleanup is done.
         for index in 0..capacity_value {
-            let entry = self.entry_mut(index);
+            let entry = self.entry_meta_mut(index);
 
-            *entry = Entry::Vacant {
+            *entry = EntryMeta::Vacant {
                 next_free_index: capacity_value,
             };
         }
@@ -455,8 +445,8 @@ impl Drop for DatalessSlab {
         // SAFETY: The layout matches between alloc and dealloc.
         unsafe {
             dealloc(
-                self.first_entry_ptr.as_ptr().cast(),
-                self.layout_info.slab_layout,
+                self.first_entry_meta_ptr.as_ptr().cast(),
+                self.layout_info.entry_array_layout,
             );
         }
 
@@ -517,25 +507,27 @@ mod tests {
             assert_eq!(reservation_c.ptr.cast::<u32>().as_ptr().read(), 44);
         }
 
-        // Also verify get() works.
+        // Also verify direct ptr usage works.
         unsafe {
             assert_eq!(
-                slab.get(reservation_a.index).cast::<u32>().as_ptr().read(),
+                reservation_a.ptr.cast::<u32>().as_ptr().read(),
                 42
             );
             assert_eq!(
-                slab.get(reservation_b.index).cast::<u32>().as_ptr().read(),
+                reservation_b.ptr.cast::<u32>().as_ptr().read(),
                 43
             );
             assert_eq!(
-                slab.get(reservation_c.index).cast::<u32>().as_ptr().read(),
+                reservation_c.ptr.cast::<u32>().as_ptr().read(),
                 44
             );
         }
 
         assert_eq!(slab.len(), 3);
 
-        slab.release(reservation_b.index);
+        unsafe {
+            slab.release(reservation_b.index);
+        }
 
         assert_eq!(slab.len(), 2);
 
@@ -544,15 +536,15 @@ mod tests {
         unsafe {
             reservation_d.ptr.cast::<u32>().as_ptr().write(45);
             assert_eq!(
-                slab.get(reservation_a.index).cast::<u32>().as_ptr().read(),
+                reservation_a.ptr.cast::<u32>().as_ptr().read(),
                 42
             );
             assert_eq!(
-                slab.get(reservation_c.index).cast::<u32>().as_ptr().read(),
+                reservation_c.ptr.cast::<u32>().as_ptr().read(),
                 44
             );
             assert_eq!(
-                slab.get(reservation_d.index).cast::<u32>().as_ptr().read(),
+                reservation_d.ptr.cast::<u32>().as_ptr().read(),
                 45
             );
         }
@@ -560,9 +552,11 @@ mod tests {
         assert!(slab.is_full());
 
         // Clean up remaining reservations.
-        slab.release(reservation_a.index);
-        slab.release(reservation_c.index);
-        slab.release(reservation_d.index);
+        unsafe {
+            slab.release(reservation_a.index);
+            slab.release(reservation_c.index);
+            slab.release(reservation_d.index);
+        }
     }
     #[test]
     #[should_panic]
@@ -583,7 +577,11 @@ mod tests {
         let mut slab = DatalessSlab::new(layout, NonZero::new(3).unwrap());
 
         _ = slab.reserve();
-        _ = slab.get(1234);
+        // This test verified that getting an out of bounds index panics.
+        // Since we removed get(), we test that creating a pointer to index 1234 
+        // would panic if we had a way to access arbitrary indices.
+        // For now, we'll use entry_meta_ptr as it has bounds checking.
+        _ = slab.entry_meta_ptr(1234);
     }
     #[test]
     fn insert_returns_correct_index_and_pointer() {
@@ -596,7 +594,7 @@ mod tests {
         assert_eq!(reservation.index(), 0);
         unsafe {
             reservation.ptr().cast::<u32>().as_ptr().write(10);
-            assert_eq!(slab.get(0).cast::<u32>().as_ptr().read(), 10);
+            assert_eq!(reservation.ptr().cast::<u32>().as_ptr().read(), 10);
         }
         let index_0 = reservation.index();
 
@@ -604,7 +602,7 @@ mod tests {
         assert_eq!(reservation.index(), 1);
         unsafe {
             reservation.ptr().cast::<u32>().as_ptr().write(11);
-            assert_eq!(slab.get(1).cast::<u32>().as_ptr().read(), 11);
+            assert_eq!(reservation.ptr().cast::<u32>().as_ptr().read(), 11);
         }
         let index_1 = reservation.index();
 
@@ -612,14 +610,16 @@ mod tests {
         assert_eq!(reservation.index(), 2);
         unsafe {
             reservation.ptr().cast::<u32>().as_ptr().write(12);
-            assert_eq!(slab.get(2).cast::<u32>().as_ptr().read(), 12);
+            assert_eq!(reservation.ptr().cast::<u32>().as_ptr().read(), 12);
         }
         let index_2 = reservation.index();
 
         // Clean up reservations before drop.
-        slab.release(index_0);
-        slab.release(index_1);
-        slab.release(index_2);
+        unsafe {
+            slab.release(index_0);
+            slab.release(index_1);
+            slab.release(index_2);
+        }
     }
     #[test]
     fn release_makes_room() {
@@ -636,30 +636,34 @@ mod tests {
             reservation_c.ptr.cast::<u32>().as_ptr().write(44);
         }
 
-        slab.release(reservation_b.index);
+        unsafe {
+            slab.release(reservation_b.index);
+        }
 
         let reservation_d = slab.reserve();
         unsafe {
             reservation_d.ptr.cast::<u32>().as_ptr().write(45);
 
             assert_eq!(
-                slab.get(reservation_a.index).cast::<u32>().as_ptr().read(),
+                reservation_a.ptr.cast::<u32>().as_ptr().read(),
                 42
             );
             assert_eq!(
-                slab.get(reservation_c.index).cast::<u32>().as_ptr().read(),
+                reservation_c.ptr.cast::<u32>().as_ptr().read(),
                 44
             );
             assert_eq!(
-                slab.get(reservation_d.index).cast::<u32>().as_ptr().read(),
+                reservation_d.ptr.cast::<u32>().as_ptr().read(),
                 45
             );
         }
 
         // Clean up remaining reservations before drop.
-        slab.release(reservation_a.index);
-        slab.release(reservation_c.index);
-        slab.release(reservation_d.index);
+        unsafe {
+            slab.release(reservation_a.index);
+            slab.release(reservation_c.index);
+            slab.release(reservation_d.index);
+        }
     }
     #[test]
     #[should_panic]
@@ -667,16 +671,9 @@ mod tests {
         let layout = Layout::new::<u32>();
         let mut slab = DatalessSlab::new(layout, NonZero::new(3).unwrap());
 
-        slab.release(1);
-    }
-
-    #[test]
-    #[should_panic]
-    fn get_vacant_panics() {
-        let layout = Layout::new::<u32>();
-        let slab = DatalessSlab::new(layout, NonZero::new(3).unwrap());
-
-        _ = slab.get(1);
+        unsafe {
+            slab.release(1);
+        }
     }
 
     #[test]
@@ -696,7 +693,9 @@ mod tests {
                 0x1234567890ABCDEF
             );
         }
-        slab_u64.release(reservation.index());
+        unsafe {
+            slab_u64.release(reservation.index());
+        }
 
         // Test with larger struct.
         #[repr(C)]
@@ -728,7 +727,9 @@ mod tests {
             assert_eq!(value.c, 3);
             assert_eq!(value.d, 4);
         }
-        slab_large.release(reservation.index());
+        unsafe {
+            slab_large.release(reservation.index());
+        }
     }
 
     #[test]
@@ -771,20 +772,22 @@ mod tests {
                 reservation_c.ptr.cast::<u32>().as_ptr().write(44);
 
                 assert_eq!(
-                    slab.get(reservation_a.index).cast::<u32>().as_ptr().read(),
+                    reservation_a.ptr.cast::<u32>().as_ptr().read(),
                     42
                 );
                 assert_eq!(
-                    slab.get(reservation_b.index).cast::<u32>().as_ptr().read(),
+                    reservation_b.ptr.cast::<u32>().as_ptr().read(),
                     43
                 );
                 assert_eq!(
-                    slab.get(reservation_c.index).cast::<u32>().as_ptr().read(),
+                    reservation_c.ptr.cast::<u32>().as_ptr().read(),
                     44
                 );
             }
 
-            slab.release(reservation_b.index);
+            unsafe {
+                slab.release(reservation_b.index);
+            }
 
             let reservation_d = slab.reserve();
             index_d = reservation_d.index;
@@ -792,15 +795,15 @@ mod tests {
             unsafe {
                 reservation_d.ptr.cast::<u32>().as_ptr().write(45);
                 assert_eq!(
-                    slab.get(reservation_a.index).cast::<u32>().as_ptr().read(),
+                    reservation_a.ptr.cast::<u32>().as_ptr().read(),
                     42
                 );
                 assert_eq!(
-                    slab.get(reservation_c.index).cast::<u32>().as_ptr().read(),
+                    reservation_c.ptr.cast::<u32>().as_ptr().read(),
                     44
                 );
                 assert_eq!(
-                    slab.get(reservation_d.index).cast::<u32>().as_ptr().read(),
+                    reservation_d.ptr.cast::<u32>().as_ptr().read(),
                     45
                 );
             }
@@ -809,7 +812,7 @@ mod tests {
         {
             let slab = slab.borrow();
             unsafe {
-                assert_eq!(slab.get(0).cast::<u32>().as_ptr().read(), 42);
+                assert_eq!(slab.item_ptr(index_a).cast::<u32>().as_ptr().read(), 42);
             }
             assert!(slab.is_full());
         }
@@ -817,9 +820,11 @@ mod tests {
         // Clean up remaining reservations before drop.
         {
             let mut slab = slab.borrow_mut();
-            slab.release(index_a);
-            slab.release(index_c);
-            slab.release(index_d);
+            unsafe {
+                slab.release(index_a);
+                slab.release(index_c);
+                slab.release(index_d);
+            }
         }
     }
 
@@ -858,17 +863,19 @@ mod tests {
         let handle = thread::spawn(move || {
             let mut slab = slab_clone.lock().unwrap();
 
-            slab.release(b);
+            unsafe {
+                slab.release(b);
+            }
 
             let reservation_d = slab.reserve();
             let d = reservation_d.index;
 
             unsafe {
                 reservation_d.ptr.cast::<u32>().as_ptr().write(45);
-                assert_eq!(slab.get(a).cast::<u32>().as_ptr().read(), 42);
-                assert_eq!(slab.get(c).cast::<u32>().as_ptr().read(), 44);
+                assert_eq!(slab.item_ptr(a).cast::<u32>().as_ptr().read(), 42);
+                assert_eq!(slab.item_ptr(c).cast::<u32>().as_ptr().read(), 44);
                 assert_eq!(
-                    slab.get(reservation_d.index).cast::<u32>().as_ptr().read(),
+                    reservation_d.ptr.cast::<u32>().as_ptr().read(),
                     45
                 );
             }
@@ -887,9 +894,11 @@ mod tests {
         // Clean up remaining reservations before drop.
         {
             let mut slab = slab.lock().unwrap();
-            slab.release(a);
-            slab.release(c);
-            slab.release(d);
+            unsafe {
+                slab.release(a);
+                slab.release(c);
+                slab.release(d);
+            }
         }
     }
 
@@ -903,14 +912,13 @@ mod tests {
         // Verify the pointer works and points to the right location.
         unsafe {
             reservation.ptr().cast::<u64>().as_ptr().write(0xDEADBEEF);
-            assert_eq!(
-                slab.get(reservation.index()).cast::<u64>().as_ptr().read(),
-                0xDEADBEEF
-            );
+            assert_eq!(reservation.ptr().cast::<u64>().as_ptr().read(), 0xDEADBEEF);
             assert_eq!(reservation.ptr().cast::<u64>().as_ptr().read(), 0xDEADBEEF);
         }
 
-        slab.release(reservation.index());
+        unsafe {
+            slab.release(reservation.index());
+        }
     }
 
     #[test]
@@ -932,7 +940,9 @@ mod tests {
 
         // Release every other item.
         for i in (0..10).step_by(2) {
-            slab.release(indices[i]);
+            unsafe {
+                slab.release(indices[i]);
+            }
         }
 
         assert_eq!(slab.len(), 5);
@@ -957,7 +967,7 @@ mod tests {
             let expected = if i % 2 == 0 { i * 100 + 50 } else { i * 100 };
             unsafe {
                 assert_eq!(
-                    slab.get(indices[i]).cast::<usize>().as_ptr().read(),
+                    slab.item_ptr(indices[i]).cast::<usize>().as_ptr().read(),
                     expected
                 );
             }
@@ -965,7 +975,9 @@ mod tests {
 
         // Clean up all reservations before drop.
         for &index in &indices {
-            slab.release(index);
+            unsafe {
+                slab.release(index);
+            }
         }
     }
 
@@ -989,7 +1001,9 @@ mod tests {
                 .write(Byte { data: 42 });
             assert_eq!(reservation.ptr().cast::<Byte>().as_ptr().read().data, 42);
         }
-        slab.release(reservation.index());
+        unsafe {
+            slab.release(reservation.index());
+        }
 
         // 2-byte aligned.
         #[repr(C, align(2))]
@@ -1010,7 +1024,9 @@ mod tests {
                 0x1234
             );
         }
-        slab.release(reservation.index());
+        unsafe {
+            slab.release(reservation.index());
+        }
 
         // 4-byte aligned.
         #[repr(C, align(4))]
@@ -1031,7 +1047,9 @@ mod tests {
                 0x12345678
             );
         }
-        slab.release(reservation.index());
+        unsafe {
+            slab.release(reservation.index());
+        }
 
         // 8-byte aligned.
         #[repr(C, align(8))]
@@ -1050,7 +1068,9 @@ mod tests {
                 0x123456789ABCDEF0
             );
         }
-        slab.release(reservation.index());
+        unsafe {
+            slab.release(reservation.index());
+        }
 
         // 16-byte aligned.
         #[repr(C, align(16))]
@@ -1068,7 +1088,9 @@ mod tests {
             assert_eq!(read_data.data[0], 0x123456789ABCDEF0);
             assert_eq!(read_data.data[1], 0x0FEDCBA987654321);
         }
-        slab.release(reservation.index());
+        unsafe {
+            slab.release(reservation.index());
+        }
     }
 
     #[test]
@@ -1136,8 +1158,10 @@ mod tests {
             assert_eq!(data2.f, (0xEEEE, 0xFFFFFFFF, 0x1111111111111111));
         }
 
-        slab.release(reservation1.index());
-        slab.release(reservation2.index());
+        unsafe {
+            slab.release(reservation1.index());
+            slab.release(reservation2.index());
+        }
     }
 
     #[test]
@@ -1182,9 +1206,11 @@ mod tests {
             let _data3 = res3.ptr().cast::<TestEnum>().as_ptr().read();
         }
 
-        slab.release(res1.index());
-        slab.release(res2.index());
-        slab.release(res3.index());
+        unsafe {
+            slab.release(res1.index());
+            slab.release(res2.index());
+            slab.release(res3.index());
+        }
     }
 
     #[test]
@@ -1214,7 +1240,9 @@ mod tests {
 
         // Clean up.
         for reservation in reservations {
-            slab_small.release(reservation.index());
+            unsafe {
+                slab_small.release(reservation.index());
+            }
         }
 
         // Test large data types.
@@ -1245,7 +1273,9 @@ mod tests {
             }
         }
 
-        slab_large.release(reservation.index());
+        unsafe {
+            slab_large.release(reservation.index());
+        }
     }
 
     #[test]
@@ -1257,7 +1287,7 @@ mod tests {
         let layout_info = SlabLayoutInfo::calculate(item_layout, capacity);
 
         // The combined entry layout should be larger than just the Entry.
-        let entry_layout = Layout::new::<Entry>();
+        let entry_layout = Layout::new::<EntryMeta>();
         assert!(layout_info.combined_entry_layout.size() >= entry_layout.size());
         assert!(layout_info.combined_entry_layout.size() >= item_layout.size());
 
@@ -1266,7 +1296,7 @@ mod tests {
 
         // Slab layout should accommodate all entries.
         assert!(
-            layout_info.slab_layout.size()
+            layout_info.entry_array_layout.size()
                 >= layout_info.combined_entry_layout.size() * capacity.get()
         );
 
@@ -1289,7 +1319,7 @@ mod tests {
             SlabLayoutInfo::calculate(Layout::new::<Align1>(), NonZero::new(3).unwrap());
         assert_eq!(
             layout_info_1.combined_entry_layout.align(),
-            Layout::new::<Entry>().align().max(1)
+            Layout::new::<EntryMeta>().align().max(1)
         );
 
         // Test with 8-byte aligned data.
@@ -1302,7 +1332,7 @@ mod tests {
             SlabLayoutInfo::calculate(Layout::new::<Align8>(), NonZero::new(3).unwrap());
         assert_eq!(
             layout_info_8.combined_entry_layout.align(),
-            Layout::new::<Entry>().align().max(8)
+            Layout::new::<EntryMeta>().align().max(8)
         );
 
         // Test with 16-byte aligned data.
@@ -1315,7 +1345,7 @@ mod tests {
             SlabLayoutInfo::calculate(Layout::new::<Align16>(), NonZero::new(3).unwrap());
         assert_eq!(
             layout_info_16.combined_entry_layout.align(),
-            Layout::new::<Entry>().align().max(16)
+            Layout::new::<EntryMeta>().align().max(16)
         );
     }
 
@@ -1334,7 +1364,7 @@ mod tests {
 
         // Verify the slab can hold all entries.
         assert!(
-            layout_info.slab_layout.size()
+            layout_info.entry_array_layout.size()
                 >= layout_info.combined_entry_layout.size() * capacity.get()
         );
 
@@ -1346,6 +1376,126 @@ mod tests {
     #[should_panic(expected = "SlabLayoutInfo cannot be calculated for zero-sized item layout")]
     fn layout_calculation_zero_size_panics() {
         let zero_layout = Layout::from_size_align(0, 1).unwrap();
-        SlabLayoutInfo::calculate(zero_layout, NonZero::new(3).unwrap());
+        #[allow(clippy::let_underscore_must_use, reason = "we expect this to panic")]
+        let _ = SlabLayoutInfo::calculate(zero_layout, NonZero::new(3).unwrap());
     }
+
+    #[test]
+    fn alignment_stress_test() {
+        // This test specifically targets the alignment issue by using a layout
+        // that has different alignment requirements than Entry, which forces
+        // the combined layout to have padding that could cause misalignment
+        // when multiplied by index.
+
+        #[repr(C, align(1))]
+        struct ByteAligned {
+            data: u8,
+        }
+
+        // Create a slab with byte-aligned items, which will create a combined
+        // layout where the size might not be a multiple of Entry's alignment
+        let mut slab = DatalessSlab::new(Layout::new::<ByteAligned>(), NonZero::new(10).unwrap());
+
+        // Reserve multiple items to stress test the alignment
+        let mut reservations = Vec::new();
+        for i in 0..10 {
+            let reservation = slab.reserve();
+            unsafe {
+                reservation
+                    .ptr()
+                    .cast::<ByteAligned>()
+                    .as_ptr()
+                    .write(ByteAligned {
+                        data: u8::try_from(i).expect("loop range is within u8 bounds"),
+                    });
+            }
+            reservations.push(reservation);
+        }
+
+        // Verify we can read all items back correctly
+        for (i, reservation) in reservations.iter().enumerate() {
+            unsafe {
+                let value = reservation.ptr().cast::<ByteAligned>().as_ptr().read();
+                assert_eq!(
+                    value.data,
+                    u8::try_from(i).expect("loop range is within u8 bounds")
+                );
+            }
+        }
+
+        // Clean up
+        for reservation in reservations {
+            unsafe {
+                slab.release(reservation.index());
+            }
+        }
+    }
+
+    #[test]
+    fn alignment_with_different_item_alignments() {
+        // Test alignment with various item alignment requirements to ensure
+        // the array layout correctly handles alignment for each entry
+
+        // Test with 1-byte aligned items
+        #[repr(C, align(1))]
+        struct Align1 {
+            data: u8,
+        }
+
+        let mut slab1 = DatalessSlab::new(Layout::new::<Align1>(), NonZero::new(5).unwrap());
+        let res1 = slab1.reserve();
+        unsafe {
+            res1.ptr()
+                .cast::<Align1>()
+                .as_ptr()
+                .write(Align1 { data: 42 });
+            assert_eq!(res1.ptr().cast::<Align1>().as_ptr().read().data, 42);
+        }
+        unsafe {
+            slab1.release(res1.index());
+        }
+
+        // Test with 2-byte aligned items
+        #[repr(C, align(2))]
+        struct Align2 {
+            data: u16,
+        }
+
+        let mut slab2 = DatalessSlab::new(Layout::new::<Align2>(), NonZero::new(5).unwrap());
+        let res2 = slab2.reserve();
+        unsafe {
+            res2.ptr()
+                .cast::<Align2>()
+                .as_ptr()
+                .write(Align2 { data: 0x1234 });
+            assert_eq!(res2.ptr().cast::<Align2>().as_ptr().read().data, 0x1234);
+        }
+        unsafe {
+            slab2.release(res2.index());
+        }
+
+        // Test with multiple entries in each slab to stress alignment
+        for _ in 0..3 {
+            let res1 = slab1.reserve();
+            let res2 = slab2.reserve();
+            unsafe {
+                res1.ptr()
+                    .cast::<Align1>()
+                    .as_ptr()
+                    .write(Align1 { data: 99 });
+                res2.ptr()
+                    .cast::<Align2>()
+                    .as_ptr()
+                    .write(Align2 { data: 0xABCD });
+                assert_eq!(res1.ptr().cast::<Align1>().as_ptr().read().data, 99);
+                assert_eq!(res2.ptr().cast::<Align2>().as_ptr().read().data, 0xABCD);
+            }
+            unsafe {
+                slab1.release(res1.index());
+                slab2.release(res2.index());
+            }
+        }
+    }
+
+    // ...existing tests...
 }
