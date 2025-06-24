@@ -1,10 +1,11 @@
 use std::alloc::Layout;
 use std::num::NonZero;
 use std::ptr::NonNull;
+use std::thread;
 
-use crate::MemorySlab;
+use crate::DatalessSlab;
 
-/// The result of reserving memory in a [`MemoryPool`].
+/// The result of reserving memory in a [`DatalessPool`].
 ///
 /// Contains both the coordinates for accessing the memory and a pointer to the reserved memory.
 /// Acts as both the reservation and the key - the user must return this to the pool to release
@@ -14,10 +15,10 @@ use crate::MemorySlab;
 /// ```rust
 /// use std::alloc::Layout;
 ///
-/// use memory_slab::MemoryPool;
+/// use dataless_pool::DatalessPool;
 ///
 /// let layout = Layout::new::<i64>();
-/// let mut pool = MemoryPool::new(layout);
+/// let mut pool = DatalessPool::new(layout);
 ///
 /// let reservation = pool.reserve();
 ///
@@ -54,10 +55,10 @@ impl PoolReservation {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use memory_slab::MemoryPool;
+    /// use dataless_pool::DatalessPool;
     ///
     /// let layout = Layout::new::<f64>();
-    /// let mut pool = MemoryPool::new(layout);
+    /// let mut pool = DatalessPool::new(layout);
     /// let reservation = pool.reserve();
     ///
     /// // Write data to the reserved memory
@@ -82,10 +83,8 @@ impl PoolReservation {
     }
 }
 
-/// An object pool of unbounded size that provides type-erased memory allocation.
-///
-/// A dynamically growing memory pool that manages multiple fixed-capacity slabs internally
-/// and automatically allocates new slabs when needed.
+/// A memory pool of unbounded size that reserves pinned memory without placing any data in it,
+/// leaving that up to the owner.
 ///
 /// The pool returns a [`PoolReservation`] for each reserved memory block, which acts as both
 /// the key and provides direct access to the memory pointer.
@@ -104,10 +103,10 @@ impl PoolReservation {
 /// ```rust
 /// use std::alloc::Layout;
 ///
-/// use memory_slab::MemoryPool;
+/// use dataless_pool::DatalessPool;
 ///
 /// let layout = Layout::new::<u32>();
-/// let mut pool = MemoryPool::new(layout);
+/// let mut pool = DatalessPool::new(layout);
 ///
 /// // Reserve memory and get a reservation
 /// let reservation = pool.reserve();
@@ -129,7 +128,7 @@ impl PoolReservation {
 /// pool.release(reservation);
 /// ```
 #[derive(Debug)]
-pub struct MemoryPool {
+pub struct DatalessPool {
     /// The layout of memory blocks managed by this pool.
     item_layout: Layout,
 
@@ -141,7 +140,7 @@ pub struct MemoryPool {
     ///
     /// For now, we only grow this Vec but in theory, one could implement shrinking as well
     /// by removing empty slabs.
-    slabs: Vec<MemorySlab>,
+    slabs: Vec<DatalessSlab>,
 
     /// Lowest index of any slab that has a vacant slot, if known. We use this to avoid scanning
     /// the entire collection for vacant slots when reserving memory. This being `None` does not
@@ -164,8 +163,8 @@ const DEFAULT_SLAB_CAPACITY: usize = 128;
 #[cfg(miri)]
 const DEFAULT_SLAB_CAPACITY: usize = 16;
 
-impl MemoryPool {
-    /// Creates a new [`MemoryPool`] with the specified item memory layout.
+impl DatalessPool {
+    /// Creates a new [`DatalessPool`] with the specified item memory layout.
     ///
     /// The pool starts empty and will automatically grow as needed when memory is reserved.
     ///
@@ -174,11 +173,11 @@ impl MemoryPool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use memory_slab::MemoryPool;
+    /// use dataless_pool::DatalessPool;
     ///
     /// // Create a pool for storing u64 values
     /// let layout = Layout::new::<u64>();
-    /// let pool = MemoryPool::new(layout);
+    /// let pool = DatalessPool::new(layout);
     ///
     /// assert_eq!(pool.len(), 0);
     /// assert!(pool.is_empty());
@@ -193,7 +192,7 @@ impl MemoryPool {
         Self::with_slab_capacity(item_layout, NonZero::new(DEFAULT_SLAB_CAPACITY).unwrap())
     }
 
-    /// Creates a new [`MemoryPool`] with the specified memory layout and slab capacity.
+    /// Creates a new [`DatalessPool`] with the specified memory layout and slab capacity.
     ///
     /// The slab capacity determines how many items each internal slab can hold. This can be
     /// useful for performance tuning in specific scenarios, though the default capacity
@@ -205,12 +204,12 @@ impl MemoryPool {
     /// use std::alloc::Layout;
     /// use std::num::NonZero;
     ///
-    /// use memory_slab::MemoryPool;
+    /// use dataless_pool::DatalessPool;
     ///
     /// // Create a pool with custom slab capacity
     /// let layout = Layout::new::<u32>();
     /// let slab_capacity = NonZero::new(64).unwrap();
-    /// let pool = MemoryPool::with_slab_capacity(layout, slab_capacity);
+    /// let pool = DatalessPool::with_slab_capacity(layout, slab_capacity);
     ///
     /// assert_eq!(pool.len(), 0);
     /// assert!(pool.is_empty());
@@ -223,7 +222,7 @@ impl MemoryPool {
     pub fn with_slab_capacity(item_layout: Layout, slab_capacity: NonZero<usize>) -> Self {
         assert!(
             item_layout.size() > 0,
-            "MemoryPool must have non-zero memory block size"
+            "DatalessPool must have non-zero memory block size"
         );
 
         Self {
@@ -241,10 +240,10 @@ impl MemoryPool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use memory_slab::MemoryPool;
+    /// use dataless_pool::DatalessPool;
     ///
     /// let layout = Layout::new::<u128>();
-    /// let pool = MemoryPool::new(layout);
+    /// let pool = DatalessPool::new(layout);
     ///
     /// assert_eq!(pool.item_layout(), layout);
     /// assert_eq!(pool.item_layout().size(), std::mem::size_of::<u128>());
@@ -261,10 +260,10 @@ impl MemoryPool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use memory_slab::MemoryPool;
+    /// use dataless_pool::DatalessPool;
     ///
     /// let layout = Layout::new::<i32>();
-    /// let mut pool = MemoryPool::new(layout);
+    /// let mut pool = DatalessPool::new(layout);
     ///
     /// assert_eq!(pool.len(), 0);
     ///
@@ -280,7 +279,7 @@ impl MemoryPool {
     /// ```
     #[must_use]
     pub fn len(&self) -> usize {
-        self.slabs.iter().map(MemorySlab::len).sum()
+        self.slabs.iter().map(DatalessSlab::len).sum()
     }
 
     /// The number of memory blocks the pool can accommodate without additional resource allocation.
@@ -293,10 +292,10 @@ impl MemoryPool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use memory_slab::MemoryPool;
+    /// use dataless_pool::DatalessPool;
     ///
     /// let layout = Layout::new::<u8>();
-    /// let mut pool = MemoryPool::new(layout);
+    /// let mut pool = DatalessPool::new(layout);
     ///
     /// // New pool starts with zero capacity
     /// assert_eq!(pool.capacity(), 0);
@@ -326,10 +325,10 @@ impl MemoryPool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use memory_slab::MemoryPool;
+    /// use dataless_pool::DatalessPool;
     ///
     /// let layout = Layout::new::<u16>();
-    /// let mut pool = MemoryPool::new(layout);
+    /// let mut pool = DatalessPool::new(layout);
     ///
     /// assert!(pool.is_empty());
     ///
@@ -341,7 +340,7 @@ impl MemoryPool {
     /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.slabs.iter().all(MemorySlab::is_empty)
+        self.slabs.iter().all(DatalessSlab::is_empty)
     }
 
     /// Reserves memory in the pool and returns a reservation that acts as both the key and pointer.
@@ -354,10 +353,10 @@ impl MemoryPool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use memory_slab::MemoryPool;
+    /// use dataless_pool::DatalessPool;
     ///
     /// let layout = Layout::new::<u64>();
-    /// let mut pool = MemoryPool::new(layout);
+    /// let mut pool = DatalessPool::new(layout);
     ///
     /// // Reserve memory
     /// let reservation = pool.reserve();
@@ -425,10 +424,10 @@ impl MemoryPool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use memory_slab::MemoryPool;
+    /// use dataless_pool::DatalessPool;
     ///
     /// let layout = Layout::new::<i32>();
-    /// let mut pool = MemoryPool::new(layout);
+    /// let mut pool = DatalessPool::new(layout);
     ///
     /// let reservation = pool.reserve();
     /// assert_eq!(pool.len(), 1);
@@ -481,7 +480,7 @@ impl MemoryPool {
         } else {
             // All slabs are full, so we need to expand capacity.
             self.slabs
-                .push(MemorySlab::new(self.item_layout, self.slab_capacity));
+                .push(DatalessSlab::new(self.item_layout, self.slab_capacity));
 
             self.slabs
                 .len()
@@ -520,6 +519,22 @@ impl MemoryBlockCoordinates {
     }
 }
 
+impl Drop for DatalessPool {
+    fn drop(&mut self) {
+        let was_empty = self.is_empty();
+
+        // If we are already panicking, we do not want to panic again because that will
+        // simply obscure whatever the original panic was, leading to debug difficulties.
+        if !thread::panicking() {
+            assert!(
+                was_empty,
+                "dropped a non-empty DatalessPool with {} active reservations - this suggests reserved memory may still be in use",
+                self.len()
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::undocumented_unsafe_blocks,
@@ -536,7 +551,7 @@ mod tests {
     #[test]
     fn smoke_test() {
         let layout = Layout::new::<u32>();
-        let mut pool = MemoryPool::new(layout);
+        let mut pool = DatalessPool::new(layout);
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
@@ -573,13 +588,18 @@ mod tests {
             assert_eq!(reservation_c.ptr().cast::<u32>().as_ptr().read(), 44);
             assert_eq!(reservation_d.ptr().cast::<u32>().as_ptr().read(), 45);
         }
+
+        // Clean up remaining reservations
+        pool.release(reservation_a);
+        pool.release(reservation_c);
+        pool.release(reservation_d);
     }
 
     #[test]
     #[should_panic]
     fn release_nonexistent_panics() {
         let layout = Layout::new::<u32>();
-        let mut pool = MemoryPool::new(layout);
+        let mut pool = DatalessPool::new(layout);
 
         // Create a fake reservation with invalid coordinates
         let fake_reservation = PoolReservation {
@@ -594,7 +614,7 @@ mod tests {
     #[test]
     fn reservater_works() {
         let layout = Layout::new::<u64>();
-        let mut pool = MemoryPool::new(layout);
+        let mut pool = DatalessPool::new(layout);
 
         let reservation = pool.reserve();
 
@@ -609,6 +629,8 @@ mod tests {
                 0x1234567890ABCDEF
             );
         }
+
+        pool.release(reservation);
     }
     #[test]
     #[allow(
@@ -617,7 +639,7 @@ mod tests {
     )]
     fn multi_slab_growth() {
         let layout = Layout::new::<u32>();
-        let mut pool = MemoryPool::new(layout);
+        let mut pool = DatalessPool::new(layout);
 
         // Reserve more items than a single slab can hold to test growth
         let mut reservations = Vec::new();
@@ -638,12 +660,17 @@ mod tests {
                 assert_eq!(reservation.ptr().cast::<u32>().as_ptr().read(), i as u32);
             }
         }
+
+        // Clean up all reservations
+        for reservation in reservations {
+            pool.release(reservation);
+        }
     }
     #[test]
     fn different_layouts() {
         // Test with different sized types
         let layout_u64 = Layout::new::<u64>();
-        let mut pool_u64 = MemoryPool::new(layout_u64);
+        let mut pool_u64 = DatalessPool::new(layout_u64);
         let reservation = pool_u64.reserve();
         unsafe {
             reservation
@@ -656,6 +683,7 @@ mod tests {
                 0x1234567890ABCDEF
             );
         }
+        pool_u64.release(reservation);
 
         // Test with larger struct
         #[repr(C)]
@@ -667,7 +695,7 @@ mod tests {
         }
 
         let layout_large = Layout::new::<LargeStruct>();
-        let mut pool_large = MemoryPool::new(layout_large);
+        let mut pool_large = DatalessPool::new(layout_large);
 
         let reservation = pool_large.reserve();
         unsafe {
@@ -687,18 +715,19 @@ mod tests {
             assert_eq!(value.c, 3);
             assert_eq!(value.d, 4);
         }
+        pool_large.release(reservation);
     }
 
     #[test]
     #[should_panic]
     fn zero_size_layout_is_panic() {
         let layout = Layout::from_size_align(0, 1).unwrap();
-        drop(MemoryPool::new(layout));
+        drop(DatalessPool::new(layout));
     }
     #[test]
     fn stress_test_repeated_reserve_release() {
         let layout = Layout::new::<usize>();
-        let mut pool = MemoryPool::new(layout);
+        let mut pool = DatalessPool::new(layout);
 
         // Reserve and release many items to test slab management
         for iteration in 0..10 {
@@ -743,5 +772,63 @@ mod tests {
         }
 
         assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn drop_with_no_active_reservations_does_not_panic() {
+        let layout = Layout::new::<u64>();
+        let mut pool = DatalessPool::new(layout);
+
+        // Reserve and then release immediately
+        let reservation = pool.reserve();
+        pool.release(reservation);
+
+        assert!(pool.is_empty());
+
+        // Pool should drop without panic
+        drop(pool);
+    }
+
+    #[test]
+    #[should_panic(expected = "dropped a non-empty DatalessPool with 1 active reservations")]
+    fn drop_with_active_reservation_panics() {
+        let layout = Layout::new::<u64>();
+        let mut pool = DatalessPool::new(layout);
+
+        let _reservation = pool.reserve();
+
+        // Pool should panic on drop since we still have an active reservation
+        drop(pool);
+    }
+
+    #[test]
+    #[should_panic(expected = "dropped a non-empty DatalessPool with 3 active reservations")]
+    fn drop_with_multiple_active_reservations_panics() {
+        let layout = Layout::new::<u32>();
+        let mut pool = DatalessPool::new(layout);
+
+        let _reservation1 = pool.reserve();
+        let _reservation2 = pool.reserve();
+        let _reservation3 = pool.reserve();
+
+        // Pool should panic on drop since we have multiple active reservations
+        drop(pool);
+    }
+
+    #[test]
+    #[should_panic(expected = "dropped a non-empty DatalessPool with 2 active reservations")]
+    fn drop_with_some_released_reservations_still_panics() {
+        let layout = Layout::new::<i64>();
+        let mut pool = DatalessPool::new(layout);
+
+        let reservation1 = pool.reserve();
+        let _reservation2 = pool.reserve();
+        let _reservation3 = pool.reserve();
+
+        // Release one reservation but keep two
+        pool.release(reservation1);
+
+        // Pool should still panic since we have active reservations
+        drop(pool);
     }
 }

@@ -1,18 +1,18 @@
-//! Basic usage example for `MemoryPool`.
+//! Basic usage example for `DatalessPool`.
 //!
-//! This example demonstrates how to use `MemoryPool` to manage type-erased memory
+//! This example demonstrates how to use `DatalessPool` to manage type-erased memory
 //! with dynamic capacity growth.
 
 use std::alloc::Layout;
 
-use memory_slab::MemoryPool;
+use dataless_pool::DatalessPool;
 
 fn main() {
     // Create a pool for u32 values
     let layout = Layout::new::<u32>();
-    let mut pool = MemoryPool::new(layout);
+    let mut pool = DatalessPool::new(layout);
 
-    println!("Created MemoryPool with capacity: {}", pool.capacity());
+    println!("Created DatalessPool with capacity: {}", pool.capacity());
 
     // Reserve some values
     let reservation1 = pool.reserve();
@@ -90,5 +90,5 @@ fn main() {
         }
     }
 
-    println!("MemoryPool example completed successfully!");
+    println!("DatalessPool example completed successfully!");
 }

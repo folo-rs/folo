@@ -1,6 +1,6 @@
 [package]
-name = "memory_slab"
-description = "Slabs and pools of untyped memory to be used for constructing typed pools"
+name = "dataless_pool"
+description = "A pool that reserves pinned memory without placing any data in it, leaving that up to the owner"
 publish = true
 version = "0.1.0"
 

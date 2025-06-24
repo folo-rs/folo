@@ -91,7 +91,12 @@ rules we enable and try your best to follow them in the inline examples in API d
 
 # Language
 
-Use proper English grammar, spelling and punctuation. Sentences end with punctuation.
+Use proper English grammar, spelling and punctuation.
+
+Sentences end with punctuation:
+
+* This is wrong: "//! // Create a pool for storing u64 values"
+* This is correct: "//! Create a pool for storing u64 values."
 
 # Use of unwrap() and expect()
 

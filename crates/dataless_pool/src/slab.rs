@@ -1,9 +1,9 @@
 use std::alloc::{Layout, alloc, dealloc};
 use std::num::NonZero;
 use std::ptr::NonNull;
-use std::{mem, ptr};
+use std::{mem, ptr, thread};
 
-/// The result of reserving memory in a [`MemorySlab`].
+/// The result of reserving memory in a [`DatalessSlab`].
 ///
 /// Contains both the stable index for later operations and a pointer to the reserved memory.
 #[derive(Debug)]
@@ -42,7 +42,7 @@ impl SlabReservation {
 /// memory via pointers and to create custom references to memory from unsafe code even when not
 /// holding an exclusive reference to the collection.
 #[derive(Debug)]
-pub(crate) struct MemorySlab {
+pub(crate) struct DatalessSlab {
     /// The maximum number of items this slab can hold.
     capacity: NonZero<usize>,
 
@@ -76,7 +76,7 @@ enum Entry {
     Vacant { next_free_index: usize },
 }
 
-impl MemorySlab {
+impl DatalessSlab {
     /// Creates a new slab with the specified item memory layout and capacity.
     ///
     /// # Panics
@@ -86,7 +86,7 @@ impl MemorySlab {
     pub(crate) fn new(item_layout: Layout, capacity: NonZero<usize>) -> Self {
         assert!(
             item_layout.size() > 0,
-            "MemorySlab must have non-zero item size"
+            "DatalessSlab must have non-zero item size"
         );
 
         let capacity_value = capacity.get();
@@ -267,7 +267,7 @@ impl MemorySlab {
 
     /// Reserves memory in the slab and returns both the index and a pointer to the memory.
     ///
-    /// Returns a [`MemorySlabReservation`] containing the stable index that can be used for later
+    /// Returns a [`DatalessSlabReservation`] containing the stable index that can be used for later
     /// operations like [`get()`] and [`release()`], and a pointer to the reserved memory.
     ///
     /// # Panics
@@ -420,8 +420,9 @@ impl MemorySlab {
     }
 }
 
-impl Drop for MemorySlab {
+impl Drop for DatalessSlab {
     fn drop(&mut self) {
+        let was_empty = self.is_empty();
         let capacity_value = self.capacity.get();
 
         // Set them all to `Vacant` to ensure any cleanup is done.
@@ -437,12 +438,26 @@ impl Drop for MemorySlab {
         unsafe {
             dealloc(self.first_entry_ptr.as_ptr().cast(), self.slab_layout());
         }
+
+        // We do this check at the end so we clean up the memory first. Mostly to make Miri happy.
+        // As we are going to panic anyway if something is wrong, there is little good to expect
+        // for the app itself.
+        //
+        // If we are already panicking, we do not want to panic again because that will
+        // simply obscure whatever the original panic was, leading to debug difficulties.
+        if !thread::panicking() {
+            assert!(
+                was_empty,
+                "dropped a non-empty DatalessSlab with {} active reservations - this suggests reserved memory may still be in use",
+                self.count
+            );
+        }
     }
 }
 
 // SAFETY: There are raw pointers involved here but nothing inherently non-thread-mobile
 // about it, so the slab can move between threads.
-unsafe impl Send for MemorySlab {}
+unsafe impl Send for DatalessSlab {}
 
 #[cfg(test)]
 #[allow(
@@ -461,7 +476,7 @@ mod tests {
     #[test]
     fn smoke_test() {
         let layout = Layout::new::<u32>();
-        let mut slab = MemorySlab::new(layout, NonZero::new(3).unwrap());
+        let mut slab = DatalessSlab::new(layout, NonZero::new(3).unwrap());
 
         let reservation_a = slab.reserve();
         let reservation_b = slab.reserve();
@@ -522,12 +537,17 @@ mod tests {
         }
 
         assert!(slab.is_full());
+
+        // Clean up remaining reservations
+        slab.release(reservation_a.index);
+        slab.release(reservation_c.index);
+        slab.release(reservation_d.index);
     }
     #[test]
     #[should_panic]
     fn panic_when_full() {
         let layout = Layout::new::<u32>();
-        let mut slab = MemorySlab::new(layout, NonZero::new(3).unwrap());
+        let mut slab = DatalessSlab::new(layout, NonZero::new(3).unwrap());
 
         _ = slab.reserve();
         _ = slab.reserve();
@@ -539,7 +559,7 @@ mod tests {
     #[should_panic]
     fn panic_when_oob_get() {
         let layout = Layout::new::<u32>();
-        let mut slab = MemorySlab::new(layout, NonZero::new(3).unwrap());
+        let mut slab = DatalessSlab::new(layout, NonZero::new(3).unwrap());
 
         _ = slab.reserve();
         _ = slab.get(1234);
@@ -547,7 +567,7 @@ mod tests {
     #[test]
     fn insert_returns_correct_index_and_pointer() {
         let layout = Layout::new::<u32>();
-        let mut slab = MemorySlab::new(layout, NonZero::new(3).unwrap());
+        let mut slab = DatalessSlab::new(layout, NonZero::new(3).unwrap());
 
         // We expect that we reserve items in order, from the start (0, 1, 2, ...).
 
@@ -557,6 +577,7 @@ mod tests {
             reservation.ptr().cast::<u32>().as_ptr().write(10);
             assert_eq!(slab.get(0).cast::<u32>().as_ptr().read(), 10);
         }
+        let index_0 = reservation.index();
 
         let reservation = slab.reserve();
         assert_eq!(reservation.index(), 1);
@@ -564,6 +585,7 @@ mod tests {
             reservation.ptr().cast::<u32>().as_ptr().write(11);
             assert_eq!(slab.get(1).cast::<u32>().as_ptr().read(), 11);
         }
+        let index_1 = reservation.index();
 
         let reservation = slab.reserve();
         assert_eq!(reservation.index(), 2);
@@ -571,11 +593,17 @@ mod tests {
             reservation.ptr().cast::<u32>().as_ptr().write(12);
             assert_eq!(slab.get(2).cast::<u32>().as_ptr().read(), 12);
         }
+        let index_2 = reservation.index();
+
+        // Clean up reservations before drop
+        slab.release(index_0);
+        slab.release(index_1);
+        slab.release(index_2);
     }
     #[test]
     fn release_makes_room() {
         let layout = Layout::new::<u32>();
-        let mut slab = MemorySlab::new(layout, NonZero::new(3).unwrap());
+        let mut slab = DatalessSlab::new(layout, NonZero::new(3).unwrap());
 
         let reservation_a = slab.reserve();
         let reservation_b = slab.reserve();
@@ -606,12 +634,17 @@ mod tests {
                 45
             );
         }
+
+        // Clean up remaining reservations before drop
+        slab.release(reservation_a.index);
+        slab.release(reservation_c.index);
+        slab.release(reservation_d.index);
     }
     #[test]
     #[should_panic]
     fn release_vacant_panics() {
         let layout = Layout::new::<u32>();
-        let mut slab = MemorySlab::new(layout, NonZero::new(3).unwrap());
+        let mut slab = DatalessSlab::new(layout, NonZero::new(3).unwrap());
 
         slab.release(1);
     }
@@ -620,7 +653,7 @@ mod tests {
     #[should_panic]
     fn get_vacant_panics() {
         let layout = Layout::new::<u32>();
-        let slab = MemorySlab::new(layout, NonZero::new(3).unwrap());
+        let slab = DatalessSlab::new(layout, NonZero::new(3).unwrap());
 
         _ = slab.get(1);
     }
@@ -629,7 +662,7 @@ mod tests {
     fn different_layouts() {
         // Test with different sized types
         let layout_u64 = Layout::new::<u64>();
-        let mut slab_u64 = MemorySlab::new(layout_u64, NonZero::new(2).unwrap());
+        let mut slab_u64 = DatalessSlab::new(layout_u64, NonZero::new(2).unwrap());
         let reservation = slab_u64.reserve();
         unsafe {
             reservation
@@ -642,6 +675,7 @@ mod tests {
                 0x1234567890ABCDEF
             );
         }
+        slab_u64.release(reservation.index());
 
         // Test with larger struct
         #[repr(C)]
@@ -653,7 +687,7 @@ mod tests {
         }
 
         let layout_large = Layout::new::<LargeStruct>();
-        let mut slab_large = MemorySlab::new(layout_large, NonZero::new(2).unwrap());
+        let mut slab_large = DatalessSlab::new(layout_large, NonZero::new(2).unwrap());
 
         let reservation = slab_large.reserve();
         unsafe {
@@ -673,6 +707,7 @@ mod tests {
             assert_eq!(value.c, 3);
             assert_eq!(value.d, 4);
         }
+        slab_large.release(reservation.index());
     }
 
     #[test]
@@ -681,14 +716,14 @@ mod tests {
         // This test verifies that NonZero::new(0) panics, maintaining the same behavior
         // as before but now at the type level
         let layout = Layout::new::<usize>();
-        drop(MemorySlab::new(layout, NonZero::new(0).unwrap()));
+        drop(DatalessSlab::new(layout, NonZero::new(0).unwrap()));
     }
 
     #[test]
     #[should_panic]
     fn zero_size_layout_is_panic() {
         let layout = Layout::from_size_align(0, 1).unwrap();
-        drop(MemorySlab::new(layout, NonZero::new(3).unwrap()));
+        drop(DatalessSlab::new(layout, NonZero::new(3).unwrap()));
     }
 
     #[test]
@@ -696,13 +731,18 @@ mod tests {
         use std::cell::RefCell;
 
         let layout = Layout::new::<u32>();
-        let slab = RefCell::new(MemorySlab::new(layout, NonZero::new(3).unwrap()));
+        let slab = RefCell::new(DatalessSlab::new(layout, NonZero::new(3).unwrap()));
+
+        let (index_a, index_c, index_d);
 
         {
             let mut slab = slab.borrow_mut();
             let reservation_a = slab.reserve();
             let reservation_b = slab.reserve();
             let reservation_c = slab.reserve();
+
+            index_a = reservation_a.index;
+            index_c = reservation_c.index;
 
             unsafe {
                 reservation_a.ptr.cast::<u32>().as_ptr().write(42);
@@ -726,6 +766,7 @@ mod tests {
             slab.release(reservation_b.index);
 
             let reservation_d = slab.reserve();
+            index_d = reservation_d.index;
 
             unsafe {
                 reservation_d.ptr.cast::<u32>().as_ptr().write(45);
@@ -751,6 +792,14 @@ mod tests {
             }
             assert!(slab.is_full());
         }
+
+        // Clean up remaining reservations before drop
+        {
+            let mut slab = slab.borrow_mut();
+            slab.release(index_a);
+            slab.release(index_c);
+            slab.release(index_d);
+        }
     }
 
     #[test]
@@ -759,7 +808,7 @@ mod tests {
         use std::thread;
 
         let layout = Layout::new::<u32>();
-        let slab = Arc::new(Mutex::new(MemorySlab::new(
+        let slab = Arc::new(Mutex::new(DatalessSlab::new(
             layout,
             NonZero::new(3).unwrap(),
         )));
@@ -791,6 +840,7 @@ mod tests {
             slab.release(b);
 
             let reservation_d = slab.reserve();
+            let d = reservation_d.index;
 
             unsafe {
                 reservation_d.ptr.cast::<u32>().as_ptr().write(45);
@@ -801,18 +851,31 @@ mod tests {
                     45
                 );
             }
+
+            // Return the index for cleanup
+            d
         });
 
-        handle.join().unwrap();
+        let d = handle.join().unwrap();
 
-        let slab = slab.lock().unwrap();
-        assert!(slab.is_full());
+        {
+            let slab = slab.lock().unwrap();
+            assert!(slab.is_full());
+        }
+
+        // Clean up remaining reservations before drop
+        {
+            let mut slab = slab.lock().unwrap();
+            slab.release(a);
+            slab.release(c);
+            slab.release(d);
+        }
     }
 
     #[test]
     fn insert_returns_correct_pointer() {
         let layout = Layout::new::<u64>();
-        let mut slab = MemorySlab::new(layout, NonZero::new(2).unwrap());
+        let mut slab = DatalessSlab::new(layout, NonZero::new(2).unwrap());
 
         let reservation = slab.reserve();
 
@@ -825,12 +888,14 @@ mod tests {
             );
             assert_eq!(reservation.ptr().cast::<u64>().as_ptr().read(), 0xDEADBEEF);
         }
+
+        slab.release(reservation.index());
     }
 
     #[test]
     fn stress_test_repeated_reserve_release() {
         let layout = Layout::new::<usize>();
-        let mut slab = MemorySlab::new(layout, NonZero::new(10).unwrap());
+        let mut slab = DatalessSlab::new(layout, NonZero::new(10).unwrap());
 
         // Fill the slab
         let mut indices = Vec::new();
@@ -876,6 +941,11 @@ mod tests {
                 );
             }
         }
+
+        // Clean up all reservations before drop
+        for &index in &indices {
+            slab.release(index);
+        }
     }
 
     #[test]
@@ -887,7 +957,7 @@ mod tests {
         }
 
         let layout = Layout::new::<AlignedStruct>();
-        let mut slab = MemorySlab::new(layout, NonZero::new(2).unwrap());
+        let mut slab = DatalessSlab::new(layout, NonZero::new(2).unwrap());
 
         let reservation = slab.reserve();
 
@@ -903,5 +973,68 @@ mod tests {
             assert_eq!(value.data[0], 0x42);
             assert_eq!(value.data[31], 0x42);
         }
+
+        slab.release(reservation.index());
+    }
+    #[test]
+    fn drop_with_no_active_reservations_does_not_panic() {
+        let layout = Layout::new::<u64>();
+        let capacity = NonZero::new(10).unwrap();
+        let mut slab = DatalessSlab::new(layout, capacity);
+
+        // Reserve and then release immediately
+        let reservation = slab.reserve();
+        slab.release(reservation.index());
+
+        assert!(slab.is_empty());
+
+        // Slab should drop without panic
+        drop(slab);
+    }
+
+    #[test]
+    #[should_panic(expected = "dropped a non-empty DatalessSlab with 1 active reservations")]
+    fn drop_with_active_reservation_panics() {
+        let layout = Layout::new::<u64>();
+        let capacity = NonZero::new(10).unwrap();
+        let mut slab = DatalessSlab::new(layout, capacity);
+
+        let _reservation = slab.reserve();
+
+        // Slab should panic on drop since we still have an active reservation
+        drop(slab);
+    }
+
+    #[test]
+    #[should_panic(expected = "dropped a non-empty DatalessSlab with 3 active reservations")]
+    fn drop_with_multiple_active_reservations_panics() {
+        let layout = Layout::new::<u32>();
+        let capacity = NonZero::new(10).unwrap();
+        let mut slab = DatalessSlab::new(layout, capacity);
+
+        let _reservation1 = slab.reserve();
+        let _reservation2 = slab.reserve();
+        let _reservation3 = slab.reserve();
+
+        // Slab should panic on drop since we have multiple active reservations
+        drop(slab);
+    }
+
+    #[test]
+    #[should_panic(expected = "dropped a non-empty DatalessSlab with 2 active reservations")]
+    fn drop_with_some_released_reservations_still_panics() {
+        let layout = Layout::new::<i64>();
+        let capacity = NonZero::new(10).unwrap();
+        let mut slab = DatalessSlab::new(layout, capacity);
+
+        let reservation1 = slab.reserve();
+        let _reservation2 = slab.reserve();
+        let _reservation3 = slab.reserve();
+
+        // Release one reservation but keep two
+        slab.release(reservation1.index());
+
+        // Slab should still panic since we have active reservations
+        drop(slab);
     }
 }
