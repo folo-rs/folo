@@ -44,19 +44,20 @@ fn generate_pool_id() -> u64 {
 /// let reservation = pool.reserve();
 ///
 /// // Write to the memory.
+/// // SAFETY: The pointer is valid and aligned for u32, and we own the memory.
 /// unsafe {
-///     // SAFETY: The pointer is valid and aligned for u32, and we own the memory.
 ///     reservation.ptr().cast::<u32>().write(42);
 /// }
 ///
 /// // Read from the memory.
+/// // SAFETY: The pointer is valid and the memory was just initialized.
 /// let value = unsafe {
-///     // SAFETY: The pointer is valid and the memory was just initialized.
 ///     reservation.ptr().cast::<u32>().read()
 /// };
 /// assert_eq!(value, 42);
 ///
 /// // Release the memory back to the pool.
+/// // SAFETY: The reservation is valid and came from this pool, so it's safe to release.
 /// unsafe {
 ///     pool.release(reservation);
 /// }
@@ -196,10 +197,12 @@ impl DatalessPool {
     /// let reservation2 = pool.reserve();
     /// assert_eq!(pool.len(), 2);
     ///
+    /// // SAFETY: reservation1 is valid and came from this pool.
     /// unsafe {
     ///     pool.release(reservation1);
     /// }
     /// assert_eq!(pool.len(), 1);
+    /// # // SAFETY: reservation2 is valid and came from this pool.
     /// # unsafe {
     /// #     pool.release(reservation2);
     /// # }
@@ -231,6 +234,7 @@ impl DatalessPool {
     /// let reservation = pool.reserve();
     /// assert!(pool.capacity() > 0);
     /// assert!(pool.capacity() >= pool.len());
+    /// # // SAFETY: reservation is valid and came from this pool.
     /// # unsafe {
     /// #     pool.release(reservation);
     /// # }
@@ -264,6 +268,7 @@ impl DatalessPool {
     /// let reservation = pool.reserve();
     /// assert!(!pool.is_empty());
     ///
+    /// // SAFETY: reservation is valid and came from this pool.
     /// unsafe {
     ///     pool.release(reservation);
     /// }
@@ -293,8 +298,8 @@ impl DatalessPool {
     /// let reservation = pool.reserve();
     ///
     /// // Write data to the reserved memory.
+    /// // SAFETY: The pointer is valid and aligned for u64, and we own the memory.
     /// unsafe {
-    ///     // SAFETY: The pointer is valid and aligned for u64, and we own the memory.
     ///     reservation
     ///         .ptr()
     ///         .cast::<u64>()
@@ -302,13 +307,14 @@ impl DatalessPool {
     /// }
     ///
     /// // Read data back.
+    /// // SAFETY: The pointer is valid and the memory was just initialized.
     /// let value = unsafe {
-    ///     // SAFETY: The pointer is valid and the memory was just initialized.
     ///     reservation.ptr().cast::<u64>().read()
     /// };
     /// assert_eq!(value, 0xDEADBEEF_CAFEBABE);
     ///
     /// // Must release the reservation to free the memory.
+    /// // SAFETY: reservation is valid and came from this pool.
     /// unsafe {
     ///     pool.release(reservation);
     /// }
@@ -366,6 +372,7 @@ impl DatalessPool {
     /// assert_eq!(pool.len(), 1);
     ///
     /// // Release the reservation.
+    /// // SAFETY: reservation is valid and came from this pool.
     /// unsafe {
     ///     pool.release(reservation);
     /// }
@@ -471,19 +478,20 @@ impl DatalessPool {
 /// let reservation = pool.reserve();
 ///
 /// // Write to the memory pointer.
+/// // SAFETY: The pointer is valid and aligned for i64, and we own the memory.
 /// unsafe {
-///     // SAFETY: The pointer is valid and aligned for i64, and we own the memory.
 ///     reservation.ptr().cast::<i64>().write(-123);
 /// }
 ///
 /// // Read from the memory pointer.
+/// // SAFETY: The pointer is valid and the memory was just initialized.
 /// let value = unsafe {
-///     // SAFETY: The pointer is valid and the memory was just initialized.
 ///     reservation.ptr().cast::<i64>().read()
 /// };
 /// assert_eq!(value, -123);
 ///
 /// // The reservation must be returned to release the memory.
+/// // SAFETY: reservation is valid and came from this pool.
 /// unsafe {
 ///     pool.release(reservation);
 /// }
@@ -513,19 +521,20 @@ impl PoolReservation {
     /// let reservation = pool.reserve();
     ///
     /// // Write data to the reserved memory.
+    /// // SAFETY: The pointer is valid and aligned for f64, and we own the memory.
     /// unsafe {
-    ///     // SAFETY: The pointer is valid and aligned for f64, and we own the memory.
     ///     let ptr = reservation.ptr().cast::<f64>();
     ///     ptr.write(3.14159);
     /// }
     ///
     /// // Read data back from the memory.
+    /// // SAFETY: The pointer is valid and the memory was just initialized.
     /// let value = unsafe {
-    ///     // SAFETY: The pointer is valid and the memory was just initialized.
     ///     let ptr = reservation.ptr().cast::<f64>();
     ///     ptr.read()
     /// };
     /// assert_eq!(value, 3.14159);
+    /// # // SAFETY: reservation is valid and came from this pool.
     /// # unsafe {
     /// #     pool.release(reservation);
     /// # }
@@ -659,14 +668,8 @@ mod tests {
         let reservation = pool.reserve();
 
         unsafe {
-            reservation
-                .ptr()
-                .cast::<u64>()
-                .write(0x1234567890ABCDEF);
-            assert_eq!(
-                reservation.ptr().cast::<u64>().read(),
-                0x1234567890ABCDEF
-            );
+            reservation.ptr().cast::<u64>().write(0x1234567890ABCDEF);
+            assert_eq!(reservation.ptr().cast::<u64>().read(), 0x1234567890ABCDEF);
         }
 
         unsafe {

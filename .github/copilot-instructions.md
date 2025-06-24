@@ -133,6 +133,39 @@ Safety comments must explain how we satisfy the safety requirements of the unsaf
 calling. Safety comments are not there just to re-state the requirements, they must explain how
 we satisfy them (e.g. by referencing an assertion, a type invariant, earlier logic or other mechanism).
 
+Safety comments are also required in examples and doctests that use `unsafe` blocks.
+
+Safety comments (whether single- or multiline) go above the line with the `unsafe` block. To be
+clear, they are associated with a specific `unsafe` block, not with a function call. Example:
+
+```rust
+/// SAFETY: We ensured above that the pointer is valid and aligned for the type `T`.
+unsafe {
+    unsafe_function(pointer);
+}
+```
+
+Each `unsafe` block is expected to only have one call to an unsafe function, and should not have 
+nontrivial safe code inside it.
+
+Good example - only unsafe code in the unsafe block:
+
+```rust
+/// SAFETY: We ensured above that the pointer is valid and aligned for the type `T`.
+let entity = Entity::from(unsafe {
+    unsafe_function(pointer)
+});
+```
+
+Bad example - `unsafe` block includes safe code:
+
+```rust
+/// SAFETY: We ensured above that the pointer is valid and aligned for the type `T`.
+let entity = unsafe {
+    Entity::from(unsafe_function(pointer))
+};
+```
+
 # Whitespace
 
 There should be an empty line between functions.

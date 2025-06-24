@@ -100,11 +100,14 @@ fn main() {
             pool.release(reservation);
         }
     }
-    
+
     // Also clean up the first two reservations we still have.
     // SAFETY: We know these reservations are valid since we created them and only released reservation2.
     unsafe {
         pool.release(reservation1);
+    }
+    // SAFETY: We know this reservation is valid since we created it and only released reservation2.
+    unsafe {
         pool.release(reservation3);
     }
 

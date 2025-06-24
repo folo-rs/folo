@@ -645,14 +645,8 @@ mod tests {
         let mut slab_u64 = DatalessSlab::new(layout_u64, NonZero::new(2).unwrap());
         let reservation = slab_u64.reserve();
         unsafe {
-            reservation
-                .ptr()
-                .cast::<u64>()
-                .write(0x1234567890ABCDEF);
-            assert_eq!(
-                reservation.ptr().cast::<u64>().read(),
-                0x1234567890ABCDEF
-            );
+            reservation.ptr().cast::<u64>().write(0x1234567890ABCDEF);
+            assert_eq!(reservation.ptr().cast::<u64>().read(), 0x1234567890ABCDEF);
         }
         unsafe {
             slab_u64.release(reservation.index());
@@ -672,15 +666,12 @@ mod tests {
 
         let reservation = slab_large.reserve();
         unsafe {
-            reservation
-                .ptr()
-                .cast::<LargeStruct>()
-                .write(LargeStruct {
-                    a: 1,
-                    b: 2,
-                    c: 3,
-                    d: 4,
-                });
+            reservation.ptr().cast::<LargeStruct>().write(LargeStruct {
+                a: 1,
+                b: 2,
+                c: 3,
+                d: 4,
+            });
             let value = reservation.ptr().cast::<LargeStruct>().read();
             assert_eq!(value.a, 1);
             assert_eq!(value.b, 2);
@@ -890,10 +881,7 @@ mod tests {
         for i in (0..10).step_by(2) {
             let reservation = slab.reserve();
             unsafe {
-                reservation
-                    .ptr()
-                    .cast::<usize>()
-                    .write(i * 100 + 50);
+                reservation.ptr().cast::<usize>().write(i * 100 + 50);
             }
             indices[i] = reservation.index();
         }
@@ -904,10 +892,7 @@ mod tests {
         for i in 0..10 {
             let expected = if i % 2 == 0 { i * 100 + 50 } else { i * 100 };
             unsafe {
-                assert_eq!(
-                    slab.item_ptr(indices[i]).cast::<usize>().read(),
-                    expected
-                );
+                assert_eq!(slab.item_ptr(indices[i]).cast::<usize>().read(), expected);
             }
         }
 
@@ -932,10 +917,7 @@ mod tests {
         let mut slab = DatalessSlab::new(Layout::new::<Byte>(), NonZero::new(5).unwrap());
         let reservation = slab.reserve();
         unsafe {
-            reservation
-                .ptr()
-                .cast::<Byte>()
-                .write(Byte { data: 42 });
+            reservation.ptr().cast::<Byte>().write(Byte { data: 42 });
             assert_eq!(reservation.ptr().cast::<Byte>().read().data, 42);
         }
         unsafe {
@@ -955,10 +937,7 @@ mod tests {
                 .ptr()
                 .cast::<Word>()
                 .write(Word { data: 0x1234 });
-            assert_eq!(
-                reservation.ptr().cast::<Word>().read().data,
-                0x1234
-            );
+            assert_eq!(reservation.ptr().cast::<Word>().read().data, 0x1234);
         }
         unsafe {
             slab.release(reservation.index());
@@ -977,10 +956,7 @@ mod tests {
                 .ptr()
                 .cast::<DWord>()
                 .write(DWord { data: 0x12345678 });
-            assert_eq!(
-                reservation.ptr().cast::<DWord>().read().data,
-                0x12345678
-            );
+            assert_eq!(reservation.ptr().cast::<DWord>().read().data, 0x12345678);
         }
         unsafe {
             slab.release(reservation.index());
@@ -1119,15 +1095,11 @@ mod tests {
             res1.ptr()
                 .cast::<TestEnum>()
                 .write(TestEnum::Variant1(0x12345678));
-            res2.ptr()
-                .cast::<TestEnum>()
-                .write(TestEnum::Variant2 {
-                    x: 0x1111111111111111,
-                    y: 0x2222222222222222,
-                });
-            res3.ptr()
-                .cast::<TestEnum>()
-                .write(TestEnum::Variant3);
+            res2.ptr().cast::<TestEnum>().write(TestEnum::Variant2 {
+                x: 0x1111111111111111,
+                y: 0x2222222222222222,
+            });
+            res3.ptr().cast::<TestEnum>().write(TestEnum::Variant3);
 
             // Verify we can read them back (note: this is a bit unsafe since we're
             // treating the enum as raw memory, but it tests the layout handling).
