@@ -484,23 +484,23 @@ mod tests {
 
         // Write some values.
         unsafe {
-            reservation_a.ptr.cast::<u32>().as_ptr().write(42);
-            reservation_b.ptr.cast::<u32>().as_ptr().write(43);
-            reservation_c.ptr.cast::<u32>().as_ptr().write(44);
+            reservation_a.ptr.cast::<u32>().write(42);
+            reservation_b.ptr.cast::<u32>().write(43);
+            reservation_c.ptr.cast::<u32>().write(44);
         }
 
         // Read them back.
         unsafe {
-            assert_eq!(reservation_a.ptr.cast::<u32>().as_ptr().read(), 42);
-            assert_eq!(reservation_b.ptr.cast::<u32>().as_ptr().read(), 43);
-            assert_eq!(reservation_c.ptr.cast::<u32>().as_ptr().read(), 44);
+            assert_eq!(reservation_a.ptr.cast::<u32>().read(), 42);
+            assert_eq!(reservation_b.ptr.cast::<u32>().read(), 43);
+            assert_eq!(reservation_c.ptr.cast::<u32>().read(), 44);
         }
 
         // Also verify direct ptr usage works.
         unsafe {
-            assert_eq!(reservation_a.ptr.cast::<u32>().as_ptr().read(), 42);
-            assert_eq!(reservation_b.ptr.cast::<u32>().as_ptr().read(), 43);
-            assert_eq!(reservation_c.ptr.cast::<u32>().as_ptr().read(), 44);
+            assert_eq!(reservation_a.ptr.cast::<u32>().read(), 42);
+            assert_eq!(reservation_b.ptr.cast::<u32>().read(), 43);
+            assert_eq!(reservation_c.ptr.cast::<u32>().read(), 44);
         }
 
         assert_eq!(slab.len(), 3);
@@ -514,10 +514,10 @@ mod tests {
         let reservation_d = slab.reserve();
 
         unsafe {
-            reservation_d.ptr.cast::<u32>().as_ptr().write(45);
-            assert_eq!(reservation_a.ptr.cast::<u32>().as_ptr().read(), 42);
-            assert_eq!(reservation_c.ptr.cast::<u32>().as_ptr().read(), 44);
-            assert_eq!(reservation_d.ptr.cast::<u32>().as_ptr().read(), 45);
+            reservation_d.ptr.cast::<u32>().write(45);
+            assert_eq!(reservation_a.ptr.cast::<u32>().read(), 42);
+            assert_eq!(reservation_c.ptr.cast::<u32>().read(), 44);
+            assert_eq!(reservation_d.ptr.cast::<u32>().read(), 45);
         }
 
         assert!(slab.is_full());
@@ -564,24 +564,24 @@ mod tests {
         let reservation = slab.reserve();
         assert_eq!(reservation.index(), 0);
         unsafe {
-            reservation.ptr().cast::<u32>().as_ptr().write(10);
-            assert_eq!(reservation.ptr().cast::<u32>().as_ptr().read(), 10);
+            reservation.ptr().cast::<u32>().write(10);
+            assert_eq!(reservation.ptr().cast::<u32>().read(), 10);
         }
         let index_0 = reservation.index();
 
         let reservation = slab.reserve();
         assert_eq!(reservation.index(), 1);
         unsafe {
-            reservation.ptr().cast::<u32>().as_ptr().write(11);
-            assert_eq!(reservation.ptr().cast::<u32>().as_ptr().read(), 11);
+            reservation.ptr().cast::<u32>().write(11);
+            assert_eq!(reservation.ptr().cast::<u32>().read(), 11);
         }
         let index_1 = reservation.index();
 
         let reservation = slab.reserve();
         assert_eq!(reservation.index(), 2);
         unsafe {
-            reservation.ptr().cast::<u32>().as_ptr().write(12);
-            assert_eq!(reservation.ptr().cast::<u32>().as_ptr().read(), 12);
+            reservation.ptr().cast::<u32>().write(12);
+            assert_eq!(reservation.ptr().cast::<u32>().read(), 12);
         }
         let index_2 = reservation.index();
 
@@ -602,9 +602,9 @@ mod tests {
         let reservation_c = slab.reserve();
 
         unsafe {
-            reservation_a.ptr.cast::<u32>().as_ptr().write(42);
-            reservation_b.ptr.cast::<u32>().as_ptr().write(43);
-            reservation_c.ptr.cast::<u32>().as_ptr().write(44);
+            reservation_a.ptr.cast::<u32>().write(42);
+            reservation_b.ptr.cast::<u32>().write(43);
+            reservation_c.ptr.cast::<u32>().write(44);
         }
 
         unsafe {
@@ -613,11 +613,11 @@ mod tests {
 
         let reservation_d = slab.reserve();
         unsafe {
-            reservation_d.ptr.cast::<u32>().as_ptr().write(45);
+            reservation_d.ptr.cast::<u32>().write(45);
 
-            assert_eq!(reservation_a.ptr.cast::<u32>().as_ptr().read(), 42);
-            assert_eq!(reservation_c.ptr.cast::<u32>().as_ptr().read(), 44);
-            assert_eq!(reservation_d.ptr.cast::<u32>().as_ptr().read(), 45);
+            assert_eq!(reservation_a.ptr.cast::<u32>().read(), 42);
+            assert_eq!(reservation_c.ptr.cast::<u32>().read(), 44);
+            assert_eq!(reservation_d.ptr.cast::<u32>().read(), 45);
         }
 
         // Clean up remaining reservations before drop.
@@ -648,10 +648,9 @@ mod tests {
             reservation
                 .ptr()
                 .cast::<u64>()
-                .as_ptr()
                 .write(0x1234567890ABCDEF);
             assert_eq!(
-                reservation.ptr().cast::<u64>().as_ptr().read(),
+                reservation.ptr().cast::<u64>().read(),
                 0x1234567890ABCDEF
             );
         }
@@ -676,14 +675,13 @@ mod tests {
             reservation
                 .ptr()
                 .cast::<LargeStruct>()
-                .as_ptr()
                 .write(LargeStruct {
                     a: 1,
                     b: 2,
                     c: 3,
                     d: 4,
                 });
-            let value = reservation.ptr().cast::<LargeStruct>().as_ptr().read();
+            let value = reservation.ptr().cast::<LargeStruct>().read();
             assert_eq!(value.a, 1);
             assert_eq!(value.b, 2);
             assert_eq!(value.c, 3);
@@ -729,13 +727,13 @@ mod tests {
             index_c = reservation_c.index;
 
             unsafe {
-                reservation_a.ptr.cast::<u32>().as_ptr().write(42);
-                reservation_b.ptr.cast::<u32>().as_ptr().write(43);
-                reservation_c.ptr.cast::<u32>().as_ptr().write(44);
+                reservation_a.ptr.cast::<u32>().write(42);
+                reservation_b.ptr.cast::<u32>().write(43);
+                reservation_c.ptr.cast::<u32>().write(44);
 
-                assert_eq!(reservation_a.ptr.cast::<u32>().as_ptr().read(), 42);
-                assert_eq!(reservation_b.ptr.cast::<u32>().as_ptr().read(), 43);
-                assert_eq!(reservation_c.ptr.cast::<u32>().as_ptr().read(), 44);
+                assert_eq!(reservation_a.ptr.cast::<u32>().read(), 42);
+                assert_eq!(reservation_b.ptr.cast::<u32>().read(), 43);
+                assert_eq!(reservation_c.ptr.cast::<u32>().read(), 44);
             }
 
             unsafe {
@@ -746,17 +744,17 @@ mod tests {
             index_d = reservation_d.index;
 
             unsafe {
-                reservation_d.ptr.cast::<u32>().as_ptr().write(45);
-                assert_eq!(reservation_a.ptr.cast::<u32>().as_ptr().read(), 42);
-                assert_eq!(reservation_c.ptr.cast::<u32>().as_ptr().read(), 44);
-                assert_eq!(reservation_d.ptr.cast::<u32>().as_ptr().read(), 45);
+                reservation_d.ptr.cast::<u32>().write(45);
+                assert_eq!(reservation_a.ptr.cast::<u32>().read(), 42);
+                assert_eq!(reservation_c.ptr.cast::<u32>().read(), 44);
+                assert_eq!(reservation_d.ptr.cast::<u32>().read(), 45);
             }
         }
 
         {
             let slab = slab.borrow();
             unsafe {
-                assert_eq!(slab.item_ptr(index_a).cast::<u32>().as_ptr().read(), 42);
+                assert_eq!(slab.item_ptr(index_a).cast::<u32>().read(), 42);
             }
             assert!(slab.is_full());
         }
@@ -797,9 +795,9 @@ mod tests {
             c = reservation_c.index;
 
             unsafe {
-                reservation_a.ptr.cast::<u32>().as_ptr().write(42);
-                reservation_b.ptr.cast::<u32>().as_ptr().write(43);
-                reservation_c.ptr.cast::<u32>().as_ptr().write(44);
+                reservation_a.ptr.cast::<u32>().write(42);
+                reservation_b.ptr.cast::<u32>().write(43);
+                reservation_c.ptr.cast::<u32>().write(44);
             }
         }
 
@@ -815,10 +813,10 @@ mod tests {
             let d = reservation_d.index;
 
             unsafe {
-                reservation_d.ptr.cast::<u32>().as_ptr().write(45);
-                assert_eq!(slab.item_ptr(a).cast::<u32>().as_ptr().read(), 42);
-                assert_eq!(slab.item_ptr(c).cast::<u32>().as_ptr().read(), 44);
-                assert_eq!(reservation_d.ptr.cast::<u32>().as_ptr().read(), 45);
+                reservation_d.ptr.cast::<u32>().write(45);
+                assert_eq!(slab.item_ptr(a).cast::<u32>().read(), 42);
+                assert_eq!(slab.item_ptr(c).cast::<u32>().read(), 44);
+                assert_eq!(reservation_d.ptr.cast::<u32>().read(), 45);
             }
 
             // Return the index for cleanup.
@@ -852,9 +850,9 @@ mod tests {
 
         // Verify the pointer works and points to the right location.
         unsafe {
-            reservation.ptr().cast::<u64>().as_ptr().write(0xDEADBEEF);
-            assert_eq!(reservation.ptr().cast::<u64>().as_ptr().read(), 0xDEADBEEF);
-            assert_eq!(reservation.ptr().cast::<u64>().as_ptr().read(), 0xDEADBEEF);
+            reservation.ptr().cast::<u64>().write(0xDEADBEEF);
+            assert_eq!(reservation.ptr().cast::<u64>().read(), 0xDEADBEEF);
+            assert_eq!(reservation.ptr().cast::<u64>().read(), 0xDEADBEEF);
         }
 
         unsafe {
@@ -872,7 +870,7 @@ mod tests {
         for i in 0..10 {
             let reservation = slab.reserve();
             unsafe {
-                reservation.ptr().cast::<usize>().as_ptr().write(i * 100);
+                reservation.ptr().cast::<usize>().write(i * 100);
             }
             indices.push(reservation.index());
         }
@@ -895,7 +893,6 @@ mod tests {
                 reservation
                     .ptr()
                     .cast::<usize>()
-                    .as_ptr()
                     .write(i * 100 + 50);
             }
             indices[i] = reservation.index();
@@ -908,7 +905,7 @@ mod tests {
             let expected = if i % 2 == 0 { i * 100 + 50 } else { i * 100 };
             unsafe {
                 assert_eq!(
-                    slab.item_ptr(indices[i]).cast::<usize>().as_ptr().read(),
+                    slab.item_ptr(indices[i]).cast::<usize>().read(),
                     expected
                 );
             }
@@ -938,9 +935,8 @@ mod tests {
             reservation
                 .ptr()
                 .cast::<Byte>()
-                .as_ptr()
                 .write(Byte { data: 42 });
-            assert_eq!(reservation.ptr().cast::<Byte>().as_ptr().read().data, 42);
+            assert_eq!(reservation.ptr().cast::<Byte>().read().data, 42);
         }
         unsafe {
             slab.release(reservation.index());
@@ -958,10 +954,9 @@ mod tests {
             reservation
                 .ptr()
                 .cast::<Word>()
-                .as_ptr()
                 .write(Word { data: 0x1234 });
             assert_eq!(
-                reservation.ptr().cast::<Word>().as_ptr().read().data,
+                reservation.ptr().cast::<Word>().read().data,
                 0x1234
             );
         }
@@ -981,10 +976,9 @@ mod tests {
             reservation
                 .ptr()
                 .cast::<DWord>()
-                .as_ptr()
                 .write(DWord { data: 0x12345678 });
             assert_eq!(
-                reservation.ptr().cast::<DWord>().as_ptr().read().data,
+                reservation.ptr().cast::<DWord>().read().data,
                 0x12345678
             );
         }
@@ -1001,11 +995,11 @@ mod tests {
         let mut slab = DatalessSlab::new(Layout::new::<QWord>(), NonZero::new(5).unwrap());
         let reservation = slab.reserve();
         unsafe {
-            reservation.ptr().cast::<QWord>().as_ptr().write(QWord {
+            reservation.ptr().cast::<QWord>().write(QWord {
                 data: 0x123456789ABCDEF0,
             });
             assert_eq!(
-                reservation.ptr().cast::<QWord>().as_ptr().read().data,
+                reservation.ptr().cast::<QWord>().read().data,
                 0x123456789ABCDEF0
             );
         }
@@ -1022,10 +1016,10 @@ mod tests {
         let mut slab = DatalessSlab::new(Layout::new::<OWord>(), NonZero::new(5).unwrap());
         let reservation = slab.reserve();
         unsafe {
-            reservation.ptr().cast::<OWord>().as_ptr().write(OWord {
+            reservation.ptr().cast::<OWord>().write(OWord {
                 data: [0x123456789ABCDEF0, 0x0FEDCBA987654321],
             });
-            let read_data = reservation.ptr().cast::<OWord>().as_ptr().read();
+            let read_data = reservation.ptr().cast::<OWord>().read();
             assert_eq!(read_data.data[0], 0x123456789ABCDEF0);
             assert_eq!(read_data.data[1], 0x0FEDCBA987654321);
         }
@@ -1057,7 +1051,6 @@ mod tests {
             reservation1
                 .ptr()
                 .cast::<ComplexStruct>()
-                .as_ptr()
                 .write(ComplexStruct {
                     a: 0x12,
                     b: 0x3456,
@@ -1071,7 +1064,6 @@ mod tests {
             reservation2
                 .ptr()
                 .cast::<ComplexStruct>()
-                .as_ptr()
                 .write(ComplexStruct {
                     a: 0xAB,
                     b: 0xCDEF,
@@ -1082,7 +1074,7 @@ mod tests {
                 });
 
             // Verify both can be read back correctly.
-            let data1 = reservation1.ptr().cast::<ComplexStruct>().as_ptr().read();
+            let data1 = reservation1.ptr().cast::<ComplexStruct>().read();
             assert_eq!(data1.a, 0x12);
             assert_eq!(data1.b, 0x3456);
             assert_eq!(data1.c, 0x789ABCDE);
@@ -1090,7 +1082,7 @@ mod tests {
             assert_eq!(data1.e, [0x11111111, 0x22222222, 0x33333333, 0x44444444]);
             assert_eq!(data1.f, (0x5555, 0x66666666, 0x7777777777777777));
 
-            let data2 = reservation2.ptr().cast::<ComplexStruct>().as_ptr().read();
+            let data2 = reservation2.ptr().cast::<ComplexStruct>().read();
             assert_eq!(data2.a, 0xAB);
             assert_eq!(data2.b, 0xCDEF);
             assert_eq!(data2.c, 0x12345678);
@@ -1126,18 +1118,15 @@ mod tests {
             // Test different enum variants.
             res1.ptr()
                 .cast::<TestEnum>()
-                .as_ptr()
                 .write(TestEnum::Variant1(0x12345678));
             res2.ptr()
                 .cast::<TestEnum>()
-                .as_ptr()
                 .write(TestEnum::Variant2 {
                     x: 0x1111111111111111,
                     y: 0x2222222222222222,
                 });
             res3.ptr()
                 .cast::<TestEnum>()
-                .as_ptr()
                 .write(TestEnum::Variant3);
 
             // Verify we can read them back (note: this is a bit unsafe since we're

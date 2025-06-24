@@ -22,26 +22,26 @@ fn main() {
     // Write values through the pointers.
     // SAFETY: We just reserved these pointers and are writing the correct type.
     unsafe {
-        reservation1.ptr().cast::<u32>().as_ptr().write(0xdeadbeef);
+        reservation1.ptr().cast::<u32>().write(0xdeadbeef);
     }
     // SAFETY: We just reserved these pointers and are writing the correct type.
     unsafe {
-        reservation2.ptr().cast::<u32>().as_ptr().write(0xcafebabe);
+        reservation2.ptr().cast::<u32>().write(0xcafebabe);
     }
     // SAFETY: We just reserved these pointers and are writing the correct type.
     unsafe {
-        reservation3.ptr().cast::<u32>().as_ptr().write(0xfeedface);
+        reservation3.ptr().cast::<u32>().write(0xfeedface);
     }
 
     println!("Reserved 3 items");
 
     // Read values back through the reservations.
     // SAFETY: We just wrote these values and are reading the correct type.
-    let value1 = unsafe { reservation1.ptr().cast::<u32>().as_ptr().read() };
+    let value1 = unsafe { reservation1.ptr().cast::<u32>().read() };
     // SAFETY: We just wrote these values and are reading the correct type.
-    let value2 = unsafe { reservation2.ptr().cast::<u32>().as_ptr().read() };
+    let value2 = unsafe { reservation2.ptr().cast::<u32>().read() };
     // SAFETY: We just wrote these values and are reading the correct type.
-    let value3 = unsafe { reservation3.ptr().cast::<u32>().as_ptr().read() };
+    let value3 = unsafe { reservation3.ptr().cast::<u32>().read() };
 
     println!("Value 1: {value1:#x}");
     println!("Value 2: {value2:#x}");
@@ -67,7 +67,7 @@ fn main() {
 
         // SAFETY: We just reserved this pointer and are writing the correct type.
         unsafe {
-            reservation.ptr().cast::<u32>().as_ptr().write(i);
+            reservation.ptr().cast::<u32>().write(i);
         }
 
         reservations.push(reservation);
@@ -87,7 +87,7 @@ fn main() {
     for (i, reservation) in reservations.iter().take(5).enumerate() {
         // SAFETY: We just wrote these values and are reading the correct type.
         unsafe {
-            let value = reservation.ptr().cast::<u32>().as_ptr().read();
+            let value = reservation.ptr().cast::<u32>().read();
             println!("Reservation contains value: {value}");
             assert_eq!(value, i as u32);
         }

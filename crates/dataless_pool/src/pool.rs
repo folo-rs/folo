@@ -46,13 +46,13 @@ fn generate_pool_id() -> u64 {
 /// // Write to the memory.
 /// unsafe {
 ///     // SAFETY: The pointer is valid and aligned for u32, and we own the memory.
-///     reservation.ptr().cast::<u32>().as_ptr().write(42);
+///     reservation.ptr().cast::<u32>().write(42);
 /// }
 ///
 /// // Read from the memory.
 /// let value = unsafe {
 ///     // SAFETY: The pointer is valid and the memory was just initialized.
-///     reservation.ptr().cast::<u32>().as_ptr().read()
+///     reservation.ptr().cast::<u32>().read()
 /// };
 /// assert_eq!(value, 42);
 ///
@@ -298,14 +298,13 @@ impl DatalessPool {
     ///     reservation
     ///         .ptr()
     ///         .cast::<u64>()
-    ///         .as_ptr()
     ///         .write(0xDEADBEEF_CAFEBABE);
     /// }
     ///
     /// // Read data back.
     /// let value = unsafe {
     ///     // SAFETY: The pointer is valid and the memory was just initialized.
-    ///     reservation.ptr().cast::<u64>().as_ptr().read()
+    ///     reservation.ptr().cast::<u64>().read()
     /// };
     /// assert_eq!(value, 0xDEADBEEF_CAFEBABE);
     ///
@@ -474,13 +473,13 @@ impl DatalessPool {
 /// // Write to the memory pointer.
 /// unsafe {
 ///     // SAFETY: The pointer is valid and aligned for i64, and we own the memory.
-///     reservation.ptr().cast::<i64>().as_ptr().write(-123);
+///     reservation.ptr().cast::<i64>().write(-123);
 /// }
 ///
 /// // Read from the memory pointer.
 /// let value = unsafe {
 ///     // SAFETY: The pointer is valid and the memory was just initialized.
-///     reservation.ptr().cast::<i64>().as_ptr().read()
+///     reservation.ptr().cast::<i64>().read()
 /// };
 /// assert_eq!(value, -123);
 ///
@@ -517,14 +516,14 @@ impl PoolReservation {
     /// unsafe {
     ///     // SAFETY: The pointer is valid and aligned for f64, and we own the memory.
     ///     let ptr = reservation.ptr().cast::<f64>();
-    ///     ptr.as_ptr().write(3.14159);
+    ///     ptr.write(3.14159);
     /// }
     ///
     /// // Read data back from the memory.
     /// let value = unsafe {
     ///     // SAFETY: The pointer is valid and the memory was just initialized.
     ///     let ptr = reservation.ptr().cast::<f64>();
-    ///     ptr.as_ptr().read()
+    ///     ptr.read()
     /// };
     /// assert_eq!(value, 3.14159);
     /// # unsafe {
@@ -600,16 +599,16 @@ mod tests {
 
         // Write some values.
         unsafe {
-            reservation_a.ptr().cast::<u32>().as_ptr().write(42);
-            reservation_b.ptr().cast::<u32>().as_ptr().write(43);
-            reservation_c.ptr().cast::<u32>().as_ptr().write(44);
+            reservation_a.ptr().cast::<u32>().write(42);
+            reservation_b.ptr().cast::<u32>().write(43);
+            reservation_c.ptr().cast::<u32>().write(44);
         }
 
         // Read them back via reservation pointer.
         unsafe {
-            assert_eq!(reservation_a.ptr().cast::<u32>().as_ptr().read(), 42);
-            assert_eq!(reservation_b.ptr().cast::<u32>().as_ptr().read(), 43);
-            assert_eq!(reservation_c.ptr().cast::<u32>().as_ptr().read(), 44);
+            assert_eq!(reservation_a.ptr().cast::<u32>().read(), 42);
+            assert_eq!(reservation_b.ptr().cast::<u32>().read(), 43);
+            assert_eq!(reservation_c.ptr().cast::<u32>().read(), 44);
         }
 
         unsafe {
@@ -619,10 +618,10 @@ mod tests {
         let reservation_d = pool.reserve();
 
         unsafe {
-            reservation_d.ptr().cast::<u32>().as_ptr().write(45);
-            assert_eq!(reservation_a.ptr().cast::<u32>().as_ptr().read(), 42);
-            assert_eq!(reservation_c.ptr().cast::<u32>().as_ptr().read(), 44);
-            assert_eq!(reservation_d.ptr().cast::<u32>().as_ptr().read(), 45);
+            reservation_d.ptr().cast::<u32>().write(45);
+            assert_eq!(reservation_a.ptr().cast::<u32>().read(), 42);
+            assert_eq!(reservation_c.ptr().cast::<u32>().read(), 44);
+            assert_eq!(reservation_d.ptr().cast::<u32>().read(), 45);
         }
 
         // Clean up remaining reservations.
@@ -663,10 +662,9 @@ mod tests {
             reservation
                 .ptr()
                 .cast::<u64>()
-                .as_ptr()
                 .write(0x1234567890ABCDEF);
             assert_eq!(
-                reservation.ptr().cast::<u64>().as_ptr().read(),
+                reservation.ptr().cast::<u64>().read(),
                 0x1234567890ABCDEF
             );
         }
@@ -689,7 +687,7 @@ mod tests {
         for i in 0..200 {
             let reservation = pool.reserve();
             unsafe {
-                reservation.ptr().cast::<u32>().as_ptr().write(i);
+                reservation.ptr().cast::<u32>().write(i);
             }
             reservations.push(reservation);
         }

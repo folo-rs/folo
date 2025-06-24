@@ -17,11 +17,11 @@ fn main() {
         let reservation = pool.reserve();
         // SAFETY: The pointer is valid and aligned for u64, and we own the memory.
         unsafe {
-            reservation.ptr().cast::<u64>().as_ptr().write(42);
+            reservation.ptr().cast::<u64>().write(42);
         }
         println!("   Wrote value: 42");
         // SAFETY: The pointer is valid and the memory was just initialized.
-        let value = unsafe { reservation.ptr().cast::<u64>().as_ptr().read() };
+        let value = unsafe { reservation.ptr().cast::<u64>().read() };
         println!("   Read value: {value}");
 
         // SAFETY: We know the reservation is valid since we just created it.
