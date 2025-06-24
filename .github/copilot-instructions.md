@@ -137,3 +137,6 @@ in both private APIs/logic and public APIs. Prefer `NonZero<usize>` over `NonZer
 Bigger and more important types go higher in the file, smaller and less important types go lower.
 
 Public API types go higher in the file, private types go lower.
+
+The implementation of a type should stay close to the definition of the type (e.g. `impl` blocks
+of a type follow the `struct` block).
