@@ -34,6 +34,11 @@ be faster than doing the individual validation steps one by one.
 
 We operate under a "zero warnings allowed" requirement - fix all warnings that validation generates.
 
+# Validate via examples
+
+All stand-alone examples binaries are expected to not panic when executed. When validating changes
+to a package, run each stand-alone example binary it has and ensure that none of them panic.
+
 # Extra validation for unsafe code
 
 If a package you are modifying requires unsafe code, you are expected to run the tests under Miri

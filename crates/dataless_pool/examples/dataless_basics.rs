@@ -93,5 +93,21 @@ fn main() {
         }
     }
 
+    // Clean up the remaining reservations.
+    // SAFETY: All reservations are valid since we just created them.
+    unsafe {
+        for reservation in reservations {
+            pool.release(reservation);
+        }
+    }
+    
+    // Also clean up the first two reservations we still have.
+    // SAFETY: We know these reservations are valid since we created them and only released reservation2.
+    unsafe {
+        pool.release(reservation1);
+        pool.release(reservation3);
+    }
+
+    println!("All reservations cleaned up successfully!");
     println!("DatalessPool example completed successfully!");
 }
