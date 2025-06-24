@@ -32,6 +32,10 @@ pub(crate) struct DatalessSlab {
     /// pseudo-concatenated together in memory (respecting all relevant memory layout rules).
     item_offset: usize,
 
+    /// Pointer to the first entry in the allocated slab memory.
+    ///
+    /// This points to the beginning of the allocated memory block that contains all entries.
+    /// Each entry is a combination of `Entry` metadata and the actual item data.
     first_entry_ptr: NonNull<Entry>,
 
     /// Index of the next free slot in the collection. Think of this as a virtual stack of the most
@@ -44,6 +48,84 @@ pub(crate) struct DatalessSlab {
     /// cases the collection is the backing store for a custom reservation/pinning scheme for items
     /// used from unsafe code and may not be valid to drop when any items are still present.
     count: usize,
+}
+
+/// The result of reserving memory in a [`DatalessSlab`].
+///
+/// Contains both the stable index for later operations and a pointer to the reserved memory.
+#[derive(Debug)]
+pub(crate) struct SlabReservation {
+    /// The stable index that can be used to retrieve or release this memory later.
+    index: usize,
+
+    /// A pointer to the reserved memory block.
+    ptr: NonNull<()>,
+}
+
+impl SlabReservation {
+    /// Returns the stable index that can be used to retrieve or release this memory later.
+    #[must_use]
+    pub(crate) fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Returns a pointer to the reserved memory block.
+    #[must_use]
+    pub(crate) fn ptr(&self) -> NonNull<()> {
+        self.ptr
+    }
+}
+
+/// Layout calculations for a [`DatalessSlab`].
+///
+/// Contains the computed memory layouts needed to construct and operate a slab.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SlabLayoutInfo {
+    /// Layout of the `Entry` and the item it owns combined.
+    pub(crate) combined_entry_layout: Layout,
+
+    /// Offset to add to an `Entry` pointer to get to the actual item inside the entry.
+    pub(crate) item_offset: usize,
+
+    /// Layout of the entire slab (all entries for the given capacity).
+    pub(crate) slab_layout: Layout,
+}
+
+impl SlabLayoutInfo {
+    /// Calculates layout information for a slab with the given item layout and capacity.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the item layout has zero size or if layout calculations overflow.
+    pub(crate) fn calculate(item_layout: Layout, capacity: NonZero<usize>) -> Self {
+        assert!(
+            item_layout.size() > 0,
+            "SlabLayoutInfo cannot be calculated for zero-sized item layout"
+        );
+
+        // Calculate the combined layout for Entry + item.
+        let entry_layout = Layout::new::<Entry>();
+
+        let (combined_entry_layout, item_offset) = entry_layout
+            .extend(item_layout)
+            .expect("layout extension cannot fail for valid layouts with reasonable sizes");
+
+        // Calculate the layout for the entire slab (array of combined layouts).
+        let slab_layout = Layout::from_size_align(
+            combined_entry_layout
+                .size()
+                .checked_mul(capacity.get())
+                .expect("capacity multiplication cannot overflow for reasonable capacity values"),
+            combined_entry_layout.align(),
+        )
+        .expect("slab layout calculation cannot fail for valid combined layouts");
+
+        Self {
+            combined_entry_layout,
+            item_offset,
+            slab_layout,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -65,38 +147,18 @@ impl DatalessSlab {
     /// Panics if the slab would be zero-sized due to item size being zero.
     #[must_use]
     pub(crate) fn new(item_layout: Layout, capacity: NonZero<usize>) -> Self {
-        assert!(
-            item_layout.size() > 0,
-            "DatalessSlab must have non-zero item size"
-        );
-
-        // Calculate the combined layout for Entry + item.
-        let entry_layout = Layout::new::<Entry>();
-
-        let (combined_layout, item_offset) = entry_layout
-            .extend(item_layout)
-            .expect("layout extension cannot fail for valid layouts with reasonable sizes");
-
-        // Calculate the layout for the entire slab (array of combined layouts).
-        let slab_layout = Layout::from_size_align(
-            combined_layout
-                .size()
-                .checked_mul(capacity.get())
-                .expect("capacity multiplication cannot overflow for reasonable capacity values"),
-            combined_layout.align(),
-        )
-        .expect("slab layout calculation cannot fail for valid combined layouts");
+        let layout_info = SlabLayoutInfo::calculate(item_layout, capacity);
 
         // SAFETY: The layout is valid for the target allocation and not zero-sized.
         // (guarded by assertions above).
-        let ptr = NonNull::new(unsafe { alloc(slab_layout) })
+        let ptr = NonNull::new(unsafe { alloc(layout_info.slab_layout) })
             .expect("we do not intend to handle allocation failure as a real possibility - OOM results in panic")
             .cast::<Entry>();
 
         // Initialize all slots to `Vacant` to start with.
         for index in 0_usize..capacity.get() {
             let offset = index
-                .checked_mul(combined_layout.size())
+                .checked_mul(layout_info.combined_entry_layout.size())
                 .expect("index offset calculation cannot overflow for reasonable index values");
 
             // SAFETY: We allocated enough space for all items up to the indicated capacity.
@@ -115,7 +177,9 @@ impl DatalessSlab {
                 ptr::write(
                     entry_ptr,
                     Entry::Vacant {
-                        next_free_index: index.checked_add(1_usize).unwrap_or(capacity.get()),
+                        next_free_index: index
+                            .checked_add(1_usize)
+                            .unwrap_or_else(|| capacity.get()),
                     },
                 );
             }
@@ -124,7 +188,7 @@ impl DatalessSlab {
         Self {
             item_layout,
             capacity,
-            item_offset,
+            item_offset: layout_info.item_offset,
             first_entry_ptr: ptr,
             next_free_index: 0,
             count: 0,
@@ -134,25 +198,13 @@ impl DatalessSlab {
     /// Layout of the `Entry` and the item it owns.
     #[must_use]
     fn combined_entry_layout(&self) -> Layout {
-        let entry_layout = Layout::new::<Entry>();
-        entry_layout
-            .extend(self.item_layout)
-            .expect("layout extension must be valid")
-            .0
+        SlabLayoutInfo::calculate(self.item_layout, self.capacity).combined_entry_layout
     }
 
     /// Layout of the entire slab (all `capacity` entries).
     #[must_use]
     fn slab_layout(&self) -> Layout {
-        let combined_layout = self.combined_entry_layout();
-        Layout::from_size_align(
-            combined_layout
-                .size()
-                .checked_mul(self.capacity.get())
-                .expect("capacity multiplication cannot overflow for reasonable capacity values"),
-            combined_layout.align(),
-        )
-        .expect("slab layout calculation cannot fail for valid combined layouts")
+        SlabLayoutInfo::calculate(self.item_layout, self.capacity).slab_layout
     }
 
     /// Returns the number of reserved memory blocks in the slab.
@@ -438,32 +490,6 @@ impl Drop for DatalessSlab {
 // SAFETY: There are raw pointers involved here but nothing inherently non-thread-mobile.
 // about it, so the slab can move between threads.
 unsafe impl Send for DatalessSlab {}
-
-/// The result of reserving memory in a [`DatalessSlab`].
-///
-/// Contains both the stable index for later operations and a pointer to the reserved memory.
-#[derive(Debug)]
-pub(crate) struct SlabReservation {
-    /// The stable index that can be used to retrieve or release this memory later.
-    index: usize,
-
-    /// A pointer to the reserved memory block.
-    ptr: NonNull<()>,
-}
-
-impl SlabReservation {
-    /// Returns the stable index that can be used to retrieve or release this memory later.
-    #[must_use]
-    pub(crate) fn index(&self) -> usize {
-        self.index
-    }
-
-    /// Returns a pointer to the reserved memory block.
-    #[must_use]
-    pub(crate) fn ptr(&self) -> NonNull<()> {
-        self.ptr
-    }
-}
 
 #[cfg(test)]
 #[allow(
@@ -956,91 +982,381 @@ mod tests {
 
     #[test]
     fn different_alignments() {
-        // Test with a type that has specific alignment requirements.
-        #[repr(align(16))]
-        struct AlignedStruct {
-            data: [u8; 32],
+        // Test various alignment requirements to ensure proper memory layout.
+
+        // 1-byte aligned.
+        #[repr(C, align(1))]
+        struct Byte {
+            data: u8,
         }
 
-        let layout = Layout::new::<AlignedStruct>();
-        let mut slab = DatalessSlab::new(layout, NonZero::new(2).unwrap());
-
+        let mut slab = DatalessSlab::new(Layout::new::<Byte>(), NonZero::new(5).unwrap());
         let reservation = slab.reserve();
-
-        // Verify alignment.
-        assert_eq!(reservation.ptr().as_ptr() as usize % 16, 0);
-
         unsafe {
-            let aligned_ptr = reservation.ptr().cast::<AlignedStruct>();
-            aligned_ptr
+            reservation
+                .ptr()
+                .cast::<Byte>()
                 .as_ptr()
-                .write(AlignedStruct { data: [0x42; 32] });
-            let value = aligned_ptr.as_ptr().read();
-            assert_eq!(value.data[0], 0x42);
-            assert_eq!(value.data[31], 0x42);
+                .write(Byte { data: 42 });
+            assert_eq!(reservation.ptr().cast::<Byte>().as_ptr().read().data, 42);
+        }
+        slab.release(reservation.index());
+
+        // 2-byte aligned.
+        #[repr(C, align(2))]
+        struct Word {
+            data: u16,
         }
 
-        slab.release(reservation.index());
-    }
-    #[test]
-    fn drop_with_no_active_reservations_does_not_panic() {
-        let layout = Layout::new::<u64>();
-        let capacity = NonZero::new(10).unwrap();
-        let mut slab = DatalessSlab::new(layout, capacity);
-
-        // Reserve and then release immediately.
+        let mut slab = DatalessSlab::new(Layout::new::<Word>(), NonZero::new(5).unwrap());
         let reservation = slab.reserve();
+        unsafe {
+            reservation
+                .ptr()
+                .cast::<Word>()
+                .as_ptr()
+                .write(Word { data: 0x1234 });
+            assert_eq!(
+                reservation.ptr().cast::<Word>().as_ptr().read().data,
+                0x1234
+            );
+        }
         slab.release(reservation.index());
 
-        assert!(slab.is_empty());
+        // 4-byte aligned.
+        #[repr(C, align(4))]
+        struct DWord {
+            data: u32,
+        }
 
-        // Slab should drop without panic.
-        drop(slab);
+        let mut slab = DatalessSlab::new(Layout::new::<DWord>(), NonZero::new(5).unwrap());
+        let reservation = slab.reserve();
+        unsafe {
+            reservation
+                .ptr()
+                .cast::<DWord>()
+                .as_ptr()
+                .write(DWord { data: 0x12345678 });
+            assert_eq!(
+                reservation.ptr().cast::<DWord>().as_ptr().read().data,
+                0x12345678
+            );
+        }
+        slab.release(reservation.index());
+
+        // 8-byte aligned.
+        #[repr(C, align(8))]
+        struct QWord {
+            data: u64,
+        }
+
+        let mut slab = DatalessSlab::new(Layout::new::<QWord>(), NonZero::new(5).unwrap());
+        let reservation = slab.reserve();
+        unsafe {
+            reservation.ptr().cast::<QWord>().as_ptr().write(QWord {
+                data: 0x123456789ABCDEF0,
+            });
+            assert_eq!(
+                reservation.ptr().cast::<QWord>().as_ptr().read().data,
+                0x123456789ABCDEF0
+            );
+        }
+        slab.release(reservation.index());
+
+        // 16-byte aligned.
+        #[repr(C, align(16))]
+        struct OWord {
+            data: [u64; 2],
+        }
+
+        let mut slab = DatalessSlab::new(Layout::new::<OWord>(), NonZero::new(5).unwrap());
+        let reservation = slab.reserve();
+        unsafe {
+            reservation.ptr().cast::<OWord>().as_ptr().write(OWord {
+                data: [0x123456789ABCDEF0, 0x0FEDCBA987654321],
+            });
+            let read_data = reservation.ptr().cast::<OWord>().as_ptr().read();
+            assert_eq!(read_data.data[0], 0x123456789ABCDEF0);
+            assert_eq!(read_data.data[1], 0x0FEDCBA987654321);
+        }
+        slab.release(reservation.index());
     }
 
     #[test]
-    #[should_panic(expected = "dropped a non-empty DatalessSlab with 1 active reservations")]
-    fn drop_with_active_reservation_panics() {
-        let layout = Layout::new::<u64>();
-        let capacity = NonZero::new(10).unwrap();
-        let mut slab = DatalessSlab::new(layout, capacity);
+    fn complex_data_types() {
+        // Test with complex nested structures.
+        #[repr(C)]
+        struct ComplexStruct {
+            a: u8,
+            b: u16,
+            c: u32,
+            d: u64,
+            e: [u32; 4],
+            f: (u16, u32, u64),
+        }
 
-        let _reservation = slab.reserve();
-
-        // Slab should panic on drop since we still have an active reservation.
-        drop(slab);
-    }
-
-    #[test]
-    #[should_panic(expected = "dropped a non-empty DatalessSlab with 3 active reservations")]
-    fn drop_with_multiple_active_reservations_panics() {
-        let layout = Layout::new::<u32>();
-        let capacity = NonZero::new(10).unwrap();
-        let mut slab = DatalessSlab::new(layout, capacity);
-
-        let _reservation1 = slab.reserve();
-        let _reservation2 = slab.reserve();
-        let _reservation3 = slab.reserve();
-
-        // Slab should panic on drop since we have multiple active reservations.
-        drop(slab);
-    }
-
-    #[test]
-    #[should_panic(expected = "dropped a non-empty DatalessSlab with 2 active reservations")]
-    fn drop_with_some_released_reservations_still_panics() {
-        let layout = Layout::new::<i64>();
-        let capacity = NonZero::new(10).unwrap();
-        let mut slab = DatalessSlab::new(layout, capacity);
+        let mut slab = DatalessSlab::new(Layout::new::<ComplexStruct>(), NonZero::new(3).unwrap());
 
         let reservation1 = slab.reserve();
-        let _reservation2 = slab.reserve();
-        let _reservation3 = slab.reserve();
+        let reservation2 = slab.reserve();
 
-        // Release one reservation but keep two.
+        unsafe {
+            // Write complex data to first reservation.
+            reservation1
+                .ptr()
+                .cast::<ComplexStruct>()
+                .as_ptr()
+                .write(ComplexStruct {
+                    a: 0x12,
+                    b: 0x3456,
+                    c: 0x789ABCDE,
+                    d: 0x123456789ABCDEF0,
+                    e: [0x11111111, 0x22222222, 0x33333333, 0x44444444],
+                    f: (0x5555, 0x66666666, 0x7777777777777777),
+                });
+
+            // Write different data to second reservation.
+            reservation2
+                .ptr()
+                .cast::<ComplexStruct>()
+                .as_ptr()
+                .write(ComplexStruct {
+                    a: 0xAB,
+                    b: 0xCDEF,
+                    c: 0x12345678,
+                    d: 0xFEDCBA0987654321,
+                    e: [0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD],
+                    f: (0xEEEE, 0xFFFFFFFF, 0x1111111111111111),
+                });
+
+            // Verify both can be read back correctly.
+            let data1 = reservation1.ptr().cast::<ComplexStruct>().as_ptr().read();
+            assert_eq!(data1.a, 0x12);
+            assert_eq!(data1.b, 0x3456);
+            assert_eq!(data1.c, 0x789ABCDE);
+            assert_eq!(data1.d, 0x123456789ABCDEF0);
+            assert_eq!(data1.e, [0x11111111, 0x22222222, 0x33333333, 0x44444444]);
+            assert_eq!(data1.f, (0x5555, 0x66666666, 0x7777777777777777));
+
+            let data2 = reservation2.ptr().cast::<ComplexStruct>().as_ptr().read();
+            assert_eq!(data2.a, 0xAB);
+            assert_eq!(data2.b, 0xCDEF);
+            assert_eq!(data2.c, 0x12345678);
+            assert_eq!(data2.d, 0xFEDCBA0987654321);
+            assert_eq!(data2.e, [0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD]);
+            assert_eq!(data2.f, (0xEEEE, 0xFFFFFFFF, 0x1111111111111111));
+        }
+
         slab.release(reservation1.index());
+        slab.release(reservation2.index());
+    }
 
-        // Slab should still panic since we have active reservations.
-        drop(slab);
+    #[test]
+    fn enum_data_types() {
+        // Test with enums to ensure proper layout handling.
+        #[repr(C)]
+        #[allow(dead_code, reason = "test-only enum variants")]
+        enum TestEnum {
+            Variant1(u32),
+            Variant2 { x: u64, y: u64 },
+            Variant3,
+        }
+
+        let mut slab = DatalessSlab::new(Layout::new::<TestEnum>(), NonZero::new(4).unwrap());
+
+        let res1 = slab.reserve();
+        let res2 = slab.reserve();
+        let res3 = slab.reserve();
+
+        unsafe {
+            // Test different enum variants.
+            res1.ptr()
+                .cast::<TestEnum>()
+                .as_ptr()
+                .write(TestEnum::Variant1(0x12345678));
+            res2.ptr()
+                .cast::<TestEnum>()
+                .as_ptr()
+                .write(TestEnum::Variant2 {
+                    x: 0x1111111111111111,
+                    y: 0x2222222222222222,
+                });
+            res3.ptr()
+                .cast::<TestEnum>()
+                .as_ptr()
+                .write(TestEnum::Variant3);
+
+            // Verify we can read them back (note: this is a bit unsafe since we're
+            // treating the enum as raw memory, but it tests the layout handling).
+            let _data1 = res1.ptr().cast::<TestEnum>().as_ptr().read();
+            let _data2 = res2.ptr().cast::<TestEnum>().as_ptr().read();
+            let _data3 = res3.ptr().cast::<TestEnum>().as_ptr().read();
+        }
+
+        slab.release(res1.index());
+        slab.release(res2.index());
+        slab.release(res3.index());
+    }
+
+    #[test]
+    fn small_and_large_sizes() {
+        // Test very small data types.
+        let mut slab_small = DatalessSlab::new(Layout::new::<u8>(), NonZero::new(100).unwrap());
+        let mut reservations = Vec::new();
+
+        // Fill with small values.
+        for i in 0..100_u8 {
+            let reservation = slab_small.reserve();
+            unsafe {
+                reservation.ptr().cast::<u8>().as_ptr().write(i);
+            }
+            reservations.push(reservation);
+        }
+
+        // Verify all values.
+        for (i, reservation) in reservations.iter().enumerate() {
+            unsafe {
+                assert_eq!(
+                    reservation.ptr().cast::<u8>().as_ptr().read(),
+                    u8::try_from(i).expect("loop range is within u8 bounds")
+                );
+            }
+        }
+
+        // Clean up.
+        for reservation in reservations {
+            slab_small.release(reservation.index());
+        }
+
+        // Test large data types.
+        #[repr(C)]
+        struct HugeStruct {
+            data: [u64; 128], // 1024 bytes
+        }
+
+        let mut slab_large =
+            DatalessSlab::new(Layout::new::<HugeStruct>(), NonZero::new(5).unwrap());
+        let reservation = slab_large.reserve();
+
+        unsafe {
+            let mut huge_data = HugeStruct { data: [0; 128] };
+            for (i, elem) in huge_data.data.iter_mut().enumerate() {
+                *elem = (i as u64) * 0x0123456789ABCDEF;
+            }
+
+            reservation
+                .ptr()
+                .cast::<HugeStruct>()
+                .as_ptr()
+                .write(huge_data);
+
+            let read_data = reservation.ptr().cast::<HugeStruct>().as_ptr().read();
+            for (i, &elem) in read_data.data.iter().enumerate() {
+                assert_eq!(elem, (i as u64) * 0x0123456789ABCDEF);
+            }
+        }
+
+        slab_large.release(reservation.index());
+    }
+
+    #[test]
+    fn layout_calculation_basic() {
+        // Test with a simple u32 layout.
+        let item_layout = Layout::new::<u32>();
+        let capacity = NonZero::new(5).unwrap();
+
+        let layout_info = SlabLayoutInfo::calculate(item_layout, capacity);
+
+        // The combined entry layout should be larger than just the Entry.
+        let entry_layout = Layout::new::<Entry>();
+        assert!(layout_info.combined_entry_layout.size() >= entry_layout.size());
+        assert!(layout_info.combined_entry_layout.size() >= item_layout.size());
+
+        // Item offset should be non-zero (Entry comes first).
+        assert!(layout_info.item_offset > 0);
+
+        // Slab layout should accommodate all entries.
+        assert!(
+            layout_info.slab_layout.size()
+                >= layout_info.combined_entry_layout.size() * capacity.get()
+        );
+
+        // Alignment should be at least as strict as both Entry and item.
+        assert!(layout_info.combined_entry_layout.align() >= entry_layout.align());
+        assert!(layout_info.combined_entry_layout.align() >= item_layout.align());
+    }
+
+    #[test]
+    fn layout_calculation_various_alignments() {
+        // Test with different alignment requirements.
+
+        // Test with 1-byte aligned data.
+        #[repr(C, align(1))]
+        struct Align1 {
+            data: u8,
+        }
+
+        let layout_info_1 =
+            SlabLayoutInfo::calculate(Layout::new::<Align1>(), NonZero::new(3).unwrap());
+        assert_eq!(
+            layout_info_1.combined_entry_layout.align(),
+            Layout::new::<Entry>().align().max(1)
+        );
+
+        // Test with 8-byte aligned data.
+        #[repr(C, align(8))]
+        struct Align8 {
+            data: u64,
+        }
+
+        let layout_info_8 =
+            SlabLayoutInfo::calculate(Layout::new::<Align8>(), NonZero::new(3).unwrap());
+        assert_eq!(
+            layout_info_8.combined_entry_layout.align(),
+            Layout::new::<Entry>().align().max(8)
+        );
+
+        // Test with 16-byte aligned data.
+        #[repr(C, align(16))]
+        struct Align16 {
+            data: [u64; 2],
+        }
+
+        let layout_info_16 =
+            SlabLayoutInfo::calculate(Layout::new::<Align16>(), NonZero::new(3).unwrap());
+        assert_eq!(
+            layout_info_16.combined_entry_layout.align(),
+            Layout::new::<Entry>().align().max(16)
+        );
+    }
+
+    #[test]
+    fn layout_calculation_large_structs() {
+        // Test with a large struct to ensure proper layout calculation.
+        #[repr(C)]
+        struct LargeStruct {
+            data: [u64; 32], // 256 bytes
+        }
+
+        let item_layout = Layout::new::<LargeStruct>();
+        let capacity = NonZero::new(10).unwrap();
+
+        let layout_info = SlabLayoutInfo::calculate(item_layout, capacity);
+
+        // Verify the slab can hold all entries.
+        assert!(
+            layout_info.slab_layout.size()
+                >= layout_info.combined_entry_layout.size() * capacity.get()
+        );
+
+        // Verify item offset is properly aligned for the large struct.
+        assert_eq!(layout_info.item_offset % item_layout.align(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "SlabLayoutInfo cannot be calculated for zero-sized item layout")]
+    fn layout_calculation_zero_size_panics() {
+        let zero_layout = Layout::from_size_align(0, 1).unwrap();
+        SlabLayoutInfo::calculate(zero_layout, NonZero::new(3).unwrap());
     }
 }

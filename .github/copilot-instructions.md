@@ -131,3 +131,9 @@ There should be an empty line between functions.
 
 Whenever a numeric value must be non-zero, prefer `NonZero<usize>` over `usize`,
 in both private APIs/logic and public APIs. Prefer `NonZero<usize>` over `NonZeroUsize`.
+
+# File contents flow
+
+Bigger and more important types go higher in the file, smaller and less important types go lower.
+
+Public API types go higher in the file, private types go lower.
