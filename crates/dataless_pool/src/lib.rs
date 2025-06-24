@@ -16,13 +16,13 @@
 //!
 //! # Features
 //!
-//! - **Type-erased memory management**: Works with any memory layout via [`std::alloc::Layout`]
-//! - **Stable addresses**: Memory addresses remain valid until explicitly released
-//! - **Dynamic growth**: Pool automatically expands as needed
-//! - **Efficient allocation**: Uses high density slabs to minimize allocation overhead
-//! - **Stable Rust**: No unstable Rust features required
+//! - **Type-erased memory management**: Works with any memory layout via [`std::alloc::Layout`].
+//! - **Stable addresses**: Memory addresses remain valid until explicitly released.
+//! - **Dynamic growth**: Pool automatically expands as needed.
+//! - **Efficient allocation**: Uses high density slabs to minimize allocation overhead.
+//! - **Stable Rust**: No unstable Rust features required.
 //! - **Some guardrails**: Prevents releasing memory without a reservation, though requires
-//!   `unsafe` for data access
+//!   `unsafe` for data access.
 //!
 //! # Example
 //!
@@ -39,25 +39,25 @@
 //! let reservation1 = pool.reserve();
 //! let reservation2 = pool.reserve();
 //!
-//! // Write data to the first reservation
+//! // Write data to the first reservation.
 //! unsafe {
 //!     // SAFETY: The pointer is valid and aligned for u64, and we own the memory.
 //!     reservation1.ptr().cast::<u64>().write(42);
 //! }
 //!
-//! // Write data to the second reservation
+//! // Write data to the second reservation.
 //! unsafe {
 //!     // SAFETY: The pointer is valid and aligned for u64, and we own the memory.
 //!     reservation2.ptr().cast::<u64>().write(123);
 //! }
 //!
-//! // Read data back from the first reservation
+//! // Read data back from the first reservation.
 //! let value1 = unsafe {
 //!     // SAFETY: The pointer is valid and the memory was just initialized.
 //!     reservation1.ptr().cast::<u64>().read()
 //! };
 //!
-//! // Read data back from the second reservation
+//! // Read data back from the second reservation.
 //! let value2 = unsafe {
 //!     // SAFETY: The pointer is valid and the memory was just initialized.
 //!     reservation2.ptr().cast::<u64>().read()
@@ -78,9 +78,9 @@
 //! While the pool management itself is safe, accessing the memory requires `unsafe` code
 //! since the pool works with type-erased memory. Users are responsible for:
 //!
-//! - Writing and reading data with the correct type that matches the layout
-//! - Not accessing memory after the reservation has been released
-//! - Ensuring proper initialization before reading
+//! - Writing and reading data with the correct type that matches the layout.
+//! - Not accessing memory after the reservation has been released.
+//! - Ensuring proper initialization before reading.
 //!
 //! The reservation-based design helps prevent some common errors by making it impossible
 //! to release memory without the original reservation object.
