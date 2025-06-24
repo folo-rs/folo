@@ -147,3 +147,15 @@ Types, fields, functions and methods should have the minimum required visibility
 visible in the same file by default if not part of the public API surface.
 
 Use `pub(crate)` only when a type actually needs to be accessible in other files of the same crate.
+
+# Diagrams
+
+Mermaid diagrams are encouraged in API documentation where they make sense.
+
+Each diagram should be a separate file in a `crate/docs/diagrams` folder, with the file
+extension `.mermaid`. The file name should match the diagram name used in the documentation.
+
+Rendering Mermaid diagrams in Rust API documentation requires the `simple-mermaid` package to
+be referenced. The syntax for embedding a Mermaid diagram is
+`#![doc = mermaid!("../doc/region_cached.mermaid")]`. See existing examples for a detailed
+reference (e.g. the `region_local` package).
