@@ -5,85 +5,6 @@ use std::thread;
 
 use crate::DatalessSlab;
 
-/// The result of reserving memory in a [`DatalessPool`].
-///
-/// Contains both the coordinates for accessing the memory and a pointer to the reserved memory.
-/// Acts as both the reservation and the key - the user must return this to the pool to release
-/// the memory capacity.
-///
-/// # Example
-///
-/// ```rust
-/// use std::alloc::Layout;
-///
-/// use dataless_pool::DatalessPool;
-///
-/// let layout = Layout::new::<i64>();
-/// let mut pool = DatalessPool::new(layout);
-///
-/// let reservation = pool.reserve();
-///
-/// // Write to the memory pointer.
-/// unsafe {
-///     // SAFETY: The pointer is valid and aligned for i64, and we own the memory.
-///     reservation.ptr().cast::<i64>().as_ptr().write(-123);
-/// }
-///
-/// // Read from the memory pointer.
-/// let value = unsafe {
-///     // SAFETY: The pointer is valid and the memory was just initialized.
-///     reservation.ptr().cast::<i64>().as_ptr().read()
-/// };
-/// assert_eq!(value, -123);
-///
-/// // The reservation must be returned to release the memory.
-/// pool.release(reservation);
-/// ```
-#[derive(Debug)]
-pub struct PoolReservation {
-    /// The coordinates of the memory block within the pool structure.
-    coordinates: MemoryBlockCoordinates,
-
-    /// A pointer to the reserved memory block.
-    ptr: NonNull<()>,
-}
-
-impl PoolReservation {
-    /// Returns a pointer to the reserved memory block.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use std::alloc::Layout;
-    ///
-    /// use dataless_pool::DatalessPool;
-    ///
-    /// let layout = Layout::new::<f64>();
-    /// let mut pool = DatalessPool::new(layout);
-    /// let reservation = pool.reserve();
-    ///
-    /// // Write data to the reserved memory.
-    /// unsafe {
-    ///     // SAFETY: The pointer is valid and aligned for f64, and we own the memory.
-    ///     let ptr = reservation.ptr().cast::<f64>();
-    ///     ptr.as_ptr().write(3.14159);
-    /// }
-    ///
-    /// // Read data back from the memory.
-    /// let value = unsafe {
-    ///     // SAFETY: The pointer is valid and the memory was just initialized.
-    ///     let ptr = reservation.ptr().cast::<f64>();
-    ///     ptr.as_ptr().read()
-    /// };
-    /// assert_eq!(value, 3.14159);
-    /// # pool.release(reservation);
-    /// ```
-    #[must_use]
-    pub fn ptr(&self) -> NonNull<()> {
-        self.ptr
-    }
-}
-
 /// A memory pool of unbounded size that reserves pinned memory without placing any data in it,
 /// leaving that up to the owner.
 ///
@@ -502,6 +423,85 @@ impl DatalessPool {
         for slab in &self.slabs {
             slab.integrity_check();
         }
+    }
+}
+
+/// The result of reserving memory in a [`DatalessPool`].
+///
+/// Contains both the coordinates for accessing the memory and a pointer to the reserved memory.
+/// Acts as both the reservation and the key - the user must return this to the pool to release
+/// the memory capacity.
+///
+/// # Example
+///
+/// ```rust
+/// use std::alloc::Layout;
+///
+/// use dataless_pool::DatalessPool;
+///
+/// let layout = Layout::new::<i64>();
+/// let mut pool = DatalessPool::new(layout);
+///
+/// let reservation = pool.reserve();
+///
+/// // Write to the memory pointer.
+/// unsafe {
+///     // SAFETY: The pointer is valid and aligned for i64, and we own the memory.
+///     reservation.ptr().cast::<i64>().as_ptr().write(-123);
+/// }
+///
+/// // Read from the memory pointer.
+/// let value = unsafe {
+///     // SAFETY: The pointer is valid and the memory was just initialized.
+///     reservation.ptr().cast::<i64>().as_ptr().read()
+/// };
+/// assert_eq!(value, -123);
+///
+/// // The reservation must be returned to release the memory.
+/// pool.release(reservation);
+/// ```
+#[derive(Debug)]
+pub struct PoolReservation {
+    /// The coordinates of the memory block within the pool structure.
+    coordinates: MemoryBlockCoordinates,
+
+    /// A pointer to the reserved memory block.
+    ptr: NonNull<()>,
+}
+
+impl PoolReservation {
+    /// Returns a pointer to the reserved memory block.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    ///
+    /// use dataless_pool::DatalessPool;
+    ///
+    /// let layout = Layout::new::<f64>();
+    /// let mut pool = DatalessPool::new(layout);
+    /// let reservation = pool.reserve();
+    ///
+    /// // Write data to the reserved memory.
+    /// unsafe {
+    ///     // SAFETY: The pointer is valid and aligned for f64, and we own the memory.
+    ///     let ptr = reservation.ptr().cast::<f64>();
+    ///     ptr.as_ptr().write(3.14159);
+    /// }
+    ///
+    /// // Read data back from the memory.
+    /// let value = unsafe {
+    ///     // SAFETY: The pointer is valid and the memory was just initialized.
+    ///     let ptr = reservation.ptr().cast::<f64>();
+    ///     ptr.as_ptr().read()
+    /// };
+    /// assert_eq!(value, 3.14159);
+    /// # pool.release(reservation);
+    /// ```
+    #[must_use]
+    pub fn ptr(&self) -> NonNull<()> {
+        self.ptr
     }
 }
 

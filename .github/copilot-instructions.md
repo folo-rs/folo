@@ -20,19 +20,19 @@ Do not execute `just release` - this is a critical tool reserved for human use.
 
 # Validating changes
 
-After making changes to the codebase, you are expected to validate the essentials via
-`just validate-quick`. This tends to be faster than doing the individual validation steps
-one by one.
+After making changes to the codebase, you are expected to validate the essentials:
+
+* `just format` to apply auto-formatting to code files, ensuring consistent code style.
+* `just check` to verify that compiler checks pass.
+* `just clippy` to verify that all linter rules pass.
+* `just test` to verify that the code compiles and tests pass.
+* `just test-docs` to verify that doctests pass.
+* `just docs` to verify that the API documentation builds without errors.
+
+You can run all of these validation steps in one go via `just validate-quick`. This tends to
+be faster than doing the individual validation steps one by one.
 
 We operate under a "zero warnings allowed" requirement - fix all warnings that validation generates.
-
-If you only want to validate a specific aspect, call a specific `just` command, such as:
-    * `just format` to apply auto-formatting to code files, ensuring consistent code style.
-    * `just check` to verify that compiler checks pass.
-    * `just clippy` to verify that all linter rules pass.
-    * `just test` to verify that the code compiles and tests pass.
-    * `just test-docs` to verify that doctests pass.
-    * `just docs` to verify that the API documentation builds without errors.
 
 # Multiplatform codebase
 
@@ -86,9 +86,13 @@ You can assume PowerShell 7 (`pwsh`) is available. Prefer PowerShell 7 over Bash
 
 # Code style
 
-There are many Clippy rules defined in `./Cargo.toml`. Try to follow these even in doctests.
-Note that Clippy does not actually run on doctests, so you will need to manually check what
-rules we enable and try your best to follow them in the inline examples in API documentation.
+We limit line length to 100, including API documentation and comments.
+
+There are many Clippy rules defined in the workspace-level `Cargo.toml`.
+
+Follow these even in doctests. Note that Clippy does not actually check doctests! You will need to
+manually check what Clippy rules we enable in the workspace-level `Cargo.toml` and follow them in
+the inline examples in API documentation.
 
 # Language
 

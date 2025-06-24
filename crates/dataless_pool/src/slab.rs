@@ -3,38 +3,15 @@ use std::num::NonZero;
 use std::ptr::NonNull;
 use std::{mem, ptr, thread};
 
-/// The result of reserving memory in a [`DatalessSlab`].
+/// Provides memory for a specified number of objects with a specific layout without
+/// knowing their type.
 ///
-/// Contains both the stable index for later operations and a pointer to the reserved memory.
-#[derive(Debug)]
-pub(crate) struct SlabReservation {
-    /// The stable index that can be used to retrieve or release this memory later.
-    index: usize,
-
-    /// A pointer to the reserved memory block.
-    ptr: NonNull<()>,
-}
-
-impl SlabReservation {
-    /// Returns the stable index that can be used to retrieve or release this memory later.
-    #[must_use]
-    pub(crate) fn index(&self) -> usize {
-        self.index
-    }
-
-    /// Returns a pointer to the reserved memory block.
-    #[must_use]
-    pub(crate) fn ptr(&self) -> NonNull<()> {
-        self.ptr
-    }
-}
-
-/// Provides memory for a specified number of objects with a specific layout without knowing their type.
-///
-/// A fixed-capacity heap-allocated collection that works with opaque memory blocks. Works similar
-/// to a `Vec` but all items are located at stable addresses and the collection has a fixed
-/// capacity determined at construction time, operating using an index for lookup. When you reserve memory,
-/// you get back the index to use for accessing or deallocating the memory.
+/// A fixed-capacity heap-allocated collection that works with opaque memory blocks.
+/// Works similar to a `Vec` but only reserves memory, without placing any data in the
+/// reserved memory capacity. All items are located at stable addresses and the collection
+/// has a fixed capacity determined at construction time, operating using an index for
+/// lookup. When you reserve memory, you get back the index to use for accessing or
+/// deallocating the memory.
 ///
 /// # Out of band access
 ///
@@ -46,13 +23,13 @@ pub(crate) struct DatalessSlab {
     /// The maximum number of items this slab can hold.
     capacity: NonZero<usize>,
 
-    /// Layout of one item in the slab. This is only the contents, not including the `Entry`.
+    /// Layout of one item in the slab. This is only the "contents", not including the `Entry`.
     item_layout: Layout,
 
     /// Offset to add to an `Entry` pointer to get to the actual item inside the entry.
     ///
     /// Essentially, each item in the slab is a combination of `Entry` and the actual item contents,
-    /// pseudo-concatenated together in memory (respecting memory layout rules wrt padding).
+    /// pseudo-concatenated together in memory (respecting all relevant memory layout rules).
     item_offset: usize,
 
     first_entry_ptr: NonNull<Entry>,
@@ -71,9 +48,13 @@ pub(crate) struct DatalessSlab {
 
 #[derive(Debug)]
 enum Entry {
+    /// We do not know the type of the item, so we cannot name the item here. Instead,
+    /// the item will follow the entry at `item_offset` bytes from the start of the entry.
     Occupied,
 
-    Vacant { next_free_index: usize },
+    Vacant {
+        next_free_index: usize,
+    },
 }
 
 impl DatalessSlab {
@@ -89,10 +70,9 @@ impl DatalessSlab {
             "DatalessSlab must have non-zero item size"
         );
 
-        let capacity_value = capacity.get();
-
         // Calculate the combined layout for Entry + item.
         let entry_layout = Layout::new::<Entry>();
+
         let (combined_layout, item_offset) = entry_layout
             .extend(item_layout)
             .expect("layout extension cannot fail for valid layouts with reasonable sizes");
@@ -101,7 +81,7 @@ impl DatalessSlab {
         let slab_layout = Layout::from_size_align(
             combined_layout
                 .size()
-                .checked_mul(capacity_value)
+                .checked_mul(capacity.get())
                 .expect("capacity multiplication cannot overflow for reasonable capacity values"),
             combined_layout.align(),
         )
@@ -114,7 +94,7 @@ impl DatalessSlab {
             .cast::<Entry>();
 
         // Initialize all slots to `Vacant` to start with.
-        for index in 0_usize..capacity_value {
+        for index in 0_usize..capacity.get() {
             let offset = index
                 .checked_mul(combined_layout.size())
                 .expect("index offset calculation cannot overflow for reasonable index values");
@@ -135,7 +115,7 @@ impl DatalessSlab {
                 ptr::write(
                     entry_ptr,
                     Entry::Vacant {
-                        next_free_index: index.checked_add(1_usize).unwrap_or(capacity_value),
+                        next_free_index: index.checked_add(1_usize).unwrap_or(capacity.get()),
                     },
                 );
             }
@@ -458,6 +438,32 @@ impl Drop for DatalessSlab {
 // SAFETY: There are raw pointers involved here but nothing inherently non-thread-mobile.
 // about it, so the slab can move between threads.
 unsafe impl Send for DatalessSlab {}
+
+/// The result of reserving memory in a [`DatalessSlab`].
+///
+/// Contains both the stable index for later operations and a pointer to the reserved memory.
+#[derive(Debug)]
+pub(crate) struct SlabReservation {
+    /// The stable index that can be used to retrieve or release this memory later.
+    index: usize,
+
+    /// A pointer to the reserved memory block.
+    ptr: NonNull<()>,
+}
+
+impl SlabReservation {
+    /// Returns the stable index that can be used to retrieve or release this memory later.
+    #[must_use]
+    pub(crate) fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Returns a pointer to the reserved memory block.
+    #[must_use]
+    pub(crate) fn ptr(&self) -> NonNull<()> {
+        self.ptr
+    }
+}
 
 #[cfg(test)]
 #[allow(

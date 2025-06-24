@@ -2,8 +2,8 @@
 //! leaving placement of the data up to the owner.
 //!
 //! This crate provides [`DatalessPool`], a dynamically growing pool of memory capacity that works
-//! with opaque memory blocks on a specific [`std::alloc::Layout`] defined at pool creation. It offers stable
-//! memory addresses and efficient reservation-based memory management.
+//! with opaque memory blocks on a specific [`std::alloc::Layout`] defined at pool creation. It
+//! offers stable memory addresses and efficient reservation-based memory management.
 //!
 //! # Placing data into the reserved memory
 //!

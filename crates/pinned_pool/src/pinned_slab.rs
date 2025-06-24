@@ -50,7 +50,7 @@ pub(crate) struct PinnedSlab<T, const CAPACITY: usize> {
 
     /// Index of the next free slot in the collection. Think of this as a virtual stack of the most
     /// recently freed slots, with the stack entries stored in the collection entries themselves.
-    /// This will point out of bounds if the collection is full.
+    /// Also known as intrusive freelist. This will point out of bounds if the collection is full.
     next_free_index: usize,
 
     /// The total number of items in the collection. This is not used by the collection itself but
