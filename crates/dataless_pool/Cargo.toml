@@ -22,3 +22,7 @@ mutants = { workspace = true }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "dp_basic"
+harness = false
