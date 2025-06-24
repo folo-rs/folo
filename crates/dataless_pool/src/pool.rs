@@ -23,20 +23,20 @@ use crate::DatalessSlab;
 ///
 /// let reservation = pool.reserve();
 ///
-/// // Write to the memory pointer
+/// // Write to the memory pointer.
 /// unsafe {
 ///     // SAFETY: The pointer is valid and aligned for i64, and we own the memory.
 ///     reservation.ptr().cast::<i64>().as_ptr().write(-123);
 /// }
 ///
-/// // Read from the memory pointer
+/// // Read from the memory pointer.
 /// let value = unsafe {
 ///     // SAFETY: The pointer is valid and the memory was just initialized.
 ///     reservation.ptr().cast::<i64>().as_ptr().read()
 /// };
 /// assert_eq!(value, -123);
 ///
-/// // The reservation must be returned to release the memory
+/// // The reservation must be returned to release the memory.
 /// pool.release(reservation);
 /// ```
 #[derive(Debug)]
@@ -62,14 +62,14 @@ impl PoolReservation {
     /// let mut pool = DatalessPool::new(layout);
     /// let reservation = pool.reserve();
     ///
-    /// // Write data to the reserved memory
+    /// // Write data to the reserved memory.
     /// unsafe {
     ///     // SAFETY: The pointer is valid and aligned for f64, and we own the memory.
     ///     let ptr = reservation.ptr().cast::<f64>();
     ///     ptr.as_ptr().write(3.14159);
     /// }
     ///
-    /// // Read data back from the memory
+    /// // Read data back from the memory.
     /// let value = unsafe {
     ///     // SAFETY: The pointer is valid and the memory was just initialized.
     ///     let ptr = reservation.ptr().cast::<f64>();
@@ -110,23 +110,23 @@ impl PoolReservation {
 /// let layout = Layout::new::<u32>();
 /// let mut pool = DatalessPool::new(layout);
 ///
-/// // Reserve memory and get a reservation
+/// // Reserve memory and get a reservation.
 /// let reservation = pool.reserve();
 ///
-/// // Write to the memory
+/// // Write to the memory.
 /// unsafe {
 ///     // SAFETY: The pointer is valid and aligned for u32, and we own the memory.
 ///     reservation.ptr().cast::<u32>().as_ptr().write(42);
 /// }
 ///
-/// // Read from the memory
+/// // Read from the memory.
 /// let value = unsafe {
 ///     // SAFETY: The pointer is valid and the memory was just initialized.
 ///     reservation.ptr().cast::<u32>().as_ptr().read()
 /// };
 /// assert_eq!(value, 42);
 ///
-/// // Release the memory back to the pool
+/// // Release the memory back to the pool.
 /// pool.release(reservation);
 /// ```
 #[derive(Debug)]
@@ -177,7 +177,7 @@ impl DatalessPool {
     ///
     /// use dataless_pool::DatalessPool;
     ///
-    /// // Create a pool for storing u64 values
+    /// // Create a pool for storing u64 values.
     /// let layout = Layout::new::<u64>();
     /// let pool = DatalessPool::new(layout);
     ///
@@ -208,7 +208,7 @@ impl DatalessPool {
     ///
     /// use dataless_pool::DatalessPool;
     ///
-    /// // Create a pool with custom slab capacity
+    /// // Create a pool with custom slab capacity.
     /// let layout = Layout::new::<u32>();
     /// let slab_capacity = NonZero::new(64).unwrap();
     /// let pool = DatalessPool::with_slab_capacity(layout, slab_capacity);
@@ -299,10 +299,10 @@ impl DatalessPool {
     /// let layout = Layout::new::<u8>();
     /// let mut pool = DatalessPool::new(layout);
     ///
-    /// // New pool starts with zero capacity
+    /// // New pool starts with zero capacity.
     /// assert_eq!(pool.capacity(), 0);
     ///
-    /// // Reserving memory may increase capacity
+    /// // Reserving memory may increase capacity.
     /// let reservation = pool.reserve();
     /// assert!(pool.capacity() > 0);
     /// assert!(pool.capacity() >= pool.len());
@@ -360,10 +360,10 @@ impl DatalessPool {
     /// let layout = Layout::new::<u64>();
     /// let mut pool = DatalessPool::new(layout);
     ///
-    /// // Reserve memory
+    /// // Reserve memory.
     /// let reservation = pool.reserve();
     ///
-    /// // Write data to the reserved memory
+    /// // Write data to the reserved memory.
     /// unsafe {
     ///     // SAFETY: The pointer is valid and aligned for u64, and we own the memory.
     ///     reservation
@@ -373,14 +373,14 @@ impl DatalessPool {
     ///         .write(0xDEADBEEF_CAFEBABE);
     /// }
     ///
-    /// // Read data back
+    /// // Read data back.
     /// let value = unsafe {
     ///     // SAFETY: The pointer is valid and the memory was just initialized.
     ///     reservation.ptr().cast::<u64>().as_ptr().read()
     /// };
     /// assert_eq!(value, 0xDEADBEEF_CAFEBABE);
     ///
-    /// // Must release the reservation to free the memory
+    /// // Must release the reservation to free the memory.
     /// pool.release(reservation);
     /// ```
     ///
@@ -434,7 +434,7 @@ impl DatalessPool {
     /// let reservation = pool.reserve();
     /// assert_eq!(pool.len(), 1);
     ///
-    /// // Release the reservation
+    /// // Release the reservation.
     /// pool.release(reservation);
     /// assert_eq!(pool.len(), 0);
     /// assert!(pool.is_empty());

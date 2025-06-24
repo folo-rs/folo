@@ -107,7 +107,7 @@ impl DatalessSlab {
         )
         .expect("slab layout calculation cannot fail for valid combined layouts");
 
-        // SAFETY: The layout is valid for the target allocation and not zero-sized
+        // SAFETY: The layout is valid for the target allocation and not zero-sized.
         // (guarded by assertions above).
         let ptr = NonNull::new(unsafe { alloc(slab_layout) })
             .expect("we do not intend to handle allocation failure as a real possibility - OOM results in panic")
@@ -119,7 +119,7 @@ impl DatalessSlab {
                 .checked_mul(combined_layout.size())
                 .expect("index offset calculation cannot overflow for reasonable index values");
 
-            // SAFETY: We allocated enough space for all items up to the indicated capacity
+            // SAFETY: We allocated enough space for all items up to the indicated capacity.
             // and the offset is calculated safely above.
             let entry_ptr = unsafe { ptr.as_ptr().cast::<u8>().add(offset) };
 
@@ -455,7 +455,7 @@ impl Drop for DatalessSlab {
     }
 }
 
-// SAFETY: There are raw pointers involved here but nothing inherently non-thread-mobile
+// SAFETY: There are raw pointers involved here but nothing inherently non-thread-mobile.
 // about it, so the slab can move between threads.
 unsafe impl Send for DatalessSlab {}
 

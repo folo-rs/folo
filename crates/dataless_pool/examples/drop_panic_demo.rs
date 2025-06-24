@@ -8,7 +8,7 @@ fn main() {
     println!("DatalessPool Drop Panic Demo");
     println!("============================");
 
-    // Demonstrate normal operation - no panic
+    // Demonstrate normal operation - no panic.
     {
         println!("1. Normal operation - pool with proper cleanup (no panic expected):");
         let layout = Layout::new::<u64>();
@@ -26,11 +26,11 @@ fn main() {
 
         pool.release(reservation);
         println!("   Released reservation - pool should drop cleanly");
-        // Pool drops here without panic
+        // Pool drops here without panic.
     }
     println!("   ✓ Pool dropped successfully - no active reservations");
 
-    // Demonstrate panic behavior
+    // Demonstrate panic behavior.
     println!("\n2. Demonstrating panic behavior - pool with active reservation:");
     println!("   (This will cause a panic when the pool is dropped)");
 
@@ -51,7 +51,7 @@ fn main() {
         let _reservation = pool.reserve(); // This reservation is never released!
         println!("   Created reservation but will not release it");
 
-        // Pool will panic on drop because reservation is still active
+        // Pool will panic on drop because reservation is still active.
     });
 
     match result {

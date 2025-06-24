@@ -20,9 +20,19 @@ Do not execute `just release` - this is a critical tool reserved for human use.
 
 # Validating changes
 
-After making changes to the codebase, you are expected to validate the essentials via `just validate-quick`.
+After making changes to the codebase, you are expected to validate the essentials via
+`just validate-quick`. This tends to be faster than doing the individual validation steps
+one by one.
 
 We operate under a "zero warnings allowed" requirement - fix all warnings that validation generates.
+
+If you only want to validate a specific aspect, call a specific `just` command, such as:
+    * `just format` to apply auto-formatting to code files, ensuring consistent code style.
+    * `just check` to verify that compiler checks pass.
+    * `just clippy` to verify that all linter rules pass.
+    * `just test` to verify that the code compiles and tests pass.
+    * `just test-docs` to verify that doctests pass.
+    * `just docs` to verify that the API documentation builds without errors.
 
 # Multiplatform codebase
 
@@ -88,6 +98,8 @@ Sentences end with punctuation:
 
 * This is wrong: "//! // Create a pool for storing u64 values"
 * This is correct: "//! Create a pool for storing u64 values."
+
+Do not forget proper language in tests, doctests and examples.
 
 # Use of unwrap() and expect()
 
