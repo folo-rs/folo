@@ -49,26 +49,26 @@ validate: validate-local validate-linux
 # Performs the part of the `validate` recipe that must run on Linux, when commanded from Windows.
 [group('quality')]
 validate-linux:
-    wsl -e bash -l -c "just validate-local"
+    wsl -e bash -l -c "just package={{ package }} validate-local"
 
 # Full validation of primary factors, as you would do in a build pipeline before a release.
 # Performs validation on the current platform, whatever that may be.
 [group('quality')]
 validate-local:
     cargo generate-lockfile
-    just machete
-    just format-check
-    just check dev
-    just clippy dev
-    just test
-    just test-docs
-    just test-benches
-    just docs
-    just miri
-    just clippy release
-    just check release
-    just build release
-    just hack
+    just package={{ package }} machete
+    just package={{ package }} format-check
+    just package={{ package }} check dev
+    just package={{ package }} clippy dev
+    just package={{ package }} test
+    just package={{ package }} test-docs
+    just package={{ package }} test-benches
+    just package={{ package }} docs
+    just package={{ package }} miri
+    just package={{ package }} clippy release
+    just package={{ package }} check release
+    just package={{ package }} build release
+    just package={{ package }} hack
 
 # Validation of extra factors that take potentially too long to run in regular validation.
 [group('quality')]
@@ -77,7 +77,7 @@ validate-extra: validate-extra-local validate-extra-linux
 # Performs the part of the `validate-extra` recipe that must run on Linux, when commanded from Windows.
 [group('quality')]
 validate-extra-linux:
-    wsl -e bash -l -c "just validate-extra-local"
+    wsl -e bash -l -c "just package={{ package }} validate-extra-local"
 
 # Validation of extra factors that take potentially too long to run in regular validation.
 # Performs validation on the current platform, whatever that may be.
@@ -92,15 +92,15 @@ validate-quick: validate-quick-local validate-quick-linux
 # Performs the part of the `validate-quick` recipe that must run on Linux, when commanded from Windows.
 [group('quality')]
 validate-quick-linux:
-    wsl -e bash -l -c "just validate-quick-local"
+    wsl -e bash -l -c "just package={{ package }} validate-quick-local"
 
 # Quick validation suitable for AI iteration, which skips some lengthy checks.
 # Performs validation on the current platform, whatever that may be.
 [group('quality')]
 validate-quick-local:
-    just format-check
-    just check dev
-    just clippy dev
-    just test
-    just test-docs
-    just docs
+    just package={{ package }} format-check
+    just package={{ package }} check dev
+    just package={{ package }} clippy dev
+    just package={{ package }} test
+    just package={{ package }} test-docs
+    just package={{ package }} docs
