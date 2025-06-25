@@ -57,13 +57,13 @@ pub(crate) struct OpaqueSlab {
 
 /// The result of inserting a value into a [`OpaqueSlab`].
 #[derive(Debug)]
-pub(crate) struct SlabItem {
+pub(crate) struct SlabItem<T> {
     index: usize,
 
-    ptr: NonNull<()>,
+    ptr: NonNull<T>,
 }
 
-impl SlabItem {
+impl<T> SlabItem<T> {
     #[must_use]
     pub(crate) fn index(&self) -> usize {
         self.index
@@ -71,7 +71,7 @@ impl SlabItem {
 
     /// Returns a pointer to the inserted value.
     #[must_use]
-    pub(crate) fn ptr(&self) -> NonNull<()> {
+    pub(crate) fn ptr(&self) -> NonNull<T> {
         self.ptr
     }
 }
@@ -300,7 +300,7 @@ impl OpaqueSlab {
     ///
     /// The caller must ensure that the layout of `T` matches the slab's item layout.
     /// In debug builds, this is checked with an assertion.
-    pub(crate) unsafe fn insert<T>(&mut self, value: T) -> SlabItem {
+    pub(crate) unsafe fn insert<T>(&mut self, value: T) -> SlabItem<T> {
         #[cfg(debug_assertions)]
         {
             assert_eq!(
@@ -368,7 +368,7 @@ impl OpaqueSlab {
 
         SlabItem {
             index,
-            ptr: item_ptr,
+            ptr: item_ptr.cast::<T>(),
         }
     }
 
@@ -550,18 +550,28 @@ mod tests {
         // SAFETY: The layout of u32 matches the slab's layout.
         let pooled_c = unsafe { slab.insert(44_u32) };
 
-        // Read them back.
+        // Read them back using the typed interface.
         unsafe {
-            assert_eq!(pooled_a.ptr.cast::<u32>().read(), 42);
-            assert_eq!(pooled_b.ptr.cast::<u32>().read(), 43);
-            assert_eq!(pooled_c.ptr.cast::<u32>().read(), 44);
+            assert_eq!(pooled_a.ptr().read(), 42);
+            assert_eq!(pooled_b.ptr().read(), 43);
+            assert_eq!(pooled_c.ptr().read(), 44);
         }
 
-        // Also verify direct ptr usage works.
+        // Also verify direct reference access works.
         unsafe {
-            assert_eq!(pooled_a.ptr.cast::<u32>().read(), 42);
-            assert_eq!(pooled_b.ptr.cast::<u32>().read(), 43);
-            assert_eq!(pooled_c.ptr.cast::<u32>().read(), 44);
+            assert_eq!(*pooled_a.ptr().as_ref(), 42);
+            assert_eq!(*pooled_b.ptr().as_ref(), 43);
+            assert_eq!(*pooled_c.ptr().as_ref(), 44);
+        }
+
+        // Test mutable reference access as well.
+        unsafe {
+            *pooled_a.ptr().as_mut() += 1;
+            *pooled_b.ptr().as_mut() += 1;
+            *pooled_c.ptr().as_mut() += 1;
+            assert_eq!(*pooled_a.ptr().as_ref(), 43);
+            assert_eq!(*pooled_b.ptr().as_ref(), 44);
+            assert_eq!(*pooled_c.ptr().as_ref(), 45);
         }
 
         assert_eq!(slab.len(), 3);
@@ -574,9 +584,9 @@ mod tests {
         let pooled_d = unsafe { slab.insert(45_u32) };
 
         unsafe {
-            assert_eq!(pooled_a.ptr.cast::<u32>().read(), 42);
-            assert_eq!(pooled_c.ptr.cast::<u32>().read(), 44);
-            assert_eq!(pooled_d.ptr.cast::<u32>().read(), 45);
+            assert_eq!(pooled_a.ptr().read(), 43); // Was incremented by 1 in earlier test
+            assert_eq!(pooled_c.ptr().read(), 45); // Was incremented by 1 in earlier test  
+            assert_eq!(pooled_d.ptr().read(), 45);
         }
 
         assert!(slab.is_full());
@@ -615,7 +625,7 @@ mod tests {
         let pooled = unsafe { slab.insert(10_u32) };
         assert_eq!(pooled.index(), 0);
         unsafe {
-            assert_eq!(pooled.ptr().cast::<u32>().read(), 10);
+            assert_eq!(pooled.ptr().read(), 10);
         }
         let index_0 = pooled.index();
 
@@ -623,7 +633,7 @@ mod tests {
         let pooled = unsafe { slab.insert(11_u32) };
         assert_eq!(pooled.index(), 1);
         unsafe {
-            assert_eq!(pooled.ptr().cast::<u32>().read(), 11);
+            assert_eq!(pooled.ptr().read(), 11);
         }
         let index_1 = pooled.index();
 
@@ -631,7 +641,7 @@ mod tests {
         let pooled = unsafe { slab.insert(12_u32) };
         assert_eq!(pooled.index(), 2);
         unsafe {
-            assert_eq!(pooled.ptr().cast::<u32>().read(), 12);
+            assert_eq!(pooled.ptr().read(), 12);
         }
         let index_2 = pooled.index();
 
@@ -659,9 +669,9 @@ mod tests {
         let pooled_d = unsafe { slab.insert(45_u32) };
 
         unsafe {
-            assert_eq!(pooled_a.ptr.cast::<u32>().read(), 42);
-            assert_eq!(pooled_c.ptr.cast::<u32>().read(), 44);
-            assert_eq!(pooled_d.ptr.cast::<u32>().read(), 45);
+            assert_eq!(pooled_a.ptr().read(), 42);
+            assert_eq!(pooled_c.ptr().read(), 44);
+            assert_eq!(pooled_d.ptr().read(), 45);
         }
 
         // Clean up remaining pooled items before drop.
@@ -687,7 +697,7 @@ mod tests {
         // SAFETY: The layout of u64 matches the slab's layout.
         let pooled = unsafe { slab_u64.insert(0x1234567890ABCDEF_u64) };
         unsafe {
-            assert_eq!(pooled.ptr().cast::<u64>().read(), 0x1234567890ABCDEF);
+            assert_eq!(pooled.ptr().read(), 0x1234567890ABCDEF);
         }
         slab_u64.remove(pooled.index());
 
@@ -712,7 +722,7 @@ mod tests {
         // SAFETY: The layout of LargeStruct matches the slab's layout.
         let pooled = unsafe { slab_large.insert(test_struct) };
         unsafe {
-            let value = pooled.ptr().cast::<LargeStruct>().read();
+            let value = pooled.ptr().read();
             assert_eq!(value.a, 1);
             assert_eq!(value.b, 2);
             assert_eq!(value.c, 3);
