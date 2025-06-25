@@ -248,3 +248,17 @@ Code should be well covered with unit tests, public APIs should be documented an
 examples. The most important scenarios should be covered by stand-alone example binaries.
 
 Performance-critical code should include Criterion benchmarks to help detect regressions.
+
+# Document the contract, not the implementation
+
+API documentation on types and functions should describe the API contract (i.e. the inputs,
+the outputs and the behavior) not how it is implemented. Do not discuss implementation details
+like private helper types or reference the internal field structure of a type in API documentation.
+
+# Lint suppressions
+
+It is fine to suppress Clippy and compiler lints in the code if it is justified. All suppressions
+must have a `reason` field to justify them.
+
+Prefer `expect` over `allow` suppressions, except when applying a broadly-scoped suppression that
+applies to a whole file or module using outer attributes, in which case "allow" is preferred.
