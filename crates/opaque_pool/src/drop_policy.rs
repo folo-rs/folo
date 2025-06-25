@@ -11,7 +11,8 @@
 ///
 /// // The drop policy is set at pool creation time.
 /// let layout = Layout::new::<u32>();
-/// let pool = OpaquePool::builder(layout)
+/// let pool = OpaquePool::builder()
+///     .layout(layout)
 ///     .drop_policy(DropPolicy::MustNotDropItems)
 ///     .build();
 /// ```

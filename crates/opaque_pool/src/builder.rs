@@ -129,7 +129,7 @@ impl OpaquePoolBuilder {
     /// let layout = Layout::new::<u32>();
     /// let pool = OpaquePool::builder()
     ///     .layout(layout)
-    ///     .slab_capacity(NonZero::new(64).unwrap())
+    ///     // Note: slab_capacity is not public and cannot be set in client code
     ///     .build();
     /// ```
     #[allow(dead_code, reason = "Reserved for future use and internal testing")]

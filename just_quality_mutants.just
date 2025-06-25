@@ -74,4 +74,4 @@ mutants:
 
     # We must use Invoke-Expression to preserve the quotes around the wildcarded arguments on Linux.
     $expanded_args = [String]::join(" ", $args)
-    Invoke-Expression "cargo mutants {{ target_package }} --profile=mutants $expanded_args"
+    Invoke-Expression "cargo mutants {{ target_package }} --profile=mutants --no-times --caught --unviable $expanded_args"

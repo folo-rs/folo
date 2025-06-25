@@ -537,13 +537,11 @@ impl Drop for OpaqueSlab {
         //
         // If we are already panicking, we do not want to panic again because that will
         // simply obscure whatever the original panic was, leading to debug difficulties.
-        if !thread::panicking() {
-            if matches!(self.drop_policy, DropPolicy::MustNotDropItems) {
-                assert!(
-                    was_empty,
-                    "dropped a non-empty OpaqueSlab with {original_count} items - this is forbidden by DropPolicy::MustNotDropItems"
-                );
-            }
+        if !thread::panicking() && matches!(self.drop_policy, DropPolicy::MustNotDropItems) {
+            assert!(
+                was_empty,
+                "dropped a non-empty OpaqueSlab with {original_count} items - this is forbidden by DropPolicy::MustNotDropItems"
+            );
         }
     }
 }
