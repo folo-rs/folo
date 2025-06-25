@@ -1,8 +1,8 @@
 use std::alloc::Layout;
+use std::mem::ManuallyDrop;
 use std::num::NonZero;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
 
 use crate::DatalessSlab;
 
@@ -383,6 +383,9 @@ impl DatalessPool {
     /// If the reserved memory was initialized with data, the caller is responsible for calling
     /// the destructor on the data before releasing the memory.
     pub unsafe fn release(&mut self, reservation: PoolReservation) {
+        // PoolReservation has a no-execute `Drop` impl, so we drop it manually here.
+        let reservation = ManuallyDrop::new(reservation);
+
         assert!(
             reservation.pool_id == self.pool_id,
             "attempted to release a reservation from a different pool (reservation pool ID: {}, current pool ID: {})",
@@ -538,7 +541,17 @@ impl PoolReservation {
     }
 }
 
-#[derive(Debug)]
+impl Drop for PoolReservation {
+    fn drop(&mut self) {
+        const {
+            panic!(
+                "PoolReservation must be returned to DatalessPool::release() - you cannot drop this type"
+            )
+        };
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 struct MemoryBlockCoordinates {
     slab_index: usize,
     index_in_slab: usize,
