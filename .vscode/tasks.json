@@ -95,6 +95,7 @@
                 "many_cpus_benchmarking",
                 "new_zealand",
                 "nm",
+                "opaque_pool",
                 "pinned_pool",
                 "region_cached",
                 "region_local",
