@@ -1,18 +1,18 @@
-//! Demo showing `DatalessPool` panic-on-drop functionality.
+//! Demo showing `OpaquePool` panic-on-drop functionality.
 
 use std::alloc::Layout;
 
-use dataless_pool::DatalessPool;
+use opaque_pool::OpaquePool;
 
 fn main() {
-    println!("DatalessPool Drop Panic Demo");
+    println!("OpaquePool Drop Panic Demo");
     println!("============================");
 
     // Demonstrate normal operation - no panic.
     {
         println!("1. Normal operation - pool with proper cleanup (no panic expected):");
         let layout = Layout::new::<u64>();
-        let mut pool = DatalessPool::new(layout);
+        let mut pool = OpaquePool::new(layout);
 
         // SAFETY: u64 matches the layout used to create the pool.
         let pooled = unsafe { pool.insert(42_u64) };
@@ -44,7 +44,7 @@ fn main() {
 
     let result = std::panic::catch_unwind(|| {
         let layout = Layout::new::<u64>();
-        let mut pool = DatalessPool::new(layout);
+        let mut pool = OpaquePool::new(layout);
 
         // SAFETY: u64 matches the layout used to create the pool.
         let _pooled = unsafe { pool.insert(123_u64) }; // This item is never removed!

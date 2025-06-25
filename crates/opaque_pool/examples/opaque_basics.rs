@@ -1,18 +1,18 @@
-//! Basic usage example for `DatalessPool`.
+//! Basic usage example for `OpaquePool`.
 //!
-//! This example demonstrates how to use `DatalessPool` to manage type-erased memory
+//! This example demonstrates how to use `OpaquePool` to manage type-erased memory
 //! with dynamic capacity growth.
 
 use std::alloc::Layout;
 
-use dataless_pool::DatalessPool;
+use opaque_pool::OpaquePool;
 
 fn main() {
     // Create a pool for u32 values.
     let layout = Layout::new::<u32>();
-    let mut pool = DatalessPool::new(layout);
+    let mut pool = OpaquePool::new(layout);
 
-    println!("Created DatalessPool with capacity: {}", pool.capacity());
+    println!("Created OpaquePool with capacity: {}", pool.capacity());
 
     // Insert some values.
     // SAFETY: u32 matches the layout used to create the pool.
@@ -84,5 +84,5 @@ fn main() {
     pool.remove(pooled3);
 
     println!("All items cleaned up successfully!");
-    println!("DatalessPool example completed successfully!");
+    println!("OpaquePool example completed successfully!");
 }

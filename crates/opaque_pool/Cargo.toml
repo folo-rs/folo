@@ -1,6 +1,6 @@
 [package]
-name = "dataless_pool"
-description = "A pool that reserves pinned memory without placing any data in it, leaving that up to the owner"
+name = "opaque_pool"
+description = "A pinned object pool that is ignorant of the type of items it contains"
 publish = true
 version = "0.1.0"
 
@@ -24,5 +24,5 @@ mutants = { workspace = true }
 workspace = true
 
 [[bench]]
-name = "dp_basic"
+name = "op_basic"
 harness = false

@@ -27,6 +27,7 @@ This is an umbrella project that covers multiple largely independent crates:
 | [`many_cpus`](crates/many_cpus/README.md)                           | Efficiently schedule work and inspect the hardware environment on many-processor systems                                                    |
 | [`many_cpus_benchmarking`](crates/many_cpus_benchmarking/README.md) | Criterion benchmark harness to easily compare different processor configurations                                                            |
 | [`nm`](crates/nm/README.md)                                         | Collect metrics about observed events with minimal collection overhead even in highly multithreaded applications running on 100+ processors |
+| [`opaque_pool`](crates/opaque_pool/README.md)                       | A pinned object pool that is ignorant of the type of items it contains                                                                     |
 | [`pinned_pool`](crates/pinned_pool/README.md)                       | An object pool that guarantees pinning of its items                                                                                         |
 | [`region_cached`](crates/region_cached/README.md)                   | Add a layer of cache between L3 and main memory                                                                                             |
 | [`region_local`](crates/region_local/README.md)                     | Isolate variable storage per memory region, similar to `thread_local_rc!`                                                                   |
@@ -39,7 +40,7 @@ functionality. They only indirectly contribute to the Folo mission, so are liste
 | [`cpulist`](crates/cpulist/README.md)         | Utilities for parsing and emitting Linux cpulist strings                                                 |
 | [`folo_ffi`](crates/folo_ffi/README.md)       | Utilities for working with FFI logic; exists for internal use in Folo crates; no stable API surface      |
 | [`folo_utils`](crates/folo_utils/README.md)   | Utilities for internal use in Folo crates; exists for internal use in Folo crates; no stable API surface |
-| [`new_zealand`](crates/new_zealand/README.md) | Utilizing for working with non-zero integers                                                             |
+| [`new_zealand`](crates/new_zealand/README.md) | Utilities for working with non-zero integers                                                             |
 
 There are also some development-only crates in this repo, which are not published:
 

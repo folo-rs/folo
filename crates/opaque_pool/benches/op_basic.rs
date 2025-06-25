@@ -1,4 +1,4 @@
-//! Basic benchmarks for the `dataless_pool` crate.
+//! Basic benchmarks for the `opaque_pool` crate.
 #![allow(
     missing_docs,
     reason = "No need for API documentation in benchmark code"
@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use dataless_pool::DatalessPool;
+use opaque_pool::OpaquePool;
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
@@ -23,14 +23,14 @@ fn entrypoint(c: &mut Criterion) {
     group.bench_function("empty", |b| {
         b.iter(|| {
             let layout = Layout::new::<TestItem>();
-            drop(black_box(DatalessPool::new(layout)));
+            drop(black_box(OpaquePool::new(layout)));
         });
     });
 
     group.bench_function("one", |b| {
         b.iter(|| {
             let layout = Layout::new::<TestItem>();
-            let mut pool = DatalessPool::new(layout);
+            let mut pool = OpaquePool::new(layout);
             // SAFETY: The layout of TestItem matches the pool's layout.
             let pooled = unsafe { pool.insert(TEST_VALUE) };
             pool.remove(pooled);
@@ -41,7 +41,7 @@ fn entrypoint(c: &mut Criterion) {
     group.bench_function("ten_thousand", |b| {
         b.iter(|| {
             let layout = Layout::new::<TestItem>();
-            let mut pool = DatalessPool::new(layout);
+            let mut pool = OpaquePool::new(layout);
             let mut pooled_items = Vec::with_capacity(10_000);
             for _ in 0..10_000 {
                 // SAFETY: The layout of TestItem matches the pool's layout.
@@ -59,7 +59,7 @@ fn entrypoint(c: &mut Criterion) {
         // We add 10 items, remove the first 5 and repeat this 1000 times.
         b.iter(|| {
             let layout = Layout::new::<TestItem>();
-            let mut pool = DatalessPool::new(layout);
+            let mut pool = OpaquePool::new(layout);
             let mut all_pooled = VecDeque::with_capacity(1000 * 10);
             for _ in 0..1000 {
                 for _ in 0..10 {
@@ -86,7 +86,7 @@ fn entrypoint(c: &mut Criterion) {
     group.bench_function("one", |b| {
         b.iter(|| {
             let layout = Layout::new::<TestItem>();
-            let mut pool = DatalessPool::new(layout);
+            let mut pool = OpaquePool::new(layout);
             // SAFETY: The layout of TestItem matches the pool's layout.
             let pooled = unsafe { pool.insert(TEST_VALUE) };
             // SAFETY: We just inserted the value and are reading the correct type.
@@ -99,7 +99,7 @@ fn entrypoint(c: &mut Criterion) {
     group.bench_function("ten_thousand", |b| {
         b.iter(|| {
             let layout = Layout::new::<TestItem>();
-            let mut pool = DatalessPool::new(layout);
+            let mut pool = OpaquePool::new(layout);
             let mut pooled_items = Vec::with_capacity(10_000);
             for _ in 0..10_000 {
                 // SAFETY: The layout of TestItem matches the pool's layout.
@@ -123,7 +123,7 @@ fn entrypoint(c: &mut Criterion) {
     group.bench_function("single_insert", |b| {
         b.iter(|| {
             let layout = Layout::new::<TestItem>();
-            let mut pool = DatalessPool::new(layout);
+            let mut pool = OpaquePool::new(layout);
             // SAFETY: The layout of TestItem matches the pool's layout.
             let pooled = unsafe { pool.insert(TEST_VALUE) };
             black_box(&pooled);
@@ -134,7 +134,7 @@ fn entrypoint(c: &mut Criterion) {
     group.bench_function("insert_with_read", |b| {
         b.iter(|| {
             let layout = Layout::new::<TestItem>();
-            let mut pool = DatalessPool::new(layout);
+            let mut pool = OpaquePool::new(layout);
             // SAFETY: The layout of TestItem matches the pool's layout.
             let pooled = unsafe { pool.insert(TEST_VALUE) };
             // SAFETY: We just inserted the value and are reading the correct type.
@@ -152,7 +152,7 @@ fn entrypoint(c: &mut Criterion) {
         let layout = Layout::new::<TestItem>();
         b.iter_batched(
             || {
-                let mut pool = DatalessPool::new(layout);
+                let mut pool = OpaquePool::new(layout);
                 // SAFETY: The layout of TestItem matches the pool's layout.
                 let pooled = unsafe { pool.insert(TEST_VALUE) };
                 (pool, pooled)
@@ -169,7 +169,7 @@ fn entrypoint(c: &mut Criterion) {
         let layout = Layout::new::<TestItem>();
         b.iter_batched(
             || {
-                let mut pool = DatalessPool::new(layout);
+                let mut pool = OpaquePool::new(layout);
                 let mut pooled_items = Vec::with_capacity(100);
                 for _ in 0..100 {
                     // SAFETY: The layout of TestItem matches the pool's layout.

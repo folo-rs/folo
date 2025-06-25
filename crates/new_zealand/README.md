@@ -1,4 +1,4 @@
-Utilizing for working with non-zero integers.
+Utilities for working with non-zero integers.
 
 Currently this implements a shorthand macro for creating non-zero integers
 from literals at compile time:

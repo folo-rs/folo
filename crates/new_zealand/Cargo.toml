@@ -1,6 +1,6 @@
 [package]
 name = "new_zealand"
-description = "Utilizing for working with non-zero integers"
+description = "Utilities for working with non-zero integers"
 publish = true
 version = "0.1.2"
 

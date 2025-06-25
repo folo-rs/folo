@@ -1,5 +1,3 @@
-#![allow(dead_code, reason = "soon")]
-
 use std::pin::Pin;
 use std::ptr::{self, NonNull};
 

@@ -4,7 +4,7 @@ use std::num::NonZero;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::DatalessSlab;
+use crate::OpaqueSlab;
 
 /// Global counter for generating unique pool IDs.
 static POOL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -34,10 +34,10 @@ fn generate_pool_id() -> u64 {
 /// ```rust
 /// use std::alloc::Layout;
 ///
-/// use dataless_pool::DatalessPool;
+/// use opaque_pool::OpaquePool;
 ///
 /// let layout = Layout::new::<u32>();
-/// let mut pool = DatalessPool::new(layout);
+/// let mut pool = OpaquePool::new(layout);
 ///
 /// // Insert a value and get a handle.
 /// // SAFETY: u32 matches the layout used to create the pool.
@@ -52,7 +52,7 @@ fn generate_pool_id() -> u64 {
 /// pool.remove(pooled);
 /// ```
 #[derive(Debug)]
-pub struct DatalessPool {
+pub struct OpaquePool {
     /// We need to uniquely identify each pool to ensure that memory is not returned to the
     /// wrong pool. If the pool ID does not match when returning memory, we panic.
     pool_id: u64,
@@ -66,7 +66,7 @@ pub struct DatalessPool {
     ///
     /// For now, we only grow this Vec but in theory, one could implement shrinking as well
     /// by removing empty slabs.
-    slabs: Vec<DatalessSlab>,
+    slabs: Vec<OpaqueSlab>,
 
     /// Lowest index of any slab that has a vacant slot, if known. We use this to avoid scanning
     /// the entire collection for vacant slots when reserving memory. This being `None` does not
@@ -89,8 +89,8 @@ const DEFAULT_SLAB_CAPACITY: usize = 128;
 #[cfg(miri)]
 const DEFAULT_SLAB_CAPACITY: usize = 16;
 
-impl DatalessPool {
-    /// Creates a new [`DatalessPool`] with the specified item memory layout.
+impl OpaquePool {
+    /// Creates a new [`OpaquePool`] with the specified item memory layout.
     ///
     /// The pool starts empty and will automatically grow as needed when memory is reserved.
     ///
@@ -99,11 +99,11 @@ impl DatalessPool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use dataless_pool::DatalessPool;
+    /// use opaque_pool::OpaquePool;
     ///
     /// // Create a pool for storing u64 values.
     /// let layout = Layout::new::<u64>();
-    /// let pool = DatalessPool::new(layout);
+    /// let pool = OpaquePool::new(layout);
     ///
     /// assert_eq!(pool.len(), 0);
     /// assert!(pool.is_empty());
@@ -122,7 +122,7 @@ impl DatalessPool {
         )
     }
 
-    /// Creates a new [`DatalessPool`] with the specified memory layout and internal capacity.
+    /// Creates a new [`OpaquePool`] with the specified memory layout and internal capacity.
     ///
     /// This is intended for internal use and testing scenarios where fine-tuning of the
     /// internal memory organization is required.
@@ -134,7 +134,7 @@ impl DatalessPool {
     pub(crate) fn with_slab_capacity(item_layout: Layout, slab_capacity: NonZero<usize>) -> Self {
         assert!(
             item_layout.size() > 0,
-            "DatalessPool must have non-zero memory block size"
+            "OpaquePool must have non-zero memory block size"
         );
 
         Self {
@@ -153,10 +153,10 @@ impl DatalessPool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use dataless_pool::DatalessPool;
+    /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<u128>();
-    /// let pool = DatalessPool::new(layout);
+    /// let pool = OpaquePool::new(layout);
     ///
     /// assert_eq!(pool.item_layout(), layout);
     /// assert_eq!(pool.item_layout().size(), std::mem::size_of::<u128>());
@@ -173,10 +173,10 @@ impl DatalessPool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use dataless_pool::DatalessPool;
+    /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<i32>();
-    /// let mut pool = DatalessPool::new(layout);
+    /// let mut pool = OpaquePool::new(layout);
     ///
     /// assert_eq!(pool.len(), 0);
     ///
@@ -194,7 +194,7 @@ impl DatalessPool {
     /// ```
     #[must_use]
     pub fn len(&self) -> usize {
-        self.slabs.iter().map(DatalessSlab::len).sum()
+        self.slabs.iter().map(OpaqueSlab::len).sum()
     }
 
     /// The number of values the pool can accommodate without additional resource allocation.
@@ -207,10 +207,10 @@ impl DatalessPool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use dataless_pool::DatalessPool;
+    /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<u8>();
-    /// let mut pool = DatalessPool::new(layout);
+    /// let mut pool = OpaquePool::new(layout);
     ///
     /// // New pool starts with zero capacity.
     /// assert_eq!(pool.capacity(), 0);
@@ -241,10 +241,10 @@ impl DatalessPool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use dataless_pool::DatalessPool;
+    /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<u16>();
-    /// let mut pool = DatalessPool::new(layout);
+    /// let mut pool = OpaquePool::new(layout);
     ///
     /// assert!(pool.is_empty());
     ///
@@ -257,7 +257,7 @@ impl DatalessPool {
     /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.slabs.iter().all(DatalessSlab::is_empty)
+        self.slabs.iter().all(OpaqueSlab::is_empty)
     }
 
     /// Inserts a value into the pool and returns a handle that acts as both the key and pointer.
@@ -270,10 +270,10 @@ impl DatalessPool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use dataless_pool::DatalessPool;
+    /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<u64>();
-    /// let mut pool = DatalessPool::new(layout);
+    /// let mut pool = OpaquePool::new(layout);
     ///
     /// // Insert a value.
     /// // SAFETY: u64 matches the layout used to create the pool.
@@ -340,10 +340,10 @@ impl DatalessPool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use dataless_pool::DatalessPool;
+    /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<i32>();
-    /// let mut pool = DatalessPool::new(layout);
+    /// let mut pool = OpaquePool::new(layout);
     ///
     /// // SAFETY: i32 matches the layout used to create the pool.
     /// let pooled = unsafe { pool.insert(42i32) };
@@ -407,7 +407,7 @@ impl DatalessPool {
         } else {
             // All slabs are full, so we need to expand capacity.
             self.slabs
-                .push(DatalessSlab::new(self.item_layout, self.slab_capacity));
+                .push(OpaqueSlab::new(self.item_layout, self.slab_capacity));
 
             self.slabs
                 .len()
@@ -430,7 +430,7 @@ impl DatalessPool {
     }
 }
 
-/// The result of inserting a value of type `T` into a [`DatalessPool`].
+/// The result of inserting a value of type `T` into a [`OpaquePool`].
 ///
 /// Acts as both the handle and the key - the user must return this to the pool to remove
 /// the value and properly drop it. The pool will panic on drop if some active handles remain.
@@ -443,10 +443,10 @@ impl DatalessPool {
 /// ```rust
 /// use std::alloc::Layout;
 ///
-/// use dataless_pool::DatalessPool;
+/// use opaque_pool::OpaquePool;
 ///
 /// let layout = Layout::new::<i64>();
-/// let mut pool = DatalessPool::new(layout);
+/// let mut pool = OpaquePool::new(layout);
 ///
 /// // SAFETY: i64 matches the layout used to create the pool.
 /// let pooled = unsafe { pool.insert(-123i64) };
@@ -476,10 +476,10 @@ impl<T> Pooled<T> {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use dataless_pool::DatalessPool;
+    /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<f64>();
-    /// let mut pool = DatalessPool::new(layout);
+    /// let mut pool = OpaquePool::new(layout);
     ///
     /// // SAFETY: f64 matches the layout used to create the pool.
     /// let pooled = unsafe { pool.insert(3.14159f64) };
@@ -504,10 +504,10 @@ impl<T> Pooled<T> {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use dataless_pool::DatalessPool;
+    /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<u64>();
-    /// let mut pool = DatalessPool::new(layout);
+    /// let mut pool = OpaquePool::new(layout);
     ///
     /// // SAFETY: u64 matches the layout used to create the pool.
     /// let pooled = unsafe { pool.insert(42u64) };
@@ -564,7 +564,7 @@ mod tests {
     #[test]
     fn smoke_test() {
         let layout = Layout::new::<u32>();
-        let mut pool = DatalessPool::new(layout);
+        let mut pool = OpaquePool::new(layout);
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
@@ -608,7 +608,7 @@ mod tests {
     #[should_panic]
     fn remove_nonexistent_panics() {
         let layout = Layout::new::<u32>();
-        let mut pool = DatalessPool::new(layout);
+        let mut pool = OpaquePool::new(layout);
 
         // Create a fake pooled with invalid coordinates.
         let fake_pooled: Pooled<u32> = Pooled {
@@ -630,7 +630,7 @@ mod tests {
     )]
     fn multi_slab_growth() {
         let layout = Layout::new::<u32>();
-        let mut pool = DatalessPool::new(layout);
+        let mut pool = OpaquePool::new(layout);
 
         // Reserve more items than a single slab can hold to test growth.
         // We use 2 * DEFAULT_SLAB_CAPACITY + 1 to guarantee we need at least 3 slabs.
@@ -662,7 +662,7 @@ mod tests {
     fn different_layouts() {
         // Test with different sized types.
         let layout_u64 = Layout::new::<u64>();
-        let mut pool_u64 = DatalessPool::new(layout_u64);
+        let mut pool_u64 = OpaquePool::new(layout_u64);
         // SAFETY: The layout of u64 matches the pool's layout.
         let pooled = unsafe { pool_u64.insert(0x1234567890ABCDEF_u64) };
         unsafe {
@@ -680,7 +680,7 @@ mod tests {
         }
 
         let layout_large = Layout::new::<LargeStruct>();
-        let mut pool_large = DatalessPool::new(layout_large);
+        let mut pool_large = OpaquePool::new(layout_large);
 
         let test_struct = LargeStruct {
             a: 1,
@@ -704,13 +704,13 @@ mod tests {
     #[should_panic]
     fn zero_size_layout_is_panic() {
         let layout = Layout::from_size_align(0, 1).unwrap();
-        drop(DatalessPool::new(layout));
+        drop(OpaquePool::new(layout));
     }
 
     #[test]
     fn stress_test_repeated_insert_remove() {
         let layout = Layout::new::<usize>();
-        let mut pool = DatalessPool::new(layout);
+        let mut pool = OpaquePool::new(layout);
 
         // Insert and remove many items to test slab management.
         for iteration in 0..10 {
@@ -752,7 +752,7 @@ mod tests {
     #[test]
     fn drop_with_no_active_pooled_does_not_panic() {
         let layout = Layout::new::<u64>();
-        let mut pool = DatalessPool::new(layout);
+        let mut pool = OpaquePool::new(layout);
 
         // Insert and then remove immediately.
         // SAFETY: The layout of u64 matches the pool's layout.
@@ -769,7 +769,7 @@ mod tests {
     #[should_panic]
     fn drop_with_active_pooled_panics() {
         let layout = Layout::new::<u64>();
-        let mut pool = DatalessPool::new(layout);
+        let mut pool = OpaquePool::new(layout);
 
         // Pooled items are undroppable, so we just let this pooled item leak to trigger the panic.
         // SAFETY: The layout of u64 matches the pool's layout.
@@ -783,8 +783,8 @@ mod tests {
     #[should_panic]
     fn remove_pooled_from_different_pool_panics() {
         let layout = Layout::new::<u32>();
-        let mut pool1 = DatalessPool::new(layout);
-        let mut pool2 = DatalessPool::new(layout);
+        let mut pool1 = OpaquePool::new(layout);
+        let mut pool2 = OpaquePool::new(layout);
 
         // Insert into pool1 but try to remove from pool2.
         // SAFETY: The layout of u32 matches the pool's layout.
@@ -795,9 +795,9 @@ mod tests {
     #[test]
     fn pool_ids_are_unique() {
         let layout = Layout::new::<u32>();
-        let pool1 = DatalessPool::new(layout);
-        let pool2 = DatalessPool::new(layout);
-        let pool3 = DatalessPool::new(layout);
+        let pool1 = OpaquePool::new(layout);
+        let pool2 = OpaquePool::new(layout);
+        let pool3 = OpaquePool::new(layout);
 
         // Pool IDs should be different for each pool instance.
         assert_ne!(pool1.pool_id, pool2.pool_id);
@@ -808,7 +808,7 @@ mod tests {
     #[test]
     fn pooled_belongs_to_correct_pool() {
         let layout = Layout::new::<u64>();
-        let mut pool = DatalessPool::new(layout);
+        let mut pool = OpaquePool::new(layout);
 
         // SAFETY: The layout of u64 matches the pool's layout.
         let pooled = unsafe { pool.insert(42_u64) };
@@ -823,7 +823,7 @@ mod tests {
     #[test]
     fn pooled_erase_functionality() {
         let layout = Layout::new::<u32>();
-        let mut pool = DatalessPool::new(layout);
+        let mut pool = OpaquePool::new(layout);
 
         // SAFETY: The layout of u32 matches the pool's layout.
         let pooled = unsafe { pool.insert(42_u32) };

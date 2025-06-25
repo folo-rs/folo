@@ -7,14 +7,17 @@ use std::{mem, ptr, thread};
 use crate::Dropper;
 
 /// Provides memory for a specified number of objects with a specific layout without
-/// knowing their type.
+/// remembering their type, allowing objects of mixed types in the same slab.
 ///
-/// A fixed-capacity heap-allocated collection that works with opaque memory blocks.
-/// Works similar to a `Vec` but only reserves memory, without placing any data in the
-/// reserved memory capacity. All items are located at stable addresses and the collection
+/// A fixed-capacity heap-allocated collection that works with opaque items for which we only
+/// know the memory layout.
+///
+/// Works similar to a `Vec`. All items are located at stable addresses and the collection
 /// has a fixed capacity determined at construction time, operating using an index for
-/// lookup. When you reserve memory, you get back the index to use for accessing or
-/// deallocating the memory.
+/// lookup.
+///
+/// When you reserve memory, you get back the index to use for accessing or
+/// deallocating the memory, as well as the pointer to the inserted item.
 ///
 /// # Out of band access
 ///
@@ -22,13 +25,17 @@ use crate::Dropper;
 /// memory via pointers and to create custom references to memory from unsafe code even when not
 /// holding an exclusive reference to the collection.
 #[derive(Debug)]
-pub(crate) struct DatalessSlab {
+pub(crate) struct OpaqueSlab {
+    /// Number of items that can be stored in this slab.
     capacity: NonZero<usize>,
 
-    /// The original item layout this slab was created for.
-    #[allow(
-        dead_code,
-        reason = "Used in debug assertions for type layout checking"
+    /// The memory layout of items in this slab.
+    #[cfg_attr(
+        not(debug_assertions),
+        expect(
+            dead_code,
+            reason = "Used in cfg(debug_assertions) for type layout checking"
+        )
     )]
     item_layout: Layout,
 
@@ -48,15 +55,15 @@ pub(crate) struct DatalessSlab {
     count: usize,
 }
 
-/// The result of inserting a value into a [`DatalessSlab`].
+/// The result of inserting a value into a [`OpaqueSlab`].
 #[derive(Debug)]
-pub(crate) struct SlabPooled {
+pub(crate) struct SlabItem {
     index: usize,
 
     ptr: NonNull<()>,
 }
 
-impl SlabPooled {
+impl SlabItem {
     #[must_use]
     pub(crate) fn index(&self) -> usize {
         self.index
@@ -69,7 +76,7 @@ impl SlabPooled {
     }
 }
 
-/// Layout calculations for a [`DatalessSlab`].
+/// Layout calculations for a [`OpaqueSlab`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SlabLayoutInfo {
     /// Layout of the `EntryMeta` and the item it owns combined, padded to alignment.
@@ -138,7 +145,7 @@ enum EntryMeta {
     },
 }
 
-impl DatalessSlab {
+impl OpaqueSlab {
     /// Creates a new slab with the specified item memory layout and capacity.
     ///
     /// # Panics
@@ -293,7 +300,7 @@ impl DatalessSlab {
     ///
     /// The caller must ensure that the layout of `T` matches the slab's item layout.
     /// In debug builds, this is checked with an assertion.
-    pub(crate) unsafe fn insert<T>(&mut self, value: T) -> SlabPooled {
+    pub(crate) unsafe fn insert<T>(&mut self, value: T) -> SlabItem {
         #[cfg(debug_assertions)]
         {
             assert_eq!(
@@ -359,7 +366,7 @@ impl DatalessSlab {
             .checked_add(1)
             .expect("count cannot overflow because it is bounded by capacity which is bounded by usize::MAX");
 
-        SlabPooled {
+        SlabItem {
             index,
             ptr: item_ptr,
         }
@@ -473,7 +480,7 @@ impl DatalessSlab {
     }
 }
 
-impl Drop for DatalessSlab {
+impl Drop for OpaqueSlab {
     fn drop(&mut self) {
         let was_empty = self.is_empty();
         let capacity_value = self.capacity.get();
@@ -505,7 +512,7 @@ impl Drop for DatalessSlab {
         if !thread::panicking() {
             assert!(
                 was_empty,
-                "dropped a non-empty DatalessSlab with {} active reservations - this suggests reserved memory may still be in use",
+                "dropped a non-empty OpaqueSlab with {} active reservations - this suggests reserved memory may still be in use",
                 self.count
             );
         }
@@ -514,7 +521,7 @@ impl Drop for DatalessSlab {
 
 // SAFETY: There are raw pointers involved here but nothing inherently non-thread-mobile.
 // about it, so the slab can move between threads.
-unsafe impl Send for DatalessSlab {}
+unsafe impl Send for OpaqueSlab {}
 
 #[cfg(test)]
 #[allow(
@@ -534,7 +541,7 @@ mod tests {
     #[test]
     fn smoke_test() {
         let layout = Layout::new::<u32>();
-        let mut slab = DatalessSlab::new(layout, NonZero::new(3).unwrap());
+        let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap());
 
         // SAFETY: The layout of u32 matches the slab's layout.
         let pooled_a = unsafe { slab.insert(42_u32) };
@@ -584,7 +591,7 @@ mod tests {
     #[should_panic]
     fn panic_when_full() {
         let layout = Layout::new::<u32>();
-        let mut slab = DatalessSlab::new(layout, NonZero::new(3).unwrap());
+        let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap());
 
         // SAFETY: The layout of u32 matches the slab's layout.
         _ = unsafe { slab.insert(1_u32) };
@@ -600,7 +607,7 @@ mod tests {
     #[test]
     fn insert_returns_correct_index_and_pointer() {
         let layout = Layout::new::<u32>();
-        let mut slab = DatalessSlab::new(layout, NonZero::new(3).unwrap());
+        let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap());
 
         // We expect that we insert items in order, from the start (0, 1, 2, ...).
 
@@ -637,7 +644,7 @@ mod tests {
     #[test]
     fn remove_makes_room() {
         let layout = Layout::new::<u32>();
-        let mut slab = DatalessSlab::new(layout, NonZero::new(3).unwrap());
+        let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap());
 
         // SAFETY: The layout of u32 matches the slab's layout.
         let pooled_a = unsafe { slab.insert(42_u32) };
@@ -667,7 +674,7 @@ mod tests {
     #[should_panic]
     fn remove_vacant_panics() {
         let layout = Layout::new::<u32>();
-        let mut slab = DatalessSlab::new(layout, NonZero::new(3).unwrap());
+        let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap());
 
         slab.remove(1);
     }
@@ -676,7 +683,7 @@ mod tests {
     fn different_layouts() {
         // Test with different sized types.
         let layout_u64 = Layout::new::<u64>();
-        let mut slab_u64 = DatalessSlab::new(layout_u64, NonZero::new(2).unwrap());
+        let mut slab_u64 = OpaqueSlab::new(layout_u64, NonZero::new(2).unwrap());
         // SAFETY: The layout of u64 matches the slab's layout.
         let pooled = unsafe { slab_u64.insert(0x1234567890ABCDEF_u64) };
         unsafe {
@@ -694,7 +701,7 @@ mod tests {
         }
 
         let layout_large = Layout::new::<LargeStruct>();
-        let mut slab_large = DatalessSlab::new(layout_large, NonZero::new(2).unwrap());
+        let mut slab_large = OpaqueSlab::new(layout_large, NonZero::new(2).unwrap());
 
         let test_struct = LargeStruct {
             a: 1,
@@ -725,14 +732,14 @@ mod tests {
             // This test verifies that NonZero::new(0) panics, maintaining the same behavior
             // as before but now at the type level
             let layout = Layout::new::<usize>();
-            drop(DatalessSlab::new(layout, NonZero::new(0).unwrap()));
+            drop(OpaqueSlab::new(layout, NonZero::new(0).unwrap()));
         }
 
         #[test]
         #[should_panic]
         fn zero_size_layout_is_panic() {
             let layout = Layout::from_size_align(0, 1).unwrap();
-            drop(DatalessSlab::new(layout, NonZero::new(3).unwrap()));
+            drop(OpaqueSlab::new(layout, NonZero::new(3).unwrap()));
         }
 
         #[test]
@@ -740,7 +747,7 @@ mod tests {
             use std::cell::RefCell;
 
             let layout = Layout::new::<u32>();
-            let slab = RefCell::new(DatalessSlab::new(layout, NonZero::new(3).unwrap()));
+            let slab = RefCell::new(OpaqueSlab::new(layout, NonZero::new(3).unwrap()));
 
             let (index_a, index_c, index_d);
 
@@ -803,7 +810,7 @@ mod tests {
             use std::thread;
 
             let layout = Layout::new::<u32>();
-            let slab = Arc::new(Mutex::new(DatalessSlab::new(
+            let slab = Arc::new(Mutex::new(OpaqueSlab::new(
                 layout,
                 NonZero::new(3).unwrap(),
             )));
@@ -871,7 +878,7 @@ mod tests {
         #[test]
         fn insert_returns_correct_pointer() {
             let layout = Layout::new::<u64>();
-            let mut slab = DatalessSlab::new(layout, NonZero::new(2).unwrap());
+            let mut slab = OpaqueSlab::new(layout, NonZero::new(2).unwrap());
 
             let reservation = slab.reserve();
 
@@ -890,7 +897,7 @@ mod tests {
         #[test]
         fn stress_test_repeated_reserve_release() {
             let layout = Layout::new::<usize>();
-            let mut slab = DatalessSlab::new(layout, NonZero::new(10).unwrap());
+            let mut slab = OpaqueSlab::new(layout, NonZero::new(10).unwrap());
 
             // Fill the slab.
             let mut indices = Vec::new();
@@ -950,7 +957,7 @@ mod tests {
                 data: u8,
             }
 
-            let mut slab = DatalessSlab::new(Layout::new::<Byte>(), NonZero::new(5).unwrap());
+            let mut slab = OpaqueSlab::new(Layout::new::<Byte>(), NonZero::new(5).unwrap());
             let reservation = slab.reserve();
             unsafe {
                 reservation.ptr().cast::<Byte>().write(Byte { data: 42 });
@@ -966,7 +973,7 @@ mod tests {
                 data: u16,
             }
 
-            let mut slab = DatalessSlab::new(Layout::new::<Word>(), NonZero::new(5).unwrap());
+            let mut slab = OpaqueSlab::new(Layout::new::<Word>(), NonZero::new(5).unwrap());
             let reservation = slab.reserve();
             unsafe {
                 reservation
@@ -985,7 +992,7 @@ mod tests {
                 data: u32,
             }
 
-            let mut slab = DatalessSlab::new(Layout::new::<DWord>(), NonZero::new(5).unwrap());
+            let mut slab = OpaqueSlab::new(Layout::new::<DWord>(), NonZero::new(5).unwrap());
             let reservation = slab.reserve();
             unsafe {
                 reservation
@@ -1004,7 +1011,7 @@ mod tests {
                 data: u64,
             }
 
-            let mut slab = DatalessSlab::new(Layout::new::<QWord>(), NonZero::new(5).unwrap());
+            let mut slab = OpaqueSlab::new(Layout::new::<QWord>(), NonZero::new(5).unwrap());
             let reservation = slab.reserve();
             unsafe {
                 reservation.ptr().cast::<QWord>().write(QWord {
@@ -1025,7 +1032,7 @@ mod tests {
                 data: [u64; 2],
             }
 
-            let mut slab = DatalessSlab::new(Layout::new::<OWord>(), NonZero::new(5).unwrap());
+            let mut slab = OpaqueSlab::new(Layout::new::<OWord>(), NonZero::new(5).unwrap());
             let reservation = slab.reserve();
             unsafe {
                 reservation.ptr().cast::<OWord>().write(OWord {
@@ -1054,7 +1061,7 @@ mod tests {
             }
 
             let mut slab =
-                DatalessSlab::new(Layout::new::<ComplexStruct>(), NonZero::new(3).unwrap());
+                OpaqueSlab::new(Layout::new::<ComplexStruct>(), NonZero::new(3).unwrap());
 
             let reservation1 = slab.reserve();
             let reservation2 = slab.reserve();
@@ -1121,7 +1128,7 @@ mod tests {
                 Variant3,
             }
 
-            let mut slab = DatalessSlab::new(Layout::new::<TestEnum>(), NonZero::new(4).unwrap());
+            let mut slab = OpaqueSlab::new(Layout::new::<TestEnum>(), NonZero::new(4).unwrap());
 
             let res1 = slab.reserve();
             let res2 = slab.reserve();
@@ -1155,7 +1162,7 @@ mod tests {
         #[test]
         fn small_and_large_sizes() {
             // Test very small data types.
-            let mut slab_small = DatalessSlab::new(Layout::new::<u8>(), NonZero::new(100).unwrap());
+            let mut slab_small = OpaqueSlab::new(Layout::new::<u8>(), NonZero::new(100).unwrap());
             let mut reservations = Vec::new();
 
             // Fill with small values.
@@ -1191,7 +1198,7 @@ mod tests {
             }
 
             let mut slab_large =
-                DatalessSlab::new(Layout::new::<HugeStruct>(), NonZero::new(5).unwrap());
+                OpaqueSlab::new(Layout::new::<HugeStruct>(), NonZero::new(5).unwrap());
             let reservation = slab_large.reserve();
 
             unsafe {
@@ -1279,7 +1286,7 @@ mod tests {
         #[should_panic]
         fn drop_with_active_reservations_panics() {
             let layout = Layout::new::<u32>();
-            let mut slab = DatalessSlab::new(layout, NonZero::new(3).unwrap());
+            let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap());
 
             // Reserve some memory but don't release it before drop.
             let _reservation = slab.reserve();
