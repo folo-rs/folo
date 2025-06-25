@@ -89,8 +89,14 @@
 //! The reservation-based design helps prevent some common errors by making it impossible
 //! to release memory without the original reservation object.
 
+mod dropper;
 mod pool;
 mod slab;
 
-pub use pool::{DatalessPool, PoolReservation};
-pub(crate) use slab::DatalessSlab;
+#[allow(
+    unused_imports,
+    reason = "Dropper is part of the crate's public API but not yet used by other modules"
+)]
+pub(crate) use dropper::*;
+pub use pool::*;
+pub(crate) use slab::*;

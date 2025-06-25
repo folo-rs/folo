@@ -20,7 +20,6 @@ debug = "none"
 
 [workspace.dependencies]
 # The packages we publish.
-blind_pool = { version = "0.1.0", path = "crates/blind_pool" }
 cpulist = { version = "0.2.3", path = "crates/cpulist" }
 dataless_pool = { version = "0.1.0", path = "crates/dataless_pool" }
 folo_ffi = { version = "0.1.3", path = "crates/folo_ffi" }
@@ -35,6 +34,7 @@ nm = { version = "0.1.3", path = "crates/nm" }
 pinned_pool = { version = "0.1.2", path = "crates/pinned_pool" }
 region_cached = { version = "0.1.15", path = "crates/region_cached" }
 region_local = { version = "0.1.15", path = "crates/region_local" }
+undroppable = { version = "0.1.0", path = "crates/undroppable" }
 
 # Internal packages we do not publish.
 benchmarks = { path = "crates/benchmarks" }

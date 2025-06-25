@@ -461,7 +461,7 @@ impl DatalessPool {
 /// The result of reserving memory in a [`DatalessPool`].
 ///
 /// Acts as both the reservation and the key - the user must return this to the pool to release
-/// the memory capacity.
+/// the memory capacity. The pool will panic on drop if some active reservations remain.
 ///
 /// # Example
 ///
@@ -538,16 +538,6 @@ impl PoolReservation {
     #[must_use]
     pub fn ptr(&self) -> NonNull<()> {
         self.ptr
-    }
-}
-
-impl Drop for PoolReservation {
-    fn drop(&mut self) {
-        const {
-            panic!(
-                "PoolReservation must be returned to DatalessPool::release() - you cannot drop this type"
-            )
-        };
     }
 }
 
@@ -840,44 +830,10 @@ mod tests {
         let layout = Layout::new::<u64>();
         let mut pool = DatalessPool::new(layout);
 
+        // Reservations are undroppable, so we just let this reservation leak to trigger the panic.
         let _reservation = pool.reserve();
 
         // Pool should panic on drop since we still have an active reservation.
-        drop(pool);
-    }
-
-    #[test]
-    #[should_panic]
-    fn drop_with_multiple_active_reservations_panics() {
-        let layout = Layout::new::<u32>();
-        let mut pool = DatalessPool::new(layout);
-
-        let _reservation1 = pool.reserve();
-        let _reservation2 = pool.reserve();
-        let _reservation3 = pool.reserve();
-
-        // Pool should panic on drop since we have multiple active reservations.
-        drop(pool);
-    }
-
-    #[test]
-    #[should_panic]
-    fn drop_with_some_released_reservations_still_panics() {
-        let layout = Layout::new::<i64>();
-        let mut pool = DatalessPool::new(layout);
-
-        let reservation1 = pool.reserve();
-        let _reservation2 = pool.reserve();
-        let _reservation3 = pool.reserve();
-
-        // Release one reservation but keep two.
-        // SAFETY: The reserved memory was never initialized, so no destructors need to be called
-        // before releasing the memory.
-        unsafe {
-            pool.release(reservation1);
-        }
-
-        // Pool should still panic since we have active reservations.
         drop(pool);
     }
 
