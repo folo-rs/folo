@@ -24,5 +24,5 @@ mutants = { workspace = true }
 workspace = true
 
 [[bench]]
-name = "op_basic"
+name = "opaque_basic"
 harness = false

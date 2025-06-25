@@ -3,14 +3,11 @@
 //! This example demonstrates how to use `OpaquePool` to manage type-erased memory
 //! with dynamic capacity growth.
 
-use std::alloc::Layout;
-
 use opaque_pool::OpaquePool;
 
 fn main() {
     // Create a pool for u32 values.
-    let layout = Layout::new::<u32>();
-    let mut pool = OpaquePool::new(layout);
+    let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 
     println!("Created OpaquePool with capacity: {}", pool.capacity());
 

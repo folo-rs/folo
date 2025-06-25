@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::{mem, ptr, thread};
 
-use crate::Dropper;
+use crate::{DropPolicy, Dropper};
 
 /// Provides memory for a specified number of objects with a specific layout without
 /// remembering their type, allowing objects of mixed types in the same slab.
@@ -55,6 +55,9 @@ pub(crate) struct OpaqueSlab {
     /// Current number of occupied slots, enabling detection of memory leaks when the slab
     /// is dropped while items are still allocated.
     count: usize,
+
+    /// Drop policy that determines whether the slab panics if items are present during drop.
+    drop_policy: DropPolicy,
 }
 
 /// The result of inserting a value into a [`OpaqueSlab`].
@@ -163,13 +166,17 @@ enum EntryMeta {
 }
 
 impl OpaqueSlab {
-    /// Creates a new slab with the specified item memory layout and capacity.
+    /// Creates a new slab with the specified item memory layout, capacity, and drop policy.
     ///
     /// # Panics
     ///
     /// Panics if the slab would be zero-sized due to item size being zero.
     #[must_use]
-    pub(crate) fn new(item_layout: Layout, capacity: NonZero<usize>) -> Self {
+    pub(crate) fn new(
+        item_layout: Layout,
+        capacity: NonZero<usize>,
+        drop_policy: DropPolicy,
+    ) -> Self {
         let layout_info = SlabLayoutInfo::calculate(item_layout, capacity);
 
         // SAFETY: The layout_info.entry_array_layout is guaranteed to be valid and non-zero-sized
@@ -219,6 +226,7 @@ impl OpaqueSlab {
             first_entry_meta_ptr: first_entry_ptr,
             next_free_index: 0,
             count: 0,
+            drop_policy,
         }
     }
 
@@ -498,6 +506,7 @@ impl OpaqueSlab {
 impl Drop for OpaqueSlab {
     fn drop(&mut self) {
         let was_empty = self.is_empty();
+        let original_count = self.count;
         let capacity_value = self.capacity.get();
 
         // Manually drop all EntryMeta instances to ensure occupied entries are properly dropped.
@@ -529,11 +538,12 @@ impl Drop for OpaqueSlab {
         // If we are already panicking, we do not want to panic again because that will
         // simply obscure whatever the original panic was, leading to debug difficulties.
         if !thread::panicking() {
-            assert!(
-                was_empty,
-                "dropped a non-empty OpaqueSlab with {} items - this suggests items may still be in use",
-                self.count
-            );
+            if matches!(self.drop_policy, DropPolicy::MustNotDropItems) {
+                assert!(
+                    was_empty,
+                    "dropped a non-empty OpaqueSlab with {original_count} items - this is forbidden by DropPolicy::MustNotDropItems"
+                );
+            }
         }
     }
 }
@@ -558,11 +568,12 @@ mod tests {
     use std::num::NonZero;
 
     use super::*;
+    use crate::DropPolicy;
 
     #[test]
     fn smoke_test() {
         let layout = Layout::new::<u32>();
-        let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap());
+        let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap(), DropPolicy::MayDropItems);
 
         // SAFETY: The layout of u32 matches the slab's layout.
         let pooled_a = unsafe { slab.insert(42_u32) };
@@ -622,7 +633,7 @@ mod tests {
     #[should_panic]
     fn panic_when_full() {
         let layout = Layout::new::<u32>();
-        let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap());
+        let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap(), DropPolicy::MayDropItems);
 
         // SAFETY: The layout of u32 matches the slab's layout.
         _ = unsafe { slab.insert(1_u32) };
@@ -638,7 +649,7 @@ mod tests {
     #[test]
     fn insert_returns_correct_index_and_pointer() {
         let layout = Layout::new::<u32>();
-        let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap());
+        let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap(), DropPolicy::MayDropItems);
 
         // We expect that we insert items in order, from the start (0, 1, 2, ...).
 
@@ -675,7 +686,7 @@ mod tests {
     #[test]
     fn remove_makes_room() {
         let layout = Layout::new::<u32>();
-        let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap());
+        let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap(), DropPolicy::MayDropItems);
 
         // SAFETY: The layout of u32 matches the slab's layout.
         let pooled_a = unsafe { slab.insert(42_u32) };
@@ -705,7 +716,7 @@ mod tests {
     #[should_panic]
     fn remove_vacant_panics() {
         let layout = Layout::new::<u32>();
-        let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap());
+        let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap(), DropPolicy::MayDropItems);
 
         slab.remove(1);
     }
@@ -714,7 +725,11 @@ mod tests {
     fn different_layouts() {
         // Test with different sized types.
         let layout_u64 = Layout::new::<u64>();
-        let mut slab_u64 = OpaqueSlab::new(layout_u64, NonZero::new(2).unwrap());
+        let mut slab_u64 = OpaqueSlab::new(
+            layout_u64,
+            NonZero::new(2).unwrap(),
+            DropPolicy::MayDropItems,
+        );
         // SAFETY: The layout of u64 matches the slab's layout.
         let pooled = unsafe { slab_u64.insert(0x1234567890ABCDEF_u64) };
         unsafe {
@@ -732,7 +747,11 @@ mod tests {
         }
 
         let layout_large = Layout::new::<LargeStruct>();
-        let mut slab_large = OpaqueSlab::new(layout_large, NonZero::new(2).unwrap());
+        let mut slab_large = OpaqueSlab::new(
+            layout_large,
+            NonZero::new(2).unwrap(),
+            DropPolicy::MayDropItems,
+        );
 
         let test_struct = LargeStruct {
             a: 1,
@@ -758,14 +777,22 @@ mod tests {
         // This test verifies that NonZero::new(0) panics, maintaining the same behavior
         // as before but now at the type level
         let layout = Layout::new::<usize>();
-        drop(OpaqueSlab::new(layout, NonZero::new(0).unwrap()));
+        drop(OpaqueSlab::new(
+            layout,
+            NonZero::new(0).unwrap(),
+            DropPolicy::MayDropItems,
+        ));
     }
 
     #[test]
     #[should_panic]
     fn zero_size_layout_is_panic() {
         let layout = Layout::from_size_align(0, 1).unwrap();
-        drop(OpaqueSlab::new(layout, NonZero::new(3).unwrap()));
+        drop(OpaqueSlab::new(
+            layout,
+            NonZero::new(3).unwrap(),
+            DropPolicy::MayDropItems,
+        ));
     }
 
     #[test]
@@ -773,7 +800,11 @@ mod tests {
         use std::cell::RefCell;
 
         let layout = Layout::new::<u32>();
-        let slab = RefCell::new(OpaqueSlab::new(layout, NonZero::new(3).unwrap()));
+        let slab = RefCell::new(OpaqueSlab::new(
+            layout,
+            NonZero::new(3).unwrap(),
+            DropPolicy::MayDropItems,
+        ));
 
         let (index_a, index_c, index_d);
 
@@ -831,6 +862,7 @@ mod tests {
         let slab = Arc::new(Mutex::new(OpaqueSlab::new(
             layout,
             NonZero::new(3).unwrap(),
+            DropPolicy::MayDropItems,
         )));
 
         let a;
@@ -893,7 +925,7 @@ mod tests {
     #[test]
     fn insert_returns_correct_pointer() {
         let layout = Layout::new::<u64>();
-        let mut slab = OpaqueSlab::new(layout, NonZero::new(2).unwrap());
+        let mut slab = OpaqueSlab::new(layout, NonZero::new(2).unwrap(), DropPolicy::MayDropItems);
 
         // SAFETY: The layout of u64 matches the slab's layout.
         let item = unsafe { slab.insert(0xDEADBEEF_u64) };
@@ -910,7 +942,7 @@ mod tests {
     #[test]
     fn stress_test_repeated_insert_remove() {
         let layout = Layout::new::<u32>();
-        let mut slab = OpaqueSlab::new(layout, NonZero::new(10).unwrap());
+        let mut slab = OpaqueSlab::new(layout, NonZero::new(10).unwrap(), DropPolicy::MayDropItems);
 
         // Fill the slab.
         let mut indices = Vec::new();
@@ -954,7 +986,11 @@ mod tests {
             data: u8,
         }
 
-        let mut slab = OpaqueSlab::new(Layout::new::<Byte>(), NonZero::new(5).unwrap());
+        let mut slab = OpaqueSlab::new(
+            Layout::new::<Byte>(),
+            NonZero::new(5).unwrap(),
+            DropPolicy::MayDropItems,
+        );
         // SAFETY: The layout of Byte matches the slab's layout.
         let item = unsafe { slab.insert(Byte { data: 42 }) };
         unsafe {
@@ -968,7 +1004,11 @@ mod tests {
             data: u16,
         }
 
-        let mut slab = OpaqueSlab::new(Layout::new::<Word>(), NonZero::new(5).unwrap());
+        let mut slab = OpaqueSlab::new(
+            Layout::new::<Word>(),
+            NonZero::new(5).unwrap(),
+            DropPolicy::MayDropItems,
+        );
         // SAFETY: The layout of Word matches the slab's layout.
         let item = unsafe { slab.insert(Word { data: 0x1234 }) };
         unsafe {
@@ -982,7 +1022,11 @@ mod tests {
             data: u32,
         }
 
-        let mut slab = OpaqueSlab::new(Layout::new::<DWord>(), NonZero::new(5).unwrap());
+        let mut slab = OpaqueSlab::new(
+            Layout::new::<DWord>(),
+            NonZero::new(5).unwrap(),
+            DropPolicy::MayDropItems,
+        );
         // SAFETY: The layout of DWord matches the slab's layout.
         let item = unsafe { slab.insert(DWord { data: 0x12345678 }) };
         unsafe {
@@ -996,7 +1040,11 @@ mod tests {
             data: u64,
         }
 
-        let mut slab = OpaqueSlab::new(Layout::new::<QWord>(), NonZero::new(5).unwrap());
+        let mut slab = OpaqueSlab::new(
+            Layout::new::<QWord>(),
+            NonZero::new(5).unwrap(),
+            DropPolicy::MayDropItems,
+        );
         // SAFETY: The layout of QWord matches the slab's layout.
         let item = unsafe {
             slab.insert(QWord {
@@ -1014,7 +1062,11 @@ mod tests {
             data: [u64; 2],
         }
 
-        let mut slab = OpaqueSlab::new(Layout::new::<OWord>(), NonZero::new(5).unwrap());
+        let mut slab = OpaqueSlab::new(
+            Layout::new::<OWord>(),
+            NonZero::new(5).unwrap(),
+            DropPolicy::MayDropItems,
+        );
         // SAFETY: The layout of OWord matches the slab's layout.
         let item = unsafe {
             slab.insert(OWord {
@@ -1042,7 +1094,11 @@ mod tests {
             f: (u16, u32, u64),
         }
 
-        let mut slab = OpaqueSlab::new(Layout::new::<ComplexStruct>(), NonZero::new(3).unwrap());
+        let mut slab = OpaqueSlab::new(
+            Layout::new::<ComplexStruct>(),
+            NonZero::new(3).unwrap(),
+            DropPolicy::MayDropItems,
+        );
 
         // SAFETY: The layout of ComplexStruct matches the slab's layout.
         let item1 = unsafe {
@@ -1102,7 +1158,11 @@ mod tests {
             Variant3,
         }
 
-        let mut slab = OpaqueSlab::new(Layout::new::<TestEnum>(), NonZero::new(4).unwrap());
+        let mut slab = OpaqueSlab::new(
+            Layout::new::<TestEnum>(),
+            NonZero::new(4).unwrap(),
+            DropPolicy::MayDropItems,
+        );
 
         // SAFETY: The layout of TestEnum matches the slab's layout.
         let item1 = unsafe { slab.insert(TestEnum::Variant1(0x12345678)) };
@@ -1132,7 +1192,11 @@ mod tests {
     #[test]
     fn small_and_large_sizes() {
         // Test very small data types.
-        let mut slab_small = OpaqueSlab::new(Layout::new::<u8>(), NonZero::new(100).unwrap());
+        let mut slab_small = OpaqueSlab::new(
+            Layout::new::<u8>(),
+            NonZero::new(100).unwrap(),
+            DropPolicy::MayDropItems,
+        );
         let mut items = Vec::new();
 
         // Fill with small values.
@@ -1163,7 +1227,11 @@ mod tests {
             data: [u64; 128], // 1024 bytes
         }
 
-        let mut slab_large = OpaqueSlab::new(Layout::new::<HugeStruct>(), NonZero::new(5).unwrap());
+        let mut slab_large = OpaqueSlab::new(
+            Layout::new::<HugeStruct>(),
+            NonZero::new(5).unwrap(),
+            DropPolicy::MayDropItems,
+        );
 
         let mut huge_data = HugeStruct { data: [0; 128] };
         for (i, elem) in huge_data.data.iter_mut().enumerate() {
@@ -1244,7 +1312,11 @@ mod tests {
     #[should_panic]
     fn drop_with_active_items_panics() {
         let layout = Layout::new::<u32>();
-        let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap());
+        let mut slab = OpaqueSlab::new(
+            layout,
+            NonZero::new(3).unwrap(),
+            DropPolicy::MustNotDropItems,
+        );
 
         // Insert some item but don't remove it before drop.
         // SAFETY: The layout of u32 matches the slab's layout.

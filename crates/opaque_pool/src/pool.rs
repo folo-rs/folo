@@ -4,7 +4,7 @@ use std::num::NonZero;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::OpaqueSlab;
+use crate::{DropPolicy, OpaqueSlab};
 
 /// Global counter for generating unique pool IDs.
 static POOL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -37,7 +37,7 @@ fn generate_pool_id() -> u64 {
 /// use opaque_pool::OpaquePool;
 ///
 /// let layout = Layout::new::<u32>();
-/// let mut pool = OpaquePool::new(layout);
+/// let mut pool = OpaquePool::builder().layout(layout).build();
 ///
 /// // Insert a value and get a handle.
 /// // SAFETY: u32 matches the layout used to create the pool.
@@ -74,6 +74,9 @@ pub struct OpaquePool {
     /// In other words, this is a cache, not the ground truth - we set it to `None` when we lose
     /// confidence that the data is still valid but when we have no need to look up the new value.
     slab_with_vacant_slot_index: Option<usize>,
+
+    /// Drop policy that determines how the pool handles remaining items when dropped.
+    drop_policy: DropPolicy,
 }
 
 /// Today, we assemble the pool from memory slabs, each containing a fixed number of memory blocks.
@@ -83,16 +86,18 @@ pub struct OpaquePool {
 /// This is why the parameter is also not exposed in the public API - we may want to change how we
 /// perform the memory layout in a future version.
 #[cfg(not(miri))]
-const DEFAULT_SLAB_CAPACITY: usize = 128;
+pub(crate) const DEFAULT_SLAB_CAPACITY: usize = 128;
 
 // Under Miri, we use a smaller slab capacity because Miri test runtime scales by memory usage.
 #[cfg(miri)]
-const DEFAULT_SLAB_CAPACITY: usize = 16;
+pub(crate) const DEFAULT_SLAB_CAPACITY: usize = 16;
 
 impl OpaquePool {
-    /// Creates a new [`OpaquePool`] with the specified item memory layout.
+    /// Creates a builder for configuring and constructing an [`OpaquePool`].
     ///
-    /// The pool starts empty and will automatically grow as needed when memory is reserved.
+    /// This is the preferred way to create an [`OpaquePool`] as it allows configuring
+    /// the drop policy and other options. You must specify a layout using either 
+    /// `.layout()` or `.layout_of::<T>()` before calling `.build()`.
     ///
     /// # Example
     ///
@@ -101,37 +106,38 @@ impl OpaquePool {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// // Create a pool for storing u64 values.
+    /// // Create a pool for storing u64 values using explicit layout.
     /// let layout = Layout::new::<u64>();
-    /// let pool = OpaquePool::new(layout);
+    /// let pool = OpaquePool::builder()
+    ///     .layout(layout)
+    ///     .build();
     ///
     /// assert_eq!(pool.len(), 0);
     /// assert!(pool.is_empty());
     /// assert_eq!(pool.item_layout(), layout);
+    ///
+    /// // Create a pool for storing u32 values using type-based layout.
+    /// let pool = OpaquePool::builder()
+    ///     .layout_of::<u32>()
+    ///     .build();
     /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if the layout has zero size.
-    #[must_use]
-    pub fn new(item_layout: Layout) -> Self {
-        Self::with_slab_capacity(
-            item_layout,
-            NonZero::new(DEFAULT_SLAB_CAPACITY)
-                .expect("DEFAULT_SLAB_CAPACITY is a non-zero constant"),
-        )
+    pub fn builder() -> crate::OpaquePoolBuilder {
+        crate::OpaquePoolBuilder::new()
     }
 
-    /// Creates a new [`OpaquePool`] with the specified memory layout and internal capacity.
+    /// Creates a new [`OpaquePool`] with the specified configuration.
     ///
-    /// This is intended for internal use and testing scenarios where fine-tuning of the
-    /// internal memory organization is required.
+    /// This method is used internally by the builder to construct the actual pool.
     ///
     /// # Panics
     ///
     /// Panics if the layout has zero size.
     #[must_use]
-    pub(crate) fn with_slab_capacity(item_layout: Layout, slab_capacity: NonZero<usize>) -> Self {
+    pub(crate) fn new_inner(
+        item_layout: Layout,
+        drop_policy: DropPolicy,
+        slab_capacity: NonZero<usize>,
+    ) -> Self {
         assert!(
             item_layout.size() > 0,
             "OpaquePool must have non-zero memory block size"
@@ -143,6 +149,7 @@ impl OpaquePool {
             slab_capacity,
             slabs: Vec::new(),
             slab_with_vacant_slot_index: None,
+            drop_policy,
         }
     }
 
@@ -156,7 +163,7 @@ impl OpaquePool {
     /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<u128>();
-    /// let pool = OpaquePool::new(layout);
+    /// let pool = OpaquePool::builder().layout(layout).build();
     ///
     /// assert_eq!(pool.item_layout(), layout);
     /// assert_eq!(pool.item_layout().size(), std::mem::size_of::<u128>());
@@ -176,7 +183,7 @@ impl OpaquePool {
     /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<i32>();
-    /// let mut pool = OpaquePool::new(layout);
+    /// let mut pool = OpaquePool::builder().layout(layout).build();
     ///
     /// assert_eq!(pool.len(), 0);
     ///
@@ -210,7 +217,7 @@ impl OpaquePool {
     /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<u8>();
-    /// let mut pool = OpaquePool::new(layout);
+    /// let mut pool = OpaquePool::builder().layout(layout).build();
     ///
     /// // New pool starts with zero capacity.
     /// assert_eq!(pool.capacity(), 0);
@@ -244,7 +251,7 @@ impl OpaquePool {
     /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<u16>();
-    /// let mut pool = OpaquePool::new(layout);
+    /// let mut pool = OpaquePool::builder().layout(layout).build();
     ///
     /// assert!(pool.is_empty());
     ///
@@ -273,7 +280,7 @@ impl OpaquePool {
     /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<u64>();
-    /// let mut pool = OpaquePool::new(layout);
+    /// let mut pool = OpaquePool::builder().layout(layout).build();
     ///
     /// // Insert a value.
     /// // SAFETY: u64 matches the layout used to create the pool.
@@ -343,7 +350,7 @@ impl OpaquePool {
     /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<i32>();
-    /// let mut pool = OpaquePool::new(layout);
+    /// let mut pool = OpaquePool::builder().layout(layout).build();
     ///
     /// // SAFETY: i32 matches the layout used to create the pool.
     /// let pooled = unsafe { pool.insert(42i32) };
@@ -407,7 +414,7 @@ impl OpaquePool {
         } else {
             // All slabs are full, so we need to expand capacity.
             self.slabs
-                .push(OpaqueSlab::new(self.item_layout, self.slab_capacity));
+                .push(OpaqueSlab::new(self.item_layout, self.slab_capacity, self.drop_policy));
 
             self.slabs
                 .len()
@@ -446,7 +453,7 @@ impl OpaquePool {
 /// use opaque_pool::OpaquePool;
 ///
 /// let layout = Layout::new::<i64>();
-/// let mut pool = OpaquePool::new(layout);
+/// let mut pool = OpaquePool::builder().layout(layout).build();
 ///
 /// // SAFETY: i64 matches the layout used to create the pool.
 /// let pooled = unsafe { pool.insert(-123i64) };
@@ -479,7 +486,7 @@ impl<T> Pooled<T> {
     /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<f64>();
-    /// let mut pool = OpaquePool::new(layout);
+    /// let mut pool = OpaquePool::builder().layout(layout).build();
     ///
     /// // SAFETY: f64 matches the layout used to create the pool.
     /// let pooled = unsafe { pool.insert(3.14159f64) };
@@ -507,7 +514,7 @@ impl<T> Pooled<T> {
     /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<u64>();
-    /// let mut pool = OpaquePool::new(layout);
+    /// let mut pool = OpaquePool::builder().layout(layout).build();
     ///
     /// // SAFETY: u64 matches the layout used to create the pool.
     /// let pooled = unsafe { pool.insert(42u64) };
@@ -564,7 +571,7 @@ mod tests {
     #[test]
     fn smoke_test() {
         let layout = Layout::new::<u32>();
-        let mut pool = OpaquePool::new(layout);
+        let mut pool = OpaquePool::builder().layout(layout).build();
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
@@ -608,7 +615,7 @@ mod tests {
     #[should_panic]
     fn remove_nonexistent_panics() {
         let layout = Layout::new::<u32>();
-        let mut pool = OpaquePool::new(layout);
+        let mut pool = OpaquePool::builder().layout(layout).build();
 
         // Create a fake pooled with invalid coordinates.
         let fake_pooled: Pooled<u32> = Pooled {
@@ -630,7 +637,7 @@ mod tests {
     )]
     fn multi_slab_growth() {
         let layout = Layout::new::<u32>();
-        let mut pool = OpaquePool::new(layout);
+        let mut pool = OpaquePool::builder().layout(layout).build();
 
         // Reserve more items than a single slab can hold to test growth.
         // We use 2 * DEFAULT_SLAB_CAPACITY + 1 to guarantee we need at least 3 slabs.
@@ -662,7 +669,7 @@ mod tests {
     fn different_layouts() {
         // Test with different sized types.
         let layout_u64 = Layout::new::<u64>();
-        let mut pool_u64 = OpaquePool::new(layout_u64);
+        let mut pool_u64 = OpaquePool::builder().layout(layout_u64).build();
         // SAFETY: The layout of u64 matches the pool's layout.
         let pooled = unsafe { pool_u64.insert(0x1234567890ABCDEF_u64) };
         unsafe {
@@ -680,7 +687,7 @@ mod tests {
         }
 
         let layout_large = Layout::new::<LargeStruct>();
-        let mut pool_large = OpaquePool::new(layout_large);
+        let mut pool_large = OpaquePool::builder().layout(layout_large).build();
 
         let test_struct = LargeStruct {
             a: 1,
@@ -704,13 +711,13 @@ mod tests {
     #[should_panic]
     fn zero_size_layout_is_panic() {
         let layout = Layout::from_size_align(0, 1).unwrap();
-        drop(OpaquePool::new(layout));
+        drop(OpaquePool::builder().layout(layout).build());
     }
 
     #[test]
     fn stress_test_repeated_insert_remove() {
         let layout = Layout::new::<usize>();
-        let mut pool = OpaquePool::new(layout);
+        let mut pool = OpaquePool::builder().layout(layout).build();
 
         // Insert and remove many items to test slab management.
         for iteration in 0..10 {
@@ -752,7 +759,7 @@ mod tests {
     #[test]
     fn drop_with_no_active_pooled_does_not_panic() {
         let layout = Layout::new::<u64>();
-        let mut pool = OpaquePool::new(layout);
+        let mut pool = OpaquePool::builder().layout(layout).build();
 
         // Insert and then remove immediately.
         // SAFETY: The layout of u64 matches the pool's layout.
@@ -769,7 +776,10 @@ mod tests {
     #[should_panic]
     fn drop_with_active_pooled_panics() {
         let layout = Layout::new::<u64>();
-        let mut pool = OpaquePool::new(layout);
+        let mut pool = OpaquePool::builder()
+            .layout(layout)
+            .drop_policy(DropPolicy::MustNotDropItems)
+            .build();
 
         // Pooled items are undroppable, so we just let this pooled item leak to trigger the panic.
         // SAFETY: The layout of u64 matches the pool's layout.
@@ -783,8 +793,8 @@ mod tests {
     #[should_panic]
     fn remove_pooled_from_different_pool_panics() {
         let layout = Layout::new::<u32>();
-        let mut pool1 = OpaquePool::new(layout);
-        let mut pool2 = OpaquePool::new(layout);
+        let mut pool1 = OpaquePool::builder().layout(layout).build();
+        let mut pool2 = OpaquePool::builder().layout(layout).build();
 
         // Insert into pool1 but try to remove from pool2.
         // SAFETY: The layout of u32 matches the pool's layout.
@@ -795,9 +805,9 @@ mod tests {
     #[test]
     fn pool_ids_are_unique() {
         let layout = Layout::new::<u32>();
-        let pool1 = OpaquePool::new(layout);
-        let pool2 = OpaquePool::new(layout);
-        let pool3 = OpaquePool::new(layout);
+        let pool1 = OpaquePool::builder().layout(layout).build();
+        let pool2 = OpaquePool::builder().layout(layout).build();
+        let pool3 = OpaquePool::builder().layout(layout).build();
 
         // Pool IDs should be different for each pool instance.
         assert_ne!(pool1.pool_id, pool2.pool_id);
@@ -808,7 +818,7 @@ mod tests {
     #[test]
     fn pooled_belongs_to_correct_pool() {
         let layout = Layout::new::<u64>();
-        let mut pool = OpaquePool::new(layout);
+        let mut pool = OpaquePool::builder().layout(layout).build();
 
         // SAFETY: The layout of u64 matches the pool's layout.
         let pooled = unsafe { pool.insert(42_u64) };
@@ -823,7 +833,7 @@ mod tests {
     #[test]
     fn pooled_erase_functionality() {
         let layout = Layout::new::<u32>();
-        let mut pool = OpaquePool::new(layout);
+        let mut pool = OpaquePool::builder().layout(layout).build();
 
         // SAFETY: The layout of u32 matches the pool's layout.
         let pooled = unsafe { pool.insert(42_u32) };
@@ -843,5 +853,54 @@ mod tests {
 
         // Should be able to remove the erased handle.
         pool.remove(erased);
+    }
+
+    #[test]
+    fn drop_policy_may_drop_items_works() {
+        let layout = Layout::new::<u32>();
+        let mut pool = OpaquePool::builder()
+            .layout(layout)
+            .drop_policy(DropPolicy::MayDropItems)
+            .build();
+
+        // SAFETY: The layout of u32 matches the pool's layout.
+        let _pooled = unsafe { pool.insert(42_u32) };
+
+        // Pool should drop without panic even with active items when using MayDropItems
+        drop(pool);
+    }
+
+    #[test]
+    #[should_panic]
+    fn drop_policy_must_not_drop_items_panics() {
+        let layout = Layout::new::<u32>();
+        let mut pool = OpaquePool::builder()
+            .layout(layout)
+            .drop_policy(DropPolicy::MustNotDropItems)
+            .build();
+
+        // SAFETY: The layout of u32 matches the pool's layout.
+        let _pooled = unsafe { pool.insert(42_u32) };
+
+        // Pool should panic on drop when using MustNotDropItems with active items
+        drop(pool);
+    }
+
+    #[test]
+    fn drop_policy_must_not_drop_items_ok_when_empty() {
+        let layout = Layout::new::<u32>();
+        let mut pool = OpaquePool::builder()
+            .layout(layout)
+            .drop_policy(DropPolicy::MustNotDropItems)
+            .build();
+
+        // SAFETY: The layout of u32 matches the pool's layout.
+        let pooled = unsafe { pool.insert(42_u32) };
+        
+        // Remove the item before dropping
+        pool.remove(pooled);
+
+        // Pool should drop without panic when empty, even with MustNotDropItems
+        drop(pool);
     }
 }

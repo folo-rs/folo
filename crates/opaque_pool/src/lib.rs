@@ -35,7 +35,7 @@
 //!
 //! // Create a pool for storing values that match the layout of `u64`.
 //! let layout = Layout::new::<u64>();
-//! let mut pool = OpaquePool::new(layout);
+//! let mut pool = OpaquePool::builder(layout).build();
 //!
 //! // Insert values into the pool.
 //! // SAFETY: The layout of u64 matches the pool's item layout.
@@ -66,10 +66,14 @@
 //! assert!(pool.is_empty());
 //! ```
 
+mod builder;
+mod drop_policy;
 mod dropper;
 mod pool;
 mod slab;
 
+pub use builder::*;
+pub use drop_policy::*;
 pub(crate) use dropper::*;
 pub use pool::*;
 pub(crate) use slab::*;
