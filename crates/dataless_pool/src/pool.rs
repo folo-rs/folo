@@ -14,10 +14,9 @@ fn generate_pool_id() -> u64 {
     POOL_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-/// A memory pool of unbounded size that reserves pinned memory without placing any data in it,
-/// leaving that up to the owner.
+/// A memory pool of unbounded size that inserts typed values into pinned memory.
 ///
-/// The pool returns a [`PoolReservation`] for each reserved memory block, which acts as both
+/// The pool returns a [`Pooled`] for each inserted value, which acts as both
 /// the key and provides direct access to the memory pointer.
 ///
 /// # Out of band access
@@ -40,26 +39,17 @@ fn generate_pool_id() -> u64 {
 /// let layout = Layout::new::<u32>();
 /// let mut pool = DatalessPool::new(layout);
 ///
-/// // Reserve memory and get a reservation.
-/// let reservation = pool.reserve();
-///
-/// // Write to the memory.
-/// // SAFETY: The pointer is valid and aligned for u32, and we own the memory.
-/// unsafe {
-///     reservation.ptr().cast::<u32>().write(42);
-/// }
+/// // Insert a value and get a handle.
+/// // SAFETY: u32 matches the layout used to create the pool.
+/// let pooled = unsafe { pool.insert(42u32) };
 ///
 /// // Read from the memory.
-/// // SAFETY: The pointer is valid and the memory was just initialized.
-/// let value = unsafe { reservation.ptr().cast::<u32>().read() };
+/// // SAFETY: The pointer is valid and the memory contains the value we just inserted.
+/// let value = unsafe { pooled.ptr().cast::<u32>().read() };
 /// assert_eq!(value, 42);
 ///
-/// // Release the memory back to the pool.
-/// // SAFETY: The reserved memory contains u32 data which is Copy and has no destructor,
-/// // so no cleanup is required before releasing.
-/// unsafe {
-///     pool.release(reservation);
-/// }
+/// // Remove the value from the pool.
+/// pool.remove(pooled);
 /// ```
 #[derive(Debug)]
 pub struct DatalessPool {
@@ -176,7 +166,7 @@ impl DatalessPool {
         self.item_layout
     }
 
-    /// The number of memory blocks in the pool that have been reserved.
+    /// The number of values in the pool that have been inserted.
     ///
     /// # Example
     ///
@@ -190,31 +180,27 @@ impl DatalessPool {
     ///
     /// assert_eq!(pool.len(), 0);
     ///
-    /// let reservation1 = pool.reserve();
+    /// // SAFETY: i32 matches the layout used to create the pool.
+    /// let pooled1 = unsafe { pool.insert(1i32) };
     /// assert_eq!(pool.len(), 1);
     ///
-    /// let reservation2 = pool.reserve();
+    /// // SAFETY: i32 matches the layout used to create the pool.
+    /// let pooled2 = unsafe { pool.insert(2i32) };
     /// assert_eq!(pool.len(), 2);
     ///
-    /// // SAFETY: The memory was never initialized, so no destructor needs to be called.
-    /// unsafe {
-    ///     pool.release(reservation1);
-    /// }
+    /// pool.remove(pooled1);
     /// assert_eq!(pool.len(), 1);
-    /// # // SAFETY: The memory was never initialized, so no destructor needs to be called.
-    /// # unsafe {
-    /// #     pool.release(reservation2);
-    /// # }
+    /// # pool.remove(pooled2);
     /// ```
     #[must_use]
     pub fn len(&self) -> usize {
         self.slabs.iter().map(DatalessSlab::len).sum()
     }
 
-    /// The number of memory blocks the pool can accommodate without additional resource allocation.
+    /// The number of values the pool can accommodate without additional resource allocation.
     ///
-    /// This is the total capacity, including any existing reservations. The capacity may grow
-    /// automatically when [`reserve()`] is called and no space is available.
+    /// This is the total capacity, including any existing insertions. The capacity may grow
+    /// automatically when [`insert()`] is called and no space is available.
     ///
     /// # Example
     ///
@@ -229,17 +215,15 @@ impl DatalessPool {
     /// // New pool starts with zero capacity.
     /// assert_eq!(pool.capacity(), 0);
     ///
-    /// // Reserving memory may increase capacity.
-    /// let reservation = pool.reserve();
+    /// // Inserting values may increase capacity.
+    /// // SAFETY: u8 matches the layout used to create the pool.
+    /// let pooled = unsafe { pool.insert(42u8) };
     /// assert!(pool.capacity() > 0);
     /// assert!(pool.capacity() >= pool.len());
-    /// # // SAFETY: The memory was never initialized, so no destructor needs to be called.
-    /// # unsafe {
-    /// #     pool.release(reservation);
-    /// # }
+    /// # pool.remove(pooled);
     /// ```
     ///
-    /// [`reserve()`]: Self::reserve
+    /// [`insert()`]: Self::insert
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.slabs
@@ -248,7 +232,7 @@ impl DatalessPool {
             .expect("capacity calculation cannot overflow for reasonable slab counts")
     }
 
-    /// Whether the pool has no reservations.
+    /// Whether the pool has no inserted values.
     ///
     /// An empty pool may still be holding unused memory capacity.
     ///
@@ -264,13 +248,11 @@ impl DatalessPool {
     ///
     /// assert!(pool.is_empty());
     ///
-    /// let reservation = pool.reserve();
+    /// // SAFETY: u16 matches the layout used to create the pool.
+    /// let pooled = unsafe { pool.insert(42u16) };
     /// assert!(!pool.is_empty());
     ///
-    /// // SAFETY: The memory was never initialized, so no destructor needs to be called.
-    /// unsafe {
-    ///     pool.release(reservation);
-    /// }
+    /// pool.remove(pooled);
     /// assert!(pool.is_empty());
     /// ```
     #[must_use]
@@ -278,10 +260,10 @@ impl DatalessPool {
         self.slabs.iter().all(DatalessSlab::is_empty)
     }
 
-    /// Reserves memory in the pool and returns a reservation that acts as both the key and pointer.
+    /// Inserts a value into the pool and returns a handle that acts as both the key and pointer.
     ///
-    /// The returned [`PoolReservation`] provides direct access to the memory via [`PoolReservation::ptr()`]
-    /// and must be returned to the pool via [`release()`] to free the memory.
+    /// The returned [`Pooled`] provides direct access to the memory via [`Pooled::ptr()`]
+    /// and must be returned to the pool via [`remove()`] to free the memory and properly drop the value.
     ///
     /// # Example
     ///
@@ -293,30 +275,31 @@ impl DatalessPool {
     /// let layout = Layout::new::<u64>();
     /// let mut pool = DatalessPool::new(layout);
     ///
-    /// // Reserve memory.
-    /// let reservation = pool.reserve();
-    ///
-    /// // Write data to the reserved memory.
-    /// // SAFETY: The pointer is valid and aligned for u64, and we own the memory.
-    /// unsafe {
-    ///     reservation.ptr().cast::<u64>().write(0xDEADBEEF_CAFEBABE);
-    /// }
+    /// // Insert a value.
+    /// // SAFETY: u64 matches the layout used to create the pool.
+    /// let pooled = unsafe { pool.insert(0xDEADBEEF_CAFEBABEu64) };
     ///
     /// // Read data back.
-    /// // SAFETY: The pointer is valid and the memory was just initialized.
-    /// let value = unsafe { reservation.ptr().cast::<u64>().read() };
+    /// // SAFETY: The pointer is valid and the memory contains the value we just inserted.
+    /// let value = unsafe { pooled.ptr().cast::<u64>().read() };
     /// assert_eq!(value, 0xDEADBEEF_CAFEBABE);
     ///
-    /// // Must release the reservation to free the memory.
-    /// // SAFETY: The reserved memory contains u64 data which is Copy and has no destructor.
-    /// unsafe {
-    ///     pool.release(reservation);
-    /// }
+    /// // Must remove the value to free the memory and drop it properly.
+    /// pool.remove(pooled);
     /// ```
     ///
-    /// [`release()`]: Self::release
+    /// # Panics
+    ///
+    /// In debug builds, panics if the layout of `T` does not match the pool's item layout.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the layout of `T` matches the pool's item layout.
+    /// In debug builds, this is checked with an assertion.
+    ///
+    /// [`remove()`]: Self::remove
     #[must_use]
-    pub fn reserve(&mut self) -> PoolReservation {
+    pub unsafe fn insert<T>(&mut self, value: T) -> Pooled {
         let slab_index = self.index_of_slab_with_vacant_slot();
         let slab = self
             .slabs
@@ -333,24 +316,25 @@ impl DatalessPool {
             self.slab_with_vacant_slot_index = None;
         }
 
-        let reservation = slab.reserve();
+        // SAFETY: The caller ensures T's layout matches the pool's layout.
+        let pooled = unsafe { slab.insert(value) };
         let coordinates = MemoryBlockCoordinates::from_parts(
             slab_index,
-            reservation.index(),
+            pooled.index(),
             self.slab_capacity.get(),
         );
 
-        PoolReservation {
+        Pooled {
             pool_id: self.pool_id,
             coordinates,
-            ptr: reservation.ptr(),
+            ptr: pooled.ptr(),
         }
     }
 
-    /// Releases memory previously reserved.
+    /// Removes a value previously inserted into the pool.
     ///
-    /// The [`PoolReservation`] is consumed by this operation and cannot be used afterward.
-    /// The memory becomes available for future reservations.
+    /// The [`Pooled`] is consumed by this operation and cannot be used afterward.
+    /// The value is properly dropped and the memory becomes available for future insertions.
     ///
     /// # Example
     ///
@@ -362,50 +346,39 @@ impl DatalessPool {
     /// let layout = Layout::new::<i32>();
     /// let mut pool = DatalessPool::new(layout);
     ///
-    /// let reservation = pool.reserve();
+    /// // SAFETY: i32 matches the layout used to create the pool.
+    /// let pooled = unsafe { pool.insert(42i32) };
     /// assert_eq!(pool.len(), 1);
     ///
-    /// // Release the reservation.
-    /// // SAFETY: The memory was never initialized, so no destructor needs to be called.
-    /// unsafe {
-    ///     pool.release(reservation);
-    /// }
+    /// // Remove the value.
+    /// pool.remove(pooled);
     /// assert_eq!(pool.len(), 0);
     /// assert!(pool.is_empty());
     /// ```
     ///
     /// # Panics
     ///
-    /// Panics if the reservation is not associated with a memory block.
-    ///
-    /// # Safety
-    ///
-    /// If the reserved memory was initialized with data, the caller is responsible for calling
-    /// the destructor on the data before releasing the memory.
-    pub unsafe fn release(&mut self, reservation: PoolReservation) {
-        // PoolReservation has a no-execute `Drop` impl, so we drop it manually here.
-        let reservation = ManuallyDrop::new(reservation);
+    /// Panics if the handle is not associated with a value in this pool.
+    pub fn remove(&mut self, pooled: Pooled) {
+        // Pooled has a no-execute `Drop` impl, so we drop it manually here.
+        let pooled = ManuallyDrop::new(pooled);
 
         assert!(
-            reservation.pool_id == self.pool_id,
-            "attempted to release a reservation from a different pool (reservation pool ID: {}, current pool ID: {})",
-            reservation.pool_id,
+            pooled.pool_id == self.pool_id,
+            "attempted to remove a handle from a different pool (handle pool ID: {}, current pool ID: {})",
+            pooled.pool_id,
             self.pool_id
         );
 
-        let coordinates = reservation.coordinates;
+        let coordinates = pooled.coordinates;
 
         let Some(slab) = self.slabs.get_mut(coordinates.slab_index) else {
-            panic!("reservation was not associated with a memory block in the pool")
+            panic!("handle was not associated with a value in the pool")
         };
 
-        // SAFETY: The caller is responsible for ensuring any data destructors have been
-        // called before releasing the memory, which satisfies the safety requirement of slab.release().
-        unsafe {
-            slab.release(coordinates.index_in_slab);
-        }
+        slab.remove(coordinates.index_in_slab);
 
-        // There is now a vacant slot in this slab! We may want to remember this for fast reservations.
+        // There is now a vacant slot in this slab! We may want to remember this for fast insertions.
         // We try to remember the lowest index of a slab with a vacant slot, so we
         // fill the collection from the start (to enable easier shrinking later).
         if self
@@ -458,10 +431,10 @@ impl DatalessPool {
     }
 }
 
-/// The result of reserving memory in a [`DatalessPool`].
+/// The result of inserting a value into a [`DatalessPool`].
 ///
-/// Acts as both the reservation and the key - the user must return this to the pool to release
-/// the memory capacity. The pool will panic on drop if some active reservations remain.
+/// Acts as both the handle and the key - the user must return this to the pool to remove
+/// the value and properly drop it. The pool will panic on drop if some active handles remain.
 ///
 /// # Example
 ///
@@ -473,28 +446,20 @@ impl DatalessPool {
 /// let layout = Layout::new::<i64>();
 /// let mut pool = DatalessPool::new(layout);
 ///
-/// let reservation = pool.reserve();
-///
-/// // Write to the memory pointer.
-/// // SAFETY: The pointer is valid and aligned for i64, and we own the memory.
-/// unsafe {
-///     reservation.ptr().cast::<i64>().write(-123);
-/// }
+/// // SAFETY: i64 matches the layout used to create the pool.
+/// let pooled = unsafe { pool.insert(-123i64) };
 ///
 /// // Read from the memory pointer.
-/// // SAFETY: The pointer is valid and the memory was just initialized.
-/// let value = unsafe { reservation.ptr().cast::<i64>().read() };
+/// // SAFETY: The pointer is valid and the memory contains the value we just inserted.
+/// let value = unsafe { pooled.ptr().cast::<i64>().read() };
 /// assert_eq!(value, -123);
 ///
-/// // The reservation must be returned to release the memory.
-/// // SAFETY: The reserved memory contains i64 data which is Copy and has no destructor.
-/// unsafe {
-///     pool.release(reservation);
-/// }
+/// // The handle must be returned to remove the value and drop it properly.
+/// pool.remove(pooled);
 /// ```
 #[derive(Debug)]
-pub struct PoolReservation {
-    /// Ensures this reservation can only be released to the pool it came from.
+pub struct Pooled {
+    /// Ensures this handle can only be returned to the pool it came from.
     pool_id: u64,
 
     coordinates: MemoryBlockCoordinates,
@@ -502,8 +467,8 @@ pub struct PoolReservation {
     ptr: NonNull<()>,
 }
 
-impl PoolReservation {
-    /// Returns a pointer to the reserved memory block.
+impl Pooled {
+    /// Returns a pointer to the inserted value.
     ///
     /// # Example
     ///
@@ -514,26 +479,18 @@ impl PoolReservation {
     ///
     /// let layout = Layout::new::<f64>();
     /// let mut pool = DatalessPool::new(layout);
-    /// let reservation = pool.reserve();
     ///
-    /// // Write data to the reserved memory.
-    /// // SAFETY: The pointer is valid and aligned for f64, and we own the memory.
-    /// unsafe {
-    ///     let ptr = reservation.ptr().cast::<f64>();
-    ///     ptr.write(3.14159);
-    /// }
+    /// // SAFETY: f64 matches the layout used to create the pool.
+    /// let pooled = unsafe { pool.insert(3.14159f64) };
     ///
     /// // Read data back from the memory.
-    /// // SAFETY: The pointer is valid and the memory was just initialized.
+    /// // SAFETY: The pointer is valid and the memory contains the value we just inserted.
     /// let value = unsafe {
-    ///     let ptr = reservation.ptr().cast::<f64>();
+    ///     let ptr = pooled.ptr().cast::<f64>();
     ///     ptr.read()
     /// };
     /// assert_eq!(value, 3.14159);
-    /// # // SAFETY: The reserved memory contains f64 data which is Copy and has no destructor.
-    /// # unsafe {
-    /// #     pool.release(reservation);
-    /// # }
+    /// # pool.remove(pooled);
     /// ```
     #[must_use]
     pub fn ptr(&self) -> NonNull<()> {
@@ -570,6 +527,7 @@ mod tests {
     use std::alloc::Layout;
 
     use super::*;
+
     #[test]
     fn smoke_test() {
         let layout = Layout::new::<u32>();
@@ -578,60 +536,49 @@ mod tests {
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
 
-        let reservation_a = pool.reserve();
-        let reservation_b = pool.reserve();
-        let reservation_c = pool.reserve();
+        // SAFETY: The layout of u32 matches the pool's layout.
+        let pooled_a = unsafe { pool.insert(42_u32) };
+        // SAFETY: The layout of u32 matches the pool's layout.
+        let pooled_b = unsafe { pool.insert(43_u32) };
+        // SAFETY: The layout of u32 matches the pool's layout.
+        let pooled_c = unsafe { pool.insert(44_u32) };
 
         assert_eq!(pool.len(), 3);
         assert!(!pool.is_empty());
         assert!(pool.capacity() >= 3);
 
-        // Write some values.
+        // Read them back via pooled pointer.
         unsafe {
-            reservation_a.ptr().cast::<u32>().write(42);
-            reservation_b.ptr().cast::<u32>().write(43);
-            reservation_c.ptr().cast::<u32>().write(44);
+            assert_eq!(pooled_a.ptr().cast::<u32>().read(), 42);
+            assert_eq!(pooled_b.ptr().cast::<u32>().read(), 43);
+            assert_eq!(pooled_c.ptr().cast::<u32>().read(), 44);
         }
 
-        // Read them back via reservation pointer.
-        unsafe {
-            assert_eq!(reservation_a.ptr().cast::<u32>().read(), 42);
-            assert_eq!(reservation_b.ptr().cast::<u32>().read(), 43);
-            assert_eq!(reservation_c.ptr().cast::<u32>().read(), 44);
-        }
+        pool.remove(pooled_b);
 
-        // SAFETY: The reserved memory contains u32 data which is Copy and has no destructor.
-        unsafe {
-            pool.release(reservation_b);
-        }
-
-        let reservation_d = pool.reserve();
+        // SAFETY: The layout of u32 matches the pool's layout.
+        let pooled_d = unsafe { pool.insert(45_u32) };
 
         unsafe {
-            reservation_d.ptr().cast::<u32>().write(45);
-            assert_eq!(reservation_a.ptr().cast::<u32>().read(), 42);
-            assert_eq!(reservation_c.ptr().cast::<u32>().read(), 44);
-            assert_eq!(reservation_d.ptr().cast::<u32>().read(), 45);
+            assert_eq!(pooled_a.ptr().cast::<u32>().read(), 42);
+            assert_eq!(pooled_c.ptr().cast::<u32>().read(), 44);
+            assert_eq!(pooled_d.ptr().cast::<u32>().read(), 45);
         }
 
-        // Clean up remaining reservations.
-        // SAFETY: The reserved memory contains u32 data which is Copy and has no destructor,
-        // so no destructors need to be called before releasing the memory.
-        unsafe {
-            pool.release(reservation_a);
-            pool.release(reservation_c);
-            pool.release(reservation_d);
-        }
+        // Clean up remaining pooled items.
+        pool.remove(pooled_a);
+        pool.remove(pooled_c);
+        pool.remove(pooled_d);
     }
 
     #[test]
     #[should_panic]
-    fn release_nonexistent_panics() {
+    fn remove_nonexistent_panics() {
         let layout = Layout::new::<u32>();
         let mut pool = DatalessPool::new(layout);
 
-        // Create a fake reservation with invalid coordinates.
-        let fake_reservation = PoolReservation {
+        // Create a fake pooled with invalid coordinates.
+        let fake_pooled = Pooled {
             pool_id: pool.pool_id, // Use correct pool ID but invalid coordinates
             coordinates: MemoryBlockCoordinates {
                 slab_index: 0,
@@ -640,9 +587,7 @@ mod tests {
             ptr: NonNull::dangling(),
         };
 
-        unsafe {
-            pool.release(fake_reservation);
-        }
+        pool.remove(fake_pooled);
     }
 
     #[test]
@@ -657,32 +602,26 @@ mod tests {
         // Reserve more items than a single slab can hold to test growth.
         // We use 2 * DEFAULT_SLAB_CAPACITY + 1 to guarantee we need at least 3 slabs.
         let items_to_reserve = 2 * DEFAULT_SLAB_CAPACITY + 1;
-        let mut reservations = Vec::new();
+        let mut pooled_items = Vec::new();
         for i in 0..items_to_reserve {
-            let reservation = pool.reserve();
-            unsafe {
-                reservation.ptr().cast::<u32>().write(i as u32);
-            }
-            reservations.push(reservation);
+            // SAFETY: The layout of u32 matches the pool's layout.
+            let pooled = unsafe { pool.insert(i as u32) };
+            pooled_items.push(pooled);
         }
 
         assert_eq!(pool.len(), items_to_reserve);
         assert!(pool.capacity() >= items_to_reserve);
 
         // Verify all values are still accessible.
-        for (i, reservation) in reservations.iter().enumerate() {
+        for (i, pooled) in pooled_items.iter().enumerate() {
             unsafe {
-                assert_eq!(reservation.ptr().cast::<u32>().as_ptr().read(), i as u32);
+                assert_eq!(pooled.ptr().cast::<u32>().as_ptr().read(), i as u32);
             }
         }
 
-        // Clean up all reservations.
-        for reservation in reservations {
-            // SAFETY: The reserved memory contains u32 data which is Copy and has no destructor,
-            // so no destructors need to be called before releasing the memory.
-            unsafe {
-                pool.release(reservation);
-            }
+        // Clean up all pooled items.
+        for pooled in pooled_items {
+            pool.remove(pooled);
         }
     }
 
@@ -691,21 +630,15 @@ mod tests {
         // Test with different sized types.
         let layout_u64 = Layout::new::<u64>();
         let mut pool_u64 = DatalessPool::new(layout_u64);
-        let reservation = pool_u64.reserve();
+        // SAFETY: The layout of u64 matches the pool's layout.
+        let pooled = unsafe { pool_u64.insert(0x1234567890ABCDEF_u64) };
         unsafe {
-            reservation
-                .ptr()
-                .cast::<u64>()
-                .as_ptr()
-                .write(0x1234567890ABCDEF);
             assert_eq!(
-                reservation.ptr().cast::<u64>().as_ptr().read(),
+                pooled.ptr().cast::<u64>().as_ptr().read(),
                 0x1234567890ABCDEF
             );
         }
-        unsafe {
-            pool_u64.release(reservation);
-        }
+        pool_u64.remove(pooled);
 
         // Test with larger struct.
         #[repr(C)]
@@ -719,27 +652,22 @@ mod tests {
         let layout_large = Layout::new::<LargeStruct>();
         let mut pool_large = DatalessPool::new(layout_large);
 
-        let reservation = pool_large.reserve();
+        let test_struct = LargeStruct {
+            a: 1,
+            b: 2,
+            c: 3,
+            d: 4,
+        };
+        // SAFETY: The layout of LargeStruct matches the pool's layout.
+        let pooled = unsafe { pool_large.insert(test_struct) };
         unsafe {
-            reservation
-                .ptr()
-                .cast::<LargeStruct>()
-                .as_ptr()
-                .write(LargeStruct {
-                    a: 1,
-                    b: 2,
-                    c: 3,
-                    d: 4,
-                });
-            let value = reservation.ptr().cast::<LargeStruct>().as_ptr().read();
+            let value = pooled.ptr().cast::<LargeStruct>().as_ptr().read();
             assert_eq!(value.a, 1);
             assert_eq!(value.b, 2);
             assert_eq!(value.c, 3);
             assert_eq!(value.d, 4);
         }
-        unsafe {
-            pool_large.release(reservation);
-        }
+        pool_large.remove(pooled);
     }
 
     #[test]
@@ -750,55 +678,41 @@ mod tests {
     }
 
     #[test]
-    fn stress_test_repeated_reserve_release() {
+    fn stress_test_repeated_insert_remove() {
         let layout = Layout::new::<usize>();
         let mut pool = DatalessPool::new(layout);
 
-        // Reserve and release many items to test slab management.
+        // Insert and remove many items to test slab management.
         for iteration in 0..10 {
-            let mut reservations = Vec::new();
+            let mut pooled_items = Vec::new();
             for i in 0..50 {
-                let reservation = pool.reserve();
-                unsafe {
-                    reservation
-                        .ptr()
-                        .cast::<usize>()
-                        .as_ptr()
-                        .write(iteration * 100 + i);
-                }
-                reservations.push(reservation);
+                let value = iteration * 100 + i;
+                // SAFETY: The layout of usize matches the pool's layout.
+                let pooled = unsafe { pool.insert(value) };
+                pooled_items.push(pooled);
             }
 
-            // Release every other item.
-            let mut remaining_reservations = Vec::new();
-            for (index, reservation) in reservations.into_iter().enumerate() {
+            // Remove every other item.
+            let mut remaining_pooled = Vec::new();
+            for (index, pooled) in pooled_items.into_iter().enumerate() {
                 if index % 2 == 0 {
-                    unsafe {
-                        pool.release(reservation);
-                    }
+                    pool.remove(pooled);
                 } else {
-                    remaining_reservations.push(reservation);
+                    remaining_pooled.push(pooled);
                 }
             }
 
             // Verify remaining items.
-            for (index, reservation) in remaining_reservations.iter().enumerate() {
+            for (index, pooled) in remaining_pooled.iter().enumerate() {
                 let expected_value = iteration * 100 + (index * 2 + 1); // Odd indices
                 unsafe {
-                    assert_eq!(
-                        reservation.ptr().cast::<usize>().as_ptr().read(),
-                        expected_value
-                    );
+                    assert_eq!(pooled.ptr().cast::<usize>().as_ptr().read(), expected_value);
                 }
             }
 
-            // Release remaining items.
-            for reservation in remaining_reservations {
-                // SAFETY: The reserved memory contains u32 data which is Copy and has no destructor,
-                // so no destructors need to be called before releasing the memory.
-                unsafe {
-                    pool.release(reservation);
-                }
+            // Remove remaining items.
+            for pooled in remaining_pooled {
+                pool.remove(pooled);
             }
         }
 
@@ -806,17 +720,14 @@ mod tests {
     }
 
     #[test]
-    fn drop_with_no_active_reservations_does_not_panic() {
+    fn drop_with_no_active_pooled_does_not_panic() {
         let layout = Layout::new::<u64>();
         let mut pool = DatalessPool::new(layout);
 
-        // Reserve and then release immediately.
-        let reservation = pool.reserve();
-        // SAFETY: The reserved memory was never initialized, so no destructors need to be called
-        // before releasing the memory.
-        unsafe {
-            pool.release(reservation);
-        }
+        // Insert and then remove immediately.
+        // SAFETY: The layout of u64 matches the pool's layout.
+        let pooled = unsafe { pool.insert(42_u64) };
+        pool.remove(pooled);
 
         assert!(pool.is_empty());
 
@@ -826,29 +737,29 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn drop_with_active_reservation_panics() {
+    fn drop_with_active_pooled_panics() {
         let layout = Layout::new::<u64>();
         let mut pool = DatalessPool::new(layout);
 
-        // Reservations are undroppable, so we just let this reservation leak to trigger the panic.
-        let _reservation = pool.reserve();
+        // Pooled items are undroppable, so we just let this pooled item leak to trigger the panic.
+        // SAFETY: The layout of u64 matches the pool's layout.
+        let _pooled = unsafe { pool.insert(42_u64) };
 
-        // Pool should panic on drop since we still have an active reservation.
+        // Pool should panic on drop since we still have an active pooled item.
         drop(pool);
     }
 
     #[test]
     #[should_panic]
-    fn release_reservation_from_different_pool_panics() {
+    fn remove_pooled_from_different_pool_panics() {
         let layout = Layout::new::<u32>();
         let mut pool1 = DatalessPool::new(layout);
         let mut pool2 = DatalessPool::new(layout);
 
-        // Reserve from pool1 but try to release to pool2.
-        let reservation = pool1.reserve();
-        unsafe {
-            pool2.release(reservation); // Should panic
-        }
+        // Insert into pool1 but try to remove from pool2.
+        // SAFETY: The layout of u32 matches the pool's layout.
+        let pooled = unsafe { pool1.insert(42_u32) };
+        pool2.remove(pooled); // Should panic
     }
 
     #[test]
@@ -865,20 +776,17 @@ mod tests {
     }
 
     #[test]
-    fn reservation_belongs_to_correct_pool() {
+    fn pooled_belongs_to_correct_pool() {
         let layout = Layout::new::<u64>();
         let mut pool = DatalessPool::new(layout);
 
-        let reservation = pool.reserve();
+        // SAFETY: The layout of u64 matches the pool's layout.
+        let pooled = unsafe { pool.insert(42_u64) };
 
-        // The reservation should have the same pool ID as the pool it came from.
-        assert_eq!(reservation.pool_id, pool.pool_id);
+        // The pooled item should have the same pool ID as the pool it came from.
+        assert_eq!(pooled.pool_id, pool.pool_id);
 
-        // Releasing to the same pool should work fine.
-        // SAFETY: The reserved memory was never initialized, so no destructors need to be called
-        // before releasing the memory.
-        unsafe {
-            pool.release(reservation);
-        }
+        // Removing from the same pool should work fine.
+        pool.remove(pooled);
     }
 }

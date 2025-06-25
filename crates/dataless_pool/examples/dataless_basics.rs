@@ -1,6 +1,6 @@
 //! Basic usage example for `DatalessPool`.
 //!
-//! This example demonstrates how to use `DatalessPool` to manage type-erased memory.
+//! This example demonstrates how to use `DatalessPool` to manage type-erased memory
 //! with dynamic capacity growth.
 
 use std::alloc::Layout;
@@ -14,34 +14,23 @@ fn main() {
 
     println!("Created DatalessPool with capacity: {}", pool.capacity());
 
-    // Reserve some values.
-    let reservation1 = pool.reserve();
-    let reservation2 = pool.reserve();
-    let reservation3 = pool.reserve();
+    // Insert some values.
+    // SAFETY: u32 matches the layout used to create the pool.
+    let pooled1 = unsafe { pool.insert(0xdeadbeef_u32) };
+    // SAFETY: u32 matches the layout used to create the pool.
+    let pooled2 = unsafe { pool.insert(0xcafebabe_u32) };
+    // SAFETY: u32 matches the layout used to create the pool.
+    let pooled3 = unsafe { pool.insert(0xfeedface_u32) };
 
-    // Write values through the pointers.
-    // SAFETY: We just reserved these pointers and are writing the correct type.
-    unsafe {
-        reservation1.ptr().cast::<u32>().write(0xdeadbeef);
-    }
-    // SAFETY: We just reserved these pointers and are writing the correct type.
-    unsafe {
-        reservation2.ptr().cast::<u32>().write(0xcafebabe);
-    }
-    // SAFETY: We just reserved these pointers and are writing the correct type.
-    unsafe {
-        reservation3.ptr().cast::<u32>().write(0xfeedface);
-    }
+    println!("Inserted 3 items");
 
-    println!("Reserved 3 items");
-
-    // Read values back through the reservations.
-    // SAFETY: We just wrote these values and are reading the correct type.
-    let value1 = unsafe { reservation1.ptr().cast::<u32>().read() };
-    // SAFETY: We just wrote these values and are reading the correct type.
-    let value2 = unsafe { reservation2.ptr().cast::<u32>().read() };
-    // SAFETY: We just wrote these values and are reading the correct type.
-    let value3 = unsafe { reservation3.ptr().cast::<u32>().read() };
+    // Read values back through the handles.
+    // SAFETY: The pointers are valid and the memory contains the values we just inserted.
+    let value1 = unsafe { pooled1.ptr().cast::<u32>().read() };
+    // SAFETY: The pointers are valid and the memory contains the values we just inserted.
+    let value2 = unsafe { pooled2.ptr().cast::<u32>().read() };
+    // SAFETY: The pointers are valid and the memory contains the values we just inserted.
+    let value3 = unsafe { pooled3.ptr().cast::<u32>().read() };
 
     println!("Value 1: {value1:#x}");
     println!("Value 2: {value2:#x}");
@@ -53,25 +42,16 @@ fn main() {
         pool.capacity()
     );
 
-    // Release one item.
-    // SAFETY: The reserved memory contains u32 data which is Copy and has no destructor,
-    // so no destructors need to be called before releasing the memory.
-    unsafe {
-        pool.release(reservation2);
-    }
-    println!("Released item");
+    // Remove one item.
+    pool.remove(pooled2);
+    println!("Removed item");
 
     // The pool automatically grows as needed.
-    let mut reservations = Vec::new();
+    let mut pooled_items = Vec::new();
     for i in 0..100 {
-        let reservation = pool.reserve();
-
-        // SAFETY: We just reserved this pointer and are writing the correct type.
-        unsafe {
-            reservation.ptr().cast::<u32>().write(i);
-        }
-
-        reservations.push(reservation);
+        // SAFETY: u32 matches the layout used to create the pool.
+        let pooled = unsafe { pool.insert(i) };
+        pooled_items.push(pooled);
     }
 
     println!(
@@ -85,36 +65,24 @@ fn main() {
         clippy::cast_possible_truncation,
         reason = "test uses small values that fit in u32"
     )]
-    for (i, reservation) in reservations.iter().take(5).enumerate() {
-        // SAFETY: We just wrote these values and are reading the correct type.
+    for (i, pooled) in pooled_items.iter().take(5).enumerate() {
+        // SAFETY: The pointers are valid and the memory contains the values we just inserted.
         unsafe {
-            let value = reservation.ptr().cast::<u32>().read();
-            println!("Reservation contains value: {value}");
+            let value = pooled.ptr().cast::<u32>().read();
+            println!("Pooled item contains value: {value}");
             assert_eq!(value, i as u32);
         }
     }
 
-    // Clean up the remaining reservations.
-    // SAFETY: The reserved memory contains u32 data which is Copy and has no destructor,
-    // so no destructors need to be called before releasing the memory.
-    unsafe {
-        for reservation in reservations {
-            pool.release(reservation);
-        }
+    // Clean up the remaining pooled items.
+    for pooled in pooled_items {
+        pool.remove(pooled);
     }
 
-    // Also clean up the first two reservations we still have.
-    // SAFETY: The reserved memory contains u32 data which is Copy and has no destructor,
-    // so no destructors need to be called before releasing the memory.
-    unsafe {
-        pool.release(reservation1);
-    }
-    // SAFETY: The reserved memory contains u32 data which is Copy and has no destructor,
-    // so no destructors need to be called before releasing the memory.
-    unsafe {
-        pool.release(reservation3);
-    }
+    // Also clean up the first and third items we still have.
+    pool.remove(pooled1);
+    pool.remove(pooled3);
 
-    println!("All reservations cleaned up successfully!");
+    println!("All items cleaned up successfully!");
     println!("DatalessPool example completed successfully!");
 }

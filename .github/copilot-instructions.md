@@ -92,7 +92,8 @@ types, we re-export them all at the parent, so while we have modules like
 
 # Scripting
 
-You can assume PowerShell 7 (`pwsh`) is available. Prefer PowerShell 7 over Bash.
+You can assume PowerShell 7 (`pwsh`) is available. Prefer PowerShell 7 over Bash. Do NOT assume
+that Bash or Linux commands are available - we are operating on Windows by default.
 
 # Code style
 

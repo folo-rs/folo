@@ -1,28 +1,30 @@
-//! A pool that reserves pinned memory without placing any data in it,
-//! leaving placement of the data up to the owner.
+//! A pool that inserts typed values into pinned memory with automatic drop handling.
 //!
-//! This crate provides [`DatalessPool`], a dynamically growing pool of memory capacity that works
-//! with opaque memory blocks on a specific [`std::alloc::Layout`] defined at pool creation. It
-//! offers stable memory addresses and efficient reservation-based memory management.
+//! This crate provides [`DatalessPool`], a dynamically growing pool that inserts values into
+//! memory with a specific [`std::alloc::Layout`] defined at pool creation. It offers stable
+//! memory addresses and efficient typed insertion with automatic value dropping.
 //!
-//! # Placing data into the reserved memory
+//! # Type-erased value management
 //!
-//! The caller is expected to use unsafe code via pointers to read and write the data to be stored
-//! in the reserved capacity.
+//! The pool works with any type that matches the layout specified at creation time. Values are
+//! inserted using the unsafe [`DatalessPool::insert()`] method, which requires the caller to
+//! ensure the type matches the pool's layout. The pool automatically handles dropping of values
+//! when they are removed.
 //!
 //! The pool itself does not hold or create any `&` shared or `&mut` exclusive references to its
-//! contents, allowing the caller to decide who and when can obtain a reference to the reserved
-//! memory. The caller is responsible for ensuring that Rust aliasing rules are respected.
+//! contents, allowing the caller to decide who and when can obtain a reference to the inserted
+//! values. The caller is responsible for ensuring that Rust aliasing rules are respected.
 //!
 //! # Features
 //!
 //! - **Type-erased memory management**: Works with any memory layout via [`std::alloc::Layout`].
-//! - **Stable addresses**: Memory addresses remain valid until explicitly released.
-//! - **Dynamic growth**: Pool automatically expands as needed.
+//! - **Stable addresses**: Memory addresses remain valid until explicitly removed.
+//! - **Automatic dropping**: Values are properly dropped when removed from the pool.
+//! - **Layout safety**: Debug builds verify that inserted types match the pool's layout.
+//! - **Dynamic growth**: Pool capacity grows automatically as needed.
 //! - **Efficient allocation**: Uses high density slabs to minimize allocation overhead.
 //! - **Stable Rust**: No unstable Rust features required.
-//! - **Some guardrails**: Prevents releasing memory without a reservation, though requires
-//!   `unsafe` for data access.
+//! - **Panic safety**: Pool panics on drop if values are still present (leak detection).
 //!
 //! # Example
 //!
@@ -35,44 +37,29 @@
 //! let layout = Layout::new::<u64>();
 //! let mut pool = DatalessPool::new(layout);
 //!
-//! // Reserve memory capacity for two items.
-//! let reservation1 = pool.reserve();
-//! let reservation2 = pool.reserve();
+//! // Insert values into the pool.
+//! // SAFETY: The layout of u64 matches the pool's layout.
+//! let pooled1 = unsafe { pool.insert(42_u64) };
+//! // SAFETY: The layout of u64 matches the pool's layout.
+//! let pooled2 = unsafe { pool.insert(123_u64) };
 //!
-//! // Write data to the first reservation.
-//! unsafe {
-//!     // SAFETY: The pointer is valid and aligned for u64, and we own the memory.
-//!     reservation1.ptr().cast::<u64>().write(42);
-//! }
-//!
-//! // Write data to the second reservation.
-//! unsafe {
-//!     // SAFETY: The pointer is valid and aligned for u64, and we own the memory.
-//!     reservation2.ptr().cast::<u64>().write(123);
-//! }
-//!
-//! // Read data back from the first reservation.
+//! // Read data back from the pooled items.
 //! let value1 = unsafe {
-//!     // SAFETY: The pointer is valid and the memory was just initialized.
-//!     reservation1.ptr().cast::<u64>().read()
+//!     // SAFETY: The pointer is valid and the value was just inserted.
+//!     pooled1.ptr().cast::<u64>().read()
 //! };
 //!
-//! // Read data back from the second reservation.
 //! let value2 = unsafe {
-//!     // SAFETY: The pointer is valid and the memory was just initialized.
-//!     reservation2.ptr().cast::<u64>().read()
+//!     // SAFETY: The pointer is valid and the value was just inserted.
+//!     pooled2.ptr().cast::<u64>().read()
 //! };
 //!
 //! assert_eq!(value1, 42);
 //! assert_eq!(value2, 123);
 //!
-//! // Release memory back to the pool.
-//! // SAFETY: The reserved memory contains u64 data which is Copy and has no destructor,
-//! // so no destructors need to be called before releasing the memory.
-//! unsafe {
-//!     pool.release(reservation1);
-//!     pool.release(reservation2);
-//! }
+//! // Remove values from the pool. The values are automatically dropped.
+//! pool.remove(pooled1);
+//! pool.remove(pooled2);
 //!
 //! assert!(pool.is_empty());
 //! ```

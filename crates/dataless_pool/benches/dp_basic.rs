@@ -1,5 +1,4 @@
 //! Basic benchmarks for the `dataless_pool` crate.
-
 #![allow(
     missing_docs,
     reason = "No need for API documentation in benchmark code"
@@ -32,20 +31,9 @@ fn entrypoint(c: &mut Criterion) {
         b.iter(|| {
             let layout = Layout::new::<TestItem>();
             let mut pool = DatalessPool::new(layout);
-
-            let reservation = pool.reserve();
-
-            // SAFETY: We just reserved this memory and are writing the correct type.
-            unsafe {
-                reservation.ptr().cast::<TestItem>().write(TEST_VALUE);
-            }
-
-            // SAFETY: The reserved memory contains TestItem data which is Copy and has no
-            // destructor, so no destructors need to be called before releasing the memory.
-            unsafe {
-                pool.release(reservation);
-            }
-
+            // SAFETY: The layout of TestItem matches the pool's layout.
+            let pooled = unsafe { pool.insert(TEST_VALUE) };
+            pool.remove(pooled);
             drop(pool);
         });
     });
@@ -54,28 +42,15 @@ fn entrypoint(c: &mut Criterion) {
         b.iter(|| {
             let layout = Layout::new::<TestItem>();
             let mut pool = DatalessPool::new(layout);
-
-            let mut reservations = Vec::with_capacity(10_000);
-
+            let mut pooled_items = Vec::with_capacity(10_000);
             for _ in 0..10_000 {
-                let reservation = pool.reserve();
-
-                // SAFETY: We just reserved this memory and are writing the correct type.
-                unsafe {
-                    reservation.ptr().cast::<TestItem>().write(TEST_VALUE);
-                }
-
-                reservations.push(reservation);
+                // SAFETY: The layout of TestItem matches the pool's layout.
+                let pooled = unsafe { pool.insert(TEST_VALUE) };
+                pooled_items.push(pooled);
             }
-
-            // SAFETY: The reserved memory contains TestItem data which is Copy and has no
-            // destructor, so no destructors need to be called before releasing the memory.
-            unsafe {
-                for reservation in reservations {
-                    pool.release(reservation);
-                }
+            for pooled in pooled_items {
+                pool.remove(pooled);
             }
-
             drop(pool);
         });
     });
@@ -85,38 +60,21 @@ fn entrypoint(c: &mut Criterion) {
         b.iter(|| {
             let layout = Layout::new::<TestItem>();
             let mut pool = DatalessPool::new(layout);
-            let mut all_reservations = VecDeque::with_capacity(1000 * 10);
-
+            let mut all_pooled = VecDeque::with_capacity(1000 * 10);
             for _ in 0..1000 {
                 for _ in 0..10 {
-                    let reservation = pool.reserve();
-
-                    // SAFETY: We just reserved this memory and are writing the correct type.
-                    unsafe {
-                        reservation.ptr().cast::<TestItem>().write(TEST_VALUE);
-                    }
-
-                    all_reservations.push_back(reservation);
+                    // SAFETY: The layout of TestItem matches the pool's layout.
+                    let pooled = unsafe { pool.insert(TEST_VALUE) };
+                    all_pooled.push_back(pooled);
                 }
-
                 for _ in 0..5 {
-                    let reservation = all_reservations.pop_front().unwrap();
-
-                    // SAFETY: The reserved memory contains TestItem data which is Copy and has no
-                    // destructor, so no destructors need to be called before releasing the memory.
-                    unsafe {
-                        pool.release(reservation);
-                    }
+                    let pooled = all_pooled.pop_front().unwrap();
+                    pool.remove(pooled);
                 }
             }
-
-            // Clean up remaining reservations.
-            // SAFETY: The reserved memory contains TestItem data which is Copy and has no
-            // destructor, so no destructors need to be called before releasing the memory.
-            unsafe {
-                while let Some(reservation) = all_reservations.pop_front() {
-                    pool.release(reservation);
-                }
+            // Clean up remaining pooled items.
+            while let Some(pooled) = all_pooled.pop_front() {
+                pool.remove(pooled);
             }
         });
     });
@@ -129,22 +87,12 @@ fn entrypoint(c: &mut Criterion) {
         b.iter(|| {
             let layout = Layout::new::<TestItem>();
             let mut pool = DatalessPool::new(layout);
-            let reservation = pool.reserve();
-
-            // SAFETY: We just reserved this memory and are writing the correct type.
-            unsafe {
-                reservation.ptr().cast::<TestItem>().write(TEST_VALUE);
-            }
-
-            // SAFETY: We wrote the value above and are reading the correct type.
-            let value = unsafe { reservation.ptr().cast::<TestItem>().read() };
+            // SAFETY: The layout of TestItem matches the pool's layout.
+            let pooled = unsafe { pool.insert(TEST_VALUE) };
+            // SAFETY: We just inserted the value and are reading the correct type.
+            let value = unsafe { pooled.ptr().cast::<TestItem>().read() };
             black_box(value);
-
-            // SAFETY: The reserved memory contains TestItem data which is Copy and has no
-            // destructor, so no destructors need to be called before releasing the memory.
-            unsafe {
-                pool.release(reservation);
-            }
+            pool.remove(pooled);
         });
     });
 
@@ -152,161 +100,87 @@ fn entrypoint(c: &mut Criterion) {
         b.iter(|| {
             let layout = Layout::new::<TestItem>();
             let mut pool = DatalessPool::new(layout);
-
-            let mut reservations = Vec::with_capacity(10_000);
-
+            let mut pooled_items = Vec::with_capacity(10_000);
             for _ in 0..10_000 {
-                let reservation = pool.reserve();
-
-                // SAFETY: We just reserved this memory and are writing the correct type.
-                unsafe {
-                    reservation.ptr().cast::<TestItem>().write(TEST_VALUE);
-                }
-
-                reservations.push(reservation);
+                // SAFETY: The layout of TestItem matches the pool's layout.
+                let pooled = unsafe { pool.insert(TEST_VALUE) };
+                pooled_items.push(pooled);
             }
-
-            let last_reservation = reservations.last().unwrap();
-
-            // SAFETY: We wrote the value above and are reading the correct type.
-            let value = unsafe { last_reservation.ptr().cast::<TestItem>().read() };
+            let last_pooled = pooled_items.last().unwrap();
+            // SAFETY: We inserted the value above and are reading the correct type.
+            let value = unsafe { last_pooled.ptr().cast::<TestItem>().read() };
             black_box(value);
-
-            // SAFETY: The reserved memory contains TestItem data which is Copy and has no
-            // destructor, so no destructors need to be called before releasing the memory.
-            unsafe {
-                for reservation in reservations {
-                    pool.release(reservation);
-                }
+            for pooled in pooled_items {
+                pool.remove(pooled);
             }
         });
     });
 
     group.finish();
 
-    let mut group = c.benchmark_group("dp_reserve");
+    let mut group = c.benchmark_group("dp_insert");
 
-    group.bench_function("single_reserve", |b| {
+    group.bench_function("single_insert", |b| {
         b.iter(|| {
             let layout = Layout::new::<TestItem>();
             let mut pool = DatalessPool::new(layout);
-
-            let reservation = pool.reserve();
-            black_box(&reservation);
-
-            // SAFETY: No data was written, so no cleanup needed before releasing.
-            unsafe {
-                pool.release(reservation);
-            }
+            // SAFETY: The layout of TestItem matches the pool's layout.
+            let pooled = unsafe { pool.insert(TEST_VALUE) };
+            black_box(&pooled);
+            pool.remove(pooled);
         });
     });
 
-    group.bench_function("reserve_with_write", |b| {
+    group.bench_function("insert_with_read", |b| {
         b.iter(|| {
             let layout = Layout::new::<TestItem>();
             let mut pool = DatalessPool::new(layout);
-
-            let reservation = pool.reserve();
-
-            // SAFETY: We just reserved this memory and are writing the correct type.
-            unsafe {
-                reservation.ptr().cast::<TestItem>().write(TEST_VALUE);
-            }
-
-            black_box(&reservation);
-
-            // SAFETY: The reserved memory contains TestItem data which is Copy and has no
-            // destructor, so no destructors need to be called before releasing the memory.
-            unsafe {
-                pool.release(reservation);
-            }
-        });
-    });
-
-    group.bench_function("reserve_write_read", |b| {
-        b.iter(|| {
-            let layout = Layout::new::<TestItem>();
-            let mut pool = DatalessPool::new(layout);
-
-            let reservation = pool.reserve();
-
-            // SAFETY: We just reserved this memory and are writing the correct type.
-            unsafe {
-                reservation.ptr().cast::<TestItem>().write(TEST_VALUE);
-            }
-
-            // SAFETY: We just wrote the value above and are reading the correct type.
-            let value = unsafe { reservation.ptr().cast::<TestItem>().read() };
-
-            black_box((value, &reservation));
-
-            // SAFETY: The reserved memory contains TestItem data which is Copy and has no
-            // destructor, so no destructors need to be called before releasing the memory.
-            unsafe {
-                pool.release(reservation);
-            }
+            // SAFETY: The layout of TestItem matches the pool's layout.
+            let pooled = unsafe { pool.insert(TEST_VALUE) };
+            // SAFETY: We just inserted the value and are reading the correct type.
+            let value = unsafe { pooled.ptr().cast::<TestItem>().read() };
+            black_box((value, &pooled));
+            pool.remove(pooled);
         });
     });
 
     group.finish();
 
-    let mut group = c.benchmark_group("dp_release");
+    let mut group = c.benchmark_group("dp_remove");
 
-    group.bench_function("single_release", |b| {
+    group.bench_function("single_remove", |b| {
         let layout = Layout::new::<TestItem>();
-
         b.iter_batched(
             || {
                 let mut pool = DatalessPool::new(layout);
-                let reservation = pool.reserve();
-
-                // SAFETY: We just reserved this memory and are writing the correct type.
-                unsafe {
-                    reservation.ptr().cast::<TestItem>().write(TEST_VALUE);
-                }
-
-                (pool, reservation)
+                // SAFETY: The layout of TestItem matches the pool's layout.
+                let pooled = unsafe { pool.insert(TEST_VALUE) };
+                (pool, pooled)
             },
-            |(mut pool, reservation)| {
-                // SAFETY: The reserved memory contains TestItem data which is Copy and has no
-                // destructor, so no destructors need to be called before releasing the memory.
-                unsafe {
-                    pool.release(reservation);
-                }
+            |(mut pool, pooled)| {
+                pool.remove(pooled);
                 black_box(pool);
             },
             criterion::BatchSize::SmallInput,
         );
     });
 
-    group.bench_function("batch_release_100", |b| {
+    group.bench_function("batch_remove_100", |b| {
         let layout = Layout::new::<TestItem>();
-
         b.iter_batched(
             || {
                 let mut pool = DatalessPool::new(layout);
-                let mut reservations = Vec::with_capacity(100);
-
+                let mut pooled_items = Vec::with_capacity(100);
                 for _ in 0..100 {
-                    let reservation = pool.reserve();
-
-                    // SAFETY: We just reserved this memory and are writing the correct type.
-                    unsafe {
-                        reservation.ptr().cast::<TestItem>().write(TEST_VALUE);
-                    }
-
-                    reservations.push(reservation);
+                    // SAFETY: The layout of TestItem matches the pool's layout.
+                    let pooled = unsafe { pool.insert(TEST_VALUE) };
+                    pooled_items.push(pooled);
                 }
-
-                (pool, reservations)
+                (pool, pooled_items)
             },
-            |(mut pool, reservations)| {
-                // SAFETY: The reserved memory contains TestItem data which is Copy and has no
-                // destructor, so no destructors need to be called before releasing the memory.
-                unsafe {
-                    for reservation in reservations {
-                        pool.release(reservation);
-                    }
+            |(mut pool, pooled_items)| {
+                for pooled in pooled_items {
+                    pool.remove(pooled);
                 }
                 black_box(pool);
             },

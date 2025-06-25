@@ -6,6 +6,7 @@ use std::ptr::{self, NonNull};
 /// Remembers how to drop an object while forgetting its type.
 ///
 /// Drops its target when it is itself dropped.
+#[derive(Debug)]
 pub(crate) struct Dropper {
     ptr: NonNull<()>,
     drop_fn: fn(NonNull<()>),

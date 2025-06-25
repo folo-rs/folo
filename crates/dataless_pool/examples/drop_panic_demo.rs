@@ -14,28 +14,22 @@ fn main() {
         let layout = Layout::new::<u64>();
         let mut pool = DatalessPool::new(layout);
 
-        let reservation = pool.reserve();
-        // SAFETY: The pointer is valid and aligned for u64, and we own the memory.
-        unsafe {
-            reservation.ptr().cast::<u64>().write(42);
-        }
-        println!("   Wrote value: 42");
-        // SAFETY: The pointer is valid and the memory was just initialized.
-        let value = unsafe { reservation.ptr().cast::<u64>().read() };
+        // SAFETY: u64 matches the layout used to create the pool.
+        let pooled = unsafe { pool.insert(42_u64) };
+        println!("   Inserted value: 42");
+
+        // SAFETY: The pointer is valid and the memory contains the value we just inserted.
+        let value = unsafe { pooled.ptr().cast::<u64>().read() };
         println!("   Read value: {value}");
 
-        // SAFETY: The reserved memory contains u64 data which is Copy and has no destructor,
-        // so no destructors need to be called before releasing the memory.
-        unsafe {
-            pool.release(reservation);
-        }
-        println!("   Released reservation - pool should drop cleanly");
+        pool.remove(pooled);
+        println!("   Removed value - pool should drop cleanly");
         // Pool drops here without panic.
     }
-    println!("   ✓ Pool dropped successfully - no active reservations");
+    println!("   ✓ Pool dropped successfully - no active items");
 
     // Demonstrate panic behavior.
-    println!("\n2. Demonstrating panic behavior - pool with active reservation:");
+    println!("\n2. Demonstrating panic behavior - pool with active item:");
     println!("   (This will cause a panic when the pool is dropped)");
 
     std::panic::set_hook(Box::new(|panic_info| {
@@ -52,15 +46,16 @@ fn main() {
         let layout = Layout::new::<u64>();
         let mut pool = DatalessPool::new(layout);
 
-        let _reservation = pool.reserve(); // This reservation is never released!
-        println!("   Created reservation but will not release it");
+        // SAFETY: u64 matches the layout used to create the pool.
+        let _pooled = unsafe { pool.insert(123_u64) }; // This item is never removed!
+        println!("   Inserted value but will not remove it");
 
-        // Pool will panic on drop because reservation is still active.
+        // Pool will panic on drop because the item is still active.
     });
 
     match result {
         Ok(()) => println!("   ❌ Expected panic did not occur"),
-        Err(_) => println!("   ✓ Pool correctly panicked when dropped with active reservation"),
+        Err(_) => println!("   ✓ Pool correctly panicked when dropped with active item"),
     }
 
     println!("\nDemo completed - the panic-on-drop functionality is working correctly!");
