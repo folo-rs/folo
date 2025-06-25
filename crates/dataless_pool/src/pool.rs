@@ -16,7 +16,7 @@ fn generate_pool_id() -> u64 {
 
 /// A memory pool of unbounded size that inserts typed values into pinned memory.
 ///
-/// The pool returns a [`Pooled`] for each inserted value, which acts as both
+/// The pool returns a [`Pooled<T>`] for each inserted value, which acts as both
 /// the key and provides direct access to the memory pointer.
 ///
 /// # Out of band access
@@ -45,7 +45,7 @@ fn generate_pool_id() -> u64 {
 ///
 /// // Read from the memory.
 /// // SAFETY: The pointer is valid and the memory contains the value we just inserted.
-/// let value = unsafe { pooled.ptr().cast::<u32>().read() };
+/// let value = unsafe { pooled.ptr().read() };
 /// assert_eq!(value, 42);
 ///
 /// // Remove the value from the pool.
@@ -262,7 +262,7 @@ impl DatalessPool {
 
     /// Inserts a value into the pool and returns a handle that acts as both the key and pointer.
     ///
-    /// The returned [`Pooled`] provides direct access to the memory via [`Pooled::ptr()`]
+    /// The returned [`Pooled<T>`] provides direct access to the memory via [`Pooled::ptr()`]
     /// and must be returned to the pool via [`remove()`] to free the memory and properly drop the value.
     ///
     /// # Example
@@ -280,8 +280,7 @@ impl DatalessPool {
     /// let pooled = unsafe { pool.insert(0xDEADBEEF_CAFEBABEu64) };
     ///
     /// // Read data back.
-    /// // SAFETY: The pointer is valid and the memory contains the value we just inserted.
-    /// let value = unsafe { pooled.ptr().cast::<u64>().read() };
+    /// let value = unsafe { pooled.ptr().read() };
     /// assert_eq!(value, 0xDEADBEEF_CAFEBABE);
     ///
     /// // Must remove the value to free the memory and drop it properly.
@@ -299,7 +298,7 @@ impl DatalessPool {
     ///
     /// [`remove()`]: Self::remove
     #[must_use]
-    pub unsafe fn insert<T>(&mut self, value: T) -> Pooled {
+    pub unsafe fn insert<T>(&mut self, value: T) -> Pooled<T> {
         let slab_index = self.index_of_slab_with_vacant_slot();
         let slab = self
             .slabs
@@ -327,13 +326,13 @@ impl DatalessPool {
         Pooled {
             pool_id: self.pool_id,
             coordinates,
-            ptr: pooled.ptr(),
+            ptr: pooled.ptr().cast::<T>(),
         }
     }
 
     /// Removes a value previously inserted into the pool.
     ///
-    /// The [`Pooled`] is consumed by this operation and cannot be used afterward.
+    /// The [`Pooled<T>`] is consumed by this operation and cannot be used afterward.
     /// The value is properly dropped and the memory becomes available for future insertions.
     ///
     /// # Example
@@ -359,7 +358,7 @@ impl DatalessPool {
     /// # Panics
     ///
     /// Panics if the handle is not associated with a value in this pool.
-    pub fn remove(&mut self, pooled: Pooled) {
+    pub fn remove<T>(&mut self, pooled: Pooled<T>) {
         // Pooled has a no-execute `Drop` impl, so we drop it manually here.
         let pooled = ManuallyDrop::new(pooled);
 
@@ -431,10 +430,13 @@ impl DatalessPool {
     }
 }
 
-/// The result of inserting a value into a [`DatalessPool`].
+/// The result of inserting a value of type `T` into a [`DatalessPool`].
 ///
 /// Acts as both the handle and the key - the user must return this to the pool to remove
 /// the value and properly drop it. The pool will panic on drop if some active handles remain.
+///
+/// The generic parameter `T` provides type-safe access to the stored value through [`ptr()`](Pooled::ptr).
+/// If you need to erase the type information, use [`erase()`](Pooled::erase) to convert to `Pooled<()>`.
 ///
 /// # Example
 ///
@@ -450,24 +452,23 @@ impl DatalessPool {
 /// let pooled = unsafe { pool.insert(-123i64) };
 ///
 /// // Read from the memory pointer.
-/// // SAFETY: The pointer is valid and the memory contains the value we just inserted.
-/// let value = unsafe { pooled.ptr().cast::<i64>().read() };
+/// let value = unsafe { pooled.ptr().read() };
 /// assert_eq!(value, -123);
 ///
 /// // The handle must be returned to remove the value and drop it properly.
 /// pool.remove(pooled);
 /// ```
 #[derive(Debug)]
-pub struct Pooled {
+pub struct Pooled<T> {
     /// Ensures this handle can only be returned to the pool it came from.
     pool_id: u64,
 
     coordinates: MemoryBlockCoordinates,
 
-    ptr: NonNull<()>,
+    ptr: NonNull<T>,
 }
 
-impl Pooled {
+impl<T> Pooled<T> {
     /// Returns a pointer to the inserted value.
     ///
     /// # Example
@@ -484,17 +485,49 @@ impl Pooled {
     /// let pooled = unsafe { pool.insert(3.14159f64) };
     ///
     /// // Read data back from the memory.
-    /// // SAFETY: The pointer is valid and the memory contains the value we just inserted.
-    /// let value = unsafe {
-    ///     let ptr = pooled.ptr().cast::<f64>();
-    ///     ptr.read()
-    /// };
+    /// let value = unsafe { pooled.ptr().read() };
     /// assert_eq!(value, 3.14159);
     /// # pool.remove(pooled);
     /// ```
     #[must_use]
-    pub fn ptr(&self) -> NonNull<()> {
+    pub fn ptr(&self) -> NonNull<T> {
         self.ptr
+    }
+
+    /// Erases the type information from this [`Pooled<T>`] handle, returning a [`Pooled<()>`].
+    ///
+    /// This is useful when you want to store handles of different types in the same collection
+    /// or pass them to code that doesn't need to know the specific type.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    ///
+    /// use dataless_pool::DatalessPool;
+    ///
+    /// let layout = Layout::new::<u64>();
+    /// let mut pool = DatalessPool::new(layout);
+    ///
+    /// // SAFETY: u64 matches the layout used to create the pool.
+    /// let pooled = unsafe { pool.insert(42u64) };
+    ///
+    /// // Erase type information.
+    /// let erased = pooled.erase();
+    ///
+    /// // Can still access the raw pointer.
+    /// // SAFETY: We know this contains a u64.
+    /// let value = unsafe { erased.ptr().cast::<u64>().read() };
+    /// assert_eq!(value, 42);
+    /// # pool.remove(erased);
+    /// ```
+    #[must_use]
+    pub fn erase(self) -> Pooled<()> {
+        Pooled {
+            pool_id: self.pool_id,
+            coordinates: self.coordinates,
+            ptr: self.ptr.cast::<()>(),
+        }
     }
 }
 
@@ -549,9 +582,9 @@ mod tests {
 
         // Read them back via pooled pointer.
         unsafe {
-            assert_eq!(pooled_a.ptr().cast::<u32>().read(), 42);
-            assert_eq!(pooled_b.ptr().cast::<u32>().read(), 43);
-            assert_eq!(pooled_c.ptr().cast::<u32>().read(), 44);
+            assert_eq!(pooled_a.ptr().read(), 42);
+            assert_eq!(pooled_b.ptr().read(), 43);
+            assert_eq!(pooled_c.ptr().read(), 44);
         }
 
         pool.remove(pooled_b);
@@ -560,9 +593,9 @@ mod tests {
         let pooled_d = unsafe { pool.insert(45_u32) };
 
         unsafe {
-            assert_eq!(pooled_a.ptr().cast::<u32>().read(), 42);
-            assert_eq!(pooled_c.ptr().cast::<u32>().read(), 44);
-            assert_eq!(pooled_d.ptr().cast::<u32>().read(), 45);
+            assert_eq!(pooled_a.ptr().read(), 42);
+            assert_eq!(pooled_c.ptr().read(), 44);
+            assert_eq!(pooled_d.ptr().read(), 45);
         }
 
         // Clean up remaining pooled items.
@@ -578,7 +611,7 @@ mod tests {
         let mut pool = DatalessPool::new(layout);
 
         // Create a fake pooled with invalid coordinates.
-        let fake_pooled = Pooled {
+        let fake_pooled: Pooled<u32> = Pooled {
             pool_id: pool.pool_id, // Use correct pool ID but invalid coordinates
             coordinates: MemoryBlockCoordinates {
                 slab_index: 0,
@@ -615,7 +648,7 @@ mod tests {
         // Verify all values are still accessible.
         for (i, pooled) in pooled_items.iter().enumerate() {
             unsafe {
-                assert_eq!(pooled.ptr().cast::<u32>().as_ptr().read(), i as u32);
+                assert_eq!(pooled.ptr().as_ptr().read(), i as u32);
             }
         }
 
@@ -633,10 +666,7 @@ mod tests {
         // SAFETY: The layout of u64 matches the pool's layout.
         let pooled = unsafe { pool_u64.insert(0x1234567890ABCDEF_u64) };
         unsafe {
-            assert_eq!(
-                pooled.ptr().cast::<u64>().as_ptr().read(),
-                0x1234567890ABCDEF
-            );
+            assert_eq!(pooled.ptr().as_ptr().read(), 0x1234567890ABCDEF);
         }
         pool_u64.remove(pooled);
 
@@ -661,7 +691,7 @@ mod tests {
         // SAFETY: The layout of LargeStruct matches the pool's layout.
         let pooled = unsafe { pool_large.insert(test_struct) };
         unsafe {
-            let value = pooled.ptr().cast::<LargeStruct>().as_ptr().read();
+            let value = pooled.ptr().as_ptr().read();
             assert_eq!(value.a, 1);
             assert_eq!(value.b, 2);
             assert_eq!(value.c, 3);
@@ -706,7 +736,7 @@ mod tests {
             for (index, pooled) in remaining_pooled.iter().enumerate() {
                 let expected_value = iteration * 100 + (index * 2 + 1); // Odd indices
                 unsafe {
-                    assert_eq!(pooled.ptr().cast::<usize>().as_ptr().read(), expected_value);
+                    assert_eq!(pooled.ptr().as_ptr().read(), expected_value);
                 }
             }
 
@@ -788,5 +818,30 @@ mod tests {
 
         // Removing from the same pool should work fine.
         pool.remove(pooled);
+    }
+
+    #[test]
+    fn pooled_erase_functionality() {
+        let layout = Layout::new::<u32>();
+        let mut pool = DatalessPool::new(layout);
+
+        // SAFETY: The layout of u32 matches the pool's layout.
+        let pooled = unsafe { pool.insert(42_u32) };
+
+        // Test that the typed pointer works.
+        unsafe {
+            assert_eq!(pooled.ptr().read(), 42);
+        }
+
+        // Erase the type information.
+        let erased = pooled.erase();
+
+        // Should still be able to access the value through the erased pointer.
+        unsafe {
+            assert_eq!(erased.ptr().cast::<u32>().read(), 42);
+        }
+
+        // Should be able to remove the erased handle.
+        pool.remove(erased);
     }
 }
