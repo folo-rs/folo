@@ -1234,4 +1234,17 @@ mod tests {
         #[allow(clippy::let_underscore_must_use, reason = "we expect this to panic")]
         let _ = SlabLayoutInfo::calculate(zero_layout, NonZero::new(3).unwrap());
     }
+
+    #[test]
+    #[should_panic]
+    fn drop_with_active_reservations_panics() {
+        let layout = Layout::new::<u32>();
+        let mut slab = DatalessSlab::new(layout, NonZero::new(3).unwrap());
+
+        // Reserve some memory but don't release it before drop.
+        let _reservation = slab.reserve();
+
+        // When the slab goes out of scope and Drop is called, it should panic
+        // because there's still an active reservation.
+    }
 }

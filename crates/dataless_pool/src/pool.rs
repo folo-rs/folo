@@ -554,22 +554,6 @@ impl MemoryBlockCoordinates {
     }
 }
 
-impl Drop for DatalessPool {
-    fn drop(&mut self) {
-        let was_empty = self.is_empty();
-
-        // If we are already panicking, we do not want to panic again because that will
-        // simply obscure whatever the original panic was, leading to debug difficulties.
-        if !thread::panicking() {
-            assert!(
-                was_empty,
-                "dropped a non-empty DatalessPool with {} active reservations - this suggests reserved memory may still be in use",
-                self.len()
-            );
-        }
-    }
-}
-
 #[cfg(test)]
 #[allow(
     clippy::undocumented_unsafe_blocks,
