@@ -240,15 +240,6 @@ impl OpaqueSlab {
         self.next_free_index >= self.capacity.get()
     }
 
-    #[cfg(debug_assertions)]
-    fn entry_meta(&self, index: usize) -> &EntryMeta {
-        let entry_meta_ptr = self.entry_meta_ptr(index);
-
-        // SAFETY: entry_meta_ptr was validated by entry_meta_ptr() bounds checking and points to
-        // an initialized EntryMeta that we own exclusively (we hold &self).
-        unsafe { entry_meta_ptr.as_ref() }
-    }
-
     #[expect(clippy::needless_pass_by_ref_mut, reason = "false positive")]
     fn entry_meta_mut(&mut self, index: usize) -> &mut EntryMeta {
         let mut entry_meta_ptr = self.entry_meta_ptr(index);
@@ -368,6 +359,7 @@ impl OpaqueSlab {
         // Update the entry metadata to mark it as occupied and store the dropper.
         let previous_entry =
             mem::replace(entry_meta_ptr, EntryMeta::Occupied { _dropper: dropper });
+
         self.next_free_index = match previous_entry {
             EntryMeta::Vacant { next_free_index } => next_free_index,
             EntryMeta::Occupied { .. } => panic!(
@@ -441,7 +433,13 @@ impl OpaqueSlab {
         let mut observed_occupied_count: usize = 0;
 
         for index in 0..capacity_value {
-            match self.entry_meta(index) {
+            let entry_meta_ptr = self.entry_meta_ptr(index);
+
+            // SAFETY: entry_meta_ptr was validated by entry_meta_ptr() bounds checking and points to
+            // an initialized EntryMeta that we own exclusively (we hold &self).
+            let entry_meta = unsafe { entry_meta_ptr.as_ref() };
+
+            match entry_meta {
                 EntryMeta::Occupied { .. } => {
                     observed_is_vacant[index] = Some(false);
                     observed_occupied_count += 1;
@@ -533,7 +531,7 @@ impl Drop for OpaqueSlab {
         if !thread::panicking() {
             assert!(
                 was_empty,
-                "dropped a non-empty OpaqueSlab with {} active reservations - this suggests reserved memory may still be in use",
+                "dropped a non-empty OpaqueSlab with {} items - this suggests items may still be in use",
                 self.count
             );
         }
