@@ -20,7 +20,9 @@ debug = "none"
 
 [workspace.dependencies]
 # The packages we publish.
+blind_pool = { version = "0.1.0", path = "crates/blind_pool" }
 cpulist = { version = "0.2.3", path = "crates/cpulist" }
+dataless_pool = { version = "0.1.0", path = "crates/dataless_pool" }
 folo_ffi = { version = "0.1.3", path = "crates/folo_ffi" }
 folo_utils = { version = "0.1.1", path = "crates/folo_utils" }
 linked = { version = "0.2.4", path = "crates/linked" }

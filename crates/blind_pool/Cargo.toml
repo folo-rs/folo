@@ -14,7 +14,8 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
-pinned_pool = { workspace = true }
+dataless_pool = { workspace = true }
+foldhash = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
