@@ -233,3 +233,17 @@ pool_id: u64,
 It is good to create tests that verify expected panics/errors are returned. However, never
 check for a specific error/panic message - these are not part of the public API and create
 fragile tests. Just verify that an error of an expected type occurs or any panic occurs.
+
+# Keep the house in order
+
+Do not only focus on the immediate task at hand but also consider how it affects the codebase
+around it.
+
+If the change you are working on affords more simplicity, better organization or greater reuse,
+take action to perform the refactoring needed to achieve that. If the change you are working on
+makes some logic or tests obsolete, clean up.
+
+Code should be well covered with unit tests, public APIs should be documented and include inline
+examples. The most important scenarios should be covered by stand-alone example binaries.
+
+Performance-critical code should include Criterion benchmarks to help detect regressions.
