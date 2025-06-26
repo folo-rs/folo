@@ -269,3 +269,19 @@ It is OK to verify that type invariants still hold in `drop()` and panic if some
 e.g. when an item is not in a valid state to be dropped. However, all such assertions must be
 guarded with a `thread::panicking()` check to ensure that the panic does not occur when already
 unwinding for another panic - we do not want to double-panic as that mangles the errors.
+
+# Benchmark design
+
+Unless otherwise prompted, create single-threaded synchronous Criterion benchmarks. Use benchmark
+groups to group related benchmarks that make sense to compare to each other.
+
+Only the functionality being benchmarked should be inside the `.iter()` closure, with the data setup
+being either done outside (if not per-iteration) or using the first "payload preparation" callback
+of `iter_batched()` (if per-iteration).
+
+If multithreaded benchmarks are truly appropriate, use `bench_on_threadpool()` for them. When using
+this for multithreaded benchmarks, also run any single-threaded benchmarks
+via `bench_on_threadpool()` to ensure that overheads are comparable.
+
+Inside the benchmark closure, use `std::hint::black_box()` to consume output values from the code
+being benchmarked, to avoid unrealistic eager optimizations due to output values that are discarded.
