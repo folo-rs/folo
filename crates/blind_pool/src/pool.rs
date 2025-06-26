@@ -300,7 +300,6 @@ impl Drop for BlindPool {
 /// A handle representing an item stored in a [`BlindPool`].
 ///
 /// This provides access to the stored item and can be used to remove the item from the pool.
-/// It maintains the layout information needed for proper pool operations.
 ///
 /// # Example
 ///

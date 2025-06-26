@@ -69,7 +69,10 @@ fn entrypoint(c: &mut Criterion) {
             let mut pool = BlindPool::new();
             for i in 0_u64..500 {
                 let _pooled1 = pool.insert(i);
-                let _pooled2 = pool.insert(AlignedU32 { value: i as u32, _padding: 0 });
+                let _pooled2 = pool.insert(AlignedU32 {
+                    value: i as u32,
+                    _padding: 0,
+                });
             }
             pool
         });
