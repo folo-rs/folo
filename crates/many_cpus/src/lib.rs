@@ -96,7 +96,8 @@
 //! let Some(selected_processors) = ProcessorSet::builder()
 //!     .same_memory_region()
 //!     .performance_processors_only()
-//!     .take(PROCESSOR_COUNT) else {
+//!     .take(PROCESSOR_COUNT)
+//! else {
 //!     println!("Not enough processors available for this example");
 //!     return;
 //! };

@@ -30,7 +30,7 @@ test-docs FILTER="":
 
 # Run all stand-alone example binaries to ensure they complete without panicking.
 # Each example has a 30-second timeout to handle examples that run indefinitely.
-# Platform-specific examples are automatically skipped when not supported.
+# Supports both .rs files and subdirectories with main.rs files.
 [group('testing')]
 [script]
 run-examples:
@@ -38,7 +38,6 @@ run-examples:
     $failures = @()
     $total_count = 0
     $success_count = 0
-    $skipped_count = 0
     $timeout_seconds = 30
     
     # Determine which packages to process
@@ -58,58 +57,102 @@ run-examples:
     foreach ($pkg in $packages_to_process) {
         $examples_dir = Join-Path "crates" $pkg "examples"
         
-        if (Test-Path $examples_dir) {
-            $example_files = Get-ChildItem -Path $examples_dir -Filter "*.rs" | Where-Object { $_.Name -ne "mod.rs" }
-            
-            foreach ($example_file in $example_files) {
-                $example_name = $example_file.BaseName
-                $total_count++
-                
-                Write-Host "Running example '$example_name' in package '$pkg'..." -ForegroundColor Cyan
-                
-                try {
-                    # Run the example with a timeout to prevent hanging
-                    $job = Start-Job -ScriptBlock {
-                        param($pkg, $example_name)
-                        & cargo run --package $pkg --example $example_name 2>&1
-                        return $LASTEXITCODE
-                    } -ArgumentList $pkg, $example_name
-                    
-                    $completed = Wait-Job -Job $job -Timeout $timeout_seconds
-                    
-                    if ($completed) {
-                        $result = Receive-Job -Job $job
-                        $exit_code = $result[-1]  # Last item should be the exit code
-                        
-                        if ($exit_code -eq 0) {
-                            Write-Host "✓ Example '$example_name' in package '$pkg' completed successfully" -ForegroundColor Green
-                            $success_count++
-                        } else {
-                            # Check if it's a platform-specific example that should be skipped
-                            $output_text = $result[0..($result.Length-2)] -join "`n"
-                            if ($output_text -match "This example is only supported on Windows" -or $output_text -match "This example is only supported on Linux") {
-                                Write-Host "⚠ Example '$example_name' in package '$pkg' skipped (platform-specific)" -ForegroundColor Yellow
-                                $skipped_count++
-                            } else {
-                                Write-Host "✗ Example '$example_name' in package '$pkg' failed with exit code $exit_code" -ForegroundColor Red
-                                $failures += "$pkg::$example_name (exit code $exit_code)"
-                            }
-                        }
-                    } else {
-                        Write-Host "✗ Example '$example_name' in package '$pkg' timed out after $timeout_seconds seconds" -ForegroundColor Red
-                        $failures += "$pkg::$example_name (timeout)"
-                        Stop-Job -Job $job
-                    }
-                    
-                    Remove-Job -Job $job -Force
-                    
-                } catch {
-                    Write-Host "✗ Example '$example_name' in package '$pkg' failed with exception: $($_.Exception.Message)" -ForegroundColor Red
-                    $failures += "$pkg::$example_name (exception: $($_.Exception.Message))"
-                }
-            }
-        } else {
+        # Skip packages without examples directory (early continue pattern)
+        if (-not (Test-Path $examples_dir)) {
             Write-Host "No examples directory found for package '$pkg'" -ForegroundColor DarkGray
+            continue
+        }
+        
+        # Find .rs files directly in examples directory
+        $example_files = Get-ChildItem -Path $examples_dir -Filter "*.rs" | Where-Object { $_.Name -ne "mod.rs" }
+        
+        # Find subdirectories with main.rs files
+        $example_subdirs = Get-ChildItem -Path $examples_dir -Directory | Where-Object { 
+            Test-Path (Join-Path $_.FullName "main.rs") 
+        }
+        
+        # Process .rs files
+        foreach ($example_file in $example_files) {
+            $example_name = $example_file.BaseName
+            $total_count++
+            
+            Write-Host "Running example '$example_name' in package '$pkg'..." -ForegroundColor Cyan
+            
+            try {
+                # Run the example with a timeout to prevent hanging
+                $job = Start-Job -ScriptBlock {
+                    param($pkg, $example_name)
+                    & cargo run --package $pkg --example $example_name 2>&1
+                    return $LASTEXITCODE
+                } -ArgumentList $pkg, $example_name
+                
+                $completed = Wait-Job -Job $job -Timeout $timeout_seconds
+                
+                if ($completed) {
+                    $result = Receive-Job -Job $job
+                    $exit_code = $result[-1]  # Last item should be the exit code
+                    
+                    if ($exit_code -eq 0) {
+                        Write-Host "✓ Example '$example_name' in package '$pkg' completed successfully" -ForegroundColor Green
+                        $success_count++
+                    } else {
+                        Write-Host "✗ Example '$example_name' in package '$pkg' failed with exit code $exit_code" -ForegroundColor Red
+                        $failures += "$pkg::$example_name (exit code $exit_code)"
+                    }
+                } else {
+                    Write-Host "✗ Example '$example_name' in package '$pkg' timed out after $timeout_seconds seconds" -ForegroundColor Red
+                    $failures += "$pkg::$example_name (timeout)"
+                    Stop-Job -Job $job
+                }
+                
+                Remove-Job -Job $job -Force
+                
+            } catch {
+                Write-Host "✗ Example '$example_name' in package '$pkg' failed with exception: $($_.Exception.Message)" -ForegroundColor Red
+                $failures += "$pkg::$example_name (exception: $($_.Exception.Message))"
+            }
+        }
+        
+        # Process subdirectory examples
+        foreach ($example_subdir in $example_subdirs) {
+            $example_name = $example_subdir.Name
+            $total_count++
+            
+            Write-Host "Running example '$example_name' in package '$pkg'..." -ForegroundColor Cyan
+            
+            try {
+                # Run the example with a timeout to prevent hanging
+                $job = Start-Job -ScriptBlock {
+                    param($pkg, $example_name)
+                    & cargo run --package $pkg --example $example_name 2>&1
+                    return $LASTEXITCODE
+                } -ArgumentList $pkg, $example_name
+                
+                $completed = Wait-Job -Job $job -Timeout $timeout_seconds
+                
+                if ($completed) {
+                    $result = Receive-Job -Job $job
+                    $exit_code = $result[-1]  # Last item should be the exit code
+                    
+                    if ($exit_code -eq 0) {
+                        Write-Host "✓ Example '$example_name' in package '$pkg' completed successfully" -ForegroundColor Green
+                        $success_count++
+                    } else {
+                        Write-Host "✗ Example '$example_name' in package '$pkg' failed with exit code $exit_code" -ForegroundColor Red
+                        $failures += "$pkg::$example_name (exit code $exit_code)"
+                    }
+                } else {
+                    Write-Host "✗ Example '$example_name' in package '$pkg' timed out after $timeout_seconds seconds" -ForegroundColor Red
+                    $failures += "$pkg::$example_name (timeout)"
+                    Stop-Job -Job $job
+                }
+                
+                Remove-Job -Job $job -Force
+                
+            } catch {
+                Write-Host "✗ Example '$example_name' in package '$pkg' failed with exception: $($_.Exception.Message)" -ForegroundColor Red
+                $failures += "$pkg::$example_name (exception: $($_.Exception.Message))"
+            }
         }
     }
     
@@ -117,7 +160,6 @@ run-examples:
     Write-Host "Summary:" -ForegroundColor White
     Write-Host "  Total examples: $total_count" -ForegroundColor White
     Write-Host "  Successful: $success_count" -ForegroundColor Green
-    Write-Host "  Skipped (platform-specific): $skipped_count" -ForegroundColor Yellow
     Write-Host "  Failed: $($failures.Count)" -ForegroundColor $(if ($failures.Count -eq 0) { "Green" } else { "Red" })
     
     if ($failures.Count -gt 0) {
