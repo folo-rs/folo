@@ -18,6 +18,8 @@ defined in one of the *.just files.
 
 Do not execute `just release` - this is a critical tool reserved for human use.
 
+Do not use VS Code tasks, relying instead on `just` and, if necessary, `cargo` commands.
+
 # Validating changes
 
 After making changes to the codebase, you are expected to validate the essentials:
