@@ -1,0 +1,65 @@
+name: Windows Validation
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  windows-validation:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    
+    - name: Install nightly Rust toolchain
+      uses: dtolnay/rust-toolchain@nightly
+      with:
+        components: miri, rustfmt
+    
+    - name: Setup Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        # Cache even on build failures to speed up subsequent runs
+        cache-on-failure: true
+        shared-key: "folo-windows"
+    
+    - name: Cache cargo tools
+      id: cache-cargo-tools
+      uses: actions/cache@v4
+      with:
+        # Cache installed cargo tools to avoid reinstalling them on every run
+        path: ~/.cargo/bin
+        key: cargo-tools-windows-${{ hashFiles('just_setup.just') }}
+        restore-keys: |
+          cargo-tools-windows-
+    
+    - name: Install just
+      run: cargo install just --locked
+    
+    - name: Configure Git
+      run: git config --local include.path ./.gitconfig
+    
+    - name: Install development tools
+      if: steps.cache-cargo-tools.outputs.cache-hit != 'true'
+      run: just install-tools
+    
+    - name: Verify environment setup
+      run: |
+        Write-Host "Verifying installed tools..."
+        just --version
+        cargo --version
+        rustc --version
+        Get-Command pwsh
+        # Check if critical cargo tools are available
+        try { cargo nextest --version } catch { Write-Host "cargo-nextest not available" }
+        try { cargo machete --version } catch { Write-Host "cargo-machete not available" }
+        try { cargo sort-derives --version } catch { Write-Host "cargo-sort-derives not available" }
+    
+    - name: Run validation
+      run: just validate-local
