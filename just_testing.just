@@ -15,8 +15,8 @@ miri FILTER="":
     cargo +nightly miri nextest run {{ target_package }} --no-fail-fast --all-features {{ FILTER }}
 
 [group('testing')]
+[script]
 miri-example EXAMPLE:
-    #!/usr/bin/env pwsh
     if ("{{ package }}" -eq "") {
         cargo +nightly miri run --all-features --example {{ EXAMPLE }}
     } else {
