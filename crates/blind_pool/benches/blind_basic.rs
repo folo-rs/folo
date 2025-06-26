@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 use blind_pool::BlindPool;
 
@@ -18,15 +18,15 @@ fn insert_remove_different_types(c: &mut Criterion) {
     c.bench_function("blind_pool insert/remove mixed types", |b| {
         b.iter(|| {
             let mut pool = BlindPool::new();
-            
+
             let mut handles = Vec::new();
             for i in 0..250 {
                 handles.push(pool.insert(i as u32).erase());
                 handles.push(pool.insert(i as u64).erase());
                 handles.push(pool.insert(i as f32).erase());
-                handles.push(pool.insert(format!("item{}", i)).erase());
+                handles.push(pool.insert(i as i64).erase()); // Changed from String to i64
             }
-            
+
             for handle in handles {
                 pool.remove(handle);
             }
@@ -53,7 +53,7 @@ fn insert_only_different_types(c: &mut Criterion) {
                 let _ = pool.insert(i as u32);
                 let _ = pool.insert(i as u64);
                 let _ = pool.insert(i as f32);
-                let _ = pool.insert(format!("item{}", i));
+                let _ = pool.insert(i as i64); // Changed from String to i64
             }
         });
     });

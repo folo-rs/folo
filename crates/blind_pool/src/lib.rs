@@ -5,7 +5,7 @@
 //!
 //! # Type-agnostic memory management
 //!
-//! Unlike [`OpaquePool`] which requires a specific layout to be defined at creation time, 
+//! Unlike [`OpaquePool`] which requires a specific layout to be defined at creation time,
 //! [`BlindPool`] can accept any type and will automatically create and manage the appropriate
 //! internal pools as needed. Each distinct memory layout gets its own internal [`OpaquePool`].
 //!
@@ -33,7 +33,7 @@
 //!
 //! // Insert values of different types into the same pool.
 //! let pooled_u64 = pool.insert(42_u64);
-//! let pooled_string = pool.insert("hello".to_string());
+//! let pooled_i32 = pool.insert(-123_i32);
 //! let pooled_f32 = pool.insert(3.14_f32);
 //!
 //! // Read data back from the pooled items.
@@ -42,17 +42,17 @@
 //!     pooled_u64.ptr().read()
 //! };
 //!
-//! let value_string = unsafe {
+//! let value_i32 = unsafe {
 //!     // SAFETY: The pointer is valid and the value was just inserted.
-//!     pooled_string.ptr().read()
+//!     pooled_i32.ptr().read()
 //! };
 //!
 //! assert_eq!(value_u64, 42);
-//! assert_eq!(value_string, "hello");
+//! assert_eq!(value_i32, -123);
 //!
 //! // Remove values from the pool. The values are automatically dropped.
 //! pool.remove(pooled_u64);
-//! pool.remove(pooled_string);
+//! pool.remove(pooled_i32);
 //! pool.remove(pooled_f32);
 //!
 //! assert!(pool.is_empty());

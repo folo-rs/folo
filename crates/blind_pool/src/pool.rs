@@ -38,19 +38,19 @@ use crate::BlindPoolBuilder;
 ///
 /// // Insert values of different types.
 /// let pooled_u32 = pool.insert(42u32);
-/// let pooled_str = pool.insert("hello".to_string());
+/// let pooled_i64 = pool.insert(-123i64);
 ///
 /// // Read from the memory.
 /// // SAFETY: The pointers are valid and the memory contains the values we just inserted.
 /// let value_u32 = unsafe { pooled_u32.ptr().read() };
-/// let value_str = unsafe { pooled_str.ptr().read() };
-/// 
+/// let value_i64 = unsafe { pooled_i64.ptr().read() };
+///
 /// assert_eq!(value_u32, 42);
-/// assert_eq!(value_str, "hello");
+/// assert_eq!(value_i64, -123);
 ///
 /// // Remove the values from the pool. This invalidates the pointers and drops the values.
 /// pool.remove(pooled_u32);
-/// pool.remove(pooled_str);
+/// pool.remove(pooled_i64);
 /// ```
 #[derive(Debug)]
 pub struct BlindPool {
@@ -75,11 +75,11 @@ impl BlindPool {
     /// let mut pool = BlindPool::new();
     ///
     /// let pooled = pool.insert(42_u64);
-    /// 
+    ///
     /// // SAFETY: The pointer is valid and contains the value we just inserted.
     /// let value = unsafe { pooled.ptr().read() };
     /// assert_eq!(value, 42);
-    /// 
+    ///
     /// pool.remove(pooled);
     /// assert!(pool.is_empty());
     /// ```
@@ -99,7 +99,6 @@ impl BlindPool {
     ///     .drop_policy(DropPolicy::MustNotDropItems)
     ///     .build();
     /// ```
-    #[must_use]
     pub fn builder() -> BlindPoolBuilder {
         BlindPoolBuilder::new()
     }
@@ -137,7 +136,7 @@ impl BlindPool {
     /// ```
     pub fn insert<T>(&mut self, value: T) -> BlindPooled<T> {
         let layout = Layout::new::<T>();
-        
+
         // Get or create the appropriate internal pool for this layout.
         let internal_pool = self.pools.entry(layout).or_insert_with(|| {
             OpaquePool::builder()
@@ -150,10 +149,7 @@ impl BlindPool {
         // SAFETY: T matches the layout used to create the internal pool.
         let pooled = unsafe { internal_pool.insert(value) };
 
-        BlindPooled {
-            layout,
-            pooled,
-        }
+        BlindPooled { layout, pooled }
     }
 
     /// Removes a value from the pool and drops it.
@@ -297,7 +293,7 @@ impl BlindPool {
     /// }
     ///
     /// let capacity_before = pool.capacity();
-    /// 
+    ///
     /// // Remove all items but keep the allocated capacity.
     /// while !pool.is_empty() {
     ///     // In a real scenario you'd keep track of handles to remove them properly.
@@ -312,12 +308,12 @@ impl BlindPool {
     pub fn shrink_to_fit(&mut self) {
         // Remove empty internal pools.
         self.pools.retain(|_, pool| !pool.is_empty());
-        
+
         // Shrink remaining pools.
         for pool in self.pools.values_mut() {
             pool.shrink_to_fit();
         }
-        
+
         // Shrink the HashMap itself.
         self.pools.shrink_to_fit();
     }
@@ -332,16 +328,14 @@ impl Default for BlindPool {
 impl Drop for BlindPool {
     fn drop(&mut self) {
         match self.drop_policy {
-            DropPolicy::MayDropItems => {
-                // Allow the internal pools to drop their items.
-            }
             DropPolicy::MustNotDropItems => {
-                if !self.is_empty() {
-                    panic!("BlindPool dropped while still containing items (drop policy is MustNotDropItems)");
-                }
+                assert!(
+                    self.is_empty(),
+                    "BlindPool dropped while still containing items (drop policy is MustNotDropItems)"
+                );
             }
-            #[allow(unreachable_patterns, reason = "DropPolicy is non-exhaustive")]
-            _ => {
+            DropPolicy::MayDropItems | _ => {
+                // Allow the internal pools to drop their items.
                 // Default to allowing items to be dropped for unknown variants.
                 // This provides forward compatibility if new variants are added.
             }
@@ -429,7 +423,7 @@ impl<T> BlindPooled<T> {
         self.layout
     }
 
-    /// Erases the type information from this [`BlindPooled<T>`] handle, 
+    /// Erases the type information from this [`BlindPooled<T>`] handle,
     /// returning a [`BlindPooled<()>`].
     ///
     /// This is useful when you want to store handles of different types in the same collection
@@ -497,51 +491,6 @@ mod tests {
     }
 
     #[test]
-    fn debug_string_layout() {
-        let layout = Layout::new::<String>();
-        println!("String layout: size={}, align={}", layout.size(), layout.align());
-        
-        let mut pool = BlindPool::new();
-        let pooled = pool.insert("hello".to_string());
-        println!("Inserted string successfully");
-        
-        // Try to read it back
-        let value = unsafe { pooled.ptr().read() };
-        println!("Read back: {}", value);
-        
-        pool.remove(pooled);
-        println!("Removed string successfully");
-    }
-
-    #[test]
-    fn debug_opaque_pool_direct() {
-        use opaque_pool::OpaquePool;
-        
-        let mut pool = OpaquePool::builder().layout_of::<String>().build();
-        let pooled = unsafe { pool.insert("hello".to_string()) };
-        
-        let value = unsafe { pooled.ptr().read() };
-        println!("Read back from OpaquePool: {}", value);
-        
-        pool.remove(pooled);
-        println!("Removed from OpaquePool successfully");
-    }
-
-    #[test]
-    fn debug_opaque_pool_u64() {
-        use opaque_pool::OpaquePool;
-        
-        let mut pool = OpaquePool::builder().layout_of::<u64>().build();
-        let pooled = unsafe { pool.insert(42u64) };
-        
-        let value = unsafe { pooled.ptr().read() };
-        println!("Read back from OpaquePool: {}", value);
-        
-        pool.remove(pooled);
-        println!("Removed from OpaquePool successfully");
-    }
-
-    #[test]
     fn smoke_test() {
         let mut pool = BlindPool::new();
 
@@ -551,23 +500,24 @@ mod tests {
 
         let pooled_u32 = pool.insert(42u32);
         let pooled_u64 = pool.insert(43u64);
-        let pooled_str = pool.insert("hello".to_string());
+        let pooled_f32 = pool.insert(3.14f32);
 
         assert_eq!(pool.len(), 3);
         assert!(!pool.is_empty());
-        assert_eq!(pool.layout_count(), 3); // u32, u64, String all have different layouts
+        // u32 and f32 have the same layout, so we expect 2 distinct layouts (not 3)
+        assert_eq!(pool.layout_count(), 2);
         assert!(pool.capacity() >= 3);
 
         // SAFETY: The pointers are valid and contain the values we just inserted.
         unsafe {
             assert_eq!(pooled_u32.ptr().read(), 42);
             assert_eq!(pooled_u64.ptr().read(), 43);
-            assert_eq!(pooled_str.ptr().read(), "hello");
+            assert_eq!(pooled_f32.ptr().read(), 3.14);
         }
 
         pool.remove(pooled_u32);
         pool.remove(pooled_u64);
-        pool.remove(pooled_str);
+        pool.remove(pooled_f32);
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());

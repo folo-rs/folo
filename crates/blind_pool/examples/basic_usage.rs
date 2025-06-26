@@ -1,0 +1,116 @@
+//! Example demonstrating the usage of BlindPool for storing different types.
+
+use blind_pool::BlindPool;
+
+fn main() {
+    println!("BlindPool Example");
+    println!("================");
+
+    // Create a new blind pool that can store any type.
+    let mut pool = BlindPool::new();
+
+    println!("\nCreated empty BlindPool:");
+    println!("  Length: {}", pool.len());
+    println!("  Layout count: {}", pool.layout_count());
+    println!("  Capacity: {}", pool.capacity());
+
+    // Insert different types into the same pool.
+    println!("\nInserting different types...");
+    let handle_u32 = pool.insert(42u32);
+    let handle_u64 = pool.insert(1234567890u64);
+    let handle_f32 = pool.insert(3.14159f32);
+    let handle_f64 = pool.insert(2.71828f64);
+    let handle_bool = pool.insert(true);
+    let handle_char = pool.insert('X');
+
+    println!("  Inserted u32: 42");
+    println!("  Inserted u64: 1234567890");
+    println!("  Inserted f32: 3.14159");
+    println!("  Inserted f64: 2.71828");
+    println!("  Inserted bool: true");
+    println!("  Inserted char: 'X'");
+
+    println!("\nPool status after insertions:");
+    println!("  Length: {}", pool.len());
+    println!("  Layout count: {}", pool.layout_count());
+    println!("  Capacity: {}", pool.capacity());
+
+    // Read values back from the pool using the handles.
+    println!("\nReading values back from the pool:");
+
+    // SAFETY: All pointers are valid and contain the values we just inserted.
+    unsafe {
+        let val_u32 = handle_u32.ptr().read();
+        let val_u64 = handle_u64.ptr().read();
+        let val_f32 = handle_f32.ptr().read();
+        let val_f64 = handle_f64.ptr().read();
+        let val_bool = handle_bool.ptr().read();
+        let val_char = handle_char.ptr().read();
+
+        println!("  u32 value: {}", val_u32);
+        println!("  u64 value: {}", val_u64);
+        println!("  f32 value: {}", val_f32);
+        println!("  f64 value: {}", val_f64);
+        println!("  bool value: {}", val_bool);
+        println!("  char value: '{}'", val_char);
+    }
+
+    // Demonstrate type erasure.
+    println!("\nDemonstrating type erasure...");
+    let erased_u32 = handle_u32.erase();
+    let erased_f64 = handle_f64.erase();
+
+    // Can still access raw pointers after type erasure.
+    // SAFETY: We know the types of these erased handles.
+    unsafe {
+        let val = erased_u32.ptr().cast::<u32>().read();
+        println!("  Erased u32 value: {}", val);
+
+        let val = erased_f64.ptr().cast::<f64>().read();
+        println!("  Erased f64 value: {}", val);
+    }
+
+    // Remove some items from the pool.
+    println!("\nRemoving some items...");
+    pool.remove(erased_u32); // Remove the erased u32
+    pool.remove(handle_u64);
+    pool.remove(erased_f64); // Remove the erased f64
+
+    println!("  Removed u32, u64, and f64");
+    println!("  Pool length now: {}", pool.len());
+    println!("  Layout count now: {}", pool.layout_count());
+
+    // Insert more items of existing types.
+    println!("\nInserting more items of existing types...");
+    let handle_f32_2 = pool.insert(2.5f32);
+    let handle_bool_2 = pool.insert(false);
+
+    println!("  Inserted another f32: 2.5");
+    println!("  Inserted another bool: false");
+    println!("  Pool length now: {}", pool.len());
+    println!(
+        "  Layout count still: {} (reusing existing layouts)",
+        pool.layout_count()
+    );
+
+    // Clean up remaining items.
+    println!("\nCleaning up remaining items...");
+    pool.remove(handle_f32);
+    pool.remove(handle_bool);
+    pool.remove(handle_char);
+    pool.remove(handle_f32_2);
+    pool.remove(handle_bool_2);
+
+    println!("  Pool is now empty: {}", pool.is_empty());
+
+    // Demonstrate shrink_to_fit.
+    println!("\nCalling shrink_to_fit to release unused capacity...");
+    let capacity_before = pool.capacity();
+    pool.shrink_to_fit();
+    let capacity_after = pool.capacity();
+    println!("  Capacity before shrink: {}", capacity_before);
+    println!("  Capacity after shrink: {}", capacity_after);
+    println!("  Layout count after shrink: {}", pool.layout_count());
+
+    println!("\nExample completed successfully!");
+}
