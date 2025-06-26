@@ -1027,7 +1027,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::cast_possible_truncation, reason = "test values are small")]
     fn shrink_to_fit_removes_empty_slabs() {
         let layout = Layout::new::<u32>();
         let mut pool = OpaquePool::builder().layout(layout).build();
@@ -1069,7 +1068,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::cast_possible_truncation, reason = "test values are small")]
     fn shrink_to_fit_all_empty_slabs() {
         let layout = Layout::new::<u32>();
         let mut pool = OpaquePool::builder().layout(layout).build();

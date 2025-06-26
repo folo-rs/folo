@@ -753,7 +753,11 @@ impl<const SLAB_CAPACITY: usize> ItemCoordinates<SLAB_CAPACITY> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::indexing_slicing, reason = "panic is fine in test code")]
+    #![allow(
+        clippy::indexing_slicing,
+        clippy::cast_possible_truncation,
+        reason = "we do not need to worry about these things when writing test code"
+    )]
 
     use std::cell::RefCell;
     use std::sync::{Arc, Mutex};
@@ -1200,7 +1204,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::cast_possible_truncation, reason = "test values are small")]
     fn shrink_to_fit_removes_empty_slabs() {
         let mut pool = PinnedPool::<u32>::new();
 
@@ -1234,7 +1237,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::cast_possible_truncation, reason = "test values are small")]
     fn shrink_to_fit_all_empty_slabs() {
         let mut pool = PinnedPool::<u32>::new();
 
@@ -1264,7 +1266,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::cast_possible_truncation, reason = "test values are small")]
     fn shrink_to_fit_no_empty_slabs() {
         let mut pool = PinnedPool::<u32>::new();
 
