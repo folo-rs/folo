@@ -5,9 +5,6 @@
 //!
 //! # Type-agnostic memory management
 //!
-//! [`BlindPool`] can accept any type and will automatically manage the appropriate
-//! storage as needed.
-//!
 //! The pool itself does not hold or create any `&` shared or `&mut` exclusive references to its
 //! contents, allowing the caller to decide who and when can obtain a reference to the inserted
 //! values. The caller is responsible for ensuring that Rust aliasing rules are respected.

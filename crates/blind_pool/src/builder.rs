@@ -2,15 +2,14 @@ use crate::{BlindPool, DropPolicy};
 
 /// Builder for creating an instance of [`BlindPool`].
 ///
-/// Unlike [`opaque_pool::OpaquePoolBuilder`], this builder does not require specifying
-/// a layout since [`BlindPool`] accepts objects of any layout.
+/// This builder allows configuration of pool behavior before creation.
 ///
 /// # Examples
 ///
 /// ```
 /// use blind_pool::{BlindPool, DropPolicy};
 ///
-/// // Basic blind pool.
+/// // Default blind pool.
 /// let pool = BlindPool::builder().build();
 ///
 /// // With custom drop policy.

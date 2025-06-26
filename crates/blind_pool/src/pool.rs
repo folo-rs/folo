@@ -7,8 +7,7 @@ use opaque_pool::{DropPolicy, OpaquePool, Pooled as OpaquePooled};
 
 use crate::BlindPoolBuilder;
 
-/// A pinned object pool of unbounded size that accepts objects of any type by
-/// internally managing multiple [`OpaquePool`] instances, one for each distinct memory layout.
+/// A pinned object pool of unbounded size that accepts objects of any type.
 ///
 /// The pool returns a [`Pooled<T>`] for each inserted value, which acts as both
 /// the key and provides direct access to the inserted item via a pointer.
@@ -239,12 +238,6 @@ impl BlindPool {
         self.pools.values().map(OpaquePool::capacity).sum()
     }
 
-    /// Returns the number of distinct memory layouts currently managed by this pool.
-    #[must_use]
-    pub(crate) fn layout_count(&self) -> usize {
-        self.pools.len()
-    }
-
     /// Shrinks the capacity of all internal pools to fit their current size.
     ///
     /// This can help reduce memory usage after items have been removed from the pool.
@@ -296,18 +289,11 @@ impl Default for BlindPool {
 
 impl Drop for BlindPool {
     fn drop(&mut self) {
-        match self.drop_policy {
-            DropPolicy::MustNotDropItems => {
-                if !std::thread::panicking() {
-                    assert!(
-                        self.is_empty(),
-                        "BlindPool dropped while still containing items (drop policy is MustNotDropItems)"
-                    );
-                }
-            }
-            DropPolicy::MayDropItems | _ => {
-                // Allow the internal pools to drop their items.
-            }
+        if matches!(self.drop_policy, DropPolicy::MustNotDropItems) && !std::thread::panicking() {
+            assert!(
+                self.is_empty(),
+                "BlindPool dropped while still containing items (drop policy is MustNotDropItems)"
+            );
         }
     }
 }
@@ -444,7 +430,6 @@ mod tests {
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
-        assert_eq!(pool.layout_count(), 0);
 
         let pooled_u32 = pool.insert(42_u32);
         let pooled_u64 = pool.insert(43_u64);
@@ -452,8 +437,6 @@ mod tests {
 
         assert_eq!(pool.len(), 3);
         assert!(!pool.is_empty());
-        // u32 and f32 have the same layout, so we expect 2 distinct layouts (not 3)
-        assert_eq!(pool.layout_count(), 2);
         assert!(pool.capacity() >= 3);
 
         // SAFETY: The pointers are valid and contain the values we just inserted.
@@ -484,7 +467,6 @@ mod tests {
         let pooled_f32 = pool.insert(2.5_f32);
 
         assert_eq!(pool.len(), 3);
-        assert_eq!(pool.layout_count(), 1); // All three types have the same layout
 
         // SAFETY: The pointers are valid and contain the values we just inserted.
         let u32_val = unsafe { pooled_u32.ptr().read() };
@@ -543,8 +525,6 @@ mod tests {
 
         // This should clean up empty internal pools.
         pool.shrink_to_fit();
-
-        assert_eq!(pool.layout_count(), 0);
     }
 
     #[test]
@@ -569,15 +549,15 @@ mod tests {
         // Test with String - a type that implements Drop
         let test_string = "Hello, World!".to_string();
         let pooled_string = pool.insert(test_string);
-        
+
         pool.remove(pooled_string);
 
-        // Test with Vec - another type that implements Drop  
+        // Test with Vec - another type that implements Drop
         let test_vec = vec![1, 2, 3, 4, 5];
         let pooled_vec = pool.insert(test_vec);
-        
+
         pool.remove(pooled_vec);
-        
+
         assert!(pool.is_empty());
     }
 }
