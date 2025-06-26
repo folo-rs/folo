@@ -12,12 +12,14 @@ fn main() {
     // Create a new blind pool that can store any type.
     let mut pool = BlindPool::new();
 
-    println!("\nCreated empty BlindPool:");
+    println!();
+    println!("Created empty BlindPool:");
     println!("  Length: {}", pool.len());
     println!("  Capacity: {}", pool.capacity());
 
     // Insert different types into the same pool.
-    println!("\nInserting different types...");
+    println!();
+    println!("Inserting different types...");
     let handle_u32 = pool.insert(42_u32);
     let handle_u64 = pool.insert(1234567890_u64);
     let handle_f32 = pool.insert(PI);
@@ -32,12 +34,14 @@ fn main() {
     println!("  Inserted bool: true");
     println!("  Inserted char: 'X'");
 
-    println!("\nPool status after insertions:");
+    println!();
+    println!("Pool status after insertions:");
     println!("  Length: {}", pool.len());
     println!("  Capacity: {}", pool.capacity());
 
     // Read values back from the pool using the handles.
-    println!("\nReading values back from the pool:");
+    println!();
+    println!("Reading values back from the pool:");
 
     // SAFETY: All pointers are valid and contain the values we just inserted.
     let val_u32 = unsafe { handle_u32.ptr().read() };
@@ -60,7 +64,8 @@ fn main() {
     println!("  char value: '{val_char}'");
 
     // Demonstrate type erasure.
-    println!("\nDemonstrating type erasure...");
+    println!();
+    println!("Demonstrating type erasure...");
     let erased_u32 = handle_u32.erase();
     let erased_f64 = handle_f64.erase();
 
@@ -74,7 +79,8 @@ fn main() {
     println!("  Erased f64 value: {val}");
 
     // Remove some items from the pool.
-    println!("\nRemoving some items...");
+    println!();
+    println!("Removing some items...");
     pool.remove(erased_u32); // Remove the erased u32
     pool.remove(handle_u64);
     pool.remove(erased_f64); // Remove the erased f64
@@ -83,7 +89,8 @@ fn main() {
     println!("  Pool length now: {}", pool.len());
 
     // Insert more items of existing types.
-    println!("\nInserting more items of existing types...");
+    println!();
+    println!("Inserting more items of existing types...");
     let handle_f32_2 = pool.insert(2.5_f32);
     let handle_bool_2 = pool.insert(false);
 
@@ -92,7 +99,8 @@ fn main() {
     println!("  Pool length now: {}", pool.len());
 
     // Clean up remaining items.
-    println!("\nCleaning up remaining items...");
+    println!();
+    println!("Cleaning up remaining items...");
     pool.remove(handle_f32);
     pool.remove(handle_bool);
     pool.remove(handle_char);
@@ -102,12 +110,13 @@ fn main() {
     println!("  Pool is now empty: {}", pool.is_empty());
 
     // Demonstrate shrink_to_fit.
-    println!("\nCalling shrink_to_fit to release unused capacity...");
+    println!();
+    println!("Calling shrink_to_fit to release unused capacity...");
     let capacity_before = pool.capacity();
     pool.shrink_to_fit();
     let capacity_after = pool.capacity();
     println!("  Capacity before shrink: {capacity_before}");
     println!("  Capacity after shrink: {capacity_after}");
-
-    println!("\nExample completed successfully!");
+    println!();
+    println!("Example completed successfully!");
 }

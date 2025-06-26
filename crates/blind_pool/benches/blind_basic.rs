@@ -28,50 +28,50 @@ fn entrypoint(c: &mut Criterion) {
     group.bench_function("one", |b| {
         b.iter(|| {
             let mut pool = BlindPool::new();
-            let pooled = pool.insert(TEST_VALUE);
-            pool.remove(pooled);
-            drop(pool);
+            let _pooled = pool.insert(TEST_VALUE);
+            pool
         });
     });
 
     group.bench_function("ten_thousand", |b| {
         b.iter(|| {
             let mut pool = BlindPool::new();
-            let mut pooled_items = Vec::with_capacity(10_000);
             for _ in 0..10_000 {
-                let pooled = pool.insert(TEST_VALUE);
-                pooled_items.push(pooled);
+                let _pooled = pool.insert(TEST_VALUE);
             }
-            for pooled in pooled_items {
-                pool.remove(pooled);
-            }
-            drop(pool);
+            pool
         });
     });
 
     group.finish();
 
-    let mut mixed_group = c.benchmark_group("bp_mixed");
+    let mut mixed_group = c.benchmark_group("bp_types");
 
-    mixed_group.bench_function("mixed_types", |b| {
+    // Custom struct with same size as u64 but different alignment
+    #[repr(C, align(8))]
+    struct AlignedU32 {
+        value: u32,
+        _padding: u32,
+    }
+
+    mixed_group.bench_function("single_type", |b| {
         b.iter(|| {
             let mut pool = BlindPool::new();
-            let mut handles = Vec::new();
-            for i in 0_u32..1_000 {
-                handles.push(pool.insert(i).erase());
-                handles.push(pool.insert(u64::from(i)).erase());
-                #[allow(
-                    clippy::cast_precision_loss,
-                    reason = "Intentional precision loss for benchmark data"
-                )]
-                let f32_val = i as f32;
-                handles.push(pool.insert(f32_val).erase());
-                handles.push(pool.insert(i64::from(i)).erase());
+            for i in 0_u64..1_000 {
+                let _pooled = pool.insert(i);
             }
-            for handle in handles {
-                pool.remove(handle);
+            pool
+        });
+    });
+
+    mixed_group.bench_function("two_types_same_layout", |b| {
+        b.iter(|| {
+            let mut pool = BlindPool::new();
+            for i in 0_u64..500 {
+                let _pooled1 = pool.insert(i);
+                let _pooled2 = pool.insert(AlignedU32 { value: i as u32, _padding: 0 });
             }
-            drop(pool);
+            pool
         });
     });
 

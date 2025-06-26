@@ -108,8 +108,7 @@ impl BlindPool {
 
     /// Inserts a value into the pool and returns a handle to access it.
     ///
-    /// The pool automatically determines the memory layout of the type and uses or creates
-    /// an appropriate internal pool to store the value.
+    /// The pool stores the value and provides a handle for later access or removal.
     ///
     /// # Example
     ///
@@ -145,7 +144,7 @@ impl BlindPool {
     /// Removes a value from the pool and drops it.
     ///
     /// The [`Pooled<T>`] handle is consumed and the memory is returned to the pool.
-    /// The value is automatically dropped.
+    /// The value is dropped.
     ///
     /// # Example
     ///
@@ -168,7 +167,7 @@ impl BlindPool {
         }
     }
 
-    /// Returns the total number of items stored across all internal pools.
+    /// Returns the total number of items stored in the pool.
     ///
     /// # Example
     ///
@@ -190,7 +189,7 @@ impl BlindPool {
         self.pools.values().map(OpaquePool::len).sum()
     }
 
-    /// Whether the pool has no inserted values across all internal pools.
+    /// Whether the pool has no inserted values.
     ///
     /// An empty pool may still be holding unused memory capacity.
     ///
@@ -215,7 +214,7 @@ impl BlindPool {
         self.pools.values().all(OpaquePool::is_empty)
     }
 
-    /// Returns the total capacity across all internal pools.
+    /// Returns the total capacity of the pool.
     ///
     /// This is the total number of items that can be stored without allocating more memory.
     ///
@@ -238,7 +237,7 @@ impl BlindPool {
         self.pools.values().map(OpaquePool::capacity).sum()
     }
 
-    /// Shrinks the capacity of all internal pools to fit their current size.
+    /// Shrinks the capacity of the pool to fit its current size.
     ///
     /// This can help reduce memory usage after items have been removed from the pool.
     ///
@@ -301,8 +300,7 @@ impl Drop for BlindPool {
 /// A handle representing an item stored in a [`BlindPool`].
 ///
 /// This provides access to the stored item and can be used to remove the item from the pool.
-/// It wraps an [`opaque_pool::Pooled<T>`] and adds the layout information needed for the
-/// [`BlindPool`] to route operations to the correct internal pool.
+/// It maintains the layout information needed for proper pool operations.
 ///
 /// # Example
 ///
