@@ -562,31 +562,22 @@ mod tests {
         assert!(pool.is_empty());
     }
 
-    /// Test that reproduces the double-free bug with types that have Drop implementations.
-    /// 
-    /// This test documents a known issue in the underlying opaque_pool crate where
-    /// types with Drop implementations (like String, Vec) can cause double-free errors
-    /// when removed from the pool. The issue occurs because the Dropper mechanism
-    /// in opaque_pool may attempt to drop values that have already been moved or
-    /// dropped elsewhere.
     #[test]
-    #[ignore = "This test demonstrates a double-free bug in opaque_pool and will likely fail"]
-    fn double_free_bug_with_drop_types() {
+    fn works_with_drop_types() {
         let mut pool = BlindPool::new();
 
         // Test with String - a type that implements Drop
         let test_string = "Hello, World!".to_string();
         let pooled_string = pool.insert(test_string);
         
-        // This remove operation may cause a double-free error
-        // The issue is in the underlying opaque_pool's Dropper mechanism
         pool.remove(pooled_string);
 
         // Test with Vec - another type that implements Drop  
         let test_vec = vec![1, 2, 3, 4, 5];
         let pooled_vec = pool.insert(test_vec);
         
-        // This may also cause a double-free error
         pool.remove(pooled_vec);
+        
+        assert!(pool.is_empty());
     }
 }
