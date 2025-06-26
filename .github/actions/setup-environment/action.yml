@@ -61,8 +61,13 @@ runs:
         restore-keys: |
           cargo-tools-${{ inputs.cache-key-suffix }}-
     
-    - name: Install just
-      if: steps.cache-cargo-tools.outputs.cache-hit != 'true' || inputs.platform == 'linux'
+    - name: Install just (Windows)
+      if: steps.cache-cargo-tools.outputs.cache-hit != 'true' && inputs.platform == 'windows'
+      shell: bash
+      run: cargo install just --locked
+    
+    - name: Install just (Linux)
+      if: inputs.platform == 'linux'
       shell: bash
       run: cargo install just --locked
     
