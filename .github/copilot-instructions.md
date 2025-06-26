@@ -262,3 +262,10 @@ must have a `reason` field to justify them.
 
 Prefer `expect` over `allow` suppressions, except when applying a broadly-scoped suppression that
 applies to a whole file or module using outer attributes, in which case "allow" is preferred.
+
+# Panic in drop()
+
+It is OK to verify that type invariants still hold in `drop()` and panic if some have been violated,
+e.g. when an item is not in a valid state to be dropped. However, all such assertions must be
+guarded with a `thread::panicking()` check to ensure that the panic does not occur when already
+unwinding for another panic - we do not want to double-panic as that mangles the errors.
