@@ -557,4 +557,95 @@ mod tests {
 
         assert!(pool.is_empty());
     }
+
+    #[test]
+    fn trait_object_usage() {
+        // Define a trait for testing.
+        trait Printable {
+            fn print_info(&self) -> String;
+        }
+
+        #[derive(Debug)]
+        struct Book {
+            title: String,
+            pages: u32,
+        }
+
+        impl Printable for Book {
+            fn print_info(&self) -> String {
+                format!("Book: '{}' ({} pages)", self.title, self.pages)
+            }
+        }
+
+        let mut pool = BlindPool::new();
+
+        // Insert a book into the pool.
+        let book = Book {
+            title: "The Rust Programming Language".to_string(),
+            pages: 552,
+        };
+
+        let pooled_book = pool.insert(book);
+
+        // Use item as trait object.
+        // SAFETY: The pointer is valid and points to a Book that we just inserted.
+        unsafe {
+            let book_ref: &Book = pooled_book.ptr().as_ref();
+            let printable: &dyn Printable = book_ref;
+            assert_eq!(
+                printable.print_info(),
+                "Book: 'The Rust Programming Language' (552 pages)"
+            );
+        }
+
+        pool.remove(pooled_book);
+    }
+
+    #[test]
+    fn trait_object_with_mutable_references() {
+        trait Modifiable {
+            fn modify(&mut self, factor: f64);
+            fn get_value(&self) -> f64;
+        }
+
+        #[derive(Debug)]
+        struct Temperature {
+            celsius: f64,
+        }
+
+        impl Modifiable for Temperature {
+            fn modify(&mut self, factor: f64) {
+                self.celsius *= factor;
+            }
+
+            fn get_value(&self) -> f64 {
+                self.celsius
+            }
+        }
+
+        let mut pool = BlindPool::new();
+
+        let temp = Temperature { celsius: 25.0 };
+        let pooled_temp = pool.insert(temp);
+
+        // Test mutable trait objects.
+        // SAFETY: The pointer is valid and points to a Temperature that we just inserted.
+        unsafe {
+            let temp_ref: &mut Temperature = pooled_temp.ptr().as_mut();
+            let modifiable: &mut dyn Modifiable = temp_ref;
+
+            assert!((modifiable.get_value() - 25.0).abs() < f64::EPSILON);
+            modifiable.modify(2.0);
+            assert!((modifiable.get_value() - 50.0).abs() < f64::EPSILON);
+        }
+
+        // Verify changes persisted.
+        // SAFETY: The pointer is valid and points to the object we modified.
+        unsafe {
+            let temp_ref: &Temperature = pooled_temp.ptr().as_ref();
+            assert!((temp_ref.celsius - 50.0).abs() < f64::EPSILON);
+        }
+
+        pool.remove(pooled_temp);
+    }
 }
