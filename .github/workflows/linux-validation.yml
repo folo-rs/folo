@@ -1,0 +1,51 @@
+name: Linux Validation
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  linux-validation:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y git git-lfs build-essential cmake gcc make curl
+    
+    - name: Install PowerShell 7
+      run: |
+        # Download and install PowerShell 7
+        wget -q "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"
+        sudo dpkg -i packages-microsoft-prod.deb
+        sudo apt update
+        sudo apt install -y powershell
+    
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: 1.87
+        components: rustfmt, clippy
+    
+    - name: Install nightly Rust toolchain
+      uses: dtolnay/rust-toolchain@nightly
+      with:
+        components: miri
+    
+    - name: Setup Rust cache
+      uses: Swatinem/rust-cache@v2
+    
+    - name: Install just
+      run: cargo install just --locked
+    
+    - name: Install development tools
+      run: just install-tools
+    
+    - name: Run validation
+      run: just validate-local

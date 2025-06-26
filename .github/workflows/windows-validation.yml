@@ -1,0 +1,41 @@
+name: Windows Validation
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  windows-validation:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: 1.87
+        components: rustfmt, clippy
+    
+    - name: Install nightly Rust toolchain
+      uses: dtolnay/rust-toolchain@nightly
+      with:
+        components: miri
+    
+    - name: Setup Rust cache
+      uses: Swatinem/rust-cache@v2
+    
+    - name: Install just
+      run: cargo install just --locked
+    
+    - name: Configure Git
+      run: git config --local include.path ./.gitconfig
+    
+    - name: Install development tools
+      run: just install-tools
+    
+    - name: Run validation
+      run: just validate-local
