@@ -96,7 +96,8 @@ types, we re-export them all at the parent, so while we have modules like
 
 You can assume PowerShell 7 (`pwsh`) is available on every operating system and environment.
 
-Use PowerShell 7 commands instead of Linux shell commands.
+Prefer PowerShell 7 commands to Bash commands, as they are more likely to work. You
+will not always be on Linux, so Bash commands might not always work.
 
 # Code style
 
