@@ -19,7 +19,7 @@ Prerequisites:
     * WSL
 * PowerShell 7
 * Rust development tools for version listed in `rust-toolchain.toml`
-* `rustup toolchain install nightly`
+* `rustup toolchain install nightly --component miri rustfmt`
 * `cargo install just`
 * (Only if publishing releases) GitHub CLI + `gh auth login`
 
@@ -44,9 +44,17 @@ Prerequisites:
 
 * Ubuntu 24 installed in WSL
 * `sudo apt install -y git git-lfs build-essential cmake gcc make curl`
-* [PowerShell 7](https://learn.microsoft.com/en-us/powershell/scripting/install/install-ubuntu?view=powershell-7.5)
+* Git LFS setup: `git lfs install`
+* [PowerShell 7](https://learn.microsoft.com/en-us/powershell/scripting/install/install-ubuntu?view=powershell-7.5):
+  ```bash
+  # Download and install Microsoft package repository
+  wget -q "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"
+  sudo dpkg -i packages-microsoft-prod.deb
+  sudo apt update
+  sudo apt install -y powershell
+  ```
 * Rust development tools for version listed in `rust-toolchain.toml`
-* `rustup toolchain install nightly`
+* `rustup toolchain install nightly --component miri rustfmt`
 * `cargo install just`
 * If first time Git setup, execute `git config --global credential.helper "/mnt/c/Program\ Files/Git/mingw64/bin/git-credential-manager.exe"` to setup authentication flow
 

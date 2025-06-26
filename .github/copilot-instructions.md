@@ -18,6 +18,8 @@ defined in one of the *.just files.
 
 Do not execute `just release` - this is a critical tool reserved for human use.
 
+Do not use VS Code tasks, relying instead on `just` and, if necessary, `cargo` commands.
+
 # Validating changes
 
 After making changes to the codebase, you are expected to validate the essentials:
@@ -92,8 +94,10 @@ types, we re-export them all at the parent, so while we have modules like
 
 # Scripting
 
-You can assume PowerShell 7 (`pwsh`) is available. Prefer PowerShell 7 over Bash. Do NOT assume
-that Bash or Linux commands are available - we are operating on Windows by default.
+You can assume PowerShell 7 (`pwsh`) is available on every operating system and environment.
+
+Prefer PowerShell 7 commands to Bash commands, as they are more likely to work. You
+will not always be on Linux, so Bash commands might not always work.
 
 # Code style
 

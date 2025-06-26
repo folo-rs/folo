@@ -12,7 +12,8 @@ fn main() {
         .same_memory_region()
         .performance_processors_only()
         .take(PROCESSOR_COUNT)
-        .expect("could not find required number of processors that match the selection criteria");
+        // If we do not have what we want, we fall back to default, just to make the example run.
+        .unwrap_or_default();
 
     let threads = selected_processors.spawn_threads(|processor| {
         println!("Spawned thread on processor {}", processor.id());

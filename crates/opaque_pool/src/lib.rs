@@ -24,7 +24,7 @@
 //! - **Dynamic growth**: Pool capacity grows automatically as needed.
 //! - **Efficient allocation**: Uses high density slabs to minimize allocation overhead.
 //! - **Stable Rust**: No unstable Rust features required.
-//! - **Leak detection**: Pool panics on drop if values are still present.
+//! - **Optional leak detection**: Pool can be configured to panic on drop if values are still present.
 //!
 //! # Example
 //!

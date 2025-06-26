@@ -93,11 +93,13 @@
 //! # use many_cpus::ProcessorSet;
 //! const PROCESSOR_COUNT: NonZero<usize> = NonZero::new(2).unwrap();
 //!
-//! let selected_processors = ProcessorSet::builder()
+//! let Some(selected_processors) = ProcessorSet::builder()
 //!     .same_memory_region()
 //!     .performance_processors_only()
-//!     .take(PROCESSOR_COUNT)
-//!     .expect("could not find required number of processors that match the selection criteria");
+//!     .take(PROCESSOR_COUNT) else {
+//!     println!("Not enough processors available for this example");
+//!     return;
+//! };
 //!
 //! let threads = selected_processors.spawn_threads(|processor| {
 //!     println!("Spawned thread on processor {}", processor.id());
