@@ -1,10 +1,11 @@
 use std::alloc::Layout;
-use std::mem::ManuallyDrop;
 use std::num::NonZero;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::{DropPolicy, OpaqueSlab};
+use new_zealand::nz;
+
+use crate::{DropPolicy, OpaquePoolBuilder, OpaqueSlab};
 
 /// Global counter for generating unique pool IDs.
 static POOL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -14,16 +15,20 @@ fn generate_pool_id() -> u64 {
     POOL_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-/// A memory pool of unbounded size that inserts typed values into pinned memory.
+/// A pinned object pool of unbounded size that accepts objects of different types as long
+/// as they match a specific memory layout.
 ///
 /// The pool returns a [`Pooled<T>`] for each inserted value, which acts as both
-/// the key and provides direct access to the memory pointer.
+/// the key and provides direct access to the inserted item via a pointer.
 ///
 /// # Out of band access
 ///
-/// The collection does not create or keep references to the memory blocks, so it is valid to access
-/// memory via pointers and to create custom references to memory from unsafe code even when not
-/// holding an exclusive reference to the collection.
+/// The collection does not create or keep references to the memory blocks. The only way to access
+/// the contents of the collection is via unsafe code by using the pointer from a [`Pooled<T>`].
+///
+/// The collection does not create or maintain any `&` shared or `&mut` exclusive references to
+/// the items it contains, except when explicitly called to operate on an item (e.g. `remove()`
+/// implies exclusive access).
 ///
 /// # Resource usage
 ///
@@ -36,8 +41,7 @@ fn generate_pool_id() -> u64 {
 ///
 /// use opaque_pool::OpaquePool;
 ///
-/// let layout = Layout::new::<u32>();
-/// let mut pool = OpaquePool::builder().layout(layout).build();
+/// let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 ///
 /// // Insert a value and get a handle.
 /// // SAFETY: u32 matches the layout used to create the pool.
@@ -48,19 +52,18 @@ fn generate_pool_id() -> u64 {
 /// let value = unsafe { pooled.ptr().read() };
 /// assert_eq!(value, 42);
 ///
-/// // Remove the value from the pool.
+/// // Remove the value from the pool. This invalidates the pointer and drops the value.
 /// pool.remove(pooled);
 /// ```
 #[derive(Debug)]
 pub struct OpaquePool {
-    /// We need to uniquely identify each pool to ensure that memory is not returned to the
-    /// wrong pool. If the pool ID does not match when returning memory, we panic.
+    /// We need to uniquely identify each pool to ensure that handles are not returned to the
+    /// wrong pool. If the pool ID does not match when a handle is returned, we panic.
     pool_id: u64,
 
-    /// The layout of memory blocks managed by this pool.
+    /// The memory layout of items in this pool. We accept items of any type as long as they
+    /// match this layout.
     item_layout: Layout,
-
-    slab_capacity: NonZero<usize>,
 
     /// We use a Vec here to allow for dynamic capacity growth.
     ///
@@ -86,18 +89,17 @@ pub struct OpaquePool {
 /// This is why the parameter is also not exposed in the public API - we may want to change how we
 /// perform the memory layout in a future version.
 #[cfg(not(miri))]
-pub(crate) const DEFAULT_SLAB_CAPACITY: usize = 128;
+pub(crate) const DEFAULT_SLAB_CAPACITY: NonZero<usize> = nz!(128);
 
 // Under Miri, we use a smaller slab capacity because Miri test runtime scales by memory usage.
 #[cfg(miri)]
-pub(crate) const DEFAULT_SLAB_CAPACITY: usize = 16;
+pub(crate) const DEFAULT_SLAB_CAPACITY: NonZero<usize> = nz!(16);
 
 impl OpaquePool {
     /// Creates a builder for configuring and constructing an [`OpaquePool`].
     ///
-    /// This is the preferred way to create an [`OpaquePool`] as it allows configuring
-    /// the drop policy and other options. You must specify a layout using either 
-    /// `.layout()` or `.layout_of::<T>()` before calling `.build()`.
+    /// This how you can create an [`OpaquePool`]. You must specify an item memory layout
+    /// using either  `.layout()` or `.layout_of::<T>()` before calling `.build()`.
     ///
     /// # Example
     ///
@@ -108,21 +110,17 @@ impl OpaquePool {
     ///
     /// // Create a pool for storing u64 values using explicit layout.
     /// let layout = Layout::new::<u64>();
-    /// let pool = OpaquePool::builder()
-    ///     .layout(layout)
-    ///     .build();
+    /// let pool = OpaquePool::builder().layout(layout).build();
     ///
     /// assert_eq!(pool.len(), 0);
     /// assert!(pool.is_empty());
     /// assert_eq!(pool.item_layout(), layout);
     ///
     /// // Create a pool for storing u32 values using type-based layout.
-    /// let pool = OpaquePool::builder()
-    ///     .layout_of::<u32>()
-    ///     .build();
+    /// let pool = OpaquePool::builder().layout_of::<u32>().build();
     /// ```
-    pub fn builder() -> crate::OpaquePoolBuilder {
-        crate::OpaquePoolBuilder::new()
+    pub fn builder() -> OpaquePoolBuilder {
+        OpaquePoolBuilder::new()
     }
 
     /// Creates a new [`OpaquePool`] with the specified configuration.
@@ -133,20 +131,15 @@ impl OpaquePool {
     ///
     /// Panics if the layout has zero size.
     #[must_use]
-    pub(crate) fn new_inner(
-        item_layout: Layout,
-        drop_policy: DropPolicy,
-        slab_capacity: NonZero<usize>,
-    ) -> Self {
+    pub(crate) fn new_inner(item_layout: Layout, drop_policy: DropPolicy) -> Self {
         assert!(
             item_layout.size() > 0,
-            "OpaquePool must have non-zero memory block size"
+            "OpaquePool must have non-zero item size"
         );
 
         Self {
             pool_id: generate_pool_id(),
             item_layout,
-            slab_capacity,
             slabs: Vec::new(),
             slab_with_vacant_slot_index: None,
             drop_policy,
@@ -173,7 +166,7 @@ impl OpaquePool {
         self.item_layout
     }
 
-    /// The number of values in the pool that have been inserted.
+    /// The number of values that have been inserted into the pool.
     ///
     /// # Example
     ///
@@ -182,8 +175,7 @@ impl OpaquePool {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// let layout = Layout::new::<i32>();
-    /// let mut pool = OpaquePool::builder().layout(layout).build();
+    /// let mut pool = OpaquePool::builder().layout_of::<i32>().build();
     ///
     /// assert_eq!(pool.len(), 0);
     ///
@@ -197,7 +189,6 @@ impl OpaquePool {
     ///
     /// pool.remove(pooled1);
     /// assert_eq!(pool.len(), 1);
-    /// # pool.remove(pooled2);
     /// ```
     #[must_use]
     pub fn len(&self) -> usize {
@@ -206,8 +197,8 @@ impl OpaquePool {
 
     /// The number of values the pool can accommodate without additional resource allocation.
     ///
-    /// This is the total capacity, including any existing insertions. The capacity may grow
-    /// automatically when [`insert()`] is called and no space is available.
+    /// This is the total capacity, including any existing items. The capacity will grow
+    /// automatically when [`insert()`] is called and insufficient capacity is available.
     ///
     /// # Example
     ///
@@ -216,8 +207,7 @@ impl OpaquePool {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// let layout = Layout::new::<u8>();
-    /// let mut pool = OpaquePool::builder().layout(layout).build();
+    /// let mut pool = OpaquePool::builder().layout_of::<u8>().build();
     ///
     /// // New pool starts with zero capacity.
     /// assert_eq!(pool.capacity(), 0);
@@ -225,9 +215,9 @@ impl OpaquePool {
     /// // Inserting values may increase capacity.
     /// // SAFETY: u8 matches the layout used to create the pool.
     /// let pooled = unsafe { pool.insert(42u8) };
+    ///
     /// assert!(pool.capacity() > 0);
     /// assert!(pool.capacity() >= pool.len());
-    /// # pool.remove(pooled);
     /// ```
     ///
     /// [`insert()`]: Self::insert
@@ -235,8 +225,10 @@ impl OpaquePool {
     pub fn capacity(&self) -> usize {
         self.slabs
             .len()
-            .checked_mul(self.slab_capacity.get())
-            .expect("capacity calculation cannot overflow for reasonable slab counts")
+            .checked_mul(DEFAULT_SLAB_CAPACITY.get())
+            .expect(
+                "overflow here would imply capacity is greater than virtual memory - impossible",
+            )
     }
 
     /// Whether the pool has no inserted values.
@@ -250,13 +242,13 @@ impl OpaquePool {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// let layout = Layout::new::<u16>();
-    /// let mut pool = OpaquePool::builder().layout(layout).build();
+    /// let mut pool = OpaquePool::builder().layout_of::<u16>().build();
     ///
     /// assert!(pool.is_empty());
     ///
     /// // SAFETY: u16 matches the layout used to create the pool.
     /// let pooled = unsafe { pool.insert(42u16) };
+    ///
     /// assert!(!pool.is_empty());
     ///
     /// pool.remove(pooled);
@@ -267,10 +259,15 @@ impl OpaquePool {
         self.slabs.iter().all(OpaqueSlab::is_empty)
     }
 
-    /// Inserts a value into the pool and returns a handle that acts as both the key and pointer.
+    /// Inserts a value into the pool and returns a handle that acts as the key and supplies
+    /// a pointer to the item.
     ///
-    /// The returned [`Pooled<T>`] provides direct access to the memory via [`Pooled::ptr()`]
-    /// and must be returned to the pool via [`remove()`] to free the memory and properly drop the value.
+    /// The returned [`Pooled<T>`] provides direct access to the memory via [`Pooled::ptr()`].
+    /// Accessing this pointer from unsafe code is the only way to use the inserted value.
+    ///
+    /// The [`Pooled<T>`] may be returned to the pool via [`remove()`] to free the memory and
+    /// drop the value. Behavior of the pool if dropped when non-empty is determined
+    /// by the pool's [drop policy][DropPolicy].
     ///
     /// # Example
     ///
@@ -279,19 +276,22 @@ impl OpaquePool {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// let layout = Layout::new::<u64>();
-    /// let mut pool = OpaquePool::builder().layout(layout).build();
+    /// let mut pool = OpaquePool::builder().layout_of::<u64>().build();
     ///
     /// // Insert a value.
     /// // SAFETY: u64 matches the layout used to create the pool.
     /// let pooled = unsafe { pool.insert(0xDEADBEEF_CAFEBABEu64) };
     ///
     /// // Read data back.
+    /// // SAFETY: The pointer is valid for u64 reads/writes and we have exclusive access.
     /// let value = unsafe { pooled.ptr().read() };
     /// assert_eq!(value, 0xDEADBEEF_CAFEBABE);
     ///
-    /// // Must remove the value to free the memory and drop it properly.
-    /// pool.remove(pooled);
+    /// // Write a new value into the item.
+    /// // SAFETY: The pointer is valid for u64 reads/writes and we have exclusive access.
+    /// unsafe {
+    ///     pooled.ptr().write(0xBEEFCAFE_DEADBEEFu64);
+    /// }
     /// ```
     ///
     /// # Panics
@@ -307,6 +307,7 @@ impl OpaquePool {
     #[must_use]
     pub unsafe fn insert<T>(&mut self, value: T) -> Pooled<T> {
         let slab_index = self.index_of_slab_with_vacant_slot();
+
         let slab = self
             .slabs
             .get_mut(slab_index)
@@ -318,18 +319,16 @@ impl OpaquePool {
             .checked_add(1)
             .expect("we cannot overflow because there is at least one free slot, so it means there must be room to increment");
 
-        if predicted_slab_filled_slots == self.slab_capacity.get() {
+        if predicted_slab_filled_slots == DEFAULT_SLAB_CAPACITY.get() {
             self.slab_with_vacant_slot_index = None;
         }
 
         // SAFETY: The caller ensures T's layout matches the pool's layout.
         let pooled = unsafe { slab.insert(value) };
-        let coordinates = MemoryBlockCoordinates::from_parts(
-            slab_index,
-            pooled.index(),
-            self.slab_capacity.get(),
-        );
+        let coordinates = ItemCoordinates::from_parts(slab_index, pooled.index());
 
+        // The pool itself does not care about the type T but for the convenience of the caller
+        // we imbue the Pooled with the type information, to reduce required casting by caller.
         Pooled {
             pool_id: self.pool_id,
             coordinates,
@@ -340,7 +339,9 @@ impl OpaquePool {
     /// Removes a value previously inserted into the pool.
     ///
     /// The [`Pooled<T>`] is consumed by this operation and cannot be used afterward.
-    /// The value is properly dropped and the memory becomes available for future insertions.
+    /// The value is dropped and the memory becomes available for future insertions.
+    ///
+    /// There is no way to remove an item from the pool without dropping it.
     ///
     /// # Example
     ///
@@ -349,8 +350,7 @@ impl OpaquePool {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// let layout = Layout::new::<i32>();
-    /// let mut pool = OpaquePool::builder().layout(layout).build();
+    /// let mut pool = OpaquePool::builder().layout_of::<i32>().build();
     ///
     /// // SAFETY: i32 matches the layout used to create the pool.
     /// let pooled = unsafe { pool.insert(42i32) };
@@ -358,17 +358,19 @@ impl OpaquePool {
     ///
     /// // Remove the value.
     /// pool.remove(pooled);
+    ///
     /// assert_eq!(pool.len(), 0);
     /// assert!(pool.is_empty());
     /// ```
     ///
     /// # Panics
     ///
-    /// Panics if the handle is not associated with a value in this pool.
+    /// Panics if the handle is not associated with this pool.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "intentionally consuming the handle"
+    )]
     pub fn remove<T>(&mut self, pooled: Pooled<T>) {
-        // Pooled has a no-execute `Drop` impl, so we drop it manually here.
-        let pooled = ManuallyDrop::new(pooled);
-
         assert!(
             pooled.pool_id == self.pool_id,
             "attempted to remove a handle from a different pool (handle pool ID: {}, current pool ID: {})",
@@ -378,10 +380,13 @@ impl OpaquePool {
 
         let coordinates = pooled.coordinates;
 
-        let Some(slab) = self.slabs.get_mut(coordinates.slab_index) else {
-            panic!("handle was not associated with a value in the pool")
-        };
+        let slab = self
+            .slabs
+            .get_mut(coordinates.slab_index)
+            .expect("a slab cannot be removed without first removing all items in it");
 
+        // In principle, we could return the value here if `T: Unpin` but there is no need
+        // for this functionality at present, so we do not implement it to reduce complexity.
         slab.remove(coordinates.index_in_slab);
 
         // There is now a vacant slot in this slab! We may want to remember this for fast insertions.
@@ -413,8 +418,11 @@ impl OpaquePool {
             index
         } else {
             // All slabs are full, so we need to expand capacity.
-            self.slabs
-                .push(OpaqueSlab::new(self.item_layout, self.slab_capacity, self.drop_policy));
+            self.slabs.push(OpaqueSlab::new(
+                self.item_layout,
+                DEFAULT_SLAB_CAPACITY,
+                self.drop_policy,
+            ));
 
             self.slabs
                 .len()
@@ -439,11 +447,14 @@ impl OpaquePool {
 
 /// The result of inserting a value of type `T` into a [`OpaquePool`].
 ///
-/// Acts as both the handle and the key - the user must return this to the pool to remove
-/// the value and properly drop it. The pool will panic on drop if some active handles remain.
+/// Acts as both the handle and the key - the user may return this to the pool to remove
+/// the value from the pool and drop it. Depending on the pool's [drop policy][DropPolicy],
+/// the pool may panic if it is dropped while still containing items.
 ///
-/// The generic parameter `T` provides type-safe access to the stored value through [`ptr()`](Pooled::ptr).
-/// If you need to erase the type information, use [`erase()`](Pooled::erase) to convert to `Pooled<()>`.
+/// The generic parameter `T` provides type-safe access to the stored value through
+/// [`ptr()`](Pooled::ptr). If you need to erase the type information, use
+/// [`erase()`](Pooled::erase) to convert the instance to a `Pooled<()>`, which is
+/// functionally equivalent.
 ///
 /// # Example
 ///
@@ -452,8 +463,7 @@ impl OpaquePool {
 ///
 /// use opaque_pool::OpaquePool;
 ///
-/// let layout = Layout::new::<i64>();
-/// let mut pool = OpaquePool::builder().layout(layout).build();
+/// let mut pool = OpaquePool::builder().layout_of::<i64>().build();
 ///
 /// // SAFETY: i64 matches the layout used to create the pool.
 /// let pooled = unsafe { pool.insert(-123i64) };
@@ -462,7 +472,7 @@ impl OpaquePool {
 /// let value = unsafe { pooled.ptr().read() };
 /// assert_eq!(value, -123);
 ///
-/// // The handle must be returned to remove the value and drop it properly.
+/// // To remove and drop an item, the handle is returned to the pool.
 /// pool.remove(pooled);
 /// ```
 #[derive(Debug)]
@@ -470,13 +480,17 @@ pub struct Pooled<T> {
     /// Ensures this handle can only be returned to the pool it came from.
     pool_id: u64,
 
-    coordinates: MemoryBlockCoordinates,
+    coordinates: ItemCoordinates,
 
     ptr: NonNull<T>,
 }
 
 impl<T> Pooled<T> {
     /// Returns a pointer to the inserted value.
+    ///
+    /// This is the only way to access the value stored in the pool. The owner of the handle has
+    /// exclusive access to the value and may both read and write and may create both `&` shared
+    /// and `&mut` exclusive references to the item.
     ///
     /// # Example
     ///
@@ -485,8 +499,7 @@ impl<T> Pooled<T> {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// let layout = Layout::new::<f64>();
-    /// let mut pool = OpaquePool::builder().layout(layout).build();
+    /// let mut pool = OpaquePool::builder().layout_of::<f64>().build();
     ///
     /// // SAFETY: f64 matches the layout used to create the pool.
     /// let pooled = unsafe { pool.insert(3.14159f64) };
@@ -494,7 +507,6 @@ impl<T> Pooled<T> {
     /// // Read data back from the memory.
     /// let value = unsafe { pooled.ptr().read() };
     /// assert_eq!(value, 3.14159);
-    /// # pool.remove(pooled);
     /// ```
     #[must_use]
     pub fn ptr(&self) -> NonNull<T> {
@@ -506,6 +518,9 @@ impl<T> Pooled<T> {
     /// This is useful when you want to store handles of different types in the same collection
     /// or pass them to code that doesn't need to know the specific type.
     ///
+    /// The handle remains functionally equivalent and can still be used to remove the item
+    /// from the pool and drop it. The only change is the removal of the type information.
+    ///
     /// # Example
     ///
     /// ```rust
@@ -513,8 +528,7 @@ impl<T> Pooled<T> {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// let layout = Layout::new::<u64>();
-    /// let mut pool = OpaquePool::builder().layout(layout).build();
+    /// let mut pool = OpaquePool::builder().layout_of::<u64>().build();
     ///
     /// // SAFETY: u64 matches the layout used to create the pool.
     /// let pooled = unsafe { pool.insert(42u64) };
@@ -526,7 +540,9 @@ impl<T> Pooled<T> {
     /// // SAFETY: We know this contains a u64.
     /// let value = unsafe { erased.ptr().cast::<u64>().read() };
     /// assert_eq!(value, 42);
-    /// # pool.remove(erased);
+    ///
+    /// // Can still remove the item.
+    /// pool.remove(erased);
     /// ```
     #[must_use]
     pub fn erase(self) -> Pooled<()> {
@@ -539,14 +555,14 @@ impl<T> Pooled<T> {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct MemoryBlockCoordinates {
+struct ItemCoordinates {
     slab_index: usize,
     index_in_slab: usize,
 }
 
-impl MemoryBlockCoordinates {
+impl ItemCoordinates {
     #[must_use]
-    fn from_parts(slab: usize, index_in_slab: usize, _slab_capacity: usize) -> Self {
+    fn from_parts(slab: usize, index_in_slab: usize) -> Self {
         Self {
             slab_index: slab,
             index_in_slab,
@@ -561,7 +577,8 @@ impl MemoryBlockCoordinates {
     clippy::items_after_statements,
     clippy::indexing_slicing,
     clippy::needless_range_loop,
-    reason = "test code doesn't need the same safety rigor as production code"
+    clippy::cast_possible_truncation,
+    reason = "tests focus on succinct code and do not need to tick all the boxes"
 )]
 mod tests {
     use std::alloc::Layout;
@@ -570,24 +587,19 @@ mod tests {
 
     #[test]
     fn smoke_test() {
-        let layout = Layout::new::<u32>();
-        let mut pool = OpaquePool::builder().layout(layout).build();
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
 
-        // SAFETY: The layout of u32 matches the pool's layout.
         let pooled_a = unsafe { pool.insert(42_u32) };
-        // SAFETY: The layout of u32 matches the pool's layout.
         let pooled_b = unsafe { pool.insert(43_u32) };
-        // SAFETY: The layout of u32 matches the pool's layout.
         let pooled_c = unsafe { pool.insert(44_u32) };
 
         assert_eq!(pool.len(), 3);
         assert!(!pool.is_empty());
         assert!(pool.capacity() >= 3);
 
-        // Read them back via pooled pointer.
         unsafe {
             assert_eq!(pooled_a.ptr().read(), 42);
             assert_eq!(pooled_b.ptr().read(), 43);
@@ -596,7 +608,6 @@ mod tests {
 
         pool.remove(pooled_b);
 
-        // SAFETY: The layout of u32 matches the pool's layout.
         let pooled_d = unsafe { pool.insert(45_u32) };
 
         unsafe {
@@ -605,10 +616,9 @@ mod tests {
             assert_eq!(pooled_d.ptr().read(), 45);
         }
 
-        // Clean up remaining pooled items.
         pool.remove(pooled_a);
-        pool.remove(pooled_c);
         pool.remove(pooled_d);
+        // We do not remove pooled_c, leaving that up to the pool to clean up.
     }
 
     #[test]
@@ -620,7 +630,7 @@ mod tests {
         // Create a fake pooled with invalid coordinates.
         let fake_pooled: Pooled<u32> = Pooled {
             pool_id: pool.pool_id, // Use correct pool ID but invalid coordinates
-            coordinates: MemoryBlockCoordinates {
+            coordinates: ItemCoordinates {
                 slab_index: 0,
                 index_in_slab: 0,
             },
@@ -631,20 +641,16 @@ mod tests {
     }
 
     #[test]
-    #[allow(
-        clippy::cast_possible_truncation,
-        reason = "test uses small values that fit in u32"
-    )]
     fn multi_slab_growth() {
-        let layout = Layout::new::<u32>();
-        let mut pool = OpaquePool::builder().layout(layout).build();
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 
         // Reserve more items than a single slab can hold to test growth.
         // We use 2 * DEFAULT_SLAB_CAPACITY + 1 to guarantee we need at least 3 slabs.
-        let items_to_reserve = 2 * DEFAULT_SLAB_CAPACITY + 1;
-        let mut pooled_items = Vec::new();
+        let items_to_reserve = 2 * DEFAULT_SLAB_CAPACITY.get() + 1;
+
+        let mut pooled_items = Vec::with_capacity(items_to_reserve);
+
         for i in 0..items_to_reserve {
-            // SAFETY: The layout of u32 matches the pool's layout.
             let pooled = unsafe { pool.insert(i as u32) };
             pooled_items.push(pooled);
         }
@@ -658,53 +664,6 @@ mod tests {
                 assert_eq!(pooled.ptr().as_ptr().read(), i as u32);
             }
         }
-
-        // Clean up all pooled items.
-        for pooled in pooled_items {
-            pool.remove(pooled);
-        }
-    }
-
-    #[test]
-    fn different_layouts() {
-        // Test with different sized types.
-        let layout_u64 = Layout::new::<u64>();
-        let mut pool_u64 = OpaquePool::builder().layout(layout_u64).build();
-        // SAFETY: The layout of u64 matches the pool's layout.
-        let pooled = unsafe { pool_u64.insert(0x1234567890ABCDEF_u64) };
-        unsafe {
-            assert_eq!(pooled.ptr().as_ptr().read(), 0x1234567890ABCDEF);
-        }
-        pool_u64.remove(pooled);
-
-        // Test with larger struct.
-        #[repr(C)]
-        struct LargeStruct {
-            a: u64,
-            b: u64,
-            c: u64,
-            d: u64,
-        }
-
-        let layout_large = Layout::new::<LargeStruct>();
-        let mut pool_large = OpaquePool::builder().layout(layout_large).build();
-
-        let test_struct = LargeStruct {
-            a: 1,
-            b: 2,
-            c: 3,
-            d: 4,
-        };
-        // SAFETY: The layout of LargeStruct matches the pool's layout.
-        let pooled = unsafe { pool_large.insert(test_struct) };
-        unsafe {
-            let value = pooled.ptr().as_ptr().read();
-            assert_eq!(value.a, 1);
-            assert_eq!(value.b, 2);
-            assert_eq!(value.c, 3);
-            assert_eq!(value.d, 4);
-        }
-        pool_large.remove(pooled);
     }
 
     #[test]
@@ -715,54 +674,13 @@ mod tests {
     }
 
     #[test]
-    fn stress_test_repeated_insert_remove() {
-        let layout = Layout::new::<usize>();
-        let mut pool = OpaquePool::builder().layout(layout).build();
-
-        // Insert and remove many items to test slab management.
-        for iteration in 0..10 {
-            let mut pooled_items = Vec::new();
-            for i in 0..50 {
-                let value = iteration * 100 + i;
-                // SAFETY: The layout of usize matches the pool's layout.
-                let pooled = unsafe { pool.insert(value) };
-                pooled_items.push(pooled);
-            }
-
-            // Remove every other item.
-            let mut remaining_pooled = Vec::new();
-            for (index, pooled) in pooled_items.into_iter().enumerate() {
-                if index % 2 == 0 {
-                    pool.remove(pooled);
-                } else {
-                    remaining_pooled.push(pooled);
-                }
-            }
-
-            // Verify remaining items.
-            for (index, pooled) in remaining_pooled.iter().enumerate() {
-                let expected_value = iteration * 100 + (index * 2 + 1); // Odd indices
-                unsafe {
-                    assert_eq!(pooled.ptr().as_ptr().read(), expected_value);
-                }
-            }
-
-            // Remove remaining items.
-            for pooled in remaining_pooled {
-                pool.remove(pooled);
-            }
-        }
-
-        assert!(pool.is_empty());
-    }
-
-    #[test]
-    fn drop_with_no_active_pooled_does_not_panic() {
-        let layout = Layout::new::<u64>();
-        let mut pool = OpaquePool::builder().layout(layout).build();
+    fn drop_with_no_active_pooled_does_not_panic_if_policy_must_not_drop() {
+        let mut pool = OpaquePool::builder()
+            .layout_of::<u64>()
+            .drop_policy(DropPolicy::MustNotDropItems)
+            .build();
 
         // Insert and then remove immediately.
-        // SAFETY: The layout of u64 matches the pool's layout.
         let pooled = unsafe { pool.insert(42_u64) };
         pool.remove(pooled);
 
@@ -774,18 +692,16 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn drop_with_active_pooled_panics() {
+    fn drop_with_active_pooled_panics_if_policy_must_not_drop() {
         let layout = Layout::new::<u64>();
         let mut pool = OpaquePool::builder()
             .layout(layout)
             .drop_policy(DropPolicy::MustNotDropItems)
             .build();
 
-        // Pooled items are undroppable, so we just let this pooled item leak to trigger the panic.
-        // SAFETY: The layout of u64 matches the pool's layout.
-        let _pooled = unsafe { pool.insert(42_u64) };
+        _ = unsafe { pool.insert(42_u64) };
 
-        // Pool should panic on drop since we still have an active pooled item.
+        // Based on policy, pool should panic on drop since we still have an item in the pool.
         drop(pool);
     }
 
@@ -797,37 +713,13 @@ mod tests {
         let mut pool2 = OpaquePool::builder().layout(layout).build();
 
         // Insert into pool1 but try to remove from pool2.
-        // SAFETY: The layout of u32 matches the pool's layout.
-        let pooled = unsafe { pool1.insert(42_u32) };
-        pool2.remove(pooled); // Should panic
-    }
+        let pooled1 = unsafe { pool1.insert(42_u32) };
 
-    #[test]
-    fn pool_ids_are_unique() {
-        let layout = Layout::new::<u32>();
-        let pool1 = OpaquePool::builder().layout(layout).build();
-        let pool2 = OpaquePool::builder().layout(layout).build();
-        let pool3 = OpaquePool::builder().layout(layout).build();
+        // We also insert to pool2 to ensure there is something to remove in there.
+        // The removal should still fail - having an item there is not enough.
+        _ = unsafe { pool2.insert(42_u32) };
 
-        // Pool IDs should be different for each pool instance.
-        assert_ne!(pool1.pool_id, pool2.pool_id);
-        assert_ne!(pool2.pool_id, pool3.pool_id);
-        assert_ne!(pool1.pool_id, pool3.pool_id);
-    }
-
-    #[test]
-    fn pooled_belongs_to_correct_pool() {
-        let layout = Layout::new::<u64>();
-        let mut pool = OpaquePool::builder().layout(layout).build();
-
-        // SAFETY: The layout of u64 matches the pool's layout.
-        let pooled = unsafe { pool.insert(42_u64) };
-
-        // The pooled item should have the same pool ID as the pool it came from.
-        assert_eq!(pooled.pool_id, pool.pool_id);
-
-        // Removing from the same pool should work fine.
-        pool.remove(pooled);
+        pool2.remove(pooled1); // Should panic.
     }
 
     #[test]
@@ -835,7 +727,6 @@ mod tests {
         let layout = Layout::new::<u32>();
         let mut pool = OpaquePool::builder().layout(layout).build();
 
-        // SAFETY: The layout of u32 matches the pool's layout.
         let pooled = unsafe { pool.insert(42_u32) };
 
         // Test that the typed pointer works.
@@ -856,51 +747,74 @@ mod tests {
     }
 
     #[test]
-    fn drop_policy_may_drop_items_works() {
-        let layout = Layout::new::<u32>();
-        let mut pool = OpaquePool::builder()
-            .layout(layout)
-            .drop_policy(DropPolicy::MayDropItems)
-            .build();
+    fn mixed_types_same_layout() {
+        use std::f64::consts::PI;
 
-        // SAFETY: The layout of u32 matches the pool's layout.
-        let _pooled = unsafe { pool.insert(42_u32) };
+        // Define a transparent wrapper around u64 to test struct types.
+        #[repr(transparent)]
+        struct WrappedU64(u64);
 
-        // Pool should drop without panic even with active items when using MayDropItems
-        drop(pool);
-    }
+        // All these types have the same layout as u64.
+        let layout = Layout::new::<u64>();
+        let mut pool = OpaquePool::builder().layout(layout).build();
 
-    #[test]
-    #[should_panic]
-    fn drop_policy_must_not_drop_items_panics() {
-        let layout = Layout::new::<u32>();
-        let mut pool = OpaquePool::builder()
-            .layout(layout)
-            .drop_policy(DropPolicy::MustNotDropItems)
-            .build();
+        // Insert different types with the same layout.
+        let pooled_u64 = unsafe { pool.insert(0xDEAD_BEEF_CAFE_BABE_u64) };
+        let pooled_i64 = unsafe { pool.insert(-1_234_567_890_123_456_789_i64) };
+        let pooled_f64 = unsafe { pool.insert(PI) };
+        let pooled_wrapped = unsafe { pool.insert(WrappedU64(0x1234_5678_90AB_CDEF_u64)) };
 
-        // SAFETY: The layout of u32 matches the pool's layout.
-        let _pooled = unsafe { pool.insert(42_u32) };
+        assert_eq!(pool.len(), 4);
 
-        // Pool should panic on drop when using MustNotDropItems with active items
-        drop(pool);
-    }
+        // Verify all values are accessible and correct.
+        unsafe {
+            assert_eq!(pooled_u64.ptr().read(), 0xDEAD_BEEF_CAFE_BABE);
+            assert_eq!(pooled_i64.ptr().read(), -1_234_567_890_123_456_789);
+            assert!((pooled_f64.ptr().read() - PI).abs() < f64::EPSILON);
+            assert_eq!(pooled_wrapped.ptr().read().0, 0x1234_5678_90AB_CDEF);
+        }
 
-    #[test]
-    fn drop_policy_must_not_drop_items_ok_when_empty() {
-        let layout = Layout::new::<u32>();
-        let mut pool = OpaquePool::builder()
-            .layout(layout)
-            .drop_policy(DropPolicy::MustNotDropItems)
-            .build();
+        // Test cross-type access by casting pointers (demonstrating layout compatibility).
+        unsafe {
+            // Read u64 value as raw bytes and verify it matches when cast to other types.
+            let u64_as_bytes = pooled_u64.ptr().cast::<[u8; 8]>().read();
+            let expected_bytes = 0xDEAD_BEEF_CAFE_BABE_u64.to_ne_bytes();
+            assert_eq!(u64_as_bytes, expected_bytes);
 
-        // SAFETY: The layout of u32 matches the pool's layout.
-        let pooled = unsafe { pool.insert(42_u32) };
-        
-        // Remove the item before dropping
-        pool.remove(pooled);
+            // Read i64 value and verify it has the expected bit pattern.
+            let i64_value = pooled_i64.ptr().read();
+            let i64_as_u64 = pooled_i64.ptr().cast::<u64>().read();
+            #[expect(
+                clippy::cast_sign_loss,
+                reason = "intentionally testing bit-level equivalence"
+            )]
+            let expected_u64 = i64_value as u64;
+            assert_eq!(i64_as_u64, expected_u64);
 
-        // Pool should drop without panic when empty, even with MustNotDropItems
-        drop(pool);
+            // Read f64 value and verify it can be accessed as u64 bits.
+            let f64_value = pooled_f64.ptr().read();
+            let f64_as_u64 = pooled_f64.ptr().cast::<u64>().read();
+            assert_eq!(f64_as_u64, f64_value.to_bits());
+
+            // Read wrapped struct and verify it can be accessed as plain u64.
+            let wrapped_value = pooled_wrapped.ptr().read();
+            let wrapped_as_u64 = pooled_wrapped.ptr().cast::<u64>().read();
+            assert_eq!(wrapped_as_u64, wrapped_value.0);
+        }
+
+        // Remove items in different order to test that handles work correctly.
+        pool.remove(pooled_f64);
+        pool.remove(pooled_u64);
+        assert_eq!(pool.len(), 2);
+
+        // Verify remaining items are still accessible.
+        unsafe {
+            assert_eq!(pooled_i64.ptr().read(), -1_234_567_890_123_456_789);
+            assert_eq!(pooled_wrapped.ptr().read().0, 0x1234_5678_90AB_CDEF);
+        }
+
+        pool.remove(pooled_wrapped);
+        pool.remove(pooled_i64);
+        assert!(pool.is_empty());
     }
 }

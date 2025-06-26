@@ -15,6 +15,7 @@ default = []
 
 [dependencies]
 num = { workspace = true }
+new_zealand = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

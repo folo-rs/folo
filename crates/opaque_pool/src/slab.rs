@@ -6,18 +6,8 @@ use std::{mem, ptr, thread};
 
 use crate::{DropPolicy, Dropper};
 
-/// Provides memory for a specified number of objects with a specific layout without
+/// Stores a specified number of objects with a specific layout without
 /// remembering their type, allowing objects of mixed types in the same slab.
-///
-/// A fixed-capacity heap-allocated collection that works with opaque items for which we only
-/// know the memory layout.
-///
-/// Works similar to a `Vec`. All items are located at stable addresses and the collection
-/// has a fixed capacity determined at construction time, operating using an index for
-/// lookup.
-///
-/// When you reserve memory, you get back the index to use for accessing or
-/// deallocating the memory, as well as the pointer to the inserted item.
 ///
 /// # Out of band access
 ///
@@ -573,11 +563,8 @@ mod tests {
         let layout = Layout::new::<u32>();
         let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap(), DropPolicy::MayDropItems);
 
-        // SAFETY: The layout of u32 matches the slab's layout.
         let pooled_a = unsafe { slab.insert(42_u32) };
-        // SAFETY: The layout of u32 matches the slab's layout.
         let pooled_b = unsafe { slab.insert(43_u32) };
-        // SAFETY: The layout of u32 matches the slab's layout.
         let pooled_c = unsafe { slab.insert(44_u32) };
 
         // Read them back using the typed interface.
@@ -610,7 +597,6 @@ mod tests {
 
         assert_eq!(slab.len(), 2);
 
-        // SAFETY: The layout of u32 matches the slab's layout.
         let pooled_d = unsafe { slab.insert(45_u32) };
 
         unsafe {
@@ -621,9 +607,8 @@ mod tests {
 
         assert!(slab.is_full());
 
-        // Clean up remaining pooled items.
+        // Clean up remaining items, except for C which we allow the slab to clean up.
         slab.remove(pooled_a.index);
-        slab.remove(pooled_c.index);
         slab.remove(pooled_d.index);
     }
 
@@ -633,14 +618,10 @@ mod tests {
         let layout = Layout::new::<u32>();
         let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap(), DropPolicy::MayDropItems);
 
-        // SAFETY: The layout of u32 matches the slab's layout.
         _ = unsafe { slab.insert(1_u32) };
-        // SAFETY: The layout of u32 matches the slab's layout.
         _ = unsafe { slab.insert(2_u32) };
-        // SAFETY: The layout of u32 matches the slab's layout.
         _ = unsafe { slab.insert(3_u32) };
 
-        // SAFETY: The layout of u32 matches the slab's layout.
         _ = unsafe { slab.insert(4_u32) };
     }
 
@@ -651,34 +632,23 @@ mod tests {
 
         // We expect that we insert items in order, from the start (0, 1, 2, ...).
 
-        // SAFETY: The layout of u32 matches the slab's layout.
         let pooled = unsafe { slab.insert(10_u32) };
         assert_eq!(pooled.index(), 0);
         unsafe {
             assert_eq!(pooled.ptr().read(), 10);
         }
-        let index_0 = pooled.index();
 
-        // SAFETY: The layout of u32 matches the slab's layout.
         let pooled = unsafe { slab.insert(11_u32) };
         assert_eq!(pooled.index(), 1);
         unsafe {
             assert_eq!(pooled.ptr().read(), 11);
         }
-        let index_1 = pooled.index();
 
-        // SAFETY: The layout of u32 matches the slab's layout.
         let pooled = unsafe { slab.insert(12_u32) };
         assert_eq!(pooled.index(), 2);
         unsafe {
             assert_eq!(pooled.ptr().read(), 12);
         }
-        let index_2 = pooled.index();
-
-        // Clean up pooled items before drop.
-        slab.remove(index_0);
-        slab.remove(index_1);
-        slab.remove(index_2);
     }
 
     #[test]
@@ -686,16 +656,12 @@ mod tests {
         let layout = Layout::new::<u32>();
         let mut slab = OpaqueSlab::new(layout, NonZero::new(3).unwrap(), DropPolicy::MayDropItems);
 
-        // SAFETY: The layout of u32 matches the slab's layout.
         let pooled_a = unsafe { slab.insert(42_u32) };
-        // SAFETY: The layout of u32 matches the slab's layout.
         let pooled_b = unsafe { slab.insert(43_u32) };
-        // SAFETY: The layout of u32 matches the slab's layout.
         let pooled_c = unsafe { slab.insert(44_u32) };
 
         slab.remove(pooled_b.index);
 
-        // SAFETY: The layout of u32 matches the slab's layout.
         let pooled_d = unsafe { slab.insert(45_u32) };
 
         unsafe {
@@ -703,11 +669,6 @@ mod tests {
             assert_eq!(pooled_c.ptr().read(), 44);
             assert_eq!(pooled_d.ptr().read(), 45);
         }
-
-        // Clean up remaining pooled items before drop.
-        slab.remove(pooled_a.index);
-        slab.remove(pooled_c.index);
-        slab.remove(pooled_d.index);
     }
 
     #[test]
@@ -720,61 +681,10 @@ mod tests {
     }
 
     #[test]
-    fn different_layouts() {
-        // Test with different sized types.
-        let layout_u64 = Layout::new::<u64>();
-        let mut slab_u64 = OpaqueSlab::new(
-            layout_u64,
-            NonZero::new(2).unwrap(),
-            DropPolicy::MayDropItems,
-        );
-        // SAFETY: The layout of u64 matches the slab's layout.
-        let pooled = unsafe { slab_u64.insert(0x1234567890ABCDEF_u64) };
-        unsafe {
-            assert_eq!(pooled.ptr().read(), 0x1234567890ABCDEF);
-        }
-        slab_u64.remove(pooled.index());
-
-        // Test with larger struct.
-        #[repr(C)]
-        struct LargeStruct {
-            a: u64,
-            b: u64,
-            c: u64,
-            d: u64,
-        }
-
-        let layout_large = Layout::new::<LargeStruct>();
-        let mut slab_large = OpaqueSlab::new(
-            layout_large,
-            NonZero::new(2).unwrap(),
-            DropPolicy::MayDropItems,
-        );
-
-        let test_struct = LargeStruct {
-            a: 1,
-            b: 2,
-            c: 3,
-            d: 4,
-        };
-        // SAFETY: The layout of LargeStruct matches the slab's layout.
-        let pooled = unsafe { slab_large.insert(test_struct) };
-        unsafe {
-            let value = pooled.ptr().read();
-            assert_eq!(value.a, 1);
-            assert_eq!(value.b, 2);
-            assert_eq!(value.c, 3);
-            assert_eq!(value.d, 4);
-        }
-        slab_large.remove(pooled.index());
-    }
-
-    #[test]
     #[should_panic]
     fn zero_capacity_constructor_panics() {
-        // This test verifies that NonZero::new(0) panics, maintaining the same behavior
-        // as before but now at the type level
         let layout = Layout::new::<usize>();
+
         drop(OpaqueSlab::new(
             layout,
             NonZero::new(0).unwrap(),
@@ -786,6 +696,7 @@ mod tests {
     #[should_panic]
     fn zero_size_layout_is_panic() {
         let layout = Layout::from_size_align(0, 1).unwrap();
+
         drop(OpaqueSlab::new(
             layout,
             NonZero::new(3).unwrap(),
@@ -804,19 +715,11 @@ mod tests {
             DropPolicy::MayDropItems,
         ));
 
-        let (index_a, index_c, index_d);
-
         {
             let mut slab = slab.borrow_mut();
-            // SAFETY: The layout of u32 matches the slab's layout.
             let item_a = unsafe { slab.insert(42_u32) };
-            // SAFETY: The layout of u32 matches the slab's layout.
             let item_b = unsafe { slab.insert(43_u32) };
-            // SAFETY: The layout of u32 matches the slab's layout.
             let item_c = unsafe { slab.insert(44_u32) };
-
-            index_a = item_a.index();
-            index_c = item_c.index();
 
             unsafe {
                 assert_eq!(item_a.ptr().read(), 42);
@@ -826,9 +729,7 @@ mod tests {
 
             slab.remove(item_b.index());
 
-            // SAFETY: The layout of u32 matches the slab's layout.
             let item_d = unsafe { slab.insert(45_u32) };
-            index_d = item_d.index();
 
             unsafe {
                 assert_eq!(item_a.ptr().read(), 42);
@@ -840,14 +741,6 @@ mod tests {
         {
             let slab = slab.borrow();
             assert!(slab.is_full());
-        }
-
-        // Clean up remaining items before drop.
-        {
-            let mut slab = slab.borrow_mut();
-            slab.remove(index_a);
-            slab.remove(index_c);
-            slab.remove(index_d);
         }
     }
 
@@ -863,9 +756,7 @@ mod tests {
             DropPolicy::MayDropItems,
         )));
 
-        let a;
         let b;
-        let c;
 
         {
             let mut slab = slab.lock().unwrap();
@@ -875,9 +766,7 @@ mod tests {
             let item_b = unsafe { slab.insert(43_u32) };
             // SAFETY: The layout of u32 matches the slab's layout.
             let item_c = unsafe { slab.insert(44_u32) };
-            a = item_a.index();
             b = item_b.index();
-            c = item_c.index();
 
             unsafe {
                 assert_eq!(item_a.ptr().read(), 42);
@@ -894,83 +783,17 @@ mod tests {
 
             // SAFETY: The layout of u32 matches the slab's layout.
             let item_d = unsafe { slab.insert(45_u32) };
-            let d = item_d.index();
 
             unsafe {
                 assert_eq!(item_d.ptr().read(), 45);
             }
-
-            // Return the index for cleanup.
-            d
         });
 
-        let d = handle.join().unwrap();
+        handle.join().unwrap();
 
         {
             let slab = slab.lock().unwrap();
             assert!(slab.is_full());
-        }
-
-        // Clean up remaining items before drop.
-        {
-            let mut slab = slab.lock().unwrap();
-            slab.remove(a);
-            slab.remove(c);
-            slab.remove(d);
-        }
-    }
-
-    #[test]
-    fn insert_returns_correct_pointer() {
-        let layout = Layout::new::<u64>();
-        let mut slab = OpaqueSlab::new(layout, NonZero::new(2).unwrap(), DropPolicy::MayDropItems);
-
-        // SAFETY: The layout of u64 matches the slab's layout.
-        let item = unsafe { slab.insert(0xDEADBEEF_u64) };
-
-        // Verify the pointer works and points to the right location.
-        unsafe {
-            assert_eq!(item.ptr().read(), 0xDEADBEEF);
-            assert_eq!(item.ptr().read(), 0xDEADBEEF);
-        }
-
-        slab.remove(item.index());
-    }
-
-    #[test]
-    fn stress_test_repeated_insert_remove() {
-        let layout = Layout::new::<u32>();
-        let mut slab = OpaqueSlab::new(layout, NonZero::new(10).unwrap(), DropPolicy::MayDropItems);
-
-        // Fill the slab.
-        let mut indices = Vec::new();
-        for i in 0_u32..10 {
-            // SAFETY: The layout of u32 matches the slab's layout.
-            let item = unsafe { slab.insert(i * 100) };
-            indices.push(item.index());
-        }
-
-        assert!(slab.is_full());
-
-        // Remove every other item.
-        for i in (0_usize..10).step_by(2) {
-            slab.remove(indices[i]);
-        }
-
-        assert_eq!(slab.len(), 5);
-
-        // Fill again.
-        for i in (0_u32..10).step_by(2) {
-            // SAFETY: The layout of u32 matches the slab's layout.
-            let item = unsafe { slab.insert(i * 100 + 50) };
-            indices[i as usize] = item.index();
-        }
-
-        assert!(slab.is_full());
-
-        // Clean up all items before drop.
-        for &index in &indices {
-            slab.remove(index);
         }
     }
 

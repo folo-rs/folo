@@ -1,4 +1,4 @@
-/// Determines container behavior when the container is dropped.
+/// Determines item dropping behavior when the container is dropped.
 ///
 /// By default, the container will drop its items when it is dropped.
 ///

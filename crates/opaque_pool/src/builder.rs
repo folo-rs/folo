@@ -1,12 +1,14 @@
 use std::alloc::Layout;
-use std::num::NonZero;
 
 use crate::{DropPolicy, OpaquePool};
 
 /// Builder for creating an instance of [`OpaquePool`].
 ///
-/// Unlike [`PinnedPool`], [`OpaquePool`] requires a layout to be specified at construction time.
-/// Use either `.layout()` to provide a specific layout or `.layout_of::<T>()` for type-based layout.
+/// [`OpaquePool`] requires the item memory layout to be specified at construction time.
+/// Use either `.layout()` to provide a specific layout or `.layout_of::<T>()` to generate
+/// a layout based on the provided type.
+///
+/// The layout is mandatory, whereas other settings are optional.
 ///
 /// # Examples
 ///
@@ -15,25 +17,18 @@ use crate::{DropPolicy, OpaquePool};
 ///
 /// use opaque_pool::{DropPolicy, OpaquePool};
 ///
-/// // Using a specific layout
+/// // Using a specific layout.
 /// let layout = Layout::new::<u32>();
-/// let pool = OpaquePool::builder()
-///     .layout(layout)
-///     .drop_policy(DropPolicy::MayDropItems)
-///     .build();
+/// let pool = OpaquePool::builder().layout(layout).build();
 ///
-/// // Using type-based layout
-/// let pool = OpaquePool::builder()
-///     .layout_of::<u64>()
-///     .drop_policy(DropPolicy::MustNotDropItems)
-///     .build();
+/// // Using type-based layout.
+/// let pool = OpaquePool::builder().layout_of::<u64>().build();
 /// ```
 #[derive(Debug)]
 #[must_use]
 pub struct OpaquePoolBuilder {
     item_layout: Option<Layout>,
     drop_policy: DropPolicy,
-    slab_capacity: NonZero<usize>,
 }
 
 impl OpaquePoolBuilder {
@@ -41,8 +36,6 @@ impl OpaquePoolBuilder {
         Self {
             item_layout: None,
             drop_policy: DropPolicy::default(),
-            slab_capacity: NonZero::new(crate::pool::DEFAULT_SLAB_CAPACITY)
-                .expect("DEFAULT_SLAB_CAPACITY is a non-zero constant"),
         }
     }
 
@@ -56,15 +49,10 @@ impl OpaquePoolBuilder {
     /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<u32>();
-    /// let pool = OpaquePool::builder()
-    ///     .layout(layout)
-    ///     .build();
+    /// let pool = OpaquePool::builder().layout(layout).build();
     /// ```
     pub fn layout(mut self, layout: Layout) -> Self {
-        assert!(
-            layout.size() > 0,
-            "OpaquePool must have non-zero memory block size"
-        );
+        assert!(layout.size() > 0, "OpaquePool must have non-zero item size");
         self.item_layout = Some(layout);
         self
     }
@@ -78,16 +66,11 @@ impl OpaquePoolBuilder {
     /// ```
     /// use opaque_pool::OpaquePool;
     ///
-    /// let pool = OpaquePool::builder()
-    ///     .layout_of::<u64>()
-    ///     .build();
+    /// let pool = OpaquePool::builder().layout_of::<u64>().build();
     /// ```
     pub fn layout_of<T>(mut self) -> Self {
         let layout = Layout::new::<T>();
-        assert!(
-            layout.size() > 0,
-            "OpaquePool must have non-zero memory block size"
-        );
+        assert!(layout.size() > 0, "OpaquePool must have non-zero item size");
         self.item_layout = Some(layout);
         self
     }
@@ -113,36 +96,11 @@ impl OpaquePoolBuilder {
         self
     }
 
-    /// Sets the internal slab capacity for the pool.
-    ///
-    /// This is intended for internal use and testing scenarios where fine-tuning of the
-    /// internal memory organization is required.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::alloc::Layout;
-    /// use std::num::NonZero;
-    ///
-    /// use opaque_pool::OpaquePool;
-    ///
-    /// let layout = Layout::new::<u32>();
-    /// let pool = OpaquePool::builder()
-    ///     .layout(layout)
-    ///     // Note: slab_capacity is not public and cannot be set in client code
-    ///     .build();
-    /// ```
-    #[allow(dead_code, reason = "Reserved for future use and internal testing")]
-    pub(crate) fn slab_capacity(mut self, capacity: NonZero<usize>) -> Self {
-        self.slab_capacity = capacity;
-        self
-    }
-
     /// Builds the opaque pool with the specified configuration.
     ///
     /// # Panics
     ///
-    /// Panics if no layout has been set using either [`layout`](Self::layout) or 
+    /// Panics if no layout has been set using either [`layout`](Self::layout) or
     /// [`layout_of`](Self::layout_of).
     ///
     /// # Examples
@@ -153,14 +111,13 @@ impl OpaquePoolBuilder {
     /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<u32>();
-    /// let pool = OpaquePool::builder()
-    ///     .layout(layout)
-    ///     .build();
+    /// let pool = OpaquePool::builder().layout(layout).build();
     /// ```
     #[must_use]
     pub fn build(self) -> OpaquePool {
-        let layout = self.item_layout
-            .expect("Layout must be set using .layout() or .layout_of::<T>() before calling .build()");
-        OpaquePool::new_inner(layout, self.drop_policy, self.slab_capacity)
+        let layout = self.item_layout.expect(
+            "Layout must be set using .layout() or .layout_of::<T>() before calling .build()",
+        );
+        OpaquePool::new_inner(layout, self.drop_policy)
     }
 }
