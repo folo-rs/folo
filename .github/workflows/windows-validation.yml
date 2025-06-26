@@ -16,8 +16,6 @@ jobs:
     
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
-      with:
-        components: rustfmt, clippy
     
     - name: Install nightly Rust toolchain
       uses: dtolnay/rust-toolchain@nightly
