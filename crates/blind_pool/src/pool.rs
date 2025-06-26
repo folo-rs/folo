@@ -37,8 +37,8 @@ use crate::BlindPoolBuilder;
 /// let mut pool = BlindPool::new();
 ///
 /// // Insert values of different types.
-/// let pooled_u32 = pool.insert(42u32);
-/// let pooled_i64 = pool.insert(-123i64);
+/// let pooled_u32 = pool.insert(42_u32);
+/// let pooled_i64 = pool.insert(-123_i64);
 ///
 /// // Read from the memory.
 /// // SAFETY: The pointers are valid and the memory contains the values we just inserted.
@@ -128,7 +128,7 @@ impl BlindPool {
     ///
     /// // Insert different types into the same pool.
     /// let pooled_int = pool.insert(42_i32);
-    /// let pooled_float = pool.insert(3.14_f64);
+    /// let pooled_float = pool.insert(2.5_f64);
     /// let pooled_string = pool.insert("hello".to_string());
     ///
     /// // All values are stored in the same BlindPool but in separate internal pools.
@@ -191,7 +191,7 @@ impl BlindPool {
     ///
     /// let _a = pool.insert(42_u32);
     /// let _b = pool.insert("hello".to_string());
-    /// let _c = pool.insert(3.14_f64);
+    /// let _c = pool.insert(2.5_f64);
     ///
     /// assert_eq!(pool.len(), 3);
     /// ```
@@ -262,13 +262,13 @@ impl BlindPool {
     ///
     /// assert_eq!(pool.layout_count(), 0);
     ///
-    /// let _a = pool.insert(42_u32);     // First layout
+    /// let _a = pool.insert(42_u32); // First layout
     /// assert_eq!(pool.layout_count(), 1);
     ///
-    /// let _b = pool.insert(3.14_f64);   // Second layout
+    /// let _b = pool.insert(2.5_f64); // Second layout
     /// assert_eq!(pool.layout_count(), 2);
     ///
-    /// let _c = pool.insert(100_u32);    // Same as first layout
+    /// let _c = pool.insert(100_u32); // Same as first layout
     /// assert_eq!(pool.layout_count(), 2);
     /// ```
     #[must_use]
@@ -390,12 +390,12 @@ impl<T> BlindPooled<T> {
     ///
     /// let mut pool = BlindPool::new();
     ///
-    /// let pooled = pool.insert(3.14159_f64);
+    /// let pooled = pool.insert(2.5159_f64);
     ///
     /// // Read data back from the memory.
     /// // SAFETY: The pointer is valid and the memory contains the value we just inserted.
     /// let value = unsafe { pooled.ptr().read() };
-    /// assert_eq!(value, 3.14159);
+    /// assert_eq!(value, 2.5159);
     /// ```
     #[must_use]
     pub fn ptr(&self) -> NonNull<T> {
@@ -409,8 +409,9 @@ impl<T> BlindPooled<T> {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
     /// use std::alloc::Layout;
+    ///
+    /// use blind_pool::BlindPool;
     ///
     /// let mut pool = BlindPool::new();
     ///
@@ -468,15 +469,15 @@ mod tests {
     #[test]
     fn simple_insert_remove() {
         let mut pool = BlindPool::new();
-        let pooled = pool.insert(42u32);
+        let pooled = pool.insert(42_u32);
         pool.remove(pooled);
     }
 
     #[test]
     fn two_items_same_type() {
         let mut pool = BlindPool::new();
-        let pooled1 = pool.insert(42u32);
-        let pooled2 = pool.insert(43u32);
+        let pooled1 = pool.insert(42_u32);
+        let pooled2 = pool.insert(43_u32);
         pool.remove(pooled1);
         pool.remove(pooled2);
     }
@@ -484,8 +485,8 @@ mod tests {
     #[test]
     fn two_items_different_types() {
         let mut pool = BlindPool::new();
-        let pooled1 = pool.insert(42u32);
-        let pooled2 = pool.insert(43u64);
+        let pooled1 = pool.insert(42_u32);
+        let pooled2 = pool.insert(43_u64);
         pool.remove(pooled1);
         pool.remove(pooled2);
     }
@@ -498,9 +499,9 @@ mod tests {
         assert!(pool.is_empty());
         assert_eq!(pool.layout_count(), 0);
 
-        let pooled_u32 = pool.insert(42u32);
-        let pooled_u64 = pool.insert(43u64);
-        let pooled_f32 = pool.insert(3.14f32);
+        let pooled_u32 = pool.insert(42_u32);
+        let pooled_u64 = pool.insert(43_u64);
+        let pooled_f32 = pool.insert(2.5_f32);
 
         assert_eq!(pool.len(), 3);
         assert!(!pool.is_empty());
@@ -509,11 +510,14 @@ mod tests {
         assert!(pool.capacity() >= 3);
 
         // SAFETY: The pointers are valid and contain the values we just inserted.
-        unsafe {
-            assert_eq!(pooled_u32.ptr().read(), 42);
-            assert_eq!(pooled_u64.ptr().read(), 43);
-            assert_eq!(pooled_f32.ptr().read(), 3.14);
-        }
+        let u32_val = unsafe { pooled_u32.ptr().read() };
+        // SAFETY: The pointers are valid and contain the values we just inserted.
+        let u64_val = unsafe { pooled_u64.ptr().read() };
+        // SAFETY: The pointers are valid and contain the values we just inserted.
+        let f32_val = unsafe { pooled_f32.ptr().read() };
+        assert_eq!(u32_val, 42);
+        assert_eq!(u64_val, 43);
+        assert!((f32_val - 2.5).abs() < f32::EPSILON);
 
         pool.remove(pooled_u32);
         pool.remove(pooled_u64);
@@ -528,19 +532,22 @@ mod tests {
         let mut pool = BlindPool::new();
 
         // These types have the same layout (both are 4 bytes, 4-byte aligned).
-        let pooled_u32 = pool.insert(42u32);
-        let pooled_i32 = pool.insert(-42i32);
-        let pooled_f32 = pool.insert(3.14f32);
+        let pooled_u32 = pool.insert(42_u32);
+        let pooled_i32 = pool.insert(-42_i32);
+        let pooled_f32 = pool.insert(2.5_f32);
 
         assert_eq!(pool.len(), 3);
         assert_eq!(pool.layout_count(), 1); // All three types have the same layout
 
         // SAFETY: The pointers are valid and contain the values we just inserted.
-        unsafe {
-            assert_eq!(pooled_u32.ptr().read(), 42);
-            assert_eq!(pooled_i32.ptr().read(), -42);
-            assert_eq!(pooled_f32.ptr().read(), 3.14);
-        }
+        let u32_val = unsafe { pooled_u32.ptr().read() };
+        // SAFETY: The pointers are valid and contain the values we just inserted.
+        let i32_val = unsafe { pooled_i32.ptr().read() };
+        // SAFETY: The pointers are valid and contain the values we just inserted.
+        let f32_val = unsafe { pooled_f32.ptr().read() };
+        assert_eq!(u32_val, 42);
+        assert_eq!(i32_val, -42);
+        assert!((f32_val - 2.5).abs() < f32::EPSILON);
 
         pool.remove(pooled_u32);
         pool.remove(pooled_i32);
@@ -566,7 +573,7 @@ mod tests {
             .drop_policy(DropPolicy::MustNotDropItems)
             .build();
 
-        let _pooled = pool.insert(42u32);
+        let _pooled = pool.insert(42_u32);
 
         // Pool should panic when dropped with items.
         drop(pool);
@@ -577,9 +584,9 @@ mod tests {
         let mut pool = BlindPool::new();
 
         // Insert and remove some items to create potential waste.
-        let pooled1 = pool.insert(1u32);
-        let pooled2 = pool.insert(2u32);
-        let pooled3 = pool.insert(3u32);
+        let pooled1 = pool.insert(1_u32);
+        let pooled2 = pool.insert(2_u32);
+        let pooled3 = pool.insert(3_u32);
 
         pool.remove(pooled1);
         pool.remove(pooled2);
@@ -597,7 +604,7 @@ mod tests {
     fn erase_type_information() {
         let mut pool = BlindPool::new();
 
-        let pooled = pool.insert(42u64);
+        let pooled = pool.insert(42_u64);
         let erased = pooled.erase();
 
         // SAFETY: We know this contains a u64.
@@ -612,7 +619,7 @@ mod tests {
     fn layout_method() {
         let mut pool = BlindPool::new();
 
-        let pooled = pool.insert(42u64);
+        let pooled = pool.insert(42_u64);
         assert_eq!(pooled.layout(), Layout::new::<u64>());
 
         pool.remove(pooled);

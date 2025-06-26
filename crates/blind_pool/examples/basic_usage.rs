@@ -1,4 +1,7 @@
-//! Example demonstrating the usage of BlindPool for storing different types.
+//! Example demonstrating the usage of `BlindPool` for storing different types.
+
+use std::f32::consts::PI;
+use std::f64::consts::E;
 
 use blind_pool::BlindPool;
 
@@ -16,17 +19,17 @@ fn main() {
 
     // Insert different types into the same pool.
     println!("\nInserting different types...");
-    let handle_u32 = pool.insert(42u32);
-    let handle_u64 = pool.insert(1234567890u64);
-    let handle_f32 = pool.insert(3.14159f32);
-    let handle_f64 = pool.insert(2.71828f64);
+    let handle_u32 = pool.insert(42_u32);
+    let handle_u64 = pool.insert(1234567890_u64);
+    let handle_f32 = pool.insert(PI);
+    let handle_f64 = pool.insert(E);
     let handle_bool = pool.insert(true);
     let handle_char = pool.insert('X');
 
     println!("  Inserted u32: 42");
     println!("  Inserted u64: 1234567890");
-    println!("  Inserted f32: 3.14159");
-    println!("  Inserted f64: 2.71828");
+    println!("  Inserted f32: PI");
+    println!("  Inserted f64: E");
     println!("  Inserted bool: true");
     println!("  Inserted char: 'X'");
 
@@ -39,21 +42,24 @@ fn main() {
     println!("\nReading values back from the pool:");
 
     // SAFETY: All pointers are valid and contain the values we just inserted.
-    unsafe {
-        let val_u32 = handle_u32.ptr().read();
-        let val_u64 = handle_u64.ptr().read();
-        let val_f32 = handle_f32.ptr().read();
-        let val_f64 = handle_f64.ptr().read();
-        let val_bool = handle_bool.ptr().read();
-        let val_char = handle_char.ptr().read();
+    let val_u32 = unsafe { handle_u32.ptr().read() };
+    // SAFETY: All pointers are valid and contain the values we just inserted.
+    let val_u64 = unsafe { handle_u64.ptr().read() };
+    // SAFETY: All pointers are valid and contain the values we just inserted.
+    let val_f32 = unsafe { handle_f32.ptr().read() };
+    // SAFETY: All pointers are valid and contain the values we just inserted.
+    let val_f64 = unsafe { handle_f64.ptr().read() };
+    // SAFETY: All pointers are valid and contain the values we just inserted.
+    let val_bool = unsafe { handle_bool.ptr().read() };
+    // SAFETY: All pointers are valid and contain the values we just inserted.
+    let val_char = unsafe { handle_char.ptr().read() };
 
-        println!("  u32 value: {}", val_u32);
-        println!("  u64 value: {}", val_u64);
-        println!("  f32 value: {}", val_f32);
-        println!("  f64 value: {}", val_f64);
-        println!("  bool value: {}", val_bool);
-        println!("  char value: '{}'", val_char);
-    }
+    println!("  u32 value: {val_u32}");
+    println!("  u64 value: {val_u64}");
+    println!("  f32 value: {val_f32}");
+    println!("  f64 value: {val_f64}");
+    println!("  bool value: {val_bool}");
+    println!("  char value: '{val_char}'");
 
     // Demonstrate type erasure.
     println!("\nDemonstrating type erasure...");
@@ -62,13 +68,12 @@ fn main() {
 
     // Can still access raw pointers after type erasure.
     // SAFETY: We know the types of these erased handles.
-    unsafe {
-        let val = erased_u32.ptr().cast::<u32>().read();
-        println!("  Erased u32 value: {}", val);
+    let val = unsafe { erased_u32.ptr().cast::<u32>().read() };
+    println!("  Erased u32 value: {val}");
 
-        let val = erased_f64.ptr().cast::<f64>().read();
-        println!("  Erased f64 value: {}", val);
-    }
+    // SAFETY: We know the types of these erased handles.
+    let val = unsafe { erased_f64.ptr().cast::<f64>().read() };
+    println!("  Erased f64 value: {val}");
 
     // Remove some items from the pool.
     println!("\nRemoving some items...");
@@ -82,7 +87,7 @@ fn main() {
 
     // Insert more items of existing types.
     println!("\nInserting more items of existing types...");
-    let handle_f32_2 = pool.insert(2.5f32);
+    let handle_f32_2 = pool.insert(2.5_f32);
     let handle_bool_2 = pool.insert(false);
 
     println!("  Inserted another f32: 2.5");
@@ -108,8 +113,8 @@ fn main() {
     let capacity_before = pool.capacity();
     pool.shrink_to_fit();
     let capacity_after = pool.capacity();
-    println!("  Capacity before shrink: {}", capacity_before);
-    println!("  Capacity after shrink: {}", capacity_after);
+    println!("  Capacity before shrink: {capacity_before}");
+    println!("  Capacity after shrink: {capacity_after}");
     println!("  Layout count after shrink: {}", pool.layout_count());
 
     println!("\nExample completed successfully!");
