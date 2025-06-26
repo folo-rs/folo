@@ -1,6 +1,5 @@
 use std::alloc::{Layout, alloc, dealloc};
 use std::num::NonZero;
-use std::pin::Pin;
 use std::ptr::NonNull;
 use std::{mem, ptr, thread};
 
@@ -269,7 +268,7 @@ impl OpaqueSlab {
         unsafe { NonNull::new_unchecked(entry_meta_ptr) }
     }
 
-    fn item_ptr(&self, index: usize) -> NonNull<()> {
+    fn item_ptr<T>(&self, index: usize) -> NonNull<T> {
         let entry_meta_ptr = self.entry_meta_ptr(index);
 
         // SAFETY: entry_meta_ptr is valid from entry_meta_ptr() and item_offset was calculated
@@ -282,7 +281,7 @@ impl OpaqueSlab {
 
         // SAFETY: item_ptr is valid and non-null due to the valid entry_meta_ptr and correct
         // item_offset calculation above.
-        unsafe { NonNull::new_unchecked(item_ptr.cast::<()>()) }
+        unsafe { NonNull::new_unchecked(item_ptr.cast::<T>()) }
     }
 
     /// Inserts a value into the slab and returns an object that provides both the item's index
@@ -330,29 +329,19 @@ impl OpaqueSlab {
         let entry_meta_ptr = unsafe { entry_meta_ptr.as_mut() };
 
         // Get the item pointer where we'll write the value.
-        let item_ptr = self.item_ptr(index);
+        let item_ptr = self.item_ptr::<T>(index);
 
         // SAFETY: The caller's safety contract guarantees T's layout matches our item_layout.
         // item_ptr points to valid, properly aligned memory for type T within our allocated
         // block, and we own this memory exclusively.
         unsafe {
-            item_ptr.cast::<T>().as_ptr().write(value);
+            item_ptr.write(value);
         }
 
         // Create a dropper for the value we just wrote.
-        let dropper = {
-            // SAFETY: We just wrote a valid T value to this location above, so the pointer
-            // points to a properly initialized value of type T.
-            let value_ref = unsafe { &mut *item_ptr.cast::<T>().as_ptr() };
-
-            // SAFETY: The value is stored in our slab's stable memory location and will remain
-            // pinned until we explicitly call the dropper in remove() or drop().
-            let pinned_value = unsafe { Pin::new_unchecked(value_ref) };
-
-            // SAFETY: pinned_value is valid and properly initialized, and we ensure the dropper
-            // will be called before the memory is deallocated or reused.
-            unsafe { Dropper::new(pinned_value) }
-        };
+        // SAFETY: pointer is valid and properly initialized, and we ensure the dropper
+        // will be called before the memory is deallocated or reused.
+        let dropper = unsafe { Dropper::new(item_ptr) };
 
         // Update the entry metadata to mark it as occupied and store the dropper.
         let previous_entry =
@@ -373,7 +362,7 @@ impl OpaqueSlab {
 
         SlabItem {
             index,
-            ptr: item_ptr.cast::<T>(),
+            ptr: item_ptr,
         }
     }
 

@@ -1,4 +1,3 @@
-use std::pin::Pin;
 use std::ptr::{self, NonNull};
 
 /// Remembers how to drop an object while forgetting its type.
@@ -22,18 +21,15 @@ impl Dropper {
     /// 2. The target is not dropped through its normal lifetime (e.g., by calling `drop()`
     ///    or letting it go out of scope) while the `Dropper` exists.
     /// 3. Only one `Dropper` instance exists for any given target at a time.
-    pub(crate) unsafe fn new<T>(target: Pin<&mut T>) -> Self {
+    pub(crate) unsafe fn new<T>(target: NonNull<T>) -> Self {
         let drop_fn = drop_fn::<T>;
 
-        // Erase the type of the pointer.
+        // Erase the type of the pointer in the function arguments.
         // SAFETY: We are just changing the target of the pointer arg, everything is ABI-equal.
         let drop_fn = unsafe { std::mem::transmute::<fn(NonNull<T>), fn(NonNull<()>)>(drop_fn) };
 
-        // SAFETY: We are not moving anything, just creating a pointer to the pinned object.
-        let ptr = NonNull::from(unsafe { target.get_unchecked_mut() });
-
         Self {
-            ptr: ptr.cast(),
+            ptr: target.cast(),
             drop_fn,
         }
     }
@@ -86,11 +82,10 @@ mod tests {
     fn dropper_drops_target_when_dropped() {
         let (tracker, dropped_flag) = DropTracker::new();
         let mut stack_value = tracker;
-        let mut pinned = Pin::new(&mut stack_value);
 
         // Create dropper for the pinned object.
         // SAFETY: We ensure the target outlives the dropper and prevent double-drop with mem::forget.
-        let dropper = unsafe { Dropper::new(pinned.as_mut()) };
+        let dropper = unsafe { Dropper::new(NonNull::from(&mut stack_value)) };
 
         // Target should not be dropped yet.
         assert!(
@@ -115,10 +110,9 @@ mod tests {
     fn dropper_handles_zero_sized_types() {
         let (tracker, dropped_flag) = DropTracker::new();
         let mut stack_value = ((), tracker);
-        let mut pinned = Pin::new(&mut stack_value);
 
         // SAFETY: We ensure the target outlives the dropper and prevent double-drop with mem::forget.
-        let dropper = unsafe { Dropper::new(pinned.as_mut()) };
+        let dropper = unsafe { Dropper::new(NonNull::from(&mut stack_value)) };
 
         assert!(!dropped_flag.get());
         drop(dropper);
@@ -150,11 +144,10 @@ mod tests {
         };
 
         let mut stack_complex = complex;
-        let mut pinned = Pin::new(&mut stack_complex);
 
         {
             // SAFETY: We ensure the target outlives the dropper and prevent double-drop with mem::forget.
-            let dropper = unsafe { Dropper::new(pinned.as_mut()) };
+            let dropper = unsafe { Dropper::new(NonNull::from(&mut stack_complex)) };
             assert!(!dropped_flag.get());
             drop(dropper);
         }

@@ -11,8 +11,8 @@ bench TARGET="":
     cargo bench {{ target_package }} --all-features $target_selector
 
 [group('testing')]
-miri:
-    cargo +nightly miri nextest run {{ target_package }}
+miri FILTER="":
+    cargo +nightly miri nextest run {{ target_package }} --no-fail-fast --all-features {{ FILTER }}
 
 [group('testing')]
 test FILTER="":
