@@ -14,7 +14,6 @@ fn main() {
 
     println!("\nCreated empty BlindPool:");
     println!("  Length: {}", pool.len());
-    println!("  Layout count: {}", pool.layout_count());
     println!("  Capacity: {}", pool.capacity());
 
     // Insert different types into the same pool.
@@ -35,7 +34,6 @@ fn main() {
 
     println!("\nPool status after insertions:");
     println!("  Length: {}", pool.len());
-    println!("  Layout count: {}", pool.layout_count());
     println!("  Capacity: {}", pool.capacity());
 
     // Read values back from the pool using the handles.
@@ -83,7 +81,6 @@ fn main() {
 
     println!("  Removed u32, u64, and f64");
     println!("  Pool length now: {}", pool.len());
-    println!("  Layout count now: {}", pool.layout_count());
 
     // Insert more items of existing types.
     println!("\nInserting more items of existing types...");
@@ -93,10 +90,6 @@ fn main() {
     println!("  Inserted another f32: 2.5");
     println!("  Inserted another bool: false");
     println!("  Pool length now: {}", pool.len());
-    println!(
-        "  Layout count still: {} (reusing existing layouts)",
-        pool.layout_count()
-    );
 
     // Clean up remaining items.
     println!("\nCleaning up remaining items...");
@@ -115,7 +108,6 @@ fn main() {
     let capacity_after = pool.capacity();
     println!("  Capacity before shrink: {capacity_before}");
     println!("  Capacity after shrink: {capacity_after}");
-    println!("  Layout count after shrink: {}", pool.layout_count());
 
     println!("\nExample completed successfully!");
 }

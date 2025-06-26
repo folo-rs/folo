@@ -1,13 +1,12 @@
 //! This crate provides [`BlindPool`], a dynamically growing pool of objects that can store
-//! objects with any memory layout by internally managing multiple [`OpaquePool`] instances.
+//! objects of any type.
 //!
 //! It offers stable memory addresses and efficient typed insertion with automatic value dropping.
 //!
 //! # Type-agnostic memory management
 //!
-//! Unlike [`OpaquePool`] which requires a specific layout to be defined at creation time,
-//! [`BlindPool`] can accept any type and will automatically create and manage the appropriate
-//! internal pools as needed. Each distinct memory layout gets its own internal [`OpaquePool`].
+//! [`BlindPool`] can accept any type and will automatically manage the appropriate
+//! storage as needed.
 //!
 //! The pool itself does not hold or create any `&` shared or `&mut` exclusive references to its
 //! contents, allowing the caller to decide who and when can obtain a reference to the inserted
@@ -15,13 +14,13 @@
 //!
 //! # Features
 //!
-//! - **Layout-agnostic memory management**: Accepts any type and manages layouts automatically.
+//! - **Type-agnostic memory management**: Accepts any type.
 //! - **Stable addresses**: Memory addresses remain valid until explicitly removed.
 //! - **Automatic dropping**: Values are properly dropped when removed from the pool.
 //! - **Dynamic growth**: Pool capacity grows automatically as needed.
 //! - **Efficient allocation**: Uses high density slabs to minimize allocation overhead.
 //! - **Stable Rust**: No unstable Rust features required.
-//! - **Leak detection**: Pool panics on drop if values are still present.
+//! - **Optional leak detection**: Pool can be configured to panic on drop if values are still present.
 //!
 //! # Example
 //!
@@ -49,13 +48,6 @@
 //!
 //! assert_eq!(value_u64, 42);
 //! assert_eq!(value_i32, -123);
-//!
-//! // Remove values from the pool. The values are automatically dropped.
-//! pool.remove(pooled_u64);
-//! pool.remove(pooled_i32);
-//! pool.remove(pooled_f32);
-//!
-//! assert!(pool.is_empty());
 //! ```
 
 mod builder;

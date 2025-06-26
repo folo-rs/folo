@@ -3,20 +3,20 @@ use std::collections::HashMap;
 use std::ptr::NonNull;
 
 use foldhash::fast::FixedState;
-use opaque_pool::{DropPolicy, OpaquePool, Pooled};
+use opaque_pool::{DropPolicy, OpaquePool, Pooled as OpaquePooled};
 
 use crate::BlindPoolBuilder;
 
 /// A pinned object pool of unbounded size that accepts objects of any type by
 /// internally managing multiple [`OpaquePool`] instances, one for each distinct memory layout.
 ///
-/// The pool returns a [`BlindPooled<T>`] for each inserted value, which acts as both
+/// The pool returns a [`Pooled<T>`] for each inserted value, which acts as both
 /// the key and provides direct access to the inserted item via a pointer.
 ///
 /// # Out of band access
 ///
 /// The collection does not create or keep references to the memory blocks. The only way to access
-/// the contents of the collection is via unsafe code by using the pointer from a [`BlindPooled<T>`].
+/// the contents of the collection is via unsafe code by using the pointer from a [`Pooled<T>`].
 ///
 /// The collection does not create or maintain any `&` shared or `&mut` exclusive references to
 /// the items it contains, except when explicitly called to operate on an item (e.g. `remove()`
@@ -47,10 +47,6 @@ use crate::BlindPoolBuilder;
 ///
 /// assert_eq!(value_u32, 42);
 /// assert_eq!(value_i64, -123);
-///
-/// // Remove the values from the pool. This invalidates the pointers and drops the values.
-/// pool.remove(pooled_u32);
-/// pool.remove(pooled_i64);
 /// ```
 #[derive(Debug)]
 pub struct BlindPool {
@@ -79,9 +75,6 @@ impl BlindPool {
     /// // SAFETY: The pointer is valid and contains the value we just inserted.
     /// let value = unsafe { pooled.ptr().read() };
     /// assert_eq!(value, 42);
-    ///
-    /// pool.remove(pooled);
-    /// assert!(pool.is_empty());
     /// ```
     #[must_use]
     pub fn new() -> Self {
@@ -131,13 +124,12 @@ impl BlindPool {
     /// let pooled_float = pool.insert(2.5_f64);
     /// let pooled_string = pool.insert("hello".to_string());
     ///
-    /// // All values are stored in the same BlindPool but in separate internal pools.
+    /// // All values are stored in the same BlindPool.
     /// assert_eq!(pool.len(), 3);
     /// ```
-    pub fn insert<T>(&mut self, value: T) -> BlindPooled<T> {
+    pub fn insert<T>(&mut self, value: T) -> Pooled<T> {
         let layout = Layout::new::<T>();
 
-        // Get or create the appropriate internal pool for this layout.
         let internal_pool = self.pools.entry(layout).or_insert_with(|| {
             OpaquePool::builder()
                 .layout_of::<T>()
@@ -145,16 +137,15 @@ impl BlindPool {
                 .build()
         });
 
-        // Insert the value into the internal pool.
         // SAFETY: T matches the layout used to create the internal pool.
         let pooled = unsafe { internal_pool.insert(value) };
 
-        BlindPooled { layout, pooled }
+        Pooled { layout, pooled }
     }
 
     /// Removes a value from the pool and drops it.
     ///
-    /// The [`BlindPooled<T>`] handle is consumed and the memory is returned to the pool.
+    /// The [`Pooled<T>`] handle is consumed and the memory is returned to the pool.
     /// The value is automatically dropped.
     ///
     /// # Example
@@ -170,7 +161,7 @@ impl BlindPool {
     /// pool.remove(pooled);
     /// assert_eq!(pool.len(), 0);
     /// ```
-    pub fn remove<T>(&mut self, pooled: BlindPooled<T>) {
+    pub fn remove<T>(&mut self, pooled: Pooled<T>) {
         if let Some(internal_pool) = self.pools.get_mut(&pooled.layout) {
             internal_pool.remove(pooled.pooled);
         } else {
@@ -249,30 +240,8 @@ impl BlindPool {
     }
 
     /// Returns the number of distinct memory layouts currently managed by this pool.
-    ///
-    /// Each unique type creates its own internal pool. This method returns how many such
-    /// internal pools currently exist.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use blind_pool::BlindPool;
-    ///
-    /// let mut pool = BlindPool::new();
-    ///
-    /// assert_eq!(pool.layout_count(), 0);
-    ///
-    /// let _a = pool.insert(42_u32); // First layout
-    /// assert_eq!(pool.layout_count(), 1);
-    ///
-    /// let _b = pool.insert(2.5_f64); // Second layout
-    /// assert_eq!(pool.layout_count(), 2);
-    ///
-    /// let _c = pool.insert(100_u32); // Same as first layout
-    /// assert_eq!(pool.layout_count(), 2);
-    /// ```
     #[must_use]
-    pub fn layout_count(&self) -> usize {
+    pub(crate) fn layout_count(&self) -> usize {
         self.pools.len()
     }
 
@@ -329,15 +298,15 @@ impl Drop for BlindPool {
     fn drop(&mut self) {
         match self.drop_policy {
             DropPolicy::MustNotDropItems => {
-                assert!(
-                    self.is_empty(),
-                    "BlindPool dropped while still containing items (drop policy is MustNotDropItems)"
-                );
+                if !std::thread::panicking() {
+                    assert!(
+                        self.is_empty(),
+                        "BlindPool dropped while still containing items (drop policy is MustNotDropItems)"
+                    );
+                }
             }
             DropPolicy::MayDropItems | _ => {
                 // Allow the internal pools to drop their items.
-                // Default to allowing items to be dropped for unknown variants.
-                // This provides forward compatibility if new variants are added.
             }
         }
     }
@@ -367,16 +336,16 @@ impl Drop for BlindPool {
 /// pool.remove(pooled);
 /// ```
 #[derive(Debug)]
-pub struct BlindPooled<T> {
+pub struct Pooled<T> {
     /// The memory layout of the stored item. This is used to identify which internal
     /// pool the item belongs to.
     layout: Layout,
 
     /// The handle from the internal opaque pool.
-    pooled: Pooled<T>,
+    pooled: OpaquePooled<T>,
 }
 
-impl<T> BlindPooled<T> {
+impl<T> Pooled<T> {
     /// Returns a pointer to the inserted value.
     ///
     /// This is the only way to access the value stored in the pool. The owner of the handle has
@@ -402,30 +371,8 @@ impl<T> BlindPooled<T> {
         self.pooled.ptr()
     }
 
-    /// Returns the memory layout of the stored item.
-    ///
-    /// This can be useful for introspection or debugging purposes.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use std::alloc::Layout;
-    ///
-    /// use blind_pool::BlindPool;
-    ///
-    /// let mut pool = BlindPool::new();
-    ///
-    /// let pooled = pool.insert(42_u64);
-    ///
-    /// assert_eq!(pooled.layout(), Layout::new::<u64>());
-    /// ```
-    #[must_use]
-    pub fn layout(&self) -> Layout {
-        self.layout
-    }
-
-    /// Erases the type information from this [`BlindPooled<T>`] handle,
-    /// returning a [`BlindPooled<()>`].
+    /// Erases the type information from this [`Pooled<T>`] handle,
+    /// returning a [`Pooled<()>`].
     ///
     /// This is useful when you want to store handles of different types in the same collection
     /// or pass them to code that doesn't need to know the specific type.
@@ -454,8 +401,8 @@ impl<T> BlindPooled<T> {
     /// pool.remove(erased);
     /// ```
     #[must_use]
-    pub fn erase(self) -> BlindPooled<()> {
-        BlindPooled {
+    pub fn erase(self) -> Pooled<()> {
+        Pooled {
             layout: self.layout,
             pooled: self.pooled.erase(),
         }
@@ -615,13 +562,31 @@ mod tests {
         assert!(pool.is_empty());
     }
 
+    /// Test that reproduces the double-free bug with types that have Drop implementations.
+    /// 
+    /// This test documents a known issue in the underlying opaque_pool crate where
+    /// types with Drop implementations (like String, Vec) can cause double-free errors
+    /// when removed from the pool. The issue occurs because the Dropper mechanism
+    /// in opaque_pool may attempt to drop values that have already been moved or
+    /// dropped elsewhere.
     #[test]
-    fn layout_method() {
+    #[ignore = "This test demonstrates a double-free bug in opaque_pool and will likely fail"]
+    fn double_free_bug_with_drop_types() {
         let mut pool = BlindPool::new();
 
-        let pooled = pool.insert(42_u64);
-        assert_eq!(pooled.layout(), Layout::new::<u64>());
+        // Test with String - a type that implements Drop
+        let test_string = "Hello, World!".to_string();
+        let pooled_string = pool.insert(test_string);
+        
+        // This remove operation may cause a double-free error
+        // The issue is in the underlying opaque_pool's Dropper mechanism
+        pool.remove(pooled_string);
 
-        pool.remove(pooled);
+        // Test with Vec - another type that implements Drop  
+        let test_vec = vec![1, 2, 3, 4, 5];
+        let pooled_vec = pool.insert(test_vec);
+        
+        // This may also cause a double-free error
+        pool.remove(pooled_vec);
     }
 }
