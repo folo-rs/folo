@@ -275,6 +275,10 @@ unwinding for another panic - we do not want to double-panic as that mangles the
 Unless otherwise prompted, create single-threaded synchronous Criterion benchmarks. Use benchmark
 groups to group related benchmarks that make sense to compare to each other.
 
+Focus on benchmarking elementary operations, do not create benchmarks with lots of long-winded
+logic. We generally want to benchmark a single API call or at most a sequence of closely coupled
+API calls.
+
 Only the functionality being benchmarked should be inside the `.iter()` closure, with the data setup
 being either done outside (if not per-iteration) or using the first "payload preparation" callback
 of `iter_batched()` (if per-iteration).
