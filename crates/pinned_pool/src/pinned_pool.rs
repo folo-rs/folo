@@ -1301,4 +1301,52 @@ mod tests {
         assert_eq!(pool.capacity(), 0);
         assert!(pool.is_empty());
     }
+
+    #[test]
+    fn shrink_then_grow_allocates_new_slab() {
+        let mut pool = PinnedPool::<u32>::new();
+
+        // Fill one complete slab
+        let mut keys = Vec::new();
+        for i in 0..SLAB_CAPACITY {
+            keys.push(pool.insert(i as u32));
+        }
+
+        // Add one item to the second slab
+        let overflow_key = pool.insert(9999_u32);
+
+        // Verify we have 2 slabs
+        assert_eq!(pool.slabs.len(), 2);
+        assert_eq!(pool.capacity(), SLAB_CAPACITY * 2);
+
+        // Remove the overflow item (making the second slab empty)
+        pool.remove(overflow_key);
+
+        // Shrink to fit should remove the empty second slab
+        pool.shrink_to_fit();
+
+        // Verify we're back to 1 slab
+        assert_eq!(pool.slabs.len(), 1);
+        assert_eq!(pool.capacity(), SLAB_CAPACITY);
+        assert!(pool.slabs[0].is_full());
+
+        // Insert a new item - this should allocate a new slab since the existing one is full
+        let new_key = pool.insert(8888_u32);
+
+        // Verify we now have 2 slabs again
+        assert_eq!(pool.slabs.len(), 2);
+        assert_eq!(pool.capacity(), SLAB_CAPACITY * 2);
+
+        // Verify the new item went to the second slab
+        assert_eq!(new_key.index_in_pool, SLAB_CAPACITY);
+
+        // Verify the new item is accessible
+        assert_eq!(*pool.get(new_key), 8888);
+
+        // Clean up
+        for key in keys {
+            pool.remove(key);
+        }
+        pool.remove(new_key);
+    }
 }

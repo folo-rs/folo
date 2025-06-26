@@ -1138,4 +1138,54 @@ mod tests {
         assert_eq!(pool.capacity(), 0);
         assert!(pool.is_empty());
     }
+
+    #[test]
+    fn shrink_then_grow_allocates_new_slab() {
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
+
+        // Fill one complete slab
+        let mut pooled_items = Vec::new();
+        for i in 0..DEFAULT_SLAB_CAPACITY.get() {
+            pooled_items.push(unsafe { pool.insert(i as u32) });
+        }
+
+        // Add one item to the second slab
+        let overflow_item = unsafe { pool.insert(9999_u32) };
+
+        // Verify we have 2 slabs
+        assert_eq!(pool.slabs.len(), 2);
+        assert_eq!(pool.capacity(), DEFAULT_SLAB_CAPACITY.get() * 2);
+
+        // Remove the overflow item (making the second slab empty)
+        pool.remove(overflow_item);
+
+        // Shrink to fit should remove the empty second slab
+        pool.shrink_to_fit();
+
+        // Verify we're back to 1 slab
+        assert_eq!(pool.slabs.len(), 1);
+        assert_eq!(pool.capacity(), DEFAULT_SLAB_CAPACITY.get());
+        assert!(pool.slabs[0].is_full());
+
+        // Insert a new item - this should allocate a new slab since the existing one is full
+        let new_item = unsafe { pool.insert(8888_u32) };
+
+        // Verify we now have 2 slabs again
+        assert_eq!(pool.slabs.len(), 2);
+        assert_eq!(pool.capacity(), DEFAULT_SLAB_CAPACITY.get() * 2);
+
+        // Verify the new item went to the second slab
+        assert_eq!(new_item.coordinates.slab_index, 1);
+
+        // Verify the new item is accessible
+        unsafe {
+            assert_eq!(new_item.ptr().read(), 8888);
+        }
+
+        // Clean up
+        for item in pooled_items {
+            pool.remove(item);
+        }
+        pool.remove(new_item);
+    }
 }
