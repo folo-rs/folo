@@ -1,13 +1,10 @@
 name: 'Setup Environment'
 description: 'Setup development environment for Folo project'
 inputs:
-  platform:
-    description: 'Platform type (linux or windows)'
-    required: true
   cache-key-suffix:
     description: 'Suffix for cache keys to differentiate between workflows'
     required: true
-  install-system-deps:
+  install-linux-deps:
     description: 'Whether to install Linux system dependencies'
     required: false
     default: 'false'
@@ -16,7 +13,7 @@ runs:
   using: 'composite'
   steps:
     - name: Install system dependencies (Linux)
-      if: inputs.install-system-deps == 'true' && inputs.platform == 'linux'
+      if: inputs.install-linux-deps == 'true' && runner.os == 'Linux'
       shell: bash
       run: |
         sudo apt update
@@ -25,7 +22,7 @@ runs:
         git lfs install
     
     - name: Install PowerShell 7 (Linux)
-      if: inputs.install-system-deps == 'true' && inputs.platform == 'linux'
+      if: inputs.install-linux-deps == 'true' && runner.os == 'Linux'
       shell: bash
       run: |
         # Download and install PowerShell 7
@@ -61,19 +58,13 @@ runs:
         restore-keys: |
           cargo-tools-${{ inputs.cache-key-suffix }}-
     
-    - name: Install just (Windows)
-      if: steps.cache-cargo-tools.outputs.cache-hit != 'true' && inputs.platform == 'windows'
+    - name: Install just
+      if: steps.cache-cargo-tools.outputs.cache-hit != 'true'
       shell: bash
       run: cargo install just --locked
     
-    - name: Install just (Linux)
-      if: inputs.platform == 'linux'
+    - name: Configure Git
       shell: bash
-      run: cargo install just --locked
-    
-    - name: Configure Git (Windows)
-      if: inputs.platform == 'windows'
-      shell: pwsh
       run: git config --local include.path ./.gitconfig
     
     - name: Install development tools
@@ -81,8 +72,7 @@ runs:
       shell: bash
       run: just install-tools
     
-    - name: Verify environment setup (Linux)
-      if: inputs.platform == 'linux'
+    - name: Verify environment setup
       shell: bash
       run: |
         echo "Verifying installed tools..."
@@ -91,24 +81,14 @@ runs:
         which rustc
         cargo --version
         rustc --version
-        pwsh --version
+        # Check PowerShell on both platforms
+        if command -v pwsh &> /dev/null; then
+          pwsh --version
+        else
+          echo "PowerShell not available"
+        fi
         # Check if critical cargo tools are available
         cargo nextest --version || echo "cargo-nextest not available"
         cargo machete --version || echo "cargo-machete not available"
         cargo sort-derives --version || echo "cargo-sort-derives not available"
         echo "Environment setup complete"
-    
-    - name: Verify environment setup (Windows)
-      if: inputs.platform == 'windows'
-      shell: pwsh
-      run: |
-        Write-Host "Verifying installed tools..."
-        just --version
-        cargo --version
-        rustc --version
-        Get-Command pwsh
-        # Check if critical cargo tools are available
-        try { cargo nextest --version } catch { Write-Host "cargo-nextest not available" }
-        try { cargo machete --version } catch { Write-Host "cargo-machete not available" }
-        try { cargo sort-derives --version } catch { Write-Host "cargo-sort-derives not available" }
-        Write-Host "Environment setup complete"

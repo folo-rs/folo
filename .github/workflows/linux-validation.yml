@@ -17,9 +17,8 @@ jobs:
     - name: Setup environment
       uses: ./.github/actions/setup-environment
       with:
-        platform: linux
         cache-key-suffix: linux
-        install-system-deps: true
+        install-linux-deps: true
     
     - name: Run validation
       run: just validate-local
