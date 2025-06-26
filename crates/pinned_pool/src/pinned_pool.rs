@@ -1349,4 +1349,124 @@ mod tests {
         }
         pool.remove(new_key);
     }
+
+    #[test]
+    fn trait_object_usage() {
+        use std::fmt::Display;
+
+        // Define a simple trait for testing.
+        trait Greet {
+            fn greet(&self) -> String;
+        }
+
+        // Implement the trait for different types.
+        #[derive(Debug)]
+        struct Person {
+            name: String,
+        }
+
+        impl Greet for Person {
+            fn greet(&self) -> String {
+                format!("Hello, I'm {}", self.name)
+            }
+        }
+
+        impl Display for Person {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "Person({})", self.name)
+            }
+        }
+
+        #[derive(Debug)]
+        struct Robot {
+            id: u32,
+        }
+
+        impl Greet for Robot {
+            fn greet(&self) -> String {
+                format!("BEEP BOOP. Robot ID: {}", self.id)
+            }
+        }
+
+        impl Display for Robot {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "Robot({})", self.id)
+            }
+        }
+
+        let mut pool = PinnedPool::<Box<dyn Greet>>::new();
+
+        // Insert different types that implement the trait.
+        let person_key = pool.insert(Box::new(Person {
+            name: "Alice".to_string(),
+        }) as Box<dyn Greet>);
+
+        let robot_key = pool.insert(Box::new(Robot { id: 42 }) as Box<dyn Greet>);
+
+        // Access items via trait objects.
+        let person_greet = pool.get(person_key);
+        let robot_greet = pool.get(robot_key);
+
+        // Use the trait method on the trait objects.
+        assert_eq!(person_greet.greet(), "Hello, I'm Alice");
+        assert_eq!(robot_greet.greet(), "BEEP BOOP. Robot ID: 42");
+
+        // Clean up.
+        pool.remove(person_key);
+        pool.remove(robot_key);
+    }
+
+    #[test]
+    fn trait_object_with_pinned_references() {
+        trait Identifiable {
+            fn get_id(&self) -> u64;
+            fn set_id(&mut self, id: u64);
+        }
+
+        #[derive(Debug)]
+        struct Item {
+            id: u64,
+            data: String,
+        }
+
+        impl Identifiable for Item {
+            fn get_id(&self) -> u64 {
+                self.id
+            }
+
+            fn set_id(&mut self, id: u64) {
+                self.id = id;
+            }
+        }
+
+        let mut pool = PinnedPool::<Item>::new();
+
+        let item_key = pool.insert(Item {
+            id: 123,
+            data: "test data".to_string(),
+        });
+
+        // Get a pinned reference and use it as a trait object.
+        {
+            let item_ref = pool.get(item_key);
+            let trait_obj: &dyn Identifiable = item_ref.get_ref();
+            assert_eq!(trait_obj.get_id(), 123);
+        }
+
+        // Get a mutable pinned reference and use it as a trait object.
+        {
+            let mut item_ref = pool.get_mut(item_key);
+            let trait_obj: &mut dyn Identifiable = item_ref.get_mut();
+            trait_obj.set_id(456);
+            assert_eq!(trait_obj.get_id(), 456);
+        }
+
+        // Verify the change persisted.
+        {
+            let item_ref = pool.get(item_key);
+            assert_eq!(item_ref.id, 456);
+        }
+
+        pool.remove(item_key);
+    }
 }

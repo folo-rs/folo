@@ -557,4 +557,171 @@ mod tests {
 
         assert!(pool.is_empty());
     }
+
+    #[test]
+    fn trait_object_usage() {
+        use std::fmt::Display;
+
+        // Define a trait for testing.
+        trait Printable {
+            fn print_info(&self) -> String;
+        }
+
+        #[derive(Debug)]
+        struct Book {
+            title: String,
+            pages: u32,
+        }
+
+        impl Printable for Book {
+            fn print_info(&self) -> String {
+                format!("Book: '{}' ({} pages)", self.title, self.pages)
+            }
+        }
+
+        impl Display for Book {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "'{}' ({} pages)", self.title, self.pages)
+            }
+        }
+
+        #[derive(Debug)]
+        struct Movie {
+            title: String,
+            duration_minutes: u32,
+        }
+
+        impl Printable for Movie {
+            fn print_info(&self) -> String {
+                format!("Movie: '{}' ({} minutes)", self.title, self.duration_minutes)
+            }
+        }
+
+        impl Display for Movie {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "'{}' ({} min)", self.title, self.duration_minutes)
+            }
+        }
+
+        let mut pool = BlindPool::new();
+
+        // Insert different types into the same pool.
+        let book = Book {
+            title: "The Rust Programming Language".to_string(),
+            pages: 552,
+        };
+        let movie = Movie {
+            title: "The Matrix".to_string(),
+            duration_minutes: 136,
+        };
+
+        let pooled_book = pool.insert(book);
+        let pooled_movie = pool.insert(movie);
+
+        // Use items as trait objects.
+        unsafe {
+            // SAFETY: The pointer is valid and points to a Book that we just inserted.
+            let book_ref: &Book = pooled_book.ptr().as_ref();
+            let printable: &dyn Printable = book_ref;
+            assert_eq!(printable.print_info(), "Book: 'The Rust Programming Language' (552 pages)");
+
+            // Also test Display trait.
+            let display: &dyn Display = book_ref;
+            assert_eq!(format!("{}", display), "'The Rust Programming Language' (552 pages)");
+        }
+
+        unsafe {
+            // SAFETY: The pointer is valid and points to a Movie that we just inserted.
+            let movie_ref: &Movie = pooled_movie.ptr().as_ref();
+            let printable: &dyn Printable = movie_ref;
+            assert_eq!(printable.print_info(), "Movie: 'The Matrix' (136 minutes)");
+
+            // Also test Display trait.
+            let display: &dyn Display = movie_ref;
+            assert_eq!(format!("{}", display), "'The Matrix' (136 min)");
+        }
+
+        pool.remove(pooled_book);
+        pool.remove(pooled_movie);
+    }
+
+    #[test]
+    fn trait_object_with_mutable_references() {
+        trait Modifiable {
+            fn modify(&mut self, factor: f64);
+            fn get_value(&self) -> f64;
+        }
+
+        #[derive(Debug)]
+        struct Temperature {
+            celsius: f64,
+        }
+
+        impl Modifiable for Temperature {
+            fn modify(&mut self, factor: f64) {
+                self.celsius *= factor;
+            }
+
+            fn get_value(&self) -> f64 {
+                self.celsius
+            }
+        }
+
+        #[derive(Debug)]
+        struct Distance {
+            meters: f64,
+        }
+
+        impl Modifiable for Distance {
+            fn modify(&mut self, factor: f64) {
+                self.meters *= factor;
+            }
+
+            fn get_value(&self) -> f64 {
+                self.meters
+            }
+        }
+
+        let mut pool = BlindPool::new();
+
+        let temp = Temperature { celsius: 25.0 };
+        let distance = Distance { meters: 100.0 };
+
+        let pooled_temp = pool.insert(temp);
+        let pooled_distance = pool.insert(distance);
+
+        // Test mutable trait objects.
+        unsafe {
+            // SAFETY: The pointer is valid and points to a Temperature that we just inserted.
+            let temp_ref: &mut Temperature = pooled_temp.ptr().as_mut();
+            let modifiable: &mut dyn Modifiable = temp_ref;
+            
+            assert_eq!(modifiable.get_value(), 25.0);
+            modifiable.modify(2.0);
+            assert_eq!(modifiable.get_value(), 50.0);
+        }
+
+        unsafe {
+            // SAFETY: The pointer is valid and points to a Distance that we just inserted.
+            let distance_ref: &mut Distance = pooled_distance.ptr().as_mut();
+            let modifiable: &mut dyn Modifiable = distance_ref;
+            
+            assert_eq!(modifiable.get_value(), 100.0);
+            modifiable.modify(0.5);
+            assert_eq!(modifiable.get_value(), 50.0);
+        }
+
+        // Verify changes persisted.
+        unsafe {
+            // SAFETY: The pointers are valid and point to the objects we modified.
+            let temp_ref: &Temperature = pooled_temp.ptr().as_ref();
+            assert_eq!(temp_ref.celsius, 50.0);
+
+            let distance_ref: &Distance = pooled_distance.ptr().as_ref();
+            assert_eq!(distance_ref.meters, 50.0);
+        }
+
+        pool.remove(pooled_temp);
+        pool.remove(pooled_distance);
+    }
 }

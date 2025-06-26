@@ -1188,4 +1188,107 @@ mod tests {
         }
         pool.remove(new_item);
     }
+
+    #[test]
+    fn trait_object_usage() {
+        use std::fmt::Display;
+
+        // Define a trait for testing.
+        trait Describable {
+            fn describe(&self) -> String;
+        }
+
+        #[derive(Debug)]
+        struct Product {
+            name: String,
+            price: f64,
+        }
+
+        impl Describable for Product {
+            fn describe(&self) -> String {
+                format!("Product: {} (${:.2})", self.name, self.price)
+            }
+        }
+
+        impl Display for Product {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{} (${:.2})", self.name, self.price)
+            }
+        }
+
+        let mut pool = OpaquePool::builder().layout_of::<Product>().build();
+
+        // Insert a concrete type.
+        let product = Product {
+            name: "Widget".to_string(),
+            price: 19.99,
+        };
+
+        // SAFETY: Product matches the layout used to create the pool.
+        let pooled = unsafe { pool.insert(product) };
+
+        // Create a reference from the pointer and use it as a trait object.
+        unsafe {
+            // SAFETY: The pointer is valid and points to a Product that we just inserted.
+            let product_ref: &Product = pooled.ptr().as_ref();
+            let trait_obj: &dyn Describable = product_ref;
+            assert_eq!(trait_obj.describe(), "Product: Widget ($19.99)");
+
+            // Also test Display trait.
+            let display_obj: &dyn Display = product_ref;
+            assert_eq!(format!("{}", display_obj), "Widget ($19.99)");
+        }
+
+        pool.remove(pooled);
+    }
+
+    #[test]
+    fn trait_object_with_mutable_references() {
+        trait Adjustable {
+            fn adjust_value(&mut self, delta: i32);
+            fn get_value(&self) -> i32;
+        }
+
+        #[derive(Debug)]
+        struct Counter {
+            value: i32,
+        }
+
+        impl Adjustable for Counter {
+            fn adjust_value(&mut self, delta: i32) {
+                self.value += delta;
+            }
+
+            fn get_value(&self) -> i32 {
+                self.value
+            }
+        }
+
+        let mut pool = OpaquePool::builder().layout_of::<Counter>().build();
+
+        let counter = Counter { value: 10 };
+
+        // SAFETY: Counter matches the layout used to create the pool.
+        let pooled = unsafe { pool.insert(counter) };
+
+        // Test mutable trait object.
+        unsafe {
+            // SAFETY: The pointer is valid and points to a Counter that we just inserted.
+            let counter_ref: &mut Counter = pooled.ptr().as_mut();
+            let trait_obj: &mut dyn Adjustable = counter_ref;
+            
+            assert_eq!(trait_obj.get_value(), 10);
+            trait_obj.adjust_value(5);
+            assert_eq!(trait_obj.get_value(), 15);
+        }
+
+        // Verify the change persisted.
+        unsafe {
+            // SAFETY: The pointer is valid and points to the same Counter.
+            let counter_ref: &Counter = pooled.ptr().as_ref();
+            assert_eq!(counter_ref.value, 15);
+        }
+
+        pool.remove(pooled);
+    }
 }
