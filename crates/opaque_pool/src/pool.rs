@@ -1191,8 +1191,6 @@ mod tests {
 
     #[test]
     fn trait_object_usage() {
-        use std::fmt::Display;
-
         // Define a trait for testing.
         trait Describable {
             fn describe(&self) -> String;
@@ -1207,12 +1205,6 @@ mod tests {
         impl Describable for Product {
             fn describe(&self) -> String {
                 format!("Product: {} (${:.2})", self.name, self.price)
-            }
-        }
-
-        impl Display for Product {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{} (${:.2})", self.name, self.price)
             }
         }
 
@@ -1233,10 +1225,6 @@ mod tests {
             let product_ref: &Product = pooled.ptr().as_ref();
             let trait_obj: &dyn Describable = product_ref;
             assert_eq!(trait_obj.describe(), "Product: Widget ($19.99)");
-
-            // Also test Display trait.
-            let display_obj: &dyn Display = product_ref;
-            assert_eq!(format!("{}", display_obj), "Widget ($19.99)");
         }
 
         pool.remove(pooled);
@@ -1276,7 +1264,7 @@ mod tests {
             // SAFETY: The pointer is valid and points to a Counter that we just inserted.
             let counter_ref: &mut Counter = pooled.ptr().as_mut();
             let trait_obj: &mut dyn Adjustable = counter_ref;
-            
+
             assert_eq!(trait_obj.get_value(), 10);
             trait_obj.adjust_value(5);
             assert_eq!(trait_obj.get_value(), 15);

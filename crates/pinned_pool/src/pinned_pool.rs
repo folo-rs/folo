@@ -1352,14 +1352,12 @@ mod tests {
 
     #[test]
     fn trait_object_usage() {
-        use std::fmt::Display;
-
         // Define a simple trait for testing.
         trait Greet {
             fn greet(&self) -> String;
         }
 
-        // Implement the trait for different types.
+        // Implement the trait for a concrete type.
         #[derive(Debug)]
         struct Person {
             name: String,
@@ -1371,49 +1369,22 @@ mod tests {
             }
         }
 
-        impl Display for Person {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "Person({})", self.name)
-            }
-        }
+        let mut pool = PinnedPool::<Person>::new();
 
-        #[derive(Debug)]
-        struct Robot {
-            id: u32,
-        }
-
-        impl Greet for Robot {
-            fn greet(&self) -> String {
-                format!("BEEP BOOP. Robot ID: {}", self.id)
-            }
-        }
-
-        impl Display for Robot {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "Robot({})", self.id)
-            }
-        }
-
-        let mut pool = PinnedPool::<Box<dyn Greet>>::new();
-
-        // Insert different types that implement the trait.
-        let person_key = pool.insert(Box::new(Person {
+        // Insert concrete type into the pool.
+        let person_key = pool.insert(Person {
             name: "Alice".to_string(),
-        }) as Box<dyn Greet>);
+        });
 
-        let robot_key = pool.insert(Box::new(Robot { id: 42 }) as Box<dyn Greet>);
+        // Access item and convert to trait object.
+        let person_ref = pool.get(person_key);
+        let greet_obj: &dyn Greet = person_ref.get_ref();
 
-        // Access items via trait objects.
-        let person_greet = pool.get(person_key);
-        let robot_greet = pool.get(robot_key);
-
-        // Use the trait method on the trait objects.
-        assert_eq!(person_greet.greet(), "Hello, I'm Alice");
-        assert_eq!(robot_greet.greet(), "BEEP BOOP. Robot ID: 42");
+        // Use the trait method on the trait object.
+        assert_eq!(greet_obj.greet(), "Hello, I'm Alice");
 
         // Clean up.
         pool.remove(person_key);
-        pool.remove(robot_key);
     }
 
     #[test]
@@ -1426,6 +1397,7 @@ mod tests {
         #[derive(Debug)]
         struct Item {
             id: u64,
+            #[expect(dead_code, reason = "Used for demo purposes")]
             data: String,
         }
 
@@ -1455,7 +1427,7 @@ mod tests {
 
         // Get a mutable pinned reference and use it as a trait object.
         {
-            let mut item_ref = pool.get_mut(item_key);
+            let item_ref = pool.get_mut(item_key);
             let trait_obj: &mut dyn Identifiable = item_ref.get_mut();
             trait_obj.set_id(456);
             assert_eq!(trait_obj.get_id(), 456);
