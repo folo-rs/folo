@@ -1,0 +1,109 @@
+name: 'Setup Environment'
+description: 'Setup development environment for Folo project'
+inputs:
+  platform:
+    description: 'Platform type (linux or windows)'
+    required: true
+  cache-key-suffix:
+    description: 'Suffix for cache keys to differentiate between workflows'
+    required: true
+  install-system-deps:
+    description: 'Whether to install Linux system dependencies'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install system dependencies (Linux)
+      if: inputs.install-system-deps == 'true' && inputs.platform == 'linux'
+      shell: bash
+      run: |
+        sudo apt update
+        sudo apt install -y git git-lfs build-essential cmake gcc make curl
+        # Set up Git LFS
+        git lfs install
+    
+    - name: Install PowerShell 7 (Linux)
+      if: inputs.install-system-deps == 'true' && inputs.platform == 'linux'
+      shell: bash
+      run: |
+        # Download and install PowerShell 7
+        wget -q "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"
+        sudo dpkg -i packages-microsoft-prod.deb
+        sudo apt update
+        sudo apt install -y powershell
+        # Verify PowerShell installation
+        pwsh -c "Write-Host 'PowerShell installed successfully'"
+    
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    
+    - name: Install nightly Rust toolchain
+      uses: dtolnay/rust-toolchain@nightly
+      with:
+        components: miri, rustfmt
+    
+    - name: Setup Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        # Cache even on build failures to speed up subsequent runs
+        cache-on-failure: true
+        shared-key: folo-${{ inputs.cache-key-suffix }}
+    
+    - name: Cache cargo tools
+      id: cache-cargo-tools
+      uses: actions/cache@v4
+      with:
+        # Cache installed cargo tools to avoid reinstalling them on every run
+        path: ~/.cargo/bin
+        key: cargo-tools-${{ inputs.cache-key-suffix }}-${{ hashFiles('just_setup.just') }}
+        restore-keys: |
+          cargo-tools-${{ inputs.cache-key-suffix }}-
+    
+    - name: Install just
+      if: steps.cache-cargo-tools.outputs.cache-hit != 'true' || inputs.platform == 'linux'
+      shell: bash
+      run: cargo install just --locked
+    
+    - name: Configure Git (Windows)
+      if: inputs.platform == 'windows'
+      shell: pwsh
+      run: git config --local include.path ./.gitconfig
+    
+    - name: Install development tools
+      if: steps.cache-cargo-tools.outputs.cache-hit != 'true'
+      shell: bash
+      run: just install-tools
+    
+    - name: Verify environment setup (Linux)
+      if: inputs.platform == 'linux'
+      shell: bash
+      run: |
+        echo "Verifying installed tools..."
+        which just
+        which cargo
+        which rustc
+        cargo --version
+        rustc --version
+        pwsh --version
+        # Check if critical cargo tools are available
+        cargo nextest --version || echo "cargo-nextest not available"
+        cargo machete --version || echo "cargo-machete not available"
+        cargo sort-derives --version || echo "cargo-sort-derives not available"
+        echo "Environment setup complete"
+    
+    - name: Verify environment setup (Windows)
+      if: inputs.platform == 'windows'
+      shell: pwsh
+      run: |
+        Write-Host "Verifying installed tools..."
+        just --version
+        cargo --version
+        rustc --version
+        Get-Command pwsh
+        # Check if critical cargo tools are available
+        try { cargo nextest --version } catch { Write-Host "cargo-nextest not available" }
+        try { cargo machete --version } catch { Write-Host "cargo-machete not available" }
+        try { cargo sort-derives --version } catch { Write-Host "cargo-sort-derives not available" }
+        Write-Host "Environment setup complete"
