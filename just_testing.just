@@ -28,6 +28,9 @@ test-benches FILTER="":
 test-docs FILTER="":
     cargo test {{ target_package }} --all-features --doc {{ FILTER }}
 
+# Run all stand-alone example binaries to ensure they complete without panicking.
+# Each example has a 30-second timeout to handle examples that run indefinitely.
+# Platform-specific examples are automatically skipped when not supported.
 [group('testing')]
 [script]
 run-examples:
