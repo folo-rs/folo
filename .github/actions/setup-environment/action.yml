@@ -4,16 +4,12 @@ inputs:
   cache-key-suffix:
     description: 'Suffix for cache keys to differentiate between workflows'
     required: true
-  install-linux-deps:
-    description: 'Whether to install Linux system dependencies'
-    required: false
-    default: 'false'
 
 runs:
   using: 'composite'
   steps:
     - name: Install system dependencies (Linux)
-      if: inputs.install-linux-deps == 'true' && runner.os == 'Linux'
+      if: runner.os == 'Linux'
       shell: bash
       run: |
         sudo apt update
@@ -22,7 +18,7 @@ runs:
         git lfs install
     
     - name: Install PowerShell 7 (Linux)
-      if: inputs.install-linux-deps == 'true' && runner.os == 'Linux'
+      if: runner.os == 'Linux'
       shell: bash
       run: |
         # Download and install PowerShell 7
@@ -76,19 +72,7 @@ runs:
       shell: bash
       run: |
         echo "Verifying installed tools..."
-        which just
-        which cargo
-        which rustc
+        just --version
         cargo --version
         rustc --version
-        # Check PowerShell on both platforms
-        if command -v pwsh &> /dev/null; then
-          pwsh --version
-        else
-          echo "PowerShell not available"
-        fi
-        # Check if critical cargo tools are available
-        cargo nextest --version || echo "cargo-nextest not available"
-        cargo machete --version || echo "cargo-machete not available"
-        cargo sort-derives --version || echo "cargo-sort-derives not available"
         echo "Environment setup complete"

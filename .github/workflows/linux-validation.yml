@@ -18,7 +18,6 @@ jobs:
       uses: ./.github/actions/setup-environment
       with:
         cache-key-suffix: linux
-        install-linux-deps: true
     
     - name: Run validation
       run: just validate-local
