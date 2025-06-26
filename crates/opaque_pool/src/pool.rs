@@ -32,7 +32,10 @@ fn generate_pool_id() -> u64 {
 ///
 /// # Resource usage
 ///
-/// As of today, the collection never shrinks, though future versions may offer facilities to do so.
+/// The collection automatically grows as items are added. To reduce memory usage after items have
+/// been removed, use the [`shrink_to_fit()`][1] method to release unused capacity.
+///
+/// [1]: Self::shrink_to_fit
 ///
 /// # Example
 ///
@@ -67,8 +70,8 @@ pub struct OpaquePool {
 
     /// We use a Vec here to allow for dynamic capacity growth.
     ///
-    /// For now, we only grow this Vec but in theory, one could implement shrinking as well
-    /// by removing empty slabs.
+    /// The Vec can grow as items are added and can shrink when empty slabs are removed via
+    /// `shrink_to_fit()`.
     slabs: Vec<OpaqueSlab>,
 
     /// Lowest index of any slab that has a vacant slot, if known. We use this to avoid scanning
@@ -257,6 +260,66 @@ impl OpaquePool {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.slabs.iter().all(OpaqueSlab::is_empty)
+    }
+
+    /// Shrinks the pool's memory usage by dropping unused capacity.
+    ///
+    /// This method reduces the pool's memory footprint by removing unused capacity
+    /// where possible. Items currently in the pool are preserved.
+    ///
+    /// The pool's capacity may be reduced, but all existing handles remain valid.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    ///
+    /// use opaque_pool::OpaquePool;
+    ///
+    /// let mut pool = OpaquePool::builder().layout_of::<u32>().build();
+    ///
+    /// // Insert some items to create slabs
+    /// // SAFETY: u32 matches the layout used to create the pool.
+    /// let pooled1 = unsafe { pool.insert(1u32) };
+    /// // SAFETY: u32 matches the layout used to create the pool.
+    /// let pooled2 = unsafe { pool.insert(2u32) };
+    /// let initial_capacity = pool.capacity();
+    ///
+    /// // Remove all items
+    /// pool.remove(pooled1);
+    /// pool.remove(pooled2);
+    ///
+    /// // Capacity remains the same until we shrink
+    /// assert_eq!(pool.capacity(), initial_capacity);
+    ///
+    /// // Shrink to fit reduces capacity
+    /// pool.shrink_to_fit();
+    /// assert!(pool.capacity() <= initial_capacity);
+    /// ```
+    pub fn shrink_to_fit(&mut self) {
+        // Find the last non-empty slab by scanning from the end
+        let new_len = self
+            .slabs
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(idx, slab)| {
+                if !slab.is_empty() {
+                    Some(idx.checked_add(1).expect("slab index cannot overflow"))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+
+        // If we're about to remove slabs, we need to invalidate the vacant slot cache
+        // since it might point to a slab that will no longer exist
+        if new_len < self.slabs.len() {
+            self.slab_with_vacant_slot_index = None;
+        }
+
+        // Truncate the slabs vector to remove empty slabs from the end
+        self.slabs.truncate(new_len);
     }
 
     /// Inserts a value into the pool and returns a handle that acts as the key and supplies
@@ -961,5 +1024,120 @@ mod tests {
             pool.remove(item);
         }
         pool.remove(pooled_filled);
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation, reason = "test values are small")]
+    fn shrink_to_fit_removes_empty_slabs() {
+        let layout = Layout::new::<u32>();
+        let mut pool = OpaquePool::builder().layout(layout).build();
+
+        // Insert enough items to create multiple slabs
+        let mut pooled_items = Vec::new();
+        for i in 0..(DEFAULT_SLAB_CAPACITY.get() * 3) {
+            pooled_items.push(unsafe { pool.insert(i as u32) });
+        }
+
+        // Verify we have 3 slabs
+        assert_eq!(pool.capacity(), DEFAULT_SLAB_CAPACITY.get() * 3);
+
+        // Remove all items from the last two slabs, keeping the first slab full
+        let remaining_items: Vec<_> = pooled_items.drain(DEFAULT_SLAB_CAPACITY.get()..).collect();
+        for item in remaining_items {
+            pool.remove(item);
+        }
+
+        // Capacity should still be 3 slabs
+        assert_eq!(pool.capacity(), DEFAULT_SLAB_CAPACITY.get() * 3);
+
+        // Shrink to fit should remove the empty slabs
+        pool.shrink_to_fit();
+
+        // Now capacity should be 1 slab
+        assert_eq!(pool.capacity(), DEFAULT_SLAB_CAPACITY.get());
+
+        // Verify the remaining items are still accessible
+        for (i, pooled) in pooled_items
+            .iter()
+            .take(DEFAULT_SLAB_CAPACITY.get())
+            .enumerate()
+        {
+            unsafe {
+                assert_eq!(pooled.ptr().read(), i as u32);
+            }
+        }
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation, reason = "test values are small")]
+    fn shrink_to_fit_all_empty_slabs() {
+        let layout = Layout::new::<u32>();
+        let mut pool = OpaquePool::builder().layout(layout).build();
+
+        // Insert items to create slabs
+        let mut pooled_items = Vec::new();
+        for i in 0..(DEFAULT_SLAB_CAPACITY.get() * 2) {
+            pooled_items.push(unsafe { pool.insert(i as u32) });
+        }
+
+        // Verify we have 2 slabs
+        assert_eq!(pool.capacity(), DEFAULT_SLAB_CAPACITY.get() * 2);
+
+        // Remove all items
+        for item in pooled_items {
+            pool.remove(item);
+        }
+
+        // Capacity should still be 2 slabs
+        assert_eq!(pool.capacity(), DEFAULT_SLAB_CAPACITY.get() * 2);
+
+        // Shrink to fit should remove all slabs
+        pool.shrink_to_fit();
+
+        // Now capacity should be 0
+        assert_eq!(pool.capacity(), 0);
+        assert!(pool.is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation, reason = "test values are small")]
+    fn shrink_to_fit_no_empty_slabs() {
+        let layout = Layout::new::<u32>();
+        let mut pool = OpaquePool::builder().layout(layout).build();
+
+        // Insert items to fill slabs completely
+        let mut pooled_items = Vec::new();
+        for i in 0..(DEFAULT_SLAB_CAPACITY.get() * 2) {
+            pooled_items.push(unsafe { pool.insert(i as u32) });
+        }
+
+        let original_capacity = pool.capacity();
+
+        // Shrink to fit should not change anything since no slabs are empty
+        pool.shrink_to_fit();
+
+        assert_eq!(pool.capacity(), original_capacity);
+
+        // Verify all items are still accessible
+        for (i, pooled) in pooled_items.iter().enumerate() {
+            unsafe {
+                assert_eq!(pooled.ptr().read(), i as u32);
+            }
+        }
+    }
+
+    #[test]
+    fn shrink_to_fit_empty_pool() {
+        let layout = Layout::new::<u32>();
+        let mut pool = OpaquePool::builder().layout(layout).build();
+
+        // Pool starts empty
+        assert_eq!(pool.capacity(), 0);
+
+        // Shrink to fit should not change anything
+        pool.shrink_to_fit();
+
+        assert_eq!(pool.capacity(), 0);
+        assert!(pool.is_empty());
     }
 }

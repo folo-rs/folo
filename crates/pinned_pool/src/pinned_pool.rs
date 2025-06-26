@@ -33,21 +33,23 @@ use crate::{DropPolicy, PinnedPoolBuilder, PinnedSlab, PinnedSlabInserter};
 ///
 /// # Resource usage
 ///
-/// As of today, the collection never shrinks, though future versions may offer facilities to do so.
+/// The collection automatically grows as items are added. To reduce memory usage after items have
+/// been removed, use the [`shrink_to_fit()`][6] method to release unused capacity.
 ///
 /// [1]: Self::get
 /// [2]: Self::get_mut
 /// [3]: Self::insert
 /// [4]: PinnedPoolInserter::insert
 /// [5]: PinnedPoolInserter::insert_mut
+/// [6]: Self::shrink_to_fit
 /// [7]: PinnedPoolInserter::key
 #[derive(Debug)]
 pub struct PinnedPool<T> {
     /// The slabs that provide the storage of the pool.
     /// We use a Vec here to allow for dynamic capacity growth.
     ///
-    /// For now, we only grow this Vec but in theory, one could implement shrinking as well
-    /// by removing empty slabs (we cannot touch non-empty slabs because we made a promise to pin).
+    /// The Vec can grow as items are added and can shrink when empty slabs are removed via
+    /// `shrink_to_fit()`. We cannot remove non-empty slabs because we made a promise to pin.
     slabs: Vec<PinnedSlab<T, SLAB_CAPACITY>>,
 
     /// Lowest index of any slab that has a vacant slot, if known. We use this to avoid scanning
@@ -255,6 +257,63 @@ impl<T> PinnedPool<T> {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.slabs.iter().all(PinnedSlab::is_empty)
+    }
+
+    /// Shrinks the pool's memory usage by dropping unused capacity.
+    ///
+    /// This method reduces the pool's memory footprint by removing unused capacity
+    /// where possible. Items currently in the pool are preserved and continue to
+    /// maintain their pinning guarantees.
+    ///
+    /// The pool's capacity may be reduced, but all existing keys remain valid.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pinned_pool::PinnedPool;
+    ///
+    /// let mut pool = PinnedPool::<u32>::new();
+    ///
+    /// // Insert some items to create slabs
+    /// let key1 = pool.insert(1);
+    /// let key2 = pool.insert(2);
+    /// let initial_capacity = pool.capacity();
+    ///
+    /// // Remove all items
+    /// pool.remove(key1);
+    /// pool.remove(key2);
+    ///
+    /// // Capacity remains the same until we shrink
+    /// assert_eq!(pool.capacity(), initial_capacity);
+    ///
+    /// // Shrink to fit reduces capacity
+    /// pool.shrink_to_fit();
+    /// assert!(pool.capacity() <= initial_capacity);
+    /// ```
+    pub fn shrink_to_fit(&mut self) {
+        // Find the last non-empty slab by scanning from the end
+        let new_len = self
+            .slabs
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(idx, slab)| {
+                if !slab.is_empty() {
+                    Some(idx.checked_add(1).expect("slab index cannot overflow"))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+
+        // If we're about to remove slabs, we need to invalidate the vacant slot cache
+        // since it might point to a slab that will no longer exist
+        if new_len < self.slabs.len() {
+            self.slab_with_vacant_slot_index = None;
+        }
+
+        // Truncate the slabs vector to remove empty slabs from the end
+        self.slabs.truncate(new_len);
     }
 
     /// Gets a pinned reference to an item in the pool by its key.
@@ -1138,5 +1197,107 @@ mod tests {
         assert_eq!(pool.get(key).get_ref(), &1234);
 
         pool.remove(key);
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation, reason = "test values are small")]
+    fn shrink_to_fit_removes_empty_slabs() {
+        let mut pool = PinnedPool::<u32>::new();
+
+        // Insert enough items to create multiple slabs
+        let mut keys = Vec::new();
+        for i in 0..(SLAB_CAPACITY * 3) {
+            keys.push(pool.insert(i as u32));
+        }
+
+        // Verify we have 3 slabs
+        assert_eq!(pool.capacity(), SLAB_CAPACITY * 3);
+
+        // Remove all items from the last two slabs, keeping the first slab full
+        for key in keys.iter().skip(SLAB_CAPACITY) {
+            pool.remove(*key);
+        }
+
+        // Capacity should still be 3 slabs
+        assert_eq!(pool.capacity(), SLAB_CAPACITY * 3);
+
+        // Shrink to fit should remove the empty slabs
+        pool.shrink_to_fit();
+
+        // Now capacity should be 1 slab
+        assert_eq!(pool.capacity(), SLAB_CAPACITY);
+
+        // Verify the remaining items are still accessible
+        for (i, key) in keys.iter().take(SLAB_CAPACITY).enumerate() {
+            assert_eq!(*pool.get(*key), i as u32);
+        }
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation, reason = "test values are small")]
+    fn shrink_to_fit_all_empty_slabs() {
+        let mut pool = PinnedPool::<u32>::new();
+
+        // Insert items to create slabs
+        let mut keys = Vec::new();
+        for i in 0..(SLAB_CAPACITY * 2) {
+            keys.push(pool.insert(i as u32));
+        }
+
+        // Verify we have 2 slabs
+        assert_eq!(pool.capacity(), SLAB_CAPACITY * 2);
+
+        // Remove all items
+        for key in keys {
+            pool.remove(key);
+        }
+
+        // Capacity should still be 2 slabs
+        assert_eq!(pool.capacity(), SLAB_CAPACITY * 2);
+
+        // Shrink to fit should remove all slabs
+        pool.shrink_to_fit();
+
+        // Now capacity should be 0
+        assert_eq!(pool.capacity(), 0);
+        assert!(pool.is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation, reason = "test values are small")]
+    fn shrink_to_fit_no_empty_slabs() {
+        let mut pool = PinnedPool::<u32>::new();
+
+        // Insert items to fill slabs completely
+        let mut keys = Vec::new();
+        for i in 0..(SLAB_CAPACITY * 2) {
+            keys.push(pool.insert(i as u32));
+        }
+
+        let original_capacity = pool.capacity();
+
+        // Shrink to fit should not change anything since no slabs are empty
+        pool.shrink_to_fit();
+
+        assert_eq!(pool.capacity(), original_capacity);
+
+        // Verify all items are still accessible
+        for (i, key) in keys.iter().enumerate() {
+            assert_eq!(*pool.get(*key), i as u32);
+        }
+    }
+
+    #[test]
+    fn shrink_to_fit_empty_pool() {
+        let mut pool = PinnedPool::<u32>::new();
+
+        // Pool starts empty
+        assert_eq!(pool.capacity(), 0);
+
+        // Shrink to fit should not change anything
+        pool.shrink_to_fit();
+
+        assert_eq!(pool.capacity(), 0);
+        assert!(pool.is_empty());
     }
 }
