@@ -1,0 +1,29 @@
+[package]
+name = "once_event"
+description = "A lightweight event that can deliver a signal at most once"
+publish = true
+version = "0.1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+pinned_pool = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+futures = { workspace = true }
+mutants = { workspace = true }
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "once_event"
+harness = false
