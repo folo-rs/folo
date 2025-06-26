@@ -47,6 +47,7 @@ jobs:
         shared-key: "folo-linux"
     
     - name: Cache cargo tools
+      id: cache-cargo-tools
       uses: actions/cache@v4
       with:
         # Cache installed cargo tools to avoid reinstalling them on every run
@@ -59,6 +60,7 @@ jobs:
       run: cargo install just --locked
     
     - name: Install development tools
+      if: steps.cache-cargo-tools.outputs.cache-hit != 'true'
       run: just install-tools
     
     - name: Verify environment setup
