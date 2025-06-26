@@ -25,13 +25,12 @@ fn entrypoint(c: &mut Criterion) {
             .unwrap(),
     );
 
-    let two_threads = ThreadPool::new(
-        &ProcessorSet::builder()
-            .same_memory_region()
-            .performance_processors_only()
-            .take(nz!(2))
-            .unwrap(),
-    );
+    // Not every system is going to have at least two processors, so only some can do this.
+    let two_threads = ProcessorSet::builder()
+        .same_memory_region()
+        .performance_processors_only()
+        .take(nz!(2))
+        .map(|x| ThreadPool::new(&x));
 
     let all_threads = ThreadPool::default();
 
@@ -87,18 +86,20 @@ fn entrypoint(c: &mut Criterion) {
     });
 
     // Two threads perform "get" in a loop.
-    group.bench_function("par_get", |b| {
-        region_cached!(static VALUE: u32 = 99942);
+    if let Some(ref thread_pool) = two_threads {
+        group.bench_function("par_get", |b| {
+            region_cached!(static VALUE: u32 = 99942);
 
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &two_threads,
-                iters,
-                || (),
-                |()| _ = black_box(VALUE.get_cached()),
-            )
+            b.iter_custom(|iters| {
+                bench_on_threadpool(
+                    thread_pool,
+                    iters,
+                    || (),
+                    |()| _ = black_box(VALUE.get_cached()),
+                )
+            });
         });
-    });
+    }
 
     // All threads perform "get" in a loop.
     group.bench_function("par_get_all", |b| {
@@ -136,42 +137,46 @@ fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("region_cached_get_set_pin");
 
     // One thread performs "get" in a loop, another performs "set" in a loop.
-    group.bench_function("par_get_set", |b| {
-        region_cached!(static VALUE: u32 = 99942);
+    if let Some(ref thread_pool) = two_threads {
+        group.bench_function("par_get_set", |b| {
+            region_cached!(static VALUE: u32 = 99942);
 
-        b.iter_custom(|iters| {
-            bench_on_threadpool_ab(
-                &two_threads,
-                iters,
-                |_| (),
-                |worker, ()| match worker {
-                    AbWorker::A => _ = black_box(VALUE.get_cached()),
-                    AbWorker::B => VALUE.set_global(black_box(566)),
-                },
-            )
+            b.iter_custom(|iters| {
+                bench_on_threadpool_ab(
+                    thread_pool,
+                    iters,
+                    |_| (),
+                    |worker, ()| match worker {
+                        AbWorker::A => _ = black_box(VALUE.get_cached()),
+                        AbWorker::B => VALUE.set_global(black_box(566)),
+                    },
+                )
+            });
         });
-    });
+    }
 
     // One thread performs "with" in a loop, another performs "set" in a loop.
     // The "with" thread is slow, also doing some "other stuff" in the callback.
-    group.bench_function("par_with_set_busy", |b| {
-        region_cached!(static VALUE: u32 = 99942);
+    if let Some(ref thread_pool) = two_threads {
+        group.bench_function("par_with_set_busy", |b| {
+            region_cached!(static VALUE: u32 = 99942);
 
-        b.iter_custom(|iters| {
-            bench_on_threadpool_ab(
-                &two_threads,
-                iters,
-                |_| (),
-                |worker, ()| match worker {
-                    AbWorker::A => VALUE.with_cached(|v| {
-                        _ = black_box(*v);
-                        thread::yield_now();
-                    }),
-                    AbWorker::B => VALUE.set_global(black_box(566)),
-                },
-            )
+            b.iter_custom(|iters| {
+                bench_on_threadpool_ab(
+                    thread_pool,
+                    iters,
+                    |_| (),
+                    |worker, ()| match worker {
+                        AbWorker::A => VALUE.with_cached(|v| {
+                            _ = black_box(*v);
+                            thread::yield_now();
+                        }),
+                        AbWorker::B => VALUE.set_global(black_box(566)),
+                    },
+                )
+            });
         });
-    });
+    }
 
     if let Some(ref thread_pool) = two_memory_regions {
         // One thread performs "get" in a loop, another performs "set" in a loop.
