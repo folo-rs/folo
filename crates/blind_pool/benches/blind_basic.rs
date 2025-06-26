@@ -16,6 +16,13 @@ criterion_main!(benches);
 type TestItem = usize;
 const TEST_VALUE: TestItem = 1024;
 
+// Custom struct with same size as u64 but different alignment
+#[repr(C, align(8))]
+struct AlignedU32 {
+    value: u32,
+    _padding: u32,
+}
+
 fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("bp_fill");
 
@@ -47,13 +54,6 @@ fn entrypoint(c: &mut Criterion) {
 
     let mut mixed_group = c.benchmark_group("bp_types");
 
-    // Custom struct with same size as u64 but different alignment
-    #[repr(C, align(8))]
-    struct AlignedU32 {
-        value: u32,
-        _padding: u32,
-    }
-
     mixed_group.bench_function("single_type", |b| {
         b.iter(|| {
             let mut pool = BlindPool::new();
@@ -69,6 +69,7 @@ fn entrypoint(c: &mut Criterion) {
             let mut pool = BlindPool::new();
             for i in 0_u64..500 {
                 let _pooled1 = pool.insert(i);
+                #[allow(clippy::cast_possible_truncation, reason = "Intentional truncation for benchmark")]
                 let _pooled2 = pool.insert(AlignedU32 {
                     value: i as u32,
                     _padding: 0,
