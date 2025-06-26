@@ -40,6 +40,7 @@ jobs:
           cargo-tools-windows-
     
     - name: Install just
+      if: steps.cache-cargo-tools.outputs.cache-hit != 'true'
       run: cargo install just --locked
     
     - name: Configure Git
