@@ -1,6 +1,9 @@
 //! Benchmarks for the `once_event` crate.
 
-#![allow(missing_docs, reason = "Benchmarks do not require public documentation")]
+#![allow(
+    missing_docs,
+    reason = "Benchmarks do not require public documentation"
+)]
 
 use std::rc::Rc;
 use std::task;

@@ -23,14 +23,20 @@ impl<T> WithRefCount<T> {
     }
 
     pub(crate) fn inc_ref(&mut self) {
-        #[expect(clippy::arithmetic_side_effects, reason = "Reference counting increment cannot overflow in practice")]
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "Reference counting increment cannot overflow in practice"
+        )]
         {
             self.ref_count += 1;
         }
     }
 
     pub(crate) fn dec_ref(&mut self) {
-        #[expect(clippy::arithmetic_side_effects, reason = "Reference counting decrement cannot underflow as it is only called when references exist")]
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "Reference counting decrement cannot underflow as it is only called when references exist"
+        )]
         {
             self.ref_count -= 1;
         }

@@ -22,14 +22,14 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{self, Waker};
 
-use crate::pinned_rc::{RcSlabRc, RefSlabRc, SlabRcBox, SlabRcStorage, UnsafeSlabRc};
+use crate::pinned_rc::{PinnedRcBox, PinnedRcStorage, RcPinnedRc, RefPinnedRc, UnsafePinnedRc};
 use crate::with_ref_count::WithRefCount;
 
 /// Shorthand type for defining the slab-based backing storage for `OnceEvent` instances.
 ///
 /// Use `OnceEvent::new_storage()` to easily create a new instance without having to remember each
 /// layer of types inside this type.
-pub type OnceEventSlabStorage<T> = SlabRcStorage<OnceEvent<T>>;
+pub type OnceEventSlabStorage<T> = PinnedRcStorage<OnceEvent<T>>;
 
 /// An asynchronous event that can be triggered at most once to deliver a value of type T to at most
 /// one listener awaiting that value.
@@ -140,7 +140,7 @@ impl<T> OnceEvent<T> {
     ///   must be pinned.
     #[must_use]
     pub fn new_slab_storage() -> OnceEventSlabStorage<T> {
-        SlabRcBox::new_storage_ref()
+        PinnedRcBox::new_storage_ref()
     }
 
     /// This embeds a single event directly into a data structure owned by the caller. It is the
@@ -154,7 +154,7 @@ impl<T> OnceEvent<T> {
     /// Creates an event in storage that is referenced by a direct shared reference. This is a cheap
     /// and efficient mechanism but requires the caller to track lifetimes across the type graph.
     pub fn new_in_ref(storage: &OnceEventSlabStorage<T>) -> (RefSender<'_, T>, RefReceiver<'_, T>) {
-        let event = SlabRcBox::new(Self::new()).insert_into_ref(storage);
+        let event = PinnedRcBox::new(Self::new()).insert_into_ref(storage);
 
         (
             RefSender {
@@ -168,7 +168,7 @@ impl<T> OnceEvent<T> {
     /// incurs minor reference counting overhead. At the same time, it saves you from lifetimes
     /// while ensuring safety.
     pub fn new_in_rc(storage: Rc<OnceEventSlabStorage<T>>) -> (RcSender<T>, RcReceiver<T>) {
-        let event = SlabRcBox::new(Self::new()).insert_into_rc(storage);
+        let event = PinnedRcBox::new(Self::new()).insert_into_rc(storage);
 
         (
             RcSender {
@@ -193,7 +193,7 @@ impl<T> OnceEvent<T> {
         storage: Pin<&OnceEventSlabStorage<T>>,
     ) -> (UnsafeSender<T>, UnsafeReceiver<T>) {
         // SAFETY: The caller guarantees that the storage outlives all smart pointers.
-        let event = unsafe { SlabRcBox::new(Self::new()).insert_into_unsafe(storage) };
+        let event = unsafe { PinnedRcBox::new(Self::new()).insert_into_unsafe(storage) };
 
         (
             UnsafeSender {
@@ -255,7 +255,7 @@ enum EventState<T> {
 #[derive(Debug)]
 /// Sender side of a ref-based `OnceEvent`.
 pub struct RefSender<'storage, T> {
-    event: RefSlabRc<'storage, OnceEvent<T>>,
+    event: RefPinnedRc<'storage, OnceEvent<T>>,
 }
 
 impl<T> RefSender<'_, T> {
@@ -268,7 +268,7 @@ impl<T> RefSender<'_, T> {
 #[derive(Debug)]
 /// Receiver side of a ref-based `OnceEvent`.
 pub struct RefReceiver<'storage, T> {
-    event: RefSlabRc<'storage, OnceEvent<T>>,
+    event: RefPinnedRc<'storage, OnceEvent<T>>,
 }
 
 impl<T> Future for RefReceiver<'_, T> {
@@ -286,7 +286,7 @@ impl<T> Future for RefReceiver<'_, T> {
 #[derive(Debug)]
 /// Sender side of an RC-based `OnceEvent`.
 pub struct RcSender<T> {
-    event: RcSlabRc<OnceEvent<T>>,
+    event: RcPinnedRc<OnceEvent<T>>,
 }
 
 impl<T> RcSender<T> {
@@ -299,7 +299,7 @@ impl<T> RcSender<T> {
 #[derive(Debug)]
 /// Receiver side of an RC-based `OnceEvent`.
 pub struct RcReceiver<T> {
-    event: RcSlabRc<OnceEvent<T>>,
+    event: RcPinnedRc<OnceEvent<T>>,
 }
 
 impl<T> Future for RcReceiver<T> {
@@ -317,7 +317,7 @@ impl<T> Future for RcReceiver<T> {
 #[derive(Debug)]
 /// Sender side of an unsafe pointer-based `OnceEvent`.
 pub struct UnsafeSender<T> {
-    event: UnsafeSlabRc<OnceEvent<T>>,
+    event: UnsafePinnedRc<OnceEvent<T>>,
 }
 
 impl<T> UnsafeSender<T> {
@@ -330,7 +330,7 @@ impl<T> UnsafeSender<T> {
 #[derive(Debug)]
 /// Receiver side of an unsafe pointer-based `OnceEvent`.
 pub struct UnsafeReceiver<T> {
-    event: UnsafeSlabRc<OnceEvent<T>>,
+    event: UnsafePinnedRc<OnceEvent<T>>,
 }
 
 impl<T> Future for UnsafeReceiver<T> {
