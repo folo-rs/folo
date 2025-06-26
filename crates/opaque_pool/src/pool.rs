@@ -817,4 +817,149 @@ mod tests {
         pool.remove(pooled_i64);
         assert!(pool.is_empty());
     }
+
+    #[test]
+    fn fill_first_slab_before_allocating_second() {
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
+
+        for _ in 0..DEFAULT_SLAB_CAPACITY.get() {
+            _ = unsafe { pool.insert(1234_u32) };
+        }
+
+        assert_eq!(pool.slabs.len(), 1);
+        assert!(pool.slabs[0].is_full());
+
+        // This will allocate a second slab.
+        _ = unsafe { pool.insert(1234_u32) };
+
+        assert_eq!(pool.slabs.len(), 2);
+    }
+
+    #[test]
+    fn fill_hole_before_allocating_new_slab() {
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
+
+        // Fill the first slab.
+        let mut pooled_items = Vec::new();
+        for _ in 0..DEFAULT_SLAB_CAPACITY.get() {
+            pooled_items.push(unsafe { pool.insert(1234_u32) });
+        }
+
+        // Remove the first item to create a hole.
+        let first_item = pooled_items.remove(0);
+        pool.remove(first_item);
+
+        // This will fill the hole instead of allocating a new slab.
+        let pooled_filled = unsafe { pool.insert(5678_u32) };
+
+        assert_eq!(pooled_filled.coordinates.slab_index, 0);
+        assert_eq!(pooled_filled.coordinates.index_in_slab, 0);
+        unsafe {
+            assert_eq!(pooled_filled.ptr().read(), 5678);
+        }
+
+        // Clean up remaining items.
+        for item in pooled_items {
+            pool.remove(item);
+        }
+        pool.remove(pooled_filled);
+    }
+
+    #[test]
+    fn fill_first_hole_ascending() {
+        // If two slabs have a hole, we always fill a hole in the first (index-wise) slab.
+        // We do not care which hole we fill (there may be multiple per slab), we just care
+        // about which slab it is in.
+        //
+        // We create the holes in ascending order (first slab first, then second slab).
+
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
+
+        // Fill the first slab.
+        let mut first_slab_items = Vec::new();
+        for _ in 0..DEFAULT_SLAB_CAPACITY.get() {
+            first_slab_items.push(unsafe { pool.insert(1234_u32) });
+        }
+
+        // Fill the second slab.
+        let mut second_slab_items = Vec::new();
+        for _ in 0..DEFAULT_SLAB_CAPACITY.get() {
+            second_slab_items.push(unsafe { pool.insert(5678_u32) });
+        }
+
+        // Remove the first item in the first slab to create a hole.
+        let first_slab_first_item = first_slab_items.remove(0);
+        pool.remove(first_slab_first_item);
+
+        // Remove the first item in the second slab to create a hole.
+        let second_slab_first_item = second_slab_items.remove(0);
+        pool.remove(second_slab_first_item);
+
+        // This will fill the hole in the first slab instead of allocating a new slab.
+        let pooled_filled = unsafe { pool.insert(91011_u32) };
+
+        assert_eq!(pooled_filled.coordinates.slab_index, 0);
+        assert_eq!(pooled_filled.coordinates.index_in_slab, 0);
+        unsafe {
+            assert_eq!(pooled_filled.ptr().read(), 91011);
+        }
+
+        // Clean up remaining items.
+        for item in first_slab_items {
+            pool.remove(item);
+        }
+        for item in second_slab_items {
+            pool.remove(item);
+        }
+        pool.remove(pooled_filled);
+    }
+
+    #[test]
+    fn fill_first_hole_descending() {
+        // If two slabs have a hole, we always fill a hole in the first (index-wise) slab.
+        // We do not care which hole we fill (there may be multiple per slab), we just care
+        // about which slab it is in.
+        //
+        // We create the holes in descending order (second slab first, then first slab).
+
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
+
+        // Fill the first slab.
+        let mut first_slab_items = Vec::new();
+        for _ in 0..DEFAULT_SLAB_CAPACITY.get() {
+            first_slab_items.push(unsafe { pool.insert(1234_u32) });
+        }
+
+        // Fill the second slab.
+        let mut second_slab_items = Vec::new();
+        for _ in 0..DEFAULT_SLAB_CAPACITY.get() {
+            second_slab_items.push(unsafe { pool.insert(5678_u32) });
+        }
+
+        // Remove the first item in the second slab to create a hole.
+        let second_slab_first_item = second_slab_items.remove(0);
+        pool.remove(second_slab_first_item);
+
+        // Remove the first item in the first slab to create a hole.
+        let first_slab_first_item = first_slab_items.remove(0);
+        pool.remove(first_slab_first_item);
+
+        // This will fill the hole in the first slab instead of allocating a new slab.
+        let pooled_filled = unsafe { pool.insert(91011_u32) };
+
+        assert_eq!(pooled_filled.coordinates.slab_index, 0);
+        assert_eq!(pooled_filled.coordinates.index_in_slab, 0);
+        unsafe {
+            assert_eq!(pooled_filled.ptr().read(), 91011);
+        }
+
+        // Clean up remaining items.
+        for item in first_slab_items {
+            pool.remove(item);
+        }
+        for item in second_slab_items {
+            pool.remove(item);
+        }
+        pool.remove(pooled_filled);
+    }
 }
