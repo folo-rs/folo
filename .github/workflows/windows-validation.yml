@@ -17,7 +17,6 @@ jobs:
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
       with:
-        toolchain: 1.87
         components: rustfmt, clippy
     
     - name: Install nightly Rust toolchain
@@ -28,12 +27,14 @@ jobs:
     - name: Setup Rust cache
       uses: Swatinem/rust-cache@v2
       with:
+        # Cache even on build failures to speed up subsequent runs
         cache-on-failure: true
         shared-key: "folo-windows"
     
     - name: Cache cargo tools
       uses: actions/cache@v4
       with:
+        # Cache installed cargo tools to avoid reinstalling them on every run
         path: ~/.cargo/bin
         key: cargo-tools-windows-${{ hashFiles('just_setup.just') }}
         restore-keys: |
@@ -46,24 +47,7 @@ jobs:
       run: git config --local include.path ./.gitconfig
     
     - name: Install development tools
-      run: |
-        # Install tools with retry mechanism
-        $retryCount = 0
-        $maxRetries = 3
-        do {
-          try {
-            just install-tools
-            break
-          }
-          catch {
-            $retryCount++
-            if ($retryCount -ge $maxRetries) {
-              throw "Failed to install tools after $maxRetries attempts"
-            }
-            Write-Host "Installation failed, retrying in 30 seconds... (attempt $retryCount of $maxRetries)"
-            Start-Sleep -Seconds 30
-          }
-        } while ($retryCount -lt $maxRetries)
+      run: just install-tools
     
     - name: Verify environment setup
       run: |
@@ -78,16 +62,4 @@ jobs:
         try { cargo sort-derives --version } catch { Write-Host "cargo-sort-derives not available" }
     
     - name: Run validation
-      run: |
-        try {
-          just validate-local
-        }
-        catch {
-          Write-Host "Validation failed with error: $_"
-          Write-Host "Attempting to run individual validation steps..."
-          # Try running key validation steps individually to get better diagnostics
-          try { just format-check } catch { Write-Host "Format check failed: $_" }
-          try { just check dev } catch { Write-Host "Check dev failed: $_" }
-          try { just clippy dev } catch { Write-Host "Clippy dev failed: $_" }
-          throw "Validation failed"
-        }
+      run: just validate-local

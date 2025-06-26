@@ -18,7 +18,7 @@ Prerequisites:
     * vscode-just
     * WSL
 * PowerShell 7
-* Rust development tools for version listed in `rust-toolchain.toml` (currently 1.87)
+* Rust development tools for version listed in `rust-toolchain.toml`
 * `rustup toolchain install nightly --component miri rustfmt`
 * `cargo install just`
 * (Only if publishing releases) GitHub CLI + `gh auth login`
@@ -28,7 +28,7 @@ Setup:
 1. Clone the repo to a directory of your choosing.
 1. Open a terminal in the repo root.
 1. Execute `git config --local include.path ./.gitconfig` to attach the repo-specific Git configuration.
-1. Execute `just install-tools` to install development tools (cargo-machete, cargo-nextest, release-plz, cargo-semver-checks, cargo-audit, cargo-hack, cargo-mutants, cargo-llvm-cov, cargo-sort-derives and nightly toolchain with miri component).
+1. Execute `just install-tools` to install development tools.
 
 Validation:
 
@@ -53,7 +53,7 @@ Prerequisites:
   sudo apt update
   sudo apt install -y powershell
   ```
-* Rust development tools for version listed in `rust-toolchain.toml` (currently 1.87)
+* Rust development tools for version listed in `rust-toolchain.toml`
 * `rustup toolchain install nightly --component miri rustfmt`
 * `cargo install just`
 * If first time Git setup, execute `git config --global credential.helper "/mnt/c/Program\ Files/Git/mingw64/bin/git-credential-manager.exe"` to setup authentication flow
@@ -61,7 +61,7 @@ Prerequisites:
 Setup:
 
 1. Navigate to repo shared with Windows host (under `/mnt/c/`). Do not create a separate clone of the repo for Linux.
-1. Execute `just install-tools` to install development tools (cargo-machete, cargo-nextest, release-plz, cargo-semver-checks, cargo-audit, cargo-hack, cargo-mutants, cargo-llvm-cov, cargo-sort-derives and nightly toolchain with miri component).
+1. Execute `just install-tools` to install development tools.
 1. Open Visual Studio code via `code .`
 1. If first time setup, install required Visual Studio Code extensions:
     * C/C++

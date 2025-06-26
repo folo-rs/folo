@@ -34,7 +34,6 @@ jobs:
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
       with:
-        toolchain: 1.87
         components: rustfmt, clippy
     
     - name: Install nightly Rust toolchain
@@ -45,12 +44,14 @@ jobs:
     - name: Setup Rust cache
       uses: Swatinem/rust-cache@v2
       with:
+        # Cache even on build failures to speed up subsequent runs
         cache-on-failure: true
         shared-key: "folo-linux"
     
     - name: Cache cargo tools
       uses: actions/cache@v4
       with:
+        # Cache installed cargo tools to avoid reinstalling them on every run
         path: ~/.cargo/bin
         key: cargo-tools-linux-${{ hashFiles('just_setup.just') }}
         restore-keys: |
@@ -60,17 +61,7 @@ jobs:
       run: cargo install just --locked
     
     - name: Install development tools
-      run: |
-        # Install tools with retry mechanism and timeout handling
-        timeout 1800 just install-tools || {
-          echo "Installation timed out or failed, retrying with individual components..."
-          # Try installing critical tools individually
-          cargo install cargo-nextest --locked || true
-          cargo install cargo-machete --locked || true  
-          cargo install cargo-sort-derives --locked || true
-          cargo install cargo-llvm-cov --locked || true
-          cargo install cargo-hack --locked || true
-        }
+      run: just install-tools
     
     - name: Verify environment setup
       run: |
@@ -87,13 +78,4 @@ jobs:
         cargo sort-derives --version || echo "cargo-sort-derives not available"
     
     - name: Run validation
-      run: |
-        # Run validation with better error handling
-        if ! just validate-local; then
-          echo "Validation failed, attempting to run individual validation steps for diagnostics..."
-          # Try running key validation steps individually to get better diagnostics
-          just format-check || echo "Format check failed"
-          just check dev || echo "Check dev failed"
-          just clippy dev || echo "Clippy dev failed"
-          exit 1
-        fi
+      run: just validate-local
