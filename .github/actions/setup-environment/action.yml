@@ -1,8 +1,8 @@
-name: 'Setup Environment'
-description: 'Setup development environment for Folo project'
+name: Setup Environment
+description: Setup development environment for Folo project
 
 runs:
-  using: 'composite'
+  using: composite
   steps:
     - name: Install system dependencies (Linux)
       if: runner.os == 'Linux'
