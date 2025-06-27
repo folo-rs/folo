@@ -289,53 +289,48 @@ impl<T> ByRefEventReceiver<'_, T> {
 #[cfg(test)]
 mod tests {
     use static_assertions::assert_not_impl_any;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
     use super::*;
 
-    /// Runs a test with a 10-second watchdog timer to prevent infinite hangs.
-    /// If the test does not complete within 10 seconds, the watchdog thread will panic.
-    fn with_watchdog<F>(test_fn: F)
+    /// Runs a test with a 10-second timeout to prevent infinite hangs.
+    /// If the test does not complete within 10 seconds, the function will panic.
+    fn with_watchdog<F, R>(test_fn: F) -> R
     where
-        F: FnOnce() + Send + 'static,
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
     {
-        let completed = Arc::new(AtomicBool::new(false));
-        let completed_watchdog = Arc::clone(&completed);
-        let completed_cleanup = Arc::clone(&completed);
+        use std::sync::mpsc;
+        use std::thread;
 
-        // Spawn watchdog thread
-        let watchdog_handle = std::thread::spawn(move || {
-            let start = std::time::Instant::now();
-            while start.elapsed() < Duration::from_secs(10) {
-                if completed_watchdog.load(Ordering::Relaxed) {
-                    return; // Test completed successfully
-                }
-                std::thread::sleep(Duration::from_millis(100)); // Check every 100ms
+        let (tx, rx) = mpsc::channel();
+
+        // Run the test in a separate thread
+        let test_handle = thread::spawn(move || {
+            let result = test_fn();
+            // Send the result back - if this fails, the receiver has timed out
+            drop(tx.send(result));
+        });
+
+        // Wait for either the test to complete or timeout
+        match rx.recv_timeout(Duration::from_secs(10)) {
+            Ok(result) => {
+                // Test completed successfully, join the thread to clean up
+                test_handle.join().expect("Test thread should not panic");
+                result
             }
-            assert!(
-                completed_watchdog.load(Ordering::Relaxed),
-                "Test exceeded 10-second timeout - likely hanging in receive()"
-            );
-        });
-
-        // Run the actual test
-        let test_handle = std::thread::spawn(move || {
-            test_fn();
-            completed.store(true, Ordering::Relaxed);
-        });
-
-        // Wait for test to complete
-        if let Err(e) = test_handle.join() {
-            completed_cleanup.store(true, Ordering::Relaxed);
-            drop(watchdog_handle.join());
-            std::panic::resume_unwind(e);
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Test timed out - this indicates the test is hanging
+                panic!("Test exceeded 10-second timeout - likely hanging in receive()");
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                // Thread panicked, join it to get the panic
+                match test_handle.join() {
+                    Ok(()) => panic!("Test thread disconnected unexpectedly"),
+                    Err(e) => std::panic::resume_unwind(e),
+                }
+            }
         }
-
-        // Signal completion and wait for watchdog to finish
-        completed_cleanup.store(true, Ordering::Relaxed);
-        drop(watchdog_handle.join());
     }
 
     #[test]
