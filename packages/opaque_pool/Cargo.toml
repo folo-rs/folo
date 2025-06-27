@@ -1,6 +1,6 @@
 [package]
 name = "opaque_pool"
-description = "A pinned object pool that is ignorant of the type of items it contains"
+description = "A pinned object pool that contains any type of object as long as it has a compatible memory layout"
 publish = true
 version = "0.1.1"
 

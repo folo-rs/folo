@@ -1,4 +1,4 @@
-A pinned object pool that is ignorant of the type of items it contains.
+A pinned object pool that contains any type of object as long as it has a compatible memory layout.
 
 More details in the [crate documentation](https://docs.rs/opaque_pool/).
 
