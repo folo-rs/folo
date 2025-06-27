@@ -16,12 +16,35 @@ behavior while presenting a simple and reasonably ergonomic API to user code:
   providing **a reasonably simple API with minimal extra complexity** for both the author
   and the user of a type.
 
-The patterns and mechanisms provided by this crate are designed to make it easy to create linked
-object families and to provide primitives that allow these object families to be used without
-the user code having to understand how the objects are wired up inside or keeping track of which
-instance is meant to be used on which thread.
+```rust
+use std::sync::{Arc, Mutex};
 
-More details in the [crate documentation](https://docs.rs/linked/).
+#[linked::object]
+pub struct Thing {
+    value: Arc<Mutex<String>>,
+}
+
+impl Thing {
+    pub fn new(initial_value: String) -> Self {
+        let shared_value = Arc::new(Mutex::new(initial_value));
+
+        linked::new!(Self {
+            // Capture `shared_value` to reuse it for all instances in the family.
+            value: Arc::clone(&shared_value),
+        })
+    }
+
+    pub fn value(&self) -> String {
+        self.value.lock().unwrap().clone()
+    }
+
+    pub fn set_value(&self, value: String) {
+        *self.value.lock().unwrap() = value;
+    }
+}
+```
+
+More details in the [package documentation](https://docs.rs/linked/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
 high-performance hardware-aware programming in Rust.

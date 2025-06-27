@@ -13,7 +13,21 @@ transfers and want to isolate the data sets).
 Think of this as an equivalent of `thread_local_rc!`, except operating on the memory region boundary
 instead of the thread boundary.
 
-More details in the [crate documentation](https://docs.rs/region_local/).
+```rust
+// RegionLocalExt provides required extension methods on region-local
+// static variables, such as `with_local()` and `set_local()`.
+use region_local::{region_local, RegionLocalExt};
+
+region_local!(static FAVORITE_COLOR: String = "blue".to_string());
+
+FAVORITE_COLOR.with_local(|color| {
+    println!("My favorite color is {color}");
+});
+
+FAVORITE_COLOR.set_local("red".to_string());
+```
+
+More details in the [package documentation](https://docs.rs/region_local/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
 high-performance hardware-aware programming in Rust.
