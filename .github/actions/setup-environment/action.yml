@@ -35,6 +35,11 @@ runs:
     
     - name: Setup Rust cache
       uses: Swatinem/rust-cache@v2
+      with:
+        # We use the same shared key for all the different workflows that use this action.
+        # This enables more reuse, e.g. the Copilot workflow can reuse artifacts from the
+        # validate-linux workflow, which speeds up copilot executions.
+        shared-key: prerequisites
     
     - name: Install just
       shell: bash

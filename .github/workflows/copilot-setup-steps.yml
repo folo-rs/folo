@@ -1,10 +1,15 @@
 name: Copilot Setup Steps
 
-# This workflow sets up the development environment for GitHub Copilot coding agent
-# following the requirements in the GitHub documentation
+# This workflow sets up the development environment for GitHub Copilot coding agent.
+# See https://docs.github.com/en/copilot/how-tos/agents/copilot-coding-agent/customizing-the-development-environment-for-copilot-coding-agent
 on:
-  workflow_call:
   workflow_dispatch:
+  push:
+    paths:
+    - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+    - .github/workflows/copilot-setup-steps.yml
 
 jobs:
   copilot-setup-steps:
