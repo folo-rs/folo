@@ -48,7 +48,7 @@ to confirm that there are no memory safety violations that the compiler alone ca
 
 # Multiplatform codebase
 
-This is a multiplatform codebase. In some crates you will find folders named `linux` and `windows`,
+This is a multiplatform codebase. In some packages you will find folders named `linux` and `windows`,
 which contain platform-specific code. When modifying files of one platform, you are also expected
 to make the equivalent modifications in the other.
 
@@ -62,24 +62,24 @@ You are expected to validate all changes on both operating systems.
 
 # Facades and abstractions
 
-Some crates like `many_cpus` use a platform abstraction layer (PAL), where an abstraction like
-`trait Platform` defined in `crates/many_cpus/src/pal/abstractions/**` has multiple different
+Some packages like `many_cpus` use a platform abstraction layer (PAL), where an abstraction like
+`trait Platform` defined in `packages/many_cpus/src/pal/abstractions/**` has multiple different
 implementations:
 
-1. A Windows implementation (`crates/many_cpus/src/pal/windows/**`)
-2. A Linux implementation (`crates/many_cpus/src/pal/linux/**`)
-3. A mock implementation (`crates/many_cpus/src/pal/mocks.rs`)
+1. A Windows implementation (`packages/many_cpus/src/pal/windows/**`)
+2. A Linux implementation (`packages/many_cpus/src/pal/linux/**`)
+3. A mock implementation (`packages/many_cpus/src/pal/mocks.rs`)
 
 Logic code will consume this abstraction via facade types, which can either call into the real
 implementation of the build target platform (Windows or Linux) or the mock implementation (only
-when building in test mode). The facades are defined in `crates/many_cpus/src/pal/facade/**` and
+when building in test mode). The facades are defined in `packages/many_cpus/src/pal/facade/**` and
 only exist to be minimal pass-through layers to allow swapping in the mock implementation in tests.
 
 When modifying the API of the PAL, you are expected to make the API changes in the
 abstraction, facade and implementation types at the same time, as the API surface must match.
 
 The same pattern may also be used elsewhere (e.g. inside the PAL implementations as a second layer
-of abstraction, or in other crates).
+of abstraction, or in other packages).
 
 # Filesystem structure
 
@@ -89,7 +89,7 @@ if only API-visible inside the same crate).
 
 We prefer to keep the public API relatively flat - even if we create separate Rust modules for
 types, we re-export them all at the parent, so while we have modules like
-`crates/many_cpus/src/hardware_tracker.rs` the type itself is exported at the crate root as
+`packages/many_cpus/src/hardware_tracker.rs` the type itself is exported at the crate root as
 `many_cpus::HardwareTracker` instead of at the module as `many_cpus::hardware_tracker::HardwareTracker`.
 
 # Scripting

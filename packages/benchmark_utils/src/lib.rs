@@ -1,4 +1,4 @@
-//! Common benchmarking logic used across the crates in this project.
+//! Common benchmarking logic used across the packages in this project.
 //!
 //! See also `many_cpus_benchmarking`, which provides public benchmarking utilities
 //! that may have value even outside this project.

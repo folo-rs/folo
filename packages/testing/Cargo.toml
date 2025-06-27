@@ -1,6 +1,6 @@
 [package]
 name = "testing"
-description = "Private helpers for testing and examples in Folo crates"
+description = "Private helpers for testing and examples in Folo packages"
 publish = false
 version = "0.0.1-never"
 

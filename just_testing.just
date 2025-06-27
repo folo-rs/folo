@@ -53,7 +53,7 @@ run-examples:
     $packages_to_process = @()
     if ("{{ package }}" -eq "") {
         # Get all workspace members
-        $workspace_members = Get-ChildItem -Path "crates" -Directory | Where-Object { Test-Path (Join-Path $_.FullName "Cargo.toml") }
+        $workspace_members = Get-ChildItem -Path "packages" -Directory | Where-Object { Test-Path (Join-Path $_.FullName "Cargo.toml") }
         $packages_to_process = $workspace_members | ForEach-Object { $_.Name }
     } else {
         $packages_to_process = @("{{ package }}")
@@ -64,7 +64,7 @@ run-examples:
     Write-Host ""
     
     foreach ($pkg in $packages_to_process) {
-        $examples_dir = Join-Path "crates" $pkg "examples"
+        $examples_dir = Join-Path "packages" $pkg "examples"
         
         # Skip packages without examples directory (early continue pattern)
         if (-not (Test-Path $examples_dir)) {

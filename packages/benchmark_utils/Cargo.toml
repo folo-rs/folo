@@ -1,8 +1,8 @@
 [package]
-name = "folo_ffi"
-description = "Utilities for working with FFI logic; exists for internal use in Folo crates; no stable API surface"
-publish = true
-version = "0.1.3"
+name = "benchmark_utils"
+description = "Common benchmarking logic used across the packages in this project"
+publish = false
+version = "0.0.1-never"
 
 authors.workspace = true
 edition.workspace = true
@@ -13,10 +13,10 @@ rust-version.workspace = true
 [lib]
 doc = false
 
-[features]
-default = []
-
 [dependencies]
+many_cpus = { workspace = true }
+new_zealand = { workspace = true }
+oneshot = { workspace = true }
 
 [dev-dependencies]
 mutants = { workspace = true }

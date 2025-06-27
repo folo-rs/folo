@@ -1,4 +1,4 @@
-//! Private helpers for testing and examples in Folo crates.
+//! Private helpers for testing and examples in Folo packages.
 
 #[cfg(windows)]
 mod windows;

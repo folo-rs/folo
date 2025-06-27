@@ -37,11 +37,11 @@ mutants:
 
         "-e"
         # This is just a different type of bindings, skipped for same reason as `bindings` above.
-        (Escape-Wildcards "crates/many_cpus/src/pal/linux/filesystem/**")
+        (Escape-Wildcards "packages/many_cpus/src/pal/linux/filesystem/**")
         
         "-e"
         # All this is code only used in tests - we do not test this code itself.
-        (Escape-Wildcards "crates/testing/**")
+        (Escape-Wildcards "packages/testing/**")
     )
 
     if ($IsLinux) {

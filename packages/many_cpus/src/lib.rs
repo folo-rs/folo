@@ -43,7 +43,7 @@
 //! not bound to a specific processor. This can be a building block for efficiency improvements even
 //! outside directly controlled work scheduling.
 //!
-//! Other crates from the [Folo project](https://github.com/folo-rs/folo) build upon this hardware-
+//! Other packages from the [Folo project](https://github.com/folo-rs/folo) build upon this hardware-
 //! awareness functionality to provide higher-level primitives such as thread pools, work schedulers,
 //! region-local cells and more.
 //!
