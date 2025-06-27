@@ -7,7 +7,7 @@ authors = ["Sander Saares <sander@saares.eu>"]
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/folo-rs/folo"
-rust-version = "1.86"
+rust-version = "1.87"
 
 [profile.release]
 # This ensures we have high quality data with proper stack traces when profiling.
@@ -53,7 +53,7 @@ deranged = { version = "0.4", default-features = false }
 derive_more = { version = "2.0", default-features = false }
 fake_headers = { version = "0.0", default-features = false }
 foldhash = { version = "0.1", default-features = false, features = ["std"] }
-frozen-collections = { version = "0.5", default-features = false }
+frozen-collections = { version = "0.7", default-features = false }
 hash_hasher = { version = "2.0", default-features = false }
 heapless = { version = "0.8", default-features = false }
 http = { version = "1.2", default-features = false, features = ["std"] }
