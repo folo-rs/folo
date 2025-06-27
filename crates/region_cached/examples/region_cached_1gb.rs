@@ -15,6 +15,12 @@ region_cached! {
 }
 
 fn main() {
+    // Exit early if running in a testing environment
+    if std::env::var("IS_TESTING").is_ok() {
+        println!("Running in testing mode - exiting immediately to prevent infinite operation");
+        return;
+    }
+
     let processor_set = ProcessorSet::default();
 
     processor_set

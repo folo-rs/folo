@@ -5,7 +5,10 @@ fn main() {
     windows::main();
 
     #[cfg(not(windows))]
-    panic!("This example is only supported on Windows.");
+    {
+        eprintln!("This example is only supported on Windows.");
+        std::process::exit(0);
+    }
 }
 
 #[cfg(windows)]
@@ -22,6 +25,12 @@ mod windows {
     const SLEEP_TIME_SECS: u64 = 10;
 
     pub(crate) fn main() {
+        // Exit early if running in a testing environment
+        if std::env::var("IS_TESTING").is_ok() {
+            println!("Running in testing mode - exiting immediately to prevent infinite operation");
+            return;
+        }
+
         let job = Job::builder()
             .with_processor_count(nz!(8))
             .with_max_processor_time_pct(ProcessorTimePct::new_static::<50>())

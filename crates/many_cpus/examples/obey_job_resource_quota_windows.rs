@@ -13,7 +13,10 @@ fn main() {
     windows::main();
 
     #[cfg(not(windows))]
-    panic!("This example is only supported on Windows.");
+    {
+        eprintln!("This example is only supported on Windows.");
+        std::process::exit(0);
+    }
 }
 
 #[cfg(windows)]

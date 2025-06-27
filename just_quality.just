@@ -82,7 +82,7 @@ validate-extra-linux:
 # Validation of extra factors that take potentially too long to run in regular validation.
 # Performs validation on the current platform, whatever that may be.
 [group('quality')]
-validate-extra-local: mutants
+validate-extra-local: mutants run-examples
 
 # Quick validation suitable for AI iteration, which skips some lengthy checks.
 # We assume this is executed on Windows, and will also perform the full validation on Linux.

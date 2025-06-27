@@ -12,6 +12,12 @@ region_local!(static LAST_UPDATE: u128 = 0);
 
 #[tokio::main]
 async fn main() {
+    // Exit early if running in a testing environment
+    if std::env::var("IS_TESTING").is_ok() {
+        println!("Running in testing mode - exiting immediately to prevent infinite operation");
+        return;
+    }
+
     let memory_region_count = HardwareInfo::max_memory_region_count();
     println!("the current system has {memory_region_count} memory regions");
 
