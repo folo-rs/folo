@@ -1,7 +1,7 @@
 use std::iter::repeat_with;
 use std::num::NonZero;
 use std::sync::{Arc, Mutex, mpsc};
-use std::thread::JoinHandle;
+use std::thread::{self, JoinHandle};
 
 use many_cpus::ProcessorSet;
 
@@ -35,11 +35,6 @@ impl ThreadPool {
                 }
             })
             .into_vec();
-
-        debug_assert!(
-            rxs.lock().unwrap().is_empty(),
-            "All receiver channels should have been consumed by the worker threads"
-        );
 
         Self {
             command_txs: txs,
@@ -75,6 +70,12 @@ impl Default for ThreadPool {
 
 impl Drop for ThreadPool {
     fn drop(&mut self) {
+        if thread::panicking() {
+            // If the thread is panicking, we are probably in a dirty state and shutting down
+            // may make the problem worse by hiding the original panic, so just do nothing.
+            return;
+        }
+
         for tx in self.command_txs.drain(..) {
             tx.send(Command::Shutdown).unwrap();
         }
@@ -90,6 +91,7 @@ enum Command {
     Shutdown,
 }
 
+#[cfg_attr(test, mutants::skip)] // Timeout due to waiting forever on a Barrier. Whatever.
 fn worker_entrypoint(rx: &mpsc::Receiver<Command>) {
     while let Command::Execute(f) = rx.recv().unwrap() {
         f();

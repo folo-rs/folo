@@ -151,12 +151,15 @@ where
             .thread_count()
             .get()
             .checked_rem(2)
-            .expect("2 != 0")
+            .expect("thread pool processor count must be divisible by two for A/B test")
             == 0
     );
 
     let thread_count = thread_pool.thread_count();
-    let half_thread_count = thread_count.get().checked_div(2).expect("2 != 0");
+    let half_thread_count = thread_count
+        .get()
+        .checked_div(2)
+        .expect("guarded against zero by assertion above");
 
     let worker_types = Arc::new(Mutex::new(
         vec![AbWorker::A; half_thread_count]
