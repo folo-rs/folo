@@ -53,7 +53,7 @@ fn cross_thread_events(c: &mut Criterion) {
     let two_threads = ProcessorSet::builder()
         .performance_processors_only()
         .take(nz!(2));
-    
+
     if let Some(processor_set) = two_threads {
         let thread_pool = ThreadPool::new(&processor_set);
         let mut group = c.benchmark_group("cross_thread");
@@ -124,5 +124,10 @@ fn event_creation(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, events_vs_oneshot, cross_thread_events, event_creation);
+criterion_group!(
+    benches,
+    events_vs_oneshot,
+    cross_thread_events,
+    event_creation
+);
 criterion_main!(benches);

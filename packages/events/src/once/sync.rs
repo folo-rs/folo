@@ -3,8 +3,8 @@
 //! This module provides thread-safe event types that can be shared across threads
 //! and used for cross-thread communication.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A one-time event that can send and receive a value of type `T`.
 ///
@@ -138,9 +138,11 @@ where
         if self.used.swap(true, Ordering::SeqCst) {
             return None;
         }
-        
+
         let (sender, _receiver) = self.channel.lock().unwrap().take()?;
-        Some(EventSender { sender: Some(sender) })
+        Some(EventSender {
+            sender: Some(sender),
+        })
     }
 
     /// Returns a receiver for this event, or [`None`] if endpoints have already been retrieved.
@@ -159,9 +161,11 @@ where
         if self.used.swap(true, Ordering::SeqCst) {
             return None;
         }
-        
+
         let (_sender, receiver) = self.channel.lock().unwrap().take()?;
-        Some(EventReceiver { receiver: Some(receiver) })
+        Some(EventReceiver {
+            receiver: Some(receiver),
+        })
     }
 
     /// Returns both the sender and receiver for this event, or [`None`] if endpoints have
@@ -181,11 +185,15 @@ where
         if self.used.swap(true, Ordering::SeqCst) {
             return None;
         }
-        
+
         let (sender, receiver) = self.channel.lock().unwrap().take()?;
         Some((
-            EventSender { sender: Some(sender) },
-            EventReceiver { receiver: Some(receiver) },
+            EventSender {
+                sender: Some(sender),
+            },
+            EventReceiver {
+                receiver: Some(receiver),
+            },
         ))
     }
 }
@@ -312,8 +320,8 @@ pub type ByRefEventReceiver<'e, T> = EventReceiver<T>;
 mod tests {
     use std::rc::Rc;
     use std::sync::Arc;
-    use std::time::Duration;
     use std::thread;
+    use std::time::Duration;
 
     use static_assertions::assert_impl_all;
 
@@ -491,9 +499,7 @@ mod tests {
                 sender.send("Hello from thread!".to_string());
             });
 
-            let receiver_handle = thread::spawn(move || {
-                receiver.receive()
-            });
+            let receiver_handle = thread::spawn(move || receiver.receive());
 
             sender_handle.join().unwrap();
             let message = receiver_handle.join().unwrap();
