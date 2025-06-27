@@ -4,6 +4,7 @@
 //! including cross-thread communication and different wrapper types.
 
 use std::sync::Arc;
+use std::thread;
 
 use events::once::Event;
 
@@ -32,13 +33,11 @@ fn main() {
     // Note: With ByRef types, the Event must live until threads complete.
     // This pattern avoids the lifetime issue by using a scoped approach.
     println!("\n3. Cross-thread communication pattern:");
-    
-    use std::thread;
-    
+
     // Create event and extract endpoints in the main scope
     let event = Event::<String>::new();
     let (sender, receiver) = event.endpoints();
-    
+
     // Use scoped threads to ensure Event lives long enough
     thread::scope(|s| {
         let sender_handle = s.spawn(|| {
@@ -58,7 +57,7 @@ fn main() {
         let message = receiver_handle.join().unwrap();
         println!("Cross-thread message: {message}");
     });
-    
+
     // Event is safely dropped here after all threads complete
 
     println!("\nThread-safe events example completed successfully!");

@@ -49,21 +49,11 @@ fn events_vs_oneshot(c: &mut Criterion) {
 
 /// Cross-thread communication benchmark using events package.
 /// One worker sends a value, the other receives it.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct EventsCrossThread {
     event: Option<Arc<events::once::Event<i32>>>,
     is_sender: bool,
     value: Option<i32>,
-}
-
-impl Default for EventsCrossThread {
-    fn default() -> Self {
-        Self {
-            event: None,
-            is_sender: false,
-            value: None,
-        }
-    }
 }
 
 impl Payload for EventsCrossThread {
@@ -72,7 +62,7 @@ impl Payload for EventsCrossThread {
 
         (
             Self {
-                event: Some(event.clone()),
+                event: Some(Arc::<events::once::Event<i32>>::clone(&event)),
                 is_sender: true,
                 value: Some(42),
             },

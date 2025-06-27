@@ -191,7 +191,9 @@ where
     /// let endpoints2 = event.endpoints_checked(); // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
-    pub fn endpoints_checked(&self) -> Option<(ByRefEventSender<'_, T>, ByRefEventReceiver<'_, T>)> {
+    pub fn endpoints_checked(
+        &self,
+    ) -> Option<(ByRefEventSender<'_, T>, ByRefEventReceiver<'_, T>)> {
         if self.used.swap(true, Ordering::SeqCst) {
             return None;
         }
@@ -488,7 +490,7 @@ mod tests {
             // For cross-thread usage, we need the Event to live long enough
             // In practice, this would typically be done with Arc<Event>
             static EVENT: std::sync::OnceLock<Event<String>> = std::sync::OnceLock::new();
-            let event = EVENT.get_or_init(|| Event::<String>::new());
+            let event = EVENT.get_or_init(Event::<String>::new);
             let (sender, receiver) = event.endpoints();
 
             let sender_handle = thread::spawn(move || {
