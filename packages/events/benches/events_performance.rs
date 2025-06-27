@@ -7,10 +7,8 @@
 
 use std::hint;
 
-use benchmark_utils::{ThreadPool, bench_on_threadpool};
 use criterion::{Criterion, criterion_group, criterion_main};
-use many_cpus::ProcessorSet;
-use new_zealand::nz;
+use many_cpus_benchmarking::{Payload, WorkDistribution, execute_runs};
 
 /// Compares the performance of events package vs pure oneshot channels.
 fn events_vs_oneshot(c: &mut Criterion) {
@@ -48,36 +46,91 @@ fn events_vs_oneshot(c: &mut Criterion) {
     group.finish();
 }
 
+/// Cross-thread communication benchmark using events package.
+/// One worker sends a value, the other receives it.
+#[derive(Debug, Default)]
+struct EventsCrossThread {
+    sender: Option<events::once::EventSender<i32>>,
+    receiver: Option<events::once::EventReceiver<i32>>,
+    value: Option<i32>,
+}
+
+impl Payload for EventsCrossThread {
+    fn new_pair() -> (Self, Self) {
+        let event = events::once::Event::<i32>::new();
+        let (sender, receiver) = event.endpoints();
+        
+        (
+            Self {
+                sender: Some(sender),
+                receiver: None,
+                value: Some(42),
+            },
+            Self {
+                sender: None,
+                receiver: Some(receiver),
+                value: None,
+            },
+        )
+    }
+
+    fn process(&mut self) {
+        if let Some(sender) = self.sender.take() {
+            // Sender worker
+            let value = self.value.take().unwrap();
+            sender.send(hint::black_box(value));
+        } else if let Some(receiver) = self.receiver.take() {
+            // Receiver worker
+            let value = receiver.receive();
+            hint::black_box(value);
+        }
+    }
+}
+
+/// Cross-thread communication benchmark using pure oneshot channels.
+/// One worker sends a value, the other receives it.
+#[derive(Debug, Default)]
+struct OneshotCrossThread {
+    sender: Option<oneshot::Sender<i32>>,
+    receiver: Option<oneshot::Receiver<i32>>,
+    value: Option<i32>,
+}
+
+impl Payload for OneshotCrossThread {
+    fn new_pair() -> (Self, Self) {
+        let (sender, receiver) = oneshot::channel();
+        
+        (
+            Self {
+                sender: Some(sender),
+                receiver: None,
+                value: Some(42),
+            },
+            Self {
+                sender: None,
+                receiver: Some(receiver),
+                value: None,
+            },
+        )
+    }
+
+    fn process(&mut self) {
+        if let Some(sender) = self.sender.take() {
+            // Sender worker
+            let value = self.value.take().unwrap();
+            sender.send(hint::black_box(value)).unwrap();
+        } else if let Some(receiver) = self.receiver.take() {
+            // Receiver worker
+            let value = receiver.recv().unwrap();
+            hint::black_box(value);
+        }
+    }
+}
+
 /// Benchmarks cross-thread communication scenarios.
 fn cross_thread_events(c: &mut Criterion) {
-    let two_threads = ProcessorSet::builder()
-        .performance_processors_only()
-        .take(nz!(2));
-
-    if let Some(processor_set) = two_threads {
-        let thread_pool = ThreadPool::new(&processor_set);
-        let mut group = c.benchmark_group("cross_thread");
-
-        group.bench_function("events_cross_thread_create_endpoints", |b| {
-            b.iter_custom(|iters| {
-                bench_on_threadpool(
-                    &thread_pool,
-                    iters,
-                    || (), // No preparation needed
-                    |()| {
-                        // Each thread creates its own event and endpoints
-                        let event = events::once::Event::<i32>::new();
-                        let (sender, receiver) = event.endpoints();
-                        sender.send(hint::black_box(42));
-                        let value = receiver.receive();
-                        hint::black_box(value);
-                    },
-                )
-            });
-        });
-
-        group.finish();
-    }
+    execute_runs::<EventsCrossThread, 100>(c, WorkDistribution::all_with_unique_processors());
+    execute_runs::<OneshotCrossThread, 100>(c, WorkDistribution::all_with_unique_processors());
 }
 
 /// Benchmarks creation overhead for different event types.

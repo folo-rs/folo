@@ -5,18 +5,16 @@
 //! high performance in concurrent scenarios.
 //!
 //! Both single-threaded and thread-safe variants are available:
-//! - [`Event<T>`], [`ByRefEventSender<T>`], [`ByRefEventReceiver<T>`] - Thread-safe variants
+//! - [`Event<T>`], [`EventSender<T>`], [`EventReceiver<T>`] - Thread-safe variants
 //! - [`LocalEvent<T>`], [`ByRefLocalEventSender<T>`], [`ByRefLocalEventReceiver<T>`] - Single-threaded variants
 //!
 //! # Thread-safe Example
 //!
 //! ```rust
-//! use std::sync::Arc;
-//!
 //! use events::once::Event;
 //!
 //! // Create a thread-safe event for passing a string message
-//! let event = Arc::new(Event::<String>::new());
+//! let event = Event::<String>::new();
 //! let (sender, receiver) = event.endpoints();
 //!
 //! // Send a message through the event

@@ -3,14 +3,14 @@
 //! This module provides thread-safe event types that can be shared across threads
 //! and used for cross-thread communication.
 
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 /// A one-time event that can send and receive a value of type `T`.
 ///
 /// This is the thread-safe variant that can create sender and receiver endpoints
-/// that can be used across threads. The event itself doesn't need to be shared
-/// across threads - only the sender and receiver do.
+/// that can be used across threads. The event itself can be shared across threads
+/// but is typically used as a factory to create endpoints and then discarded.
 ///
 /// The event can only be used once - after obtaining the sender and receiver,
 /// subsequent calls to obtain them will panic (or return [`None`] for the checked variants).
@@ -21,6 +21,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///
 /// This type requires `T: Send` as values will be sent across thread boundaries.
 /// The sender and receiver implement `Send + Sync` when `T: Send`.
+/// The Event itself is thread-safe to allow sharing during endpoint creation,
+/// though it's typically used once and then discarded.
 ///
 /// # Example
 ///
@@ -39,7 +41,9 @@ pub struct Event<T>
 where
     T: Send,
 {
+    // AtomicBool to track whether endpoints have been retrieved (thread-safe)
     used: AtomicBool,
+    // Mutex only needed for one-time endpoint extraction, not ongoing operations
     channel: Mutex<Option<(oneshot::Sender<T>, oneshot::Receiver<T>)>>,
 }
 
@@ -245,11 +249,6 @@ where
     }
 }
 
-// SAFETY: EventSender can be sent across threads when T: Send, which is already required
-unsafe impl<T: Send> Send for EventSender<T> {}
-// SAFETY: EventSender can be shared across threads when T: Send
-unsafe impl<T: Send> Sync for EventSender<T> {}
-
 /// A receiver that can receive a value from a thread-safe event.
 ///
 /// The receiver owns the underlying channel and can be moved across threads.
@@ -299,22 +298,6 @@ where
         )
     }
 }
-
-// SAFETY: EventReceiver can be sent across threads when T: Send, which is already required
-unsafe impl<T: Send> Send for EventReceiver<T> {}
-// SAFETY: EventReceiver can be shared across threads when T: Send
-unsafe impl<T: Send> Sync for EventReceiver<T> {}
-
-// Keep the old names for backwards compatibility
-/// A sender that can send a value through a thread-safe event.
-///
-/// **Deprecated:** Use [`EventSender`] instead. This type alias is kept for backwards compatibility.
-pub type ByRefEventSender<'e, T> = EventSender<T>;
-
-/// A receiver that can receive a value from a thread-safe event.
-///
-/// **Deprecated:** Use [`EventReceiver`] instead. This type alias is kept for backwards compatibility.
-pub type ByRefEventReceiver<'e, T> = EventReceiver<T>;
 
 #[cfg(test)]
 mod tests {
@@ -511,8 +494,9 @@ mod tests {
     fn thread_safe_types() {
         // Event should implement Send and Sync
         assert_impl_all!(Event<i32>: Send, Sync);
-        // Sender and Receiver should implement Send and Sync
+        // Sender should implement Send and Sync  
         assert_impl_all!(EventSender<i32>: Send, Sync);
-        assert_impl_all!(EventReceiver<i32>: Send, Sync);
+        // Receiver should implement Send but not necessarily Sync (based on oneshot::Receiver)
+        assert_impl_all!(EventReceiver<i32>: Send);
     }
 }

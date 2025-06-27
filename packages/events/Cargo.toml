@@ -19,7 +19,7 @@ oneshot = { workspace = true }
 [dev-dependencies]
 benchmark_utils = { path = "../benchmark_utils" }
 criterion = { workspace = true }
-many_cpus = { path = "../many_cpus" }
+many_cpus_benchmarking = { path = "../many_cpus_benchmarking" }
 mutants = { workspace = true }
 new_zealand = { path = "../new_zealand" }
 static_assertions = { workspace = true }
