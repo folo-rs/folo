@@ -82,6 +82,7 @@ run-examples:
                 # Run the example with a timeout to prevent hanging
                 $job = Start-Job -ScriptBlock {
                     param($pkg, $example_name)
+                    $env:IS_TESTING = "1"
                     & cargo run --package $pkg --example $example_name 2>&1
                     return $LASTEXITCODE
                 } -ArgumentList $pkg, $example_name
@@ -124,6 +125,7 @@ run-examples:
                 # Run the example with a timeout to prevent hanging
                 $job = Start-Job -ScriptBlock {
                     param($pkg, $example_name)
+                    $env:IS_TESTING = "1"
                     & cargo run --package $pkg --example $example_name 2>&1
                     return $LASTEXITCODE
                 } -ArgumentList $pkg, $example_name

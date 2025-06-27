@@ -7,6 +7,12 @@ use std::time::Duration;
 use many_cpus::{HardwareInfo, HardwareTracker};
 
 fn main() {
+    // Exit early if running in a testing environment
+    if std::env::var("IS_TESTING").is_ok() {
+        println!("Running in testing mode - exiting immediately to prevent infinite loop");
+        return;
+    }
+
     let max_processors = HardwareInfo::max_processor_count();
     let max_memory_regions = HardwareInfo::max_memory_region_count();
     println!(

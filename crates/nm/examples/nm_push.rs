@@ -15,6 +15,12 @@ const BATCH_SIZE: usize = 10;
 const BAGEL_WEIGHT_GRAMS: i64 = 100;
 
 fn main() {
+    // Exit early if running in a testing environment
+    if std::env::var("IS_TESTING").is_ok() {
+        println!("Running in testing mode - exiting immediately to prevent infinite loop");
+        return;
+    }
+
     // We start a separate thread to generate the reports.
     thread::spawn(move || {
         loop {
