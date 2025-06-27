@@ -6,10 +6,8 @@
 )]
 
 use std::hint;
-use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use many_cpus_benchmarking::{Payload, WorkDistribution, execute_runs};
 
 /// Compares the performance of events package vs pure oneshot channels.
 fn events_vs_oneshot(c: &mut Criterion) {
@@ -45,95 +43,6 @@ fn events_vs_oneshot(c: &mut Criterion) {
     });
 
     group.finish();
-}
-
-/// Cross-thread communication benchmark using events package.
-/// One worker sends a value, the other receives it.
-#[derive(Debug, Default)]
-struct EventsCrossThread {
-    event: Option<Arc<events::once::Event<i32>>>,
-    is_sender: bool,
-    value: Option<i32>,
-}
-
-impl Payload for EventsCrossThread {
-    fn new_pair() -> (Self, Self) {
-        let event = Arc::new(events::once::Event::<i32>::new());
-
-        (
-            Self {
-                event: Some(Arc::<events::once::Event<i32>>::clone(&event)),
-                is_sender: true,
-                value: Some(42),
-            },
-            Self {
-                event: Some(event),
-                is_sender: false,
-                value: None,
-            },
-        )
-    }
-
-    fn process(&mut self) {
-        let event = self.event.take().unwrap();
-        if self.is_sender {
-            // Sender worker
-            let sender = event.sender();
-            let value = self.value.take().unwrap();
-            sender.send(hint::black_box(value));
-        } else {
-            // Receiver worker
-            let receiver = event.receiver();
-            let value = receiver.receive();
-            hint::black_box(value);
-        }
-    }
-}
-
-/// Cross-thread communication benchmark using pure oneshot channels.
-/// One worker sends a value, the other receives it.
-#[derive(Debug, Default)]
-struct OneshotCrossThread {
-    sender: Option<oneshot::Sender<i32>>,
-    receiver: Option<oneshot::Receiver<i32>>,
-    value: Option<i32>,
-}
-
-impl Payload for OneshotCrossThread {
-    fn new_pair() -> (Self, Self) {
-        let (sender, receiver) = oneshot::channel();
-
-        (
-            Self {
-                sender: Some(sender),
-                receiver: None,
-                value: Some(42),
-            },
-            Self {
-                sender: None,
-                receiver: Some(receiver),
-                value: None,
-            },
-        )
-    }
-
-    fn process(&mut self) {
-        if let Some(sender) = self.sender.take() {
-            // Sender worker
-            let value = self.value.take().unwrap();
-            sender.send(hint::black_box(value)).unwrap();
-        } else if let Some(receiver) = self.receiver.take() {
-            // Receiver worker
-            let value = receiver.recv().unwrap();
-            hint::black_box(value);
-        }
-    }
-}
-
-/// Benchmarks cross-thread communication scenarios.
-fn cross_thread_events(c: &mut Criterion) {
-    execute_runs::<EventsCrossThread, 100>(c, WorkDistribution::all_with_unique_processors());
-    execute_runs::<OneshotCrossThread, 100>(c, WorkDistribution::all_with_unique_processors());
 }
 
 /// Benchmarks creation overhead for different event types.
@@ -180,10 +89,5 @@ fn event_creation(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    events_vs_oneshot,
-    cross_thread_events,
-    event_creation
-);
+criterion_group!(benches, events_vs_oneshot, event_creation);
 criterion_main!(benches);
