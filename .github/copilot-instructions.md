@@ -293,3 +293,14 @@ via `bench_on_threadpool()` to ensure that overheads are comparable.
 
 Inside the benchmark closure, use `std::hint::black_box()` to consume output values from the code
 being benchmarked, to avoid unrealistic eager optimizations due to output values that are discarded.
+
+# YAML formatting
+
+Prefer not using quotes around strings, unless the string starts with special characters.
+
+Example of desired formatting:
+
+```yaml
+regular_field: just some text
+special_field: ':::starts with special characters, needs quoting'
+```
