@@ -506,22 +506,30 @@ mod tests {
     }
 
     #[test]
-    fn shrink_to_fit() {
+    fn shrink_to_fit_removes_empty_pools() {
         let mut pool = BlindPool::new();
 
-        // Insert and remove some items to create potential waste.
-        let pooled1 = pool.insert(1_u32);
-        let pooled2 = pool.insert(2_u32);
-        let pooled3 = pool.insert(3_u32);
+        // Insert items of different types to create multiple internal pools.
+        // Use types with different layouts: u8 (1 byte), u64 (8 bytes), [u8; 3] (3 bytes).
+        let pooled_u8 = pool.insert(1_u8);
+        let pooled_u64 = pool.insert(2_u64);
+        _ = pool.insert([1_u8, 2_u8, 3_u8]);
 
-        pool.remove(pooled1);
-        pool.remove(pooled2);
-        pool.remove(pooled3);
+        // Verify we have multiple internal pools.
+        assert_eq!(pool.pools.len(), 3);
+        assert_eq!(pool.len(), 3);
 
-        assert!(pool.is_empty());
+        // Remove some but not all items (we leave the array).
+        pool.remove(pooled_u8);
+        pool.remove(pooled_u64);
+
+        assert_eq!(pool.pools.len(), 3); // Internal pools still exist before shrinking.
 
         // This should clean up empty internal pools.
         pool.shrink_to_fit();
+
+        // Verify that empty internal pools have been removed.
+        assert_eq!(pool.pools.len(), 1);
     }
 
     #[test]

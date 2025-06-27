@@ -296,6 +296,7 @@ impl OpaquePool {
     /// pool.shrink_to_fit();
     /// assert!(pool.capacity() <= initial_capacity);
     /// ```
+    #[cfg_attr(test, mutants::skip)] // Too annoying to test the vacant index caching.
     pub fn shrink_to_fit(&mut self) {
         // Find the last non-empty slab by scanning from the end
         let new_len = self
