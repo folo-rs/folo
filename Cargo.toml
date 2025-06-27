@@ -7,7 +7,9 @@ authors = ["Sander Saares <sander@saares.eu>"]
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/folo-rs/folo"
-rust-version = "1.87"
+# NB! This is not considered breaking change by `just prepare-release`!
+# You may want to manually increment major version because de facto it can be breaking.
+rust-version = "1.86"
 
 [profile.release]
 # This ensures we have high quality data with proper stack traces when profiling.
@@ -20,22 +22,22 @@ debug = "none"
 
 [workspace.dependencies]
 # The packages we publish.
-blind_pool = { version = "0.1.1", path = "packages/blind_pool" }
-cpulist = { version = "0.2.5", path = "packages/cpulist" }
+blind_pool = { version = "0.1.2", path = "packages/blind_pool" }
+cpulist = { version = "0.2.6", path = "packages/cpulist" }
 events = { version = "0.1.0", path = "packages/events" }
-folo_ffi = { version = "0.1.4", path = "packages/folo_ffi" }
-folo_utils = { version = "0.1.2", path = "packages/folo_utils" }
-linked = { version = "0.2.5", path = "packages/linked" }
-linked_macros = { version = "0.2.5", path = "packages/linked_macros" }
-linked_macros_impl = { version = "0.2.5", path = "packages/linked_macros_impl" }
-many_cpus = { version = "0.3.7", path = "packages/many_cpus" }
-many_cpus_benchmarking = { version = "0.1.16", path = "packages/many_cpus_benchmarking" }
-new_zealand = { version = "0.1.4", path = "packages/new_zealand" }
-opaque_pool = { version = "0.1.2", path = "packages/opaque_pool" }
-nm = { version = "0.1.5", path = "packages/nm" }
-pinned_pool = { version = "0.1.4", path = "packages/pinned_pool" }
-region_cached = { version = "0.1.17", path = "packages/region_cached" }
-region_local = { version = "0.1.17", path = "packages/region_local" }
+folo_ffi = { version = "0.1.5", path = "packages/folo_ffi" }
+folo_utils = { version = "0.1.3", path = "packages/folo_utils" }
+linked = { version = "0.2.6", path = "packages/linked" }
+linked_macros = { version = "0.2.6", path = "packages/linked_macros" }
+linked_macros_impl = { version = "0.2.6", path = "packages/linked_macros_impl" }
+many_cpus = { version = "0.3.8", path = "packages/many_cpus" }
+many_cpus_benchmarking = { version = "0.1.17", path = "packages/many_cpus_benchmarking" }
+new_zealand = { version = "0.1.5", path = "packages/new_zealand" }
+opaque_pool = { version = "0.1.3", path = "packages/opaque_pool" }
+nm = { version = "0.1.6", path = "packages/nm" }
+pinned_pool = { version = "0.1.5", path = "packages/pinned_pool" }
+region_cached = { version = "0.1.18", path = "packages/region_cached" }
+region_local = { version = "0.1.18", path = "packages/region_local" }
 
 # Internal packages we do not publish.
 benchmarks = { path = "packages/benchmarks" }
@@ -54,7 +56,7 @@ deranged = { version = "0.4", default-features = false }
 derive_more = { version = "2.0", default-features = false }
 fake_headers = { version = "0.0", default-features = false }
 foldhash = { version = "0.1", default-features = false, features = ["std"] }
-frozen-collections = { version = "0.7", default-features = false }
+frozen-collections = { version = "0.5", default-features = false }
 hash_hasher = { version = "2.0", default-features = false }
 heapless = { version = "0.8", default-features = false }
 http = { version = "1.2", default-features = false, features = ["std"] }
