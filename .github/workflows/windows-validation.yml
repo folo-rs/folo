@@ -16,8 +16,6 @@ jobs:
     
     - name: Setup environment
       uses: ./.github/actions/setup-environment
-      with:
-        cache-key-suffix: windows
     
     - name: Run validation
       run: just validate-local

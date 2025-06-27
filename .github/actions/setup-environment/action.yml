@@ -1,9 +1,5 @@
 name: 'Setup Environment'
 description: 'Setup development environment for Folo project'
-inputs:
-  cache-key-suffix:
-    description: 'Suffix for cache keys to differentiate between workflows'
-    required: true
 
 runs:
   using: 'composite'
@@ -39,10 +35,6 @@ runs:
     
     - name: Setup Rust cache
       uses: Swatinem/rust-cache@v2
-      with:
-        # Cache even on build failures to speed up subsequent runs
-        cache-on-failure: true
-        shared-key: folo-${{ inputs.cache-key-suffix }}
     
     - name: Cache cargo tools
       id: cache-cargo-tools
@@ -50,9 +42,9 @@ runs:
       with:
         # Cache installed cargo tools to avoid reinstalling them on every run
         path: ~/.cargo/bin
-        key: cargo-tools-${{ inputs.cache-key-suffix }}-${{ hashFiles('just_setup.just') }}
+        key: cargo-tools-${{ hashFiles('just_setup.just') }}
         restore-keys: |
-          cargo-tools-${{ inputs.cache-key-suffix }}-
+          cargo-tools-
     
     - name: Install just
       if: steps.cache-cargo-tools.outputs.cache-hit != 'true'
