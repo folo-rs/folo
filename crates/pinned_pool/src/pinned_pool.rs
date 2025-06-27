@@ -1349,4 +1349,96 @@ mod tests {
         }
         pool.remove(new_key);
     }
+
+    #[test]
+    fn trait_object_usage() {
+        // Define a simple trait for testing.
+        trait Greet {
+            fn greet(&self) -> String;
+        }
+
+        // Implement the trait for a concrete type.
+        #[derive(Debug)]
+        struct Person {
+            name: String,
+        }
+
+        impl Greet for Person {
+            fn greet(&self) -> String {
+                format!("Hello, I'm {}", self.name)
+            }
+        }
+
+        let mut pool = PinnedPool::<Person>::new();
+
+        // Insert concrete type into the pool.
+        let person_key = pool.insert(Person {
+            name: "Alice".to_string(),
+        });
+
+        // Access item and convert to trait object.
+        let person_ref = pool.get(person_key);
+        let greet_obj: &dyn Greet = person_ref.get_ref();
+
+        // Use the trait method on the trait object.
+        assert_eq!(greet_obj.greet(), "Hello, I'm Alice");
+
+        // Clean up.
+        pool.remove(person_key);
+    }
+
+    #[test]
+    fn trait_object_with_pinned_references() {
+        trait Identifiable {
+            fn get_id(&self) -> u64;
+            fn set_id(&mut self, id: u64);
+        }
+
+        #[derive(Debug)]
+        struct Item {
+            id: u64,
+            #[expect(dead_code, reason = "Used for demo purposes")]
+            data: String,
+        }
+
+        impl Identifiable for Item {
+            fn get_id(&self) -> u64 {
+                self.id
+            }
+
+            fn set_id(&mut self, id: u64) {
+                self.id = id;
+            }
+        }
+
+        let mut pool = PinnedPool::<Item>::new();
+
+        let item_key = pool.insert(Item {
+            id: 123,
+            data: "test data".to_string(),
+        });
+
+        // Get a pinned reference and use it as a trait object.
+        {
+            let item_ref = pool.get(item_key);
+            let trait_obj: &dyn Identifiable = item_ref.get_ref();
+            assert_eq!(trait_obj.get_id(), 123);
+        }
+
+        // Get a mutable pinned reference and use it as a trait object.
+        {
+            let item_ref = pool.get_mut(item_key);
+            let trait_obj: &mut dyn Identifiable = item_ref.get_mut();
+            trait_obj.set_id(456);
+            assert_eq!(trait_obj.get_id(), 456);
+        }
+
+        // Verify the change persisted.
+        {
+            let item_ref = pool.get(item_key);
+            assert_eq!(item_ref.id, 456);
+        }
+
+        pool.remove(item_key);
+    }
 }
