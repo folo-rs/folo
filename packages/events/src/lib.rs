@@ -5,7 +5,7 @@
 //! high performance in concurrent scenarios.
 //!
 //! Both single-threaded and thread-safe variants are available:
-//! - [`Event<T>`], [`EventSender<T>`], [`EventReceiver<T>`] - Thread-safe variants
+//! - [`Event<T>`], [`ByRefEventSender<T>`], [`ByRefEventReceiver<T>`] - Thread-safe variants
 //! - [`LocalEvent<T>`], [`ByRefLocalEventSender<T>`], [`ByRefLocalEventReceiver<T>`] - Single-threaded variants
 //!
 //! # Thread-safe Example

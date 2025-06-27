@@ -21,7 +21,7 @@
 //!    [`Event::endpoints()`] to get a tuple with both
 //! 3. You can only do this once (panic on 2nd call; [`Event::sender_checked()`] is also
 //!    supported, returning [`None`] on 2nd call instead)
-//! 4. Use [`EventSender`]/[`EventReceiver`] as desired, either dropping them or
+//! 4. Use [`ByRefEventSender`]/[`ByRefEventReceiver`] as desired, either dropping them or
 //!    consuming them via self-taking methods
 //!
 //! # Example (Thread-safe)
@@ -55,4 +55,4 @@ mod sync;
 
 // Re-export all public types from both modules
 pub use local::{ByRefLocalEventReceiver, ByRefLocalEventSender, LocalEvent};
-pub use sync::{Event, EventReceiver, EventSender};
+pub use sync::{ByRefEventReceiver, ByRefEventSender, Event};

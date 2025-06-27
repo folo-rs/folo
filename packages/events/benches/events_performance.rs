@@ -6,6 +6,7 @@
 )]
 
 use std::hint;
+use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus_benchmarking::{Payload, WorkDistribution, execute_runs};
@@ -48,39 +49,51 @@ fn events_vs_oneshot(c: &mut Criterion) {
 
 /// Cross-thread communication benchmark using events package.
 /// One worker sends a value, the other receives it.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct EventsCrossThread {
-    sender: Option<events::once::EventSender<i32>>,
-    receiver: Option<events::once::EventReceiver<i32>>,
+    event: Option<Arc<events::once::Event<i32>>>,
+    is_sender: bool,
     value: Option<i32>,
+}
+
+impl Default for EventsCrossThread {
+    fn default() -> Self {
+        Self {
+            event: None,
+            is_sender: false,
+            value: None,
+        }
+    }
 }
 
 impl Payload for EventsCrossThread {
     fn new_pair() -> (Self, Self) {
-        let event = events::once::Event::<i32>::new();
-        let (sender, receiver) = event.endpoints();
+        let event = Arc::new(events::once::Event::<i32>::new());
 
         (
             Self {
-                sender: Some(sender),
-                receiver: None,
+                event: Some(event.clone()),
+                is_sender: true,
                 value: Some(42),
             },
             Self {
-                sender: None,
-                receiver: Some(receiver),
+                event: Some(event),
+                is_sender: false,
                 value: None,
             },
         )
     }
 
     fn process(&mut self) {
-        if let Some(sender) = self.sender.take() {
+        let event = self.event.take().unwrap();
+        if self.is_sender {
             // Sender worker
+            let sender = event.sender();
             let value = self.value.take().unwrap();
             sender.send(hint::black_box(value));
-        } else if let Some(receiver) = self.receiver.take() {
+        } else {
             // Receiver worker
+            let receiver = event.receiver();
             let value = receiver.receive();
             hint::black_box(value);
         }

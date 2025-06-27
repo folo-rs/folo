@@ -21,8 +21,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///
 /// This type requires `T: Send` as values will be sent across thread boundaries.
 /// The sender and receiver implement `Send + Sync` when `T: Send`.
-/// The Event itself is thread-safe to allow sharing during endpoint creation,
-/// though it's typically used once and then discarded.
+/// The Event itself is thread-safe because it can be referenced from other threads
+/// via the sender and receiver endpoints (which hold references to the Event).
+/// This thread-safety is needed even though the Event is typically used once
+/// and then discarded.
 ///
 /// # Example
 ///
@@ -43,7 +45,9 @@ where
 {
     // AtomicBool to track whether endpoints have been retrieved (thread-safe)
     used: AtomicBool,
-    // Mutex only needed for one-time endpoint extraction, not ongoing operations
+    // Mutex is needed because the Event can be referenced from multiple threads
+    // via the sender and receiver endpoints, requiring thread-safe access
+    // to the channel for one-time endpoint extraction
     channel: Mutex<Option<(oneshot::Sender<T>, oneshot::Receiver<T>)>>,
 }
 
@@ -83,7 +87,7 @@ where
     /// let event = Event::<i32>::new();
     /// let sender = event.sender();
     /// ```
-    pub fn sender(&self) -> EventSender<T> {
+    pub fn sender(&self) -> ByRefEventSender<'_, T> {
         self.sender_checked()
             .expect("Event endpoints have already been retrieved")
     }
@@ -102,7 +106,7 @@ where
     /// let event = Event::<i32>::new();
     /// let receiver = event.receiver();
     /// ```
-    pub fn receiver(&self) -> EventReceiver<T> {
+    pub fn receiver(&self) -> ByRefEventReceiver<'_, T> {
         self.receiver_checked()
             .expect("Event endpoints have already been retrieved")
     }
@@ -121,7 +125,7 @@ where
     /// let event = Event::<i32>::new();
     /// let (sender, receiver) = event.endpoints();
     /// ```
-    pub fn endpoints(&self) -> (EventSender<T>, EventReceiver<T>) {
+    pub fn endpoints(&self) -> (ByRefEventSender<'_, T>, ByRefEventReceiver<'_, T>) {
         self.endpoints_checked()
             .expect("Event endpoints have already been retrieved")
     }
@@ -138,13 +142,14 @@ where
     /// let sender2 = event.sender_checked(); // Returns None
     /// assert!(sender2.is_none());
     /// ```
-    pub fn sender_checked(&self) -> Option<EventSender<T>> {
+    pub fn sender_checked(&self) -> Option<ByRefEventSender<'_, T>> {
         if self.used.swap(true, Ordering::SeqCst) {
             return None;
         }
 
         let (sender, _receiver) = self.channel.lock().unwrap().take()?;
-        Some(EventSender {
+        Some(ByRefEventSender {
+            _event: self,
             sender: Some(sender),
         })
     }
@@ -161,13 +166,14 @@ where
     /// let receiver2 = event.receiver_checked(); // Returns None
     /// assert!(receiver2.is_none());
     /// ```
-    pub fn receiver_checked(&self) -> Option<EventReceiver<T>> {
+    pub fn receiver_checked(&self) -> Option<ByRefEventReceiver<'_, T>> {
         if self.used.swap(true, Ordering::SeqCst) {
             return None;
         }
 
         let (_sender, receiver) = self.channel.lock().unwrap().take()?;
-        Some(EventReceiver {
+        Some(ByRefEventReceiver {
+            _event: self,
             receiver: Some(receiver),
         })
     }
@@ -185,17 +191,19 @@ where
     /// let endpoints2 = event.endpoints_checked(); // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
-    pub fn endpoints_checked(&self) -> Option<(EventSender<T>, EventReceiver<T>)> {
+    pub fn endpoints_checked(&self) -> Option<(ByRefEventSender<'_, T>, ByRefEventReceiver<'_, T>)> {
         if self.used.swap(true, Ordering::SeqCst) {
             return None;
         }
 
         let (sender, receiver) = self.channel.lock().unwrap().take()?;
         Some((
-            EventSender {
+            ByRefEventSender {
+                _event: self,
                 sender: Some(sender),
             },
-            EventReceiver {
+            ByRefEventReceiver {
+                _event: self,
                 receiver: Some(receiver),
             },
         ))
@@ -213,17 +221,18 @@ where
 
 /// A sender that can send a value through a thread-safe event.
 ///
-/// The sender owns the underlying channel and can be moved across threads.
-/// After calling [`send`](EventSender::send), the sender is consumed.
+/// The sender holds a reference to the event and can be moved across threads.
+/// After calling [`send`](ByRefEventSender::send), the sender is consumed.
 #[derive(Debug)]
-pub struct EventSender<T>
+pub struct ByRefEventSender<'e, T>
 where
     T: Send,
 {
+    _event: &'e Event<T>,
     sender: Option<oneshot::Sender<T>>,
 }
 
-impl<T> EventSender<T>
+impl<T> ByRefEventSender<'_, T>
 where
     T: Send,
 {
@@ -251,17 +260,18 @@ where
 
 /// A receiver that can receive a value from a thread-safe event.
 ///
-/// The receiver owns the underlying channel and can be moved across threads.
-/// After calling [`receive`](EventReceiver::receive), the receiver is consumed.
+/// The receiver holds a reference to the event and can be moved across threads.
+/// After calling [`receive`](ByRefEventReceiver::receive), the receiver is consumed.
 #[derive(Debug)]
-pub struct EventReceiver<T>
+pub struct ByRefEventReceiver<'e, T>
 where
     T: Send,
 {
+    _event: &'e Event<T>,
     receiver: Option<oneshot::Receiver<T>>,
 }
 
-impl<T> EventReceiver<T>
+impl<T> ByRefEventReceiver<'_, T>
 where
     T: Send,
 {
@@ -475,7 +485,10 @@ mod tests {
     #[test]
     fn event_cross_thread_communication() {
         with_watchdog(|| {
-            let event = Event::<String>::new();
+            // For cross-thread usage, we need the Event to live long enough
+            // In practice, this would typically be done with Arc<Event>
+            static EVENT: std::sync::OnceLock<Event<String>> = std::sync::OnceLock::new();
+            let event = EVENT.get_or_init(|| Event::<String>::new());
             let (sender, receiver) = event.endpoints();
 
             let sender_handle = thread::spawn(move || {
@@ -495,8 +508,8 @@ mod tests {
         // Event should implement Send and Sync
         assert_impl_all!(Event<i32>: Send, Sync);
         // Sender should implement Send and Sync
-        assert_impl_all!(EventSender<i32>: Send, Sync);
+        assert_impl_all!(ByRefEventSender<'_, i32>: Send, Sync);
         // Receiver should implement Send but not necessarily Sync (based on oneshot::Receiver)
-        assert_impl_all!(EventReceiver<i32>: Send);
+        assert_impl_all!(ByRefEventReceiver<'_, i32>: Send);
     }
 }

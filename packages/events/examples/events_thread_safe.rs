@@ -4,7 +4,6 @@
 //! including cross-thread communication and different wrapper types.
 
 use std::sync::Arc;
-use std::thread;
 
 use events::once::Event;
 
@@ -29,27 +28,38 @@ fn main() {
     let value = receiver.receive();
     println!("Received from Arc-wrapped event: {value}");
 
-    // Example 3: Cross-thread communication with Event endpoints
-    println!("\n3. Cross-thread communication:");
+    // Example 3: Cross-thread pattern - endpoints extracted before threading
+    // Note: With ByRef types, the Event must live until threads complete.
+    // This pattern avoids the lifetime issue by using a scoped approach.
+    println!("\n3. Cross-thread communication pattern:");
+    
+    use std::thread;
+    
+    // Create event and extract endpoints in the main scope
     let event = Event::<String>::new();
     let (sender, receiver) = event.endpoints();
+    
+    // Use scoped threads to ensure Event lives long enough
+    thread::scope(|s| {
+        let sender_handle = s.spawn(|| {
+            println!("Sender thread: Sending message...");
+            sender.send("Hello from scoped thread!".to_string());
+            println!("Sender thread: Message sent");
+        });
 
-    let sender_handle = thread::spawn(move || {
-        println!("Sender thread: Sending message...");
-        sender.send("Hello from another thread!".to_string());
-        println!("Sender thread: Message sent");
+        let receiver_handle = s.spawn(|| {
+            println!("Receiver thread: Waiting for message...");
+            let message = receiver.receive();
+            println!("Receiver thread: Received: {message}");
+            message
+        });
+
+        sender_handle.join().unwrap();
+        let message = receiver_handle.join().unwrap();
+        println!("Cross-thread message: {message}");
     });
-
-    let receiver_handle = thread::spawn(move || {
-        println!("Receiver thread: Waiting for message...");
-        let message = receiver.receive();
-        println!("Receiver thread: Received: {message}");
-        message
-    });
-
-    sender_handle.join().unwrap();
-    let cross_thread_message = receiver_handle.join().unwrap();
-    println!("Main thread received result: {cross_thread_message}");
+    
+    // Event is safely dropped here after all threads complete
 
     println!("\nThread-safe events example completed successfully!");
 }
