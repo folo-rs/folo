@@ -36,6 +36,11 @@ impl ThreadPool {
             })
             .into_vec();
 
+        debug_assert!(
+            rxs.lock().unwrap().is_empty(),
+            "All receiver channels should have been consumed by the worker threads"
+        );
+
         Self {
             command_txs: txs,
             join_handles,
