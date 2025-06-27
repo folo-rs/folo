@@ -1,6 +1,6 @@
 //! Events that can happen at most once (send/receive consumes the sender/receiver).
 //!
-//! This module provides one-time use events based on oneshot channels. Each event can only
+//! This module provides one-time use events. Each event can only
 //! be used once - after sending and receiving a value, the sender and receiver are consumed.
 //!
 //! # Usage Pattern
