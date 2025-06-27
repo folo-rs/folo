@@ -3,8 +3,8 @@
 //! This module provides thread-safe event types that can be shared across threads
 //! and used for cross-thread communication.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A one-time event that can send and receive a value of type `T`.
 ///
@@ -494,7 +494,7 @@ mod tests {
     fn thread_safe_types() {
         // Event should implement Send and Sync
         assert_impl_all!(Event<i32>: Send, Sync);
-        // Sender should implement Send and Sync  
+        // Sender should implement Send and Sync
         assert_impl_all!(EventSender<i32>: Send, Sync);
         // Receiver should implement Send but not necessarily Sync (based on oneshot::Receiver)
         assert_impl_all!(EventReceiver<i32>: Send);

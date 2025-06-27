@@ -59,7 +59,7 @@ impl Payload for EventsCrossThread {
     fn new_pair() -> (Self, Self) {
         let event = events::once::Event::<i32>::new();
         let (sender, receiver) = event.endpoints();
-        
+
         (
             Self {
                 sender: Some(sender),
@@ -99,7 +99,7 @@ struct OneshotCrossThread {
 impl Payload for OneshotCrossThread {
     fn new_pair() -> (Self, Self) {
         let (sender, receiver) = oneshot::channel();
-        
+
         (
             Self {
                 sender: Some(sender),
