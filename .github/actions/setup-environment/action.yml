@@ -36,18 +36,7 @@ runs:
     - name: Setup Rust cache
       uses: Swatinem/rust-cache@v2
     
-    - name: Cache cargo tools
-      id: cache-cargo-tools
-      uses: actions/cache@v4
-      with:
-        # Cache installed cargo tools to avoid reinstalling them on every run
-        path: ~/.cargo/bin
-        key: cargo-tools-${{ hashFiles('just_setup.just') }}
-        restore-keys: |
-          cargo-tools-
-    
     - name: Install just
-      if: steps.cache-cargo-tools.outputs.cache-hit != 'true'
       shell: bash
       run: cargo install just --locked
     
@@ -56,7 +45,6 @@ runs:
       run: git config --local include.path ./.gitconfig
     
     - name: Install development tools
-      if: steps.cache-cargo-tools.outputs.cache-hit != 'true'
       shell: bash
       run: just install-tools
     
