@@ -1,5 +1,5 @@
 //! Minimal example of observing simple events and reporting the metrics at exit.
-//! This is the same as nm_basic.rs but structured as a subdirectory example.
+//! This is the same as `nm_basic.rs` but structured as a subdirectory example.
 
 use nm::{Event, Report};
 
