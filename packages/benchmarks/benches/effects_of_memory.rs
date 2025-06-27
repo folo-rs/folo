@@ -15,7 +15,7 @@ use std::sync::{Arc, RwLock, mpsc};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use fake_headers::Headers;
-use frozen_collections::{FzHashMap, FzScalarMap};
+use frozen_collections::{FzHashMap, FzScalarMap, MapQuery};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use many_cpus_benchmarking::{Payload, WorkDistribution, execute_runs};
 
