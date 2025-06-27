@@ -2,7 +2,7 @@
 name = "cpulist"
 description = "Parse and emit the Linux 'cpulist' data format used to list processors, memory regions and similar entities"
 publish = true
-version = "0.2.4"
+version = "0.2.5"
 
 authors.workspace = true
 edition.workspace = true
