@@ -1,0 +1,29 @@
+[package]
+name = "events"
+description = "High-performance event signaling primitives for concurrent environments"
+publish = true
+version = "0.1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+oneshot = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+mutants = { workspace = true }
+static_assertions = { workspace = true }
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "events_performance"
+harness = false
