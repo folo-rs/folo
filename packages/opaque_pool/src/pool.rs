@@ -455,12 +455,7 @@ impl OpaquePool {
         // There is now a vacant slot in this slab! We may want to remember this for fast insertions.
         // We try to remember the lowest index of a slab with a vacant slot, so we
         // fill the collection from the start (to enable easier shrinking later).
-        if self
-            .slab_with_vacant_slot_index
-            .is_none_or(|current| current > coordinates.slab_index)
-        {
-            self.slab_with_vacant_slot_index = Some(coordinates.slab_index);
-        }
+        self.update_vacant_slot_cache(coordinates.slab_index);
     }
 
     #[must_use]
@@ -494,8 +489,32 @@ impl OpaquePool {
         };
 
         // We update the cache. The caller is responsible for invalidating this when needed.
-        self.slab_with_vacant_slot_index = Some(index);
+        self.set_vacant_slot_cache(index);
         index
+    }
+
+    /// Updates the vacant slot cache to point to the slab with the lowest index that has a vacant slot.
+    ///
+    /// This should be called when a slot becomes vacant in a slab. The cache will only be updated
+    /// if the provided slab index is lower than the current cached index, ensuring we always
+    /// point to the lowest-indexed slab with vacant slots for better memory locality.
+    #[cfg_attr(test, mutants::skip)] // Some mutations are untestable - this is just a cache so even if this gets mutated away, we will still operate correctly, just with less performance.
+    fn update_vacant_slot_cache(&mut self, slab_with_vacant_slot_index: usize) {
+        if self
+            .slab_with_vacant_slot_index
+            .is_none_or(|current| current > slab_with_vacant_slot_index)
+        {
+            self.slab_with_vacant_slot_index = Some(slab_with_vacant_slot_index);
+        }
+    }
+
+    /// Sets the vacant slot cache to the specified slab index.
+    ///
+    /// This unconditionally updates the cache and should be used when we have determined
+    /// the exact slab index that should be cached.
+    #[cfg_attr(test, mutants::skip)] // Some mutations are untestable - this is just a cache so even if this gets mutated away, we will still operate correctly, just with less performance.
+    fn set_vacant_slot_cache(&mut self, slab_index: usize) {
+        self.slab_with_vacant_slot_index = Some(slab_index);
     }
 
     #[cfg_attr(test, mutants::skip)] // This is essentially test logic, mutation is meaningless.
