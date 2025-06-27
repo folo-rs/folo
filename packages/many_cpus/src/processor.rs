@@ -154,7 +154,6 @@ mod tests {
         assert_eq!(processor.efficiency_class(), EfficiencyClass::Efficiency);
 
         // A clone is a legit clone.
-        #[expect(clippy::redundant_clone, reason = "testing")]
         let processor_clone = processor.clone();
         assert_eq!(processor, processor_clone);
 

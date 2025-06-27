@@ -30,7 +30,7 @@ mod tests {
     use crate::nz;
 
     #[test]
-    fn test_basic_functionality() {
+    fn basic_functionality() {
         // Test basic usage with different data types
         let u32_value: NonZero<u32> = nz!(42);
         assert_eq!(u32_value.get(), 42);
@@ -43,7 +43,7 @@ mod tests {
     }
 
     #[test]
-    fn test_signed_integers() {
+    fn signed_integers() {
         // Test positive and negative values for signed types
         let positive: NonZero<i32> = nz!(42);
         assert_eq!(positive.get(), 42);
@@ -59,7 +59,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extreme_values() {
+    fn extreme_values() {
         // Test minimum non-zero and maximum values
         let min_u8: NonZero<u8> = nz!(1);
         assert_eq!(min_u8.get(), 1);
@@ -75,7 +75,7 @@ mod tests {
     }
 
     #[test]
-    fn test_const_evaluation() {
+    fn const_evaluation() {
         // Test that the macro works in const contexts
         const U32_VALUE: NonZero<u32> = nz!(42);
         const I32_VALUE: NonZero<i32> = nz!(-42);
@@ -87,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn test_function_parameter() {
+    fn function_parameter() {
         fn takes_nonzero_u32(x: NonZero<u32>) -> u32 {
             x.get() * 2
         }
@@ -101,7 +101,7 @@ mod tests {
     }
 
     #[test]
-    fn test_various_literal_formats() {
+    fn various_literal_formats() {
         // Test decimal literals
         let decimal: NonZero<u32> = nz!(123);
         assert_eq!(decimal.get(), 123);
@@ -120,7 +120,7 @@ mod tests {
     }
 
     #[test]
-    fn test_type_inference() {
+    fn type_inference() {
         // Test that the macro works with type inference
         let inferred = nz!(42);
         let _: NonZero<u32> = inferred;

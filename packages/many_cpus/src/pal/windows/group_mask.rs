@@ -94,7 +94,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_components() {
+    fn from_components() {
         // Create a mask with bits 0, 3, and 7 set, in group 2
         let mask_value = (1 << 0) | (1 << 3) | (1 << 7);
         let group_index = 2;
@@ -109,7 +109,7 @@ mod tests {
     }
 
     #[test]
-    fn test_contains_by_index_in_group() {
+    fn contains_by_index_in_group() {
         // Create a mask with bits 0, 3, and 7 set
         let mut mask = GroupMask::none();
         let p0 = ProcessorImpl::new(0, 0, 0, 0, EfficiencyClass::Performance);
