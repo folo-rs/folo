@@ -1,0 +1,58 @@
+name: Setup Environment
+description: Setup development environment for Folo project
+
+runs:
+  using: composite
+  steps:
+    - name: Install system dependencies (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt update
+        sudo apt install -y git git-lfs build-essential cmake gcc make curl
+        # Set up Git LFS
+        git lfs install
+    
+    - name: Install PowerShell 7 (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        # Download and install PowerShell 7
+        wget -q "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"
+        sudo dpkg -i packages-microsoft-prod.deb
+        sudo apt update
+        sudo apt install -y powershell
+        # Verify PowerShell installation
+        pwsh -c "Write-Host 'PowerShell installed successfully'"
+    
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    
+    - name: Install nightly Rust toolchain
+      uses: dtolnay/rust-toolchain@nightly
+      with:
+        components: miri, rustfmt
+    
+    - name: Setup Rust cache
+      uses: Swatinem/rust-cache@v2
+    
+    - name: Install just
+      shell: bash
+      run: cargo install just --locked
+    
+    - name: Configure Git
+      shell: bash
+      run: git config --local include.path ./.gitconfig
+    
+    - name: Install development tools
+      shell: bash
+      run: just install-tools
+    
+    - name: Verify environment setup
+      shell: bash
+      run: |
+        echo "Verifying installed tools..."
+        just --version
+        cargo --version
+        rustc --version
+        echo "Environment setup complete"
