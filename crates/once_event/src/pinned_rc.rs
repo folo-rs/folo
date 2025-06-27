@@ -41,10 +41,6 @@ pub(crate) type PinnedRcStorage<T> = RefCell<PinnedPool<PinnedRcBox<T>>>;
 ///   smart pointer will ever be alive after the slab chain is dropped, this is essentially free of
 ///   any runtime overhead.
 #[derive(Debug)]
-#[expect(
-    clippy::module_name_repetitions,
-    reason = "PinnedRc prefix is appropriate for the type hierarchy"
-)]
 pub struct PinnedRcBox<T> {
     value: T,
     ref_count: Cell<usize>,
@@ -233,10 +229,6 @@ impl<T> From<T> for PinnedRcBox<T> {
 /// checking. Make sure you are not holding any references to the slab chain yourself when dropping
 /// any `PinnedRc` values or the drop will panic.
 #[derive(Debug)]
-#[expect(
-    clippy::module_name_repetitions,
-    reason = "RefPinnedRc name clearly indicates its purpose"
-)]
 pub struct RefPinnedRc<'slab, T> {
     // We may need to mutate the chain at any time, so we require it to be in a RefCell.
     slab_chain: &'slab RefCell<PinnedPool<PinnedRcBox<T>>>,
@@ -316,10 +308,6 @@ impl<T> Drop for RefPinnedRc<'_, T> {
 /// checking. Make sure you are not holding any references to the slab chain yourself when dropping
 /// any `PinnedRc` values or the drop will panic.
 #[derive(Debug)]
-#[expect(
-    clippy::module_name_repetitions,
-    reason = "RcPinnedRc name clearly indicates its purpose"
-)]
 pub struct RcPinnedRc<T> {
     // We may need to mutate the chain at any time, so we require it to be in a RefCell.
     slab_chain: Rc<RefCell<PinnedPool<PinnedRcBox<T>>>>,
@@ -400,10 +388,6 @@ impl<T> Drop for RcPinnedRc<T> {
 /// checking. Make sure you are not holding any references to the slab chain yourself when dropping
 /// any `PinnedRc` values or the drop will panic.
 #[derive(Debug)]
-#[expect(
-    clippy::module_name_repetitions,
-    reason = "UnsafePinnedRc name clearly indicates its purpose"
-)]
 pub struct UnsafePinnedRc<T> {
     // We may need to mutate the chain at any time, so we require it to be in a RefCell.
     // The caller is responsible for ensuring this outlives us.
