@@ -304,3 +304,21 @@ Example of desired formatting:
 regular_field: just some text
 special_field: ':::starts with special characters, needs quoting'
 ```
+
+# Use imports
+
+Types we reference should be imported via `use` statements. Unless there is a specific need
+to disambiguate between similarly named types, do not use absolute paths to types.
+
+This is good:
+
+```rust
+use std::time::Instant;
+
+fn foo(i: Instant) {}
+```
+
+Is is bad:
+```rust
+fn foo(i: std::time::Instant) { }
+```
