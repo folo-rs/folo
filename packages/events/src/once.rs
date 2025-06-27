@@ -289,36 +289,88 @@ impl<T> ByRefEventReceiver<'_, T> {
 #[cfg(test)]
 mod tests {
     use static_assertions::assert_not_impl_any;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
 
     use super::*;
 
+    /// Runs a test with a 10-second watchdog timer to prevent infinite hangs.
+    /// If the test does not complete within 10 seconds, the watchdog thread will panic.
+    fn with_watchdog<F>(test_fn: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_watchdog = Arc::clone(&completed);
+        let completed_cleanup = Arc::clone(&completed);
+
+        // Spawn watchdog thread
+        let watchdog_handle = std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            while start.elapsed() < Duration::from_secs(10) {
+                if completed_watchdog.load(Ordering::Relaxed) {
+                    return; // Test completed successfully
+                }
+                std::thread::sleep(Duration::from_millis(100)); // Check every 100ms
+            }
+            assert!(
+                completed_watchdog.load(Ordering::Relaxed),
+                "Test exceeded 10-second timeout - likely hanging in receive()"
+            );
+        });
+
+        // Run the actual test
+        let test_handle = std::thread::spawn(move || {
+            test_fn();
+            completed.store(true, Ordering::Relaxed);
+        });
+
+        // Wait for test to complete
+        if let Err(e) = test_handle.join() {
+            completed_cleanup.store(true, Ordering::Relaxed);
+            drop(watchdog_handle.join());
+            std::panic::resume_unwind(e);
+        }
+
+        // Signal completion and wait for watchdog to finish
+        completed_cleanup.store(true, Ordering::Relaxed);
+        drop(watchdog_handle.join());
+    }
+
     #[test]
     fn event_new_creates_valid_event() {
-        let event = Event::<i32>::new();
-        // Should be able to get endpoints once
-        let (sender, receiver) = event.endpoints();
-        sender.send(42);
-        let value = receiver.receive();
-        assert_eq!(value, 42);
+        with_watchdog(|| {
+            let event = Event::<i32>::new();
+            // Should be able to get endpoints once
+            let (sender, receiver) = event.endpoints();
+            sender.send(42);
+            let value = receiver.receive();
+            assert_eq!(value, 42);
+        });
     }
 
     #[test]
     fn event_default_creates_valid_event() {
-        let event = Event::<String>::default();
-        let (sender, receiver) = event.endpoints();
-        sender.send("test".to_string());
-        let value = receiver.receive();
-        assert_eq!(value, "test");
+        with_watchdog(|| {
+            let event = Event::<String>::default();
+            let (sender, receiver) = event.endpoints();
+            sender.send("test".to_string());
+            let value = receiver.receive();
+            assert_eq!(value, "test");
+        });
     }
 
     #[test]
     fn endpoints_method_provides_both() {
-        let event = Event::<u64>::new();
-        let (sender, receiver) = event.endpoints();
+        with_watchdog(|| {
+            let event = Event::<u64>::new();
+            let (sender, receiver) = event.endpoints();
 
-        sender.send(123);
-        let value = receiver.receive();
-        assert_eq!(value, 123);
+            sender.send(123);
+            let value = receiver.receive();
+            assert_eq!(value, 123);
+        });
     }
 
     #[test]
