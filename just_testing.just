@@ -15,6 +15,15 @@ miri FILTER="":
     cargo +nightly miri nextest run {{ target_package }} --no-fail-fast --all-features {{ FILTER }}
 
 [group('testing')]
+[script]
+miri-example EXAMPLE:
+    if ("{{ package }}" -eq "") {
+        cargo +nightly miri run --all-features --example {{ EXAMPLE }}
+    } else {
+        cargo +nightly miri run -p {{ package }} --all-features --example {{ EXAMPLE }}
+    }
+
+[group('testing')]
 test FILTER="":
     cargo nextest run {{ target_package }} --all-features {{ FILTER }}
 
