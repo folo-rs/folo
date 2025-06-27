@@ -65,6 +65,7 @@ validate-local:
     just package={{ package }} test-benches
     just package={{ package }} docs
     just package={{ package }} miri
+    just package={{ package }} run-examples
     just package={{ package }} clippy release
     just package={{ package }} check release
     just package={{ package }} build release
@@ -82,7 +83,7 @@ validate-extra-linux:
 # Validation of extra factors that take potentially too long to run in regular validation.
 # Performs validation on the current platform, whatever that may be.
 [group('quality')]
-validate-extra-local: mutants run-examples
+validate-extra-local: mutants
 
 # Quick validation suitable for AI iteration, which skips some lengthy checks.
 # We assume this is executed on Windows, and will also perform the full validation on Linux.
