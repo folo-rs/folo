@@ -318,7 +318,8 @@ use std::time::Instant;
 fn foo(i: Instant) {}
 ```
 
-Is is bad:
+This is bad:
+
 ```rust
 fn foo(i: std::time::Instant) { }
 ```
