@@ -15,6 +15,7 @@ default = []
 
 [dependencies]
 futures = { workspace = true }
+pinned_pool = { workspace = true }
 
 [dev-dependencies]
 benchmark_utils = { workspace = true }

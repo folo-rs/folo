@@ -125,9 +125,7 @@ where
         }
 
         Some((
-            ByRefEventSender {
-                event: self,
-            },
+            ByRefEventSender { event: self },
             ByRefEventReceiver { event: self },
         ))
     }
@@ -276,7 +274,7 @@ where
     /// let pinned_event = Pin::new(&mut event);
     /// // SAFETY: We ensure the event outlives the sender and receiver
     /// let (sender, receiver) = unsafe { pinned_event.by_ptr() };
-    /// 
+    ///
     /// sender.send(42);
     /// let value = receiver.recv();
     /// assert_eq!(value, 42);
@@ -285,8 +283,7 @@ where
     #[must_use]
     pub unsafe fn by_ptr(self: Pin<&mut Self>) -> (ByPtrEventSender<T>, ByPtrEventReceiver<T>) {
         // SAFETY: Caller has guaranteed event lifetime management
-        unsafe { self.by_ptr_checked() }
-            .expect("Event endpoints have already been retrieved")
+        unsafe { self.by_ptr_checked() }.expect("Event endpoints have already been retrieved")
     }
 
     /// Returns both the sender and receiver for this event, connected by raw pointer,
@@ -331,9 +328,7 @@ where
 
         let event_ptr: *const Self = this;
         Some((
-            ByPtrEventSender {
-                event: event_ptr,
-            },
+            ByPtrEventSender { event: event_ptr },
             ByPtrEventReceiver { event: event_ptr },
         ))
     }
@@ -342,7 +337,7 @@ where
     ///
     /// Returns `Ok(())` if the value was set successfully, or `Err(value)` if
     /// the event has already been fired.
-    fn try_set(&self, value: T) -> Result<(), T> {
+    pub(crate) fn try_set(&self, value: T) -> Result<(), T> {
         let mut state = self.state.lock().unwrap();
         match mem::replace(&mut *state, EventState::Consumed) {
             EventState::NotSet => {
@@ -1223,7 +1218,7 @@ mod tests {
             // SAFETY: We ensure the event outlives the sender and receiver within this test
             let endpoints = unsafe { pinned_event.by_ptr_checked() };
             assert!(endpoints.is_some());
-            
+
             // Second call should return None
             let pinned_event2 = Pin::new(&mut event);
             // SAFETY: We ensure the event outlives the endpoints within this test

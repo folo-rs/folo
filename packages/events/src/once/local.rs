@@ -113,9 +113,7 @@ impl<T> LocalEvent<T> {
         *used = true;
 
         Some((
-            ByRefLocalEventSender {
-                event: self,
-            },
+            ByRefLocalEventSender { event: self },
             ByRefLocalEventReceiver { event: self },
         ))
     }
@@ -185,7 +183,7 @@ impl<T> LocalEvent<T> {
     ///
     /// Returns `Ok(())` if the value was set successfully, or `Err(value)` if
     /// the event has already been fired.
-    fn try_set(&self, value: T) -> Result<(), T> {
+    pub(crate) fn try_set(&self, value: T) -> Result<(), T> {
         let mut state = self.state.borrow_mut();
         match mem::replace(&mut *state, EventState::Consumed) {
             EventState::NotSet => {
@@ -264,17 +262,18 @@ impl<T> LocalEvent<T> {
     /// let pinned_event = Pin::new(&mut event);
     /// // SAFETY: We ensure the event outlives the sender and receiver
     /// let (sender, receiver) = unsafe { pinned_event.by_ptr() };
-    /// 
+    ///
     /// sender.send(42);
     /// let value = receiver.recv();
     /// assert_eq!(value, 42);
     /// // sender and receiver are dropped here, before event
     /// ```
     #[must_use]
-    pub unsafe fn by_ptr(self: Pin<&mut Self>) -> (ByPtrLocalEventSender<T>, ByPtrLocalEventReceiver<T>) {
+    pub unsafe fn by_ptr(
+        self: Pin<&mut Self>,
+    ) -> (ByPtrLocalEventSender<T>, ByPtrLocalEventReceiver<T>) {
         // SAFETY: Caller has guaranteed event lifetime management
-        unsafe { self.by_ptr_checked() }
-            .expect("Event endpoints have already been retrieved")
+        unsafe { self.by_ptr_checked() }.expect("Event endpoints have already been retrieved")
     }
 
     /// Returns both the sender and receiver for this event, connected by raw pointer,
@@ -321,9 +320,7 @@ impl<T> LocalEvent<T> {
 
         let event_ptr: *const Self = this;
         Some((
-            ByPtrLocalEventSender {
-                event: event_ptr,
-            },
+            ByPtrLocalEventSender { event: event_ptr },
             ByPtrLocalEventReceiver { event: event_ptr },
         ))
     }
@@ -895,7 +892,7 @@ mod tests {
             // SAFETY: We ensure the event outlives the sender and receiver within this test
             let endpoints = unsafe { pinned_event.by_ptr_checked() };
             assert!(endpoints.is_some());
-            
+
             // Second call should return None
             let pinned_event2 = Pin::new(&mut event);
             // SAFETY: We ensure the event outlives the endpoints within this test
