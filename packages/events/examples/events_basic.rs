@@ -12,7 +12,7 @@ fn main() {
     let event = Event::<String>::new();
 
     // Get both the sender and receiver endpoints
-    let (sender, receiver) = event.endpoints();
+    let (sender, receiver) = event.by_ref();
 
     println!("Sending message through event...");
     sender.send("Hello from events!".to_string());

@@ -1,5 +1,5 @@
 //! High-performance event signaling primitives for concurrent environments.
-//! 
+//!
 //! (DRAFT API WITH PLACEHOLDER IMPLEMENTATION - WORK IN PROGRESS)
 //!
 //! This crate provides lightweight, efficient signaling mechanisms for communicating between
@@ -17,7 +17,7 @@
 //!
 //! // Create a thread-safe event for passing a string message
 //! let event = Event::<String>::new();
-//! let (sender, receiver) = event.endpoints();
+//! let (sender, receiver) = event.by_ref();
 //!
 //! // Send a message through the event
 //! sender.send("Hello, World!".to_string());
@@ -34,7 +34,7 @@
 //!
 //! // Create a local event for passing a string message
 //! let event = LocalEvent::<String>::new();
-//! let (sender, receiver) = event.endpoints();
+//! let (sender, receiver) = event.by_ref();
 //!
 //! // Send a message through the event
 //! sender.send("Hello, World!".to_string());

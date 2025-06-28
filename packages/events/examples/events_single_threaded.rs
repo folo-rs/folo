@@ -13,7 +13,7 @@ fn main() {
     // Example 1: Basic LocalEvent usage
     println!("\n1. Basic LocalEvent usage:");
     let event = LocalEvent::<String>::new();
-    let (sender, receiver) = event.endpoints();
+    let (sender, receiver) = event.by_ref();
     sender.send("Hello from local event!".to_string());
     let message = receiver.receive();
     println!("Received: {message}");
@@ -21,7 +21,7 @@ fn main() {
     // Example 2: LocalEvent with Rc for sharing (single-threaded only)
     println!("\n2. LocalEvent with Rc for sharing:");
     let event_rc = Rc::new(LocalEvent::<i32>::new());
-    let (sender_rc, receiver_rc) = event_rc.endpoints();
+    let (sender_rc, receiver_rc) = event_rc.by_ref();
     sender_rc.send(123);
     let value = receiver_rc.receive();
     println!("Received from Rc-wrapped LocalEvent: {value}");
@@ -30,7 +30,7 @@ fn main() {
     println!("\n3. LocalEvent works with !Send types:");
     let rc_data = Rc::new("Shared data in Rc".to_string());
     let event = LocalEvent::<Rc<String>>::new();
-    let (sender, receiver) = event.endpoints();
+    let (sender, receiver) = event.by_ref();
     sender.send(Rc::<String>::clone(&rc_data));
     let received_rc = receiver.receive();
     println!("Received Rc data: {received_rc}");

@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// use events::once::Event;
 ///
 /// let event = Event::<String>::new();
-/// let (sender, receiver) = event.endpoints();
+/// let (sender, receiver) = event.by_ref();
 ///
 /// sender.send("Hello".to_string());
 /// let message = receiver.receive();
@@ -73,11 +73,11 @@ where
         }
     }
 
-    /// Returns a sender for this event.
+    /// Returns both the sender and receiver for this event, connected by reference.
     ///
     /// # Panics
     ///
-    /// Panics if this method or any other endpoint retrieval method has been called before.
+    /// Panics if this method or [`by_ref_checked`](Event::by_ref_checked) has been called before.
     ///
     /// # Example
     ///
@@ -85,18 +85,15 @@ where
     /// use events::once::Event;
     ///
     /// let event = Event::<i32>::new();
-    /// let sender = event.sender();
+    /// let (sender, receiver) = event.by_ref();
     /// ```
-    pub fn sender(&self) -> ByRefEventSender<'_, T> {
-        self.sender_checked()
+    pub fn by_ref(&self) -> (ByRefEventSender<'_, T>, ByRefEventReceiver<'_, T>) {
+        self.by_ref_checked()
             .expect("Event endpoints have already been retrieved")
     }
 
-    /// Returns a receiver for this event.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this method or any other endpoint retrieval method has been called before.
+    /// Returns both the sender and receiver for this event, connected by reference,
+    /// or [`None`] if endpoints have already been retrieved.
     ///
     /// # Example
     ///
@@ -104,96 +101,11 @@ where
     /// use events::once::Event;
     ///
     /// let event = Event::<i32>::new();
-    /// let receiver = event.receiver();
-    /// ```
-    pub fn receiver(&self) -> ByRefEventReceiver<'_, T> {
-        self.receiver_checked()
-            .expect("Event endpoints have already been retrieved")
-    }
-
-    /// Returns both the sender and receiver for this event.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this method or any other endpoint retrieval method has been called before.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use events::once::Event;
-    ///
-    /// let event = Event::<i32>::new();
-    /// let (sender, receiver) = event.endpoints();
-    /// ```
-    pub fn endpoints(&self) -> (ByRefEventSender<'_, T>, ByRefEventReceiver<'_, T>) {
-        self.endpoints_checked()
-            .expect("Event endpoints have already been retrieved")
-    }
-
-    /// Returns a sender for this event, or [`None`] if endpoints have already been retrieved.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use events::once::Event;
-    ///
-    /// let event = Event::<i32>::new();
-    /// let sender = event.sender_checked().unwrap();
-    /// let sender2 = event.sender_checked(); // Returns None
-    /// assert!(sender2.is_none());
-    /// ```
-    pub fn sender_checked(&self) -> Option<ByRefEventSender<'_, T>> {
-        if self.used.swap(true, Ordering::SeqCst) {
-            return None;
-        }
-
-        let (sender, _receiver) = self.channel.lock().unwrap().take()?;
-        Some(ByRefEventSender {
-            _event: self,
-            sender: Some(sender),
-        })
-    }
-
-    /// Returns a receiver for this event, or [`None`] if endpoints have already been retrieved.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use events::once::Event;
-    ///
-    /// let event = Event::<i32>::new();
-    /// let receiver = event.receiver_checked().unwrap();
-    /// let receiver2 = event.receiver_checked(); // Returns None
-    /// assert!(receiver2.is_none());
-    /// ```
-    pub fn receiver_checked(&self) -> Option<ByRefEventReceiver<'_, T>> {
-        if self.used.swap(true, Ordering::SeqCst) {
-            return None;
-        }
-
-        let (_sender, receiver) = self.channel.lock().unwrap().take()?;
-        Some(ByRefEventReceiver {
-            _event: self,
-            receiver: Some(receiver),
-        })
-    }
-
-    /// Returns both the sender and receiver for this event, or [`None`] if endpoints have
-    /// already been retrieved.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use events::once::Event;
-    ///
-    /// let event = Event::<i32>::new();
-    /// let endpoints = event.endpoints_checked().unwrap();
-    /// let endpoints2 = event.endpoints_checked(); // Returns None
+    /// let endpoints = event.by_ref_checked().unwrap();
+    /// let endpoints2 = event.by_ref_checked(); // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
-    pub fn endpoints_checked(
-        &self,
-    ) -> Option<(ByRefEventSender<'_, T>, ByRefEventReceiver<'_, T>)> {
+    pub fn by_ref_checked(&self) -> Option<(ByRefEventSender<'_, T>, ByRefEventReceiver<'_, T>)> {
         if self.used.swap(true, Ordering::SeqCst) {
             return None;
         }
@@ -249,7 +161,7 @@ where
     /// use events::once::Event;
     ///
     /// let event = Event::<i32>::new();
-    /// let sender = event.sender();
+    /// let (sender, _receiver) = event.by_ref();
     /// sender.send(42);
     /// ```
     pub fn send(mut self, value: T) {
@@ -288,7 +200,7 @@ where
     /// use events::once::Event;
     ///
     /// let event = Event::<i32>::new();
-    /// let (sender, receiver) = event.endpoints();
+    /// let (sender, receiver) = event.by_ref();
     ///
     /// sender.send(42);
     /// let value = receiver.receive();
@@ -367,7 +279,7 @@ mod tests {
         with_watchdog(|| {
             let event = Event::<i32>::new();
             // Should be able to get endpoints once
-            let (sender, receiver) = event.endpoints();
+            let (sender, receiver) = event.by_ref();
             sender.send(42);
             let value = receiver.receive();
             assert_eq!(value, 42);
@@ -378,7 +290,7 @@ mod tests {
     fn event_default_creates_valid_event() {
         with_watchdog(|| {
             let event = Event::<String>::default();
-            let (sender, receiver) = event.endpoints();
+            let (sender, receiver) = event.by_ref();
             sender.send("test".to_string());
             let value = receiver.receive();
             assert_eq!(value, "test");
@@ -386,10 +298,10 @@ mod tests {
     }
 
     #[test]
-    fn event_endpoints_method_provides_both() {
+    fn event_by_ref_method_provides_both() {
         with_watchdog(|| {
             let event = Event::<u64>::new();
-            let (sender, receiver) = event.endpoints();
+            let (sender, receiver) = event.by_ref();
 
             sender.send(123);
             let value = receiver.receive();
@@ -399,62 +311,26 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "Event endpoints have already been retrieved")]
-    fn event_sender_panics_after_endpoints_retrieved() {
+    fn event_by_ref_panics_on_second_call() {
         let event = Event::<i32>::new();
-        let _endpoints = event.endpoints();
-        let _sender = event.sender(); // Should panic
+        let _endpoints = event.by_ref();
+        let _endpoints2 = event.by_ref(); // Should panic
     }
 
     #[test]
-    #[should_panic(expected = "Event endpoints have already been retrieved")]
-    fn event_receiver_panics_after_endpoints_retrieved() {
+    fn event_by_ref_checked_returns_none_after_use() {
         let event = Event::<i32>::new();
-        let _endpoints = event.endpoints();
-        let _receiver = event.receiver(); // Should panic
-    }
-
-    #[test]
-    #[should_panic(expected = "Event endpoints have already been retrieved")]
-    fn event_endpoints_panics_after_sender_retrieved() {
-        let event = Event::<i32>::new();
-        let _sender = event.sender();
-        let _endpoints = event.endpoints(); // Should panic
-    }
-
-    #[test]
-    fn event_sender_checked_returns_none_after_use() {
-        let event = Event::<i32>::new();
-        let sender1 = event.sender_checked();
-        assert!(sender1.is_some());
-
-        let sender2 = event.sender_checked();
-        assert!(sender2.is_none());
-    }
-
-    #[test]
-    fn event_receiver_checked_returns_none_after_use() {
-        let event = Event::<i32>::new();
-        let receiver1 = event.receiver_checked();
-        assert!(receiver1.is_some());
-
-        let receiver2 = event.receiver_checked();
-        assert!(receiver2.is_none());
-    }
-
-    #[test]
-    fn event_endpoints_checked_returns_none_after_use() {
-        let event = Event::<i32>::new();
-        let endpoints1 = event.endpoints_checked();
+        let endpoints1 = event.by_ref_checked();
         assert!(endpoints1.is_some());
 
-        let endpoints2 = event.endpoints_checked();
+        let endpoints2 = event.by_ref_checked();
         assert!(endpoints2.is_none());
     }
 
     #[test]
     fn event_send_succeeds_without_receiver() {
         let event = Event::<i32>::new();
-        let sender = event.sender();
+        let (sender, _receiver) = event.by_ref();
 
         // Send should still succeed even if we don't have a receiver
         sender.send(42);
@@ -464,7 +340,7 @@ mod tests {
     fn event_works_in_arc() {
         with_watchdog(|| {
             let event = Arc::new(Event::<String>::new());
-            let (sender, receiver) = event.endpoints();
+            let (sender, receiver) = event.by_ref();
 
             sender.send("Hello from Arc".to_string());
             let value = receiver.receive();
@@ -476,7 +352,7 @@ mod tests {
     fn event_works_in_rc() {
         with_watchdog(|| {
             let event = Rc::new(Event::<String>::new());
-            let (sender, receiver) = event.endpoints();
+            let (sender, receiver) = event.by_ref();
 
             sender.send("Hello from Rc".to_string());
             let value = receiver.receive();
@@ -491,7 +367,7 @@ mod tests {
             // In practice, this would typically be done with Arc<Event>
             static EVENT: std::sync::OnceLock<Event<String>> = std::sync::OnceLock::new();
             let event = EVENT.get_or_init(Event::<String>::new);
-            let (sender, receiver) = event.endpoints();
+            let (sender, receiver) = event.by_ref();
 
             let sender_handle = thread::spawn(move || {
                 sender.send("Hello from thread!".to_string());

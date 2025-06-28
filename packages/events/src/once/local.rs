@@ -20,7 +20,7 @@ use std::marker::PhantomData;
 /// use events::once::LocalEvent;
 ///
 /// let event = LocalEvent::<String>::new();
-/// let (sender, receiver) = event.endpoints();
+/// let (sender, receiver) = event.by_ref();
 ///
 /// sender.send("Hello".to_string());
 /// let message = receiver.receive();
@@ -51,11 +51,11 @@ impl<T> LocalEvent<T> {
         }
     }
 
-    /// Returns a sender for this event.
+    /// Returns both the sender and receiver for this event, connected by reference.
     ///
     /// # Panics
     ///
-    /// Panics if this method or any other endpoint retrieval method has been called before.
+    /// Panics if this method or [`by_ref_checked`](LocalEvent::by_ref_checked) has been called before.
     ///
     /// # Example
     ///
@@ -63,18 +63,15 @@ impl<T> LocalEvent<T> {
     /// use events::once::LocalEvent;
     ///
     /// let event = LocalEvent::<i32>::new();
-    /// let sender = event.sender();
+    /// let (sender, receiver) = event.by_ref();
     /// ```
-    pub fn sender(&self) -> ByRefLocalEventSender<'_, T> {
-        self.sender_checked()
+    pub fn by_ref(&self) -> (ByRefLocalEventSender<'_, T>, ByRefLocalEventReceiver<'_, T>) {
+        self.by_ref_checked()
             .expect("Event endpoints have already been retrieved")
     }
 
-    /// Returns a receiver for this event.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this method or any other endpoint retrieval method has been called before.
+    /// Returns both the sender and receiver for this event, connected by reference,
+    /// or [`None`] if endpoints have already been retrieved.
     ///
     /// # Example
     ///
@@ -82,86 +79,11 @@ impl<T> LocalEvent<T> {
     /// use events::once::LocalEvent;
     ///
     /// let event = LocalEvent::<i32>::new();
-    /// let receiver = event.receiver();
-    /// ```
-    pub fn receiver(&self) -> ByRefLocalEventReceiver<'_, T> {
-        self.receiver_checked()
-            .expect("Event endpoints have already been retrieved")
-    }
-
-    /// Returns both the sender and receiver for this event.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this method or any other endpoint retrieval method has been called before.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use events::once::LocalEvent;
-    ///
-    /// let event = LocalEvent::<i32>::new();
-    /// let (sender, receiver) = event.endpoints();
-    /// ```
-    pub fn endpoints(&self) -> (ByRefLocalEventSender<'_, T>, ByRefLocalEventReceiver<'_, T>) {
-        self.endpoints_checked()
-            .expect("Event endpoints have already been retrieved")
-    }
-
-    /// Returns a sender for this event, or [`None`] if endpoints have already been retrieved.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use events::once::LocalEvent;
-    ///
-    /// let event = LocalEvent::<i32>::new();
-    /// let sender = event.sender_checked().unwrap();
-    /// let sender2 = event.sender_checked(); // Returns None
-    /// assert!(sender2.is_none());
-    /// ```
-    pub fn sender_checked(&self) -> Option<ByRefLocalEventSender<'_, T>> {
-        let (sender, _) = self.take_channel()?;
-        Some(ByRefLocalEventSender {
-            sender: Some(sender),
-            _lifetime: PhantomData,
-        })
-    }
-
-    /// Returns a receiver for this event, or [`None`] if endpoints have already been retrieved.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use events::once::LocalEvent;
-    ///
-    /// let event = LocalEvent::<i32>::new();
-    /// let receiver = event.receiver_checked().unwrap();
-    /// let receiver2 = event.receiver_checked(); // Returns None
-    /// assert!(receiver2.is_none());
-    /// ```
-    pub fn receiver_checked(&self) -> Option<ByRefLocalEventReceiver<'_, T>> {
-        let (_, receiver) = self.take_channel()?;
-        Some(ByRefLocalEventReceiver {
-            receiver: Some(receiver),
-            _lifetime: PhantomData,
-        })
-    }
-
-    /// Returns both the sender and receiver for this event, or [`None`] if endpoints have
-    /// already been retrieved.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use events::once::LocalEvent;
-    ///
-    /// let event = LocalEvent::<i32>::new();
-    /// let endpoints = event.endpoints_checked().unwrap();
-    /// let endpoints2 = event.endpoints_checked(); // Returns None
+    /// let endpoints = event.by_ref_checked().unwrap();
+    /// let endpoints2 = event.by_ref_checked(); // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
-    pub fn endpoints_checked(
+    pub fn by_ref_checked(
         &self,
     ) -> Option<(ByRefLocalEventSender<'_, T>, ByRefLocalEventReceiver<'_, T>)> {
         let (sender, receiver) = self.take_channel()?;
@@ -210,7 +132,7 @@ impl<T> ByRefLocalEventSender<'_, T> {
     /// use events::once::LocalEvent;
     ///
     /// let event = LocalEvent::<i32>::new();
-    /// let sender = event.sender();
+    /// let (sender, _receiver) = event.by_ref();
     /// sender.send(42);
     /// ```
     pub fn send(mut self, value: T) {
@@ -243,7 +165,7 @@ impl<T> ByRefLocalEventReceiver<'_, T> {
     /// use events::once::LocalEvent;
     ///
     /// let event = LocalEvent::<i32>::new();
-    /// let (sender, receiver) = event.endpoints();
+    /// let (sender, receiver) = event.by_ref();
     ///
     /// sender.send(42);
     /// let value = receiver.receive();
@@ -320,7 +242,7 @@ mod tests {
         with_watchdog(|| {
             let event = LocalEvent::<i32>::new();
             // Should be able to get endpoints once
-            let (sender, receiver) = event.endpoints();
+            let (sender, receiver) = event.by_ref();
             sender.send(42);
             let value = receiver.receive();
             assert_eq!(value, 42);
@@ -331,7 +253,7 @@ mod tests {
     fn local_event_default_creates_valid_event() {
         with_watchdog(|| {
             let event = LocalEvent::<String>::default();
-            let (sender, receiver) = event.endpoints();
+            let (sender, receiver) = event.by_ref();
             sender.send("test".to_string());
             let value = receiver.receive();
             assert_eq!(value, "test");
@@ -339,10 +261,10 @@ mod tests {
     }
 
     #[test]
-    fn local_event_endpoints_method_provides_both() {
+    fn local_event_by_ref_method_provides_both() {
         with_watchdog(|| {
             let event = LocalEvent::<u64>::new();
-            let (sender, receiver) = event.endpoints();
+            let (sender, receiver) = event.by_ref();
 
             sender.send(123);
             let value = receiver.receive();
@@ -352,62 +274,26 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "Event endpoints have already been retrieved")]
-    fn local_event_sender_panics_after_endpoints_retrieved() {
+    fn local_event_by_ref_panics_on_second_call() {
         let event = LocalEvent::<i32>::new();
-        let _endpoints = event.endpoints();
-        let _sender = event.sender(); // Should panic
+        let _endpoints = event.by_ref();
+        let _endpoints2 = event.by_ref(); // Should panic
     }
 
     #[test]
-    #[should_panic(expected = "Event endpoints have already been retrieved")]
-    fn local_event_receiver_panics_after_endpoints_retrieved() {
+    fn local_event_by_ref_checked_returns_none_after_use() {
         let event = LocalEvent::<i32>::new();
-        let _endpoints = event.endpoints();
-        let _receiver = event.receiver(); // Should panic
-    }
-
-    #[test]
-    #[should_panic(expected = "Event endpoints have already been retrieved")]
-    fn local_event_endpoints_panics_after_sender_retrieved() {
-        let event = LocalEvent::<i32>::new();
-        let _sender = event.sender();
-        let _endpoints = event.endpoints(); // Should panic
-    }
-
-    #[test]
-    fn local_event_sender_checked_returns_none_after_use() {
-        let event = LocalEvent::<i32>::new();
-        let sender1 = event.sender_checked();
-        assert!(sender1.is_some());
-
-        let sender2 = event.sender_checked();
-        assert!(sender2.is_none());
-    }
-
-    #[test]
-    fn local_event_receiver_checked_returns_none_after_use() {
-        let event = LocalEvent::<i32>::new();
-        let receiver1 = event.receiver_checked();
-        assert!(receiver1.is_some());
-
-        let receiver2 = event.receiver_checked();
-        assert!(receiver2.is_none());
-    }
-
-    #[test]
-    fn local_event_endpoints_checked_returns_none_after_use() {
-        let event = LocalEvent::<i32>::new();
-        let endpoints1 = event.endpoints_checked();
+        let endpoints1 = event.by_ref_checked();
         assert!(endpoints1.is_some());
 
-        let endpoints2 = event.endpoints_checked();
+        let endpoints2 = event.by_ref_checked();
         assert!(endpoints2.is_none());
     }
 
     #[test]
     fn local_event_send_succeeds_without_receiver() {
         let event = LocalEvent::<i32>::new();
-        let sender = event.sender();
+        let (sender, _receiver) = event.by_ref();
 
         // Send should still succeed even if we don't have a receiver
         sender.send(42);
@@ -417,7 +303,7 @@ mod tests {
     fn local_event_works_in_rc() {
         with_watchdog(|| {
             let event = Rc::new(LocalEvent::<String>::new());
-            let (sender, receiver) = event.endpoints();
+            let (sender, receiver) = event.by_ref();
 
             sender.send("Hello from Rc".to_string());
             let value = receiver.receive();

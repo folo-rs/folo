@@ -25,7 +25,7 @@ fn events_vs_oneshot(c: &mut Criterion) {
     group.bench_function("events_once_single_thread", |b| {
         b.iter(|| {
             let event = events::once::Event::<i32>::new();
-            let (sender, receiver) = event.endpoints();
+            let (sender, receiver) = event.by_ref();
             sender.send(hint::black_box(42));
             let value = receiver.receive();
             hint::black_box(value);
@@ -35,7 +35,7 @@ fn events_vs_oneshot(c: &mut Criterion) {
     group.bench_function("local_events_once_single_thread", |b| {
         b.iter(|| {
             let event = events::once::LocalEvent::<i32>::new();
-            let (sender, receiver) = event.endpoints();
+            let (sender, receiver) = event.by_ref();
             sender.send(hint::black_box(42));
             let value = receiver.receive();
             hint::black_box(value);
@@ -73,7 +73,7 @@ fn event_creation(c: &mut Criterion) {
     group.bench_function("thread_safe_event_with_endpoints", |b| {
         b.iter(|| {
             let event = events::once::Event::<i32>::new();
-            let endpoints = event.endpoints();
+            let endpoints = event.by_ref();
             hint::black_box(endpoints);
         });
     });
@@ -81,7 +81,7 @@ fn event_creation(c: &mut Criterion) {
     group.bench_function("local_event_with_endpoints", |b| {
         b.iter(|| {
             let event = events::once::LocalEvent::<i32>::new();
-            let endpoints = event.endpoints();
+            let endpoints = event.by_ref();
             hint::black_box(endpoints);
         });
     });

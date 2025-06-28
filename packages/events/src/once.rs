@@ -7,9 +7,8 @@
 //! # Single-threaded Usage Pattern
 //!
 //! 1. Create an instance of [`LocalEvent<T>`] (potentially inside an [`std::rc::Rc`])
-//! 2. Call [`LocalEvent::sender()`] and [`LocalEvent::receiver()`] to get instances of each, or
-//!    [`LocalEvent::endpoints()`] to get a tuple with both
-//! 3. You can only do this once (panic on 2nd call; [`LocalEvent::sender_checked()`] is also
+//! 2. Call [`LocalEvent::by_ref()`] to get a tuple with both sender and receiver instances
+//! 3. You can only do this once (panic on 2nd call; [`LocalEvent::by_ref_checked()`] is also
 //!    supported, returning [`None`] on 2nd call instead)
 //! 4. Use [`ByRefLocalEventSender`]/[`ByRefLocalEventReceiver`] as desired, either dropping them or
 //!    consuming them via self-taking methods
@@ -17,9 +16,8 @@
 //! # Thread-safe Usage Pattern
 //!
 //! 1. Create an instance of [`Event<T>`] (potentially inside an [`std::sync::Arc`])
-//! 2. Call [`Event::sender()`] and [`Event::receiver()`] to get instances of each, or
-//!    [`Event::endpoints()`] to get a tuple with both
-//! 3. You can only do this once (panic on 2nd call; [`Event::sender_checked()`] is also
+//! 2. Call [`Event::by_ref()`] to get a tuple with both sender and receiver instances
+//! 3. You can only do this once (panic on 2nd call; [`Event::by_ref_checked()`] is also
 //!    supported, returning [`None`] on 2nd call instead)
 //! 4. Use [`ByRefEventSender`]/[`ByRefEventReceiver`] as desired, either dropping them or
 //!    consuming them via self-taking methods
@@ -30,7 +28,7 @@
 //! use events::once::Event;
 //!
 //! let event = Event::<i32>::new();
-//! let (sender, receiver) = event.endpoints();
+//! let (sender, receiver) = event.by_ref();
 //!
 //! sender.send(42);
 //! let value = receiver.receive();
@@ -43,7 +41,7 @@
 //! use events::once::LocalEvent;
 //!
 //! let event = LocalEvent::<i32>::new();
-//! let (sender, receiver) = event.endpoints();
+//! let (sender, receiver) = event.by_ref();
 //!
 //! sender.send(42);
 //! let value = receiver.receive();
