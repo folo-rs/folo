@@ -27,7 +27,7 @@ fn events_vs_oneshot(c: &mut Criterion) {
             let event = events::once::Event::<i32>::new();
             let (sender, receiver) = event.by_ref();
             sender.send(hint::black_box(42));
-            let value = receiver.receive();
+            let value = receiver.recv();
             hint::black_box(value);
         });
     });
@@ -37,7 +37,7 @@ fn events_vs_oneshot(c: &mut Criterion) {
             let event = events::once::LocalEvent::<i32>::new();
             let (sender, receiver) = event.by_ref();
             sender.send(hint::black_box(42));
-            let value = receiver.receive();
+            let value = receiver.recv();
             hint::black_box(value);
         });
     });

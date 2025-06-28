@@ -9,21 +9,23 @@ fn main() {
     println!("=== Event Endpoints Example ===");
 
     // Method 1: Get both endpoints at once using by_ref
-    println!("\n1. Using by_ref() method:");
+    println!();
+    println!("1. Using by_ref() method:");
     let event1 = Event::<i32>::new();
     let (sender1, receiver1) = event1.by_ref();
 
     sender1.send(42);
-    let value1 = receiver1.receive();
+    let value1 = receiver1.recv();
     println!("Received: {value1}");
 
     // Method 2: Using checked variant
-    println!("\n2. Using by_ref_checked() method:");
+    println!();
+    println!("2. Using by_ref_checked() method:");
     let event2 = Event::<u64>::new();
 
     if let Some((sender2, receiver2)) = event2.by_ref_checked() {
         sender2.send(12345);
-        let value2 = receiver2.receive();
+        let value2 = receiver2.recv();
         println!("Received via checked method: {value2}");
     }
 
@@ -35,7 +37,8 @@ fn main() {
     }
 
     // Method 3: Demonstrating panic behavior when trying to get endpoints twice
-    println!("\n3. Demonstrating panic behavior:");
+    println!();
+    println!("3. Demonstrating panic behavior:");
     let event3 = Event::<String>::new();
     let (_sender3, _receiver3) = event3.by_ref();
 
@@ -43,5 +46,6 @@ fn main() {
     // let (_sender3_again, _receiver3_again) = event3.by_ref();
     println!("Would panic if we tried to call by_ref() again on event3");
 
-    println!("\nExample completed successfully!");
+    println!();
+    println!("Example completed successfully!");
 }

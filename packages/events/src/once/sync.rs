@@ -35,7 +35,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// let (sender, receiver) = event.by_ref();
 ///
 /// sender.send("Hello".to_string());
-/// let message = receiver.receive();
+/// let message = receiver.recv();
 /// assert_eq!(message, "Hello");
 /// ```
 #[derive(Debug)]
@@ -175,7 +175,7 @@ where
 /// A receiver that can receive a value from a thread-safe event.
 ///
 /// The receiver holds a reference to the event and can be moved across threads.
-/// After calling [`receive`](ByRefEventReceiver::receive), the receiver is consumed.
+/// After calling [`recv`](ByRefEventReceiver::recv), the receiver is consumed.
 #[derive(Debug)]
 pub struct ByRefEventReceiver<'e, T>
 where
@@ -203,13 +203,13 @@ where
     /// let (sender, receiver) = event.by_ref();
     ///
     /// sender.send(42);
-    /// let value = receiver.receive();
+    /// let value = receiver.recv();
     /// assert_eq!(value, 42);
     /// ```
     #[must_use]
-    pub fn receive(mut self) -> T {
+    pub fn recv(mut self) -> T {
         self.receiver.take().map_or_else(
-            || unreachable!("receiver should always be Some when receive is called"),
+            || unreachable!("receiver should always be Some when recv is called"),
             |receiver| {
                 receiver.recv().unwrap_or_else(|_| {
                     // If the sender was dropped without sending, we wait forever
@@ -220,6 +220,44 @@ where
                 })
             },
         )
+    }
+
+    /// Receives a value from the event asynchronously.
+    ///
+    /// This method consumes the receiver and waits for a sender to send a value.
+    /// If the sender is dropped without sending, this method will wait forever.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use events::once::Event;
+    /// use futures::executor::block_on;
+    ///
+    /// let event = Event::<i32>::new();
+    /// let (sender, receiver) = event.by_ref();
+    ///
+    /// sender.send(42);
+    /// let value = block_on(receiver.recv_async());
+    /// assert_eq!(value, 42);
+    /// ```
+    pub async fn recv_async(mut self) -> T {
+        match self.receiver.take() {
+            Some(receiver) => {
+                // Use the oneshot receiver's native async support
+                // The receiver implements Future directly, so we can await it
+                match receiver.await {
+                    Ok(value) => value,
+                    Err(_) => {
+                        // If the sender was dropped without sending, we wait forever as per spec
+                        // This matches the behavior of the sync receive() method
+                        loop {
+                            std::future::pending::<()>().await;
+                        }
+                    }
+                }
+            }
+            None => unreachable!("receiver should always be Some when recv_async is called"),
+        }
     }
 }
 
@@ -262,7 +300,7 @@ mod tests {
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 // Test timed out - this indicates the test is hanging
-                panic!("Test exceeded 10-second timeout - likely hanging in receive()");
+                panic!("Test exceeded 10-second timeout - likely hanging in recv()");
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 // Thread panicked, join it to get the panic
@@ -281,7 +319,7 @@ mod tests {
             // Should be able to get endpoints once
             let (sender, receiver) = event.by_ref();
             sender.send(42);
-            let value = receiver.receive();
+            let value = receiver.recv();
             assert_eq!(value, 42);
         });
     }
@@ -292,7 +330,7 @@ mod tests {
             let event = Event::<String>::default();
             let (sender, receiver) = event.by_ref();
             sender.send("test".to_string());
-            let value = receiver.receive();
+            let value = receiver.recv();
             assert_eq!(value, "test");
         });
     }
@@ -304,7 +342,7 @@ mod tests {
             let (sender, receiver) = event.by_ref();
 
             sender.send(123);
-            let value = receiver.receive();
+            let value = receiver.recv();
             assert_eq!(value, 123);
         });
     }
@@ -343,7 +381,7 @@ mod tests {
             let (sender, receiver) = event.by_ref();
 
             sender.send("Hello from Arc".to_string());
-            let value = receiver.receive();
+            let value = receiver.recv();
             assert_eq!(value, "Hello from Arc");
         });
     }
@@ -355,7 +393,7 @@ mod tests {
             let (sender, receiver) = event.by_ref();
 
             sender.send("Hello from Rc".to_string());
-            let value = receiver.receive();
+            let value = receiver.recv();
             assert_eq!(value, "Hello from Rc");
         });
     }
@@ -373,7 +411,7 @@ mod tests {
                 sender.send("Hello from thread!".to_string());
             });
 
-            let receiver_handle = thread::spawn(move || receiver.receive());
+            let receiver_handle = thread::spawn(move || receiver.recv());
 
             sender_handle.join().unwrap();
             let message = receiver_handle.join().unwrap();
@@ -389,5 +427,65 @@ mod tests {
         assert_impl_all!(ByRefEventSender<'_, i32>: Send, Sync);
         // Receiver should implement Send but not necessarily Sync (based on oneshot::Receiver)
         assert_impl_all!(ByRefEventReceiver<'_, i32>: Send);
+    }
+
+    #[test]
+    fn event_receive_async_basic() {
+        use futures::executor::block_on;
+
+        with_watchdog(|| {
+            let event = Event::<i32>::new();
+            let (sender, receiver) = event.by_ref();
+
+            sender.send(42);
+            let value = block_on(receiver.recv_async());
+            assert_eq!(value, 42);
+        });
+    }
+
+    #[test]
+    fn event_receive_async_cross_thread() {
+        use futures::executor::block_on;
+
+        with_watchdog(|| {
+            static EVENT: std::sync::OnceLock<Event<String>> = std::sync::OnceLock::new();
+            let event = EVENT.get_or_init(Event::<String>::new);
+            let (sender, receiver) = event.by_ref();
+
+            let sender_handle = thread::spawn(move || {
+                // Add a small delay to ensure receiver is waiting
+                thread::sleep(Duration::from_millis(10));
+                sender.send("Hello async!".to_string());
+            });
+
+            let receiver_handle = thread::spawn(move || block_on(receiver.recv_async()));
+
+            sender_handle.join().unwrap();
+            let message = receiver_handle.join().unwrap();
+            assert_eq!(message, "Hello async!");
+        });
+    }
+
+    #[test]
+    fn event_receive_async_mixed_with_sync() {
+        use futures::executor::block_on;
+
+        with_watchdog(|| {
+            // Test that sync and async can be used in the same test
+            let event1 = Event::<i32>::new();
+            let (sender1, receiver1) = event1.by_ref();
+
+            let event2 = Event::<i32>::new();
+            let (sender2, receiver2) = event2.by_ref();
+
+            sender1.send(1);
+            sender2.send(2);
+
+            let value1 = receiver1.recv();
+            let value2 = block_on(receiver2.recv_async());
+
+            assert_eq!(value1, 1);
+            assert_eq!(value2, 2);
+        });
     }
 }

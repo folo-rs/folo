@@ -11,38 +11,43 @@ fn main() {
     println!("=== Single-threaded Events Example ===");
 
     // Example 1: Basic LocalEvent usage
-    println!("\n1. Basic LocalEvent usage:");
+    println!();
+    println!("1. Basic LocalEvent usage:");
     let event = LocalEvent::<String>::new();
     let (sender, receiver) = event.by_ref();
     sender.send("Hello from local event!".to_string());
-    let message = receiver.receive();
+    let message = receiver.recv();
     println!("Received: {message}");
 
     // Example 2: LocalEvent with Rc for sharing (single-threaded only)
-    println!("\n2. LocalEvent with Rc for sharing:");
+    println!();
+    println!("2. LocalEvent with Rc for sharing:");
     let event_rc = Rc::new(LocalEvent::<i32>::new());
     let (sender_rc, receiver_rc) = event_rc.by_ref();
     sender_rc.send(123);
-    let value = receiver_rc.receive();
+    let value = receiver_rc.recv();
     println!("Received from Rc-wrapped LocalEvent: {value}");
 
     // Example 3: LocalEvent works with !Send types
-    println!("\n3. LocalEvent works with !Send types:");
+    println!();
+    println!("3. LocalEvent works with !Send types:");
     let rc_data = Rc::new("Shared data in Rc".to_string());
     let event = LocalEvent::<Rc<String>>::new();
     let (sender, receiver) = event.by_ref();
     sender.send(Rc::<String>::clone(&rc_data));
-    let received_rc = receiver.receive();
+    let received_rc = receiver.recv();
     println!("Received Rc data: {received_rc}");
     println!("Original Rc data: {rc_data}");
 
     // Example 4: Type constraints demonstration
-    println!("\n4. Type constraints demonstration:");
+    println!();
+    println!("4. Type constraints demonstration:");
 
     // LocalEvent works with any type (including !Send types)
     let _local_event_send = LocalEvent::<String>::new(); // String: Send ✓
     let _local_event_not_send = LocalEvent::<Rc<String>>::new(); // Rc<String>: !Send ✓
     println!("LocalEvent works with both Send and !Send types");
 
-    println!("\nSingle-threaded events example completed successfully!");
+    println!();
+    println!("Single-threaded events example completed successfully!");
 }

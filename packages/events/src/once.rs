@@ -31,7 +31,7 @@
 //! let (sender, receiver) = event.by_ref();
 //!
 //! sender.send(42);
-//! let value = receiver.receive();
+//! let value = receiver.recv();
 //! assert_eq!(value, 42);
 //! ```
 //!
@@ -44,7 +44,7 @@
 //! let (sender, receiver) = event.by_ref();
 //!
 //! sender.send(42);
-//! let value = receiver.receive();
+//! let value = receiver.recv();
 //! assert_eq!(value, 42);
 //! ```
 

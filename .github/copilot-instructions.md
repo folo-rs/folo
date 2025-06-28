@@ -323,3 +323,33 @@ This is bad:
 ```rust
 fn foo(i: std::time::Instant) { }
 ```
+
+# Dependencies in cargo.toml
+
+Dependencies are sorted alphabetically by name of the package.
+
+# Do not use `\n` in println!() statements
+
+To empty an empty line to the terminal, use use `println!();` instead of
+embedding `\n` in another printed line.
+
+# Delays are forbidden in test code
+
+There should never be any delay/sleep on the successful path in tests - every test must be
+near-instantaneous and time-based synchronization is forbidden.
+
+You may use events/signals for synchronization (e.g. `Barrier` or `oneshot` or channels),
+as long as there are no delays or wait-loops in the test code itself.
+
+# Tests must not hang
+
+When there is a danger that a test may hang (e.g. it contains a `.wait()`, `.recv()` or
+similar call), you must use a watchdog timer to force a timeout after 10 seconds.
+
+# Named constants
+
+Avoid magic values in the code and use named constants instead. It does not matter how many
+times the magic value is present, even one instance is enough to warrant a named constant.
+
+The exception is example code - if a magic value is only used once in an example, it is
+fine to leave it inline.

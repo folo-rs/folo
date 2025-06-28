@@ -14,6 +14,7 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
+futures = { workspace = true }
 oneshot = { workspace = true }
 
 [dev-dependencies]

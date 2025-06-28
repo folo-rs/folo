@@ -23,7 +23,7 @@ use std::marker::PhantomData;
 /// let (sender, receiver) = event.by_ref();
 ///
 /// sender.send("Hello".to_string());
-/// let message = receiver.receive();
+/// let message = receiver.recv();
 /// assert_eq!(message, "Hello");
 /// ```
 #[derive(Debug)]
@@ -146,7 +146,7 @@ impl<T> ByRefLocalEventSender<'_, T> {
 /// A receiver that can receive a value from a single-threaded event.
 ///
 /// The receiver holds a reference to the event and can only be used once.
-/// After calling [`receive`](ByRefLocalEventReceiver::receive), the receiver is consumed.
+/// After calling [`recv`](ByRefLocalEventReceiver::recv), the receiver is consumed.
 #[derive(Debug)]
 pub struct ByRefLocalEventReceiver<'e, T> {
     receiver: Option<oneshot::Receiver<T>>,
@@ -168,13 +168,13 @@ impl<T> ByRefLocalEventReceiver<'_, T> {
     /// let (sender, receiver) = event.by_ref();
     ///
     /// sender.send(42);
-    /// let value = receiver.receive();
+    /// let value = receiver.recv();
     /// assert_eq!(value, 42);
     /// ```
     #[must_use]
-    pub fn receive(mut self) -> T {
+    pub fn recv(mut self) -> T {
         self.receiver.take().map_or_else(
-            || unreachable!("receiver should always be Some when receive is called"),
+            || unreachable!("receiver should always be Some when recv is called"),
             |receiver| {
                 receiver.recv().unwrap_or_else(|_| {
                     // If the sender was dropped without sending, we wait forever
@@ -185,6 +185,44 @@ impl<T> ByRefLocalEventReceiver<'_, T> {
                 })
             },
         )
+    }
+
+    /// Receives a value from the event asynchronously.
+    ///
+    /// This method consumes the receiver and waits for a sender to send a value.
+    /// If the sender is dropped without sending, this method will wait forever.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use events::once::LocalEvent;
+    /// use futures::executor::block_on;
+    ///
+    /// let event = LocalEvent::<i32>::new();
+    /// let (sender, receiver) = event.by_ref();
+    ///
+    /// sender.send(42);
+    /// let value = block_on(receiver.recv_async());
+    /// assert_eq!(value, 42);
+    /// ```
+    pub async fn recv_async(mut self) -> T {
+        match self.receiver.take() {
+            Some(receiver) => {
+                // Use the oneshot receiver's native async support
+                // The receiver implements Future directly, so we can await it
+                match receiver.await {
+                    Ok(value) => value,
+                    Err(_) => {
+                        // If the sender was dropped without sending, we wait forever as per spec
+                        // This matches the behavior of the sync receive() method
+                        loop {
+                            std::future::pending::<()>().await;
+                        }
+                    }
+                }
+            }
+            None => unreachable!("receiver should always be Some when recv_async is called"),
+        }
     }
 }
 
@@ -225,7 +263,7 @@ mod tests {
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 // Test timed out - this indicates the test is hanging
-                panic!("Test exceeded 10-second timeout - likely hanging in receive()");
+                panic!("Test exceeded 10-second timeout - likely hanging in recv()");
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 // Thread panicked, join it to get the panic
@@ -244,7 +282,7 @@ mod tests {
             // Should be able to get endpoints once
             let (sender, receiver) = event.by_ref();
             sender.send(42);
-            let value = receiver.receive();
+            let value = receiver.recv();
             assert_eq!(value, 42);
         });
     }
@@ -255,7 +293,7 @@ mod tests {
             let event = LocalEvent::<String>::default();
             let (sender, receiver) = event.by_ref();
             sender.send("test".to_string());
-            let value = receiver.receive();
+            let value = receiver.recv();
             assert_eq!(value, "test");
         });
     }
@@ -267,7 +305,7 @@ mod tests {
             let (sender, receiver) = event.by_ref();
 
             sender.send(123);
-            let value = receiver.receive();
+            let value = receiver.recv();
             assert_eq!(value, 123);
         });
     }
@@ -306,7 +344,7 @@ mod tests {
             let (sender, receiver) = event.by_ref();
 
             sender.send("Hello from Rc".to_string());
-            let value = receiver.receive();
+            let value = receiver.recv();
             assert_eq!(value, "Hello from Rc");
         });
     }
@@ -315,5 +353,56 @@ mod tests {
     fn single_threaded_types() {
         // LocalEvent should not implement Send or Sync due to RefCell and PhantomData<*const ()>
         assert_not_impl_any!(LocalEvent<i32>: Send, Sync);
+    }
+
+    #[test]
+    fn local_event_receive_async_basic() {
+        use futures::executor::block_on;
+
+        with_watchdog(|| {
+            let event = LocalEvent::<i32>::new();
+            let (sender, receiver) = event.by_ref();
+
+            sender.send(42);
+            let value = block_on(receiver.recv_async());
+            assert_eq!(value, 42);
+        });
+    }
+
+    #[test]
+    fn local_event_receive_async_mixed_with_sync() {
+        use futures::executor::block_on;
+
+        with_watchdog(|| {
+            // Test that sync and async can be used in the same test
+            let event1 = LocalEvent::<i32>::new();
+            let (sender1, receiver1) = event1.by_ref();
+
+            let event2 = LocalEvent::<i32>::new();
+            let (sender2, receiver2) = event2.by_ref();
+
+            sender1.send(1);
+            sender2.send(2);
+
+            let value1 = receiver1.recv();
+            let value2 = block_on(receiver2.recv_async());
+
+            assert_eq!(value1, 1);
+            assert_eq!(value2, 2);
+        });
+    }
+
+    #[test]
+    fn local_event_receive_async_string() {
+        use futures::executor::block_on;
+
+        with_watchdog(|| {
+            let event = LocalEvent::<String>::new();
+            let (sender, receiver) = event.by_ref();
+
+            sender.send("Hello async world!".to_string());
+            let message = block_on(receiver.recv_async());
+            assert_eq!(message, "Hello async world!");
+        });
     }
 }

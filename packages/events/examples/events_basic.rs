@@ -18,7 +18,7 @@ fn main() {
     sender.send("Hello from events!".to_string());
 
     println!("Receiving message through event...");
-    let message = receiver.receive();
+    let message = receiver.recv();
 
     println!("Received: {message}");
     println!("Example completed successfully!");
