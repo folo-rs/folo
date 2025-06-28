@@ -484,4 +484,54 @@ mod tests {
             assert_eq!(value2, 2);
         });
     }
+
+    #[test]
+    fn event_try_recv_with_value() {
+        with_watchdog(|| {
+            let event = Event::<i32>::new();
+            let (sender, _receiver) = event.by_ref();
+
+            // Initially should return None
+            assert_eq!(event.try_recv(), None);
+
+            // After sending, should return Some(value)
+            sender.send(42);
+            assert_eq!(event.try_recv(), Some(42));
+
+            // After consuming, should return None again
+            assert_eq!(event.try_recv(), None);
+        });
+    }
+
+    #[test]
+    fn event_try_recv_without_value() {
+        with_watchdog(|| {
+            let event = Event::<i32>::new();
+            let (_sender, _receiver) = event.by_ref();
+
+            // Should return None when no value has been set
+            assert_eq!(event.try_recv(), None);
+            assert_eq!(event.try_recv(), None); // Multiple calls should still return None
+        });
+    }
+
+    #[test]
+    fn event_try_recv_cross_thread() {
+        with_watchdog(|| {
+            let event = Arc::new(Event::<String>::new());
+            let event_clone = Arc::clone(&event);
+
+            // Set value from another thread
+            let handle = thread::spawn(move || {
+                let (sender, _receiver) = event_clone.by_ref();
+                sender.send("Cross-thread value".to_string());
+            });
+
+            handle.join().unwrap();
+
+            // Try to receive from main thread
+            assert_eq!(event.try_recv(), Some("Cross-thread value".to_string()));
+            assert_eq!(event.try_recv(), None); // Should be consumed
+        });
+    }
 }

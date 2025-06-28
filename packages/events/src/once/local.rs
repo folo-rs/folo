@@ -426,4 +426,34 @@ mod tests {
             assert_eq!(message, "Hello async world!");
         });
     }
+
+    #[test]
+    fn local_event_try_recv_with_value() {
+        with_watchdog(|| {
+            let event = LocalEvent::<i32>::new();
+            let (sender, _receiver) = event.by_ref();
+
+            // Initially should return None
+            assert_eq!(event.try_recv(), None);
+
+            // After sending, should return Some(value)
+            sender.send(42);
+            assert_eq!(event.try_recv(), Some(42));
+
+            // After consuming, should return None again
+            assert_eq!(event.try_recv(), None);
+        });
+    }
+
+    #[test]
+    fn local_event_try_recv_without_value() {
+        with_watchdog(|| {
+            let event = LocalEvent::<i32>::new();
+            let (_sender, _receiver) = event.by_ref();
+
+            // Should return None when no value has been set
+            assert_eq!(event.try_recv(), None);
+            assert_eq!(event.try_recv(), None); // Multiple calls should still return None
+        });
+    }
 }
