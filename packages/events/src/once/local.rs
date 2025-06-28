@@ -6,6 +6,7 @@
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::mem;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::task::Waker;
 
@@ -236,6 +237,99 @@ impl<T> LocalEvent<T> {
             EventState::Consumed => None,
         }
     }
+
+    /// Returns both the sender and receiver for this event, connected by raw pointer.
+    ///
+    /// This method provides endpoints that hold raw pointers to the event instead
+    /// of owning or borrowing it. The event must be pinned and the caller is
+    /// responsible for ensuring the sender and receiver are dropped before the event.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that:
+    /// - The event remains valid and pinned for the entire lifetime of the sender and receiver
+    /// - The sender and receiver are dropped before the event is dropped
+    /// - The event is not moved after calling this method
+    ///
+    /// # Panics
+    ///
+    /// Panics if endpoints have already been retrieved via any method.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::pin::Pin;
+    ///
+    /// use events::once::LocalEvent;
+    ///
+    /// let mut event = LocalEvent::<i32>::new();
+    /// let pinned_event = Pin::new(&mut event);
+    /// // SAFETY: We ensure the event outlives the sender and receiver
+    /// let (sender, receiver) = unsafe { pinned_event.by_ptr() };
+    /// 
+    /// sender.send(42);
+    /// let value = receiver.recv();
+    /// assert_eq!(value, 42);
+    /// // sender and receiver are dropped here, before event
+    /// ```
+    #[must_use]
+    pub unsafe fn by_ptr(self: Pin<&mut Self>) -> (ByPtrLocalEventSender<T>, ByPtrLocalEventReceiver<T>) {
+        // SAFETY: Caller has guaranteed event lifetime management
+        unsafe { self.by_ptr_checked() }
+            .expect("Event endpoints have already been retrieved")
+    }
+
+    /// Returns both the sender and receiver for this event, connected by raw pointer,
+    /// or [`None`] if endpoints have already been retrieved.
+    ///
+    /// This method provides endpoints that hold raw pointers to the event instead
+    /// of owning or borrowing it. The event must be pinned and the caller is
+    /// responsible for ensuring the sender and receiver are dropped before the event.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that:
+    /// - The event remains valid and pinned for the entire lifetime of the sender and receiver
+    /// - The sender and receiver are dropped before the event is dropped
+    /// - The event is not moved after calling this method
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::pin::Pin;
+    ///
+    /// use events::once::LocalEvent;
+    ///
+    /// let mut event = LocalEvent::<i32>::new();
+    /// let pinned_event = Pin::new(&mut event);
+    /// // SAFETY: We ensure the event outlives the sender and receiver
+    /// let endpoints = unsafe { pinned_event.by_ptr_checked() }.unwrap();
+    /// let pinned_event2 = Pin::new(&mut event);
+    /// let endpoints2 = unsafe { pinned_event2.by_ptr_checked() }; // Returns None
+    /// assert!(endpoints2.is_none());
+    /// ```
+    #[must_use]
+    pub unsafe fn by_ptr_checked(
+        self: Pin<&mut Self>,
+    ) -> Option<(ByPtrLocalEventSender<T>, ByPtrLocalEventReceiver<T>)> {
+        // SAFETY: We need to access the mutable reference to check/set the used flag
+        // The caller guarantees the event remains pinned and valid
+        let this = unsafe { self.get_unchecked_mut() };
+        let mut used = this.used.borrow_mut();
+        if *used {
+            return None;
+        }
+        *used = true;
+
+        let event_ptr: *const Self = this;
+        Some((
+            ByPtrLocalEventSender {
+                event: event_ptr,
+                sent: RefCell::new(false),
+            },
+            ByPtrLocalEventReceiver { event: event_ptr },
+        ))
+    }
 }
 
 /// A one-time event that can send and receive a value of type `T` (single-threaded variant).
@@ -444,6 +538,125 @@ impl<T> ByRcLocalEventReceiver<T> {
     /// ```
     pub async fn recv_async(self) -> T {
         LocalEventFuture::new(&self.event).await
+    }
+}
+
+/// A sender that can send a value through a single-threaded event using raw pointer access.
+///
+/// The sender holds a raw pointer to the event and the caller is responsible for
+/// ensuring the event remains valid for the lifetime of the sender.
+/// After calling [`send`](ByPtrLocalEventSender::send), the sender is consumed.
+///
+/// # Safety
+///
+/// The caller must ensure that the event remains valid and pinned for the entire
+/// lifetime of this sender.
+#[derive(Debug)]
+pub struct ByPtrLocalEventSender<T> {
+    event: *const LocalEvent<T>,
+    sent: RefCell<bool>,
+}
+
+impl<T> ByPtrLocalEventSender<T> {
+    /// Sends a value through the event.
+    ///
+    /// This method consumes the sender and always succeeds, regardless of whether
+    /// there is a receiver waiting.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::pin::Pin;
+    ///
+    /// use events::once::LocalEvent;
+    ///
+    /// let mut event = LocalEvent::<i32>::new();
+    /// let pinned_event = Pin::new(&mut event);
+    /// // SAFETY: We ensure the event outlives the sender and receiver
+    /// let (sender, _receiver) = unsafe { pinned_event.by_ptr() };
+    /// sender.send(42);
+    /// ```
+    pub fn send(self, value: T) {
+        let mut sent = self.sent.borrow_mut();
+        if *sent {
+            return; // Already sent, ignore additional sends
+        }
+        *sent = true;
+        // SAFETY: Caller guarantees the event pointer is valid
+        let event = unsafe { &*self.event };
+        drop(event.try_set(value));
+    }
+}
+
+/// A receiver that can receive a value from a single-threaded event using raw pointer access.
+///
+/// The receiver holds a raw pointer to the event and the caller is responsible for
+/// ensuring the event remains valid for the lifetime of the receiver.
+/// After calling [`recv`](ByPtrLocalEventReceiver::recv), the receiver is consumed.
+///
+/// # Safety
+///
+/// The caller must ensure that the event remains valid and pinned for the entire
+/// lifetime of this receiver.
+#[derive(Debug)]
+pub struct ByPtrLocalEventReceiver<T> {
+    event: *const LocalEvent<T>,
+}
+
+impl<T> ByPtrLocalEventReceiver<T> {
+    /// Receives a value from the event.
+    ///
+    /// This method consumes the receiver and waits for a sender to send a value.
+    /// If the sender is dropped without sending, this method will wait forever.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::pin::Pin;
+    ///
+    /// use events::once::LocalEvent;
+    ///
+    /// let mut event = LocalEvent::<i32>::new();
+    /// let pinned_event = Pin::new(&mut event);
+    /// // SAFETY: We ensure the event outlives the sender and receiver
+    /// let (sender, receiver) = unsafe { pinned_event.by_ptr() };
+    ///
+    /// sender.send(42);
+    /// let value = receiver.recv();
+    /// assert_eq!(value, 42);
+    /// ```
+    #[must_use]
+    pub fn recv(self) -> T {
+        // Use block_on from futures crate for synchronous receive
+        futures::executor::block_on(self.recv_async())
+    }
+
+    /// Receives a value from the event asynchronously.
+    ///
+    /// This method consumes the receiver and waits for a sender to send a value.
+    /// If the sender is dropped without sending, this method will wait forever.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::pin::Pin;
+    ///
+    /// use events::once::LocalEvent;
+    /// use futures::executor::block_on;
+    ///
+    /// let mut event = LocalEvent::<i32>::new();
+    /// let pinned_event = Pin::new(&mut event);
+    /// // SAFETY: We ensure the event outlives the sender and receiver
+    /// let (sender, receiver) = unsafe { pinned_event.by_ptr() };
+    ///
+    /// sender.send(42);
+    /// let value = block_on(receiver.recv_async());
+    /// assert_eq!(value, 42);
+    /// ```
+    pub async fn recv_async(self) -> T {
+        // SAFETY: Caller guarantees the event pointer is valid
+        let event = unsafe { &*self.event };
+        LocalEventFuture::new(event).await
     }
 }
 
@@ -678,5 +891,51 @@ mod tests {
         // Rc-based types should not implement Send or Sync
         assert_not_impl_any!(ByRcLocalEventSender<i32>: Send, Sync);
         assert_not_impl_any!(ByRcLocalEventReceiver<i32>: Send, Sync);
+    }
+
+    #[test]
+    fn local_event_by_ptr_basic() {
+        with_watchdog(|| {
+            let mut event = LocalEvent::<String>::new();
+            let pinned_event = Pin::new(&mut event);
+            // SAFETY: We ensure the event outlives the sender and receiver within this test
+            let (sender, receiver) = unsafe { pinned_event.by_ptr() };
+
+            sender.send("Hello from pointer".to_string());
+            let value = receiver.recv();
+            assert_eq!(value, "Hello from pointer");
+            // sender and receiver are dropped here, before event
+        });
+    }
+
+    #[test]
+    fn local_event_by_ptr_checked_returns_none_after_use() {
+        with_watchdog(|| {
+            let mut event = LocalEvent::<String>::new();
+            let pinned_event = Pin::new(&mut event);
+            // SAFETY: We ensure the event outlives the sender and receiver within this test
+            let endpoints = unsafe { pinned_event.by_ptr_checked() };
+            assert!(endpoints.is_some());
+            
+            // Second call should return None
+            let pinned_event2 = Pin::new(&mut event);
+            // SAFETY: We ensure the event outlives the endpoints within this test
+            let endpoints2 = unsafe { pinned_event2.by_ptr_checked() };
+            assert!(endpoints2.is_none());
+        });
+    }
+
+    #[test]
+    fn local_event_by_ptr_async() {
+        with_watchdog(|| {
+            let mut event = LocalEvent::<i32>::new();
+            let pinned_event = Pin::new(&mut event);
+            // SAFETY: We ensure the event outlives the sender and receiver within this test
+            let (sender, receiver) = unsafe { pinned_event.by_ptr() };
+
+            sender.send(42);
+            let value = futures::executor::block_on(receiver.recv_async());
+            assert_eq!(value, 42);
+        });
     }
 }

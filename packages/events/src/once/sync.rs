@@ -4,6 +4,7 @@
 //! and used for cross-thread communication.
 
 use std::mem;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -247,6 +248,97 @@ where
             ByRcEventReceiver {
                 event: Rc::clone(self),
             },
+        ))
+    }
+
+    /// Returns both the sender and receiver for this event, connected by raw pointer.
+    ///
+    /// This method provides endpoints that hold raw pointers to the event instead
+    /// of owning or borrowing it. The event must be pinned and the caller is
+    /// responsible for ensuring the sender and receiver are dropped before the event.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that:
+    /// - The event remains valid and pinned for the entire lifetime of the sender and receiver
+    /// - The sender and receiver are dropped before the event is dropped
+    /// - The event is not moved after calling this method
+    ///
+    /// # Panics
+    ///
+    /// Panics if endpoints have already been retrieved via any method.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::pin::Pin;
+    ///
+    /// use events::once::Event;
+    ///
+    /// let mut event = Event::<i32>::new();
+    /// let pinned_event = Pin::new(&mut event);
+    /// // SAFETY: We ensure the event outlives the sender and receiver
+    /// let (sender, receiver) = unsafe { pinned_event.by_ptr() };
+    /// 
+    /// sender.send(42);
+    /// let value = receiver.recv();
+    /// assert_eq!(value, 42);
+    /// // sender and receiver are dropped here, before event
+    /// ```
+    #[must_use]
+    pub unsafe fn by_ptr(self: Pin<&mut Self>) -> (ByPtrEventSender<T>, ByPtrEventReceiver<T>) {
+        // SAFETY: Caller has guaranteed event lifetime management
+        unsafe { self.by_ptr_checked() }
+            .expect("Event endpoints have already been retrieved")
+    }
+
+    /// Returns both the sender and receiver for this event, connected by raw pointer,
+    /// or [`None`] if endpoints have already been retrieved.
+    ///
+    /// This method provides endpoints that hold raw pointers to the event instead
+    /// of owning or borrowing it. The event must be pinned and the caller is
+    /// responsible for ensuring the sender and receiver are dropped before the event.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that:
+    /// - The event remains valid and pinned for the entire lifetime of the sender and receiver
+    /// - The sender and receiver are dropped before the event is dropped
+    /// - The event is not moved after calling this method
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::pin::Pin;
+    ///
+    /// use events::once::Event;
+    ///
+    /// let mut event = Event::<i32>::new();
+    /// let pinned_event = Pin::new(&mut event);
+    /// // SAFETY: We ensure the event outlives the sender and receiver
+    /// let endpoints = unsafe { pinned_event.by_ptr_checked() }.unwrap();
+    /// let pinned_event2 = Pin::new(&mut event);
+    /// let endpoints2 = unsafe { pinned_event2.by_ptr_checked() }; // Returns None
+    /// assert!(endpoints2.is_none());
+    /// ```
+    #[must_use]
+    pub unsafe fn by_ptr_checked(
+        self: Pin<&mut Self>,
+    ) -> Option<(ByPtrEventSender<T>, ByPtrEventReceiver<T>)> {
+        // SAFETY: We need to access the mutable reference to check/set the used flag
+        // The caller guarantees the event remains pinned and valid
+        let this = unsafe { self.get_unchecked_mut() };
+        if this.used.swap(true, Ordering::SeqCst) {
+            return None;
+        }
+
+        let event_ptr: *const Self = this;
+        Some((
+            ByPtrEventSender {
+                event: event_ptr,
+                sent: AtomicBool::new(false),
+            },
+            ByPtrEventReceiver { event: event_ptr },
         ))
     }
 
@@ -627,6 +719,151 @@ where
     }
 }
 
+/// A sender that can send a value through a thread-safe event using raw pointer.
+///
+/// The sender holds a raw pointer to the event. The caller is responsible for
+/// ensuring the event remains valid for the lifetime of the sender.
+/// After calling [`send`](ByPtrEventSender::send), the sender is consumed.
+///
+/// # Safety
+///
+/// This type is only safe to use when the caller guarantees that the event
+/// pointed to remains valid and pinned for the entire lifetime of this sender.
+#[derive(Debug)]
+pub struct ByPtrEventSender<T>
+where
+    T: Send,
+{
+    event: *const Event<T>,
+    sent: AtomicBool,
+}
+
+// SAFETY: ByPtrEventSender can be Send as long as T: Send, since we only
+// send the value T across threads, and the pointer is only used to access
+// the thread-safe Event<T>.
+unsafe impl<T> Send for ByPtrEventSender<T> where T: Send {}
+
+// SAFETY: ByPtrEventSender can be Sync as long as T: Send, since the
+// Event<T> it points to is thread-safe.
+unsafe impl<T> Sync for ByPtrEventSender<T> where T: Send {}
+
+impl<T> ByPtrEventSender<T>
+where
+    T: Send,
+{
+    /// Sends a value through the event.
+    ///
+    /// This method consumes the sender and always succeeds, regardless of whether
+    /// there is a receiver waiting.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::pin::Pin;
+    ///
+    /// use events::once::Event;
+    ///
+    /// let mut event = Event::<i32>::new();
+    /// let pinned_event = Pin::new(&mut event);
+    /// // SAFETY: We ensure the event outlives the sender and receiver
+    /// let (sender, _receiver) = unsafe { pinned_event.by_ptr() };
+    /// sender.send(42);
+    /// ```
+    pub fn send(self, value: T) {
+        if self.sent.swap(true, Ordering::SeqCst) {
+            return; // Already sent, ignore additional sends
+        }
+        // SAFETY: The caller guarantees the event pointer is valid
+        let event = unsafe { &*self.event };
+        drop(event.try_set(value));
+    }
+}
+
+/// A receiver that can receive a value from a thread-safe event using raw pointer.
+///
+/// The receiver holds a raw pointer to the event. The caller is responsible for
+/// ensuring the event remains valid for the lifetime of the receiver.
+/// After calling [`recv`](ByPtrEventReceiver::recv), the receiver is consumed.
+///
+/// # Safety
+///
+/// This type is only safe to use when the caller guarantees that the event
+/// pointed to remains valid and pinned for the entire lifetime of this receiver.
+#[derive(Debug)]
+pub struct ByPtrEventReceiver<T>
+where
+    T: Send,
+{
+    event: *const Event<T>,
+}
+
+// SAFETY: ByPtrEventReceiver can be Send as long as T: Send, since we only
+// receive the value T across threads, and the pointer is only used to access
+// the thread-safe Event<T>.
+unsafe impl<T> Send for ByPtrEventReceiver<T> where T: Send {}
+
+// Note: We don't implement Sync for ByPtrEventReceiver to match the pattern
+// of other receiver types in this codebase.
+
+impl<T> ByPtrEventReceiver<T>
+where
+    T: Send,
+{
+    /// Receives a value from the event.
+    ///
+    /// This method consumes the receiver and waits for a sender to send a value.
+    /// If the sender is dropped without sending, this method will wait forever.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::pin::Pin;
+    ///
+    /// use events::once::Event;
+    ///
+    /// let mut event = Event::<i32>::new();
+    /// let pinned_event = Pin::new(&mut event);
+    /// // SAFETY: We ensure the event outlives the sender and receiver
+    /// let (sender, receiver) = unsafe { pinned_event.by_ptr() };
+    ///
+    /// sender.send(42);
+    /// let value = receiver.recv();
+    /// assert_eq!(value, 42);
+    /// ```
+    #[must_use]
+    pub fn recv(self) -> T {
+        // Use block_on from futures crate for synchronous receive
+        futures::executor::block_on(self.recv_async())
+    }
+
+    /// Receives a value from the event asynchronously.
+    ///
+    /// This method consumes the receiver and returns a future that resolves when a value is sent.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::pin::Pin;
+    ///
+    /// use events::once::Event;
+    /// use futures::executor::block_on;
+    ///
+    /// let mut event = Event::<i32>::new();
+    /// let pinned_event = Pin::new(&mut event);
+    /// // SAFETY: We ensure the event outlives the sender and receiver
+    /// let (sender, receiver) = unsafe { pinned_event.by_ptr() };
+    ///
+    /// sender.send(42);
+    /// let value = block_on(receiver.recv_async());
+    /// assert_eq!(value, 42);
+    /// ```
+    pub async fn recv_async(self) -> T {
+        // SAFETY: The caller guarantees the event pointer is valid
+        let event = unsafe { &*self.event };
+        EventFuture::new(event).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::rc::Rc;
@@ -981,5 +1218,51 @@ mod tests {
         // Rc-based types should not implement Send or Sync (due to Rc)
         assert_not_impl_any!(ByRcEventSender<i32>: Send, Sync);
         assert_not_impl_any!(ByRcEventReceiver<i32>: Send, Sync);
+    }
+
+    #[test]
+    fn event_by_ptr_basic() {
+        with_watchdog(|| {
+            let mut event = Event::<String>::new();
+            let pinned_event = Pin::new(&mut event);
+            // SAFETY: We ensure the event outlives the sender and receiver within this test
+            let (sender, receiver) = unsafe { pinned_event.by_ptr() };
+
+            sender.send("Hello from pointer".to_string());
+            let value = receiver.recv();
+            assert_eq!(value, "Hello from pointer");
+            // sender and receiver are dropped here, before event
+        });
+    }
+
+    #[test]
+    fn event_by_ptr_checked_returns_none_after_use() {
+        with_watchdog(|| {
+            let mut event = Event::<String>::new();
+            let pinned_event = Pin::new(&mut event);
+            // SAFETY: We ensure the event outlives the sender and receiver within this test
+            let endpoints = unsafe { pinned_event.by_ptr_checked() };
+            assert!(endpoints.is_some());
+            
+            // Second call should return None
+            let pinned_event2 = Pin::new(&mut event);
+            // SAFETY: We ensure the event outlives the endpoints within this test
+            let endpoints2 = unsafe { pinned_event2.by_ptr_checked() };
+            assert!(endpoints2.is_none());
+        });
+    }
+
+    #[test]
+    fn event_by_ptr_async() {
+        with_watchdog(|| {
+            let mut event = Event::<i32>::new();
+            let pinned_event = Pin::new(&mut event);
+            // SAFETY: We ensure the event outlives the sender and receiver within this test
+            let (sender, receiver) = unsafe { pinned_event.by_ptr() };
+
+            sender.send(42);
+            let value = futures::executor::block_on(receiver.recv_async());
+            assert_eq!(value, 42);
+        });
     }
 }

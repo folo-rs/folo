@@ -53,10 +53,10 @@ mod sync;
 
 // Re-export all public types from both modules
 pub use local::{
-    ByRcLocalEventReceiver, ByRcLocalEventSender, ByRefLocalEventReceiver, ByRefLocalEventSender,
-    LocalEvent,
+    ByPtrLocalEventReceiver, ByPtrLocalEventSender, ByRcLocalEventReceiver, ByRcLocalEventSender,
+    ByRefLocalEventReceiver, ByRefLocalEventSender, LocalEvent,
 };
 pub use sync::{
-    ByArcEventReceiver, ByArcEventSender, ByRcEventReceiver, ByRcEventSender, ByRefEventReceiver,
-    ByRefEventSender, Event,
+    ByArcEventReceiver, ByArcEventSender, ByPtrEventReceiver, ByPtrEventSender, ByRcEventReceiver,
+    ByRcEventSender, ByRefEventReceiver, ByRefEventSender, Event,
 };
