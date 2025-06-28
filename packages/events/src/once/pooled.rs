@@ -146,16 +146,16 @@ where
     ) {
         let inserter = self.pool.begin_insert();
         let key = inserter.key();
-        let item = inserter.insert_mut(WithRefCount::new(Event::new()));
-
-        // Get a pointer to the inner event
-        let event_ptr = NonNull::from(item.get());
+        let _item = inserter.insert_mut(WithRefCount::new(Event::new()));
 
         // Increment reference count for both sender and receiver
+        let item_mut = self.pool.get_mut(key);
         // SAFETY: WithRefCount doesn't contain self-references so it's safe to get_unchecked_mut
-        let item_mut = unsafe { item.get_unchecked_mut() };
-        item_mut.inc_ref();
-        item_mut.inc_ref();
+        unsafe {
+            let item_ref = item_mut.get_unchecked_mut();
+            item_ref.inc_ref();
+            item_ref.inc_ref();
+        }
 
         // Use raw pointer to avoid borrowing self twice
         let pool_ptr: *mut Self = self;
@@ -163,13 +163,11 @@ where
         (
             ByRefPooledEventSender {
                 pool: pool_ptr,
-                event_ptr,
                 key,
                 _phantom: std::marker::PhantomData,
             },
             ByRefPooledEventReceiver {
                 pool: pool_ptr,
-                event_ptr,
                 key,
                 _phantom: std::marker::PhantomData,
             },
@@ -201,26 +199,24 @@ where
     ) -> (ByRcPooledEventSender<T>, ByRcPooledEventReceiver<T>) {
         let inserter = self.pool.begin_insert();
         let key = inserter.key();
-        let item = inserter.insert_mut(WithRefCount::new(Event::new()));
+        let _item = inserter.insert_mut(WithRefCount::new(Event::new()));
 
-        // Get a pointer to the inner event
-        let event_ptr = NonNull::from(item.get());
-
-        // Increment reference count for both sender and receiver
+        // Now increment reference count for both sender and receiver
+        let item_mut = self.pool.get_mut(key);
         // SAFETY: WithRefCount doesn't contain self-references so it's safe to get_unchecked_mut
-        let item_mut = unsafe { item.get_unchecked_mut() };
-        item_mut.inc_ref();
-        item_mut.inc_ref();
+        unsafe {
+            let item_ref = item_mut.get_unchecked_mut();
+            item_ref.inc_ref();
+            item_ref.inc_ref();
+        }
 
         (
             ByRcPooledEventSender {
                 pool: Rc::clone(pool_rc),
-                event_ptr,
                 key,
             },
             ByRcPooledEventReceiver {
                 pool: Rc::clone(pool_rc),
-                event_ptr,
                 key,
             },
         )
@@ -251,26 +247,24 @@ where
     ) -> (ByArcPooledEventSender<T>, ByArcPooledEventReceiver<T>) {
         let inserter = self.pool.begin_insert();
         let key = inserter.key();
-        let item = inserter.insert_mut(WithRefCount::new(Event::new()));
+        let _item = inserter.insert_mut(WithRefCount::new(Event::new()));
 
-        // Get a pointer to the inner event
-        let event_ptr = NonNull::from(item.get());
-
-        // Increment reference count for both sender and receiver
+        // Now increment reference count for both sender and receiver
+        let item_mut = self.pool.get_mut(key);
         // SAFETY: WithRefCount doesn't contain self-references so it's safe to get_unchecked_mut
-        let item_mut = unsafe { item.get_unchecked_mut() };
-        item_mut.inc_ref();
-        item_mut.inc_ref();
+        unsafe {
+            let item_ref = item_mut.get_unchecked_mut();
+            item_ref.inc_ref();
+            item_ref.inc_ref();
+        }
 
         (
             ByArcPooledEventSender {
                 pool: Arc::clone(pool_arc),
-                event_ptr,
                 key,
             },
             ByArcPooledEventReceiver {
                 pool: Arc::clone(pool_arc),
-                event_ptr,
                 key,
             },
         )
@@ -315,28 +309,26 @@ where
 
         let inserter = this.pool.begin_insert();
         let key = inserter.key();
-        let item = inserter.insert_mut(WithRefCount::new(Event::new()));
+        let _item = inserter.insert_mut(WithRefCount::new(Event::new()));
 
-        // Get a pointer to the inner event
-        let event_ptr = NonNull::from(item.get());
-
-        // Increment reference count for both sender and receiver
+        // Now increment reference count for both sender and receiver
+        let item_mut = this.pool.get_mut(key);
         // SAFETY: WithRefCount doesn't contain self-references so it's safe to get_unchecked_mut
-        let item_mut = unsafe { item.get_unchecked_mut() };
-        item_mut.inc_ref();
-        item_mut.inc_ref();
+        unsafe {
+            let item_ref = item_mut.get_unchecked_mut();
+            item_ref.inc_ref();
+            item_ref.inc_ref();
+        }
 
         let pool_ptr: *mut Self = this;
 
         (
             ByPtrPooledEventSender {
                 pool: pool_ptr,
-                event_ptr,
                 key,
             },
             ByPtrPooledEventReceiver {
                 pool: pool_ptr,
-                event_ptr,
                 key,
             },
         )
@@ -371,7 +363,6 @@ where
     T: Send,
 {
     pool: *mut EventPool<T>,
-    event_ptr: NonNull<Event<T>>,
     key: Key,
     _phantom: std::marker::PhantomData<&'p mut EventPool<T>>,
 }
@@ -382,13 +373,16 @@ where
 {
     /// Sends a value through the pooled event.
     pub fn send(self, value: T) {
-        // SAFETY: The event pointer is valid as long as we hold a reference in the pool
-        let event = unsafe { self.event_ptr.as_ref() };
+        // SAFETY: The pool pointer is valid for the lifetime of this struct
+        let pool = unsafe { &mut *self.pool };
+
+        // Get the event from the pool
+        let item = pool.pool.get(self.key);
+        let event = item.get();
+
         drop(event.try_set(value));
 
         // Clean up our reference
-        // SAFETY: The pool pointer is valid for the lifetime of this struct
-        let pool = unsafe { &mut *self.pool };
         pool.dec_ref_and_cleanup(self.key);
 
         // Prevent double cleanup in Drop
@@ -415,7 +409,6 @@ where
     T: Send,
 {
     pool: *mut EventPool<T>,
-    event_ptr: NonNull<Event<T>>,
     key: Key,
     _phantom: std::marker::PhantomData<&'p mut EventPool<T>>,
 }
@@ -427,13 +420,16 @@ where
     /// Receives a value from the pooled event.
     #[must_use]
     pub fn recv(self) -> T {
-        // SAFETY: The event pointer is valid as long as we hold a reference in the pool
-        let event = unsafe { self.event_ptr.as_ref() };
+        // SAFETY: The pool pointer is valid for the lifetime of this struct
+        let pool = unsafe { &mut *self.pool };
+
+        // Get the event from the pool
+        let item = pool.pool.get(self.key);
+        let event = item.get();
+
         let result = futures::executor::block_on(crate::futures::EventFuture::new(event));
 
         // Clean up our reference
-        // SAFETY: The pool pointer is valid for the lifetime of this struct
-        let pool = unsafe { &mut *self.pool };
         pool.dec_ref_and_cleanup(self.key);
 
         // Prevent double cleanup in Drop
@@ -444,13 +440,16 @@ where
 
     /// Receives a value from the pooled event asynchronously.
     pub async fn recv_async(self) -> T {
-        // SAFETY: The event pointer is valid as long as we hold a reference in the pool
-        let event = unsafe { self.event_ptr.as_ref() };
+        // SAFETY: The pool pointer is valid for the lifetime of this struct
+        let pool = unsafe { &mut *self.pool };
+
+        // Get the event from the pool
+        let item = pool.pool.get(self.key);
+        let event = item.get();
+
         let result = crate::futures::EventFuture::new(event).await;
 
         // Clean up our reference
-        // SAFETY: The pool pointer is valid for the lifetime of this struct
-        let pool = unsafe { &mut *self.pool };
         pool.dec_ref_and_cleanup(self.key);
 
         // Prevent double cleanup in Drop
@@ -479,7 +478,6 @@ where
     T: Send,
 {
     pool: Rc<std::cell::RefCell<EventPool<T>>>,
-    event_ptr: NonNull<Event<T>>,
     key: Key,
 }
 
@@ -489,9 +487,16 @@ where
 {
     /// Sends a value through the pooled event.
     pub fn send(self, value: T) {
+        // Get the pool item first
+        let pool_borrowed = self.pool.borrow();
+        let item = pool_borrowed.pool.get(self.key);
+
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
-        let event = unsafe { self.event_ptr.as_ref() };
+        let event: &Event<T> = unsafe { NonNull::from(item.get()).as_ref() };
         drop(event.try_set(value));
+
+        // Drop the borrow before cleanup
+        drop(pool_borrowed);
 
         // Clean up our reference
         self.pool.borrow_mut().dec_ref_and_cleanup(self.key);
@@ -518,7 +523,6 @@ where
     T: Send,
 {
     pool: Rc<std::cell::RefCell<EventPool<T>>>,
-    event_ptr: NonNull<Event<T>>,
     key: Key,
 }
 
@@ -529,9 +533,16 @@ where
     /// Receives a value from the pooled event.
     #[must_use]
     pub fn recv(self) -> T {
+        // Get the pool item first
+        let pool_borrowed = self.pool.borrow();
+        let item = pool_borrowed.pool.get(self.key);
+
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
-        let event = unsafe { self.event_ptr.as_ref() };
+        let event: &Event<T> = unsafe { NonNull::from(item.get()).as_ref() };
         let result = futures::executor::block_on(crate::futures::EventFuture::new(event));
+
+        // Drop the borrow before cleanup
+        drop(pool_borrowed);
 
         // Clean up our reference
         self.pool.borrow_mut().dec_ref_and_cleanup(self.key);
@@ -544,8 +555,15 @@ where
 
     /// Receives a value from the pooled event asynchronously.
     pub async fn recv_async(self) -> T {
+        // Get the event pointer without holding a borrow across await
+        let event_ptr = {
+            let pool_borrowed = self.pool.borrow();
+            let item = pool_borrowed.pool.get(self.key);
+            NonNull::from(item.get())
+        };
+
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
-        let event = unsafe { self.event_ptr.as_ref() };
+        let event: &Event<T> = unsafe { event_ptr.as_ref() };
         let result = crate::futures::EventFuture::new(event).await;
 
         // Clean up our reference
@@ -575,7 +593,6 @@ where
     T: Send,
 {
     pool: Arc<std::sync::Mutex<EventPool<T>>>,
-    event_ptr: NonNull<Event<T>>,
     key: Key,
 }
 
@@ -594,9 +611,16 @@ where
 {
     /// Sends a value through the pooled event.
     pub fn send(self, value: T) {
+        // Get the pool item first
+        let pool_locked = self.pool.lock().unwrap();
+        let item = pool_locked.pool.get(self.key);
+
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
-        let event = unsafe { self.event_ptr.as_ref() };
+        let event: &Event<T> = unsafe { NonNull::from(item.get()).as_ref() };
         drop(event.try_set(value));
+
+        // Drop the lock before cleanup
+        drop(pool_locked);
 
         // Clean up our reference
         self.pool.lock().unwrap().dec_ref_and_cleanup(self.key);
@@ -623,7 +647,6 @@ where
     T: Send,
 {
     pool: Arc<std::sync::Mutex<EventPool<T>>>,
-    event_ptr: NonNull<Event<T>>,
     key: Key,
 }
 
@@ -643,9 +666,16 @@ where
     /// Receives a value from the pooled event.
     #[must_use]
     pub fn recv(self) -> T {
+        // Get the pool item first
+        let pool_locked = self.pool.lock().unwrap();
+        let item = pool_locked.pool.get(self.key);
+
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
-        let event = unsafe { self.event_ptr.as_ref() };
+        let event: &Event<T> = unsafe { NonNull::from(item.get()).as_ref() };
         let result = futures::executor::block_on(crate::futures::EventFuture::new(event));
+
+        // Drop the lock before cleanup
+        drop(pool_locked);
 
         // Clean up our reference
         self.pool.lock().unwrap().dec_ref_and_cleanup(self.key);
@@ -658,8 +688,15 @@ where
 
     /// Receives a value from the pooled event asynchronously.
     pub async fn recv_async(self) -> T {
+        // Get the event pointer without holding a lock across await
+        let event_ptr = {
+            let pool_locked = self.pool.lock().unwrap();
+            let item = pool_locked.pool.get(self.key);
+            NonNull::from(item.get())
+        };
+
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
-        let event = unsafe { self.event_ptr.as_ref() };
+        let event: &Event<T> = unsafe { event_ptr.as_ref() };
         let result = crate::futures::EventFuture::new(event).await;
 
         // Clean up our reference
@@ -689,7 +726,6 @@ where
     T: Send,
 {
     pool: *mut EventPool<T>,
-    event_ptr: NonNull<Event<T>>,
     key: Key,
 }
 
@@ -708,8 +744,13 @@ where
 {
     /// Sends a value through the pooled event.
     pub fn send(self, value: T) {
+        // Get the pool item first
+        // SAFETY: The pool pointer is valid for the lifetime of this struct
+        let pool = unsafe { &*self.pool };
+        let item = pool.pool.get(self.key);
+
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
-        let event = unsafe { self.event_ptr.as_ref() };
+        let event: &Event<T> = unsafe { NonNull::from(item.get()).as_ref() };
         drop(event.try_set(value));
 
         // Clean up our reference
@@ -741,7 +782,6 @@ where
     T: Send,
 {
     pool: *mut EventPool<T>,
-    event_ptr: NonNull<Event<T>>,
     key: Key,
 }
 
@@ -761,8 +801,13 @@ where
     /// Receives a value from the pooled event.
     #[must_use]
     pub fn recv(self) -> T {
+        // Get the pool item first
+        // SAFETY: The pool pointer is valid for the lifetime of this struct
+        let pool = unsafe { &*self.pool };
+        let item = pool.pool.get(self.key);
+
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
-        let event = unsafe { self.event_ptr.as_ref() };
+        let event: &Event<T> = unsafe { NonNull::from(item.get()).as_ref() };
         let result = futures::executor::block_on(crate::futures::EventFuture::new(event));
 
         // Clean up our reference
@@ -778,8 +823,16 @@ where
 
     /// Receives a value from the pooled event asynchronously.
     pub async fn recv_async(self) -> T {
+        // Get the event pointer first
+        let event_ptr = {
+            // SAFETY: The pool pointer is valid for the lifetime of this struct
+            let pool = unsafe { &*self.pool };
+            let item = pool.pool.get(self.key);
+            NonNull::from(item.get())
+        };
+
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
-        let event = unsafe { self.event_ptr.as_ref() };
+        let event: &Event<T> = unsafe { event_ptr.as_ref() };
         let result = crate::futures::EventFuture::new(event).await;
 
         // Clean up our reference
