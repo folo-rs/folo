@@ -1,6 +1,6 @@
 [package]
 name = "events"
-description = "High-performance event signaling primitives for concurrent environments"
+description = "High-performance signaling primitives for concurrent environments (DRAFT - WORK IN PROGRESS)"
 publish = true
 version = "0.1.0"
 
