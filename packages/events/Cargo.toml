@@ -15,16 +15,16 @@ default = []
 
 [dependencies]
 futures = { workspace = true }
-oneshot = { workspace = true }
 
 [dev-dependencies]
-benchmark_utils = { path = "../benchmark_utils" }
+benchmark_utils = { workspace = true }
 criterion = { workspace = true }
-many_cpus_benchmarking = { path = "../many_cpus_benchmarking" }
+many_cpus_benchmarking = { workspace = true }
 mutants = { workspace = true }
-new_zealand = { path = "../new_zealand" }
+new_zealand = { workspace = true }
+oneshot = { workspace = true }
 static_assertions = { workspace = true }
-testing = { path = "../testing" }
+testing = { workspace = true }
 
 [lints]
 workspace = true

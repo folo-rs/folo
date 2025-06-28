@@ -68,4 +68,6 @@
 
 pub mod once;
 
+mod futures;
+
 pub use once::*;

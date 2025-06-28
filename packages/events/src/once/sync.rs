@@ -3,8 +3,25 @@
 //! This module provides thread-safe event types that can be shared across threads
 //! and used for cross-thread communication.
 
+use std::mem;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::Waker;
+
+use crate::futures::EventFuture;
+
+/// State of a thread-safe event.
+#[derive(Debug)]
+enum EventState<T> {
+    /// No value has been set yet, and no one is waiting.
+    NotSet,
+    /// No value has been set yet, but someone is waiting for it.
+    Awaiting(Waker),
+    /// A value has been set.
+    Set(T),
+    /// The value has been consumed.
+    Consumed,
+}
 
 /// A one-time event that can send and receive a value of type `T`.
 ///
@@ -43,12 +60,8 @@ pub struct Event<T>
 where
     T: Send,
 {
-    // AtomicBool to track whether endpoints have been retrieved (thread-safe)
+    state: Mutex<EventState<T>>,
     used: AtomicBool,
-    // Mutex is needed because the Event can be referenced from multiple threads
-    // via the sender and receiver endpoints, requiring thread-safe access
-    // to the channel for one-time endpoint extraction
-    channel: Mutex<Option<(oneshot::Sender<T>, oneshot::Receiver<T>)>>,
 }
 
 impl<T> Event<T>
@@ -66,10 +79,9 @@ where
     /// ```
     #[must_use]
     pub fn new() -> Self {
-        let (sender, receiver) = oneshot::channel();
         Self {
+            state: Mutex::new(EventState::NotSet),
             used: AtomicBool::new(false),
-            channel: Mutex::new(Some((sender, receiver))),
         }
     }
 
@@ -110,17 +122,68 @@ where
             return None;
         }
 
-        let (sender, receiver) = self.channel.lock().unwrap().take()?;
         Some((
             ByRefEventSender {
-                _event: self,
-                sender: Some(sender),
+                event: self,
+                sent: AtomicBool::new(false),
             },
-            ByRefEventReceiver {
-                _event: self,
-                receiver: Some(receiver),
-            },
+            ByRefEventReceiver { event: self },
         ))
+    }
+
+    /// Attempts to set the value of the event.
+    ///
+    /// Returns `Ok(())` if the value was set successfully, or `Err(value)` if
+    /// the event has already been fired.
+    fn try_set(&self, value: T) -> Result<(), T> {
+        let mut state = self.state.lock().unwrap();
+        match mem::replace(&mut *state, EventState::Consumed) {
+            EventState::NotSet => {
+                *state = EventState::Set(value);
+                Ok(())
+            }
+            EventState::Awaiting(waker) => {
+                *state = EventState::Set(value);
+                waker.wake();
+                Ok(())
+            }
+            EventState::Set(_) | EventState::Consumed => {
+                *state = EventState::Consumed;
+                Err(value)
+            }
+        }
+    }
+
+    /// Attempts to receive the value from the event without blocking.
+    ///
+    /// Returns `Some(value)` if a value is available, or `None` if no value
+    /// has been set yet.
+    #[allow(
+        dead_code,
+        reason = "May be useful for non-blocking access in the future"
+    )]
+    fn try_recv(&self) -> Option<T> {
+        let mut state = self.state.lock().unwrap();
+        match mem::replace(&mut *state, EventState::Consumed) {
+            EventState::Set(value) => Some(value),
+            other => {
+                *state = other;
+                None
+            }
+        }
+    }
+
+    /// Polls for the value with a waker for async support.
+    pub(crate) fn poll_recv(&self, waker: &Waker) -> Option<T> {
+        let mut state = self.state.lock().unwrap();
+        match mem::replace(&mut *state, EventState::Consumed) {
+            EventState::Set(value) => Some(value),
+            EventState::NotSet | EventState::Awaiting(_) => {
+                *state = EventState::Awaiting(waker.clone());
+                None
+            }
+            EventState::Consumed => None,
+        }
     }
 }
 
@@ -142,8 +205,8 @@ pub struct ByRefEventSender<'e, T>
 where
     T: Send,
 {
-    _event: &'e Event<T>,
-    sender: Option<oneshot::Sender<T>>,
+    event: &'e Event<T>,
+    sent: AtomicBool,
 }
 
 impl<T> ByRefEventSender<'_, T>
@@ -164,11 +227,11 @@ where
     /// let (sender, _receiver) = event.by_ref();
     /// sender.send(42);
     /// ```
-    pub fn send(mut self, value: T) {
-        if let Some(sender) = self.sender.take() {
-            // We don't care if the receiver is dropped - sending always succeeds
-            drop(sender.send(value));
+    pub fn send(self, value: T) {
+        if self.sent.swap(true, Ordering::SeqCst) {
+            return; // Already sent, ignore additional sends
         }
+        drop(self.event.try_set(value));
     }
 }
 
@@ -181,8 +244,7 @@ pub struct ByRefEventReceiver<'e, T>
 where
     T: Send,
 {
-    _event: &'e Event<T>,
-    receiver: Option<oneshot::Receiver<T>>,
+    event: &'e Event<T>,
 }
 
 impl<T> ByRefEventReceiver<'_, T>
@@ -207,25 +269,14 @@ where
     /// assert_eq!(value, 42);
     /// ```
     #[must_use]
-    pub fn recv(mut self) -> T {
-        self.receiver.take().map_or_else(
-            || unreachable!("receiver should always be Some when recv is called"),
-            |receiver| {
-                receiver.recv().unwrap_or_else(|_| {
-                    // If the sender was dropped without sending, we wait forever
-                    // as per the specification
-                    loop {
-                        std::thread::park();
-                    }
-                })
-            },
-        )
+    pub fn recv(self) -> T {
+        // Use block_on from futures crate for synchronous receive
+        futures::executor::block_on(self.recv_async())
     }
 
     /// Receives a value from the event asynchronously.
     ///
-    /// This method consumes the receiver and waits for a sender to send a value.
-    /// If the sender is dropped without sending, this method will wait forever.
+    /// This method consumes the receiver and returns a future that resolves when a value is sent.
     ///
     /// # Example
     ///
@@ -240,24 +291,8 @@ where
     /// let value = block_on(receiver.recv_async());
     /// assert_eq!(value, 42);
     /// ```
-    pub async fn recv_async(mut self) -> T {
-        match self.receiver.take() {
-            Some(receiver) => {
-                // Use the oneshot receiver's native async support
-                // The receiver implements Future directly, so we can await it
-                match receiver.await {
-                    Ok(value) => value,
-                    Err(_) => {
-                        // If the sender was dropped without sending, we wait forever as per spec
-                        // This matches the behavior of the sync receive() method
-                        loop {
-                            std::future::pending::<()>().await;
-                        }
-                    }
-                }
-            }
-            None => unreachable!("receiver should always be Some when recv_async is called"),
-        }
+    pub async fn recv_async(self) -> T {
+        EventFuture::new(self.event).await
     }
 }
 
