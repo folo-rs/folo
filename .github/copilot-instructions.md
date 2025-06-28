@@ -31,8 +31,13 @@ After making changes to the codebase, you are expected to validate the essential
 * `just test-docs` to verify that doctests pass.
 * `just docs` to verify that the API documentation builds without errors.
 
-You can run all of these validation steps in one go via `just validate-quick`. This tends to
+You can run all of these validation steps in one go via `just validate-quick-local`. This tends to
 be faster than doing the individual validation steps one by one.
+
+Additional validation commands you may want to consider after difficult changes:
+
+* `just validate-local` - runs all validation steps, including benchmarks and examples.
+* `just validate-extra-local` - runs long-running validation steps like mutation tests.
 
 We operate under a "zero warnings allowed" requirement - fix all warnings that validation generates.
 
@@ -323,6 +328,10 @@ This is bad:
 ```rust
 fn foo(i: std::time::Instant) { }
 ```
+
+Referencing types in `std` via absolute paths for no reason is especially sinful.
+
+`use` statements go at the top of the file or module, not inside functions.
 
 # Dependencies in cargo.toml
 

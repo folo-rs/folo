@@ -66,37 +66,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::task::{Context, Poll, Waker};
+    use std::sync::Arc;
+    use std::thread;
 
+    use futures::task::noop_waker_ref;
     use testing::with_watchdog;
 
     use super::*;
-
-    /// A simple waker that does nothing but satisfy the waker requirements.
-    struct NoOpWaker;
-
-    impl NoOpWaker {
-        #[allow(
-            clippy::new_ret_no_self,
-            reason = "Returning Waker type is intentional"
-        )]
-        fn new() -> Waker {
-            use std::task::{RawWaker, RawWakerVTable};
-
-            const VTABLE: RawWakerVTable = RawWakerVTable::new(
-                |_| RawWaker::new(std::ptr::null(), &VTABLE),
-                |_| {},
-                |_| {},
-                |_| {},
-            );
-
-            // SAFETY: The RawWaker is constructed with a valid vtable and null data pointer.
-            // This is safe because our vtable functions are no-ops that don't access the data.
-            unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
-        }
-    }
 
     #[test]
     fn local_event_future_set_then_await() {
@@ -106,8 +82,7 @@ mod tests {
             sender.send(42);
 
             let mut future = LocalEventFuture::new(&event);
-            let waker = NoOpWaker::new();
-            let mut context = Context::from_waker(&waker);
+            let mut context = Context::from_waker(noop_waker_ref());
 
             // Since the value is already set, polling should return Ready
             let result = Pin::new(&mut future).poll(&mut context);
@@ -125,8 +100,7 @@ mod tests {
             let (sender, _receiver) = event.by_ref();
 
             let mut future = LocalEventFuture::new(&event);
-            let waker = NoOpWaker::new();
-            let mut context = Context::from_waker(&waker);
+            let mut context = Context::from_waker(noop_waker_ref());
 
             // First poll should return Pending since no value is set
             let result1 = Pin::new(&mut future).poll(&mut context);
@@ -155,8 +129,7 @@ mod tests {
             sender.send(42);
 
             let mut future = EventFuture::new(&event);
-            let waker = NoOpWaker::new();
-            let mut context = Context::from_waker(&waker);
+            let mut context = Context::from_waker(noop_waker_ref());
 
             // Since the value is already set, polling should return Ready
             let result = Pin::new(&mut future).poll(&mut context);
@@ -170,14 +143,11 @@ mod tests {
     #[test]
     fn event_future_await_then_set() {
         with_watchdog(|| {
-            use std::sync::Arc;
-
             let event = Arc::new(Event::new());
             let event_clone = Arc::clone(&event);
 
             let mut future = EventFuture::new(&*event);
-            let waker = NoOpWaker::new();
-            let mut context = Context::from_waker(&waker);
+            let mut context = Context::from_waker(noop_waker_ref());
 
             // First poll should return Pending since no value is set
             let result1 = Pin::new(&mut future).poll(&mut context);
@@ -187,7 +157,7 @@ mod tests {
             );
 
             // Set the value from another thread context
-            std::thread::spawn(move || {
+            thread::spawn(move || {
                 let (sender, _receiver) = event_clone.by_ref();
                 sender.send(42);
             })
