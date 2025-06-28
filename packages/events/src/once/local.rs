@@ -114,12 +114,8 @@ impl<T> LocalEvent<T> {
             ByRefLocalEventSender {
                 event: self,
                 sent: RefCell::new(false),
-                _lifetime: PhantomData,
             },
-            ByRefLocalEventReceiver {
-                event: self,
-                _lifetime: PhantomData,
-            },
+            ByRefLocalEventReceiver { event: self },
         ))
     }
 
@@ -208,7 +204,6 @@ impl<T> Default for LocalEvent<T> {
 pub struct ByRefLocalEventSender<'e, T> {
     event: &'e LocalEvent<T>,
     sent: RefCell<bool>,
-    _lifetime: PhantomData<&'e ()>,
 }
 
 impl<T> ByRefLocalEventSender<'_, T> {
@@ -243,7 +238,6 @@ impl<T> ByRefLocalEventSender<'_, T> {
 #[derive(Debug)]
 pub struct ByRefLocalEventReceiver<'e, T> {
     event: &'e LocalEvent<T>,
-    _lifetime: PhantomData<&'e ()>,
 }
 
 impl<T> ByRefLocalEventReceiver<'_, T> {
