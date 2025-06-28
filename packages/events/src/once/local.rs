@@ -231,9 +231,9 @@ mod tests {
     use std::rc::Rc;
 
     use static_assertions::assert_not_impl_any;
+    use testing::with_watchdog;
 
     use super::*;
-    use crate::test_utils::with_watchdog;
 
     #[test]
     fn local_event_new_creates_valid_event() {

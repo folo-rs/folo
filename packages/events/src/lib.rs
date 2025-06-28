@@ -67,6 +67,5 @@
 //! ```
 
 pub mod once;
-mod test_utils;
 
 pub use once::*;

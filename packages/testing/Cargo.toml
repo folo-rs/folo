@@ -17,6 +17,8 @@ doc = false
 default = []
 
 [dependencies]
+# Required for the watchdog functionality
+# No additional dependencies needed - using std only
 
 [target.'cfg(windows)'.dependencies]
 deranged = { workspace = true, features = ["macros"] }

@@ -269,9 +269,9 @@ mod tests {
     use std::time::Duration;
 
     use static_assertions::assert_impl_all;
+    use testing::with_watchdog;
 
     use super::*;
-    use crate::test_utils::with_watchdog;
 
     #[test]
     fn event_new_creates_valid_event() {
