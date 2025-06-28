@@ -115,7 +115,6 @@ impl<T> LocalEvent<T> {
         Some((
             ByRefLocalEventSender {
                 event: self,
-                sent: RefCell::new(false),
             },
             ByRefLocalEventReceiver { event: self },
         ))
@@ -175,7 +174,6 @@ impl<T> LocalEvent<T> {
         Some((
             ByRcLocalEventSender {
                 event: Rc::clone(self),
-                sent: RefCell::new(false),
             },
             ByRcLocalEventReceiver {
                 event: Rc::clone(self),
@@ -325,7 +323,6 @@ impl<T> LocalEvent<T> {
         Some((
             ByPtrLocalEventSender {
                 event: event_ptr,
-                sent: RefCell::new(false),
             },
             ByPtrLocalEventReceiver { event: event_ptr },
         ))
@@ -360,7 +357,6 @@ impl<T> Default for LocalEvent<T> {
 #[derive(Debug)]
 pub struct ByRefLocalEventSender<'e, T> {
     event: &'e LocalEvent<T>,
-    sent: RefCell<bool>,
 }
 
 impl<T> ByRefLocalEventSender<'_, T> {
@@ -379,11 +375,6 @@ impl<T> ByRefLocalEventSender<'_, T> {
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {
-        let mut sent = self.sent.borrow_mut();
-        if *sent {
-            return; // Already sent, ignore additional sends
-        }
-        *sent = true;
         drop(self.event.try_set(value));
     }
 }
@@ -451,7 +442,6 @@ impl<T> ByRefLocalEventReceiver<'_, T> {
 #[derive(Debug)]
 pub struct ByRcLocalEventSender<T> {
     event: Rc<LocalEvent<T>>,
-    sent: RefCell<bool>,
 }
 
 impl<T> ByRcLocalEventSender<T> {
@@ -472,11 +462,6 @@ impl<T> ByRcLocalEventSender<T> {
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {
-        let mut sent = self.sent.borrow_mut();
-        if *sent {
-            return; // Already sent, ignore additional sends
-        }
-        *sent = true;
         drop(self.event.try_set(value));
     }
 }
@@ -554,7 +539,6 @@ impl<T> ByRcLocalEventReceiver<T> {
 #[derive(Debug)]
 pub struct ByPtrLocalEventSender<T> {
     event: *const LocalEvent<T>,
-    sent: RefCell<bool>,
 }
 
 impl<T> ByPtrLocalEventSender<T> {
@@ -577,11 +561,6 @@ impl<T> ByPtrLocalEventSender<T> {
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {
-        let mut sent = self.sent.borrow_mut();
-        if *sent {
-            return; // Already sent, ignore additional sends
-        }
-        *sent = true;
         // SAFETY: Caller guarantees the event pointer is valid
         let event = unsafe { &*self.event };
         drop(event.try_set(value));

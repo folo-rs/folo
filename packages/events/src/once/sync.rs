@@ -127,7 +127,6 @@ where
         Some((
             ByRefEventSender {
                 event: self,
-                sent: AtomicBool::new(false),
             },
             ByRefEventReceiver { event: self },
         ))
@@ -185,7 +184,6 @@ where
         Some((
             ByArcEventSender {
                 event: Arc::clone(self),
-                sent: AtomicBool::new(false),
             },
             ByArcEventReceiver {
                 event: Arc::clone(self),
@@ -243,7 +241,6 @@ where
         Some((
             ByRcEventSender {
                 event: Rc::clone(self),
-                sent: AtomicBool::new(false),
             },
             ByRcEventReceiver {
                 event: Rc::clone(self),
@@ -336,7 +333,6 @@ where
         Some((
             ByPtrEventSender {
                 event: event_ptr,
-                sent: AtomicBool::new(false),
             },
             ByPtrEventReceiver { event: event_ptr },
         ))
@@ -417,7 +413,6 @@ where
     T: Send,
 {
     event: &'e Event<T>,
-    sent: AtomicBool,
 }
 
 impl<T> ByRefEventSender<'_, T>
@@ -439,9 +434,6 @@ where
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {
-        if self.sent.swap(true, Ordering::SeqCst) {
-            return; // Already sent, ignore additional sends
-        }
         drop(self.event.try_set(value));
     }
 }
@@ -517,7 +509,6 @@ where
     T: Send,
 {
     event: Arc<Event<T>>,
-    sent: AtomicBool,
 }
 
 impl<T> ByArcEventSender<T>
@@ -541,9 +532,6 @@ where
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {
-        if self.sent.swap(true, Ordering::SeqCst) {
-            return; // Already sent, ignore additional sends
-        }
         drop(self.event.try_set(value));
     }
 }
@@ -623,7 +611,6 @@ where
     T: Send,
 {
     event: Rc<Event<T>>,
-    sent: AtomicBool,
 }
 
 impl<T> ByRcEventSender<T>
@@ -647,9 +634,6 @@ where
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {
-        if self.sent.swap(true, Ordering::SeqCst) {
-            return; // Already sent, ignore additional sends
-        }
         drop(self.event.try_set(value));
     }
 }
@@ -735,7 +719,6 @@ where
     T: Send,
 {
     event: *const Event<T>,
-    sent: AtomicBool,
 }
 
 // SAFETY: ByPtrEventSender can be Send as long as T: Send, since we only
@@ -770,9 +753,6 @@ where
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {
-        if self.sent.swap(true, Ordering::SeqCst) {
-            return; // Already sent, ignore additional sends
-        }
         // SAFETY: The caller guarantees the event pointer is valid
         let event = unsafe { &*self.event };
         drop(event.try_set(value));
