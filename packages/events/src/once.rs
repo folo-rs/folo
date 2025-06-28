@@ -57,7 +57,11 @@ pub use local::{
     ByPtrLocalEventReceiver, ByPtrLocalEventSender, ByRcLocalEventReceiver, ByRcLocalEventSender,
     ByRefLocalEventReceiver, ByRefLocalEventSender, LocalEvent,
 };
-pub use pooled::{ByRefPooledEventReceiver, ByRefPooledEventSender, EventPool, WithRefCount};
+pub use pooled::{
+    ByArcPooledEventReceiver, ByArcPooledEventSender, ByPtrPooledEventReceiver,
+    ByPtrPooledEventSender, ByRcPooledEventReceiver, ByRcPooledEventSender,
+    ByRefPooledEventReceiver, ByRefPooledEventSender, EventPool, WithRefCount,
+};
 pub use sync::{
     ByArcEventReceiver, ByArcEventSender, ByPtrEventReceiver, ByPtrEventSender, ByRcEventReceiver,
     ByRcEventSender, ByRefEventReceiver, ByRefEventSender, Event,
