@@ -22,48 +22,25 @@ Do not use VS Code tasks, relying instead on `just` and, if necessary, `cargo` c
 
 # Validating changes
 
-After making changes to the codebase, you are expected to validate the essentials:
-
-* `just format` to apply auto-formatting to code files, ensuring consistent code style.
-* `just check` to verify that compiler checks pass.
-* `just clippy` to verify that all linter rules pass.
-* `just test` to verify that the code compiles and tests pass.
-* `just test-docs` to verify that doctests pass.
-* `just docs` to verify that the API documentation builds without errors.
-
-You can run all of these validation steps in one go via `just validate-quick-local`. This tends to
-be faster than doing the individual validation steps one by one.
-
-Additional validation commands you may want to consider after difficult changes:
-
-* `just validate-local` - runs all validation steps, including benchmarks and examples.
-* `just validate-extra-local` - runs long-running validation steps like mutation tests.
+Validate changes via `just validate-local`. This runs a number of different checks and will
+uncover most issues.
 
 We operate under a "zero warnings allowed" requirement - fix all warnings that validation generates.
 
-# Validate via examples
-
-All stand-alone examples binaries are expected to not panic when executed. When validating changes
-to a package, run each stand-alone example binary it has and ensure that none of them panic.
-
-# Extra validation for unsafe code
-
-If a package you are modifying requires unsafe code, you are expected to run the tests under Miri
-to confirm that there are no memory safety violations that the compiler alone cannot catch.
-
 # Multiplatform codebase
 
-This is a multiplatform codebase. In some packages you will find folders named `linux` and `windows`,
-which contain platform-specific code. When modifying files of one platform, you are also expected
-to make the equivalent modifications in the other.
+This is a multiplatform codebase. In some packages you will find folders named `linux` and
+`windows`, which contain platform-specific code. When modifying files of one platform, you
+make the equivalent modifications in the other.
 
-By default, we are operating on Windows. However, you can also invoke commands on Linux using the
-syntax `wsl -e bash -l -c "command"`. For example, to test on both Windows and Linux, execute:
+When running on a local PC, the operating systme is Windows. When running in GitHub, the operating
+system is Linux.
 
-1. `just test`
-2. `wsl -e bash -l -c "just test"`
+On local PC, you can invoke any Linux commands using the syntax `wsl -e bash -l -c "command"`.
+For example, to run the standard validation on both Windows and Linux, execute:
 
-You are expected to validate all changes on both operating systems.
+1. `just validate-local`
+2. `wsl -e bash -l -c "just validate-local"`
 
 # Facades and abstractions
 
