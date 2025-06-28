@@ -6,6 +6,7 @@
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::mem;
+use std::rc::Rc;
 use std::task::Waker;
 
 use crate::futures::LocalEventFuture;
@@ -116,6 +117,68 @@ impl<T> LocalEvent<T> {
                 sent: RefCell::new(false),
             },
             ByRefLocalEventReceiver { event: self },
+        ))
+    }
+
+    /// Returns both the sender and receiver for this event, connected by Rc.
+    ///
+    /// This method requires the event to be wrapped in an [`Rc`] and provides
+    /// endpoints that own an Rc to the event instead of borrowing it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if endpoints have already been retrieved via any method.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::rc::Rc;
+    ///
+    /// use events::once::LocalEvent;
+    ///
+    /// let event = Rc::new(LocalEvent::<i32>::new());
+    /// let (sender, receiver) = event.by_rc();
+    /// ```
+    pub fn by_rc(self: &Rc<Self>) -> (ByRcLocalEventSender<T>, ByRcLocalEventReceiver<T>) {
+        self.by_rc_checked()
+            .expect("Event endpoints have already been retrieved")
+    }
+
+    /// Returns both the sender and receiver for this event, connected by Rc,
+    /// or [`None`] if endpoints have already been retrieved.
+    ///
+    /// This method requires the event to be wrapped in an [`Rc`] and provides
+    /// endpoints that own an Rc to the event instead of borrowing it.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::rc::Rc;
+    ///
+    /// use events::once::LocalEvent;
+    ///
+    /// let event = Rc::new(LocalEvent::<i32>::new());
+    /// let endpoints = event.by_rc_checked().unwrap();
+    /// let endpoints2 = event.by_rc_checked(); // Returns None
+    /// assert!(endpoints2.is_none());
+    /// ```
+    pub fn by_rc_checked(
+        self: &Rc<Self>,
+    ) -> Option<(ByRcLocalEventSender<T>, ByRcLocalEventReceiver<T>)> {
+        let mut used = self.used.borrow_mut();
+        if *used {
+            return None;
+        }
+        *used = true;
+
+        Some((
+            ByRcLocalEventSender {
+                event: Rc::clone(self),
+                sent: RefCell::new(false),
+            },
+            ByRcLocalEventReceiver {
+                event: Rc::clone(self),
+            },
         ))
     }
 
@@ -287,6 +350,103 @@ impl<T> ByRefLocalEventReceiver<'_, T> {
     }
 }
 
+/// A sender that can send a value through a single-threaded event using Rc ownership.
+///
+/// The sender owns an Rc to the event and is single-threaded.
+/// After calling [`send`](ByRcLocalEventSender::send), the sender is consumed.
+#[derive(Debug)]
+pub struct ByRcLocalEventSender<T> {
+    event: Rc<LocalEvent<T>>,
+    sent: RefCell<bool>,
+}
+
+impl<T> ByRcLocalEventSender<T> {
+    /// Sends a value through the event.
+    ///
+    /// This method consumes the sender and always succeeds, regardless of whether
+    /// there is a receiver waiting.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::rc::Rc;
+    ///
+    /// use events::once::LocalEvent;
+    ///
+    /// let event = Rc::new(LocalEvent::<i32>::new());
+    /// let (sender, _receiver) = event.by_rc();
+    /// sender.send(42);
+    /// ```
+    pub fn send(self, value: T) {
+        let mut sent = self.sent.borrow_mut();
+        if *sent {
+            return; // Already sent, ignore additional sends
+        }
+        *sent = true;
+        drop(self.event.try_set(value));
+    }
+}
+
+/// A receiver that can receive a value from a single-threaded event using Rc ownership.
+///
+/// The receiver owns an Rc to the event and is single-threaded.
+/// After calling [`recv`](ByRcLocalEventReceiver::recv), the receiver is consumed.
+#[derive(Debug)]
+pub struct ByRcLocalEventReceiver<T> {
+    event: Rc<LocalEvent<T>>,
+}
+
+impl<T> ByRcLocalEventReceiver<T> {
+    /// Receives a value from the event.
+    ///
+    /// This method consumes the receiver and waits for a sender to send a value.
+    /// If the sender is dropped without sending, this method will wait forever.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::rc::Rc;
+    ///
+    /// use events::once::LocalEvent;
+    ///
+    /// let event = Rc::new(LocalEvent::<i32>::new());
+    /// let (sender, receiver) = event.by_rc();
+    ///
+    /// sender.send(42);
+    /// let value = receiver.recv();
+    /// assert_eq!(value, 42);
+    /// ```
+    #[must_use]
+    pub fn recv(self) -> T {
+        // Use block_on from futures crate for synchronous receive
+        futures::executor::block_on(self.recv_async())
+    }
+
+    /// Receives a value from the event asynchronously.
+    ///
+    /// This method consumes the receiver and waits for a sender to send a value.
+    /// If the sender is dropped without sending, this method will wait forever.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::rc::Rc;
+    ///
+    /// use events::once::LocalEvent;
+    /// use futures::executor::block_on;
+    ///
+    /// let event = Rc::new(LocalEvent::<i32>::new());
+    /// let (sender, receiver) = event.by_rc();
+    ///
+    /// sender.send(42);
+    /// let value = block_on(receiver.recv_async());
+    /// assert_eq!(value, 42);
+    /// ```
+    pub async fn recv_async(self) -> T {
+        LocalEventFuture::new(&self.event).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::rc::Rc;
@@ -455,5 +615,68 @@ mod tests {
             assert_eq!(event.try_recv(), None);
             assert_eq!(event.try_recv(), None); // Multiple calls should still return None
         });
+    }
+
+    #[test]
+    fn local_event_by_rc_basic() {
+        with_watchdog(|| {
+            let event = Rc::new(LocalEvent::<i32>::new());
+            let (sender, receiver) = event.by_rc();
+
+            sender.send(42);
+            let value = receiver.recv();
+            assert_eq!(value, 42);
+        });
+    }
+
+    #[test]
+    fn local_event_by_rc_checked_returns_none_after_use() {
+        let event = Rc::new(LocalEvent::<i32>::new());
+        let endpoints1 = event.by_rc_checked();
+        assert!(endpoints1.is_some());
+
+        let endpoints2 = event.by_rc_checked();
+        assert!(endpoints2.is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "Event endpoints have already been retrieved")]
+    fn local_event_by_rc_panics_on_second_call() {
+        let event = Rc::new(LocalEvent::<i32>::new());
+        let _endpoints = event.by_rc();
+        let _endpoints2 = event.by_rc(); // Should panic
+    }
+
+    #[test]
+    fn local_event_by_rc_async() {
+        use futures::executor::block_on;
+
+        with_watchdog(|| {
+            let event = Rc::new(LocalEvent::<i32>::new());
+            let (sender, receiver) = event.by_rc();
+
+            sender.send(42);
+            let value = block_on(receiver.recv_async());
+            assert_eq!(value, 42);
+        });
+    }
+
+    #[test]
+    fn local_event_by_rc_string() {
+        with_watchdog(|| {
+            let event = Rc::new(LocalEvent::<String>::new());
+            let (sender, receiver) = event.by_rc();
+
+            sender.send("Hello from Rc".to_string());
+            let value = receiver.recv();
+            assert_eq!(value, "Hello from Rc");
+        });
+    }
+
+    #[test]
+    fn rc_types_not_send_sync() {
+        // Rc-based types should not implement Send or Sync
+        assert_not_impl_any!(ByRcLocalEventSender<i32>: Send, Sync);
+        assert_not_impl_any!(ByRcLocalEventReceiver<i32>: Send, Sync);
     }
 }

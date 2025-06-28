@@ -4,8 +4,9 @@
 //! and used for cross-thread communication.
 
 use std::mem;
-use std::sync::Mutex;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::task::Waker;
 
 use crate::futures::EventFuture;
@@ -128,6 +129,124 @@ where
                 sent: AtomicBool::new(false),
             },
             ByRefEventReceiver { event: self },
+        ))
+    }
+
+    /// Returns both the sender and receiver for this event, connected by Arc.
+    ///
+    /// This method requires the event to be wrapped in an [`Arc`] and provides
+    /// endpoints that own an Arc to the event instead of borrowing it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if endpoints have already been retrieved via any method.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use events::once::Event;
+    ///
+    /// let event = Arc::new(Event::<i32>::new());
+    /// let (sender, receiver) = event.by_arc();
+    /// ```
+    pub fn by_arc(self: &Arc<Self>) -> (ByArcEventSender<T>, ByArcEventReceiver<T>) {
+        self.by_arc_checked()
+            .expect("Event endpoints have already been retrieved")
+    }
+
+    /// Returns both the sender and receiver for this event, connected by Arc,
+    /// or [`None`] if endpoints have already been retrieved.
+    ///
+    /// This method requires the event to be wrapped in an [`Arc`] and provides
+    /// endpoints that own an Arc to the event instead of borrowing it.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use events::once::Event;
+    ///
+    /// let event = Arc::new(Event::<i32>::new());
+    /// let endpoints = event.by_arc_checked().unwrap();
+    /// let endpoints2 = event.by_arc_checked(); // Returns None
+    /// assert!(endpoints2.is_none());
+    /// ```
+    pub fn by_arc_checked(
+        self: &Arc<Self>,
+    ) -> Option<(ByArcEventSender<T>, ByArcEventReceiver<T>)> {
+        if self.used.swap(true, Ordering::SeqCst) {
+            return None;
+        }
+
+        Some((
+            ByArcEventSender {
+                event: Arc::clone(self),
+                sent: AtomicBool::new(false),
+            },
+            ByArcEventReceiver {
+                event: Arc::clone(self),
+            },
+        ))
+    }
+
+    /// Returns both the sender and receiver for this event, connected by Rc.
+    ///
+    /// This method requires the event to be wrapped in an [`Rc`] and provides
+    /// endpoints that own an Rc to the event instead of borrowing it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if endpoints have already been retrieved via any method.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::rc::Rc;
+    ///
+    /// use events::once::Event;
+    ///
+    /// let event = Rc::new(Event::<i32>::new());
+    /// let (sender, receiver) = event.by_rc();
+    /// ```
+    pub fn by_rc(self: &Rc<Self>) -> (ByRcEventSender<T>, ByRcEventReceiver<T>) {
+        self.by_rc_checked()
+            .expect("Event endpoints have already been retrieved")
+    }
+
+    /// Returns both the sender and receiver for this event, connected by Rc,
+    /// or [`None`] if endpoints have already been retrieved.
+    ///
+    /// This method requires the event to be wrapped in an [`Rc`] and provides
+    /// endpoints that own an Rc to the event instead of borrowing it.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::rc::Rc;
+    ///
+    /// use events::once::Event;
+    ///
+    /// let event = Rc::new(Event::<i32>::new());
+    /// let endpoints = event.by_rc_checked().unwrap();
+    /// let endpoints2 = event.by_rc_checked(); // Returns None
+    /// assert!(endpoints2.is_none());
+    /// ```
+    pub fn by_rc_checked(self: &Rc<Self>) -> Option<(ByRcEventSender<T>, ByRcEventReceiver<T>)> {
+        if self.used.swap(true, Ordering::SeqCst) {
+            return None;
+        }
+
+        Some((
+            ByRcEventSender {
+                event: Rc::clone(self),
+                sent: AtomicBool::new(false),
+            },
+            ByRcEventReceiver {
+                event: Rc::clone(self),
+            },
         ))
     }
 
@@ -296,6 +415,218 @@ where
     }
 }
 
+/// A sender that can send a value through a thread-safe event using Arc ownership.
+///
+/// The sender owns an Arc to the event and can be moved across threads.
+/// After calling [`send`](ByArcEventSender::send), the sender is consumed.
+#[derive(Debug)]
+pub struct ByArcEventSender<T>
+where
+    T: Send,
+{
+    event: Arc<Event<T>>,
+    sent: AtomicBool,
+}
+
+impl<T> ByArcEventSender<T>
+where
+    T: Send,
+{
+    /// Sends a value through the event.
+    ///
+    /// This method consumes the sender and always succeeds, regardless of whether
+    /// there is a receiver waiting.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use events::once::Event;
+    ///
+    /// let event = Arc::new(Event::<i32>::new());
+    /// let (sender, _receiver) = event.by_arc();
+    /// sender.send(42);
+    /// ```
+    pub fn send(self, value: T) {
+        if self.sent.swap(true, Ordering::SeqCst) {
+            return; // Already sent, ignore additional sends
+        }
+        drop(self.event.try_set(value));
+    }
+}
+
+/// A receiver that can receive a value from a thread-safe event using Arc ownership.
+///
+/// The receiver owns an Arc to the event and can be moved across threads.
+/// After calling [`recv`](ByArcEventReceiver::recv), the receiver is consumed.
+#[derive(Debug)]
+pub struct ByArcEventReceiver<T>
+where
+    T: Send,
+{
+    event: Arc<Event<T>>,
+}
+
+impl<T> ByArcEventReceiver<T>
+where
+    T: Send,
+{
+    /// Receives a value from the event.
+    ///
+    /// This method consumes the receiver and waits for a sender to send a value.
+    /// If the sender is dropped without sending, this method will wait forever.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use events::once::Event;
+    ///
+    /// let event = Arc::new(Event::<i32>::new());
+    /// let (sender, receiver) = event.by_arc();
+    ///
+    /// sender.send(42);
+    /// let value = receiver.recv();
+    /// assert_eq!(value, 42);
+    /// ```
+    #[must_use]
+    pub fn recv(self) -> T {
+        // Use block_on from futures crate for synchronous receive
+        futures::executor::block_on(self.recv_async())
+    }
+
+    /// Receives a value from the event asynchronously.
+    ///
+    /// This method consumes the receiver and returns a future that resolves when a value is sent.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use events::once::Event;
+    /// use futures::executor::block_on;
+    ///
+    /// let event = Arc::new(Event::<i32>::new());
+    /// let (sender, receiver) = event.by_arc();
+    ///
+    /// sender.send(42);
+    /// let value = block_on(receiver.recv_async());
+    /// assert_eq!(value, 42);
+    /// ```
+    pub async fn recv_async(self) -> T {
+        EventFuture::new(&self.event).await
+    }
+}
+
+/// A sender that can send a value through a thread-safe event using Rc ownership.
+///
+/// The sender owns an Rc to the event and is single-threaded.
+/// After calling [`send`](ByRcEventSender::send), the sender is consumed.
+#[derive(Debug)]
+pub struct ByRcEventSender<T>
+where
+    T: Send,
+{
+    event: Rc<Event<T>>,
+    sent: AtomicBool,
+}
+
+impl<T> ByRcEventSender<T>
+where
+    T: Send,
+{
+    /// Sends a value through the event.
+    ///
+    /// This method consumes the sender and always succeeds, regardless of whether
+    /// there is a receiver waiting.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::rc::Rc;
+    ///
+    /// use events::once::Event;
+    ///
+    /// let event = Rc::new(Event::<i32>::new());
+    /// let (sender, _receiver) = event.by_rc();
+    /// sender.send(42);
+    /// ```
+    pub fn send(self, value: T) {
+        if self.sent.swap(true, Ordering::SeqCst) {
+            return; // Already sent, ignore additional sends
+        }
+        drop(self.event.try_set(value));
+    }
+}
+
+/// A receiver that can receive a value from a thread-safe event using Rc ownership.
+///
+/// The receiver owns an Rc to the event and is single-threaded.
+/// After calling [`recv`](ByRcEventReceiver::recv), the receiver is consumed.
+#[derive(Debug)]
+pub struct ByRcEventReceiver<T>
+where
+    T: Send,
+{
+    event: Rc<Event<T>>,
+}
+
+impl<T> ByRcEventReceiver<T>
+where
+    T: Send,
+{
+    /// Receives a value from the event.
+    ///
+    /// This method consumes the receiver and waits for a sender to send a value.
+    /// If the sender is dropped without sending, this method will wait forever.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::rc::Rc;
+    ///
+    /// use events::once::Event;
+    ///
+    /// let event = Rc::new(Event::<i32>::new());
+    /// let (sender, receiver) = event.by_rc();
+    ///
+    /// sender.send(42);
+    /// let value = receiver.recv();
+    /// assert_eq!(value, 42);
+    /// ```
+    #[must_use]
+    pub fn recv(self) -> T {
+        // Use block_on from futures crate for synchronous receive
+        futures::executor::block_on(self.recv_async())
+    }
+
+    /// Receives a value from the event asynchronously.
+    ///
+    /// This method consumes the receiver and returns a future that resolves when a value is sent.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::rc::Rc;
+    ///
+    /// use events::once::Event;
+    /// use futures::executor::block_on;
+    ///
+    /// let event = Rc::new(Event::<i32>::new());
+    /// let (sender, receiver) = event.by_rc();
+    ///
+    /// sender.send(42);
+    /// let value = block_on(receiver.recv_async());
+    /// assert_eq!(value, 42);
+    /// ```
+    pub async fn recv_async(self) -> T {
+        EventFuture::new(&self.event).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::rc::Rc;
@@ -303,7 +634,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    use static_assertions::assert_impl_all;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
     use testing::with_watchdog;
 
     use super::*;
@@ -533,5 +864,122 @@ mod tests {
             assert_eq!(event.try_recv(), Some("Cross-thread value".to_string()));
             assert_eq!(event.try_recv(), None); // Should be consumed
         });
+    }
+
+    #[test]
+    fn event_by_arc_basic() {
+        with_watchdog(|| {
+            let event = Arc::new(Event::<i32>::new());
+            let (sender, receiver) = event.by_arc();
+
+            sender.send(42);
+            let value = receiver.recv();
+            assert_eq!(value, 42);
+        });
+    }
+
+    #[test]
+    fn event_by_arc_checked_returns_none_after_use() {
+        let event = Arc::new(Event::<i32>::new());
+        let endpoints1 = event.by_arc_checked();
+        assert!(endpoints1.is_some());
+
+        let endpoints2 = event.by_arc_checked();
+        assert!(endpoints2.is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "Event endpoints have already been retrieved")]
+    fn event_by_arc_panics_on_second_call() {
+        let event = Arc::new(Event::<i32>::new());
+        let _endpoints = event.by_arc();
+        let _endpoints2 = event.by_arc(); // Should panic
+    }
+
+    #[test]
+    fn event_by_arc_cross_thread() {
+        with_watchdog(|| {
+            let event = Arc::new(Event::<String>::new());
+            let (sender, receiver) = event.by_arc();
+
+            let sender_handle = thread::spawn(move || {
+                sender.send("Hello from Arc thread!".to_string());
+            });
+
+            let receiver_handle = thread::spawn(move || receiver.recv());
+
+            sender_handle.join().unwrap();
+            let message = receiver_handle.join().unwrap();
+            assert_eq!(message, "Hello from Arc thread!");
+        });
+    }
+
+    #[test]
+    fn event_by_arc_async() {
+        use futures::executor::block_on;
+
+        with_watchdog(|| {
+            let event = Arc::new(Event::<i32>::new());
+            let (sender, receiver) = event.by_arc();
+
+            sender.send(42);
+            let value = block_on(receiver.recv_async());
+            assert_eq!(value, 42);
+        });
+    }
+
+    #[test]
+    fn event_by_rc_basic() {
+        with_watchdog(|| {
+            let event = Rc::new(Event::<i32>::new());
+            let (sender, receiver) = event.by_rc();
+
+            sender.send(42);
+            let value = receiver.recv();
+            assert_eq!(value, 42);
+        });
+    }
+
+    #[test]
+    fn event_by_rc_checked_returns_none_after_use() {
+        let event = Rc::new(Event::<i32>::new());
+        let endpoints1 = event.by_rc_checked();
+        assert!(endpoints1.is_some());
+
+        let endpoints2 = event.by_rc_checked();
+        assert!(endpoints2.is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "Event endpoints have already been retrieved")]
+    fn event_by_rc_panics_on_second_call() {
+        let event = Rc::new(Event::<i32>::new());
+        let _endpoints = event.by_rc();
+        let _endpoints2 = event.by_rc(); // Should panic
+    }
+
+    #[test]
+    fn event_by_rc_async() {
+        use futures::executor::block_on;
+
+        with_watchdog(|| {
+            let event = Rc::new(Event::<i32>::new());
+            let (sender, receiver) = event.by_rc();
+
+            sender.send(42);
+            let value = block_on(receiver.recv_async());
+            assert_eq!(value, 42);
+        });
+    }
+
+    #[test]
+    fn arc_rc_types_send_sync() {
+        // Arc-based types should implement Send and Sync
+        assert_impl_all!(ByArcEventSender<i32>: Send, Sync);
+        assert_impl_all!(ByArcEventReceiver<i32>: Send);
+
+        // Rc-based types should not implement Send or Sync (due to Rc)
+        assert_not_impl_any!(ByRcEventSender<i32>: Send, Sync);
+        assert_not_impl_any!(ByRcEventReceiver<i32>: Send, Sync);
     }
 }

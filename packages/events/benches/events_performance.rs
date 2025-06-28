@@ -6,6 +6,8 @@
 )]
 
 use std::hint;
+use std::rc::Rc;
+use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
@@ -36,6 +38,36 @@ fn events_vs_oneshot(c: &mut Criterion) {
         b.iter(|| {
             let event = events::once::LocalEvent::<i32>::new();
             let (sender, receiver) = event.by_ref();
+            sender.send(hint::black_box(42));
+            let value = receiver.recv();
+            hint::black_box(value);
+        });
+    });
+
+    group.bench_function("events_once_arc_single_thread", |b| {
+        b.iter(|| {
+            let event = Arc::new(events::once::Event::<i32>::new());
+            let (sender, receiver) = event.by_arc();
+            sender.send(hint::black_box(42));
+            let value = receiver.recv();
+            hint::black_box(value);
+        });
+    });
+
+    group.bench_function("events_once_rc_single_thread", |b| {
+        b.iter(|| {
+            let event = Rc::new(events::once::Event::<i32>::new());
+            let (sender, receiver) = event.by_rc();
+            sender.send(hint::black_box(42));
+            let value = receiver.recv();
+            hint::black_box(value);
+        });
+    });
+
+    group.bench_function("local_events_once_rc_single_thread", |b| {
+        b.iter(|| {
+            let event = Rc::new(events::once::LocalEvent::<i32>::new());
+            let (sender, receiver) = event.by_rc();
             sender.send(hint::black_box(42));
             let value = receiver.recv();
             hint::black_box(value);
@@ -82,6 +114,30 @@ fn event_creation(c: &mut Criterion) {
         b.iter(|| {
             let event = events::once::LocalEvent::<i32>::new();
             let endpoints = event.by_ref();
+            hint::black_box(endpoints);
+        });
+    });
+
+    group.bench_function("thread_safe_event_arc_with_endpoints", |b| {
+        b.iter(|| {
+            let event = Arc::new(events::once::Event::<i32>::new());
+            let endpoints = event.by_arc();
+            hint::black_box(endpoints);
+        });
+    });
+
+    group.bench_function("thread_safe_event_rc_with_endpoints", |b| {
+        b.iter(|| {
+            let event = Rc::new(events::once::Event::<i32>::new());
+            let endpoints = event.by_rc();
+            hint::black_box(endpoints);
+        });
+    });
+
+    group.bench_function("local_event_rc_with_endpoints", |b| {
+        b.iter(|| {
+            let event = Rc::new(events::once::LocalEvent::<i32>::new());
+            let endpoints = event.by_rc();
             hint::black_box(endpoints);
         });
     });

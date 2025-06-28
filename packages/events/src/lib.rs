@@ -7,8 +7,11 @@
 //! high performance in concurrent scenarios.
 //!
 //! Both single-threaded and thread-safe variants are available:
-//! - [`Event<T>`], [`ByRefEventSender<T>`], [`ByRefEventReceiver<T>`] - Thread-safe variants
-//! - [`LocalEvent<T>`], [`ByRefLocalEventSender<T>`], [`ByRefLocalEventReceiver<T>`] - Single-threaded variants
+//! - [`Event<T>`], [`ByRefEventSender<T>`], [`ByRefEventReceiver<T>`] - Thread-safe variants using references
+//! - [`ByArcEventSender<T>`], [`ByArcEventReceiver<T>`] - Thread-safe variants using Arc ownership
+//! - [`ByRcEventSender<T>`], [`ByRcEventReceiver<T>`] - Thread-safe variants using Rc ownership (single-threaded)
+//! - [`LocalEvent<T>`], [`ByRefLocalEventSender<T>`], [`ByRefLocalEventReceiver<T>`] - Single-threaded variants using references
+//! - [`ByRcLocalEventSender<T>`], [`ByRcLocalEventReceiver<T>`] - Single-threaded variants using Rc ownership
 //!
 //! Each receiver type supports both synchronous and asynchronous receiving:
 //! - [`ByRefEventReceiver::recv`] / [`ByRefLocalEventReceiver::recv`] - Synchronous
@@ -64,6 +67,44 @@
 //! // Receive the value asynchronously
 //! let value = block_on(receiver.recv_async());
 //! assert_eq!(value, 42);
+//! ```
+//!
+//! # Arc-based Example
+//!
+//! ```rust
+//! use std::sync::Arc;
+//!
+//! use events::once::Event;
+//!
+//! // Create an Arc-wrapped event for shared ownership
+//! let event = Arc::new(Event::<String>::new());
+//! let (sender, receiver) = event.by_arc();
+//!
+//! // Send a message through the event
+//! sender.send("Hello, Arc!".to_string());
+//!
+//! // Receive the message
+//! let message = receiver.recv();
+//! assert_eq!(message, "Hello, Arc!");
+//! ```
+//!
+//! # Rc-based Example
+//!
+//! ```rust
+//! use std::rc::Rc;
+//!
+//! use events::once::LocalEvent;
+//!
+//! // Create an Rc-wrapped local event for shared ownership (single-threaded)
+//! let event = Rc::new(LocalEvent::<String>::new());
+//! let (sender, receiver) = event.by_rc();
+//!
+//! // Send a message through the event
+//! sender.send("Hello, Rc!".to_string());
+//!
+//! // Receive the message
+//! let message = receiver.recv();
+//! assert_eq!(message, "Hello, Rc!");
 //! ```
 
 pub mod once;
