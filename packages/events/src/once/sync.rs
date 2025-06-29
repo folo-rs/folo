@@ -277,7 +277,7 @@ where
     /// let (sender, receiver) = unsafe { pinned_event.by_ptr() };
     ///
     /// sender.send(42);
-    /// let value = receiver.recv();
+    /// let value = futures::executor::block_on(receiver.recv_async());
     /// assert_eq!(value, 42);
     /// // sender and receiver are dropped here, before event
     /// ```
@@ -832,7 +832,8 @@ mod tests {
                 sender.send("Hello from thread!".to_string());
             });
 
-            let receiver_handle = thread::spawn(move || futures::executor::block_on(receiver.recv_async()));
+            let receiver_handle =
+                thread::spawn(move || futures::executor::block_on(receiver.recv_async()));
 
             sender_handle.join().unwrap();
             let message = receiver_handle.join().unwrap();
@@ -950,7 +951,8 @@ mod tests {
                 sender.send("Hello from Arc thread!".to_string());
             });
 
-            let receiver_handle = thread::spawn(move || futures::executor::block_on(receiver.recv_async()));
+            let receiver_handle =
+                thread::spawn(move || futures::executor::block_on(receiver.recv_async()));
 
             sender_handle.join().unwrap();
             let message = receiver_handle.join().unwrap();

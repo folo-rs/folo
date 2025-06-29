@@ -89,7 +89,7 @@ where
 /// let (sender, receiver) = pool.by_ref();
 ///
 /// sender.send(42);
-/// let value = receiver.recv();
+/// let value = futures::executor::block_on(receiver.recv_async());
 /// assert_eq!(value, 42);
 /// // Event is automatically returned to pool when sender/receiver are dropped
 /// ```
@@ -135,7 +135,7 @@ where
     /// let (sender, receiver) = pool.by_ref();
     ///
     /// sender.send(42);
-    /// let value = receiver.recv();
+    /// let value = futures::executor::block_on(receiver.recv_async());
     /// assert_eq!(value, 42);
     /// ```
     pub fn by_ref(
@@ -190,7 +190,7 @@ where
     /// let (sender, receiver) = pool.borrow_mut().by_rc(&pool);
     ///
     /// sender.send(42);
-    /// let value = receiver.recv();
+    /// let value = futures::executor::block_on(receiver.recv_async());
     /// assert_eq!(value, 42);
     /// ```
     pub fn by_rc(
@@ -238,7 +238,7 @@ where
     /// let (sender, receiver) = pool.lock().unwrap().by_arc(&pool);
     ///
     /// sender.send(42);
-    /// let value = receiver.recv();
+    /// let value = futures::executor::block_on(receiver.recv_async());
     /// assert_eq!(value, 42);
     /// ```
     pub fn by_arc(
@@ -295,7 +295,7 @@ where
     /// let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
     ///
     /// sender.send(42);
-    /// let value = receiver.recv();
+    /// let value = futures::executor::block_on(receiver.recv_async());
     /// assert_eq!(value, 42);
     /// // sender and receiver are dropped here, before pool
     /// ```
@@ -343,6 +343,33 @@ where
         if !item_mut.is_referenced() {
             self.pool.remove(key);
         }
+    }
+
+    /// Shrinks the capacity of the pool to reduce memory usage.
+    ///
+    /// This method attempts to release unused memory by reducing the pool's capacity.
+    /// The actual reduction is implementation-dependent and may vary - some capacity
+    /// may be released, or none at all.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use events::once::EventPool;
+    ///
+    /// let mut pool = EventPool::<i32>::new();
+    ///
+    /// // Use the pool which may grow its capacity
+    /// for _ in 0..100 {
+    ///     let (sender, receiver) = pool.by_ref();
+    ///     sender.send(42);
+    ///     let _value = futures::executor::block_on(receiver.recv_async());
+    /// }
+    ///
+    /// // Attempt to shrink to reduce memory usage
+    /// pool.shrink_to_fit();
+    /// ```
+    pub fn shrink_to_fit(&mut self) {
+        self.pool.shrink_to_fit();
     }
 }
 
@@ -888,7 +915,7 @@ mod tests {
             let (sender, receiver) = pool.by_ref();
 
             sender.send(42);
-            let value = receiver.recv();
+            let value = futures::executor::block_on(receiver.recv_async());
             assert_eq!(value, 42);
         });
     }
@@ -951,7 +978,7 @@ mod tests {
             let (sender, receiver) = pool.borrow_mut().by_rc(&pool);
 
             sender.send(42);
-            let value = receiver.recv();
+            let value = futures::executor::block_on(receiver.recv_async());
             assert_eq!(value, 42);
         });
     }
@@ -965,7 +992,7 @@ mod tests {
             let (sender, receiver) = pool.lock().unwrap().by_arc(&pool);
 
             sender.send(42);
-            let value = receiver.recv();
+            let value = futures::executor::block_on(receiver.recv_async());
             assert_eq!(value, 42);
         });
     }
@@ -981,7 +1008,7 @@ mod tests {
             let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
 
             sender.send(42);
-            let value = receiver.recv();
+            let value = futures::executor::block_on(receiver.recv_async());
             assert_eq!(value, 42);
             // sender and receiver are dropped here, before pool
         });
@@ -1046,12 +1073,12 @@ mod tests {
             let mut pool = EventPool::<i32>::new();
             {
                 let (sender, _receiver) = pool.by_ref();
-                
+
                 // Force the sender to be dropped without being consumed by send()
                 drop(sender);
                 // Receiver will be dropped at end of scope
             }
-            
+
             // Create a new event to verify the pool is still functional
             let (sender2, receiver2) = pool.by_ref();
             sender2.send(123);
@@ -1066,12 +1093,12 @@ mod tests {
             let mut pool = EventPool::<i32>::new();
             {
                 let (_sender, receiver) = pool.by_ref();
-                
+
                 // Force the receiver to be dropped without being consumed by recv()
                 drop(receiver);
                 // Sender will be dropped at end of scope
             }
-            
+
             // Create a new event to verify the pool is still functional
             let (sender2, receiver2) = pool.by_ref();
             sender2.send(456);
@@ -1088,10 +1115,10 @@ mod tests {
         with_watchdog(|| {
             let pool = Rc::new(RefCell::new(EventPool::<i32>::new()));
             let (sender, _receiver) = pool.borrow_mut().by_rc(&pool);
-            
+
             // Force the sender to be dropped without being consumed by send()
             drop(sender);
-            
+
             // Create a new event to verify the pool is still functional
             let (sender2, receiver2) = pool.borrow_mut().by_rc(&pool);
             sender2.send(789);
@@ -1108,10 +1135,10 @@ mod tests {
         with_watchdog(|| {
             let pool = Rc::new(RefCell::new(EventPool::<i32>::new()));
             let (_sender, receiver) = pool.borrow_mut().by_rc(&pool);
-            
+
             // Force the receiver to be dropped without being consumed by recv()
             drop(receiver);
-            
+
             // Create a new event to verify the pool is still functional
             let (sender2, receiver2) = pool.borrow_mut().by_rc(&pool);
             sender2.send(321);
@@ -1127,10 +1154,10 @@ mod tests {
         with_watchdog(|| {
             let pool = Arc::new(Mutex::new(EventPool::<i32>::new()));
             let (sender, _receiver) = pool.lock().unwrap().by_arc(&pool);
-            
+
             // Force the sender to be dropped without being consumed by send()
             drop(sender);
-            
+
             // Create a new event to verify the pool is still functional
             let (sender2, receiver2) = pool.lock().unwrap().by_arc(&pool);
             sender2.send(654);
@@ -1146,10 +1173,10 @@ mod tests {
         with_watchdog(|| {
             let pool = Arc::new(Mutex::new(EventPool::<i32>::new()));
             let (_sender, receiver) = pool.lock().unwrap().by_arc(&pool);
-            
+
             // Force the receiver to be dropped without being consumed by recv()
             drop(receiver);
-            
+
             // Create a new event to verify the pool is still functional
             let (sender2, receiver2) = pool.lock().unwrap().by_arc(&pool);
             sender2.send(987);
@@ -1165,13 +1192,13 @@ mod tests {
         with_watchdog(|| {
             let mut pool = EventPool::<i32>::new();
             let pinned_pool = Pin::new(&mut pool);
-            
+
             // SAFETY: We ensure the pool outlives the sender and receiver
             let (sender, _receiver) = unsafe { pinned_pool.by_ptr() };
-            
+
             // Force the sender to be dropped without being consumed by send()
             drop(sender);
-            
+
             // Create a new event to verify the pool is still functional
             let pinned_pool2 = Pin::new(&mut pool);
             // SAFETY: We ensure the pool outlives the sender and receiver
@@ -1189,13 +1216,13 @@ mod tests {
         with_watchdog(|| {
             let mut pool = EventPool::<i32>::new();
             let pinned_pool = Pin::new(&mut pool);
-            
+
             // SAFETY: We ensure the pool outlives the sender and receiver
             let (_sender, receiver) = unsafe { pinned_pool.by_ptr() };
-            
+
             // Force the receiver to be dropped without being consumed by recv()
             drop(receiver);
-            
+
             // Create a new event to verify the pool is still functional
             let pinned_pool2 = Pin::new(&mut pool);
             // SAFETY: We ensure the pool outlives the sender and receiver
@@ -1210,18 +1237,18 @@ mod tests {
     fn dec_ref_and_cleanup_is_called() {
         with_watchdog(|| {
             let mut pool = EventPool::<i32>::new();
-            
+
             // Create multiple events and drop them without using
             for _ in 0..5 {
                 let (sender, receiver) = pool.by_ref();
                 drop(sender);
                 drop(receiver);
             }
-            
+
             // Verify pool still works correctly after cleanup
             let (sender, receiver) = pool.by_ref();
             sender.send(999);
-            let value = receiver.recv();
+            let value = futures::executor::block_on(receiver.recv_async());
             assert_eq!(value, 999);
         });
     }
@@ -1230,7 +1257,7 @@ mod tests {
     fn pool_cleanup_verified_by_capacity() {
         with_watchdog(|| {
             let mut pool = EventPool::<i32>::new();
-            
+
             // Create many events and drop them without using - this should not grow the pool permanently
             for i in 0..10 {
                 let (sender, receiver) = pool.by_ref();
@@ -1240,18 +1267,18 @@ mod tests {
                 } else {
                     // Use some events normally
                     sender.send(i);
-                    let _value = receiver.recv();
+                    let _value = futures::executor::block_on(receiver.recv_async());
                 }
             }
-            
+
             // The pool should have cleaned up unused events
             // If cleanup is broken, the pool would retain all the unused events
             // This is a bit of an implementation detail but it's necessary to catch the leak
-            
+
             // Create one more event to verify pool still works
             let (sender, receiver) = pool.by_ref();
             sender.send(42);
-            let value = receiver.recv();
+            let value = futures::executor::block_on(receiver.recv_async());
             assert_eq!(value, 42);
         });
     }
@@ -1260,16 +1287,16 @@ mod tests {
     fn ref_count_tracking_works() {
         with_watchdog(|| {
             let mut wrapper = WithRefCount::new(String::from("test"));
-            
+
             // Simulate what happens in the pool
             wrapper.inc_ref(); // For sender
             wrapper.inc_ref(); // For receiver
             assert_eq!(wrapper.ref_count(), 2);
-            
+
             wrapper.dec_ref(); // Sender dropped
             assert_eq!(wrapper.ref_count(), 1);
             assert!(wrapper.is_referenced());
-            
+
             wrapper.dec_ref(); // Receiver dropped
             assert_eq!(wrapper.ref_count(), 0);
             assert!(!wrapper.is_referenced());
@@ -1280,7 +1307,7 @@ mod tests {
     fn pool_stress_test_no_leak() {
         with_watchdog(|| {
             let mut pool = EventPool::<u64>::new();
-            
+
             // Stress test with many dropped events
             for _ in 0..100 {
                 let (sender, receiver) = pool.by_ref();
@@ -1288,11 +1315,11 @@ mod tests {
                 drop(sender);
                 drop(receiver);
             }
-            
+
             // Pool should still work efficiently
             let (sender, receiver) = pool.by_ref();
             sender.send(999);
-            let value = receiver.recv();
+            let value = futures::executor::block_on(receiver.recv_async());
             assert_eq!(value, 999);
         });
     }
@@ -1300,56 +1327,80 @@ mod tests {
     #[test]
     fn by_ref_drop_actually_cleans_up_pool() {
         let mut pool = EventPool::<u32>::new();
-        let initial_capacity = pool.pool.capacity();
-        
+
         // Create many events but drop them without use
         for _ in 0..100 {
             let (_sender, _receiver) = pool.by_ref();
             // Both sender and receiver will be dropped here
         }
-        
-        // Pool should be cleaned up, capacity should be same as initial
-        // If Drop implementations don't work, pool will grow indefinitely
-        assert_eq!(pool.pool.capacity(), initial_capacity, 
-                   "Pool capacity changed, indicating memory leak - Drop implementations not cleaning up");
-        assert_eq!(pool.pool.len(), 0, 
-                   "Pool still contains unused events - Drop implementations not working");
+
+        // Pool should be cleaned up - all events should be removed
+        // If Drop implementations don't work, pool will retain unused events
+        assert_eq!(
+            pool.pool.len(),
+            0,
+            "Pool still contains unused events - Drop implementations not working"
+        );
+
+        // An empty pool should be able to shrink to capacity 0
+        pool.shrink_to_fit();
+        assert_eq!(
+            pool.pool.capacity(),
+            0,
+            "Empty pool should shrink to capacity 0"
+        );
     }
 
     #[test]
     fn by_rc_drop_actually_cleans_up_pool() {
         let pool = Rc::new(std::cell::RefCell::new(EventPool::<u32>::new()));
-        let initial_capacity = pool.borrow().pool.capacity();
-        
+
         // Create many events but drop them without use
         for _ in 0..100 {
             let (_sender, _receiver) = pool.borrow_mut().by_rc(&pool);
             // Both sender and receiver will be dropped here
         }
-        
-        // Pool should be cleaned up
-        assert_eq!(pool.borrow().pool.capacity(), initial_capacity, 
-                   "Pool capacity changed, indicating memory leak - Drop implementations not cleaning up");
-        assert_eq!(pool.borrow().pool.len(), 0, 
-                   "Pool still contains unused events - Drop implementations not working");
+
+        // Pool should be cleaned up - all events should be removed
+        assert_eq!(
+            pool.borrow().pool.len(),
+            0,
+            "Pool still contains unused events - Drop implementations not working"
+        );
+
+        // An empty pool should be able to shrink to capacity 0
+        pool.borrow_mut().shrink_to_fit();
+        assert_eq!(
+            pool.borrow().pool.capacity(),
+            0,
+            "Empty pool should shrink to capacity 0"
+        );
     }
 
     #[test]
     fn by_arc_drop_actually_cleans_up_pool() {
         let pool = Arc::new(std::sync::Mutex::new(EventPool::<u32>::new()));
-        let initial_capacity = pool.lock().unwrap().pool.capacity();
-        
+
         // Create many events but drop them without use
         for _ in 0..100 {
             let (_sender, _receiver) = pool.lock().unwrap().by_arc(&pool);
             // Both sender and receiver will be dropped here
         }
-        
-        // Pool should be cleaned up
-        assert_eq!(pool.lock().unwrap().pool.capacity(), initial_capacity, 
-                   "Pool capacity changed, indicating memory leak - Drop implementations not cleaning up");
-        assert_eq!(pool.lock().unwrap().pool.len(), 0, 
-                   "Pool still contains unused events - Drop implementations not working");
+
+        // Pool should be cleaned up - all events should be removed
+        assert_eq!(
+            pool.lock().unwrap().pool.len(),
+            0,
+            "Pool still contains unused events - Drop implementations not working"
+        );
+
+        // An empty pool should be able to shrink to capacity 0
+        pool.lock().unwrap().shrink_to_fit();
+        assert_eq!(
+            pool.lock().unwrap().pool.capacity(),
+            0,
+            "Empty pool should shrink to capacity 0"
+        );
     }
 
     #[test]
@@ -1357,20 +1408,23 @@ mod tests {
         // Test ptr-based pooled events cleanup by checking pool state
         for iteration in 0..10 {
             let mut pool = EventPool::<u32>::new();
-            
+
             {
                 let mut pool_pin = std::pin::pin!(pool);
                 // SAFETY: We pin the pool for the duration of by_ptr call
                 let (_sender, _receiver) = unsafe { pool_pin.as_mut().by_ptr() };
                 // sender and receiver will be dropped here
             }
-            
+
             // Create a fresh pool for next iteration
-            #[allow(unused_assignments, reason = "Testing pool recreation for memory leak detection")]
+            #[allow(
+                unused_assignments,
+                reason = "Testing pool recreation for memory leak detection"
+            )]
             {
                 pool = EventPool::<u32>::new();
             }
-            
+
             // For this test, we'll verify that repeated operations don't accumulate
             // If Drop implementations don't work, we'd see memory accumulation
             println!("Iteration {iteration}: Pool operations completed");
@@ -1380,25 +1434,27 @@ mod tests {
     #[test]
     fn dec_ref_and_cleanup_actually_removes_events() {
         let mut pool = EventPool::<u32>::new();
-        
+
         // Test 1: Check that events are added to pool
         let pool_len_before = pool.pool.len();
-        
+
         // Create events in a scope to ensure they're dropped
         let sender_key = {
             let (sender, receiver) = pool.by_ref();
             let key = sender.key;
-            
+
             // Events should be in pool now (don't check len while borrowed)
-            
+
             drop(sender);
             drop(receiver);
             key
         };
-        
+
         // Now check that cleanup worked
         let pool_len_after = pool.pool.len();
-        assert_eq!(pool_len_after, pool_len_before, 
-                   "Pool not cleaned up after dropping events - dec_ref_and_cleanup not working, key: {sender_key:?}");
+        assert_eq!(
+            pool_len_after, pool_len_before,
+            "Pool not cleaned up after dropping events - dec_ref_and_cleanup not working, key: {sender_key:?}"
+        );
     }
 }

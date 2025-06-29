@@ -42,7 +42,7 @@ enum EventState<T> {
 /// let (sender, receiver) = event.by_ref();
 ///
 /// sender.send("Hello".to_string());
-/// let message = receiver.recv();
+/// let message = futures::executor::block_on(receiver.recv_async());
 /// assert_eq!(message, "Hello");
 /// ```
 #[derive(Debug)]
@@ -245,7 +245,7 @@ impl<T> LocalEvent<T> {
     /// let (sender, receiver) = unsafe { pinned_event.by_ptr() };
     ///
     /// sender.send(42);
-    /// let value = receiver.recv();
+    /// let value = futures::executor::block_on(receiver.recv_async());
     /// assert_eq!(value, 42);
     /// // sender and receiver are dropped here, before event
     /// ```
