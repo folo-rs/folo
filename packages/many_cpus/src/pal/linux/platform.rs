@@ -199,14 +199,9 @@ impl BuildTargetPlatform {
         let numa_nodes = numa_nodes
             .unwrap_or_else(|| once((0, cpu_infos.clone().map(|info| info.index))).collect());
 
-        // We identify efficiency cores by comparing the frequency of each processor to the maximum
-        // frequency of all processors. If the frequency is less than the maximum, we consider it an
-        // efficiency core.
-        let max_frequency = cpu_infos
-            .iter()
-            .map(|info| info.frequency_mhz)
-            .max()
-            .expect("must have at least one processor in NonEmpty");
+        // On Linux, we cannot reliably distinguish between efficiency and performance cores using
+        // /proc/cpuinfo frequency data, as it only reports current (dynamic) frequency. For now,
+        // we treat all Linux processors as performance processors.
 
         let mut processors = cpu_infos.map(|info| {
             let memory_region = numa_nodes
@@ -220,11 +215,7 @@ impl BuildTargetPlatform {
                 })
                 .expect("processor not found in any NUMA node");
 
-            let efficiency_class = if info.frequency_mhz < max_frequency {
-                EfficiencyClass::Efficiency
-            } else {
-                EfficiencyClass::Performance
-            };
+            let efficiency_class = EfficiencyClass::Performance;
 
             // Some Linux flavors do not report this, so just assume online by default.
             // Sometimes this is also omitted for a specific processor because... it just is.
@@ -266,13 +257,9 @@ impl BuildTargetPlatform {
                     // This line gives us the processor index:
                     // processor       : 29
                     //
-                    // This line gives us the processor frequency:
-                    // cpu MHz         : 3400.036
-                    //
                     // All other lines we ignore.
 
                     let mut index = None;
-                    let mut frequency_mhz = None;
 
                     for line in lines {
                         let (key, value) = line
@@ -280,20 +267,14 @@ impl BuildTargetPlatform {
                             .map(|(key, value)| (key.trim(), value.trim()))
                             .expect("/proc/cpuinfo line was not a key:value pair");
 
-                        #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation, reason = "we expect small positive numbers for frequency, which can have their integer part losslessly converted to u32")]
                         match key {
                             "processor" => index = value.parse::<ProcessorId>().ok(),
-                            "cpu MHz" => {
-                                frequency_mhz = value.parse::<f32>().map(|f| f.round() as u32).ok();
-                            }
                             _ => {}
                         }
                     }
 
                     Some(CpuInfo {
                         index: index.expect("processor index not found for processor"),
-                        frequency_mhz: frequency_mhz
-                            .expect("processor frequency not found for processor"),
                     })
                 })
                 .collect_vec(),
@@ -429,11 +410,6 @@ impl BuildTargetPlatform {
 #[derive(Clone, Debug)]
 struct CpuInfo {
     index: ProcessorId,
-
-    /// CPU frequency, rounded to nearest integer. We use this to identify efficiency versus
-    /// performance cores, where the processors with max frequency are considered performance
-    /// cores and any with lower frequency are considered efficiency cores.
-    frequency_mhz: u32,
 }
 
 /// This is the relative path of the cgroup the current process belongs to (e.g. `/foo/bar`)
@@ -519,7 +495,6 @@ mod tests {
             None,
             None,
             [0, 0, 0, 0],
-            [99.9, 99.9, 99.9, 99.9],
         );
 
         let platform = BuildTargetPlatform::new(
@@ -570,7 +545,6 @@ mod tests {
             // We expect processor 2 to be absent from our results.
             Some([true, true, false, true]),
             [0, 0, 0, 0],
-            [99.9, 99.9, 99.9, 99.9],
         );
 
         let platform = BuildTargetPlatform::new(
@@ -617,7 +591,6 @@ mod tests {
             // We expect this memory region to be completely absent from any sort of results.
             Some([true, true, false, false]),
             [0, 0, 1, 1],
-            [99.9, 99.9, 99.9, 99.9],
         );
 
         let platform = BuildTargetPlatform::new(
@@ -649,17 +622,15 @@ mod tests {
     }
 
     #[test]
-    fn two_numa_nodes_efficiency_performance() {
+    fn two_numa_nodes_all_performance() {
         let mut fs = MockFilesystem::new();
-        // Two nodes, each with 2 processors:
-        // Node 0 -> [Performance, Efficiency], Node 1 -> [Efficiency, Performance].
+        // Two nodes, each with 2 processors. On Linux, all processors are now treated as Performance.
         simulate_processor_layout(
             &mut fs,
             [0, 1, 2, 3],
             None,
             None,
             [0, 0, 1, 1],
-            [3400.0, 2000.0, 2000.0, 3400.0],
         );
 
         let platform = BuildTargetPlatform::new(
@@ -678,13 +649,13 @@ mod tests {
         let p1 = &processors[1];
         assert_eq!(p1.as_real().id, 1);
         assert_eq!(p1.as_real().memory_region_id, 0);
-        assert_eq!(p1.as_real().efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(p1.as_real().efficiency_class, EfficiencyClass::Performance);
 
         // Node 1
         let p2 = &processors[2];
         assert_eq!(p2.as_real().id, 2);
         assert_eq!(p2.as_real().memory_region_id, 1);
-        assert_eq!(p2.as_real().efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(p2.as_real().efficiency_class, EfficiencyClass::Performance);
 
         let p3 = &processors[3];
         assert_eq!(p3.as_real().id, 3);
@@ -693,18 +664,15 @@ mod tests {
     }
 
     #[test]
-    fn one_big_numa_two_small_nodes() {
+    fn one_big_numa_all_performance() {
         let mut fs = MockFilesystem::new();
-        // Three nodes: node 0 -> 4 Performance, node 1 -> 2 Efficiency, node 2 -> 2 Efficiency
+        // Three nodes with all processors treated as Performance on Linux.
         simulate_processor_layout(
             &mut fs,
             [0, 1, 2, 3, 4, 5, 6, 7],
             None,
             None,
             [0, 0, 0, 0, 1, 1, 2, 2],
-            [
-                3400.0, 3400.0, 3400.0, 3400.0, 2000.0, 2000.0, 2000.0, 2000.0,
-            ],
         );
 
         let platform = BuildTargetPlatform::new(
@@ -714,40 +682,24 @@ mod tests {
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 8);
 
-        // First 4 in node 0 => Performance
-        for i in 0..4 {
+        // All processors are Performance on Linux
+        for i in 0..8 {
             let p = &processors[i];
             assert_eq!(p.as_real().id, i as ProcessorId);
-            assert_eq!(p.as_real().memory_region_id, 0);
             assert_eq!(p.as_real().efficiency_class, EfficiencyClass::Performance);
-        }
-        // Next 2 in node 1 => Efficiency
-        for i in 4..6 {
-            let p = &processors[i];
-            assert_eq!(p.as_real().id, i as ProcessorId);
-            assert_eq!(p.as_real().memory_region_id, 1);
-            assert_eq!(p.as_real().efficiency_class, EfficiencyClass::Efficiency);
-        }
-        // Last 2 in node 2 => Efficiency
-        for i in 6..8 {
-            let p = &processors[i];
-            assert_eq!(p.as_real().id, i as ProcessorId);
-            assert_eq!(p.as_real().memory_region_id, 2);
-            assert_eq!(p.as_real().efficiency_class, EfficiencyClass::Efficiency);
         }
     }
 
     #[test]
     fn one_active_one_inactive_numa_node() {
         let mut fs = MockFilesystem::new();
-        // Node 0 -> inactive, Node 1 -> [Performance, Efficiency, Performance]
+        // Node 0 -> inactive, Node 1 -> all Performance processors
         simulate_processor_layout(
             &mut fs,
             [0, 1, 2, 3, 4, 5],
             Some([false, false, false, true, true, true]),
             None,
             [0, 0, 0, 1, 1, 1],
-            [3400.0, 2000.0, 3400.0, 3400.0, 2000.0, 3400.0],
         );
 
         let platform = BuildTargetPlatform::new(
@@ -757,7 +709,7 @@ mod tests {
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 3);
 
-        // Node 1 => [Perf, Eff, Perf]
+        // Node 1 => all Performance on Linux
         let p0 = &processors[0];
         assert_eq!(p0.as_real().id, 3);
         assert_eq!(p0.as_real().memory_region_id, 1);
@@ -766,7 +718,7 @@ mod tests {
         let p1 = &processors[1];
         assert_eq!(p1.as_real().id, 4);
         assert_eq!(p1.as_real().memory_region_id, 1);
-        assert_eq!(p1.as_real().efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(p1.as_real().efficiency_class, EfficiencyClass::Performance);
 
         let p2 = &processors[2];
         assert_eq!(p2.as_real().id, 5);
@@ -777,16 +729,13 @@ mod tests {
     #[test]
     fn two_numa_nodes_some_inactive_processors() {
         let mut fs = MockFilesystem::new();
-        // Node 0 -> Efficiency, Node 1 -> Performance, with gaps in indexes
+        // All processors are Performance on Linux
         simulate_processor_layout(
             &mut fs,
             [0, 1, 2, 3, 4, 5, 6, 7],
             Some([true, false, true, false, true, false, true, false]),
             None,
             [0, 0, 0, 0, 1, 1, 1, 1],
-            [
-                2000.0, 2000.0, 2000.0, 2000.0, 3400.0, 3400.0, 3400.0, 3400.0,
-            ],
         );
 
         let platform = BuildTargetPlatform::new(
@@ -796,18 +745,17 @@ mod tests {
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 4);
 
-        // Node 0 => [Eff, Eff]
+        // All processors are Performance on Linux
         let p0 = &processors[0];
         assert_eq!(p0.as_real().id, 0);
         assert_eq!(p0.as_real().memory_region_id, 0);
-        assert_eq!(p0.as_real().efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(p0.as_real().efficiency_class, EfficiencyClass::Performance);
 
         let p1 = &processors[1];
         assert_eq!(p1.as_real().id, 2);
         assert_eq!(p1.as_real().memory_region_id, 0);
-        assert_eq!(p1.as_real().efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(p1.as_real().efficiency_class, EfficiencyClass::Performance);
 
-        // Node 1 => [Perf, Perf]
         let p2 = &processors[2];
         assert_eq!(p2.as_real().id, 4);
         assert_eq!(p2.as_real().memory_region_id, 1);
@@ -830,7 +778,6 @@ mod tests {
         // If None, all are allowed.
         processor_is_allowed: Option<[bool; PROCESSOR_COUNT]>,
         memory_region_index: [MemoryRegionId; PROCESSOR_COUNT],
-        frequencies_per_processor: [f64; PROCESSOR_COUNT],
     ) {
         let processor_is_active = processor_is_active.unwrap_or([true; PROCESSOR_COUNT]);
         let processor_is_allowed = processor_is_allowed.unwrap_or([true; PROCESSOR_COUNT]);
@@ -839,11 +786,8 @@ mod tests {
 
         let mut cpuinfo = String::new();
 
-        for (processor_index, frequency) in
-            processor_index.iter().zip(frequencies_per_processor.iter())
-        {
+        for processor_index in processor_index.iter() {
             writeln!(cpuinfo, "processor       : {processor_index}").unwrap();
-            writeln!(cpuinfo, "cpu MHz         : {frequency}").unwrap();
             writeln!(cpuinfo, "whatever        : 123").unwrap();
             writeln!(cpuinfo, "other           : ignored").unwrap();
             writeln!(cpuinfo).unwrap();
@@ -1004,7 +948,7 @@ mod tests {
             .returning(|_| Ok(()));
 
         let mut fs = MockFilesystem::new();
-        simulate_processor_layout(&mut fs, [0], None, None, [0], [2000.0]);
+        simulate_processor_layout(&mut fs, [0], None, None, [0]);
 
         let platform = BuildTargetPlatform::new(
             BindingsFacade::from_mock(bindings),
@@ -1030,7 +974,7 @@ mod tests {
             .returning(|_| Ok(()));
 
         let mut fs = MockFilesystem::new();
-        simulate_processor_layout(&mut fs, [0, 1], None, None, [0, 0], [2000.0, 2000.0]);
+        simulate_processor_layout(&mut fs, [0, 1], None, None, [0, 0]);
 
         let platform = BuildTargetPlatform::new(
             BindingsFacade::from_mock(bindings),
@@ -1056,7 +1000,7 @@ mod tests {
             .returning(|_| Ok(()));
 
         let mut fs = MockFilesystem::new();
-        simulate_processor_layout(&mut fs, [0, 1], None, None, [0, 1], [2000.0, 2000.0]);
+        simulate_processor_layout(&mut fs, [0, 1], None, None, [0, 1]);
 
         let platform = BuildTargetPlatform::new(
             BindingsFacade::from_mock(bindings),
@@ -1067,10 +1011,10 @@ mod tests {
     }
 
     #[test]
-    fn pin_current_thread_to_efficiency_processors() {
+    fn pin_current_thread_to_all_performance_processors() {
         let mut bindings = MockBindings::new();
 
-        let expected_set = cpuset_from([1, 2]);
+        let expected_set = cpuset_from([0, 1, 2, 3]);
 
         bindings
             .expect_sched_setaffinity_current()
@@ -1082,14 +1026,13 @@ mod tests {
             .returning(|_| Ok(()));
 
         let mut fs = MockFilesystem::new();
-        // Node 0 -> [Performance, Efficiency], Node 1 -> [Efficiency, Performance]
+        // All processors are Performance on Linux
         simulate_processor_layout(
             &mut fs,
             [0, 1, 2, 3],
             None,
             None,
             [0, 0, 2, 2],
-            [3400.0, 2000.0, 2000.0, 3400.0],
         );
 
         let platform = BuildTargetPlatform::new(
@@ -1097,14 +1040,8 @@ mod tests {
             FilesystemFacade::from_mock(fs),
         );
         let processors = platform.get_all_processors();
-        let efficiency_processors = NonEmpty::from_vec(
-            processors
-                .iter()
-                .filter(|p| p.as_real().efficiency_class == EfficiencyClass::Efficiency)
-                .collect_vec(),
-        )
-        .unwrap();
-        platform.pin_current_thread_to(&efficiency_processors);
+        // All processors are performance on Linux, so pin to all of them
+        platform.pin_current_thread_to(&processors);
     }
 
     fn cpuset_from<const PROCESSOR_COUNT: usize>(
@@ -1149,7 +1086,6 @@ mod tests {
             None,
             None,
             [0, 0, 0],
-            [2000.0, 2000.0, 1000.0],
         );
 
         let platform = BuildTargetPlatform::new(
@@ -1178,7 +1114,6 @@ mod tests {
             Some([true, true, true, true, false, false]),
             None,
             [0, 0, 0, 0, 0, 0],
-            [99.9, 99.9, 99.9, 99.9, 99.9, 99.9],
         );
 
         fs.expect_get_proc_self_cgroup().times(1).return_const(None);
@@ -1215,7 +1150,6 @@ mod tests {
             Some([true, true, true, true, false, false]),
             None,
             [0, 0, 0, 0, 0, 0],
-            [99.9, 99.9, 99.9, 99.9, 99.9, 99.9],
         );
 
         simulate_cgroup_time_limit(&mut fs, 20, 10, true, false);
@@ -1252,7 +1186,6 @@ mod tests {
             Some([true, true, true, true, false, false]),
             None,
             [0, 0, 0, 0, 0, 0],
-            [99.9, 99.9, 99.9, 99.9, 99.9, 99.9],
         );
 
         simulate_cgroup_time_limit(&mut fs, 20, 10, false, true);
@@ -1289,7 +1222,6 @@ mod tests {
             Some([true, true, true, true, false, false]),
             None,
             [0, 0, 0, 0, 0, 0],
-            [99.9, 99.9, 99.9, 99.9, 99.9, 99.9],
         );
 
         simulate_cgroup_time_limit(&mut fs, 99999, 100, false, true);
@@ -1326,7 +1258,6 @@ mod tests {
             Some([true, true, true, true, false, false]),
             None,
             [0, 0, 0, 0, 0, 0],
-            [99.9, 99.9, 99.9, 99.9, 99.9, 99.9],
         );
 
         simulate_cgroup_time_limit(&mut fs, -1, 100, true, false);
@@ -1363,7 +1294,6 @@ mod tests {
             Some([true, true, true, true, false, false]),
             None,
             [0, 0, 0, 0, 0, 0],
-            [99.9, 99.9, 99.9, 99.9, 99.9, 99.9],
         );
 
         simulate_cgroup_time_limit(&mut fs, 50, 100, false, false);
@@ -1514,7 +1444,6 @@ mod tests {
             None,
             None,
             [0, 1, 2, 0, 1, 2, 0, 1, 2],
-            [2000.0; 9],
         );
 
         let mut bindings = MockBindings::new();
