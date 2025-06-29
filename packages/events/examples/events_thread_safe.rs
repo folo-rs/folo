@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::thread;
 
 use events::once::Event;
+use futures::executor::block_on;
 
 fn main() {
     println!("=== Thread-safe Events Example ===");
@@ -17,7 +18,7 @@ fn main() {
     let event = Event::<String>::new();
     let (sender, receiver) = event.by_ref();
     sender.send("Hello from thread-safe event!".to_string());
-    let message = receiver.recv();
+    let message = block_on(receiver.recv_async());
     println!("Received: {message}");
 
     // Example 2: Thread-safe Event can be wrapped in Arc for sharing
@@ -28,7 +29,7 @@ fn main() {
     let _event_clone = Arc::clone(&event_arc);
     let (sender, receiver) = event_arc.by_ref();
     sender.send(42);
-    let value = receiver.recv();
+    let value = block_on(receiver.recv_async());
     println!("Received from Arc-wrapped event: {value}");
 
     // Example 3: Cross-thread pattern - endpoints extracted before threading
@@ -51,7 +52,7 @@ fn main() {
 
         let receiver_handle = s.spawn(|| {
             println!("Receiver thread: Waiting for message...");
-            let message = receiver.recv();
+            let message = block_on(receiver.recv_async());
             println!("Receiver thread: Received: {message}");
             message
         });

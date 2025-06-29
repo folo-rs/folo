@@ -13,14 +13,14 @@
 //! - [`LocalEvent<T>`], [`ByRefLocalEventSender<T>`], [`ByRefLocalEventReceiver<T>`] - Single-threaded variants using references
 //! - [`ByRcLocalEventSender<T>`], [`ByRcLocalEventReceiver<T>`] - Single-threaded variants using Rc ownership
 //!
-//! Each receiver type supports both synchronous and asynchronous receiving:
-//! - [`ByRefEventReceiver::recv`] / [`ByRefLocalEventReceiver::recv`] - Synchronous
+//! Each receiver type supports asynchronous receiving:
 //! - [`ByRefEventReceiver::recv_async`] / [`ByRefLocalEventReceiver::recv_async`] - Asynchronous
 //!
 //! # Thread-safe Example
 //!
 //! ```rust
 //! use events::once::Event;
+//! use futures::executor::block_on;
 //!
 //! // Create a thread-safe event for passing a string message
 //! let event = Event::<String>::new();
@@ -30,7 +30,7 @@
 //! sender.send("Hello, World!".to_string());
 //!
 //! // Receive the message
-//! let message = receiver.recv();
+//! let message = block_on(receiver.recv_async());
 //! assert_eq!(message, "Hello, World!");
 //! ```
 //!
@@ -38,6 +38,7 @@
 //!
 //! ```rust
 //! use events::once::LocalEvent;
+//! use futures::executor::block_on;
 //!
 //! // Create a local event for passing a string message
 //! let event = LocalEvent::<String>::new();
@@ -47,7 +48,7 @@
 //! sender.send("Hello, World!".to_string());
 //!
 //! // Receive the message
-//! let message = receiver.recv();
+//! let message = block_on(receiver.recv_async());
 //! assert_eq!(message, "Hello, World!");
 //! ```
 //!
@@ -75,6 +76,7 @@
 //! use std::sync::Arc;
 //!
 //! use events::once::Event;
+//! use futures::executor::block_on;
 //!
 //! // Create an Arc-wrapped event for shared ownership
 //! let event = Arc::new(Event::<String>::new());
@@ -84,7 +86,7 @@
 //! sender.send("Hello, Arc!".to_string());
 //!
 //! // Receive the message
-//! let message = receiver.recv();
+//! let message = block_on(receiver.recv_async());
 //! assert_eq!(message, "Hello, Arc!");
 //! ```
 //!
@@ -94,6 +96,7 @@
 //! use std::rc::Rc;
 //!
 //! use events::once::LocalEvent;
+//! use futures::executor::block_on;
 //!
 //! // Create an Rc-wrapped local event for shared ownership (single-threaded)
 //! let event = Rc::new(LocalEvent::<String>::new());
@@ -103,7 +106,7 @@
 //! sender.send("Hello, Rc!".to_string());
 //!
 //! // Receive the message
-//! let message = receiver.recv();
+//! let message = block_on(receiver.recv_async());
 //! assert_eq!(message, "Hello, Rc!");
 //! ```
 

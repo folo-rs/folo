@@ -1,6 +1,7 @@
 //! Example demonstrating pooled events with automatic resource management.
 
 use events::once::EventPool;
+use futures::executor::block_on;
 
 fn main() {
     println!("=== Pooled Events Example ===");
@@ -18,7 +19,7 @@ fn main() {
     println!("Sent value: 42");
 
     // Receive the value
-    let received = receiver.recv();
+    let received = block_on(receiver.recv_async());
     println!("Received value: {received}");
 
     println!("Event automatically returned to pool when sender/receiver were dropped");
@@ -26,7 +27,7 @@ fn main() {
     // Create another event from the same pool
     let (sender2, receiver2) = pool.by_ref();
     sender2.send(100);
-    let received2 = receiver2.recv();
+    let received2 = block_on(receiver2.recv_async());
     println!("Second event - received value: {received2}");
 
     println!("Example completed successfully!");

@@ -59,22 +59,22 @@ fn single_threaded_async_usage() {
     println!("Received: {local_message}");
 }
 
-fn mixing_sync_and_async() {
-    println!("4. Mixing sync and async:");
-    let sync_event = Event::<u64>::new();
-    let (sync_sender, sync_receiver) = sync_event.by_ref();
+fn async_only_usage() {
+    println!("4. Async-only usage:");
+    let first_event = Event::<u64>::new();
+    let (first_sender, first_receiver) = first_event.by_ref();
 
-    let async_event = Event::<u64>::new();
-    let (async_sender, async_receiver) = async_event.by_ref();
+    let second_event = Event::<u64>::new();
+    let (second_sender, second_receiver) = second_event.by_ref();
 
-    sync_sender.send(100);
-    async_sender.send(200);
+    first_sender.send(100);
+    second_sender.send(200);
 
-    // Use sync receive for one, async for the other
-    let sync_value = sync_receiver.recv();
-    let async_value = block_on(async_receiver.recv_async());
+    // Use async receive for both
+    let sync_value = block_on(first_receiver.recv_async());
+    let async_value = block_on(second_receiver.recv_async());
 
-    println!("Sync received: {sync_value}, Async received: {async_value}");
+    println!("First received: {sync_value}, Second received: {async_value}");
 }
 
 fn main() {
@@ -89,7 +89,7 @@ fn main() {
     single_threaded_async_usage();
     println!();
 
-    mixing_sync_and_async();
+    async_only_usage();
 
     println!();
     println!("All async examples completed successfully!");

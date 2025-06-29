@@ -26,12 +26,13 @@
 //!
 //! ```rust
 //! use events::once::Event;
+//! use futures::executor::block_on;
 //!
 //! let event = Event::<i32>::new();
 //! let (sender, receiver) = event.by_ref();
 //!
 //! sender.send(42);
-//! let value = receiver.recv();
+//! let value = block_on(receiver.recv_async());
 //! assert_eq!(value, 42);
 //! ```
 //!
@@ -39,12 +40,13 @@
 //!
 //! ```rust
 //! use events::once::LocalEvent;
+//! use futures::executor::block_on;
 //!
 //! let event = LocalEvent::<i32>::new();
 //! let (sender, receiver) = event.by_ref();
 //!
 //! sender.send(42);
-//! let value = receiver.recv();
+//! let value = block_on(receiver.recv_async());
 //! assert_eq!(value, 42);
 //! ```
 

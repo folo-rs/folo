@@ -4,6 +4,7 @@
 //! primitives to complex structures.
 
 use events::once::Event;
+use futures::executor::block_on;
 
 #[derive(Clone, Debug)]
 #[allow(
@@ -27,7 +28,7 @@ fn main() {
     let (int_sender, int_receiver) = int_event.by_ref();
 
     int_sender.send(-42);
-    let int_value = int_receiver.recv();
+    let int_value = block_on(int_receiver.recv_async());
     println!("Received integer: {int_value}");
 
     // Example 2: String type
@@ -37,7 +38,7 @@ fn main() {
     let (string_sender, string_receiver) = string_event.by_ref();
 
     string_sender.send("Events support any type!".to_string());
-    let string_value = string_receiver.recv();
+    let string_value = block_on(string_receiver.recv_async());
     println!("Received string: {string_value}");
 
     // Example 3: Vector type
@@ -47,7 +48,7 @@ fn main() {
     let (vec_sender, vec_receiver) = vec_event.by_ref();
 
     vec_sender.send(vec![1, 2, 3, 4, 5]);
-    let vec_value = vec_receiver.recv();
+    let vec_value = block_on(vec_receiver.recv_async());
     println!("Received vector: {vec_value:?}");
 
     // Example 4: Custom struct type
@@ -64,7 +65,7 @@ fn main() {
     };
 
     struct_sender.send(task);
-    let received_task = struct_receiver.recv();
+    let received_task = block_on(struct_receiver.recv_async());
     println!("Received task result: {received_task:?}");
 
     // Example 5: Option type
@@ -74,7 +75,7 @@ fn main() {
     let (option_sender, option_receiver) = option_event.by_ref();
 
     option_sender.send(Some("Optional data"));
-    let option_value = option_receiver.recv();
+    let option_value = block_on(option_receiver.recv_async());
     println!("Received option: {option_value:?}");
 
     println!();

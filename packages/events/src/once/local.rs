@@ -202,25 +202,6 @@ impl<T> LocalEvent<T> {
         }
     }
 
-    /// Attempts to receive the value from the event without blocking.
-    ///
-    /// Returns `Some(value)` if a value is available, or `None` if no value
-    /// has been set yet.
-    #[allow(
-        dead_code,
-        reason = "May be useful for non-blocking access in the future"
-    )]
-    fn try_recv(&self) -> Option<T> {
-        let mut state = self.state.borrow_mut();
-        match mem::replace(&mut *state, EventState::Consumed) {
-            EventState::Set(value) => Some(value),
-            other => {
-                *state = other;
-                None
-            }
-        }
-    }
-
     /// Polls for the value with a waker for async support.
     pub(crate) fn poll_recv(&self, waker: &Waker) -> Option<T> {
         let mut state = self.state.borrow_mut();
@@ -379,36 +360,13 @@ impl<T> ByRefLocalEventSender<'_, T> {
 /// A receiver that can receive a value from a single-threaded event.
 ///
 /// The receiver holds a reference to the event and can only be used once.
-/// After calling [`recv`](ByRefLocalEventReceiver::recv), the receiver is consumed.
+/// After calling [`recv_async`](ByRefLocalEventReceiver::recv_async), the receiver is consumed.
 #[derive(Debug)]
 pub struct ByRefLocalEventReceiver<'e, T> {
     event: &'e LocalEvent<T>,
 }
 
 impl<T> ByRefLocalEventReceiver<'_, T> {
-    /// Receives a value from the event.
-    ///
-    /// This method consumes the receiver and waits for a sender to send a value.
-    /// If the sender is dropped without sending, this method will wait forever.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use events::once::LocalEvent;
-    ///
-    /// let event = LocalEvent::<i32>::new();
-    /// let (sender, receiver) = event.by_ref();
-    ///
-    /// sender.send(42);
-    /// let value = receiver.recv();
-    /// assert_eq!(value, 42);
-    /// ```
-    #[must_use]
-    pub fn recv(self) -> T {
-        // Use block_on from futures crate for synchronous receive
-        futures::executor::block_on(self.recv_async())
-    }
-
     /// Receives a value from the event asynchronously.
     ///
     /// This method consumes the receiver and waits for a sender to send a value.
@@ -466,38 +424,13 @@ impl<T> ByRcLocalEventSender<T> {
 /// A receiver that can receive a value from a single-threaded event using Rc ownership.
 ///
 /// The receiver owns an Rc to the event and is single-threaded.
-/// After calling [`recv`](ByRcLocalEventReceiver::recv), the receiver is consumed.
+/// After calling [`recv_async`](ByRcLocalEventReceiver::recv_async), the receiver is consumed.
 #[derive(Debug)]
 pub struct ByRcLocalEventReceiver<T> {
     event: Rc<LocalEvent<T>>,
 }
 
 impl<T> ByRcLocalEventReceiver<T> {
-    /// Receives a value from the event.
-    ///
-    /// This method consumes the receiver and waits for a sender to send a value.
-    /// If the sender is dropped without sending, this method will wait forever.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use std::rc::Rc;
-    ///
-    /// use events::once::LocalEvent;
-    ///
-    /// let event = Rc::new(LocalEvent::<i32>::new());
-    /// let (sender, receiver) = event.by_rc();
-    ///
-    /// sender.send(42);
-    /// let value = receiver.recv();
-    /// assert_eq!(value, 42);
-    /// ```
-    #[must_use]
-    pub fn recv(self) -> T {
-        // Use block_on from futures crate for synchronous receive
-        futures::executor::block_on(self.recv_async())
-    }
-
     /// Receives a value from the event asynchronously.
     ///
     /// This method consumes the receiver and waits for a sender to send a value.
@@ -568,7 +501,7 @@ impl<T> ByPtrLocalEventSender<T> {
 ///
 /// The receiver holds a raw pointer to the event and the caller is responsible for
 /// ensuring the event remains valid for the lifetime of the receiver.
-/// After calling [`recv`](ByPtrLocalEventReceiver::recv), the receiver is consumed.
+/// After calling [`recv_async`](ByPtrLocalEventReceiver::recv_async), the receiver is consumed.
 ///
 /// # Safety
 ///
@@ -580,33 +513,6 @@ pub struct ByPtrLocalEventReceiver<T> {
 }
 
 impl<T> ByPtrLocalEventReceiver<T> {
-    /// Receives a value from the event.
-    ///
-    /// This method consumes the receiver and waits for a sender to send a value.
-    /// If the sender is dropped without sending, this method will wait forever.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use std::pin::Pin;
-    ///
-    /// use events::once::LocalEvent;
-    ///
-    /// let mut event = LocalEvent::<i32>::new();
-    /// let pinned_event = Pin::new(&mut event);
-    /// // SAFETY: We ensure the event outlives the sender and receiver
-    /// let (sender, receiver) = unsafe { pinned_event.by_ptr() };
-    ///
-    /// sender.send(42);
-    /// let value = receiver.recv();
-    /// assert_eq!(value, 42);
-    /// ```
-    #[must_use]
-    pub fn recv(self) -> T {
-        // Use block_on from futures crate for synchronous receive
-        futures::executor::block_on(self.recv_async())
-    }
-
     /// Receives a value from the event asynchronously.
     ///
     /// This method consumes the receiver and waits for a sender to send a value.
@@ -652,7 +558,7 @@ mod tests {
             // Should be able to get endpoints once
             let (sender, receiver) = event.by_ref();
             sender.send(42);
-            let value = receiver.recv();
+            let value = futures::executor::block_on(receiver.recv_async());
             assert_eq!(value, 42);
         });
     }
@@ -663,7 +569,7 @@ mod tests {
             let event = LocalEvent::<String>::default();
             let (sender, receiver) = event.by_ref();
             sender.send("test".to_string());
-            let value = receiver.recv();
+            let value = futures::executor::block_on(receiver.recv_async());
             assert_eq!(value, "test");
         });
     }
@@ -675,7 +581,7 @@ mod tests {
             let (sender, receiver) = event.by_ref();
 
             sender.send(123);
-            let value = receiver.recv();
+            let value = futures::executor::block_on(receiver.recv_async());
             assert_eq!(value, 123);
         });
     }
@@ -714,7 +620,7 @@ mod tests {
             let (sender, receiver) = event.by_ref();
 
             sender.send("Hello from Rc".to_string());
-            let value = receiver.recv();
+            let value = futures::executor::block_on(receiver.recv_async());
             assert_eq!(value, "Hello from Rc");
         });
     }
@@ -744,7 +650,7 @@ mod tests {
         use futures::executor::block_on;
 
         with_watchdog(|| {
-            // Test that sync and async can be used in the same test
+            // Test that async can be used in different scenarios
             let event1 = LocalEvent::<i32>::new();
             let (sender1, receiver1) = event1.by_ref();
 
@@ -754,7 +660,7 @@ mod tests {
             sender1.send(1);
             sender2.send(2);
 
-            let value1 = receiver1.recv();
+            let value1 = block_on(receiver1.recv_async());
             let value2 = block_on(receiver2.recv_async());
 
             assert_eq!(value1, 1);
@@ -777,43 +683,13 @@ mod tests {
     }
 
     #[test]
-    fn local_event_try_recv_with_value() {
-        with_watchdog(|| {
-            let event = LocalEvent::<i32>::new();
-            let (sender, _receiver) = event.by_ref();
-
-            // Initially should return None
-            assert_eq!(event.try_recv(), None);
-
-            // After sending, should return Some(value)
-            sender.send(42);
-            assert_eq!(event.try_recv(), Some(42));
-
-            // After consuming, should return None again
-            assert_eq!(event.try_recv(), None);
-        });
-    }
-
-    #[test]
-    fn local_event_try_recv_without_value() {
-        with_watchdog(|| {
-            let event = LocalEvent::<i32>::new();
-            let (_sender, _receiver) = event.by_ref();
-
-            // Should return None when no value has been set
-            assert_eq!(event.try_recv(), None);
-            assert_eq!(event.try_recv(), None); // Multiple calls should still return None
-        });
-    }
-
-    #[test]
     fn local_event_by_rc_basic() {
         with_watchdog(|| {
             let event = Rc::new(LocalEvent::<i32>::new());
             let (sender, receiver) = event.by_rc();
 
             sender.send(42);
-            let value = receiver.recv();
+            let value = futures::executor::block_on(receiver.recv_async());
             assert_eq!(value, 42);
         });
     }
@@ -857,7 +733,7 @@ mod tests {
             let (sender, receiver) = event.by_rc();
 
             sender.send("Hello from Rc".to_string());
-            let value = receiver.recv();
+            let value = futures::executor::block_on(receiver.recv_async());
             assert_eq!(value, "Hello from Rc");
         });
     }
@@ -878,7 +754,7 @@ mod tests {
             let (sender, receiver) = unsafe { pinned_event.by_ptr() };
 
             sender.send("Hello from pointer".to_string());
-            let value = receiver.recv();
+            let value = futures::executor::block_on(receiver.recv_async());
             assert_eq!(value, "Hello from pointer");
             // sender and receiver are dropped here, before event
         });

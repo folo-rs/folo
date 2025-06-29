@@ -4,6 +4,7 @@
 //! creating an event, obtaining sender and receiver endpoints, and communicating through them.
 
 use events::once::Event;
+use futures::executor::block_on;
 
 fn main() {
     println!("=== Events Basic Example ===");
@@ -18,7 +19,7 @@ fn main() {
     sender.send("Hello from events!".to_string());
 
     println!("Receiving message through event...");
-    let message = receiver.recv();
+    let message = block_on(receiver.recv_async());
 
     println!("Received: {message}");
     println!("Example completed successfully!");

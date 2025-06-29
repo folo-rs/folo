@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::thread;
 
 use events::once::{Event, LocalEvent};
+use futures::executor::block_on;
 
 fn main() {
     println!("=== Arc-based Event Example ===");
@@ -27,7 +28,7 @@ fn arc_event_example() {
     let (sender, receiver) = event.by_arc();
 
     sender.send("Hello from Arc Event!".to_string());
-    let message = receiver.recv();
+    let message = block_on(receiver.recv_async());
     println!("Received: {message}");
 }
 
@@ -37,7 +38,7 @@ fn rc_event_example() {
     let (sender, receiver) = event.by_rc();
 
     sender.send(42);
-    let value = receiver.recv();
+    let value = block_on(receiver.recv_async());
     println!("Received: {value}");
 }
 
@@ -47,7 +48,7 @@ fn rc_local_event_example() {
     let (sender, receiver) = event.by_rc();
 
     sender.send(PI);
-    let value = receiver.recv();
+    let value = block_on(receiver.recv_async());
     println!("Received: {value:.5}");
 }
 
@@ -64,7 +65,7 @@ fn cross_thread_arc_example() {
 
     // Receive from another thread
     let receiver_handle = thread::spawn(move || {
-        let message = receiver.recv();
+        let message = block_on(receiver.recv_async());
         println!("Received in thread: {message}");
         message
     });

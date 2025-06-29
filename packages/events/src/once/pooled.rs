@@ -1318,7 +1318,7 @@ mod tests {
 
     #[test]
     fn by_rc_drop_actually_cleans_up_pool() {
-        let pool = std::rc::Rc::new(std::cell::RefCell::new(EventPool::<u32>::new()));
+        let pool = Rc::new(std::cell::RefCell::new(EventPool::<u32>::new()));
         let initial_capacity = pool.borrow().pool.capacity();
         
         // Create many events but drop them without use
@@ -1336,7 +1336,7 @@ mod tests {
 
     #[test]
     fn by_arc_drop_actually_cleans_up_pool() {
-        let pool = std::sync::Arc::new(std::sync::Mutex::new(EventPool::<u32>::new()));
+        let pool = Arc::new(std::sync::Mutex::new(EventPool::<u32>::new()));
         let initial_capacity = pool.lock().unwrap().pool.capacity();
         
         // Create many events but drop them without use

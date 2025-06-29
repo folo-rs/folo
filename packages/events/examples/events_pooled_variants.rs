@@ -6,6 +6,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use events::once::EventPool;
+use futures::executor::block_on;
 
 fn main() {
     println!("=== Pooled Events Variants Example ===");
@@ -17,7 +18,7 @@ fn main() {
         let (sender, receiver) = pool.by_ref();
 
         sender.send(10);
-        let value = receiver.recv();
+        let value = block_on(receiver.recv_async());
         println!("   by_ref received: {value}");
     }
 
@@ -28,7 +29,7 @@ fn main() {
         let (sender, receiver) = pool.borrow_mut().by_rc(&pool);
 
         sender.send(20);
-        let value = receiver.recv();
+        let value = block_on(receiver.recv_async());
         println!("   by_rc received: {value}");
     }
 
@@ -43,7 +44,7 @@ fn main() {
             sender.send(30);
         });
 
-        let receiver_thread = std::thread::spawn(move || receiver.recv());
+        let receiver_thread = std::thread::spawn(move || block_on(receiver.recv_async()));
 
         sender_thread.join().unwrap();
         let value = receiver_thread.join().unwrap();
@@ -60,7 +61,7 @@ fn main() {
         let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
 
         sender.send(40);
-        let value = receiver.recv();
+        let value = block_on(receiver.recv_async());
         println!("   by_ptr received: {value}");
         // sender and receiver are dropped here, before pool
     }
@@ -80,7 +81,7 @@ fn main() {
         let recv_task = async move { receiver.recv_async().await };
 
         // Run both tasks
-        futures::executor::block_on(async {
+        block_on(async {
             send_task.await;
             let value = recv_task.await;
             println!("   by_arc async received: {value}");
@@ -95,13 +96,13 @@ fn main() {
         // First event using by_ref
         let (sender1, receiver1) = pool.by_ref();
         sender1.send("First");
-        let value1 = receiver1.recv();
+        let value1 = block_on(receiver1.recv_async());
         println!("   First event: {value1}");
 
         // Second event using by_ref again (different event, same pool)
         let (sender2, receiver2) = pool.by_ref();
         sender2.send("Second");
-        let value2 = receiver2.recv();
+        let value2 = block_on(receiver2.recv_async());
         println!("   Second event: {value2}");
     }
 

@@ -10,6 +10,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use futures::executor::block_on;
 
 /// Compares the performance of events package vs pure oneshot channels.
 fn events_vs_oneshot(c: &mut Criterion) {
@@ -29,7 +30,7 @@ fn events_vs_oneshot(c: &mut Criterion) {
             let event = events::once::Event::<i32>::new();
             let (sender, receiver) = event.by_ref();
             sender.send(hint::black_box(42));
-            let value = receiver.recv();
+            let value = block_on(receiver.recv_async());
             hint::black_box(value);
         });
     });
@@ -39,7 +40,7 @@ fn events_vs_oneshot(c: &mut Criterion) {
             let event = events::once::LocalEvent::<i32>::new();
             let (sender, receiver) = event.by_ref();
             sender.send(hint::black_box(42));
-            let value = receiver.recv();
+            let value = block_on(receiver.recv_async());
             hint::black_box(value);
         });
     });
@@ -49,7 +50,7 @@ fn events_vs_oneshot(c: &mut Criterion) {
             let event = Arc::new(events::once::Event::<i32>::new());
             let (sender, receiver) = event.by_arc();
             sender.send(hint::black_box(42));
-            let value = receiver.recv();
+            let value = block_on(receiver.recv_async());
             hint::black_box(value);
         });
     });
@@ -59,7 +60,7 @@ fn events_vs_oneshot(c: &mut Criterion) {
             let event = Rc::new(events::once::Event::<i32>::new());
             let (sender, receiver) = event.by_rc();
             sender.send(hint::black_box(42));
-            let value = receiver.recv();
+            let value = block_on(receiver.recv_async());
             hint::black_box(value);
         });
     });
@@ -69,7 +70,7 @@ fn events_vs_oneshot(c: &mut Criterion) {
             let event = Rc::new(events::once::LocalEvent::<i32>::new());
             let (sender, receiver) = event.by_rc();
             sender.send(hint::black_box(42));
-            let value = receiver.recv();
+            let value = block_on(receiver.recv_async());
             hint::black_box(value);
         });
     });

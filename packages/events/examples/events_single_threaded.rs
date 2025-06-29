@@ -6,6 +6,7 @@
 use std::rc::Rc;
 
 use events::once::LocalEvent;
+use futures::executor::block_on;
 
 fn main() {
     println!("=== Single-threaded Events Example ===");
@@ -16,7 +17,7 @@ fn main() {
     let event = LocalEvent::<String>::new();
     let (sender, receiver) = event.by_ref();
     sender.send("Hello from local event!".to_string());
-    let message = receiver.recv();
+    let message = block_on(receiver.recv_async());
     println!("Received: {message}");
 
     // Example 2: LocalEvent with Rc for sharing (single-threaded only)
@@ -25,7 +26,7 @@ fn main() {
     let event_rc = Rc::new(LocalEvent::<i32>::new());
     let (sender_rc, receiver_rc) = event_rc.by_ref();
     sender_rc.send(123);
-    let value = receiver_rc.recv();
+    let value = block_on(receiver_rc.recv_async());
     println!("Received from Rc-wrapped LocalEvent: {value}");
 
     // Example 3: LocalEvent works with !Send types
@@ -35,7 +36,7 @@ fn main() {
     let event = LocalEvent::<Rc<String>>::new();
     let (sender, receiver) = event.by_ref();
     sender.send(Rc::<String>::clone(&rc_data));
-    let received_rc = receiver.recv();
+    let received_rc = block_on(receiver.recv_async());
     println!("Received Rc data: {received_rc}");
     println!("Original Rc data: {rc_data}");
 
