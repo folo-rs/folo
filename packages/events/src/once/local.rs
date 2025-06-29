@@ -4,12 +4,19 @@
 //! but cannot be shared across threads.
 
 use std::cell::RefCell;
-use std::future::Future;
 use std::marker::PhantomData;
 use std::mem;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::task::{Context, Poll, Waker};
+use std::task::Waker;
+
+mod by_ref;
+mod by_rc;
+mod by_ptr;
+
+pub use by_ref::{ByRefLocalEventReceiver, ByRefLocalEventSender};
+pub use by_rc::{ByRcLocalEventReceiver, ByRcLocalEventSender};
+pub use by_ptr::{ByPtrLocalEventReceiver, ByPtrLocalEventSender};
 
 /// State of a single-threaded event.
 #[derive(Debug)]
@@ -306,190 +313,9 @@ impl<T> LocalEvent<T> {
     }
 }
 
-/// A one-time event that can send and receive a value of type `T` (single-threaded variant).
-///
-/// This is the single-threaded variant that has lower overhead but cannot be shared across threads.
-/// The event can only be used once - after obtaining the sender and receiver,
-/// subsequent calls to obtain them will panic (or return [`None`] for the checked variants).
-///
-/// For thread-safe usage, see [`crate::once::Event`] which can be used with `Arc<T>`.
-///
-/// # Example
-///
-/// ```rust
-/// use events::once::LocalEvent;
-///
-/// let event = LocalEvent::<String>::new();
-/// let (sender, receiver) = event.by_ref();
 impl<T> Default for LocalEvent<T> {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// A sender that can send a value through a single-threaded event.
-///
-/// The sender holds a reference to the event and can only be used once.
-/// After calling [`send`](ByRefLocalEventSender::send), the sender is consumed.
-#[derive(Debug)]
-pub struct ByRefLocalEventSender<'e, T> {
-    event: &'e LocalEvent<T>,
-}
-
-impl<T> ByRefLocalEventSender<'_, T> {
-    /// Sends a value through the event.
-    ///
-    /// This method consumes the sender and always succeeds, regardless of whether
-    /// there is a receiver waiting.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use events::once::LocalEvent;
-    ///
-    /// let event = LocalEvent::<i32>::new();
-    /// let (sender, _receiver) = event.by_ref();
-    /// sender.send(42);
-    /// ```
-    pub fn send(self, value: T) {
-        drop(self.event.try_set(value));
-    }
-}
-
-/// A receiver that can receive a value from a single-threaded event.
-///
-/// The receiver holds a reference to the event and can only be used once.
-/// After awaiting the receiver, it is consumed.
-#[derive(Debug)]
-pub struct ByRefLocalEventReceiver<'e, T> {
-    event: &'e LocalEvent<T>,
-}
-
-impl<T> Future for ByRefLocalEventReceiver<'_, T> {
-    type Output = T;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.event
-            .poll_recv(cx.waker())
-            .map_or_else(|| Poll::Pending, |value| Poll::Ready(value))
-    }
-}
-
-/// A sender that can send a value through a single-threaded event using Rc ownership.
-///
-/// The sender owns an Rc to the event and is single-threaded.
-/// After calling [`send`](ByRcLocalEventSender::send), the sender is consumed.
-#[derive(Debug)]
-pub struct ByRcLocalEventSender<T> {
-    event: Rc<LocalEvent<T>>,
-}
-
-impl<T> ByRcLocalEventSender<T> {
-    /// Sends a value through the event.
-    ///
-    /// This method consumes the sender and always succeeds, regardless of whether
-    /// there is a receiver waiting.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use std::rc::Rc;
-    ///
-    /// use events::once::LocalEvent;
-    ///
-    /// let event = Rc::new(LocalEvent::<i32>::new());
-    /// let (sender, _receiver) = event.by_rc();
-    /// sender.send(42);
-    /// ```
-    pub fn send(self, value: T) {
-        drop(self.event.try_set(value));
-    }
-}
-
-/// A receiver that can receive a value from a single-threaded event using Rc ownership.
-///
-/// The receiver owns an Rc to the event and is single-threaded.
-/// After awaiting the receiver, it is consumed.
-#[derive(Debug)]
-pub struct ByRcLocalEventReceiver<T> {
-    event: Rc<LocalEvent<T>>,
-}
-
-impl<T> Future for ByRcLocalEventReceiver<T> {
-    type Output = T;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.event
-            .poll_recv(cx.waker())
-            .map_or_else(|| Poll::Pending, |value| Poll::Ready(value))
-    }
-}
-
-/// A sender that can send a value through a single-threaded event using raw pointer access.
-///
-/// The sender holds a raw pointer to the event and the caller is responsible for
-/// ensuring the event remains valid for the lifetime of the sender.
-/// After calling [`send`](ByPtrLocalEventSender::send), the sender is consumed.
-///
-/// # Safety
-///
-/// The caller must ensure that the event remains valid and pinned for the entire
-/// lifetime of this sender.
-#[derive(Debug)]
-pub struct ByPtrLocalEventSender<T> {
-    event: *const LocalEvent<T>,
-}
-
-impl<T> ByPtrLocalEventSender<T> {
-    /// Sends a value through the event.
-    ///
-    /// This method consumes the sender and always succeeds, regardless of whether
-    /// there is a receiver waiting.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use std::pin::Pin;
-    ///
-    /// use events::once::LocalEvent;
-    ///
-    /// let mut event = LocalEvent::<i32>::new();
-    /// let pinned_event = Pin::new(&mut event);
-    /// // SAFETY: We ensure the event outlives the sender and receiver
-    /// let (sender, _receiver) = unsafe { pinned_event.by_ptr() };
-    /// sender.send(42);
-    /// ```
-    pub fn send(self, value: T) {
-        // SAFETY: Caller guarantees the event pointer is valid
-        let event = unsafe { &*self.event };
-        drop(event.try_set(value));
-    }
-}
-
-/// A receiver that can receive a value from a single-threaded event using raw pointer access.
-///
-/// The receiver holds a raw pointer to the event and the caller is responsible for
-/// ensuring the event remains valid for the lifetime of the receiver.
-/// After awaiting the receiver, it is consumed.
-///
-/// # Safety
-///
-/// The caller must ensure that the event remains valid and pinned for the entire
-/// lifetime of this receiver.
-#[derive(Debug)]
-pub struct ByPtrLocalEventReceiver<T> {
-    event: *const LocalEvent<T>,
-}
-
-impl<T> Future for ByPtrLocalEventReceiver<T> {
-    type Output = T;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // SAFETY: Caller guarantees the event pointer is valid
-        let event = unsafe { &*self.event };
-        event
-            .poll_recv(cx.waker())
-            .map_or_else(|| Poll::Pending, |value| Poll::Ready(value))
     }
 }
 
