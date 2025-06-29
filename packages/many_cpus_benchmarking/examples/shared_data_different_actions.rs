@@ -99,19 +99,18 @@ impl Payload for ProducerConsumerChannels {
         } else {
             // Primary consumer: mostly receives, occasionally sends
             for i in 0..OPERATION_COUNT {
-                // Use try_recv() instead of blocking recv() to maintain consistent timing behavior.
-                // While we pre-load channels and ensure enough messages are sent, the exact timing
-                // of message arrival can vary between iterations. Using try_recv() provides more
-                // predictable benchmark results by avoiding potential blocking delays.
-                if let Ok(received) = self.rx.try_recv() {
-                    // Process the received data
-                    let processed_value = received.wrapping_mul(2);
-                    black_box(processed_value);
+                // Use blocking recv() to ensure we always process the expected amount of data.
+                // With sufficient pre-loading and the producer sending more messages than we consume,
+                // blocking is rare and ensures consistent work per benchmark iteration.
+                let received = self.rx.recv().expect("Channel should not be closed during benchmark");
+                
+                // Process the received data
+                let processed_value = received.wrapping_mul(2);
+                black_box(processed_value);
 
-                    // Occasionally send back a response
-                    if i % 5 == 0 {
-                        _ = self.tx.send(processed_value);
-                    }
+                // Occasionally send back a response
+                if i % 5 == 0 {
+                    _ = self.tx.send(processed_value);
                 }
             }
         }

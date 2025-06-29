@@ -283,7 +283,8 @@
 //!         } else {
 //!             // Consumer: mostly receives and processes data
 //!             for _ in 0..5000 {
-//!                 if let Ok(data) = self.receiver.try_recv() {
+//!                 // Use blocking recv() to ensure consistent work per iteration
+//!                 if let Ok(data) = self.receiver.recv() {
 //!                     let processed = data * 2;
 //!                     std::hint::black_box(processed);
 //!                     if data % 5 == 0 {
