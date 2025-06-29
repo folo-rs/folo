@@ -79,8 +79,8 @@
 //! ```
 
 mod local;
-mod pooled;
 mod pooled_local;
+mod pooled_sync;
 mod sync;
 
 #[cfg(test)]
@@ -91,7 +91,7 @@ pub use local::{
     ByPtrLocalEventReceiver, ByPtrLocalEventSender, ByRcLocalEventReceiver, ByRcLocalEventSender,
     ByRefLocalEventReceiver, ByRefLocalEventSender, LocalEvent,
 };
-pub use pooled::{
+pub use pooled_sync::{
     ByArcPooledEventReceiver, ByArcPooledEventSender, ByPtrPooledEventReceiver,
     ByPtrPooledEventSender, ByRcPooledEventReceiver, ByRcPooledEventSender,
     ByRefPooledEventReceiver, ByRefPooledEventSender, EventPool, WithRefCount,
