@@ -267,9 +267,8 @@ impl BuildTargetPlatform {
                             .map(|(key, value)| (key.trim(), value.trim()))
                             .expect("/proc/cpuinfo line was not a key:value pair");
 
-                        match key {
-                            "processor" => index = value.parse::<ProcessorId>().ok(),
-                            _ => {}
+                        if key == "processor" {
+                            index = value.parse::<ProcessorId>().ok();
                         }
                     }
 
@@ -489,13 +488,7 @@ mod tests {
         // single processor group and a single memory region. Welcome to 2010!
         let mut fs = MockFilesystem::new();
 
-        simulate_processor_layout(
-            &mut fs,
-            [0, 1, 2, 3],
-            None,
-            None,
-            [0, 0, 0, 0],
-        );
+        simulate_processor_layout(&mut fs, [0, 1, 2, 3], None, None, [0, 0, 0, 0]);
 
         let platform = BuildTargetPlatform::new(
             BindingsFacade::from_mock(MockBindings::new()),
@@ -625,13 +618,7 @@ mod tests {
     fn two_numa_nodes_all_performance() {
         let mut fs = MockFilesystem::new();
         // Two nodes, each with 2 processors. On Linux, all processors are now treated as Performance.
-        simulate_processor_layout(
-            &mut fs,
-            [0, 1, 2, 3],
-            None,
-            None,
-            [0, 0, 1, 1],
-        );
+        simulate_processor_layout(&mut fs, [0, 1, 2, 3], None, None, [0, 0, 1, 1]);
 
         let platform = BuildTargetPlatform::new(
             BindingsFacade::from_mock(MockBindings::new()),
@@ -786,7 +773,7 @@ mod tests {
 
         let mut cpuinfo = String::new();
 
-        for processor_index in processor_index.iter() {
+        for processor_index in &processor_index {
             writeln!(cpuinfo, "processor       : {processor_index}").unwrap();
             writeln!(cpuinfo, "whatever        : 123").unwrap();
             writeln!(cpuinfo, "other           : ignored").unwrap();
@@ -1027,13 +1014,7 @@ mod tests {
 
         let mut fs = MockFilesystem::new();
         // All processors are Performance on Linux
-        simulate_processor_layout(
-            &mut fs,
-            [0, 1, 2, 3],
-            None,
-            None,
-            [0, 0, 2, 2],
-        );
+        simulate_processor_layout(&mut fs, [0, 1, 2, 3], None, None, [0, 0, 2, 2]);
 
         let platform = BuildTargetPlatform::new(
             BindingsFacade::from_mock(bindings),
@@ -1080,13 +1061,7 @@ mod tests {
             .returning(move || Ok(expected_set_2));
 
         let mut fs = MockFilesystem::new();
-        simulate_processor_layout(
-            &mut fs,
-            [0, 1, 2],
-            None,
-            None,
-            [0, 0, 0],
-        );
+        simulate_processor_layout(&mut fs, [0, 1, 2], None, None, [0, 0, 0]);
 
         let platform = BuildTargetPlatform::new(
             BindingsFacade::from_mock(bindings),

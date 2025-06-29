@@ -1,5 +1,5 @@
 //! High-performance event signaling primitives for concurrent environments.
-//! 
+//!
 //! (DRAFT API WITH PLACEHOLDER IMPLEMENTATION - WORK IN PROGRESS)
 //!
 //! This crate provides lightweight, efficient signaling mechanisms for communicating between
