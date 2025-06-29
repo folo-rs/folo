@@ -199,12 +199,12 @@ impl BuildTargetPlatform {
         let numa_nodes = numa_nodes
             .unwrap_or_else(|| once((0, cpu_infos.clone().map(|info| info.index))).collect());
 
-        // We identify efficiency cores by comparing the frequency of each processor to the maximum
-        // frequency of all processors. If the frequency is less than the maximum, we consider it an
+        // We identify efficiency cores by comparing the bogomips of each processor to the maximum
+        // bogomips of all processors. If the bogomips is less than the maximum, we consider it an
         // efficiency core.
-        let max_frequency = cpu_infos
+        let max_bogomips = cpu_infos
             .iter()
-            .map(|info| info.frequency_mhz)
+            .map(|info| info.bogomips)
             .max()
             .expect("must have at least one processor in NonEmpty");
 
@@ -220,7 +220,7 @@ impl BuildTargetPlatform {
                 })
                 .expect("processor not found in any NUMA node");
 
-            let efficiency_class = if info.frequency_mhz < max_frequency {
+            let efficiency_class = if info.bogomips < max_bogomips {
                 EfficiencyClass::Efficiency
             } else {
                 EfficiencyClass::Performance
@@ -266,13 +266,18 @@ impl BuildTargetPlatform {
                     // This line gives us the processor index:
                     // processor       : 29
                     //
-                    // This line gives us the processor frequency:
-                    // cpu MHz         : 3400.036
+                    // This line gives us the processor bogomips:
+                    // bogomips        : 4890.85
+                    //
+                    // We use bogomips instead of "cpu MHz" because cpu MHz reports the current
+                    // dynamic frequency which fluctuates due to power management and thermal
+                    // throttling, leading to unreliable efficiency class detection. Bogomips
+                    // provides a stable measure of processor capability that remains consistent.
                     //
                     // All other lines we ignore.
 
                     let mut index = None;
-                    let mut frequency_mhz = None;
+                    let mut bogomips = None;
 
                     for line in lines {
                         let (key, value) = line
@@ -280,11 +285,11 @@ impl BuildTargetPlatform {
                             .map(|(key, value)| (key.trim(), value.trim()))
                             .expect("/proc/cpuinfo line was not a key:value pair");
 
-                        #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation, reason = "we expect small positive numbers for frequency, which can have their integer part losslessly converted to u32")]
+                        #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation, reason = "we expect small positive numbers for bogomips, which can have their integer part losslessly converted to u32")]
                         match key {
                             "processor" => index = value.parse::<ProcessorId>().ok(),
-                            "cpu MHz" => {
-                                frequency_mhz = value.parse::<f32>().map(|f| f.round() as u32).ok();
+                            "bogomips" => {
+                                bogomips = value.parse::<f32>().map(|f| f.round() as u32).ok();
                             }
                             _ => {}
                         }
@@ -292,8 +297,8 @@ impl BuildTargetPlatform {
 
                     Some(CpuInfo {
                         index: index.expect("processor index not found for processor"),
-                        frequency_mhz: frequency_mhz
-                            .expect("processor frequency not found for processor"),
+                        bogomips: bogomips
+                            .expect("processor bogomips not found for processor"),
                     })
                 })
                 .collect_vec(),
@@ -430,10 +435,10 @@ impl BuildTargetPlatform {
 struct CpuInfo {
     index: ProcessorId,
 
-    /// CPU frequency, rounded to nearest integer. We use this to identify efficiency versus
-    /// performance cores, where the processors with max frequency are considered performance
-    /// cores and any with lower frequency are considered efficiency cores.
-    frequency_mhz: u32,
+    /// CPU bogomips value, rounded to nearest integer. We use this to identify efficiency versus
+    /// performance cores, where the processors with max bogomips are considered performance
+    /// cores and any with lower bogomips are considered efficiency cores.
+    bogomips: u32,
 }
 
 /// This is the relative path of the cgroup the current process belongs to (e.g. `/foo/bar`)
@@ -830,7 +835,7 @@ mod tests {
         // If None, all are allowed.
         processor_is_allowed: Option<[bool; PROCESSOR_COUNT]>,
         memory_region_index: [MemoryRegionId; PROCESSOR_COUNT],
-        frequencies_per_processor: [f64; PROCESSOR_COUNT],
+        bogomips_per_processor: [f64; PROCESSOR_COUNT],
     ) {
         let processor_is_active = processor_is_active.unwrap_or([true; PROCESSOR_COUNT]);
         let processor_is_allowed = processor_is_allowed.unwrap_or([true; PROCESSOR_COUNT]);
@@ -839,11 +844,10 @@ mod tests {
 
         let mut cpuinfo = String::new();
 
-        for (processor_index, frequency) in
-            processor_index.iter().zip(frequencies_per_processor.iter())
+        for (processor_index, bogomips) in processor_index.iter().zip(bogomips_per_processor.iter())
         {
             writeln!(cpuinfo, "processor       : {processor_index}").unwrap();
-            writeln!(cpuinfo, "cpu MHz         : {frequency}").unwrap();
+            writeln!(cpuinfo, "bogomips        : {bogomips}").unwrap();
             writeln!(cpuinfo, "whatever        : 123").unwrap();
             writeln!(cpuinfo, "other           : ignored").unwrap();
             writeln!(cpuinfo).unwrap();
