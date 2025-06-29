@@ -14,23 +14,27 @@ fn main() {
     // 1. by_ref variant (lifetime-based)
     println!("\n1. Testing by_ref variant:");
     {
-        let mut pool = EventPool::<i32>::new();
-        let (sender, receiver) = pool.by_ref();
+        block_on(async {
+            let mut pool = EventPool::<i32>::new();
+            let (sender, receiver) = pool.by_ref();
 
-        sender.send(10);
-        let value = block_on(receiver.recv_async());
-        println!("   by_ref received: {value}");
+            sender.send(10);
+            let value = receiver.recv_async().await;
+            println!("   by_ref received: {value}");
+        });
     }
 
     // 2. by_rc variant (Rc-based, single-threaded)
     println!("\n2. Testing by_rc variant:");
     {
-        let pool = Rc::new(RefCell::new(EventPool::<i32>::new()));
-        let (sender, receiver) = pool.borrow_mut().by_rc(&pool);
+        block_on(async {
+            let pool = Rc::new(RefCell::new(EventPool::<i32>::new()));
+            let (sender, receiver) = pool.borrow_mut().by_rc(&pool);
 
-        sender.send(20);
-        let value = block_on(receiver.recv_async());
-        println!("   by_rc received: {value}");
+            sender.send(20);
+            let value = receiver.recv_async().await;
+            println!("   by_rc received: {value}");
+        });
     }
 
     // 3. by_arc variant (Arc-based, thread-safe)
@@ -54,16 +58,18 @@ fn main() {
     // 4. by_ptr variant (unsafe, raw pointer-based)
     println!("\n4. Testing by_ptr variant:");
     {
-        let mut pool = EventPool::<i32>::new();
-        let pinned_pool = Pin::new(&mut pool);
+        block_on(async {
+            let mut pool = EventPool::<i32>::new();
+            let pinned_pool = Pin::new(&mut pool);
 
-        // SAFETY: We ensure the pool outlives the sender and receiver
-        let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
+            // SAFETY: We ensure the pool outlives the sender and receiver
+            let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
 
-        sender.send(40);
-        let value = block_on(receiver.recv_async());
-        println!("   by_ptr received: {value}");
-        // sender and receiver are dropped here, before pool
+            sender.send(40);
+            let value = receiver.recv_async().await;
+            println!("   by_ptr received: {value}");
+            // sender and receiver are dropped here, before pool
+        });
     }
 
     // 5. Async example with by_arc
@@ -72,18 +78,13 @@ fn main() {
         let pool = Arc::new(Mutex::new(EventPool::<String>::new()));
         let (sender, receiver) = pool.lock().unwrap().by_arc(&pool);
 
-        // Spawn async task to send
-        let send_task = async move {
-            sender.send("Hello async!".to_string());
-        };
-
-        // Spawn async task to receive
-        let recv_task = async move { receiver.recv_async().await };
-
-        // Run both tasks
+        // Run both tasks in async block
         block_on(async {
-            send_task.await;
-            let value = recv_task.await;
+            // Send the message
+            sender.send("Hello async!".to_string());
+            
+            // Receive the message
+            let value = receiver.recv_async().await;
             println!("   by_arc async received: {value}");
         });
     }
@@ -91,19 +92,21 @@ fn main() {
     // 6. Demonstrate pool reuse across variants
     println!("\n6. Testing pool reuse:");
     {
-        let mut pool = EventPool::<&str>::new();
+        block_on(async {
+            let mut pool = EventPool::<&str>::new();
 
-        // First event using by_ref
-        let (sender1, receiver1) = pool.by_ref();
-        sender1.send("First");
-        let value1 = block_on(receiver1.recv_async());
-        println!("   First event: {value1}");
+            // First event using by_ref
+            let (sender1, receiver1) = pool.by_ref();
+            sender1.send("First");
+            let value1 = receiver1.recv_async().await;
+            println!("   First event: {value1}");
 
-        // Second event using by_ref again (different event, same pool)
-        let (sender2, receiver2) = pool.by_ref();
-        sender2.send("Second");
-        let value2 = block_on(receiver2.recv_async());
-        println!("   Second event: {value2}");
+            // Second event using by_ref again (different event, same pool)
+            let (sender2, receiver2) = pool.by_ref();
+            sender2.send("Second");
+            let value2 = receiver2.recv_async().await;
+            println!("   Second event: {value2}");
+        });
     }
 
     println!("\nAll pooled event variants work correctly!");

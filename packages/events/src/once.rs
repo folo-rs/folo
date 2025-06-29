@@ -41,12 +41,14 @@
 //! use events::once::Event;
 //! use futures::executor::block_on;
 //!
-//! let event = Event::<i32>::new();
-//! let (sender, receiver) = event.by_ref();
+//! block_on(async {
+//!     let event = Event::<i32>::new();
+//!     let (sender, receiver) = event.by_ref();
 //!
-//! sender.send(42);
-//! let value = block_on(receiver);
-//! assert_eq!(value, 42);
+//!     sender.send(42);
+//!     let value = receiver.await;
+//!     assert_eq!(value, 42);
+//! });
 //! ```
 //!
 //! # Example (Single-threaded)
@@ -55,12 +57,14 @@
 //! use events::once::LocalEvent;
 //! use futures::executor::block_on;
 //!
-//! let event = LocalEvent::<i32>::new();
-//! let (sender, receiver) = event.by_ref();
+//! block_on(async {
+//!     let event = LocalEvent::<i32>::new();
+//!     let (sender, receiver) = event.by_ref();
 //!
-//! sender.send(42);
-//! let value = block_on(receiver);
-//! assert_eq!(value, 42);
+//!     sender.send(42);
+//!     let value = receiver.await;
+//!     assert_eq!(value, 42);
+//! });
 //! ```
 //!
 //! # Example (Pooled Local Events)
@@ -69,13 +73,15 @@
 //! use events::once::LocalEventPool;
 //! use futures::executor::block_on;
 //!
-//! let mut pool = LocalEventPool::<i32>::new();
-//! let (sender, receiver) = pool.by_ref();
+//! block_on(async {
+//!     let mut pool = LocalEventPool::<i32>::new();
+//!     let (sender, receiver) = pool.by_ref();
 //!
-//! sender.send(42);
-//! let value = block_on(receiver);
-//! assert_eq!(value, 42);
-//! // Event automatically returned to pool when endpoints are dropped
+//!     sender.send(42);
+//!     let value = receiver.await;
+//!     assert_eq!(value, 42);
+//!     // Event automatically returned to pool when endpoints are dropped
+//! });
 //! ```
 
 mod local;

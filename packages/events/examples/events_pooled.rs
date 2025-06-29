@@ -6,29 +6,31 @@ use futures::executor::block_on;
 fn main() {
     println!("=== Pooled Events Example ===");
 
-    // Create a pool for managing i32 events
-    let mut pool = EventPool::<i32>::new();
+    block_on(async {
+        // Create a pool for managing i32 events
+        let mut pool = EventPool::<i32>::new();
 
-    // Create sender and receiver from the pool
-    let (sender, receiver) = pool.by_ref();
+        // Create sender and receiver from the pool
+        let (sender, receiver) = pool.by_ref();
 
-    println!("Created pooled event sender and receiver");
+        println!("Created pooled event sender and receiver");
 
-    // Send a value through the pooled event
-    sender.send(42);
-    println!("Sent value: 42");
+        // Send a value through the pooled event
+        sender.send(42);
+        println!("Sent value: 42");
 
-    // Receive the value
-    let received = block_on(receiver.recv_async());
-    println!("Received value: {received}");
+        // Receive the value
+        let received = receiver.recv_async().await;
+        println!("Received value: {received}");
 
-    println!("Event automatically returned to pool when sender/receiver were dropped");
+        println!("Event automatically returned to pool when sender/receiver were dropped");
 
-    // Create another event from the same pool
-    let (sender2, receiver2) = pool.by_ref();
-    sender2.send(100);
-    let received2 = block_on(receiver2.recv_async());
-    println!("Second event - received value: {received2}");
+        // Create another event from the same pool
+        let (sender2, receiver2) = pool.by_ref();
+        sender2.send(100);
+        let received2 = receiver2.recv_async().await;
+        println!("Second event - received value: {received2}");
 
-    println!("Example completed successfully!");
+        println!("Example completed successfully!");
+    });
 }

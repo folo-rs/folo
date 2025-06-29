@@ -12,25 +12,27 @@ use futures::executor::block_on;
 fn main() {
     println!("=== Thread-safe Events Example ===");
 
-    // Example 1: Thread-safe Event used within the same thread
-    println!();
-    println!("1. Thread-safe Event used in same thread:");
-    let event = Event::<String>::new();
-    let (sender, receiver) = event.by_ref();
-    sender.send("Hello from thread-safe event!".to_string());
-    let message = block_on(receiver);
-    println!("Received: {message}");
+    block_on(async {
+        // Example 1: Thread-safe Event used within the same thread
+        println!();
+        println!("1. Thread-safe Event used in same thread:");
+        let event = Event::<String>::new();
+        let (sender, receiver) = event.by_ref();
+        sender.send("Hello from thread-safe event!".to_string());
+        let message = receiver.await;
+        println!("Received: {message}");
 
-    // Example 2: Thread-safe Event can be wrapped in Arc for sharing
-    println!();
-    println!("2. Thread-safe Event wrapped in Arc:");
-    let event_arc = Arc::new(Event::<i32>::new());
-    // You can clone the Arc but each Event can only have endpoints retrieved once
-    let _event_clone = Arc::clone(&event_arc);
-    let (sender, receiver) = event_arc.by_ref();
-    sender.send(42);
-    let value = block_on(receiver);
-    println!("Received from Arc-wrapped event: {value}");
+        // Example 2: Thread-safe Event can be wrapped in Arc for sharing
+        println!();
+        println!("2. Thread-safe Event wrapped in Arc:");
+        let event_arc = Arc::new(Event::<i32>::new());
+        // You can clone the Arc but each Event can only have endpoints retrieved once
+        let _event_clone = Arc::clone(&event_arc);
+        let (sender, receiver) = event_arc.by_ref();
+        sender.send(42);
+        let value = receiver.await;
+        println!("Received from Arc-wrapped event: {value}");
+    });
 
     // Example 3: Cross-thread pattern - endpoints extracted before threading
     // Note: With ByRef types, the Event must live until threads complete.

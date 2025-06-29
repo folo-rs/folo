@@ -86,6 +86,7 @@
                 "benchmark_utils",
                 "benchmarks",
                 "cpulist",
+                "events",
                 "folo_ffi",
                 "folo_utils",
                 "linked",

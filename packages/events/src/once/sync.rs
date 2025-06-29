@@ -59,12 +59,14 @@ enum EventState<T> {
 /// use events::once::Event;
 /// use futures::executor::block_on;
 ///
-/// let event = Event::<String>::new();
-/// let (sender, receiver) = event.by_ref();
+/// block_on(async {
+///     let event = Event::<String>::new();
+///     let (sender, receiver) = event.by_ref();
 ///
-/// sender.send("Hello".to_string());
-/// let message = block_on(receiver);
-/// assert_eq!(message, "Hello");
+///     sender.send("Hello".to_string());
+///     let message = receiver.await;
+///     assert_eq!(message, "Hello");
+/// });
 /// ```
 #[derive(Debug)]
 pub struct Event<T>
@@ -278,16 +280,19 @@ where
     /// use std::pin::Pin;
     ///
     /// use events::once::Event;
+    /// use futures::executor::block_on;
     ///
-    /// let mut event = Event::<i32>::new();
-    /// let pinned_event = Pin::new(&mut event);
-    /// // SAFETY: We ensure the event outlives the sender and receiver
-    /// let (sender, receiver) = unsafe { pinned_event.by_ptr() };
+    /// block_on(async {
+    ///     let mut event = Event::<i32>::new();
+    ///     let pinned_event = Pin::new(&mut event);
+    ///     // SAFETY: We ensure the event outlives the sender and receiver
+    ///     let (sender, receiver) = unsafe { pinned_event.by_ptr() };
     ///
-    /// sender.send(42);
-    /// let value = futures::executor::block_on(receiver);
-    /// assert_eq!(value, 42);
-    /// // sender and receiver are dropped here, before event
+    ///     sender.send(42);
+    ///     let value = receiver.await;
+    ///     assert_eq!(value, 42);
+    ///     // sender and receiver are dropped here, before event
+    /// });
     /// ```
     #[must_use]
     pub unsafe fn by_ptr(self: Pin<&mut Self>) -> (ByPtrEventSender<T>, ByPtrEventReceiver<T>) {
@@ -403,35 +408,41 @@ mod tests {
     #[test]
     fn event_new_creates_valid_event() {
         with_watchdog(|| {
-            let event = Event::<i32>::new();
-            // Should be able to get endpoints once
-            let (sender, receiver) = event.by_ref();
-            sender.send(42);
-            let value = futures::executor::block_on(receiver);
-            assert_eq!(value, 42);
+            futures::executor::block_on(async {
+                let event = Event::<i32>::new();
+                // Should be able to get endpoints once
+                let (sender, receiver) = event.by_ref();
+                sender.send(42);
+                let value = receiver.await;
+                assert_eq!(value, 42);
+            });
         });
     }
 
     #[test]
     fn event_default_creates_valid_event() {
         with_watchdog(|| {
-            let event = Event::<String>::default();
-            let (sender, receiver) = event.by_ref();
-            sender.send("test".to_string());
-            let value = futures::executor::block_on(receiver);
-            assert_eq!(value, "test");
+            futures::executor::block_on(async {
+                let event = Event::<String>::default();
+                let (sender, receiver) = event.by_ref();
+                sender.send("test".to_string());
+                let value = receiver.await;
+                assert_eq!(value, "test");
+            });
         });
     }
 
     #[test]
     fn event_by_ref_method_provides_both() {
         with_watchdog(|| {
-            let event = Event::<u64>::new();
-            let (sender, receiver) = event.by_ref();
+            futures::executor::block_on(async {
+                let event = Event::<u64>::new();
+                let (sender, receiver) = event.by_ref();
 
-            sender.send(123);
-            let value = futures::executor::block_on(receiver);
-            assert_eq!(value, 123);
+                sender.send(123);
+                let value = receiver.await;
+                assert_eq!(value, 123);
+            });
         });
     }
 

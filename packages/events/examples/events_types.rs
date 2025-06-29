@@ -21,63 +21,65 @@ struct TaskResult {
 fn main() {
     println!("=== Events Type System Example ===");
 
-    // Example 1: Simple primitive type
-    println!();
-    println!("1. Integer event:");
-    let int_event = Event::<i32>::new();
-    let (int_sender, int_receiver) = int_event.by_ref();
+    block_on(async {
+        // Example 1: Simple primitive type
+        println!();
+        println!("1. Integer event:");
+        let int_event = Event::<i32>::new();
+        let (int_sender, int_receiver) = int_event.by_ref();
 
-    int_sender.send(-42);
-    let int_value = block_on(int_receiver);
-    println!("Received integer: {int_value}");
+        int_sender.send(-42);
+        let int_value = int_receiver.await;
+        println!("Received integer: {int_value}");
 
-    // Example 2: String type
-    println!();
-    println!("2. String event:");
-    let string_event = Event::<String>::new();
-    let (string_sender, string_receiver) = string_event.by_ref();
+        // Example 2: String type
+        println!();
+        println!("2. String event:");
+        let string_event = Event::<String>::new();
+        let (string_sender, string_receiver) = string_event.by_ref();
 
-    string_sender.send("Events support any type!".to_string());
-    let string_value = block_on(string_receiver);
-    println!("Received string: {string_value}");
+        string_sender.send("Events support any type!".to_string());
+        let string_value = string_receiver.await;
+        println!("Received string: {string_value}");
 
-    // Example 3: Vector type
-    println!();
-    println!("3. Vector event:");
-    let vec_event = Event::<Vec<u32>>::new();
-    let (vec_sender, vec_receiver) = vec_event.by_ref();
+        // Example 3: Vector type
+        println!();
+        println!("3. Vector event:");
+        let vec_event = Event::<Vec<u32>>::new();
+        let (vec_sender, vec_receiver) = vec_event.by_ref();
 
-    vec_sender.send(vec![1, 2, 3, 4, 5]);
-    let vec_value = block_on(vec_receiver);
-    println!("Received vector: {vec_value:?}");
+        vec_sender.send(vec![1, 2, 3, 4, 5]);
+        let vec_value = vec_receiver.await;
+        println!("Received vector: {vec_value:?}");
 
-    // Example 4: Custom struct type
-    println!();
-    println!("4. Custom struct event:");
-    let struct_event = Event::<TaskResult>::new();
-    let (struct_sender, struct_receiver) = struct_event.by_ref();
+        // Example 4: Custom struct type
+        println!();
+        println!("4. Custom struct event:");
+        let struct_event = Event::<TaskResult>::new();
+        let (struct_sender, struct_receiver) = struct_event.by_ref();
 
-    let task = TaskResult {
-        id: 42,
-        description: "Process user data".to_string(),
-        success: true,
-        duration_ms: 150,
-    };
+        let task = TaskResult {
+            id: 42,
+            description: "Process user data".to_string(),
+            success: true,
+            duration_ms: 150,
+        };
 
-    struct_sender.send(task);
-    let received_task = block_on(struct_receiver);
-    println!("Received task result: {received_task:?}");
+        struct_sender.send(task);
+        let received_task = struct_receiver.await;
+        println!("Received task result: {received_task:?}");
 
-    // Example 5: Option type
-    println!();
-    println!("5. Option type event:");
-    let option_event = Event::<Option<&str>>::new();
-    let (option_sender, option_receiver) = option_event.by_ref();
+        // Example 5: Option type
+        println!();
+        println!("5. Option type event:");
+        let option_event = Event::<Option<&str>>::new();
+        let (option_sender, option_receiver) = option_event.by_ref();
 
-    option_sender.send(Some("Optional data"));
-    let option_value = block_on(option_receiver);
-    println!("Received option: {option_value:?}");
+        option_sender.send(Some("Optional data"));
+        let option_value = option_receiver.await;
+        println!("Received option: {option_value:?}");
 
-    println!();
-    println!("Example completed successfully!");
+        println!();
+        println!("Example completed successfully!");
+    });
 }

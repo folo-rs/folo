@@ -9,18 +9,20 @@ use futures::executor::block_on;
 fn main() {
     println!("=== Events Basic Example ===");
 
-    // Create an event for passing string messages
-    let event = Event::<String>::new();
+    block_on(async {
+        // Create an event for passing string messages
+        let event = Event::<String>::new();
 
-    // Get both the sender and receiver endpoints
-    let (sender, receiver) = event.by_ref();
+        // Get both the sender and receiver endpoints
+        let (sender, receiver) = event.by_ref();
 
-    println!("Sending message through event...");
-    sender.send("Hello from events!".to_string());
+        println!("Sending message through event...");
+        sender.send("Hello from events!".to_string());
 
-    println!("Receiving message through event...");
-    let message = block_on(receiver);
+        println!("Receiving message through event...");
+        let message = receiver.await;
 
-    println!("Received: {message}");
-    println!("Example completed successfully!");
+        println!("Received: {message}");
+        println!("Example completed successfully!");
+    });
 }

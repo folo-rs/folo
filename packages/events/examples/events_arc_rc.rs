@@ -24,32 +24,38 @@ fn main() {
 
 /// Demonstrates Arc-based event usage in single thread.
 fn arc_event_example() {
-    let event = Arc::new(Event::<String>::new());
-    let (sender, receiver) = event.by_arc();
+    block_on(async {
+        let event = Arc::new(Event::<String>::new());
+        let (sender, receiver) = event.by_arc();
 
-    sender.send("Hello from Arc Event!".to_string());
-    let message = block_on(receiver);
-    println!("Received: {message}");
+        sender.send("Hello from Arc Event!".to_string());
+        let message = receiver.await;
+        println!("Received: {message}");
+    });
 }
 
 /// Demonstrates Rc-based event usage.
 fn rc_event_example() {
-    let event = Rc::new(Event::<i32>::new());
-    let (sender, receiver) = event.by_rc();
+    block_on(async {
+        let event = Rc::new(Event::<i32>::new());
+        let (sender, receiver) = event.by_rc();
 
-    sender.send(42);
-    let value = block_on(receiver);
-    println!("Received: {value}");
+        sender.send(42);
+        let value = receiver.await;
+        println!("Received: {value}");
+    });
 }
 
 /// Demonstrates Rc-based `LocalEvent` usage.
 fn rc_local_event_example() {
-    let event = Rc::new(LocalEvent::<f64>::new());
-    let (sender, receiver) = event.by_rc();
+    block_on(async {
+        let event = Rc::new(LocalEvent::<f64>::new());
+        let (sender, receiver) = event.by_rc();
 
-    sender.send(PI);
-    let value = block_on(receiver);
-    println!("Received: {value:.5}");
+        sender.send(PI);
+        let value = receiver.await;
+        println!("Received: {value:.5}");
+    });
 }
 
 /// Demonstrates cross-thread communication with Arc events.

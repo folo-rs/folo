@@ -11,12 +11,14 @@ use futures::executor::block_on;
 
 fn basic_async_usage() {
     println!("1. Basic async usage with thread-safe events:");
-    let event = Event::<String>::new();
-    let (sender, receiver) = event.by_ref();
+    block_on(async {
+        let event = Event::<String>::new();
+        let (sender, receiver) = event.by_ref();
 
-    sender.send("Hello async world!".to_string());
-    let message = block_on(receiver);
-    println!("Received: {message}");
+        sender.send("Hello async world!".to_string());
+        let message = receiver.await;
+        println!("Received: {message}");
+    });
 }
 
 fn cross_thread_async_communication() {
@@ -51,30 +53,34 @@ fn cross_thread_async_communication() {
 
 fn single_threaded_async_usage() {
     println!("3. Single-threaded async usage:");
-    let local_event = LocalEvent::<String>::new();
-    let (local_sender, local_receiver) = local_event.by_ref();
+    block_on(async {
+        let local_event = LocalEvent::<String>::new();
+        let (local_sender, local_receiver) = local_event.by_ref();
 
-    local_sender.send("Local async message".to_string());
-    let local_message = block_on(local_receiver);
-    println!("Received: {local_message}");
+        local_sender.send("Local async message".to_string());
+        let local_message = local_receiver.await;
+        println!("Received: {local_message}");
+    });
 }
 
 fn async_only_usage() {
     println!("4. Async-only usage:");
-    let first_event = Event::<u64>::new();
-    let (first_sender, first_receiver) = first_event.by_ref();
+    block_on(async {
+        let first_event = Event::<u64>::new();
+        let (first_sender, first_receiver) = first_event.by_ref();
 
-    let second_event = Event::<u64>::new();
-    let (second_sender, second_receiver) = second_event.by_ref();
+        let second_event = Event::<u64>::new();
+        let (second_sender, second_receiver) = second_event.by_ref();
 
-    first_sender.send(100);
-    second_sender.send(200);
+        first_sender.send(100);
+        second_sender.send(200);
 
-    // Use async receive for both
-    let sync_value = block_on(first_receiver);
-    let async_value = block_on(second_receiver);
+        // Use async receive for both
+        let sync_value = first_receiver.await;
+        let async_value = second_receiver.await;
 
-    println!("First received: {sync_value}, Second received: {async_value}");
+        println!("First received: {sync_value}, Second received: {async_value}");
+    });
 }
 
 fn main() {
