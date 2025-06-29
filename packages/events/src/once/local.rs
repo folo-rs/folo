@@ -10,13 +10,13 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::Waker;
 
-mod by_ref;
-mod by_rc;
 mod by_ptr;
+mod by_rc;
+mod by_ref;
 
-pub use by_ref::{ByRefLocalEventReceiver, ByRefLocalEventSender};
-pub use by_rc::{ByRcLocalEventReceiver, ByRcLocalEventSender};
 pub use by_ptr::{ByPtrLocalEventReceiver, ByPtrLocalEventSender};
+pub use by_rc::{ByRcLocalEventReceiver, ByRcLocalEventSender};
+pub use by_ref::{ByRefLocalEventReceiver, ByRefLocalEventSender};
 
 /// State of a single-threaded event.
 #[derive(Debug)]

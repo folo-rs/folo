@@ -1,7 +1,7 @@
 //! Arc-based senders and receivers for pooled events.
 
-use std::sync::Arc;
 use std::ptr::NonNull;
+use std::sync::Arc;
 
 use pinned_pool::Key;
 

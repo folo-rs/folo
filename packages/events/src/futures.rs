@@ -15,6 +15,17 @@ pub(crate) struct LocalEventFuture<'a, T> {
     event: &'a LocalEvent<T>,
 }
 
+impl<'a, T> LocalEventFuture<'a, T> {
+    /// Creates a new future for a single-threaded event.
+    #[allow(
+        dead_code,
+        reason = "Utility function kept for potential future use and API completeness"
+    )]
+    pub(crate) fn new(event: &'a LocalEvent<T>) -> Self {
+        Self { event }
+    }
+}
+
 impl<T> Future for LocalEventFuture<'_, T> {
     type Output = T;
 

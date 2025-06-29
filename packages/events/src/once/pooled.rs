@@ -12,15 +12,15 @@ use pinned_pool::{Key, PinnedPool};
 
 use super::sync::Event;
 
-mod by_ref;
-mod by_rc;
 mod by_arc;
 mod by_ptr;
+mod by_rc;
+mod by_ref;
 
-pub use by_ref::{ByRefPooledEventReceiver, ByRefPooledEventSender};
-pub use by_rc::{ByRcPooledEventReceiver, ByRcPooledEventSender};
 pub use by_arc::{ByArcPooledEventReceiver, ByArcPooledEventSender};
 pub use by_ptr::{ByPtrPooledEventReceiver, ByPtrPooledEventSender};
+pub use by_rc::{ByRcPooledEventReceiver, ByRcPooledEventSender};
+pub use by_ref::{ByRefPooledEventReceiver, ByRefPooledEventSender};
 
 /// Just combines a value and a reference count, for use in custom reference counting logic.
 #[derive(Debug)]

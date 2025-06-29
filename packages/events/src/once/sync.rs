@@ -10,15 +10,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Waker;
 
-mod by_ref;
 mod by_arc;
-mod by_rc;
 mod by_ptr;
+mod by_rc;
+mod by_ref;
 
-pub use by_ref::{ByRefEventReceiver, ByRefEventSender};
 pub use by_arc::{ByArcEventReceiver, ByArcEventSender};
-pub use by_rc::{ByRcEventReceiver, ByRcEventSender};
 pub use by_ptr::{ByPtrEventReceiver, ByPtrEventSender};
+pub use by_rc::{ByRcEventReceiver, ByRcEventSender};
+pub use by_ref::{ByRefEventReceiver, ByRefEventSender};
 
 /// State of a thread-safe event.
 #[derive(Debug)]

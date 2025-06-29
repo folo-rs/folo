@@ -1,7 +1,7 @@
 //! Rc-based senders and receivers for pooled events.
 
-use std::rc::Rc;
 use std::ptr::NonNull;
+use std::rc::Rc;
 
 use pinned_pool::Key;
 
