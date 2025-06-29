@@ -32,7 +32,7 @@
 //! let (sender, receiver) = event.by_ref();
 //!
 //! sender.send(42);
-//! let value = block_on(receiver.recv_async());
+//! let value = block_on(receiver);
 //! assert_eq!(value, 42);
 //! ```
 //!
@@ -46,7 +46,7 @@
 //! let (sender, receiver) = event.by_ref();
 //!
 //! sender.send(42);
-//! let value = block_on(receiver.recv_async());
+//! let value = block_on(receiver);
 //! assert_eq!(value, 42);
 //! ```
 

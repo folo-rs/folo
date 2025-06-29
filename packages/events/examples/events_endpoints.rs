@@ -16,7 +16,7 @@ fn main() {
     let (sender1, receiver1) = event1.by_ref();
 
     sender1.send(42);
-    let value1 = block_on(receiver1.recv_async());
+    let value1 = block_on(receiver1);
     println!("Received: {value1}");
 
     // Method 2: Using checked variant
@@ -26,7 +26,7 @@ fn main() {
 
     if let Some((sender2, receiver2)) = event2.by_ref_checked() {
         sender2.send(12345);
-        let value2 = block_on(receiver2.recv_async());
+        let value2 = block_on(receiver2);
         println!("Received via checked method: {value2}");
     }
 

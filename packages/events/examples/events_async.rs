@@ -15,7 +15,7 @@ fn basic_async_usage() {
     let (sender, receiver) = event.by_ref();
 
     sender.send("Hello async world!".to_string());
-    let message = block_on(receiver.recv_async());
+    let message = block_on(receiver);
     println!("Received: {message}");
 }
 
@@ -36,7 +36,7 @@ fn cross_thread_async_communication() {
         });
 
         let receiver_handle = s.spawn(move || {
-            let value = block_on(receiver.recv_async());
+            let value = block_on(receiver);
             println!("Received value {value} in background thread");
             value
         });
@@ -55,7 +55,7 @@ fn single_threaded_async_usage() {
     let (local_sender, local_receiver) = local_event.by_ref();
 
     local_sender.send("Local async message".to_string());
-    let local_message = block_on(local_receiver.recv_async());
+    let local_message = block_on(local_receiver);
     println!("Received: {local_message}");
 }
 
@@ -71,8 +71,8 @@ fn async_only_usage() {
     second_sender.send(200);
 
     // Use async receive for both
-    let sync_value = block_on(first_receiver.recv_async());
-    let async_value = block_on(second_receiver.recv_async());
+    let sync_value = block_on(first_receiver);
+    let async_value = block_on(second_receiver);
 
     println!("First received: {sync_value}, Second received: {async_value}");
 }

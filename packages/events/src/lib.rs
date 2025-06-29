@@ -13,8 +13,7 @@
 //! - [`LocalEvent<T>`], [`ByRefLocalEventSender<T>`], [`ByRefLocalEventReceiver<T>`] - Single-threaded variants using references
 //! - [`ByRcLocalEventSender<T>`], [`ByRcLocalEventReceiver<T>`] - Single-threaded variants using Rc ownership
 //!
-//! Each receiver type supports asynchronous receiving:
-//! - [`ByRefEventReceiver::recv_async`] / [`ByRefLocalEventReceiver::recv_async`] - Asynchronous
+//! Each receiver type implements [`Future`], allowing you to `.await` them directly.
 //!
 //! # Thread-safe Example
 //!
@@ -30,7 +29,7 @@
 //! sender.send("Hello, World!".to_string());
 //!
 //! // Receive the message
-//! let message = block_on(receiver.recv_async());
+//! let message = block_on(receiver);
 //! assert_eq!(message, "Hello, World!");
 //! ```
 //!
@@ -48,7 +47,7 @@
 //! sender.send("Hello, World!".to_string());
 //!
 //! // Receive the message
-//! let message = block_on(receiver.recv_async());
+//! let message = block_on(receiver);
 //! assert_eq!(message, "Hello, World!");
 //! ```
 //!
@@ -66,7 +65,7 @@
 //! sender.send(42);
 //!
 //! // Receive the value asynchronously
-//! let value = block_on(receiver.recv_async());
+//! let value = block_on(receiver);
 //! assert_eq!(value, 42);
 //! ```
 //!
@@ -86,7 +85,7 @@
 //! sender.send("Hello, Arc!".to_string());
 //!
 //! // Receive the message
-//! let message = block_on(receiver.recv_async());
+//! let message = block_on(receiver);
 //! assert_eq!(message, "Hello, Arc!");
 //! ```
 //!
@@ -106,7 +105,7 @@
 //! sender.send("Hello, Rc!".to_string());
 //!
 //! // Receive the message
-//! let message = block_on(receiver.recv_async());
+//! let message = block_on(receiver);
 //! assert_eq!(message, "Hello, Rc!");
 //! ```
 

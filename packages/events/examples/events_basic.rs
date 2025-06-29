@@ -19,7 +19,7 @@ fn main() {
     sender.send("Hello from events!".to_string());
 
     println!("Receiving message through event...");
-    let message = block_on(receiver.recv_async());
+    let message = block_on(receiver);
 
     println!("Received: {message}");
     println!("Example completed successfully!");
