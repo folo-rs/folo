@@ -9,6 +9,16 @@ use std::time::Duration;
 use events::once::{Event, LocalEvent};
 use futures::executor::block_on;
 
+/// Example integer value for testing.
+const EXAMPLE_INTEGER: i32 = 42;
+
+/// Example values for async testing.
+const FIRST_VALUE: u64 = 100;
+const SECOND_VALUE: u64 = 200;
+
+/// Simulated work duration in milliseconds.
+const SIMULATED_WORK_DURATION_MS: u64 = 100;
+
 fn basic_async_usage() {
     println!("1. Basic async usage with thread-safe events:");
     block_on(async {
@@ -32,8 +42,8 @@ fn cross_thread_async_communication() {
     thread::scope(|s| {
         let sender_handle = s.spawn(move || {
             // Simulate some work
-            thread::sleep(Duration::from_millis(100));
-            sender.send(42);
+            thread::sleep(Duration::from_millis(SIMULATED_WORK_DURATION_MS));
+            sender.send(EXAMPLE_INTEGER);
             println!("Sent value from background thread");
         });
 
@@ -47,7 +57,7 @@ fn cross_thread_async_communication() {
         let received_value = receiver_handle
             .join()
             .expect("Receiver thread should complete");
-        assert_eq!(received_value, 42);
+        assert_eq!(received_value, EXAMPLE_INTEGER);
     });
 }
 
@@ -72,8 +82,8 @@ fn async_only_usage() {
         let second_event = Event::<u64>::new();
         let (second_sender, second_receiver) = second_event.by_ref();
 
-        first_sender.send(100);
-        second_sender.send(200);
+        first_sender.send(FIRST_VALUE);
+        second_sender.send(SECOND_VALUE);
 
         // Use async receive for both
         let sync_value = first_receiver.await;

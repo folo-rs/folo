@@ -3,21 +3,27 @@
 use events::once::EventPool;
 use futures::executor::block_on;
 
+/// Example integer value for testing.
+const EXAMPLE_INTEGER: i32 = 42;
+
+/// Example second value for testing.
+const EXAMPLE_SECOND_VALUE: i32 = 100;
+
 fn main() {
     println!("=== Pooled Events Example ===");
 
     block_on(async {
-        // Create a pool for managing i32 events
+        // Pool for reusing i32 event instances to reduce allocation overhead
         let mut pool = EventPool::<i32>::new();
 
-        // Create sender and receiver from the pool
+        // Extract sender and receiver from an available pooled event
         let (sender, receiver) = pool.by_ref();
 
         println!("Created pooled event sender and receiver");
 
         // Send a value through the pooled event
-        sender.send(42);
-        println!("Sent value: 42");
+        sender.send(EXAMPLE_INTEGER);
+        println!("Sent value: {EXAMPLE_INTEGER}");
 
         // Receive the value
         let received = receiver.recv_async().await;
@@ -25,9 +31,9 @@ fn main() {
 
         println!("Event automatically returned to pool when sender/receiver were dropped");
 
-        // Create another event from the same pool
+        // Reuse the pool for another event after the first one was automatically returned
         let (sender2, receiver2) = pool.by_ref();
-        sender2.send(100);
+        sender2.send(EXAMPLE_SECOND_VALUE);
         let received2 = receiver2.recv_async().await;
         println!("Second event - received value: {received2}");
 

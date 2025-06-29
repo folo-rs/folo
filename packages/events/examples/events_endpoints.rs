@@ -6,6 +6,12 @@
 use events::once::Event;
 use futures::executor::block_on;
 
+/// Example integer value for testing.
+const EXAMPLE_INTEGER: i32 = 42;
+
+/// Example large value for testing.
+const EXAMPLE_LARGE_VALUE: u64 = 12345;
+
 fn main() {
     println!("=== Event Endpoints Example ===");
 
@@ -16,7 +22,7 @@ fn main() {
         let event1 = Event::<i32>::new();
         let (sender1, receiver1) = event1.by_ref();
 
-        sender1.send(42);
+        sender1.send(EXAMPLE_INTEGER);
         let value1 = receiver1.await;
         println!("Received: {value1}");
 
@@ -26,7 +32,7 @@ fn main() {
         let event2 = Event::<u64>::new();
 
         if let Some((sender2, receiver2)) = event2.by_ref_checked() {
-            sender2.send(12345);
+            sender2.send(EXAMPLE_LARGE_VALUE);
             let value2 = receiver2.await;
             println!("Received via checked method: {value2}");
         }

@@ -8,6 +8,9 @@ use std::thread;
 use events::once::{Event, LocalEvent};
 use futures::executor::block_on;
 
+/// Example integer value for testing.
+const EXAMPLE_INTEGER: i32 = 42;
+
 fn main() {
     println!("=== Arc-based Event Example ===");
     arc_event_example();
@@ -40,7 +43,7 @@ fn rc_event_example() {
         let event = Rc::new(Event::<i32>::new());
         let (sender, receiver) = event.by_rc();
 
-        sender.send(42);
+        sender.send(EXAMPLE_INTEGER);
         let value = receiver.await;
         println!("Received: {value}");
     });
@@ -77,7 +80,11 @@ fn cross_thread_arc_example() {
     });
 
     // Wait for completion
-    sender_handle.join().unwrap();
-    let message = receiver_handle.join().unwrap();
+    sender_handle
+        .join()
+        .expect("sender thread should complete successfully");
+    let message = receiver_handle
+        .join()
+        .expect("receiver thread should complete successfully");
     assert_eq!(message, "Message from another thread!");
 }

@@ -8,6 +8,12 @@ use std::sync::{Arc, Mutex};
 use events::once::EventPool;
 use futures::executor::block_on;
 
+/// Test values for different pooled event variants.
+const BY_REF_TEST_VALUE: i32 = 10;
+const BY_RC_TEST_VALUE: i32 = 20;
+const BY_ARC_TEST_VALUE: i32 = 30;
+const BY_PTR_TEST_VALUE: i32 = 40;
+
 fn main() {
     println!("=== Pooled Events Variants Example ===");
 
@@ -18,7 +24,7 @@ fn main() {
             let mut pool = EventPool::<i32>::new();
             let (sender, receiver) = pool.by_ref();
 
-            sender.send(10);
+            sender.send(BY_REF_TEST_VALUE);
             let value = receiver.recv_async().await;
             println!("   by_ref received: {value}");
         });
@@ -31,7 +37,7 @@ fn main() {
             let pool = Rc::new(RefCell::new(EventPool::<i32>::new()));
             let (sender, receiver) = pool.borrow_mut().by_rc(&pool);
 
-            sender.send(20);
+            sender.send(BY_RC_TEST_VALUE);
             let value = receiver.recv_async().await;
             println!("   by_rc received: {value}");
         });
@@ -41,17 +47,24 @@ fn main() {
     println!("\n3. Testing by_arc variant:");
     {
         let pool = Arc::new(Mutex::new(EventPool::<i32>::new()));
-        let (sender, receiver) = pool.lock().unwrap().by_arc(&pool);
+        let (sender, receiver) = pool
+            .lock()
+            .expect("pool lock should not be poisoned")
+            .by_arc(&pool);
 
         // Can be moved across threads
         let sender_thread = std::thread::spawn(move || {
-            sender.send(30);
+            sender.send(BY_ARC_TEST_VALUE);
         });
 
         let receiver_thread = std::thread::spawn(move || block_on(receiver.recv_async()));
 
-        sender_thread.join().unwrap();
-        let value = receiver_thread.join().unwrap();
+        sender_thread
+            .join()
+            .expect("sender thread should complete successfully");
+        let value = receiver_thread
+            .join()
+            .expect("receiver thread should complete successfully");
         println!("   by_arc received: {value}");
     }
 
@@ -65,7 +78,7 @@ fn main() {
             // SAFETY: We ensure the pool outlives the sender and receiver
             let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
 
-            sender.send(40);
+            sender.send(BY_PTR_TEST_VALUE);
             let value = receiver.recv_async().await;
             println!("   by_ptr received: {value}");
             // sender and receiver are dropped here, before pool
@@ -76,13 +89,16 @@ fn main() {
     println!("\n5. Testing by_arc with async:");
     {
         let pool = Arc::new(Mutex::new(EventPool::<String>::new()));
-        let (sender, receiver) = pool.lock().unwrap().by_arc(&pool);
+        let (sender, receiver) = pool
+            .lock()
+            .expect("pool lock should not be poisoned")
+            .by_arc(&pool);
 
         // Run both tasks in async block
         block_on(async {
             // Send the message
             sender.send("Hello async!".to_string());
-            
+
             // Receive the message
             let value = receiver.recv_async().await;
             println!("   by_arc async received: {value}");

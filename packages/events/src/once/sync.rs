@@ -352,7 +352,10 @@ where
     /// Returns `Ok(())` if the value was set successfully, or `Err(value)` if
     /// the event has already been fired.
     pub(crate) fn try_set(&self, value: T) -> Result<(), T> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .expect("event state lock should never be poisoned");
         match mem::replace(&mut *state, EventState::Consumed) {
             EventState::NotSet => {
                 *state = EventState::Set(value);
@@ -372,7 +375,10 @@ where
 
     /// Polls for the value with a waker for async support.
     pub(crate) fn poll_recv(&self, waker: &Waker) -> Option<T> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .expect("event state lock should never be poisoned");
         match mem::replace(&mut *state, EventState::Consumed) {
             EventState::Set(value) => Some(value),
             EventState::NotSet | EventState::Awaiting(_) => {

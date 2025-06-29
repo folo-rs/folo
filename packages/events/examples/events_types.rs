@@ -6,6 +6,15 @@
 use events::once::Event;
 use futures::executor::block_on;
 
+/// Example task ID for demonstration purposes.
+const EXAMPLE_TASK_ID: u32 = 42;
+
+/// Example task duration in milliseconds.
+const EXAMPLE_DURATION_MS: u64 = 150;
+
+/// Example integer value for testing.
+const EXAMPLE_INTEGER: i32 = -42;
+
 #[derive(Clone, Debug)]
 #[allow(
     dead_code,
@@ -28,7 +37,7 @@ fn main() {
         let int_event = Event::<i32>::new();
         let (int_sender, int_receiver) = int_event.by_ref();
 
-        int_sender.send(-42);
+        int_sender.send(EXAMPLE_INTEGER);
         let int_value = int_receiver.await;
         println!("Received integer: {int_value}");
 
@@ -59,10 +68,10 @@ fn main() {
         let (struct_sender, struct_receiver) = struct_event.by_ref();
 
         let task = TaskResult {
-            id: 42,
+            id: EXAMPLE_TASK_ID,
             description: "Process user data".to_string(),
             success: true,
-            duration_ms: 150,
+            duration_ms: EXAMPLE_DURATION_MS,
         };
 
         struct_sender.send(task);

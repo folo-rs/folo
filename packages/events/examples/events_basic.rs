@@ -10,10 +10,10 @@ fn main() {
     println!("=== Events Basic Example ===");
 
     block_on(async {
-        // Create an event for passing string messages
+        // Event for passing string messages between application components
         let event = Event::<String>::new();
 
-        // Get both the sender and receiver endpoints
+        // Extract both communication endpoints
         let (sender, receiver) = event.by_ref();
 
         println!("Sending message through event...");

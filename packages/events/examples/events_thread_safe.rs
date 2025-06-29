@@ -40,7 +40,7 @@ fn main() {
     println!();
     println!("3. Cross-thread communication pattern:");
 
-    // Create event and extract endpoints in the main scope
+    // Extract endpoints before threading to satisfy lifetime requirements
     let event = Event::<String>::new();
     let (sender, receiver) = event.by_ref();
 
@@ -59,8 +59,12 @@ fn main() {
             message
         });
 
-        sender_handle.join().unwrap();
-        let message = receiver_handle.join().unwrap();
+        sender_handle
+            .join()
+            .expect("sender thread should complete successfully");
+        let message = receiver_handle
+            .join()
+            .expect("receiver thread should complete successfully");
         println!("Cross-thread message: {message}");
     });
 

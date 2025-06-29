@@ -8,6 +8,9 @@ use std::rc::Rc;
 use events::once::LocalEvent;
 use futures::executor::block_on;
 
+/// Example integer value for testing.
+const EXAMPLE_INTEGER: i32 = 123;
+
 fn main() {
     println!("=== Single-threaded Events Example ===");
 
@@ -26,7 +29,7 @@ fn main() {
         println!("2. LocalEvent with Rc for sharing:");
         let event_rc = Rc::new(LocalEvent::<i32>::new());
         let (sender_rc, receiver_rc) = event_rc.by_ref();
-        sender_rc.send(123);
+        sender_rc.send(EXAMPLE_INTEGER);
         let value = receiver_rc.await;
         println!("Received from Rc-wrapped LocalEvent: {value}");
 
