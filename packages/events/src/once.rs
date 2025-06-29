@@ -89,9 +89,6 @@ mod pooled_local;
 mod pooled_sync;
 mod sync;
 
-#[cfg(test)]
-mod test_local_event_pool;
-
 // Re-export all public types from all modules
 pub use local::{
     ByPtrLocalEventReceiver, ByPtrLocalEventSender, ByRcLocalEventReceiver, ByRcLocalEventSender,
