@@ -269,6 +269,11 @@ impl BuildTargetPlatform {
                     // This line gives us the processor bogomips:
                     // bogomips        : 4890.85
                     //
+                    // We use bogomips instead of "cpu MHz" because cpu MHz reports the current
+                    // dynamic frequency which fluctuates due to power management and thermal
+                    // throttling, leading to unreliable efficiency class detection. Bogomips
+                    // provides a stable measure of processor capability that remains consistent.
+                    //
                     // All other lines we ignore.
 
                     let mut index = None;
