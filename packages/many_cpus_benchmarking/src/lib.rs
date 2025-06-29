@@ -100,6 +100,242 @@
 //!
 //! <img src="https://media.githubusercontent.com/media/folo-rs/folo/refs/heads/main/packages/many_cpus_benchmarking/images/work_distribution_comparison.png">
 //!
+//! # Step-by-step guides for common scenarios
+//!
+//! The following sections provide detailed guidance for implementing the most important
+//! multi-threaded benchmarking scenarios using this crate.
+//!
+//! ## Scenario 1: Multiple threads performing the same action on shared data
+//!
+//! This scenario is useful for measuring how memory locality affects performance when multiple
+//! threads perform identical operations on shared data structures. Examples include concurrent
+//! readers of a shared cache, multiple workers processing items from a shared queue using the
+//! same algorithm, or parallel searchers scanning the same dataset.
+//!
+//! ### Step-by-step implementation
+//!
+//! 1. **Define the payload struct** with shared data wrapped in thread-safe containers:
+//!
+//! ```rust
+//! use std::collections::HashMap;
+//! use std::sync::{Arc, RwLock};
+//!
+//! use many_cpus_benchmarking::Payload;
+//!
+//! #[derive(Debug, Default)]
+//! struct SharedDataSameAction {
+//!     // Shared data structure accessible by both workers
+//!     shared_map: Arc<RwLock<HashMap<u64, u64>>>,
+//!
+//!     // Flag to designate which worker initializes the data
+//!     is_initializer: bool,
+//! }
+//! ```
+//!
+//! 2. **Implement `new_pair()`** to create connected payload instances:
+//!
+//! ```rust
+//! # use std::collections::HashMap;
+//! # use std::sync::{Arc, RwLock};
+//! # use many_cpus_benchmarking::Payload;
+//! # #[derive(Debug, Default)]
+//! # struct SharedDataSameAction {
+//! #     shared_map: Arc<RwLock<HashMap<u64, u64>>>,
+//! #     is_initializer: bool,
+//! # }
+//! impl Payload for SharedDataSameAction {
+//!     fn new_pair() -> (Self, Self) {
+//!         let shared_map = Arc::new(RwLock::new(HashMap::new()));
+//!
+//!         let worker1 = Self {
+//!             shared_map: Arc::clone(&shared_map),
+//!             is_initializer: true,
+//!         };
+//!
+//!         let worker2 = Self {
+//!             shared_map,
+//!             is_initializer: false,
+//!         };
+//!
+//!         (worker1, worker2)
+//!     }
+//!
+//!     fn prepare(&mut self) {
+//!         // Only one worker initializes the shared data
+//!         if self.is_initializer {
+//!             let mut map = self.shared_map.write().unwrap();
+//!             for i in 0..1000 {
+//!                 map.insert(i, i * 2);
+//!             }
+//!         }
+//!     }
+//!
+//!     fn process(&mut self) {
+//!         // Both workers perform the same operation
+//!         let map = self.shared_map.read().unwrap();
+//!         for key in 0..1000 {
+//!             std::hint::black_box(map.get(&key));
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! 3. **Choose appropriate work distribution modes**. Since both workers perform the same action,
+//!    payload exchange doesn't change the benchmark semantics, so you can exclude "self" modes:
+//!
+//! ```rust ignore (benchmark)
+//! use criterion::Criterion;
+//! use many_cpus_benchmarking::{WorkDistribution, execute_runs};
+//!
+//! fn benchmark_shared_reads(c: &mut Criterion) {
+//!     // Focus on distribution modes that use different processors
+//!     execute_runs::<SharedDataSameAction, 100>(
+//!         c,
+//!         WorkDistribution::all_with_unique_processors_without_self()
+//!     );
+//! }
+//! ```
+//!
+//! ### Key considerations for this scenario
+//!
+//! - Use thread-safe containers like `Arc<RwLock<T>>` or lock-free data structures
+//! - Designate one worker as the initializer to avoid race conditions during setup
+//! - Both workers should perform identical operations in `process()`
+//! - Consider using `WorkDistribution::all_with_unique_processors_without_self()` since payload
+//!   exchange doesn't affect the benchmark when workers do the same thing
+//! - Memory locality effects will be most visible when workers are in different memory regions
+//!
+//! ## Scenario 2: Multiple threads performing different actions (producer-consumer pattern)
+//!
+//! This scenario measures performance when threads have complementary roles, such as
+//! producer-consumer pairs, sender-receiver communication, or writer-reader patterns.
+//! This is essential for understanding how memory locality affects inter-thread communication.
+//!
+//! ### Step-by-step implementation
+//!
+//! 1. **Define the payload struct** with communication mechanisms and role identifiers:
+//!
+//! ```rust
+//! use std::sync::mpsc;
+//!
+//! use many_cpus_benchmarking::Payload;
+//!
+//! #[derive(Debug)]
+//! struct ProducerConsumerPattern {
+//!     // Communication channels
+//!     sender: mpsc::Sender<u64>,
+//!     receiver: mpsc::Receiver<u64>,
+//!
+//!     // Role identifier
+//!     is_producer: bool,
+//! }
+//! ```
+//!
+//! 2. **Implement `new_pair()`** to create complementary worker roles:
+//!
+//! ```rust
+//! # use std::sync::mpsc;
+//! # use many_cpus_benchmarking::Payload;
+//! # #[derive(Debug)]
+//! # struct ProducerConsumerPattern {
+//! #     sender: mpsc::Sender<u64>,
+//! #     receiver: mpsc::Receiver<u64>,
+//! #     is_producer: bool,
+//! # }
+//! impl Payload for ProducerConsumerPattern {
+//!     fn new_pair() -> (Self, Self) {
+//!         let (tx1, rx1) = mpsc::channel();
+//!         let (tx2, rx2) = mpsc::channel();
+//!
+//!         let producer = Self {
+//!             sender: tx1,
+//!             receiver: rx2,
+//!             is_producer: true,
+//!         };
+//!
+//!         let consumer = Self {
+//!             sender: tx2,
+//!             receiver: rx1,
+//!             is_producer: false,
+//!         };
+//!
+//!         (producer, consumer)
+//!     }
+//!
+//!     fn prepare(&mut self) {
+//!         // Pre-populate channels to avoid deadlocks
+//!         for i in 0..1000 {
+//!             let _ = self.sender.send(i);
+//!         }
+//!     }
+//!
+//!     fn process(&mut self) {
+//!         if self.is_producer {
+//!             // Producer: mostly sends data
+//!             for i in 0..5000 {
+//!                 let _ = self.sender.send(i);
+//!                 if i % 10 == 0 {
+//!                     if let Ok(response) = self.receiver.try_recv() {
+//!                         std::hint::black_box(response);
+//!                     }
+//!                 }
+//!             }
+//!         } else {
+//!             // Consumer: mostly receives and processes data
+//!             for _ in 0..5000 {
+//!                 if let Ok(data) = self.receiver.try_recv() {
+//!                     let processed = data * 2;
+//!                     std::hint::black_box(processed);
+//!                     if data % 5 == 0 {
+//!                         let _ = self.sender.send(processed);
+//!                     }
+//!                 }
+//!             }
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! 3. **Use all work distribution modes** since different worker roles make payload exchange meaningful:
+//!
+//! ```rust ignore (benchmark)
+//! use criterion::Criterion;
+//! use many_cpus_benchmarking::{WorkDistribution, execute_runs};
+//!
+//! fn benchmark_producer_consumer(c: &mut Criterion) {
+//!     // All distribution modes are relevant for different worker roles
+//!     execute_runs::<ProducerConsumerPattern, 200>(
+//!         c,
+//!         WorkDistribution::all_with_unique_processors()
+//!     );
+//! }
+//! ```
+//!
+//! ### Key considerations for this scenario
+//!
+//! - Design complementary roles that represent realistic workload patterns
+//! - Use communication primitives appropriate for your use case (channels, shared memory, etc.)
+//! - Pre-populate communication channels in `prepare()` to avoid deadlocks
+//! - Include all work distribution modes since role differences make payload exchange meaningful
+//! - Consider bidirectional communication to create realistic interaction patterns
+//! - Be aware that some distribution modes like `PinnedSameProcessor` may not be suitable
+//!   for scenarios requiring real-time collaboration between workers
+//!
+//! ## Choosing the right work distribution modes
+//!
+//! Different scenarios benefit from different work distribution mode selections:
+//!
+//! - **Same action scenarios**: Use `WorkDistribution::all_with_unique_processors_without_self()`
+//!   to focus on memory locality effects without payload exchange overhead
+//! - **Different action scenarios**: Use `WorkDistribution::all_with_unique_processors()` to
+//!   include both memory locality and payload exchange effects
+//! - **All scenarios**: Use `WorkDistribution::all()` to get the complete picture including
+//!   same-processor execution modes
+//!
+//! For complete working examples, see:
+//! - `examples/shared_data_same_action.rs` - Multiple readers of shared `HashMap`
+//! - `examples/shared_data_different_actions.rs` - Producer-consumer channel communication
+//!
 //! # Payload multiplier
 //!
 //! It may sometimes be desirable to multiply the size of a benchmark scenario, e.g. if a scenario is
