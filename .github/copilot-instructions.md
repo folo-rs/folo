@@ -339,3 +339,8 @@ times the magic value is present, even one instance is enough to warrant a named
 
 The exception is example code - if a magic value is only used once in an example, it is
 fine to leave it inline.
+
+# Design documentation
+
+Document design elements, key decisions and architectural choices in inline comments in the
+files to which they apply. Use regular `//` comments, not API documentation comments.
