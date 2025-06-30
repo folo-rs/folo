@@ -392,7 +392,7 @@ mod tests {
             let (sender, receiver) = pool.bind_by_ref();
 
             sender.send(42);
-            let value = futures::executor::block_on(receiver.recv_async());
+            let value = futures::executor::block_on(receiver.recv_async()).unwrap();
             assert_eq!(value, 42);
         });
     }
@@ -406,7 +406,7 @@ mod tests {
             let (sender, receiver) = pool.bind_by_ref();
 
             sender.send(42);
-            let value = block_on(receiver.recv_async());
+            let value = block_on(receiver.recv_async()).unwrap();
             assert_eq!(value, 42);
         });
     }
@@ -434,13 +434,13 @@ mod tests {
             // Test one event first
             let (sender1, receiver1) = pool.bind_by_ref();
             sender1.send(1);
-            let value1 = futures::executor::block_on(receiver1.recv_async());
+            let value1 = futures::executor::block_on(receiver1.recv_async()).unwrap();
             assert_eq!(value1, 1);
 
             // Test another event
             let (sender2, receiver2) = pool.bind_by_ref();
             sender2.send(2);
-            let value2 = futures::executor::block_on(receiver2.recv_async());
+            let value2 = futures::executor::block_on(receiver2.recv_async()).unwrap();
             assert_eq!(value2, 2);
         });
     }
@@ -454,7 +454,7 @@ mod tests {
             let (sender, receiver) = pool.bind_by_rc(&pool);
 
             sender.send(42);
-            let value = futures::executor::block_on(receiver.recv_async());
+            let value = futures::executor::block_on(receiver.recv_async()).unwrap();
             assert_eq!(value, 42);
         });
     }
@@ -468,7 +468,7 @@ mod tests {
             let (sender, receiver) = pool.bind_by_arc(&pool);
 
             sender.send(42);
-            let value = futures::executor::block_on(receiver.recv_async());
+            let value = futures::executor::block_on(receiver.recv_async()).unwrap();
             assert_eq!(value, 42);
         });
     }
@@ -484,7 +484,7 @@ mod tests {
             let (sender, receiver) = unsafe { pinned_pool.bind_by_ptr() };
 
             sender.send(42);
-            let value = futures::executor::block_on(receiver.recv_async());
+            let value = futures::executor::block_on(receiver.recv_async()).unwrap();
             assert_eq!(value, 42);
             // sender and receiver are dropped here, before pool
         });
@@ -501,7 +501,7 @@ mod tests {
             let (sender, receiver) = pool.bind_by_rc(&pool);
 
             sender.send(42);
-            let value = block_on(receiver.recv_async());
+            let value = block_on(receiver.recv_async()).unwrap();
             assert_eq!(value, 42);
         });
     }
@@ -517,7 +517,7 @@ mod tests {
             let (sender, receiver) = pool.bind_by_arc(&pool);
 
             sender.send(42);
-            let value = block_on(receiver.recv_async());
+            let value = block_on(receiver.recv_async()).unwrap();
             assert_eq!(value, 42);
         });
     }
@@ -535,7 +535,7 @@ mod tests {
             let (sender, receiver) = unsafe { pinned_pool.bind_by_ptr() };
 
             sender.send(42);
-            let value = block_on(receiver.recv_async());
+            let value = block_on(receiver.recv_async()).unwrap();
             assert_eq!(value, 42);
             // sender and receiver are dropped here, before pool
         });
@@ -557,7 +557,7 @@ mod tests {
             // Create a new event to verify the pool is still functional
             let (sender2, receiver2) = pool.bind_by_ref();
             sender2.send(123);
-            let value = futures::executor::block_on(receiver2.recv_async());
+            let value = futures::executor::block_on(receiver2.recv_async()).unwrap();
             assert_eq!(value, 123);
         });
     }
@@ -577,7 +577,7 @@ mod tests {
             // Create a new event to verify the pool is still functional
             let (sender2, receiver2) = pool.bind_by_ref();
             sender2.send(456);
-            let value = futures::executor::block_on(receiver2.recv_async());
+            let value = futures::executor::block_on(receiver2.recv_async()).unwrap();
             assert_eq!(value, 456);
         });
     }
@@ -596,7 +596,7 @@ mod tests {
             // Create a new event to verify the pool is still functional
             let (sender2, receiver2) = pool.bind_by_rc(&pool);
             sender2.send(789);
-            let value = futures::executor::block_on(receiver2.recv_async());
+            let value = futures::executor::block_on(receiver2.recv_async()).unwrap();
             assert_eq!(value, 789);
         });
     }
@@ -615,7 +615,7 @@ mod tests {
             // Create a new event to verify the pool is still functional
             let (sender2, receiver2) = pool.bind_by_rc(&pool);
             sender2.send(321);
-            let value = futures::executor::block_on(receiver2.recv_async());
+            let value = futures::executor::block_on(receiver2.recv_async()).unwrap();
             assert_eq!(value, 321);
         });
     }
@@ -634,7 +634,7 @@ mod tests {
             // Create a new event to verify the pool is still functional
             let (sender2, receiver2) = pool.bind_by_arc(&pool);
             sender2.send(654);
-            let value = futures::executor::block_on(receiver2.recv_async());
+            let value = futures::executor::block_on(receiver2.recv_async()).unwrap();
             assert_eq!(value, 654);
         });
     }
@@ -653,7 +653,7 @@ mod tests {
             // Create a new event to verify the pool is still functional
             let (sender2, receiver2) = pool.bind_by_arc(&pool);
             sender2.send(987);
-            let value = futures::executor::block_on(receiver2.recv_async());
+            let value = futures::executor::block_on(receiver2.recv_async()).unwrap();
             assert_eq!(value, 987);
         });
     }
@@ -676,7 +676,7 @@ mod tests {
             // SAFETY: We ensure the pool outlives the sender and receiver
             let (sender2, receiver2) = unsafe { pinned_pool.bind_by_ptr() };
             sender2.send(147);
-            let value = futures::executor::block_on(receiver2.recv_async());
+            let value = futures::executor::block_on(receiver2.recv_async()).unwrap();
             assert_eq!(value, 147);
         });
     }
@@ -699,7 +699,7 @@ mod tests {
             // SAFETY: We ensure the pool outlives the sender and receiver
             let (sender2, receiver2) = unsafe { pinned_pool.bind_by_ptr() };
             sender2.send(258);
-            let value = futures::executor::block_on(receiver2.recv_async());
+            let value = futures::executor::block_on(receiver2.recv_async()).unwrap();
             assert_eq!(value, 258);
         });
     }
@@ -719,7 +719,7 @@ mod tests {
             // Verify pool still works correctly after cleanup
             let (sender, receiver) = pool.bind_by_ref();
             sender.send(999);
-            let value = futures::executor::block_on(receiver.recv_async());
+            let value = futures::executor::block_on(receiver.recv_async()).unwrap();
             assert_eq!(value, 999);
         });
     }
@@ -749,7 +749,7 @@ mod tests {
             // Create one more event to verify pool still works
             let (sender, receiver) = pool.bind_by_ref();
             sender.send(42);
-            let value = futures::executor::block_on(receiver.recv_async());
+            let value = futures::executor::block_on(receiver.recv_async()).unwrap();
             assert_eq!(value, 42);
         });
     }
@@ -770,7 +770,7 @@ mod tests {
             // Pool should still work efficiently
             let (sender, receiver) = pool.bind_by_ref();
             sender.send(999);
-            let value = futures::executor::block_on(receiver.recv_async());
+            let value = futures::executor::block_on(receiver.recv_async()).unwrap();
             assert_eq!(value, 999);
         });
     }

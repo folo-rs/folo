@@ -333,7 +333,7 @@ mod tests {
                 let (sender, receiver) = pool.bind_by_ref();
 
                 sender.send(42);
-                let value = receiver.await;
+                let value = receiver.await.unwrap();
                 assert_eq!(value, 42);
             });
         });
@@ -347,7 +347,7 @@ mod tests {
                 let (sender, receiver) = pool.bind_by_rc(&pool);
 
                 sender.send(42);
-                let value = receiver.await;
+                let value = receiver.await.unwrap();
                 assert_eq!(value, 42);
             });
         });
@@ -363,7 +363,7 @@ mod tests {
                 let (sender, receiver) = unsafe { pinned_pool.bind_by_ptr() };
 
                 sender.send(42);
-                let value = receiver.await;
+                let value = receiver.await.unwrap();
                 assert_eq!(value, 42);
             });
         });
@@ -379,14 +379,14 @@ mod tests {
                 {
                     let (sender1, receiver1) = pool.bind_by_ref();
                     sender1.send(1);
-                    let value1 = receiver1.await;
+                    let value1 = receiver1.await.unwrap();
                     assert_eq!(value1, 1);
                 }
 
                 {
                     let (sender2, receiver2) = pool.bind_by_ref();
                     sender2.send(2);
-                    let value2 = receiver2.await;
+                    let value2 = receiver2.await.unwrap();
                     assert_eq!(value2, 2);
                 }
             });
@@ -402,7 +402,7 @@ mod tests {
                 {
                     let (sender, receiver) = pool.bind_by_ref();
                     sender.send(42);
-                    let value = receiver.await;
+                    let value = receiver.await.unwrap();
                     assert_eq!(value, 42);
                     // sender and receiver dropped here
                 }
@@ -430,8 +430,8 @@ mod tests {
                 sender2.send(2);
 
                 // Receive values
-                let value1 = receiver1.await;
-                let value2 = receiver2.await;
+                let value1 = receiver1.await.unwrap();
+                let value2 = receiver2.await.unwrap();
 
                 assert_eq!(value1, 1);
                 assert_eq!(value2, 2);

@@ -69,7 +69,7 @@
 //! sender.send("Hello, World!".to_string());
 //!
 //! // Receive the message
-//! let message = receiver.await;
+//! let message = receiver.await.unwrap();
 //! assert_eq!(message, "Hello, World!");
 //! # });
 //! ```
@@ -89,7 +89,7 @@
 //! sender.send("Hello, World!".to_string());
 //!
 //! // Receive the message
-//! let message = receiver.await;
+//! let message = receiver.await.unwrap();
 //! assert_eq!(message, "Hello, World!");
 //! # });
 //! ```
@@ -111,7 +111,7 @@
 //! sender.send("Hello, Arc!".to_string());
 //!
 //! // Receive the message
-//! let message = receiver.await;
+//! let message = receiver.await.unwrap();
 //! assert_eq!(message, "Hello, Arc!");
 //! # });
 //! ```
@@ -133,13 +133,14 @@
 //! sender.send("Hello, Rc!".to_string());
 //!
 //! // Receive the message
-//! let message = receiver.await;
+//! let message = receiver.await.unwrap();
 //! assert_eq!(message, "Hello, Rc!");
 //! # });
 //! ```
 
-pub mod once;
-
+mod disconnected;
 mod futures;
+mod once;
 
+pub use disconnected::*;
 pub use once::*;

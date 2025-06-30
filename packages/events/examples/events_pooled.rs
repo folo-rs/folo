@@ -36,7 +36,7 @@ fn main() {
             sender.send(FIRST_VALUE);
             println!("   - Sent value: {FIRST_VALUE}");
 
-            let received = receiver.recv_async().await;
+            let received = receiver.recv_async().await.expect("sender should not have been dropped");
             println!("   - Received value: {received}");
 
             // When this scope ends, sender and receiver are dropped automatically,
@@ -54,7 +54,7 @@ fn main() {
             sender.send(SECOND_VALUE);
             println!("   - Sent value: {SECOND_VALUE}");
 
-            let received = receiver.recv_async().await;
+            let received = receiver.recv_async().await.expect("sender should not have been dropped");
             println!("   - Received value: {received}");
         }
         println!("   - Event returned to pool again for future reuse");
@@ -69,7 +69,7 @@ fn main() {
             sender.send(THIRD_VALUE);
             println!("   - Sent value: {THIRD_VALUE}");
 
-            let received = receiver.recv_async().await;
+            let received = receiver.recv_async().await.expect("sender should not have been dropped");
             println!("   - Received value: {received}");
         }
         println!("   - Event returned to pool once more");
@@ -84,7 +84,7 @@ fn main() {
             sender.send(FOURTH_VALUE);
             println!("   - Sent value: {FOURTH_VALUE}");
 
-            let received = receiver.recv_async().await;
+            let received = receiver.recv_async().await.expect("sender should not have been dropped");
             println!("   - Received value: {received}");
         }
         println!("   - Event returned to pool for potential future use");

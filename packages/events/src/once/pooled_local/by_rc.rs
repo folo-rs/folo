@@ -78,7 +78,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 impl<T> Future for ByRcPooledLocalOnceReceiver<T> {
-    type Output = T;
+    type Output = Result<T, crate::disconnected::Disconnected>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();

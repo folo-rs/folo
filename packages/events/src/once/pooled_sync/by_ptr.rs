@@ -78,7 +78,7 @@ where
     T: Send,
 {
     /// Receives a value from the pooled event asynchronously.
-    pub async fn recv_async(self) -> T {
+    pub async fn recv_async(self) -> Result<T, crate::disconnected::Disconnected> {
         // Get the event pointer first
         let event_ptr = {
             // SAFETY: The pool pointer is valid for the lifetime of this struct

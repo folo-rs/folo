@@ -79,7 +79,7 @@ where
     T: Send,
 {
     /// Receives a value from the pooled event asynchronously.
-    pub async fn recv_async(self) -> T {
+    pub async fn recv_async(self) -> Result<T, crate::disconnected::Disconnected> {
         // Get the event pointer without holding a lock across await
         let event_ptr = {
             let pool_locked = self

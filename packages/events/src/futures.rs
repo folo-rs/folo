@@ -7,6 +7,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use crate::Disconnected;
+
 use super::once::{LocalOnceEvent, OnceEvent};
 
 /// A `Future` that resolves when a single-threaded event receives a value.
@@ -27,12 +29,12 @@ impl<'a, T> LocalEventFuture<'a, T> {
 }
 
 impl<T> Future for LocalEventFuture<'_, T> {
-    type Output = T;
+    type Output = Result<T, Disconnected>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.event
             .poll_recv(cx.waker())
-            .map_or_else(|| Poll::Pending, |value| Poll::Ready(value))
+            .map_or_else(|| Poll::Pending, |result| Poll::Ready(result))
     }
 }
 
@@ -59,11 +61,11 @@ impl<T> Future for EventFuture<'_, T>
 where
     T: Send,
 {
-    type Output = T;
+    type Output = Result<T, Disconnected>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.event
             .poll_recv(cx.waker())
-            .map_or_else(|| Poll::Pending, |value| Poll::Ready(value))
+            .map_or_else(|| Poll::Pending, |result| Poll::Ready(result))
     }
 }

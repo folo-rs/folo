@@ -10,6 +10,8 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::Waker;
 
+use crate::{Disconnected, ValueKind};
+
 mod by_ptr;
 mod by_rc;
 mod by_ref;
@@ -26,7 +28,7 @@ enum EventState<T> {
     /// No value has been set yet, but someone is waiting for it.
     Awaiting(Waker),
     /// A value has been set.
-    Set(T),
+    Set(ValueKind<T>),
     /// The value has been consumed.
     Consumed,
 }
@@ -126,7 +128,10 @@ impl<T> LocalOnceEvent<T> {
         self.used.set(true);
 
         Some((
-            ByRefLocalOnceSender { event: self },
+            ByRefLocalOnceSender { 
+                event: self,
+                used: false,
+            },
             ByRefLocalOnceReceiver { event: self },
         ))
     }
@@ -184,6 +189,7 @@ impl<T> LocalOnceEvent<T> {
         Some((
             ByRcLocalOnceSender {
                 event: Rc::clone(self),
+                used: false,
             },
             ByRcLocalOnceReceiver {
                 event: Rc::clone(self),
@@ -199,11 +205,11 @@ impl<T> LocalOnceEvent<T> {
         let mut state = self.state.borrow_mut();
         match mem::replace(&mut *state, EventState::Consumed) {
             EventState::NotSet => {
-                *state = EventState::Set(value);
+                *state = EventState::Set(ValueKind::Real(value));
                 Ok(())
             }
             EventState::Awaiting(waker) => {
-                *state = EventState::Set(value);
+                *state = EventState::Set(ValueKind::Real(value));
                 waker.wake();
                 Ok(())
             }
@@ -215,15 +221,37 @@ impl<T> LocalOnceEvent<T> {
     }
 
     /// Polls for the value with a waker for async support.
-    pub(crate) fn poll_recv(&self, waker: &Waker) -> Option<T> {
+    pub(crate) fn poll_recv(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         let mut state = self.state.borrow_mut();
         match mem::replace(&mut *state, EventState::Consumed) {
-            EventState::Set(value) => Some(value),
+            EventState::Set(ValueKind::Real(value)) => Some(Ok(value)),
+            EventState::Set(ValueKind::Disconnected) => Some(Err(Disconnected::new())),
             EventState::NotSet | EventState::Awaiting(_) => {
                 *state = EventState::Awaiting(waker.clone());
                 None
             }
             EventState::Consumed => None,
+        }
+    }
+
+    /// Marks the sender as dropped, potentially waking any waiting receiver.
+    pub(crate) fn sender_dropped(&self) {
+        let mut state = self.state.borrow_mut();
+
+        match &*state {
+            EventState::NotSet => {
+                *state = EventState::Set(ValueKind::Disconnected);
+            }
+            EventState::Awaiting(_) => {
+                let previous_state =
+                    mem::replace(&mut *state, EventState::Set(ValueKind::Disconnected));
+
+                match previous_state {
+                    EventState::Awaiting(waker) => waker.wake(),
+                    _ => unreachable!("we are re-matching an already matched pattern"),
+                }
+            }
+            _ => {}
         }
     }
 
@@ -312,7 +340,10 @@ impl<T> LocalOnceEvent<T> {
 
         let event_ptr: *const Self = this;
         Some((
-            ByPtrLocalOnceSender { event: event_ptr },
+            ByPtrLocalOnceSender { 
+                event: event_ptr,
+                used: false,
+            },
             ByPtrLocalOnceReceiver { event: event_ptr },
         ))
     }
@@ -331,6 +362,8 @@ mod tests {
     use static_assertions::assert_not_impl_any;
     use testing::with_watchdog;
 
+    use crate::Disconnected;
+
     use super::*;
 
     #[test]
@@ -341,7 +374,7 @@ mod tests {
             let (sender, receiver) = event.bind_by_ref();
             sender.send(42);
             let value = futures::executor::block_on(receiver);
-            assert_eq!(value, 42);
+            assert_eq!(value.unwrap(), 42);
         });
     }
 
@@ -352,7 +385,7 @@ mod tests {
             let (sender, receiver) = event.bind_by_ref();
             sender.send("test".to_string());
             let value = futures::executor::block_on(receiver);
-            assert_eq!(value, "test");
+            assert_eq!(value.unwrap(), "test");
         });
     }
 
@@ -364,7 +397,7 @@ mod tests {
 
             sender.send(123);
             let value = futures::executor::block_on(receiver);
-            assert_eq!(value, 123);
+            assert_eq!(value.unwrap(), 123);
         });
     }
 
@@ -403,7 +436,7 @@ mod tests {
 
             sender.send("Hello from Rc".to_string());
             let value = futures::executor::block_on(receiver);
-            assert_eq!(value, "Hello from Rc");
+            assert_eq!(value.unwrap(), "Hello from Rc");
         });
     }
 
@@ -423,7 +456,7 @@ mod tests {
 
             sender.send(42);
             let value = block_on(receiver);
-            assert_eq!(value, 42);
+            assert_eq!(value.unwrap(), 42);
         });
     }
 
@@ -445,8 +478,8 @@ mod tests {
             let value1 = block_on(receiver1);
             let value2 = block_on(receiver2);
 
-            assert_eq!(value1, 1);
-            assert_eq!(value2, 2);
+            assert_eq!(value1.unwrap(), 1);
+            assert_eq!(value2.unwrap(), 2);
         });
     }
 
@@ -460,7 +493,7 @@ mod tests {
 
             sender.send("Hello async world!".to_string());
             let message = block_on(receiver);
-            assert_eq!(message, "Hello async world!");
+            assert_eq!(message.unwrap(), "Hello async world!");
         });
     }
 
@@ -472,7 +505,7 @@ mod tests {
 
             sender.send(42);
             let value = futures::executor::block_on(receiver);
-            assert_eq!(value, 42);
+            assert_eq!(value.unwrap(), 42);
         });
     }
 
@@ -504,7 +537,7 @@ mod tests {
 
             sender.send(42);
             let value = block_on(receiver);
-            assert_eq!(value, 42);
+            assert_eq!(value.unwrap(), 42);
         });
     }
 
@@ -516,7 +549,7 @@ mod tests {
 
             sender.send("Hello from Rc".to_string());
             let value = futures::executor::block_on(receiver);
-            assert_eq!(value, "Hello from Rc");
+            assert_eq!(value.unwrap(), "Hello from Rc");
         });
     }
 
@@ -537,7 +570,7 @@ mod tests {
 
             sender.send("Hello from pointer".to_string());
             let value = futures::executor::block_on(receiver);
-            assert_eq!(value, "Hello from pointer");
+            assert_eq!(value.unwrap(), "Hello from pointer");
             // sender and receiver are dropped here, before event
         });
     }
@@ -569,7 +602,25 @@ mod tests {
 
             sender.send(42);
             let value = futures::executor::block_on(receiver);
-            assert_eq!(value, 42);
+            assert_eq!(value.unwrap(), 42);
+        });
+    }
+
+    #[test]
+    fn local_event_receiver_gets_disconnected_when_sender_dropped() {
+        with_watchdog(|| {
+            futures::executor::block_on(async {
+                let event = LocalOnceEvent::<i32>::new();
+                let (sender, receiver) = event.bind_by_ref();
+
+                // Drop the sender without sending anything
+                drop(sender);
+
+                // Receiver should get a Disconnected error
+                let result = receiver.await;
+                assert!(result.is_err());
+                assert!(matches!(result, Err(Disconnected { .. })));
+            });
         });
     }
 }

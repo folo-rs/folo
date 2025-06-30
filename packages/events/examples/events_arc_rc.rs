@@ -32,7 +32,7 @@ fn arc_event_example() {
         let (sender, receiver) = event.bind_by_arc();
 
         sender.send("Hello from Arc Event!".to_string());
-        let message = receiver.await;
+        let message = receiver.await.expect("sender should not have been dropped");
         println!("Received: {message}");
     });
 }
@@ -44,7 +44,7 @@ fn rc_event_example() {
         let (sender, receiver) = event.bind_by_rc();
 
         sender.send(EXAMPLE_INTEGER);
-        let value = receiver.await;
+        let value = receiver.await.expect("sender should not have been dropped");
         println!("Received: {value}");
     });
 }
@@ -56,7 +56,7 @@ fn rc_local_event_example() {
         let (sender, receiver) = event.bind_by_rc();
 
         sender.send(PI);
-        let value = receiver.await;
+        let value = receiver.await.expect("sender should not have been dropped");
         println!("Received: {value:.5}");
     });
 }
@@ -74,7 +74,7 @@ fn cross_thread_arc_example() {
 
     // Receive from another thread
     let receiver_handle = thread::spawn(move || {
-        let message = block_on(receiver);
+        let message = block_on(receiver).expect("sender should not have been dropped");
         println!("Received in thread: {message}");
         message
     });

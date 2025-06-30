@@ -68,7 +68,7 @@ where
     T: Send,
 {
     /// Receives a value from the pooled event asynchronously.
-    pub async fn recv_async(self) -> T {
+    pub async fn recv_async(self) -> Result<T, crate::disconnected::Disconnected> {
         // SAFETY: The pool pointer is valid for the lifetime of this struct
         let pool = unsafe { &*self.pool };
 

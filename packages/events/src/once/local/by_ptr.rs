@@ -19,6 +19,7 @@ use super::LocalOnceEvent;
 #[derive(Debug)]
 pub struct ByPtrLocalOnceSender<T> {
     pub(super) event: *const LocalOnceEvent<T>,
+    pub(super) used: bool,
 }
 
 impl<T> ByPtrLocalOnceSender<T> {
@@ -40,10 +41,21 @@ impl<T> ByPtrLocalOnceSender<T> {
     /// let (sender, _receiver) = unsafe { pinned_event.bind_by_ptr() };
     /// sender.send(42);
     /// ```
-    pub fn send(self, value: T) {
+    pub fn send(mut self, value: T) {
+        self.used = true;
         // SAFETY: Caller guarantees the event pointer is valid
         let event = unsafe { &*self.event };
         drop(event.try_set(value));
+    }
+}
+
+impl<T> Drop for ByPtrLocalOnceSender<T> {
+    fn drop(&mut self) {
+        if !self.used {
+            // SAFETY: Caller guarantees the event pointer is valid
+            let event = unsafe { &*self.event };
+            event.sender_dropped();
+        }
     }
 }
 
@@ -63,7 +75,7 @@ pub struct ByPtrLocalOnceReceiver<T> {
 }
 
 impl<T> Future for ByPtrLocalOnceReceiver<T> {
-    type Output = T;
+    type Output = Result<T, crate::disconnected::Disconnected>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // SAFETY: Caller guarantees the event pointer is valid

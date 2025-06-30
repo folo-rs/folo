@@ -5,6 +5,8 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
+use crate::Disconnected;
+
 use super::LocalOnceEvent;
 
 /// A sender that can send a value through a single-threaded event using Rc ownership.
@@ -14,6 +16,7 @@ use super::LocalOnceEvent;
 #[derive(Debug)]
 pub struct ByRcLocalOnceSender<T> {
     pub(super) event: Rc<LocalOnceEvent<T>>,
+    pub(super) used: bool,
 }
 
 impl<T> ByRcLocalOnceSender<T> {
@@ -33,8 +36,17 @@ impl<T> ByRcLocalOnceSender<T> {
     /// let (sender, _receiver) = event.bind_by_rc();
     /// sender.send(42);
     /// ```
-    pub fn send(self, value: T) {
+    pub fn send(mut self, value: T) {
+        self.used = true;
         drop(self.event.try_set(value));
+    }
+}
+
+impl<T> Drop for ByRcLocalOnceSender<T> {
+    fn drop(&mut self) {
+        if !self.used {
+            self.event.sender_dropped();
+        }
     }
 }
 
@@ -48,11 +60,11 @@ pub struct ByRcLocalOnceReceiver<T> {
 }
 
 impl<T> Future for ByRcLocalOnceReceiver<T> {
-    type Output = T;
+    type Output = Result<T, Disconnected>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.event
             .poll_recv(cx.waker())
-            .map_or_else(|| Poll::Pending, |value| Poll::Ready(value))
+            .map_or_else(|| Poll::Pending, |result| Poll::Ready(result))
     }
 }

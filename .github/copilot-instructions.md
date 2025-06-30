@@ -405,3 +405,7 @@ is most convenient.
 
 Examples are production code. Use proper patterns and practices - examples are not tests, where
 looser rules can be allowed.
+
+# Replacing text in code files
+
+Prefer applying diffs over generating regex-replace commands for the terminal.

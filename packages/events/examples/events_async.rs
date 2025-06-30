@@ -26,7 +26,7 @@ fn basic_async_usage() {
         let (sender, receiver) = event.bind_by_ref();
 
         sender.send("Hello async world!".to_string());
-        let message = receiver.await;
+        let message = receiver.await.expect("sender should not have been dropped");
         println!("Received: {message}");
     });
 }
@@ -48,7 +48,7 @@ fn cross_thread_async_communication() {
         });
 
         let receiver_handle = s.spawn(move || {
-            let value = block_on(receiver);
+            let value = block_on(receiver).expect("sender should not have been dropped");
             println!("Received value {value} in background thread");
             value
         });
@@ -68,7 +68,7 @@ fn single_threaded_async_usage() {
         let (local_sender, local_receiver) = local_event.bind_by_ref();
 
         local_sender.send("Local async message".to_string());
-        let local_message = local_receiver.await;
+        let local_message = local_receiver.await.expect("sender should not have been dropped");
         println!("Received: {local_message}");
     });
 }
@@ -86,8 +86,8 @@ fn async_only_usage() {
         second_sender.send(SECOND_VALUE);
 
         // Use async receive for both
-        let sync_value = first_receiver.await;
-        let async_value = second_receiver.await;
+        let sync_value = first_receiver.await.expect("sender should not have been dropped");
+        let async_value = second_receiver.await.expect("sender should not have been dropped");
 
         println!("First received: {sync_value}, Second received: {async_value}");
     });
