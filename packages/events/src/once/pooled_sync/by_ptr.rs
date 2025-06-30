@@ -76,19 +76,6 @@ impl<T> ByPtrPooledEventReceiver<T>
 where
     T: Send,
 {
-    /// Receives a value from the pooled event.
-    #[must_use]
-    pub fn recv(self) -> T {
-        // Get the pool item first
-        // SAFETY: The pool pointer is valid for the lifetime of this struct
-        let pool = unsafe { &*self.pool };
-        let item = pool.pool.get(self.key);
-
-        // SAFETY: The event pointer is valid as long as we hold a reference in the pool
-        let event: &Event<T> = unsafe { NonNull::from(item.get()).as_ref() };
-        futures::executor::block_on(crate::futures::EventFuture::new(event))
-    }
-
     /// Receives a value from the pooled event asynchronously.
     pub async fn recv_async(self) -> T {
         // Get the event pointer first

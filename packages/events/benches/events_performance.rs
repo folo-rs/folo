@@ -21,7 +21,7 @@ fn entrypoint(c: &mut Criterion) {
         b.iter(|| {
             let (sender, receiver) = oneshot::channel::<i32>();
             sender.send(hint::black_box(42)).unwrap();
-            let value = receiver.recv().unwrap();
+            let value = block_on(async { receiver.recv().unwrap() });
             hint::black_box(value);
         });
     });

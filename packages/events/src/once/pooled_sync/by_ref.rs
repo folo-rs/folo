@@ -60,19 +60,6 @@ impl<T> ByRefPooledEventReceiver<'_, T>
 where
     T: Send,
 {
-    /// Receives a value from the pooled event.
-    #[must_use]
-    pub fn recv(self) -> T {
-        // SAFETY: The pool pointer is valid for the lifetime of this struct
-        let pool = unsafe { &mut *self.pool };
-
-        // Get the event from the pool
-        let item = pool.pool.get(self.key);
-        let event = item.get();
-
-        futures::executor::block_on(crate::futures::EventFuture::new(event))
-    }
-
     /// Receives a value from the pooled event asynchronously.
     pub async fn recv_async(self) -> T {
         // SAFETY: The pool pointer is valid for the lifetime of this struct
