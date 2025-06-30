@@ -17,7 +17,7 @@ criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
-    // Workers require collaboration (one initializes, the other waits), so we cannot use "self" 
+    // Workers require collaboration (one initializes, the other waits), so we cannot use "self"
     // modes where workers operate independently. The "self" modes would cause deadlock since
     // the non-initializer worker would wait forever for initialization that never happens.
     execute_runs::<SharedHashMapRead<1024, 10>, 100>(

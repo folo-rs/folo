@@ -248,7 +248,9 @@ impl<T> LocalEventPool<T> {
     /// use std::pin::Pin;
     ///
     /// use events::once::LocalEventPool;
+    /// # use futures::executor::block_on;
     ///
+    /// # block_on(async {
     /// let mut pool = LocalEventPool::<i32>::new();
     /// let pinned_pool = Pin::new(&mut pool);
     /// // SAFETY: We ensure the pool outlives the sender and receiver
@@ -258,6 +260,7 @@ impl<T> LocalEventPool<T> {
     /// let value = receiver.await;
     /// assert_eq!(value, 42);
     /// // sender and receiver are dropped here, before pool
+    /// # });
     /// ```
     #[must_use]
     pub unsafe fn by_ptr(

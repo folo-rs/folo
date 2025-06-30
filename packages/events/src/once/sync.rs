@@ -57,16 +57,16 @@ enum EventState<T> {
 ///
 /// ```rust
 /// use events::once::Event;
-/// use futures::executor::block_on;
+/// # use futures::executor::block_on;
 ///
-/// block_on(async {
-///     let event = Event::<String>::new();
-///     let (sender, receiver) = event.by_ref();
+/// # block_on(async {
+/// let event = Event::<String>::new();
+/// let (sender, receiver) = event.by_ref();
 ///
-///     sender.send("Hello".to_string());
-///     let message = receiver.await;
-///     assert_eq!(message, "Hello");
-/// });
+/// sender.send("Hello".to_string());
+/// let message = receiver.await;
+/// assert_eq!(message, "Hello");
+/// # });
 /// ```
 #[derive(Debug)]
 pub struct Event<T>
@@ -280,19 +280,19 @@ where
     /// use std::pin::Pin;
     ///
     /// use events::once::Event;
-    /// use futures::executor::block_on;
+    /// # use futures::executor::block_on;
     ///
-    /// block_on(async {
-    ///     let mut event = Event::<i32>::new();
-    ///     let pinned_event = Pin::new(&mut event);
-    ///     // SAFETY: We ensure the event outlives the sender and receiver
-    ///     let (sender, receiver) = unsafe { pinned_event.by_ptr() };
+    /// # block_on(async {
+    /// let mut event = Event::<i32>::new();
+    /// let pinned_event = Pin::new(&mut event);
+    /// // SAFETY: We ensure the event outlives the sender and receiver
+    /// let (sender, receiver) = unsafe { pinned_event.by_ptr() };
     ///
-    ///     sender.send(42);
-    ///     let value = receiver.await;
-    ///     assert_eq!(value, 42);
-    ///     // sender and receiver are dropped here, before event
-    /// });
+    /// sender.send(42);
+    /// let value = receiver.await;
+    /// assert_eq!(value, 42);
+    /// // sender and receiver are dropped here, before event
+    /// # });
     /// ```
     #[must_use]
     pub unsafe fn by_ptr(self: Pin<&mut Self>) -> (ByPtrEventSender<T>, ByPtrEventReceiver<T>) {

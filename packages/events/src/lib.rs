@@ -19,62 +19,62 @@
 //!
 //! ```rust
 //! use events::once::Event;
-//! use futures::executor::block_on;
+//! # use futures::executor::block_on;
 //!
-//! block_on(async {
-//!     // Create a thread-safe event for passing a string message
-//!     let event = Event::<String>::new();
-//!     let (sender, receiver) = event.by_ref();
+//! # block_on(async {
+//! // Create a thread-safe event for passing a string message
+//! let event = Event::<String>::new();
+//! let (sender, receiver) = event.by_ref();
 //!
-//!     // Send a message through the event
-//!     sender.send("Hello, World!".to_string());
+//! // Send a message through the event
+//! sender.send("Hello, World!".to_string());
 //!
-//!     // Receive the message
-//!     let message = receiver.await;
-//!     assert_eq!(message, "Hello, World!");
-//! });
+//! // Receive the message
+//! let message = receiver.await;
+//! assert_eq!(message, "Hello, World!");
+//! # });
 //! ```
 //!
 //! # Single-threaded Example
 //!
 //! ```rust
 //! use events::once::LocalEvent;
-//! use futures::executor::block_on;
+//! # use futures::executor::block_on;
 //!
-//! block_on(async {
-//!     // Create a local event for passing a string message
-//!     let event = LocalEvent::<String>::new();
-//!     let (sender, receiver) = event.by_ref();
+//! # block_on(async {
+//! // Create a local event for passing a string message
+//! let event = LocalEvent::<String>::new();
+//! let (sender, receiver) = event.by_ref();
 //!
-//!     // Send a message through the event
-//!     sender.send("Hello, World!".to_string());
+//! // Send a message through the event
+//! sender.send("Hello, World!".to_string());
 //!
-//!     // Receive the message
-//!     let message = receiver.await;
-//!     assert_eq!(message, "Hello, World!");
-//! });
+//! // Receive the message
+//! let message = receiver.await;
+//! assert_eq!(message, "Hello, World!");
+//! # });
 //! ```
-//! 
+//!
 //! # Arc-based Example
 //!
 //! ```rust
 //! use std::sync::Arc;
 //!
 //! use events::once::Event;
-//! use futures::executor::block_on;
+//! # use futures::executor::block_on;
 //!
-//! block_on(async {
-//!     // Create an Arc-wrapped event for shared ownership
-//!     let event = Arc::new(Event::<String>::new());
-//!     let (sender, receiver) = event.by_arc();
+//! # block_on(async {
+//! // Create an Arc-wrapped event for shared ownership
+//! let event = Arc::new(Event::<String>::new());
+//! let (sender, receiver) = event.by_arc();
 //!
-//!     // Send a message through the event
-//!     sender.send("Hello, Arc!".to_string());
+//! // Send a message through the event
+//! sender.send("Hello, Arc!".to_string());
 //!
-//!     // Receive the message
-//!     let message = receiver.await;
-//!     assert_eq!(message, "Hello, Arc!");
-//! });
+//! // Receive the message
+//! let message = receiver.await;
+//! assert_eq!(message, "Hello, Arc!");
+//! # });
 //! ```
 //!
 //! # Rc-based Example
@@ -83,20 +83,20 @@
 //! use std::rc::Rc;
 //!
 //! use events::once::LocalEvent;
-//! use futures::executor::block_on;
+//! # use futures::executor::block_on;
 //!
-//! block_on(async {
-//!     // Create an Rc-wrapped local event for shared ownership (single-threaded)
-//!     let event = Rc::new(LocalEvent::<String>::new());
-//!     let (sender, receiver) = event.by_rc();
+//! # block_on(async {
+//! // Create an Rc-wrapped local event for shared ownership (single-threaded)
+//! let event = Rc::new(LocalEvent::<String>::new());
+//! let (sender, receiver) = event.by_rc();
 //!
-//!     // Send a message through the event
-//!     sender.send("Hello, Rc!".to_string());
+//! // Send a message through the event
+//! sender.send("Hello, Rc!".to_string());
 //!
-//!     // Receive the message
-//!     let message = receiver.await;
-//!     assert_eq!(message, "Hello, Rc!");
-//! });
+//! // Receive the message
+//! let message = receiver.await;
+//! assert_eq!(message, "Hello, Rc!");
+//! # });
 //! ```
 
 pub mod once;

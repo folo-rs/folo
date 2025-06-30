@@ -102,8 +102,11 @@ impl Payload for ProducerConsumerChannels {
                 // Use blocking recv() to ensure we always process the expected amount of data.
                 // With sufficient pre-loading and the producer sending more messages than we consume,
                 // blocking is rare and ensures consistent work per benchmark iteration.
-                let received = self.rx.recv().expect("Channel should not be closed during benchmark");
-                
+                let received = self
+                    .rx
+                    .recv()
+                    .expect("Channel should not be closed during benchmark");
+
                 // Process the received data
                 let processed_value = received.wrapping_mul(2);
                 black_box(processed_value);

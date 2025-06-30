@@ -93,17 +93,17 @@ where
 ///
 /// ```rust
 /// use events::once::EventPool;
-/// use futures::executor::block_on;
+/// # use futures::executor::block_on;
 ///
-/// block_on(async {
-///     let mut pool = EventPool::<i32>::new();
-///     let (sender, receiver) = pool.by_ref();
+/// # block_on(async {
+/// let mut pool = EventPool::<i32>::new();
+/// let (sender, receiver) = pool.by_ref();
 ///
-///     sender.send(42);
-///     let value = receiver.recv_async().await;
-///     assert_eq!(value, 42);
-///     // Event is automatically returned to pool when sender/receiver are dropped
-/// });
+/// sender.send(42);
+/// let value = receiver.recv_async().await;
+/// assert_eq!(value, 42);
+/// // Event is automatically returned to pool when sender/receiver are dropped
+/// # });
 /// ```
 #[derive(Debug)]
 pub struct EventPool<T>
@@ -142,16 +142,16 @@ where
     ///
     /// ```rust
     /// use events::once::EventPool;
-    /// use futures::executor::block_on;
+    /// # use futures::executor::block_on;
     ///
-    /// block_on(async {
-    ///     let mut pool = EventPool::<i32>::new();
-    ///     let (sender, receiver) = pool.by_ref();
+    /// # block_on(async {
+    /// let mut pool = EventPool::<i32>::new();
+    /// let (sender, receiver) = pool.by_ref();
     ///
-    ///     sender.send(42);
-    ///     let value = receiver.recv_async().await;
-    ///     assert_eq!(value, 42);
-    /// });
+    /// sender.send(42);
+    /// let value = receiver.recv_async().await;
+    /// assert_eq!(value, 42);
+    /// # });
     /// ```
     pub fn by_ref(
         &mut self,
@@ -200,16 +200,16 @@ where
     /// use std::rc::Rc;
     ///
     /// use events::once::EventPool;
-    /// use futures::executor::block_on;
+    /// # use futures::executor::block_on;
     ///
-    /// block_on(async {
-    ///     let pool = Rc::new(std::cell::RefCell::new(EventPool::<i32>::new()));
-    ///     let (sender, receiver) = pool.borrow_mut().by_rc(&pool);
+    /// # block_on(async {
+    /// let pool = Rc::new(std::cell::RefCell::new(EventPool::<i32>::new()));
+    /// let (sender, receiver) = pool.borrow_mut().by_rc(&pool);
     ///
-    ///     sender.send(42);
-    ///     let value = receiver.recv_async().await;
-    ///     assert_eq!(value, 42);
-    /// });
+    /// sender.send(42);
+    /// let value = receiver.recv_async().await;
+    /// assert_eq!(value, 42);
+    /// # });
     /// ```
     pub fn by_rc(
         &mut self,
