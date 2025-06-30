@@ -31,13 +31,13 @@ impl<T> ByRcPooledLocalOnceSender<T> {
     /// ```rust
     /// use std::rc::Rc;
     ///
-    /// use events::once::LocalOnceEventPool;
+    /// use events::LocalOnceEventPool;
     ///
     /// let pool = Rc::new(LocalOnceEventPool::new());
     /// let (sender, receiver) = pool.bind_by_rc(&pool);
     ///
     /// sender.send(42);
-    /// let value = futures::executor::block_on(receiver);
+    /// let value = futures::executor::block_on(receiver).unwrap();
     /// assert_eq!(value, 42);
     /// ```
     pub fn send(self, value: T) {

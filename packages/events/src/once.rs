@@ -48,7 +48,7 @@
 //! let (sender, receiver) = event.bind_by_ref();
 //!
 //! sender.send(42);
-//! let value = receiver.await;
+//! let value = receiver.await.unwrap();
 //! assert_eq!(value, 42);
 //! # });
 //! ```
@@ -64,7 +64,7 @@
 //! let (sender, receiver) = event.bind_by_ref();
 //!
 //! sender.send(42);
-//! let value = receiver.await;
+//! let value = receiver.await.unwrap();
 //! assert_eq!(value, 42);
 //! # });
 //! ```
@@ -81,14 +81,14 @@
 //! // First usage - creates new event
 //! let (sender1, receiver1) = pool.bind_by_ref();
 //! sender1.send(42);
-//! let value1 = receiver1.await;
+//! let value1 = receiver1.await.unwrap();
 //! assert_eq!(value1, 42);
 //! // Event automatically returned to pool when endpoints are dropped
 //!
 //! // Second usage - reuses the same event instance efficiently
 //! let (sender2, receiver2) = pool.bind_by_ref();
 //! sender2.send(100);
-//! let value2 = receiver2.await;
+//! let value2 = receiver2.await.unwrap();
 //! assert_eq!(value2, 100);
 //! // Same event reused - no additional allocation overhead
 //! # });
@@ -106,13 +106,13 @@
 //! // First usage - creates new event
 //! let (sender1, receiver1) = pool.bind_by_ref();
 //! sender1.send(42);
-//! let value1 = receiver1.recv_async().await;
+//! let value1 = receiver1.recv_async().await.unwrap();
 //! assert_eq!(value1, 42);
 //!
 //! // Second usage - efficiently reuses the same underlying event
 //! let (sender2, receiver2) = pool.bind_by_ref();
 //! sender2.send(200);
-//! let value2 = receiver2.recv_async().await;
+//! let value2 = receiver2.recv_async().await.unwrap();
 //! assert_eq!(value2, 200);
 //! // Pool automatically manages event lifecycle and reuse
 //! # });

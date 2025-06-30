@@ -30,13 +30,13 @@ impl<T> ByRefPooledLocalOnceSender<'_, T> {
     /// # Example
     ///
     /// ```rust
-    /// use events::once::LocalOnceEventPool;
+    /// use events::LocalOnceEventPool;
     ///
     /// let pool = LocalOnceEventPool::new();
     /// let (sender, receiver) = pool.bind_by_ref();
     ///
     /// sender.send(42);
-    /// let value = futures::executor::block_on(receiver);
+    /// let value = futures::executor::block_on(receiver).unwrap();
     /// assert_eq!(value, 42);
     /// ```
     pub fn send(self, value: T) {

@@ -36,7 +36,7 @@ impl<T> ByPtrPooledLocalOnceSender<T> {
     /// ```rust
     /// use std::pin::Pin;
     ///
-    /// use events::once::LocalOnceEventPool;
+    /// use events::LocalOnceEventPool;
     ///
     /// let pool = LocalOnceEventPool::new();
     /// let pinned_pool = Pin::new(&pool);
@@ -44,7 +44,7 @@ impl<T> ByPtrPooledLocalOnceSender<T> {
     /// let (sender, receiver) = unsafe { pinned_pool.bind_by_ptr() };
     ///
     /// sender.send(42);
-    /// let value = futures::executor::block_on(receiver);
+    /// let value = futures::executor::block_on(receiver).unwrap();
     /// assert_eq!(value, 42);
     /// ```
     pub fn send(self, value: T) {

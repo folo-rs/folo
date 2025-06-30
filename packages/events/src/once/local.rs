@@ -58,7 +58,7 @@ enum EventState<T> {
 /// let (sender, receiver) = event.bind_by_ref();
 ///
 /// sender.send("Hello".to_string());
-/// let message = futures::executor::block_on(receiver);
+/// let message = futures::executor::block_on(receiver).unwrap();
 /// assert_eq!(message, "Hello");
 /// ```
 #[derive(Debug)]
@@ -128,7 +128,7 @@ impl<T> LocalOnceEvent<T> {
         self.used.set(true);
 
         Some((
-            ByRefLocalOnceSender { 
+            ByRefLocalOnceSender {
                 event: self,
                 used: false,
             },
@@ -285,7 +285,7 @@ impl<T> LocalOnceEvent<T> {
     /// let (sender, receiver) = unsafe { pinned_event.bind_by_ptr() };
     ///
     /// sender.send(42);
-    /// let value = futures::executor::block_on(receiver);
+    /// let value = futures::executor::block_on(receiver).unwrap();
     /// assert_eq!(value, 42);
     /// // sender and receiver are dropped here, before event
     /// ```
@@ -340,7 +340,7 @@ impl<T> LocalOnceEvent<T> {
 
         let event_ptr: *const Self = this;
         Some((
-            ByPtrLocalOnceSender { 
+            ByPtrLocalOnceSender {
                 event: event_ptr,
                 used: false,
             },

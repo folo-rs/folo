@@ -43,14 +43,14 @@ pub use by_ref::{ByRefPooledLocalOnceReceiver, ByRefPooledLocalOnceSender};
 /// // First usage - creates new event
 /// let (sender1, receiver1) = pool.bind_by_ref();
 /// sender1.send(42);
-/// let value1 = futures::executor::block_on(receiver1);
+/// let value1 = futures::executor::block_on(receiver1).unwrap();
 /// assert_eq!(value1, 42);
 /// // Event returned to pool when sender1/receiver1 are dropped
 ///
 /// // Second usage - reuses the same event instance for efficiency
 /// let (sender2, receiver2) = pool.bind_by_ref();
 /// sender2.send(100);
-/// let value2 = futures::executor::block_on(receiver2);
+/// let value2 = futures::executor::block_on(receiver2).unwrap();
 /// assert_eq!(value2, 100);
 /// // Same event reused - no additional allocation overhead
 /// ```
@@ -91,13 +91,13 @@ impl<T> LocalOnceEventPool<T> {
     /// // First usage
     /// let (sender1, receiver1) = pool.bind_by_ref();
     /// sender1.send(42);
-    /// let value1 = futures::executor::block_on(receiver1);
+    /// let value1 = futures::executor::block_on(receiver1).unwrap();
     /// assert_eq!(value1, 42);
     ///
     /// // Second usage - efficiently reuses the same underlying event
     /// let (sender2, receiver2) = pool.bind_by_ref();
     /// sender2.send(100);
-    /// let value2 = futures::executor::block_on(receiver2);
+    /// let value2 = futures::executor::block_on(receiver2).unwrap();
     /// assert_eq!(value2, 100);
     /// ```
     pub fn bind_by_ref(
@@ -155,13 +155,13 @@ impl<T> LocalOnceEventPool<T> {
     /// // First usage
     /// let (sender1, receiver1) = pool.bind_by_rc(&pool);
     /// sender1.send(42);
-    /// let value1 = futures::executor::block_on(receiver1);
+    /// let value1 = futures::executor::block_on(receiver1).unwrap();
     /// assert_eq!(value1, 42);
     ///
     /// // Second usage - reuses the same event from the pool
     /// let (sender2, receiver2) = pool.bind_by_rc(&pool);
     /// sender2.send(200);
-    /// let value2 = futures::executor::block_on(receiver2);
+    /// let value2 = futures::executor::block_on(receiver2).unwrap();
     /// assert_eq!(value2, 200);
     /// ```
     pub fn bind_by_rc(
@@ -223,14 +223,14 @@ impl<T> LocalOnceEventPool<T> {
     /// // SAFETY: We ensure the pool outlives the sender and receiver
     /// let (sender1, receiver1) = unsafe { pinned_pool.bind_by_ptr() };
     /// sender1.send(42);
-    /// let value1 = receiver1.await;
+    /// let value1 = receiver1.await.unwrap();
     /// assert_eq!(value1, 42);
     ///
     /// // Second usage - reuses the same event efficiently
     /// // SAFETY: Pool is still valid and pinned
     /// let (sender2, receiver2) = unsafe { pinned_pool.bind_by_ptr() };
     /// sender2.send(100);
-    /// let value2 = receiver2.await;
+    /// let value2 = receiver2.await.unwrap();
     /// assert_eq!(value2, 100);
     /// // Both sender and receiver pairs are dropped here, before pool
     /// # });

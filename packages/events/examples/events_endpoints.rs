@@ -23,7 +23,9 @@ fn main() {
         let (sender1, receiver1) = event1.bind_by_ref();
 
         sender1.send(EXAMPLE_INTEGER);
-        let value1 = receiver1.await.expect("sender1.send() was called immediately before this, so sender cannot be dropped");
+        let value1 = receiver1.await.expect(
+            "sender1.send() was called immediately before this, so sender cannot be dropped",
+        );
         println!("Received: {value1}");
 
         // Method 2: Using checked variant
@@ -33,7 +35,9 @@ fn main() {
 
         if let Some((sender2, receiver2)) = event2.bind_by_ref_checked() {
             sender2.send(EXAMPLE_LARGE_VALUE);
-            let value2 = receiver2.await.expect("sender2.send() was called immediately before this, so sender cannot be dropped");
+            let value2 = receiver2.await.expect(
+                "sender2.send() was called immediately before this, so sender cannot be dropped",
+            );
             println!("Received via checked method: {value2}");
         }
 

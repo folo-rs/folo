@@ -80,6 +80,6 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.once_event
             .poll_recv(cx.waker())
-            .map_or_else(|| Poll::Pending, |result| Poll::Ready(result))
+            .map_or_else(|| Poll::Pending, Poll::Ready)
     }
 }

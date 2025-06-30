@@ -140,7 +140,7 @@ where
         }
 
         Some((
-            ByRefOnceSender { 
+            ByRefOnceSender {
                 once_event: self,
                 used: false,
             },
@@ -298,7 +298,7 @@ where
     /// let (sender, receiver) = unsafe { pinned_event.bind_by_ptr() };
     ///
     /// sender.send(42);
-    /// let value = receiver.await;
+    /// let value = receiver.await.unwrap();
     /// assert_eq!(value, 42);
     /// // sender and receiver are dropped here, before event
     /// # });

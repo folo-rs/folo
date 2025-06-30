@@ -30,7 +30,7 @@ impl<T> ByRcLocalOnceSender<T> {
     /// ```rust
     /// use std::rc::Rc;
     ///
-    /// use events::once::LocalOnceEvent;
+    /// use events::LocalOnceEvent;
     ///
     /// let event = Rc::new(LocalOnceEvent::<i32>::new());
     /// let (sender, _receiver) = event.bind_by_rc();
@@ -65,6 +65,6 @@ impl<T> Future for ByRcLocalOnceReceiver<T> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.event
             .poll_recv(cx.waker())
-            .map_or_else(|| Poll::Pending, |result| Poll::Ready(result))
+            .map_or_else(|| Poll::Pending, Poll::Ready)
     }
 }

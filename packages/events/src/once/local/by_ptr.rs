@@ -33,7 +33,7 @@ impl<T> ByPtrLocalOnceSender<T> {
     /// ```rust
     /// use std::pin::Pin;
     ///
-    /// use events::once::LocalOnceEvent;
+    /// use events::LocalOnceEvent;
     ///
     /// let mut event = LocalOnceEvent::<i32>::new();
     /// let pinned_event = Pin::new(&mut event);
@@ -82,6 +82,6 @@ impl<T> Future for ByPtrLocalOnceReceiver<T> {
         let event = unsafe { &*self.event };
         event
             .poll_recv(cx.waker())
-            .map_or_else(|| Poll::Pending, |value| Poll::Ready(value))
+            .map_or_else(|| Poll::Pending, Poll::Ready)
     }
 }

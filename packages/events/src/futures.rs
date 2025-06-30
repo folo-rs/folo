@@ -34,7 +34,7 @@ impl<T> Future for LocalEventFuture<'_, T> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.event
             .poll_recv(cx.waker())
-            .map_or_else(|| Poll::Pending, |result| Poll::Ready(result))
+            .map_or_else(|| Poll::Pending, Poll::Ready)
     }
 }
 
@@ -66,6 +66,6 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.event
             .poll_recv(cx.waker())
-            .map_or_else(|| Poll::Pending, |result| Poll::Ready(result))
+            .map_or_else(|| Poll::Pending, Poll::Ready)
     }
 }

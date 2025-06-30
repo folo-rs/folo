@@ -27,7 +27,7 @@ impl<T> ByRefLocalOnceSender<'_, T> {
     /// # Example
     ///
     /// ```rust
-    /// use events::once::LocalOnceEvent;
+    /// use events::LocalOnceEvent;
     ///
     /// let event = LocalOnceEvent::<i32>::new();
     /// let (sender, _receiver) = event.bind_by_ref();
@@ -62,6 +62,6 @@ impl<T> Future for ByRefLocalOnceReceiver<'_, T> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.event
             .poll_recv(cx.waker())
-            .map_or_else(|| Poll::Pending, |result| Poll::Ready(result))
+            .map_or_else(|| Poll::Pending, Poll::Ready)
     }
 }

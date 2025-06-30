@@ -44,14 +44,14 @@ pub use by_ref::{ByRefPooledOnceReceiver, ByRefPooledOnceSender};
 /// // First usage - creates new event
 /// let (sender1, receiver1) = pool.bind_by_ref();
 /// sender1.send(42);
-/// let value1 = receiver1.recv_async().await;
+/// let value1 = receiver1.recv_async().await.unwrap();
 /// assert_eq!(value1, 42);
 /// // Event returned to pool when sender1/receiver1 are dropped
 ///
 /// // Second usage - reuses the same event instance (efficient!)
 /// let (sender2, receiver2) = pool.bind_by_ref();
 /// sender2.send(100);
-/// let value2 = receiver2.recv_async().await;
+/// let value2 = receiver2.recv_async().await.unwrap();
 /// assert_eq!(value2, 100);
 /// // Same event reused - no additional allocation overhead
 /// # });
@@ -101,13 +101,13 @@ where
     /// // First event usage
     /// let (sender1, receiver1) = pool.bind_by_ref();
     /// sender1.send(42);
-    /// let value1 = receiver1.recv_async().await;
+    /// let value1 = receiver1.recv_async().await.unwrap();
     /// assert_eq!(value1, 42);
     ///
     /// // Second event usage - efficiently reuses the same underlying event
     /// let (sender2, receiver2) = pool.bind_by_ref();
     /// sender2.send(100);
-    /// let value2 = receiver2.recv_async().await;
+    /// let value2 = receiver2.recv_async().await.unwrap();
     /// assert_eq!(value2, 100);
     /// # });
     /// ```
@@ -163,13 +163,13 @@ where
     /// // First usage
     /// let (sender1, receiver1) = pool.bind_by_rc(&pool);
     /// sender1.send(42);
-    /// let value1 = receiver1.recv_async().await;
+    /// let value1 = receiver1.recv_async().await.unwrap();
     /// assert_eq!(value1, 42);
     ///
     /// // Second usage - reuses the same event from the pool
     /// let (sender2, receiver2) = pool.bind_by_rc(&pool);
     /// sender2.send(100);
-    /// let value2 = receiver2.recv_async().await;
+    /// let value2 = receiver2.recv_async().await.unwrap();
     /// assert_eq!(value2, 100);
     /// # });
     /// ```
@@ -221,13 +221,13 @@ where
     /// // First usage
     /// let (sender1, receiver1) = pool.bind_by_arc(&pool);
     /// sender1.send(42);
-    /// let value1 = futures::executor::block_on(receiver1.recv_async());
+    /// let value1 = futures::executor::block_on(receiver1.recv_async()).unwrap();
     /// assert_eq!(value1, 42);
     ///
     /// // Second usage - efficiently reuses the same pooled event
     /// let (sender2, receiver2) = pool.bind_by_arc(&pool);
     /// sender2.send(200);
-    /// let value2 = futures::executor::block_on(receiver2.recv_async());
+    /// let value2 = futures::executor::block_on(receiver2.recv_async()).unwrap();
     /// assert_eq!(value2, 200);
     /// ```
     pub fn bind_by_arc(
@@ -287,14 +287,14 @@ where
     /// // SAFETY: We ensure the pool outlives the sender and receiver
     /// let (sender1, receiver1) = unsafe { pinned_pool.bind_by_ptr() };
     /// sender1.send(42);
-    /// let value1 = futures::executor::block_on(receiver1.recv_async());
+    /// let value1 = futures::executor::block_on(receiver1.recv_async()).unwrap();
     /// assert_eq!(value1, 42);
     ///
     /// // Second usage - reuses the same event from the pool efficiently
     /// // SAFETY: Pool is still valid and pinned
     /// let (sender2, receiver2) = unsafe { pinned_pool.bind_by_ptr() };
     /// sender2.send(100);
-    /// let value2 = futures::executor::block_on(receiver2.recv_async());
+    /// let value2 = futures::executor::block_on(receiver2.recv_async()).unwrap();
     /// assert_eq!(value2, 100);
     /// // Both sender and receiver pairs are dropped here, before pool
     /// ```

@@ -19,7 +19,9 @@ fn main() {
         let event = OnceEvent::<String>::new();
         let (sender, receiver) = event.bind_by_ref();
         sender.send("Hello from thread-safe event!".to_string());
-        let message = receiver.await.expect("sender.send() was called immediately before this, so sender cannot be dropped");
+        let message = receiver.await.expect(
+            "sender.send() was called immediately before this, so sender cannot be dropped",
+        );
         println!("Received: {message}");
 
         // Example 2: Thread-safe Event can be wrapped in Arc for sharing
@@ -30,7 +32,9 @@ fn main() {
         let _event_clone = Arc::clone(&event_arc);
         let (sender, receiver) = event_arc.bind_by_ref();
         sender.send(42);
-        let value = receiver.await.expect("sender.send() was called immediately before this, so sender cannot be dropped");
+        let value = receiver.await.expect(
+            "sender.send() was called immediately before this, so sender cannot be dropped",
+        );
         println!("Received from Arc-wrapped event: {value}");
     });
 
@@ -54,7 +58,8 @@ fn main() {
 
         let receiver_handle = s.spawn(|| {
             println!("Receiver thread: Waiting for message...");
-            let message = block_on(receiver).expect("scoped threads guarantee sender thread completes before scope ends");
+            let message = block_on(receiver)
+                .expect("scoped threads guarantee sender thread completes before scope ends");
             println!("Receiver thread: Received: {message}");
             message
         });

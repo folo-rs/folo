@@ -116,6 +116,6 @@ where
         let once_event = unsafe { &*self.once_event };
         once_event
             .poll_recv(cx.waker())
-            .map_or_else(|| Poll::Pending, |result| Poll::Ready(result))
+            .map_or_else(|| Poll::Pending, Poll::Ready)
     }
 }

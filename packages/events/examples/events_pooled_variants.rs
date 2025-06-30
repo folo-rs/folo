@@ -24,7 +24,9 @@ fn main() {
             let (sender, receiver) = pool.bind_by_ref();
 
             sender.send(BY_REF_TEST_VALUE);
-            let value = receiver.recv_async().await.expect("sender.send() was called immediately before this, so sender cannot be dropped");
+            let value = receiver.recv_async().await.expect(
+                "sender.send() was called immediately before this, so sender cannot be dropped",
+            );
             println!("   bind_by_ref received: {value}");
         });
     }
@@ -37,7 +39,9 @@ fn main() {
             let (sender, receiver) = pool.bind_by_rc(&pool);
 
             sender.send(BY_RC_TEST_VALUE);
-            let value = receiver.recv_async().await.expect("sender.send() was called immediately before this, so sender cannot be dropped");
+            let value = receiver.recv_async().await.expect(
+                "sender.send() was called immediately before this, so sender cannot be dropped",
+            );
             println!("   bind_by_rc received: {value}");
         });
     }
@@ -76,7 +80,9 @@ fn main() {
             let (sender, receiver) = unsafe { pinned_pool.bind_by_ptr() };
 
             sender.send(BY_PTR_TEST_VALUE);
-            let value = receiver.recv_async().await.expect("sender.send() was called immediately before this, so sender cannot be dropped");
+            let value = receiver.recv_async().await.expect(
+                "sender.send() was called immediately before this, so sender cannot be dropped",
+            );
             println!("   bind_by_ptr received: {value}");
             // sender and receiver are dropped here, before pool
         });
@@ -94,7 +100,9 @@ fn main() {
             sender.send("Hello async!".to_string());
 
             // Receive the message
-            let value = receiver.recv_async().await.expect("sender.send() was called immediately before this, so sender cannot be dropped");
+            let value = receiver.recv_async().await.expect(
+                "sender.send() was called immediately before this, so sender cannot be dropped",
+            );
             println!("   bind_by_arc async received: {value}");
         });
     }
@@ -120,7 +128,9 @@ fn main() {
                 };
 
                 sender.send(message);
-                let value = receiver.recv_async().await.expect("sender.send() was called immediately before this, so sender cannot be dropped");
+                let value = receiver.recv_async().await.expect(
+                    "sender.send() was called immediately before this, so sender cannot be dropped",
+                );
                 println!("     Event {i}: {value}");
             }
 

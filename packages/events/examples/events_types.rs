@@ -38,7 +38,9 @@ fn main() {
         let (int_sender, int_receiver) = int_event.bind_by_ref();
 
         int_sender.send(EXAMPLE_INTEGER);
-        let int_value = int_receiver.await.expect("int_sender.send() was called immediately before this, so sender cannot be dropped");
+        let int_value = int_receiver.await.expect(
+            "int_sender.send() was called immediately before this, so sender cannot be dropped",
+        );
         println!("Received integer: {int_value}");
 
         // Example 2: String type
@@ -48,7 +50,9 @@ fn main() {
         let (string_sender, string_receiver) = string_event.bind_by_ref();
 
         string_sender.send("Events support any type!".to_string());
-        let string_value = string_receiver.await.expect("string_sender.send() was called immediately before this, so sender cannot be dropped");
+        let string_value = string_receiver.await.expect(
+            "string_sender.send() was called immediately before this, so sender cannot be dropped",
+        );
         println!("Received string: {string_value}");
 
         // Example 3: Vector type
@@ -58,7 +62,9 @@ fn main() {
         let (vec_sender, vec_receiver) = vec_event.bind_by_ref();
 
         vec_sender.send(vec![1, 2, 3, 4, 5]);
-        let vec_value = vec_receiver.await.expect("vec_sender.send() was called immediately before this, so sender cannot be dropped");
+        let vec_value = vec_receiver.await.expect(
+            "vec_sender.send() was called immediately before this, so sender cannot be dropped",
+        );
         println!("Received vector: {vec_value:?}");
 
         // Example 4: Custom struct type
@@ -75,7 +81,9 @@ fn main() {
         };
 
         struct_sender.send(task);
-        let received_task = struct_receiver.await.expect("struct_sender.send() was called immediately before this, so sender cannot be dropped");
+        let received_task = struct_receiver.await.expect(
+            "struct_sender.send() was called immediately before this, so sender cannot be dropped",
+        );
         println!("Received task result: {received_task:?}");
 
         // Example 5: Option type
@@ -85,7 +93,9 @@ fn main() {
         let (option_sender, option_receiver) = option_event.bind_by_ref();
 
         option_sender.send(Some("Optional data"));
-        let option_value = option_receiver.await.expect("option_sender.send() was called immediately before this, so sender cannot be dropped");
+        let option_value = option_receiver.await.expect(
+            "option_sender.send() was called immediately before this, so sender cannot be dropped",
+        );
         println!("Received option: {option_value:?}");
 
         println!();
