@@ -12,22 +12,29 @@ pub struct ByRefPooledEventSender<'p, T>
 where
     T: Send,
 {
-    pub(super) pool: *mut EventPool<T>,
+    pub(super) pool: *const EventPool<T>,
     pub(super) key: Key,
-    pub(super) _phantom: PhantomData<&'p mut EventPool<T>>,
+    pub(super) _phantom: PhantomData<&'p EventPool<T>>,
 }
 
 impl<T> ByRefPooledEventSender<'_, T>
 where
     T: Send,
 {
+    /// Returns the key associated with this sender's event.
+    #[must_use]
+    pub fn key(&self) -> Key {
+        self.key
+    }
+
     /// Sends a value through the pooled event.
     pub fn send(self, value: T) {
         // SAFETY: The pool pointer is valid for the lifetime of this struct
-        let pool = unsafe { &mut *self.pool };
+        let pool = unsafe { &*self.pool };
 
         // Get the event from the pool
-        let item = pool.pool.get(self.key);
+        let pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
+        let item = pool_guard.get(self.key);
         let event = item.get();
 
         drop(event.try_set(value));
@@ -40,7 +47,7 @@ where
 {
     fn drop(&mut self) {
         // SAFETY: The pool pointer is valid for the lifetime of this struct
-        let pool = unsafe { &mut *self.pool };
+        let pool = unsafe { &*self.pool };
         pool.dec_ref_and_cleanup(self.key);
     }
 }
@@ -51,9 +58,9 @@ pub struct ByRefPooledEventReceiver<'p, T>
 where
     T: Send,
 {
-    pub(super) pool: *mut EventPool<T>,
+    pub(super) pool: *const EventPool<T>,
     pub(super) key: Key,
-    pub(super) _phantom: PhantomData<&'p mut EventPool<T>>,
+    pub(super) _phantom: PhantomData<&'p EventPool<T>>,
 }
 
 impl<T> ByRefPooledEventReceiver<'_, T>
@@ -63,12 +70,18 @@ where
     /// Receives a value from the pooled event asynchronously.
     pub async fn recv_async(self) -> T {
         // SAFETY: The pool pointer is valid for the lifetime of this struct
-        let pool = unsafe { &mut *self.pool };
+        let pool = unsafe { &*self.pool };
 
-        // Get the event from the pool
-        let item = pool.pool.get(self.key);
-        let event = item.get();
+        // Get the event pointer without holding a lock across await
+        let event_ptr = {
+            let pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
+            let item = pool_guard.get(self.key);
+            let event = item.get();
+            std::ptr::NonNull::from(event)
+        };
 
+        // SAFETY: The event is guaranteed to remain valid until we clean it up
+        let event = unsafe { event_ptr.as_ref() };
         crate::futures::EventFuture::new(event).await
     }
 }
@@ -79,7 +92,7 @@ where
 {
     fn drop(&mut self) {
         // SAFETY: The pool pointer is valid for the lifetime of this struct
-        let pool = unsafe { &mut *self.pool };
+        let pool = unsafe { &*self.pool };
         pool.dec_ref_and_cleanup(self.key);
     }
 }

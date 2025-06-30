@@ -1,6 +1,5 @@
 //! Rc-based pooled local event endpoints.
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use pinned_pool::Key;
@@ -16,7 +15,7 @@ use super::LocalEventPool;
 /// This is the single-threaded variant that cannot be sent across threads.
 #[derive(Debug)]
 pub struct ByRcPooledLocalEventSender<T> {
-    pub(super) pool: Rc<RefCell<LocalEventPool<T>>>,
+    pub(super) pool: Rc<LocalEventPool<T>>,
     pub(super) key: Key,
 }
 
@@ -30,36 +29,30 @@ impl<T> ByRcPooledLocalEventSender<T> {
     /// # Example
     ///
     /// ```rust
-    /// use std::cell::RefCell;
     /// use std::rc::Rc;
     ///
     /// use events::once::LocalEventPool;
     ///
-    /// let pool = Rc::new(RefCell::new(LocalEventPool::new()));
-    /// let (sender, receiver) = pool.borrow_mut().by_rc(&pool);
+    /// let pool = Rc::new(LocalEventPool::new());
+    /// let (sender, receiver) = pool.by_rc(&pool);
     ///
     /// sender.send(42);
     /// let value = futures::executor::block_on(receiver);
     /// assert_eq!(value, 42);
     /// ```
     pub fn send(self, value: T) {
-        let key = self.key;
-        {
-            let pool = self.pool.borrow_mut();
+        // Get the event from the pool
+        let pool_borrow = self.pool.pool.borrow();
+        let item = pool_borrow.get(self.key);
+        let event = item.get();
 
-            // Get the event from the pool
-            let item = pool.pool.get(key);
-            let event = item.get();
-
-            drop(event.try_set(value));
-        }
+        drop(event.try_set(value));
     }
 }
 
 impl<T> Drop for ByRcPooledLocalEventSender<T> {
     fn drop(&mut self) {
-        let mut pool = self.pool.borrow_mut();
-        pool.dec_ref_and_cleanup(self.key);
+        self.pool.dec_ref_and_cleanup(self.key);
     }
 }
 
@@ -72,7 +65,7 @@ impl<T> Drop for ByRcPooledLocalEventSender<T> {
 /// This is the single-threaded variant that cannot be sent across threads.
 #[derive(Debug)]
 pub struct ByRcPooledLocalEventReceiver<T> {
-    pub(super) pool: Rc<RefCell<LocalEventPool<T>>>,
+    pub(super) pool: Rc<LocalEventPool<T>>,
     pub(super) key: Option<Key>,
 }
 
@@ -97,16 +90,15 @@ impl<T> Future for ByRcPooledLocalEventReceiver<T> {
 
         // Get the event from the pool and poll it
         let poll_result = {
-            let pool = this.pool.borrow_mut();
-            let item = pool.pool.get(key);
+            let pool_borrow = this.pool.pool.borrow();
+            let item = pool_borrow.get(key);
             let event = item.get();
             event.poll_recv(cx.waker())
         };
 
         if let Some(value) = poll_result {
             // We got the value, clean up and return
-            let mut pool = this.pool.borrow_mut();
-            pool.dec_ref_and_cleanup(key);
+            this.pool.dec_ref_and_cleanup(key);
 
             // Mark this receiver as consumed
             this.key = None;
@@ -122,8 +114,7 @@ impl<T> Drop for ByRcPooledLocalEventReceiver<T> {
     fn drop(&mut self) {
         // Clean up our reference if not consumed by Future
         if let Some(key) = self.key {
-            let mut pool = self.pool.borrow_mut();
-            pool.dec_ref_and_cleanup(key);
+            self.pool.dec_ref_and_cleanup(key);
         }
     }
 }

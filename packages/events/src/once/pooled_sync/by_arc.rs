@@ -13,7 +13,7 @@ pub struct ByArcPooledEventSender<T>
 where
     T: Send,
 {
-    pub(super) pool: Arc<std::sync::Mutex<EventPool<T>>>,
+    pub(super) pool: Arc<EventPool<T>>,
     pub(super) key: Key,
 }
 
@@ -33,8 +33,12 @@ where
     /// Sends a value through the pooled event.
     pub fn send(self, value: T) {
         // Get the pool item first
-        let pool_locked = self.pool.lock().unwrap();
-        let item = pool_locked.pool.get(self.key);
+        let pool_locked = self
+            .pool
+            .pool
+            .lock()
+            .expect("pool mutex should not be poisoned");
+        let item = pool_locked.get(self.key);
 
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
         let event: &Event<T> = unsafe { NonNull::from(item.get()).as_ref() };
@@ -47,7 +51,7 @@ where
     T: Send,
 {
     fn drop(&mut self) {
-        self.pool.lock().unwrap().dec_ref_and_cleanup(self.key);
+        self.pool.dec_ref_and_cleanup(self.key);
     }
 }
 
@@ -57,7 +61,7 @@ pub struct ByArcPooledEventReceiver<T>
 where
     T: Send,
 {
-    pub(super) pool: Arc<std::sync::Mutex<EventPool<T>>>,
+    pub(super) pool: Arc<EventPool<T>>,
     pub(super) key: Key,
 }
 
@@ -78,8 +82,12 @@ where
     pub async fn recv_async(self) -> T {
         // Get the event pointer without holding a lock across await
         let event_ptr = {
-            let pool_locked = self.pool.lock().unwrap();
-            let item = pool_locked.pool.get(self.key);
+            let pool_locked = self
+                .pool
+                .pool
+                .lock()
+                .expect("pool mutex should not be poisoned");
+            let item = pool_locked.get(self.key);
             NonNull::from(item.get())
         };
 
@@ -94,6 +102,6 @@ where
     T: Send,
 {
     fn drop(&mut self) {
-        self.pool.lock().unwrap().dec_ref_and_cleanup(self.key);
+        self.pool.dec_ref_and_cleanup(self.key);
     }
 }

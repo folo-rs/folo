@@ -13,7 +13,7 @@ pub struct ByRcPooledEventSender<T>
 where
     T: Send,
 {
-    pub(super) pool: Rc<std::cell::RefCell<EventPool<T>>>,
+    pub(super) pool: Rc<EventPool<T>>,
     pub(super) key: Key,
 }
 
@@ -24,15 +24,19 @@ where
     /// Sends a value through the pooled event.
     pub fn send(self, value: T) {
         // Get the pool item first
-        let pool_borrowed = self.pool.borrow();
-        let item = pool_borrowed.pool.get(self.key);
+        let pool_guard = self
+            .pool
+            .pool
+            .lock()
+            .expect("pool mutex should not be poisoned");
+        let item = pool_guard.get(self.key);
 
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
         let event: &Event<T> = unsafe { NonNull::from(item.get()).as_ref() };
         drop(event.try_set(value));
 
         // Drop the borrow before cleanup
-        drop(pool_borrowed);
+        drop(pool_guard);
     }
 }
 
@@ -41,7 +45,7 @@ where
     T: Send,
 {
     fn drop(&mut self) {
-        self.pool.borrow_mut().dec_ref_and_cleanup(self.key);
+        self.pool.dec_ref_and_cleanup(self.key);
     }
 }
 
@@ -51,7 +55,7 @@ pub struct ByRcPooledEventReceiver<T>
 where
     T: Send,
 {
-    pub(super) pool: Rc<std::cell::RefCell<EventPool<T>>>,
+    pub(super) pool: Rc<EventPool<T>>,
     pub(super) key: Key,
 }
 
@@ -63,8 +67,12 @@ where
     pub async fn recv_async(self) -> T {
         // Get the event pointer without holding a borrow across await
         let event_ptr = {
-            let pool_borrowed = self.pool.borrow();
-            let item = pool_borrowed.pool.get(self.key);
+            let pool_guard = self
+                .pool
+                .pool
+                .lock()
+                .expect("pool mutex should not be poisoned");
+            let item = pool_guard.get(self.key);
             NonNull::from(item.get())
         };
 
@@ -79,6 +87,6 @@ where
     T: Send,
 {
     fn drop(&mut self) {
-        self.pool.borrow_mut().dec_ref_and_cleanup(self.key);
+        self.pool.dec_ref_and_cleanup(self.key);
     }
 }

@@ -106,7 +106,7 @@ where
 /// ```
 #[derive(Debug)]
 pub struct LocalEventPool<T> {
-    pool: PinnedPool<WithRefCountLocal<LocalEvent<T>>>,
+    pool: RefCell<PinnedPool<WithRefCountLocal<LocalEvent<T>>>>,
 }
 
 impl<T> LocalEventPool<T> {
@@ -122,7 +122,7 @@ impl<T> LocalEventPool<T> {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            pool: PinnedPool::new(),
+            pool: RefCell::new(PinnedPool::new()),
         }
     }
 
@@ -136,7 +136,7 @@ impl<T> LocalEventPool<T> {
     /// ```rust
     /// use events::once::LocalEventPool;
     ///
-    /// let mut pool = LocalEventPool::<i32>::new();
+    /// let pool = LocalEventPool::<i32>::new();
     /// let (sender, receiver) = pool.by_ref();
     ///
     /// sender.send(42);
@@ -144,17 +144,18 @@ impl<T> LocalEventPool<T> {
     /// assert_eq!(value, 42);
     /// ```
     pub fn by_ref(
-        &mut self,
+        &self,
     ) -> (
         ByRefPooledLocalEventSender<'_, T>,
         ByRefPooledLocalEventReceiver<'_, T>,
     ) {
-        let inserter = self.pool.begin_insert();
+        let mut pool_borrow = self.pool.borrow_mut();
+        let inserter = pool_borrow.begin_insert();
         let key = inserter.key();
         let _item = inserter.insert_mut(WithRefCountLocal::new(LocalEvent::new()));
 
         // Increment reference count for both sender and receiver
-        let item_mut = self.pool.get_mut(key);
+        let item_mut = pool_borrow.get_mut(key);
         // SAFETY: WithRefCountLocal doesn't contain self-references so it's safe to get_unchecked_mut
         unsafe {
             let item_ref = item_mut.get_unchecked_mut();
@@ -162,8 +163,11 @@ impl<T> LocalEventPool<T> {
             item_ref.inc_ref();
         }
 
+        // Drop the borrow before creating the endpoints
+        drop(pool_borrow);
+
         // Use raw pointer to avoid borrowing self twice
-        let pool_ptr: *mut Self = self;
+        let pool_ptr: *const Self = self;
 
         (
             ByRefPooledLocalEventSender {
@@ -191,32 +195,36 @@ impl<T> LocalEventPool<T> {
     ///
     /// use events::once::LocalEventPool;
     ///
-    /// let pool = Rc::new(std::cell::RefCell::new(LocalEventPool::<i32>::new()));
-    /// let (sender, receiver) = pool.borrow_mut().by_rc(&pool);
+    /// let pool = Rc::new(LocalEventPool::<i32>::new());
+    /// let (sender, receiver) = pool.by_rc(&pool);
     ///
     /// sender.send(42);
     /// let value = futures::executor::block_on(receiver);
     /// assert_eq!(value, 42);
     /// ```
     pub fn by_rc(
-        &mut self,
-        pool_rc: &Rc<RefCell<Self>>,
+        &self,
+        pool_rc: &Rc<Self>,
     ) -> (
         ByRcPooledLocalEventSender<T>,
         ByRcPooledLocalEventReceiver<T>,
     ) {
-        let inserter = self.pool.begin_insert();
+        let mut pool_borrow = self.pool.borrow_mut();
+        let inserter = pool_borrow.begin_insert();
         let key = inserter.key();
         let _item = inserter.insert_mut(WithRefCountLocal::new(LocalEvent::new()));
 
         // Now increment reference count for both sender and receiver
-        let item_mut = self.pool.get_mut(key);
+        let item_mut = pool_borrow.get_mut(key);
         // SAFETY: WithRefCountLocal doesn't contain self-references so it's safe to get_unchecked_mut
         unsafe {
             let item_ref = item_mut.get_unchecked_mut();
             item_ref.inc_ref();
             item_ref.inc_ref();
         }
+
+        // Drop the borrow before creating the endpoints
+        drop(pool_borrow);
 
         (
             ByRcPooledLocalEventSender {
@@ -251,8 +259,8 @@ impl<T> LocalEventPool<T> {
     /// # use futures::executor::block_on;
     ///
     /// # block_on(async {
-    /// let mut pool = LocalEventPool::<i32>::new();
-    /// let pinned_pool = Pin::new(&mut pool);
+    /// let pool = LocalEventPool::<i32>::new();
+    /// let pinned_pool = Pin::new(&pool);
     /// // SAFETY: We ensure the pool outlives the sender and receiver
     /// let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
     ///
@@ -264,21 +272,18 @@ impl<T> LocalEventPool<T> {
     /// ```
     #[must_use]
     pub unsafe fn by_ptr(
-        self: Pin<&mut Self>,
+        self: Pin<&Self>,
     ) -> (
         ByPtrPooledLocalEventSender<T>,
         ByPtrPooledLocalEventReceiver<T>,
     ) {
-        // SAFETY: We need to access the mutable reference to create the event
-        // The caller guarantees the pool remains pinned and valid
-        let this = unsafe { self.get_unchecked_mut() };
-
-        let inserter = this.pool.begin_insert();
+        let mut pool_borrow = self.pool.borrow_mut();
+        let inserter = pool_borrow.begin_insert();
         let key = inserter.key();
         let _item = inserter.insert_mut(WithRefCountLocal::new(LocalEvent::new()));
 
         // Now increment reference count for both sender and receiver
-        let item_mut = this.pool.get_mut(key);
+        let item_mut = pool_borrow.get_mut(key);
         // SAFETY: WithRefCountLocal doesn't contain self-references so it's safe to get_unchecked_mut
         unsafe {
             let item_ref = item_mut.get_unchecked_mut();
@@ -286,7 +291,10 @@ impl<T> LocalEventPool<T> {
             item_ref.inc_ref();
         }
 
-        let pool_ptr: *mut Self = this;
+        // Drop the borrow before creating the endpoints
+        drop(pool_borrow);
+
+        let pool_ptr: *const Self = self.get_ref();
 
         (
             ByPtrPooledLocalEventSender {
@@ -301,13 +309,14 @@ impl<T> LocalEventPool<T> {
     }
 
     /// Decrements the reference count for an event and removes it if no longer referenced.
-    fn dec_ref_and_cleanup(&mut self, key: Key) {
-        let item = self.pool.get_mut(key);
+    fn dec_ref_and_cleanup(&self, key: Key) {
+        let mut pool_borrow = self.pool.borrow_mut();
+        let item = pool_borrow.get_mut(key);
         // SAFETY: WithRefCountLocal doesn't contain self-references so it's safe to get_unchecked_mut
         let item_mut = unsafe { item.get_unchecked_mut() };
         item_mut.dec_ref();
         if !item_mut.is_referenced() {
-            self.pool.remove(key);
+            pool_borrow.remove(key);
         }
     }
 
@@ -322,7 +331,7 @@ impl<T> LocalEventPool<T> {
     /// ```rust
     /// use events::once::LocalEventPool;
     ///
-    /// let mut pool = LocalEventPool::<i32>::new();
+    /// let pool = LocalEventPool::<i32>::new();
     ///
     /// // Use the pool which may grow its capacity
     /// for _ in 0..100 {
@@ -334,8 +343,9 @@ impl<T> LocalEventPool<T> {
     /// // Attempt to shrink to reduce memory usage
     /// pool.shrink_to_fit();
     /// ```
-    pub fn shrink_to_fit(&mut self) {
-        self.pool.shrink_to_fit();
+    pub fn shrink_to_fit(&self) {
+        let mut pool_borrow = self.pool.borrow_mut();
+        pool_borrow.shrink_to_fit();
     }
 }
 
@@ -347,7 +357,6 @@ impl<T> Default for LocalEventPool<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::pin::Pin;
     use std::rc::Rc;
 
@@ -359,7 +368,7 @@ mod tests {
     fn local_event_pool_by_ref_basic() {
         with_watchdog(|| {
             futures::executor::block_on(async {
-                let mut pool = LocalEventPool::new();
+                let pool = LocalEventPool::new();
                 let (sender, receiver) = pool.by_ref();
 
                 sender.send(42);
@@ -373,8 +382,8 @@ mod tests {
     fn local_event_pool_by_rc_basic() {
         with_watchdog(|| {
             futures::executor::block_on(async {
-                let pool = Rc::new(RefCell::new(LocalEventPool::new()));
-                let (sender, receiver) = pool.borrow_mut().by_rc(&pool);
+                let pool = Rc::new(LocalEventPool::new());
+                let (sender, receiver) = pool.by_rc(&pool);
 
                 sender.send(42);
                 let value = receiver.await;
@@ -387,8 +396,8 @@ mod tests {
     fn local_event_pool_by_ptr_basic() {
         with_watchdog(|| {
             futures::executor::block_on(async {
-                let mut pool = LocalEventPool::new();
-                let pinned_pool = Pin::new(&mut pool);
+                let pool = LocalEventPool::new();
+                let pinned_pool = Pin::new(&pool);
                 // SAFETY: We ensure the pool outlives the sender and receiver
                 let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
 
@@ -403,7 +412,7 @@ mod tests {
     fn local_event_pool_multiple_events() {
         with_watchdog(|| {
             futures::executor::block_on(async {
-                let mut pool = LocalEventPool::new();
+                let pool = LocalEventPool::new();
 
                 // Test multiple events sequentially
                 {
@@ -427,7 +436,7 @@ mod tests {
     fn local_event_pool_cleanup() {
         with_watchdog(|| {
             futures::executor::block_on(async {
-                let mut pool = LocalEventPool::new();
+                let pool = LocalEventPool::new();
 
                 {
                     let (sender, receiver) = pool.by_ref();
@@ -447,13 +456,13 @@ mod tests {
     fn local_event_pool_rc_multiple_events() {
         with_watchdog(|| {
             futures::executor::block_on(async {
-                let pool = Rc::new(RefCell::new(LocalEventPool::new()));
+                let pool = Rc::new(LocalEventPool::new());
 
                 // Create first event
-                let (sender1, receiver1) = pool.borrow_mut().by_rc(&pool);
+                let (sender1, receiver1) = pool.by_rc(&pool);
 
                 // Create second event
-                let (sender2, receiver2) = pool.borrow_mut().by_rc(&pool);
+                let (sender2, receiver2) = pool.by_rc(&pool);
 
                 // Send values
                 sender1.send(1);

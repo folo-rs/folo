@@ -1,9 +1,8 @@
 //! Example demonstrating all the pooled event variants: `by_ref`, `by_rc`, `by_arc`, and `by_ptr`.
 
-use std::cell::RefCell;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use events::once::EventPool;
 use futures::executor::block_on;
@@ -21,7 +20,7 @@ fn main() {
     println!("\n1. Testing by_ref variant:");
     {
         block_on(async {
-            let mut pool = EventPool::<i32>::new();
+            let pool = EventPool::<i32>::new();
             let (sender, receiver) = pool.by_ref();
 
             sender.send(BY_REF_TEST_VALUE);
@@ -34,8 +33,8 @@ fn main() {
     println!("\n2. Testing by_rc variant:");
     {
         block_on(async {
-            let pool = Rc::new(RefCell::new(EventPool::<i32>::new()));
-            let (sender, receiver) = pool.borrow_mut().by_rc(&pool);
+            let pool = Rc::new(EventPool::<i32>::new());
+            let (sender, receiver) = pool.by_rc(&pool);
 
             sender.send(BY_RC_TEST_VALUE);
             let value = receiver.recv_async().await;
@@ -46,11 +45,8 @@ fn main() {
     // 3. by_arc variant (Arc-based, thread-safe)
     println!("\n3. Testing by_arc variant:");
     {
-        let pool = Arc::new(Mutex::new(EventPool::<i32>::new()));
-        let (sender, receiver) = pool
-            .lock()
-            .expect("pool lock should not be poisoned")
-            .by_arc(&pool);
+        let pool = Arc::new(EventPool::<i32>::new());
+        let (sender, receiver) = pool.by_arc(&pool);
 
         // Can be moved across threads
         let sender_thread = std::thread::spawn(move || {
@@ -72,8 +68,8 @@ fn main() {
     println!("\n4. Testing by_ptr variant:");
     {
         block_on(async {
-            let mut pool = EventPool::<i32>::new();
-            let pinned_pool = Pin::new(&mut pool);
+            let pool = EventPool::<i32>::new();
+            let pinned_pool = Pin::new(&pool);
 
             // SAFETY: We ensure the pool outlives the sender and receiver
             let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
@@ -88,11 +84,8 @@ fn main() {
     // 5. Async example with by_arc
     println!("\n5. Testing by_arc with async:");
     {
-        let pool = Arc::new(Mutex::new(EventPool::<String>::new()));
-        let (sender, receiver) = pool
-            .lock()
-            .expect("pool lock should not be poisoned")
-            .by_arc(&pool);
+        let pool = Arc::new(EventPool::<String>::new());
+        let (sender, receiver) = pool.by_arc(&pool);
 
         // Run both tasks in async block
         block_on(async {
@@ -109,7 +102,7 @@ fn main() {
     println!("\n6. Testing pool reuse:");
     {
         block_on(async {
-            let mut pool = EventPool::<&str>::new();
+            let pool = EventPool::<&str>::new();
 
             // First event using by_ref
             let (sender1, receiver1) = pool.by_ref();

@@ -12,7 +12,7 @@ pub struct ByPtrPooledEventSender<T>
 where
     T: Send,
 {
-    pub(super) pool: *mut EventPool<T>,
+    pub(super) pool: *const EventPool<T>,
     pub(super) key: Key,
 }
 
@@ -34,7 +34,8 @@ where
         // Get the pool item first
         // SAFETY: The pool pointer is valid for the lifetime of this struct
         let pool = unsafe { &*self.pool };
-        let item = pool.pool.get(self.key);
+        let pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
+        let item = pool_guard.get(self.key);
 
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
         let event: &Event<T> = unsafe { NonNull::from(item.get()).as_ref() };
@@ -48,7 +49,7 @@ where
 {
     fn drop(&mut self) {
         // SAFETY: The pool pointer is valid for the lifetime of this struct
-        let pool = unsafe { &mut *self.pool };
+        let pool = unsafe { &*self.pool };
         pool.dec_ref_and_cleanup(self.key);
     }
 }
@@ -59,7 +60,7 @@ pub struct ByPtrPooledEventReceiver<T>
 where
     T: Send,
 {
-    pub(super) pool: *mut EventPool<T>,
+    pub(super) pool: *const EventPool<T>,
     pub(super) key: Key,
 }
 
@@ -82,7 +83,8 @@ where
         let event_ptr = {
             // SAFETY: The pool pointer is valid for the lifetime of this struct
             let pool = unsafe { &*self.pool };
-            let item = pool.pool.get(self.key);
+            let pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
+            let item = pool_guard.get(self.key);
             NonNull::from(item.get())
         };
 
@@ -98,7 +100,7 @@ where
 {
     fn drop(&mut self) {
         // SAFETY: The pool pointer is valid for the lifetime of this struct
-        let pool = unsafe { &mut *self.pool };
+        let pool = unsafe { &*self.pool };
         pool.dec_ref_and_cleanup(self.key);
     }
 }

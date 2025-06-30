@@ -14,7 +14,7 @@ fn main() {
 
     block_on(async {
         // Pool for reusing i32 event instances to reduce allocation overhead
-        let mut pool = EventPool::<i32>::new();
+        let pool = EventPool::<i32>::new();
 
         // Extract sender and receiver from an available pooled event
         let (sender, receiver) = pool.by_ref();

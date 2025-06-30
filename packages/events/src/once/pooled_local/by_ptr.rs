@@ -20,7 +20,7 @@ use super::LocalEventPool;
 /// - The pool is not moved after creating this sender
 #[derive(Debug)]
 pub struct ByPtrPooledLocalEventSender<T> {
-    pub(super) pool: *mut LocalEventPool<T>,
+    pub(super) pool: *const LocalEventPool<T>,
     pub(super) key: Key,
 }
 
@@ -38,8 +38,8 @@ impl<T> ByPtrPooledLocalEventSender<T> {
     ///
     /// use events::once::LocalEventPool;
     ///
-    /// let mut pool = LocalEventPool::new();
-    /// let pinned_pool = Pin::new(&mut pool);
+    /// let pool = LocalEventPool::new();
+    /// let pinned_pool = Pin::new(&pool);
     /// // SAFETY: We ensure the pool outlives the sender and receiver
     /// let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
     ///
@@ -49,10 +49,11 @@ impl<T> ByPtrPooledLocalEventSender<T> {
     /// ```
     pub fn send(self, value: T) {
         // SAFETY: Caller guarantees pool is valid for the lifetime of this sender
-        let pool = unsafe { &mut *self.pool };
+        let pool = unsafe { &*self.pool };
 
         // Get the event from the pool
-        let item = pool.pool.get(self.key);
+        let pool_borrow = pool.pool.borrow();
+        let item = pool_borrow.get(self.key);
         let event = item.get();
 
         drop(event.try_set(value));
@@ -62,7 +63,7 @@ impl<T> ByPtrPooledLocalEventSender<T> {
 impl<T> Drop for ByPtrPooledLocalEventSender<T> {
     fn drop(&mut self) {
         // SAFETY: Caller guarantees pool is valid for the lifetime of this sender
-        let pool = unsafe { &mut *self.pool };
+        let pool = unsafe { &*self.pool };
         pool.dec_ref_and_cleanup(self.key);
     }
 }
@@ -83,7 +84,7 @@ impl<T> Drop for ByPtrPooledLocalEventSender<T> {
 /// - The pool is not moved after creating this receiver
 #[derive(Debug)]
 pub struct ByPtrPooledLocalEventReceiver<T> {
-    pub(super) pool: *mut LocalEventPool<T>,
+    pub(super) pool: *const LocalEventPool<T>,
     pub(super) key: Option<Key>,
 }
 
@@ -107,14 +108,18 @@ impl<T> Future for ByPtrPooledLocalEventReceiver<T> {
         };
 
         // SAFETY: Caller guarantees pool is valid for the lifetime of this receiver
-        let pool = unsafe { &mut *this.pool };
+        let pool = unsafe { &*this.pool };
 
         // Get the event from the pool and poll it
-        let item = pool.pool.get(key);
+        let pool_borrow = pool.pool.borrow();
+        let item = pool_borrow.get(key);
         let event = item.get();
         let poll_result = event.poll_recv(cx.waker());
 
         if let Some(value) = poll_result {
+            // Release the borrow before cleanup
+            drop(pool_borrow);
+
             // We got the value, clean up and return
             pool.dec_ref_and_cleanup(key);
 
@@ -133,7 +138,7 @@ impl<T> Drop for ByPtrPooledLocalEventReceiver<T> {
         // Clean up our reference if not consumed by Future
         if let Some(key) = self.key {
             // SAFETY: Caller guarantees pool is valid for the lifetime of this receiver
-            let pool = unsafe { &mut *self.pool };
+            let pool = unsafe { &*self.pool };
             pool.dec_ref_and_cleanup(key);
         }
     }

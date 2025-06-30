@@ -6,7 +6,7 @@
 
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use pinned_pool::{Key, PinnedPool};
 
@@ -110,7 +110,7 @@ pub struct EventPool<T>
 where
     T: Send,
 {
-    pool: PinnedPool<WithRefCount<Event<T>>>,
+    pool: Mutex<PinnedPool<WithRefCount<Event<T>>>>,
 }
 
 impl<T> EventPool<T>
@@ -129,7 +129,7 @@ where
     #[must_use]
     pub fn new() -> Self {
         Self {
-            pool: PinnedPool::new(),
+            pool: Mutex::new(PinnedPool::new()),
         }
     }
 
@@ -145,7 +145,7 @@ where
     /// # use futures::executor::block_on;
     ///
     /// # block_on(async {
-    /// let mut pool = EventPool::<i32>::new();
+    /// let pool = EventPool::<i32>::new();
     /// let (sender, receiver) = pool.by_ref();
     ///
     /// sender.send(42);
@@ -154,17 +154,18 @@ where
     /// # });
     /// ```
     pub fn by_ref(
-        &mut self,
+        &self,
     ) -> (
         ByRefPooledEventSender<'_, T>,
         ByRefPooledEventReceiver<'_, T>,
     ) {
-        let inserter = self.pool.begin_insert();
+        let mut pool_guard = self.pool.lock().expect("pool mutex should not be poisoned");
+        let inserter = pool_guard.begin_insert();
         let key = inserter.key();
         let _item = inserter.insert_mut(WithRefCount::new(Event::new()));
 
         // Increment reference count for both sender and receiver
-        let item_mut = self.pool.get_mut(key);
+        let item_mut = pool_guard.get_mut(key);
         // SAFETY: WithRefCount doesn't contain self-references so it's safe to get_unchecked_mut
         unsafe {
             let item_ref = item_mut.get_unchecked_mut();
@@ -172,8 +173,11 @@ where
             item_ref.inc_ref();
         }
 
+        // Drop the lock before creating the endpoints
+        drop(pool_guard);
+
         // Use raw pointer to avoid borrowing self twice
-        let pool_ptr: *mut Self = self;
+        let pool_ptr: *const Self = self;
 
         (
             ByRefPooledEventSender {
@@ -203,8 +207,8 @@ where
     /// # use futures::executor::block_on;
     ///
     /// # block_on(async {
-    /// let pool = Rc::new(std::cell::RefCell::new(EventPool::<i32>::new()));
-    /// let (sender, receiver) = pool.borrow_mut().by_rc(&pool);
+    /// let pool = Rc::new(EventPool::<i32>::new());
+    /// let (sender, receiver) = pool.by_rc(&pool);
     ///
     /// sender.send(42);
     /// let value = receiver.recv_async().await;
@@ -212,21 +216,25 @@ where
     /// # });
     /// ```
     pub fn by_rc(
-        &mut self,
-        pool_rc: &Rc<std::cell::RefCell<Self>>,
+        &self,
+        pool_rc: &Rc<Self>,
     ) -> (ByRcPooledEventSender<T>, ByRcPooledEventReceiver<T>) {
-        let inserter = self.pool.begin_insert();
+        let mut pool_guard = self.pool.lock().expect("pool mutex should not be poisoned");
+        let inserter = pool_guard.begin_insert();
         let key = inserter.key();
         let _item = inserter.insert_mut(WithRefCount::new(Event::new()));
 
         // Now increment reference count for both sender and receiver
-        let item_mut = self.pool.get_mut(key);
+        let item_mut = pool_guard.get_mut(key);
         // SAFETY: WithRefCount doesn't contain self-references so it's safe to get_unchecked_mut
         unsafe {
             let item_ref = item_mut.get_unchecked_mut();
             item_ref.inc_ref();
             item_ref.inc_ref();
         }
+
+        // Drop the lock before creating the endpoints
+        drop(pool_guard);
 
         (
             ByRcPooledEventSender {
@@ -248,33 +256,37 @@ where
     /// # Example
     ///
     /// ```rust
-    /// use std::sync::{Arc, Mutex};
+    /// use std::sync::Arc;
     ///
     /// use events::once::EventPool;
     ///
-    /// let pool = Arc::new(Mutex::new(EventPool::<i32>::new()));
-    /// let (sender, receiver) = pool.lock().unwrap().by_arc(&pool);
+    /// let pool = Arc::new(EventPool::<i32>::new());
+    /// let (sender, receiver) = pool.by_arc(&pool);
     ///
     /// sender.send(42);
     /// let value = futures::executor::block_on(receiver.recv_async());
     /// assert_eq!(value, 42);
     /// ```
     pub fn by_arc(
-        &mut self,
-        pool_arc: &Arc<std::sync::Mutex<Self>>,
+        &self,
+        pool_arc: &Arc<Self>,
     ) -> (ByArcPooledEventSender<T>, ByArcPooledEventReceiver<T>) {
-        let inserter = self.pool.begin_insert();
+        let mut pool_guard = self.pool.lock().expect("pool mutex should not be poisoned");
+        let inserter = pool_guard.begin_insert();
         let key = inserter.key();
         let _item = inserter.insert_mut(WithRefCount::new(Event::new()));
 
         // Now increment reference count for both sender and receiver
-        let item_mut = self.pool.get_mut(key);
+        let item_mut = pool_guard.get_mut(key);
         // SAFETY: WithRefCount doesn't contain self-references so it's safe to get_unchecked_mut
         unsafe {
             let item_ref = item_mut.get_unchecked_mut();
             item_ref.inc_ref();
             item_ref.inc_ref();
         }
+
+        // Drop the lock before creating the endpoints
+        drop(pool_guard);
 
         (
             ByArcPooledEventSender {
@@ -307,8 +319,8 @@ where
     ///
     /// use events::once::EventPool;
     ///
-    /// let mut pool = EventPool::<i32>::new();
-    /// let pinned_pool = Pin::new(&mut pool);
+    /// let pool = EventPool::<i32>::new();
+    /// let pinned_pool = Pin::new(&pool);
     /// // SAFETY: We ensure the pool outlives the sender and receiver
     /// let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
     ///
@@ -319,18 +331,15 @@ where
     /// ```
     #[must_use]
     pub unsafe fn by_ptr(
-        self: Pin<&mut Self>,
+        self: Pin<&Self>,
     ) -> (ByPtrPooledEventSender<T>, ByPtrPooledEventReceiver<T>) {
-        // SAFETY: We need to access the mutable reference to create the event
-        // The caller guarantees the pool remains pinned and valid
-        let this = unsafe { self.get_unchecked_mut() };
-
-        let inserter = this.pool.begin_insert();
+        let mut pool_guard = self.pool.lock().expect("pool mutex should not be poisoned");
+        let inserter = pool_guard.begin_insert();
         let key = inserter.key();
         let _item = inserter.insert_mut(WithRefCount::new(Event::new()));
 
         // Now increment reference count for both sender and receiver
-        let item_mut = this.pool.get_mut(key);
+        let item_mut = pool_guard.get_mut(key);
         // SAFETY: WithRefCount doesn't contain self-references so it's safe to get_unchecked_mut
         unsafe {
             let item_ref = item_mut.get_unchecked_mut();
@@ -338,7 +347,10 @@ where
             item_ref.inc_ref();
         }
 
-        let pool_ptr: *mut Self = this;
+        // Drop the lock before creating the endpoints
+        drop(pool_guard);
+
+        let pool_ptr: *const Self = self.get_ref();
 
         (
             ByPtrPooledEventSender {
@@ -353,13 +365,14 @@ where
     }
 
     /// Decrements the reference count for an event and removes it if no longer referenced.
-    fn dec_ref_and_cleanup(&mut self, key: Key) {
-        let item = self.pool.get_mut(key);
+    fn dec_ref_and_cleanup(&self, key: Key) {
+        let mut pool_guard = self.pool.lock().expect("pool mutex should not be poisoned");
+        let item = pool_guard.get_mut(key);
         // SAFETY: WithRefCount doesn't contain self-references so it's safe to get_unchecked_mut
         let item_mut = unsafe { item.get_unchecked_mut() };
         item_mut.dec_ref();
         if !item_mut.is_referenced() {
-            self.pool.remove(key);
+            pool_guard.remove(key);
         }
     }
 
@@ -374,7 +387,7 @@ where
     /// ```rust
     /// use events::once::EventPool;
     ///
-    /// let mut pool = EventPool::<i32>::new();
+    /// let pool = EventPool::<i32>::new();
     ///
     /// // Use the pool which may grow its capacity
     /// for _ in 0..100 {
@@ -386,8 +399,9 @@ where
     /// // Attempt to shrink to reduce memory usage
     /// pool.shrink_to_fit();
     /// ```
-    pub fn shrink_to_fit(&mut self) {
-        self.pool.shrink_to_fit();
+    pub fn shrink_to_fit(&self) {
+        let mut pool_guard = self.pool.lock().expect("pool mutex should not be poisoned");
+        pool_guard.shrink_to_fit();
     }
 }
 
@@ -425,7 +439,7 @@ mod tests {
     #[test]
     fn event_pool_by_ref() {
         with_watchdog(|| {
-            let mut pool = EventPool::<i32>::new();
+            let pool = EventPool::<i32>::new();
             let (sender, receiver) = pool.by_ref();
 
             sender.send(42);
@@ -439,7 +453,7 @@ mod tests {
         use futures::executor::block_on;
 
         with_watchdog(|| {
-            let mut pool = EventPool::<i32>::new();
+            let pool = EventPool::<i32>::new();
             let (sender, receiver) = pool.by_ref();
 
             sender.send(42);
@@ -451,7 +465,7 @@ mod tests {
     #[test]
     fn pool_drop_cleanup() {
         with_watchdog(|| {
-            let mut pool = EventPool::<i32>::new();
+            let pool = EventPool::<i32>::new();
 
             // Create and drop sender/receiver without using them
             let (sender, receiver) = pool.by_ref();
@@ -466,7 +480,7 @@ mod tests {
     #[test]
     fn pool_multiple_events() {
         with_watchdog(|| {
-            let mut pool = EventPool::<i32>::new();
+            let pool = EventPool::<i32>::new();
 
             // Test one event first
             let (sender1, receiver1) = pool.by_ref();
@@ -484,12 +498,11 @@ mod tests {
 
     #[test]
     fn event_pool_by_rc() {
-        use std::cell::RefCell;
         use std::rc::Rc;
 
         with_watchdog(|| {
-            let pool = Rc::new(RefCell::new(EventPool::<i32>::new()));
-            let (sender, receiver) = pool.borrow_mut().by_rc(&pool);
+            let pool = Rc::new(EventPool::<i32>::new());
+            let (sender, receiver) = pool.by_rc(&pool);
 
             sender.send(42);
             let value = futures::executor::block_on(receiver.recv_async());
@@ -499,11 +512,11 @@ mod tests {
 
     #[test]
     fn event_pool_by_arc() {
-        use std::sync::{Arc, Mutex};
+        use std::sync::Arc;
 
         with_watchdog(|| {
-            let pool = Arc::new(Mutex::new(EventPool::<i32>::new()));
-            let (sender, receiver) = pool.lock().unwrap().by_arc(&pool);
+            let pool = Arc::new(EventPool::<i32>::new());
+            let (sender, receiver) = pool.by_arc(&pool);
 
             sender.send(42);
             let value = futures::executor::block_on(receiver.recv_async());
@@ -516,8 +529,8 @@ mod tests {
         use std::pin::Pin;
 
         with_watchdog(|| {
-            let mut pool = EventPool::<i32>::new();
-            let pinned_pool = Pin::new(&mut pool);
+            let pool = EventPool::<i32>::new();
+            let pinned_pool = Pin::new(&pool);
             // SAFETY: We ensure the pool outlives the sender and receiver
             let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
 
@@ -530,14 +543,13 @@ mod tests {
 
     #[test]
     fn event_pool_by_rc_async() {
-        use std::cell::RefCell;
         use std::rc::Rc;
 
         use futures::executor::block_on;
 
         with_watchdog(|| {
-            let pool = Rc::new(RefCell::new(EventPool::<i32>::new()));
-            let (sender, receiver) = pool.borrow_mut().by_rc(&pool);
+            let pool = Rc::new(EventPool::<i32>::new());
+            let (sender, receiver) = pool.by_rc(&pool);
 
             sender.send(42);
             let value = block_on(receiver.recv_async());
@@ -547,13 +559,13 @@ mod tests {
 
     #[test]
     fn event_pool_by_arc_async() {
-        use std::sync::{Arc, Mutex};
+        use std::sync::Arc;
 
         use futures::executor::block_on;
 
         with_watchdog(|| {
-            let pool = Arc::new(Mutex::new(EventPool::<i32>::new()));
-            let (sender, receiver) = pool.lock().unwrap().by_arc(&pool);
+            let pool = Arc::new(EventPool::<i32>::new());
+            let (sender, receiver) = pool.by_arc(&pool);
 
             sender.send(42);
             let value = block_on(receiver.recv_async());
@@ -568,8 +580,8 @@ mod tests {
         use futures::executor::block_on;
 
         with_watchdog(|| {
-            let mut pool = EventPool::<i32>::new();
-            let pinned_pool = Pin::new(&mut pool);
+            let pool = EventPool::<i32>::new();
+            let pinned_pool = Pin::new(&pool);
             // SAFETY: We ensure the pool outlives the sender and receiver
             let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
 
@@ -584,7 +596,7 @@ mod tests {
     #[test]
     fn by_ref_sender_drop_cleanup() {
         with_watchdog(|| {
-            let mut pool = EventPool::<i32>::new();
+            let pool = EventPool::<i32>::new();
             {
                 let (sender, _receiver) = pool.by_ref();
 
@@ -604,7 +616,7 @@ mod tests {
     #[test]
     fn by_ref_receiver_drop_cleanup() {
         with_watchdog(|| {
-            let mut pool = EventPool::<i32>::new();
+            let pool = EventPool::<i32>::new();
             {
                 let (_sender, receiver) = pool.by_ref();
 
@@ -623,18 +635,17 @@ mod tests {
 
     #[test]
     fn by_rc_sender_drop_cleanup() {
-        use std::cell::RefCell;
         use std::rc::Rc;
 
         with_watchdog(|| {
-            let pool = Rc::new(RefCell::new(EventPool::<i32>::new()));
-            let (sender, _receiver) = pool.borrow_mut().by_rc(&pool);
+            let pool = Rc::new(EventPool::<i32>::new());
+            let (sender, _receiver) = pool.by_rc(&pool);
 
             // Force the sender to be dropped without being consumed by send()
             drop(sender);
 
             // Create a new event to verify the pool is still functional
-            let (sender2, receiver2) = pool.borrow_mut().by_rc(&pool);
+            let (sender2, receiver2) = pool.by_rc(&pool);
             sender2.send(789);
             let value = futures::executor::block_on(receiver2.recv_async());
             assert_eq!(value, 789);
@@ -643,18 +654,17 @@ mod tests {
 
     #[test]
     fn by_rc_receiver_drop_cleanup() {
-        use std::cell::RefCell;
         use std::rc::Rc;
 
         with_watchdog(|| {
-            let pool = Rc::new(RefCell::new(EventPool::<i32>::new()));
-            let (_sender, receiver) = pool.borrow_mut().by_rc(&pool);
+            let pool = Rc::new(EventPool::<i32>::new());
+            let (_sender, receiver) = pool.by_rc(&pool);
 
             // Force the receiver to be dropped without being consumed by recv()
             drop(receiver);
 
             // Create a new event to verify the pool is still functional
-            let (sender2, receiver2) = pool.borrow_mut().by_rc(&pool);
+            let (sender2, receiver2) = pool.by_rc(&pool);
             sender2.send(321);
             let value = futures::executor::block_on(receiver2.recv_async());
             assert_eq!(value, 321);
@@ -663,17 +673,17 @@ mod tests {
 
     #[test]
     fn by_arc_sender_drop_cleanup() {
-        use std::sync::{Arc, Mutex};
+        use std::sync::Arc;
 
         with_watchdog(|| {
-            let pool = Arc::new(Mutex::new(EventPool::<i32>::new()));
-            let (sender, _receiver) = pool.lock().unwrap().by_arc(&pool);
+            let pool = Arc::new(EventPool::<i32>::new());
+            let (sender, _receiver) = pool.by_arc(&pool);
 
             // Force the sender to be dropped without being consumed by send()
             drop(sender);
 
             // Create a new event to verify the pool is still functional
-            let (sender2, receiver2) = pool.lock().unwrap().by_arc(&pool);
+            let (sender2, receiver2) = pool.by_arc(&pool);
             sender2.send(654);
             let value = futures::executor::block_on(receiver2.recv_async());
             assert_eq!(value, 654);
@@ -682,17 +692,17 @@ mod tests {
 
     #[test]
     fn by_arc_receiver_drop_cleanup() {
-        use std::sync::{Arc, Mutex};
+        use std::sync::Arc;
 
         with_watchdog(|| {
-            let pool = Arc::new(Mutex::new(EventPool::<i32>::new()));
-            let (_sender, receiver) = pool.lock().unwrap().by_arc(&pool);
+            let pool = Arc::new(EventPool::<i32>::new());
+            let (_sender, receiver) = pool.by_arc(&pool);
 
             // Force the receiver to be dropped without being consumed by recv()
             drop(receiver);
 
             // Create a new event to verify the pool is still functional
-            let (sender2, receiver2) = pool.lock().unwrap().by_arc(&pool);
+            let (sender2, receiver2) = pool.by_arc(&pool);
             sender2.send(987);
             let value = futures::executor::block_on(receiver2.recv_async());
             assert_eq!(value, 987);
@@ -704,11 +714,11 @@ mod tests {
         use std::pin::Pin;
 
         with_watchdog(|| {
-            let mut pool = EventPool::<i32>::new();
-            let mut pinned_pool = Pin::new(&mut pool);
+            let pool = EventPool::<i32>::new();
+            let pinned_pool = Pin::new(&pool);
 
             // SAFETY: We ensure the pool outlives the sender and receiver
-            let (sender, _receiver) = unsafe { pinned_pool.as_mut().by_ptr() };
+            let (sender, _receiver) = unsafe { pinned_pool.as_ref().by_ptr() };
 
             // Force the sender to be dropped without being consumed by send()
             drop(sender);
@@ -727,11 +737,11 @@ mod tests {
         use std::pin::Pin;
 
         with_watchdog(|| {
-            let mut pool = EventPool::<i32>::new();
-            let mut pinned_pool = Pin::new(&mut pool);
+            let pool = EventPool::<i32>::new();
+            let pinned_pool = Pin::new(&pool);
 
             // SAFETY: We ensure the pool outlives the sender and receiver
-            let (_sender, receiver) = unsafe { pinned_pool.as_mut().by_ptr() };
+            let (_sender, receiver) = unsafe { pinned_pool.as_ref().by_ptr() };
 
             // Force the receiver to be dropped without being consumed by recv()
             drop(receiver);
@@ -748,7 +758,7 @@ mod tests {
     #[test]
     fn dec_ref_and_cleanup_is_called() {
         with_watchdog(|| {
-            let mut pool = EventPool::<i32>::new();
+            let pool = EventPool::<i32>::new();
 
             // Create multiple events and drop them without using
             for _ in 0..5 {
@@ -768,7 +778,7 @@ mod tests {
     #[test]
     fn pool_cleanup_verified_by_capacity() {
         with_watchdog(|| {
-            let mut pool = EventPool::<i32>::new();
+            let pool = EventPool::<i32>::new();
 
             // Create many events and drop them without using - this should not grow the pool permanently
             for i in 0..10 {
@@ -818,7 +828,7 @@ mod tests {
     #[test]
     fn pool_stress_test_no_leak() {
         with_watchdog(|| {
-            let mut pool = EventPool::<u64>::new();
+            let pool = EventPool::<u64>::new();
 
             // Stress test with many dropped events
             for _ in 0..100 {
@@ -838,7 +848,7 @@ mod tests {
 
     #[test]
     fn by_ref_drop_actually_cleans_up_pool() {
-        let mut pool = EventPool::<u32>::new();
+        let pool = EventPool::<u32>::new();
 
         // Create many events but drop them without use
         for _ in 0..100 {
@@ -848,16 +858,17 @@ mod tests {
 
         // Pool should be cleaned up - all events should be removed
         // If Drop implementations don't work, pool will retain unused events
+        let mut pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
         assert_eq!(
-            pool.pool.len(),
+            pool_guard.len(),
             0,
             "Pool still contains unused events - Drop implementations not working"
         );
 
         // An empty pool should be able to shrink to capacity 0
-        pool.shrink_to_fit();
+        pool_guard.shrink_to_fit();
         assert_eq!(
-            pool.pool.capacity(),
+            pool_guard.capacity(),
             0,
             "Empty pool should shrink to capacity 0"
         );
@@ -865,25 +876,26 @@ mod tests {
 
     #[test]
     fn by_rc_drop_actually_cleans_up_pool() {
-        let pool = Rc::new(std::cell::RefCell::new(EventPool::<u32>::new()));
+        let pool = Rc::new(EventPool::<u32>::new());
 
         // Create many events but drop them without use
         for _ in 0..100 {
-            let (_sender, _receiver) = pool.borrow_mut().by_rc(&pool);
+            let (_sender, _receiver) = pool.by_rc(&pool);
             // Both sender and receiver will be dropped here
         }
 
         // Pool should be cleaned up - all events should be removed
+        let mut pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
         assert_eq!(
-            pool.borrow().pool.len(),
+            pool_guard.len(),
             0,
             "Pool still contains unused events - Drop implementations not working"
         );
 
         // An empty pool should be able to shrink to capacity 0
-        pool.borrow_mut().shrink_to_fit();
+        pool_guard.shrink_to_fit();
         assert_eq!(
-            pool.borrow().pool.capacity(),
+            pool_guard.capacity(),
             0,
             "Empty pool should shrink to capacity 0"
         );
@@ -891,25 +903,26 @@ mod tests {
 
     #[test]
     fn by_arc_drop_actually_cleans_up_pool() {
-        let pool = Arc::new(std::sync::Mutex::new(EventPool::<u32>::new()));
+        let pool = Arc::new(EventPool::<u32>::new());
 
         // Create many events but drop them without use
         for _ in 0..100 {
-            let (_sender, _receiver) = pool.lock().unwrap().by_arc(&pool);
+            let (_sender, _receiver) = pool.by_arc(&pool);
             // Both sender and receiver will be dropped here
         }
 
         // Pool should be cleaned up - all events should be removed
+        let mut pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
         assert_eq!(
-            pool.lock().unwrap().pool.len(),
+            pool_guard.len(),
             0,
             "Pool still contains unused events - Drop implementations not working"
         );
 
         // An empty pool should be able to shrink to capacity 0
-        pool.lock().unwrap().shrink_to_fit();
+        pool_guard.shrink_to_fit();
         assert_eq!(
-            pool.lock().unwrap().pool.capacity(),
+            pool_guard.capacity(),
             0,
             "Empty pool should shrink to capacity 0"
         );
@@ -919,22 +932,13 @@ mod tests {
     fn by_ptr_drop_actually_cleans_up_pool() {
         // Test ptr-based pooled events cleanup by checking pool state
         for iteration in 0..10 {
-            let mut pool = EventPool::<u32>::new();
+            let pool = EventPool::<u32>::new();
 
             {
-                let mut pool_pin = std::pin::pin!(pool);
+                let pool_pin = std::pin::pin!(pool);
                 // SAFETY: We pin the pool for the duration of by_ptr call
-                let (_sender, _receiver) = unsafe { pool_pin.as_mut().by_ptr() };
+                let (_sender, _receiver) = unsafe { pool_pin.as_ref().by_ptr() };
                 // sender and receiver will be dropped here
-            }
-
-            // Create a fresh pool for next iteration
-            #[allow(
-                unused_assignments,
-                reason = "Testing pool recreation for memory leak detection"
-            )]
-            {
-                pool = EventPool::<u32>::new();
             }
 
             // For this test, we'll verify that repeated operations don't accumulate
@@ -945,10 +949,13 @@ mod tests {
 
     #[test]
     fn dec_ref_and_cleanup_actually_removes_events() {
-        let mut pool = EventPool::<u32>::new();
+        let pool = EventPool::<u32>::new();
 
         // Test 1: Check that events are added to pool
-        let pool_len_before = pool.pool.len();
+        let pool_len_before = {
+            let pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
+            pool_guard.len()
+        };
 
         // Create events in a scope to ensure they're dropped
         let sender_key = {
@@ -963,7 +970,10 @@ mod tests {
         };
 
         // Now check that cleanup worked
-        let pool_len_after = pool.pool.len();
+        let pool_len_after = {
+            let pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
+            pool_guard.len()
+        };
         assert_eq!(
             pool_len_after, pool_len_before,
             "Pool not cleaned up after dropping events - dec_ref_and_cleanup not working, key: {sender_key:?}"
