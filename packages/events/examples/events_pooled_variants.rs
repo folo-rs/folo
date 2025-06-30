@@ -117,12 +117,12 @@ fn main() {
                     5 => "Fifth (REUSED)",
                     _ => unreachable!(),
                 };
-                
+
                 sender.send(message);
                 let value = receiver.recv_async().await;
                 println!("     Event {i}: {value}");
             }
-            
+
             println!("   ✓ All 5 events likely reused the SAME underlying event instance!");
             println!("   ✓ Only 1 allocation on first use, 4 subsequent uses were allocation-free");
         });
@@ -133,7 +133,9 @@ fn main() {
     println!("✓ Events are automatically returned to pools when endpoints are dropped");
     println!("✓ Subsequent `pool.bind_*()` calls reuse existing event instances");
     println!("✓ This minimizes allocation overhead in high-frequency scenarios");
-    println!("✓ Different endpoint types (bind_by_ref, bind_by_rc, bind_by_arc, bind_by_ptr) can all reuse the same pool");
+    println!(
+        "✓ Different endpoint types (bind_by_ref, bind_by_rc, bind_by_arc, bind_by_ptr) can all reuse the same pool"
+    );
 
     println!("\nAll pooled event variants work correctly with efficient resource reuse!");
     println!("Events are automatically cleaned up when both sender and receiver are dropped.");
@@ -148,5 +150,7 @@ fn main() {
     );
     println!();
     println!("Key benefit: ALL variants reuse the same underlying event instances from the pool,");
-    println!("making them highly efficient for scenarios with frequent event creation/destruction!");
+    println!(
+        "making them highly efficient for scenarios with frequent event creation/destruction!"
+    );
 }

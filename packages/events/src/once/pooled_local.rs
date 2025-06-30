@@ -30,6 +30,9 @@ pub use by_ref::{ByRefPooledLocalOnceReceiver, ByRefPooledLocalOnceSender};
 /// This is the single-threaded variant that cannot be shared across threads but has
 /// lower overhead than the thread-safe [`super::OnceEventPool`].
 ///
+/// The pool provides zero-allocation event reuse for high-frequency scenarios
+/// within a single thread.
+///
 /// # Example
 ///
 /// ```rust

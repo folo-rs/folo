@@ -8,7 +8,7 @@ use super::LocalOnceEventPool;
 
 /// A sender endpoint for pooled local events that holds an Rc to the pool.
 ///
-/// This sender is created from [`LocalOnceEventPool::by_rc`] and automatically manages
+/// This sender is created from [`LocalOnceEventPool::bind_by_rc`] and automatically manages
 /// the lifetime of the underlying event. When both sender and receiver are dropped,
 /// the event is automatically returned to the pool.
 ///
@@ -34,7 +34,7 @@ impl<T> ByRcPooledLocalOnceSender<T> {
     /// use events::once::LocalOnceEventPool;
     ///
     /// let pool = Rc::new(LocalOnceEventPool::new());
-    /// let (sender, receiver) = pool.by_rc(&pool);
+    /// let (sender, receiver) = pool.bind_by_rc(&pool);
     ///
     /// sender.send(42);
     /// let value = futures::executor::block_on(receiver);
@@ -58,7 +58,7 @@ impl<T> Drop for ByRcPooledLocalOnceSender<T> {
 
 /// A receiver endpoint for pooled local events that holds an Rc to the pool.
 ///
-/// This receiver is created from [`LocalOnceEventPool::by_rc`] and automatically manages
+/// This receiver is created from [`LocalOnceEventPool::bind_by_rc`] and automatically manages
 /// the lifetime of the underlying event. When both sender and receiver are dropped,
 /// the event is automatically returned to the pool.
 ///

@@ -130,7 +130,9 @@ where
     /// let endpoints2 = event.bind_by_ref_checked(); // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
-    pub fn bind_by_ref_checked(&self) -> Option<(ByRefOnceSender<'_, T>, ByRefOnceReceiver<'_, T>)> {
+    pub fn bind_by_ref_checked(
+        &self,
+    ) -> Option<(ByRefOnceSender<'_, T>, ByRefOnceReceiver<'_, T>)> {
         if self.used.swap(true, Ordering::SeqCst) {
             return None;
         }
@@ -183,7 +185,9 @@ where
     /// let endpoints2 = event.bind_by_arc_checked(); // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
-    pub fn bind_by_arc_checked(self: &Arc<Self>) -> Option<(ByArcOnceSender<T>, ByArcOnceReceiver<T>)> {
+    pub fn bind_by_arc_checked(
+        self: &Arc<Self>,
+    ) -> Option<(ByArcOnceSender<T>, ByArcOnceReceiver<T>)> {
         if self.used.swap(true, Ordering::SeqCst) {
             return None;
         }
@@ -460,7 +464,8 @@ mod tests {
         let event = OnceEvent::<i32>::new();
         let _endpoints = event.bind_by_ref();
         let _endpoints2 = event.bind_by_ref(); // Should panic
-    }    #[test]
+    }
+    #[test]
     fn event_by_ref_checked_returns_none_after_use() {
         let event = OnceEvent::<i32>::new();
         let endpoints1 = event.bind_by_ref_checked();

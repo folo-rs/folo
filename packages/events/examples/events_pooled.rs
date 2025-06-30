@@ -38,7 +38,7 @@ fn main() {
 
             let received = receiver.recv_async().await;
             println!("   - Received value: {received}");
-            
+
             // When this scope ends, sender and receiver are dropped automatically,
             // and the event is returned to the pool for reuse
         }

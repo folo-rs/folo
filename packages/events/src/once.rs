@@ -78,7 +78,7 @@
 //! # block_on(async {
 //! let pool = LocalOnceEventPool::<i32>::new();
 //!
-//! // First usage - creates new event  
+//! // First usage - creates new event
 //! let (sender1, receiver1) = pool.bind_by_ref();
 //! sender1.send(42);
 //! let value1 = receiver1.await;
@@ -108,7 +108,7 @@
 //! sender1.send(42);
 //! let value1 = receiver1.recv_async().await;
 //! assert_eq!(value1, 42);
-//! 
+//!
 //! // Second usage - efficiently reuses the same underlying event
 //! let (sender2, receiver2) = pool.bind_by_ref();
 //! sender2.send(200);

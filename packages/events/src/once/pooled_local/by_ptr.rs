@@ -6,7 +6,7 @@ use super::LocalOnceEventPool;
 
 /// A sender endpoint for pooled local events that holds a raw pointer to the pool.
 ///
-/// This sender is created from [`LocalOnceEventPool::by_ptr`] and automatically manages
+/// This sender is created from [`LocalOnceEventPool::bind_by_ptr`] and automatically manages
 /// the lifetime of the underlying event. When both sender and receiver are dropped,
 /// the event is automatically returned to the pool.
 ///
@@ -41,7 +41,7 @@ impl<T> ByPtrPooledLocalOnceSender<T> {
     /// let pool = LocalOnceEventPool::new();
     /// let pinned_pool = Pin::new(&pool);
     /// // SAFETY: We ensure the pool outlives the sender and receiver
-    /// let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
+    /// let (sender, receiver) = unsafe { pinned_pool.bind_by_ptr() };
     ///
     /// sender.send(42);
     /// let value = futures::executor::block_on(receiver);
@@ -70,7 +70,7 @@ impl<T> Drop for ByPtrPooledLocalOnceSender<T> {
 
 /// A receiver endpoint for pooled local events that holds a raw pointer to the pool.
 ///
-/// This receiver is created from [`LocalOnceEventPool::by_ptr`] and automatically manages
+/// This receiver is created from [`LocalOnceEventPool::bind_by_ptr`] and automatically manages
 /// the lifetime of the underlying event. When both sender and receiver are dropped,
 /// the event is automatically returned to the pool.
 ///

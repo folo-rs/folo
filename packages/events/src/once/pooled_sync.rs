@@ -29,6 +29,9 @@ pub use by_ref::{ByRefPooledOnceReceiver, ByRefPooledOnceSender};
 /// sender and receiver endpoints are dropped. Events are reference-counted to
 /// track when they are no longer in use.
 ///
+/// This pool provides zero-allocation event reuse for high-frequency scenarios
+/// while maintaining thread-safety across multiple threads.
+///
 /// # Example
 ///
 /// ```rust

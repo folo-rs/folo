@@ -40,6 +40,13 @@ enum EventState<T> {
 ///
 /// For thread-safe usage, see [`crate::once::OnceEvent`] which can be used with `Arc<T>`.
 ///
+/// # Single-Threaded Optimizations
+///
+/// Without thread safety requirements, this type uses more efficient primitives:
+/// - [`std::cell::RefCell`] instead of [`std::sync::Mutex`]
+/// - [`std::cell::Cell`] instead of [`std::sync::atomic::AtomicBool`]
+/// - No atomic operations required
+///
 /// # Example
 ///
 /// ```rust
@@ -82,7 +89,7 @@ impl<T> LocalOnceEvent<T> {
     ///
     /// # Panics
     ///
-    /// Panics if this method or [`by_ref_checked`](LocalOnceEvent::by_ref_checked) has been called before.
+    /// Panics if this method or [`bind_by_ref_checked`](LocalOnceEvent::bind_by_ref_checked) has been called before.
     ///
     /// # Example
     ///
