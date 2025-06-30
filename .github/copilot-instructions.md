@@ -363,3 +363,20 @@ let message = event.await;
 assert_eq!(message, "Hello, World!");
 # });
 ```
+
+# Re-export defaults to wildcard
+
+We prefer to re-export public types from private modules
+using a wildcard import. There is no need to name the types separately.
+
+Good:
+
+```rust
+pub use events::*;
+```
+
+Bad:
+
+```rust
+pub use events::{Event, LocalEvent, EventPool, LocalEventPool};
+```
