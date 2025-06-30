@@ -344,3 +344,21 @@ fine to leave it inline.
 
 Document design elements, key decisions and architectural choices in inline comments in the
 files to which they apply. Use regular `//` comments, not API documentation comments.
+
+# Hide async entrypoint in examples
+
+In inline code examples that use `.await`, do not render the async entrypoint in documentation.
+
+Example:
+
+```rust
+use events::once::Event;
+# use futures::executor::block_on;
+
+# block_on(async {
+let event = get_event();
+let message = event.await;
+
+assert_eq!(message, "Hello, World!");
+# });
+```
