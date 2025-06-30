@@ -102,11 +102,19 @@ pub use pooled_local::{
     ByRcPooledLocalOnceSender, ByRefPooledLocalOnceReceiver, ByRefPooledLocalOnceSender,
     LocalOnceEventPool,
 };
+#[allow(
+    clippy::module_name_repetitions,
+    reason = "OnceEventPool is the correct name for this type"
+)]
 pub use pooled_sync::{
     ByArcPooledOnceReceiver, ByArcPooledOnceSender, ByPtrPooledOnceReceiver, ByPtrPooledOnceSender,
     ByRcPooledOnceReceiver, ByRcPooledOnceSender, ByRefPooledOnceReceiver, ByRefPooledOnceSender,
     OnceEventPool,
 };
+#[allow(
+    clippy::module_name_repetitions,
+    reason = "OnceEvent is the correct name for this type"
+)]
 pub use sync::{
     ByArcOnceReceiver, ByArcOnceSender, ByPtrOnceReceiver, ByPtrOnceSender, ByRcOnceReceiver,
     ByRcOnceSender, ByRefOnceReceiver, ByRefOnceSender, OnceEvent,

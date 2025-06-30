@@ -1,4 +1,4 @@
-//! Rc-based senders and receivers for thread-safe OnceEvents.
+//! Rc-based senders and receivers for thread-safe `OnceEvents`.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -7,9 +7,9 @@ use std::task::{Context, Poll};
 
 use super::OnceEvent;
 
-/// A sender that can send a value through a thread-safe OnceEvent using Rc ownership.
+/// A sender that can send a value through a thread-safe `OnceEvent` using Rc ownership.
 ///
-/// The sender owns an Rc to the OnceEvent and is single-threaded.
+/// The sender owns an Rc to the `OnceEvent` and is single-threaded.
 /// After calling [`send`](ByRcOnceSender::send), the sender is consumed.
 #[derive(Debug)]
 pub struct ByRcOnceSender<T>
@@ -23,7 +23,7 @@ impl<T> ByRcOnceSender<T>
 where
     T: Send,
 {
-    /// Sends a value through the OnceEvent.
+    /// Sends a value through the `OnceEvent`.
     ///
     /// This method consumes the sender and always succeeds, regardless of whether
     /// there is a receiver waiting.
@@ -33,10 +33,10 @@ where
     /// ```rust
     /// use std::rc::Rc;
     ///
-    /// use OnceEvents::once::OnceEvent;
+    /// use events::OnceEvent;
     ///
-    /// let OnceEvent = Rc::new(once_event::<i32>::new());
-    /// let (sender, _receiver) = OnceEvent.by_rc();
+    /// let event = Rc::new(OnceEvent::<i32>::new());
+    /// let (sender, _receiver) = event.by_rc();
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {
@@ -44,9 +44,9 @@ where
     }
 }
 
-/// A receiver that can receive a value from a thread-safe OnceEvent using Rc ownership.
+/// A receiver that can receive a value from a thread-safe `OnceEvent` using Rc ownership.
 ///
-/// The receiver owns an Rc to the OnceEvent and is single-threaded.
+/// The receiver owns an Rc to the `OnceEvent` and is single-threaded.
 /// After awaiting the receiver, it is consumed.
 #[derive(Debug)]
 pub struct ByRcOnceReceiver<T>

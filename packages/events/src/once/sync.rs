@@ -60,7 +60,7 @@ enum EventState<T> {
 /// # use futures::executor::block_on;
 ///
 /// # block_on(async {
-/// let event = OnceOnceEvent::<String>::new();
+/// let event = OnceEvent::<String>::new();
 /// let (sender, receiver) = event.by_ref();
 ///
 /// sender.send("Hello".to_string());

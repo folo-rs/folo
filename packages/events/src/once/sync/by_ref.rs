@@ -1,4 +1,4 @@
-//! Reference-based senders and receivers for thread-safe OnceEvents.
+//! Reference-based senders and receivers for thread-safe `OnceEvents`.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -6,9 +6,9 @@ use std::task::{Context, Poll};
 
 use super::OnceEvent;
 
-/// A sender that can send a value through a thread-safe OnceEvent.
+/// A sender that can send a value through a thread-safe `OnceEvent`.
 ///
-/// The sender holds a reference to the OnceEvent and can be moved across threads.
+/// The sender holds a reference to the `OnceEvent` and can be moved across threads.
 /// After calling [`send`](ByRefOnceSender::send), the sender is consumed.
 #[derive(Debug)]
 pub struct ByRefOnceSender<'e, T>
@@ -22,7 +22,7 @@ impl<T> ByRefOnceSender<'_, T>
 where
     T: Send,
 {
-    /// Sends a value through the OnceEvent.
+    /// Sends a value through the `OnceEvent`.
     ///
     /// This method consumes the sender and always succeeds, regardless of whether
     /// there is a receiver waiting.
@@ -30,10 +30,10 @@ where
     /// # Example
     ///
     /// ```rust
-    /// use OnceEvents::once::OnceEvent;
+    /// use events::OnceEvent;
     ///
-    /// let OnceEvent = once_event::<i32>::new();
-    /// let (sender, _receiver) = OnceEvent.by_ref();
+    /// let event = OnceEvent::<i32>::new();
+    /// let (sender, _receiver) = event.by_ref();
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {
@@ -41,9 +41,9 @@ where
     }
 }
 
-/// A receiver that can receive a value from a thread-safe OnceEvent.
+/// A receiver that can receive a value from a thread-safe `OnceEvent`.
 ///
-/// The receiver holds a reference to the OnceEvent and can be moved across threads.
+/// The receiver holds a reference to the `OnceEvent` and can be moved across threads.
 /// After awaiting the receiver, it is consumed.
 #[derive(Debug)]
 pub struct ByRefOnceReceiver<'e, T>

@@ -1,4 +1,4 @@
-//! Raw pointer-based senders and receivers for thread-safe OnceEvents.
+//! Raw pointer-based senders and receivers for thread-safe `OnceEvents`.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -6,15 +6,15 @@ use std::task::{Context, Poll};
 
 use super::OnceEvent;
 
-/// A sender that can send a value through a thread-safe once_event using raw pointer.
+/// A sender that can send a value through a thread-safe `OnceEvent` using raw pointer.
 ///
-/// The sender holds a raw pointer to the once_event. The caller is responsible for
-/// ensuring the once_event remains valid for the lifetime of the sender.
+/// The sender holds a raw pointer to the `OnceEvent`. The caller is responsible for
+/// ensuring the `OnceEvent` remains valid for the lifetime of the sender.
 /// After calling [`send`](ByPtrOnceSender::send), the sender is consumed.
 ///
 /// # Safety
 ///
-/// This type is only safe to use when the caller guarantees that the once_event
+/// This type is only safe to use when the caller guarantees that the `OnceEvent`
 /// pointed to remains valid and pinned for the entire lifetime of this sender.
 #[derive(Debug)]
 pub struct ByPtrOnceSender<T>
@@ -37,7 +37,7 @@ impl<T> ByPtrOnceSender<T>
 where
     T: Send,
 {
-    /// Sends a value through the once_event.
+    /// Sends a value through the `OnceEvent`.
     ///
     /// This method consumes the sender and always succeeds, regardless of whether
     /// there is a receiver waiting.
@@ -47,12 +47,12 @@ where
     /// ```rust
     /// use std::pin::Pin;
     ///
-    /// use OnceEvents::once::once_event;
+    /// use events::OnceEvent;
     ///
-    /// let mut once_event = once_event::<i32>::new();
-    /// let pinned_OnceEvent = Pin::new(&mut once_event);
-    /// // SAFETY: We ensure the once_event outlives the sender and receiver
-    /// let (sender, _receiver) = unsafe { pinned_OnceEvent.by_ptr() };
+    /// let mut event = OnceEvent::<i32>::new();
+    /// let pinned_event = Pin::new(&mut event);
+    /// // SAFETY: We ensure the event outlives the sender and receiver
+    /// let (sender, _receiver) = unsafe { pinned_event.by_ptr() };
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {
@@ -62,15 +62,15 @@ where
     }
 }
 
-/// A receiver that can receive a value from a thread-safe once_event using raw pointer.
+/// A receiver that can receive a value from a thread-safe `OnceEvent` using raw pointer.
 ///
-/// The receiver holds a raw pointer to the once_event. The caller is responsible for
-/// ensuring the once_event remains valid for the lifetime of the receiver.
+/// The receiver holds a raw pointer to the `OnceEvent`. The caller is responsible for
+/// ensuring the `OnceEvent` remains valid for the lifetime of the receiver.
 /// After awaiting the receiver, it is consumed.
 ///
 /// # Safety
 ///
-/// This type is only safe to use when the caller guarantees that the once_event
+/// This type is only safe to use when the caller guarantees that the `OnceEvent`
 /// pointed to remains valid and pinned for the entire lifetime of this receiver.
 #[derive(Debug)]
 pub struct ByPtrOnceReceiver<T>

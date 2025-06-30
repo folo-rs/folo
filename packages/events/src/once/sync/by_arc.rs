@@ -1,4 +1,4 @@
-//! Arc-based senders and receivers for thread-safe OnceEvents.
+//! Arc-based senders and receivers for thread-safe `OnceEvents`.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -7,9 +7,9 @@ use std::task::{Context, Poll};
 
 use super::OnceEvent;
 
-/// A sender that can send a value through a thread-safe OnceEvent using Arc ownership.
+/// A sender that can send a value through a thread-safe `OnceEvent` using Arc ownership.
 ///
-/// The sender owns an Arc to the OnceEvent and can be moved across threads.
+/// The sender owns an Arc to the `OnceEvent` and can be moved across threads.
 /// After calling [`send`](ByArcOnceSender::send), the sender is consumed.
 #[derive(Debug)]
 pub struct ByArcOnceSender<T>
@@ -23,7 +23,7 @@ impl<T> ByArcOnceSender<T>
 where
     T: Send,
 {
-    /// Sends a value through the OnceEvent.
+    /// Sends a value through the `OnceEvent`.
     ///
     /// This method consumes the sender and always succeeds, regardless of whether
     /// there is a receiver waiting.
@@ -33,10 +33,10 @@ where
     /// ```rust
     /// use std::sync::Arc;
     ///
-    /// use OnceEvents::once::OnceEvent;
+    /// use events::OnceEvent;
     ///
-    /// let OnceEvent = Arc::new(once_event::<i32>::new());
-    /// let (sender, _receiver) = OnceEvent.by_arc();
+    /// let event = Arc::new(OnceEvent::<i32>::new());
+    /// let (sender, _receiver) = event.by_arc();
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {
@@ -44,9 +44,9 @@ where
     }
 }
 
-/// A receiver that can receive a value from a thread-safe OnceEvent using Arc ownership.
+/// A receiver that can receive a value from a thread-safe `OnceEvent` using Arc ownership.
 ///
-/// The receiver owns an Arc to the OnceEvent and can be moved across threads.
+/// The receiver owns an Arc to the `OnceEvent` and can be moved across threads.
 /// After awaiting the receiver, it is consumed.
 #[derive(Debug)]
 pub struct ByArcOnceReceiver<T>
