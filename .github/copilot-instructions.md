@@ -380,3 +380,8 @@ Bad:
 ```rust
 pub use events::{Event, LocalEvent, EventPool, LocalEventPool};
 ```
+
+# Prefer pub(crate) over pub(other)
+
+We do not use `pub(super)` and other fine-grained visibility modifiers. A type is either private
+to a module, public, or public within the whole crate.
