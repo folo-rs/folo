@@ -30,7 +30,7 @@ fn main() {
         // === First Event Usage ===
         println!("1. First event usage:");
         {
-            let (sender, receiver) = pool.by_ref();
+            let (sender, receiver) = pool.bind_by_ref();
             println!("   - Obtained event from pool (may create new event)");
 
             sender.send(FIRST_VALUE);
@@ -48,7 +48,7 @@ fn main() {
         // === Second Event Usage (Reuses Resources) ===
         println!("2. Second event usage (REUSING same underlying event):");
         {
-            let (sender, receiver) = pool.by_ref();
+            let (sender, receiver) = pool.bind_by_ref();
             println!("   - Obtained event from pool (REUSED previous event - no allocation!)");
 
             sender.send(SECOND_VALUE);
@@ -63,7 +63,7 @@ fn main() {
         // === Third Event Usage (Continues Resource Reuse) ===
         println!("3. Third event usage (REUSING same event again):");
         {
-            let (sender, receiver) = pool.by_ref();
+            let (sender, receiver) = pool.bind_by_ref();
             println!("   - Obtained event from pool (REUSED same event instance)");
 
             sender.send(THIRD_VALUE);
@@ -78,7 +78,7 @@ fn main() {
         // === Fourth Event Usage (Demonstrates Continued Efficiency) ===
         println!("4. Fourth event usage (EFFICIENT resource recycling):");
         {
-            let (sender, receiver) = pool.by_ref();
+            let (sender, receiver) = pool.bind_by_ref();
             println!("   - Obtained event from pool (SAME event, reset and ready for use)");
 
             sender.send(FOURTH_VALUE);

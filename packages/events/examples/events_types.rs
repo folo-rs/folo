@@ -35,7 +35,7 @@ fn main() {
         println!();
         println!("1. Integer event:");
         let int_event = OnceEvent::<i32>::new();
-        let (int_sender, int_receiver) = int_event.by_ref();
+        let (int_sender, int_receiver) = int_event.bind_by_ref();
 
         int_sender.send(EXAMPLE_INTEGER);
         let int_value = int_receiver.await;
@@ -45,7 +45,7 @@ fn main() {
         println!();
         println!("2. String event:");
         let string_event = OnceEvent::<String>::new();
-        let (string_sender, string_receiver) = string_event.by_ref();
+        let (string_sender, string_receiver) = string_event.bind_by_ref();
 
         string_sender.send("Events support any type!".to_string());
         let string_value = string_receiver.await;
@@ -55,7 +55,7 @@ fn main() {
         println!();
         println!("3. Vector event:");
         let vec_event = OnceEvent::<Vec<u32>>::new();
-        let (vec_sender, vec_receiver) = vec_event.by_ref();
+        let (vec_sender, vec_receiver) = vec_event.bind_by_ref();
 
         vec_sender.send(vec![1, 2, 3, 4, 5]);
         let vec_value = vec_receiver.await;
@@ -65,7 +65,7 @@ fn main() {
         println!();
         println!("4. Custom struct event:");
         let struct_event = OnceEvent::<TaskResult>::new();
-        let (struct_sender, struct_receiver) = struct_event.by_ref();
+        let (struct_sender, struct_receiver) = struct_event.bind_by_ref();
 
         let task = TaskResult {
             id: EXAMPLE_TASK_ID,
@@ -82,7 +82,7 @@ fn main() {
         println!();
         println!("5. Option type event:");
         let option_event = OnceEvent::<Option<&str>>::new();
-        let (option_sender, option_receiver) = option_event.by_ref();
+        let (option_sender, option_receiver) = option_event.bind_by_ref();
 
         option_sender.send(Some("Optional data"));
         let option_value = option_receiver.await;

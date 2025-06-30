@@ -52,7 +52,7 @@ where
     /// let mut event = OnceEvent::<i32>::new();
     /// let pinned_event = Pin::new(&mut event);
     /// // SAFETY: We ensure the event outlives the sender and receiver
-    /// let (sender, _receiver) = unsafe { pinned_event.by_ptr() };
+    /// let (sender, _receiver) = unsafe { pinned_event.bind_by_ptr() };
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {

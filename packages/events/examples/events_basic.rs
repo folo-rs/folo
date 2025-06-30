@@ -14,7 +14,7 @@ fn main() {
         let event = OnceEvent::<String>::new();
 
         // Extract both communication endpoints
-        let (sender, receiver) = event.by_ref();
+        let (sender, receiver) = event.bind_by_ref();
 
         println!("Sending message through event...");
         sender.send("Hello from events!".to_string());

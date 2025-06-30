@@ -36,7 +36,7 @@ where
     /// use events::OnceEvent;
     ///
     /// let event = Arc::new(OnceEvent::<i32>::new());
-    /// let (sender, _receiver) = event.by_arc();
+    /// let (sender, _receiver) = event.bind_by_arc();
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {

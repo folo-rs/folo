@@ -29,7 +29,7 @@ fn main() {
 fn arc_event_example() {
     block_on(async {
         let event = Arc::new(OnceEvent::<String>::new());
-        let (sender, receiver) = event.by_arc();
+        let (sender, receiver) = event.bind_by_arc();
 
         sender.send("Hello from Arc Event!".to_string());
         let message = receiver.await;
@@ -41,7 +41,7 @@ fn arc_event_example() {
 fn rc_event_example() {
     block_on(async {
         let event = Rc::new(OnceEvent::<i32>::new());
-        let (sender, receiver) = event.by_rc();
+        let (sender, receiver) = event.bind_by_rc();
 
         sender.send(EXAMPLE_INTEGER);
         let value = receiver.await;
@@ -53,7 +53,7 @@ fn rc_event_example() {
 fn rc_local_event_example() {
     block_on(async {
         let event = Rc::new(LocalOnceEvent::<f64>::new());
-        let (sender, receiver) = event.by_rc();
+        let (sender, receiver) = event.bind_by_rc();
 
         sender.send(PI);
         let value = receiver.await;
@@ -64,7 +64,7 @@ fn rc_local_event_example() {
 /// Demonstrates cross-thread communication with Arc events.
 fn cross_thread_arc_example() {
     let event = Arc::new(OnceEvent::<String>::new());
-    let (sender, receiver) = event.by_arc();
+    let (sender, receiver) = event.bind_by_arc();
 
     // Send from one thread
     let sender_handle = thread::spawn(move || {

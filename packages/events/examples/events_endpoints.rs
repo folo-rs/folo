@@ -20,7 +20,7 @@ fn main() {
         println!();
         println!("1. Using by_ref() method:");
         let event1 = OnceEvent::<i32>::new();
-        let (sender1, receiver1) = event1.by_ref();
+        let (sender1, receiver1) = event1.bind_by_ref();
 
         sender1.send(EXAMPLE_INTEGER);
         let value1 = receiver1.await;
@@ -31,14 +31,14 @@ fn main() {
         println!("2. Using by_ref_checked() method:");
         let event2 = OnceEvent::<u64>::new();
 
-        if let Some((sender2, receiver2)) = event2.by_ref_checked() {
+        if let Some((sender2, receiver2)) = event2.bind_by_ref_checked() {
             sender2.send(EXAMPLE_LARGE_VALUE);
             let value2 = receiver2.await;
             println!("Received via checked method: {value2}");
         }
 
         // Try to get endpoints again - should return None
-        if event2.by_ref_checked().is_some() {
+        if event2.bind_by_ref_checked().is_some() {
             println!("This should not print - endpoints already retrieved!");
         } else {
             println!("Correctly returned None when trying to get endpoints again");
@@ -48,10 +48,10 @@ fn main() {
         println!();
         println!("3. Demonstrating panic behavior:");
         let event3 = OnceEvent::<String>::new();
-        let (_sender3, _receiver3) = event3.by_ref();
+        let (_sender3, _receiver3) = event3.bind_by_ref();
 
         // This would panic if uncommented:
-        // let (_sender3_again, _receiver3_again) = event3.by_ref();
+        // let (_sender3_again, _receiver3_again) = event3.bind_by_ref();
         println!("Would panic if we tried to call by_ref() again on event3");
 
         println!();

@@ -30,7 +30,7 @@ impl<T> ByRcLocalOnceSender<T> {
     /// use events::once::LocalOnceEvent;
     ///
     /// let event = Rc::new(LocalOnceEvent::<i32>::new());
-    /// let (sender, _receiver) = event.by_rc();
+    /// let (sender, _receiver) = event.bind_by_rc();
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {

@@ -36,7 +36,7 @@ where
     /// use events::OnceEvent;
     ///
     /// let event = Rc::new(OnceEvent::<i32>::new());
-    /// let (sender, _receiver) = event.by_rc();
+    /// let (sender, _receiver) = event.bind_by_rc();
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {

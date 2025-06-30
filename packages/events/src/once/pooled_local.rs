@@ -38,14 +38,14 @@ pub use by_ref::{ByRefPooledLocalOnceReceiver, ByRefPooledLocalOnceSender};
 /// let pool = LocalOnceEventPool::<i32>::new();
 ///
 /// // First usage - creates new event
-/// let (sender1, receiver1) = pool.by_ref();
+/// let (sender1, receiver1) = pool.bind_by_ref();
 /// sender1.send(42);
 /// let value1 = futures::executor::block_on(receiver1);
 /// assert_eq!(value1, 42);
 /// // Event returned to pool when sender1/receiver1 are dropped
 ///
 /// // Second usage - reuses the same event instance for efficiency
-/// let (sender2, receiver2) = pool.by_ref();
+/// let (sender2, receiver2) = pool.bind_by_ref();
 /// sender2.send(100);
 /// let value2 = futures::executor::block_on(receiver2);
 /// assert_eq!(value2, 100);
@@ -86,18 +86,18 @@ impl<T> LocalOnceEventPool<T> {
     /// let pool = LocalOnceEventPool::<i32>::new();
     ///
     /// // First usage
-    /// let (sender1, receiver1) = pool.by_ref();
+    /// let (sender1, receiver1) = pool.bind_by_ref();
     /// sender1.send(42);
     /// let value1 = futures::executor::block_on(receiver1);
     /// assert_eq!(value1, 42);
     ///
     /// // Second usage - efficiently reuses the same underlying event
-    /// let (sender2, receiver2) = pool.by_ref();
+    /// let (sender2, receiver2) = pool.bind_by_ref();
     /// sender2.send(100);
     /// let value2 = futures::executor::block_on(receiver2);
     /// assert_eq!(value2, 100);
     /// ```
-    pub fn by_ref(
+    pub fn bind_by_ref(
         &self,
     ) -> (
         ByRefPooledLocalOnceSender<'_, T>,
@@ -150,18 +150,18 @@ impl<T> LocalOnceEventPool<T> {
     /// let pool = Rc::new(LocalOnceEventPool::<i32>::new());
     ///
     /// // First usage
-    /// let (sender1, receiver1) = pool.by_rc(&pool);
+    /// let (sender1, receiver1) = pool.bind_by_rc(&pool);
     /// sender1.send(42);
     /// let value1 = futures::executor::block_on(receiver1);
     /// assert_eq!(value1, 42);
     ///
     /// // Second usage - reuses the same event from the pool
-    /// let (sender2, receiver2) = pool.by_rc(&pool);
+    /// let (sender2, receiver2) = pool.bind_by_rc(&pool);
     /// sender2.send(200);
     /// let value2 = futures::executor::block_on(receiver2);
     /// assert_eq!(value2, 200);
     /// ```
-    pub fn by_rc(
+    pub fn bind_by_rc(
         &self,
         pool_rc: &Rc<Self>,
     ) -> (ByRcPooledLocalOnceSender<T>, ByRcPooledLocalOnceReceiver<T>) {
@@ -218,14 +218,14 @@ impl<T> LocalOnceEventPool<T> {
     ///
     /// // First usage
     /// // SAFETY: We ensure the pool outlives the sender and receiver
-    /// let (sender1, receiver1) = unsafe { pinned_pool.by_ptr() };
+    /// let (sender1, receiver1) = unsafe { pinned_pool.bind_by_ptr() };
     /// sender1.send(42);
     /// let value1 = receiver1.await;
     /// assert_eq!(value1, 42);
     ///
     /// // Second usage - reuses the same event efficiently
     /// // SAFETY: Pool is still valid and pinned
-    /// let (sender2, receiver2) = unsafe { pinned_pool.by_ptr() };
+    /// let (sender2, receiver2) = unsafe { pinned_pool.bind_by_ptr() };
     /// sender2.send(100);
     /// let value2 = receiver2.await;
     /// assert_eq!(value2, 100);
@@ -233,7 +233,7 @@ impl<T> LocalOnceEventPool<T> {
     /// # });
     /// ```
     #[must_use]
-    pub unsafe fn by_ptr(
+    pub unsafe fn bind_by_ptr(
         self: Pin<&Self>,
     ) -> (
         ByPtrPooledLocalOnceSender<T>,
@@ -293,7 +293,7 @@ impl<T> LocalOnceEventPool<T> {
     ///
     /// // Use the pool which may grow its capacity
     /// for _ in 0..100 {
-    ///     let (sender, receiver) = pool.by_ref();
+    ///     let (sender, receiver) = pool.bind_by_ref();
     ///     sender.send(42);
     ///     let _value = futures::executor::block_on(receiver);
     /// }
@@ -327,7 +327,7 @@ mod tests {
         with_watchdog(|| {
             futures::executor::block_on(async {
                 let pool = LocalOnceEventPool::new();
-                let (sender, receiver) = pool.by_ref();
+                let (sender, receiver) = pool.bind_by_ref();
 
                 sender.send(42);
                 let value = receiver.await;
@@ -341,7 +341,7 @@ mod tests {
         with_watchdog(|| {
             futures::executor::block_on(async {
                 let pool = Rc::new(LocalOnceEventPool::new());
-                let (sender, receiver) = pool.by_rc(&pool);
+                let (sender, receiver) = pool.bind_by_rc(&pool);
 
                 sender.send(42);
                 let value = receiver.await;
@@ -357,7 +357,7 @@ mod tests {
                 let pool = LocalOnceEventPool::new();
                 let pinned_pool = Pin::new(&pool);
                 // SAFETY: We ensure the pool outlives the sender and receiver
-                let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
+                let (sender, receiver) = unsafe { pinned_pool.bind_by_ptr() };
 
                 sender.send(42);
                 let value = receiver.await;
@@ -374,14 +374,14 @@ mod tests {
 
                 // Test multiple events sequentially
                 {
-                    let (sender1, receiver1) = pool.by_ref();
+                    let (sender1, receiver1) = pool.bind_by_ref();
                     sender1.send(1);
                     let value1 = receiver1.await;
                     assert_eq!(value1, 1);
                 }
 
                 {
-                    let (sender2, receiver2) = pool.by_ref();
+                    let (sender2, receiver2) = pool.bind_by_ref();
                     sender2.send(2);
                     let value2 = receiver2.await;
                     assert_eq!(value2, 2);
@@ -397,7 +397,7 @@ mod tests {
                 let pool = LocalOnceEventPool::new();
 
                 {
-                    let (sender, receiver) = pool.by_ref();
+                    let (sender, receiver) = pool.bind_by_ref();
                     sender.send(42);
                     let value = receiver.await;
                     assert_eq!(value, 42);
@@ -417,10 +417,10 @@ mod tests {
                 let pool = Rc::new(LocalOnceEventPool::new());
 
                 // Create first event
-                let (sender1, receiver1) = pool.by_rc(&pool);
+                let (sender1, receiver1) = pool.bind_by_rc(&pool);
 
                 // Create second event
-                let (sender2, receiver2) = pool.by_rc(&pool);
+                let (sender2, receiver2) = pool.bind_by_rc(&pool);
 
                 // Send values
                 sender1.send(1);

@@ -23,7 +23,7 @@ fn basic_async_usage() {
     println!("1. Basic async usage with thread-safe events:");
     block_on(async {
         let event = OnceEvent::<String>::new();
-        let (sender, receiver) = event.by_ref();
+        let (sender, receiver) = event.bind_by_ref();
 
         sender.send("Hello async world!".to_string());
         let message = receiver.await;
@@ -36,7 +36,7 @@ fn cross_thread_async_communication() {
 
     // For cross-thread communication, we need to extract endpoints before threading
     let event = OnceEvent::<i32>::new();
-    let (sender, receiver) = event.by_ref();
+    let (sender, receiver) = event.bind_by_ref();
 
     // Use scoped threads to ensure all operations complete before event is dropped
     thread::scope(|s| {
@@ -65,7 +65,7 @@ fn single_threaded_async_usage() {
     println!("3. Single-threaded async usage:");
     block_on(async {
         let local_event = LocalOnceEvent::<String>::new();
-        let (local_sender, local_receiver) = local_event.by_ref();
+        let (local_sender, local_receiver) = local_event.bind_by_ref();
 
         local_sender.send("Local async message".to_string());
         let local_message = local_receiver.await;
@@ -77,10 +77,10 @@ fn async_only_usage() {
     println!("4. Async-only usage:");
     block_on(async {
         let first_event = OnceEvent::<u64>::new();
-        let (first_sender, first_receiver) = first_event.by_ref();
+        let (first_sender, first_receiver) = first_event.bind_by_ref();
 
         let second_event = OnceEvent::<u64>::new();
-        let (second_sender, second_receiver) = second_event.by_ref();
+        let (second_sender, second_receiver) = second_event.bind_by_ref();
 
         first_sender.send(FIRST_VALUE);
         second_sender.send(SECOND_VALUE);

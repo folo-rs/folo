@@ -17,7 +17,7 @@ fn main() {
         println!();
         println!("1. Thread-safe Event used in same thread:");
         let event = OnceEvent::<String>::new();
-        let (sender, receiver) = event.by_ref();
+        let (sender, receiver) = event.bind_by_ref();
         sender.send("Hello from thread-safe event!".to_string());
         let message = receiver.await;
         println!("Received: {message}");
@@ -28,7 +28,7 @@ fn main() {
         let event_arc = Arc::new(OnceEvent::<i32>::new());
         // You can clone the Arc but each Event can only have endpoints retrieved once
         let _event_clone = Arc::clone(&event_arc);
-        let (sender, receiver) = event_arc.by_ref();
+        let (sender, receiver) = event_arc.bind_by_ref();
         sender.send(42);
         let value = receiver.await;
         println!("Received from Arc-wrapped event: {value}");
@@ -42,7 +42,7 @@ fn main() {
 
     // Extract endpoints before threading to satisfy lifetime requirements
     let event = OnceEvent::<String>::new();
-    let (sender, receiver) = event.by_ref();
+    let (sender, receiver) = event.bind_by_ref();
 
     // Use scoped threads to ensure Event lives long enough
     thread::scope(|s| {

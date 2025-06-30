@@ -46,7 +46,7 @@ enum EventState<T> {
 /// use events::LocalOnceEvent;
 ///
 /// let event = LocalOnceEvent::<String>::new();
-/// let (sender, receiver) = event.by_ref();
+/// let (sender, receiver) = event.bind_by_ref();
 ///
 /// sender.send("Hello".to_string());
 /// let message = futures::executor::block_on(receiver);
@@ -90,15 +90,15 @@ impl<T> LocalOnceEvent<T> {
     /// use events::LocalOnceEvent;
     ///
     /// let event = LocalOnceEvent::<i32>::new();
-    /// let (sender, receiver) = event.by_ref();
+    /// let (sender, receiver) = event.bind_by_ref();
     /// ```
-    pub fn by_ref(&self) -> (ByRefLocalOnceSender<'_, T>, ByRefLocalOnceReceiver<'_, T>) {
-        self.by_ref_checked()
-            .expect("Event endpoints have already been retrieved")
+    pub fn bind_by_ref(&self) -> (ByRefLocalOnceSender<'_, T>, ByRefLocalOnceReceiver<'_, T>) {
+        self.bind_by_ref_checked()
+            .expect("OnceEvent has already been bound")
     }
 
-    /// Returns both the sender and receiver for this event, connected by reference,
-    /// or [`None`] if endpoints have already been retrieved.
+    /// Binds the event to a sender-receiver pair connected by reference,
+    /// or [`None`] if the event has already been bound.
     ///
     /// # Example
     ///
@@ -106,11 +106,11 @@ impl<T> LocalOnceEvent<T> {
     /// use events::LocalOnceEvent;
     ///
     /// let event = LocalOnceEvent::<i32>::new();
-    /// let endpoints = event.by_ref_checked().unwrap();
-    /// let endpoints2 = event.by_ref_checked(); // Returns None
+    /// let endpoints = event.bind_by_ref_checked().unwrap();
+    /// let endpoints2 = event.bind_by_ref_checked(); // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
-    pub fn by_ref_checked(
+    pub fn bind_by_ref_checked(
         &self,
     ) -> Option<(ByRefLocalOnceSender<'_, T>, ByRefLocalOnceReceiver<'_, T>)> {
         if self.used.get() {
@@ -141,15 +141,15 @@ impl<T> LocalOnceEvent<T> {
     /// use events::LocalOnceEvent;
     ///
     /// let event = Rc::new(LocalOnceEvent::<i32>::new());
-    /// let (sender, receiver) = event.by_rc();
+    /// let (sender, receiver) = event.bind_by_rc();
     /// ```
-    pub fn by_rc(self: &Rc<Self>) -> (ByRcLocalOnceSender<T>, ByRcLocalOnceReceiver<T>) {
-        self.by_rc_checked()
-            .expect("Event endpoints have already been retrieved")
+    pub fn bind_by_rc(self: &Rc<Self>) -> (ByRcLocalOnceSender<T>, ByRcLocalOnceReceiver<T>) {
+        self.bind_by_rc_checked()
+            .expect("OnceEvent has already been bound")
     }
 
-    /// Returns both the sender and receiver for this event, connected by Rc,
-    /// or [`None`] if endpoints have already been retrieved.
+    /// Binds the event to a sender-receiver pair connected by Rc,
+    /// or [`None`] if the event has already been bound.
     ///
     /// This method requires the event to be wrapped in an [`Rc`] and provides
     /// endpoints that own an Rc to the event.
@@ -162,11 +162,11 @@ impl<T> LocalOnceEvent<T> {
     /// use events::LocalOnceEvent;
     ///
     /// let event = Rc::new(LocalOnceEvent::<i32>::new());
-    /// let endpoints = event.by_rc_checked().unwrap();
-    /// let endpoints2 = event.by_rc_checked(); // Returns None
+    /// let endpoints = event.bind_by_rc_checked().unwrap();
+    /// let endpoints2 = event.bind_by_rc_checked(); // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
-    pub fn by_rc_checked(
+    pub fn bind_by_rc_checked(
         self: &Rc<Self>,
     ) -> Option<(ByRcLocalOnceSender<T>, ByRcLocalOnceReceiver<T>)> {
         if self.used.get() {
@@ -247,7 +247,7 @@ impl<T> LocalOnceEvent<T> {
     /// let mut event = LocalOnceEvent::<i32>::new();
     /// let pinned_event = Pin::new(&mut event);
     /// // SAFETY: We ensure the event outlives the sender and receiver
-    /// let (sender, receiver) = unsafe { pinned_event.by_ptr() };
+    /// let (sender, receiver) = unsafe { pinned_event.bind_by_ptr() };
     ///
     /// sender.send(42);
     /// let value = futures::executor::block_on(receiver);
@@ -255,15 +255,15 @@ impl<T> LocalOnceEvent<T> {
     /// // sender and receiver are dropped here, before event
     /// ```
     #[must_use]
-    pub unsafe fn by_ptr(
+    pub unsafe fn bind_by_ptr(
         self: Pin<&mut Self>,
     ) -> (ByPtrLocalOnceSender<T>, ByPtrLocalOnceReceiver<T>) {
         // SAFETY: Caller has guaranteed event lifetime management
-        unsafe { self.by_ptr_checked() }.expect("Event endpoints have already been retrieved")
+        unsafe { self.bind_by_ptr_checked() }.expect("OnceEvent has already been bound")
     }
 
-    /// Returns both the sender and receiver for this event, connected by raw pointer,
-    /// or [`None`] if endpoints have already been retrieved.
+    /// Binds the event to a sender-receiver pair connected by raw pointer,
+    /// or [`None`] if the event has already been bound.
     ///
     /// This method provides endpoints that hold raw pointers to the event instead
     /// of owning or borrowing it. The event must be pinned and the caller is
@@ -286,13 +286,13 @@ impl<T> LocalOnceEvent<T> {
     /// let mut event = LocalOnceEvent::<i32>::new();
     /// let pinned_event = Pin::new(&mut event);
     /// // SAFETY: We ensure the event outlives the sender and receiver
-    /// let endpoints = unsafe { pinned_event.by_ptr_checked() }.unwrap();
+    /// let endpoints = unsafe { pinned_event.bind_by_ptr_checked() }.unwrap();
     /// let pinned_event2 = Pin::new(&mut event);
-    /// let endpoints2 = unsafe { pinned_event2.by_ptr_checked() }; // Returns None
+    /// let endpoints2 = unsafe { pinned_event2.bind_by_ptr_checked() }; // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
     #[must_use]
-    pub unsafe fn by_ptr_checked(
+    pub unsafe fn bind_by_ptr_checked(
         self: Pin<&mut Self>,
     ) -> Option<(ByPtrLocalOnceSender<T>, ByPtrLocalOnceReceiver<T>)> {
         // SAFETY: We need to access the mutable reference to check/set the used flag
@@ -331,7 +331,7 @@ mod tests {
         with_watchdog(|| {
             let event = LocalOnceEvent::<i32>::new();
             // Should be able to get endpoints once
-            let (sender, receiver) = event.by_ref();
+            let (sender, receiver) = event.bind_by_ref();
             sender.send(42);
             let value = futures::executor::block_on(receiver);
             assert_eq!(value, 42);
@@ -342,7 +342,7 @@ mod tests {
     fn local_event_default_creates_valid_event() {
         with_watchdog(|| {
             let event = LocalOnceEvent::<String>::default();
-            let (sender, receiver) = event.by_ref();
+            let (sender, receiver) = event.bind_by_ref();
             sender.send("test".to_string());
             let value = futures::executor::block_on(receiver);
             assert_eq!(value, "test");
@@ -353,7 +353,7 @@ mod tests {
     fn local_event_by_ref_method_provides_both() {
         with_watchdog(|| {
             let event = LocalOnceEvent::<u64>::new();
-            let (sender, receiver) = event.by_ref();
+            let (sender, receiver) = event.bind_by_ref();
 
             sender.send(123);
             let value = futures::executor::block_on(receiver);
@@ -362,27 +362,27 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Event endpoints have already been retrieved")]
+    #[should_panic(expected = "OnceEvent has already been bound")]
     fn local_event_by_ref_panics_on_second_call() {
         let event = LocalOnceEvent::<i32>::new();
-        let _endpoints = event.by_ref();
-        let _endpoints2 = event.by_ref(); // Should panic
+        let _endpoints = event.bind_by_ref();
+        let _endpoints2 = event.bind_by_ref(); // Should panic
     }
 
     #[test]
     fn local_event_by_ref_checked_returns_none_after_use() {
         let event = LocalOnceEvent::<i32>::new();
-        let endpoints1 = event.by_ref_checked();
+        let endpoints1 = event.bind_by_ref_checked();
         assert!(endpoints1.is_some());
 
-        let endpoints2 = event.by_ref_checked();
+        let endpoints2 = event.bind_by_ref_checked();
         assert!(endpoints2.is_none());
     }
 
     #[test]
     fn local_event_send_succeeds_without_receiver() {
         let event = LocalOnceEvent::<i32>::new();
-        let (sender, _receiver) = event.by_ref();
+        let (sender, _receiver) = event.bind_by_ref();
 
         // Send should still succeed even if we don't have a receiver
         sender.send(42);
@@ -392,7 +392,7 @@ mod tests {
     fn local_event_works_in_rc() {
         with_watchdog(|| {
             let event = Rc::new(LocalOnceEvent::<String>::new());
-            let (sender, receiver) = event.by_ref();
+            let (sender, receiver) = event.bind_by_ref();
 
             sender.send("Hello from Rc".to_string());
             let value = futures::executor::block_on(receiver);
@@ -412,7 +412,7 @@ mod tests {
 
         with_watchdog(|| {
             let event = LocalOnceEvent::<i32>::new();
-            let (sender, receiver) = event.by_ref();
+            let (sender, receiver) = event.bind_by_ref();
 
             sender.send(42);
             let value = block_on(receiver);
@@ -427,10 +427,10 @@ mod tests {
         with_watchdog(|| {
             // Test that async can be used in different scenarios
             let event1 = LocalOnceEvent::<i32>::new();
-            let (sender1, receiver1) = event1.by_ref();
+            let (sender1, receiver1) = event1.bind_by_ref();
 
             let event2 = LocalOnceEvent::<i32>::new();
-            let (sender2, receiver2) = event2.by_ref();
+            let (sender2, receiver2) = event2.bind_by_ref();
 
             sender1.send(1);
             sender2.send(2);
@@ -449,7 +449,7 @@ mod tests {
 
         with_watchdog(|| {
             let event = LocalOnceEvent::<String>::new();
-            let (sender, receiver) = event.by_ref();
+            let (sender, receiver) = event.bind_by_ref();
 
             sender.send("Hello async world!".to_string());
             let message = block_on(receiver);
@@ -461,7 +461,7 @@ mod tests {
     fn local_event_by_rc_basic() {
         with_watchdog(|| {
             let event = Rc::new(LocalOnceEvent::<i32>::new());
-            let (sender, receiver) = event.by_rc();
+            let (sender, receiver) = event.bind_by_rc();
 
             sender.send(42);
             let value = futures::executor::block_on(receiver);
@@ -472,19 +472,19 @@ mod tests {
     #[test]
     fn local_event_by_rc_checked_returns_none_after_use() {
         let event = Rc::new(LocalOnceEvent::<i32>::new());
-        let endpoints1 = event.by_rc_checked();
+        let endpoints1 = event.bind_by_rc_checked();
         assert!(endpoints1.is_some());
 
-        let endpoints2 = event.by_rc_checked();
+        let endpoints2 = event.bind_by_rc_checked();
         assert!(endpoints2.is_none());
     }
 
     #[test]
-    #[should_panic(expected = "Event endpoints have already been retrieved")]
+    #[should_panic(expected = "OnceEvent has already been bound")]
     fn local_event_by_rc_panics_on_second_call() {
         let event = Rc::new(LocalOnceEvent::<i32>::new());
-        let _endpoints = event.by_rc();
-        let _endpoints2 = event.by_rc(); // Should panic
+        let _endpoints = event.bind_by_rc();
+        let _endpoints2 = event.bind_by_rc(); // Should panic
     }
 
     #[test]
@@ -493,7 +493,7 @@ mod tests {
 
         with_watchdog(|| {
             let event = Rc::new(LocalOnceEvent::<i32>::new());
-            let (sender, receiver) = event.by_rc();
+            let (sender, receiver) = event.bind_by_rc();
 
             sender.send(42);
             let value = block_on(receiver);
@@ -505,7 +505,7 @@ mod tests {
     fn local_event_by_rc_string() {
         with_watchdog(|| {
             let event = Rc::new(LocalOnceEvent::<String>::new());
-            let (sender, receiver) = event.by_rc();
+            let (sender, receiver) = event.bind_by_rc();
 
             sender.send("Hello from Rc".to_string());
             let value = futures::executor::block_on(receiver);
@@ -526,7 +526,7 @@ mod tests {
             let mut event = LocalOnceEvent::<String>::new();
             let pinned_event = Pin::new(&mut event);
             // SAFETY: We ensure the event outlives the sender and receiver within this test
-            let (sender, receiver) = unsafe { pinned_event.by_ptr() };
+            let (sender, receiver) = unsafe { pinned_event.bind_by_ptr() };
 
             sender.send("Hello from pointer".to_string());
             let value = futures::executor::block_on(receiver);
@@ -541,13 +541,13 @@ mod tests {
             let mut event = LocalOnceEvent::<String>::new();
             let pinned_event = Pin::new(&mut event);
             // SAFETY: We ensure the event outlives the sender and receiver within this test
-            let endpoints = unsafe { pinned_event.by_ptr_checked() };
+            let endpoints = unsafe { pinned_event.bind_by_ptr_checked() };
             assert!(endpoints.is_some());
 
             // Second call should return None
             let pinned_event2 = Pin::new(&mut event);
             // SAFETY: We ensure the event outlives the endpoints within this test
-            let endpoints2 = unsafe { pinned_event2.by_ptr_checked() };
+            let endpoints2 = unsafe { pinned_event2.bind_by_ptr_checked() };
             assert!(endpoints2.is_none());
         });
     }
@@ -558,7 +558,7 @@ mod tests {
             let mut event = LocalOnceEvent::<i32>::new();
             let pinned_event = Pin::new(&mut event);
             // SAFETY: We ensure the event outlives the sender and receiver within this test
-            let (sender, receiver) = unsafe { pinned_event.by_ptr() };
+            let (sender, receiver) = unsafe { pinned_event.bind_by_ptr() };
 
             sender.send(42);
             let value = futures::executor::block_on(receiver);

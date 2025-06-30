@@ -27,7 +27,7 @@ impl<T> ByRefLocalOnceSender<'_, T> {
     /// use events::once::LocalOnceEvent;
     ///
     /// let event = LocalOnceEvent::<i32>::new();
-    /// let (sender, _receiver) = event.by_ref();
+    /// let (sender, _receiver) = event.bind_by_ref();
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {

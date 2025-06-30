@@ -61,7 +61,7 @@ enum EventState<T> {
 ///
 /// # block_on(async {
 /// let event = OnceEvent::<String>::new();
-/// let (sender, receiver) = event.by_ref();
+/// let (sender, receiver) = event.bind_by_ref();
 ///
 /// sender.send("Hello".to_string());
 /// let message = receiver.await;
@@ -98,11 +98,11 @@ where
         }
     }
 
-    /// Returns both the sender and receiver for this event, connected by reference.
+    /// Binds the event to a sender-receiver pair connected by reference.
     ///
     /// # Panics
     ///
-    /// Panics if this method or [`by_ref_checked`](OnceEvent::by_ref_checked) has been called before.
+    /// Panics if this method or [`bind_by_ref_checked`](OnceEvent::bind_by_ref_checked) has been called before.
     ///
     /// # Example
     ///
@@ -110,15 +110,15 @@ where
     /// use events::OnceEvent;
     ///
     /// let event = OnceEvent::<i32>::new();
-    /// let (sender, receiver) = event.by_ref();
+    /// let (sender, receiver) = event.bind_by_ref();
     /// ```
-    pub fn by_ref(&self) -> (ByRefOnceSender<'_, T>, ByRefOnceReceiver<'_, T>) {
-        self.by_ref_checked()
-            .expect("Event endpoints have already been retrieved")
+    pub fn bind_by_ref(&self) -> (ByRefOnceSender<'_, T>, ByRefOnceReceiver<'_, T>) {
+        self.bind_by_ref_checked()
+            .expect("OnceEvent has already been bound")
     }
 
-    /// Returns both the sender and receiver for this event, connected by reference,
-    /// or [`None`] if endpoints have already been retrieved.
+    /// Binds the event to a sender-receiver pair connected by reference,
+    /// or [`None`] if the event has already been bound.
     ///
     /// # Example
     ///
@@ -126,11 +126,11 @@ where
     /// use events::OnceEvent;
     ///
     /// let event = OnceEvent::<i32>::new();
-    /// let endpoints = event.by_ref_checked().unwrap();
-    /// let endpoints2 = event.by_ref_checked(); // Returns None
+    /// let endpoints = event.bind_by_ref_checked().unwrap();
+    /// let endpoints2 = event.bind_by_ref_checked(); // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
-    pub fn by_ref_checked(&self) -> Option<(ByRefOnceSender<'_, T>, ByRefOnceReceiver<'_, T>)> {
+    pub fn bind_by_ref_checked(&self) -> Option<(ByRefOnceSender<'_, T>, ByRefOnceReceiver<'_, T>)> {
         if self.used.swap(true, Ordering::SeqCst) {
             return None;
         }
@@ -141,14 +141,14 @@ where
         ))
     }
 
-    /// Returns both the sender and receiver for this event, connected by Arc.
+    /// Binds the event to a sender-receiver pair connected by Arc.
     ///
     /// This method requires the event to be wrapped in an [`Arc`] and provides
     /// endpoints that own an Arc to the event.
     ///
     /// # Panics
     ///
-    /// Panics if endpoints have already been retrieved via any method.
+    /// Panics if the event has already been bound via any method.
     ///
     /// # Example
     ///
@@ -158,15 +158,15 @@ where
     /// use events::OnceEvent;
     ///
     /// let event = Arc::new(OnceEvent::<i32>::new());
-    /// let (sender, receiver) = event.by_arc();
+    /// let (sender, receiver) = event.bind_by_arc();
     /// ```
-    pub fn by_arc(self: &Arc<Self>) -> (ByArcOnceSender<T>, ByArcOnceReceiver<T>) {
-        self.by_arc_checked()
-            .expect("Event endpoints have already been retrieved")
+    pub fn bind_by_arc(self: &Arc<Self>) -> (ByArcOnceSender<T>, ByArcOnceReceiver<T>) {
+        self.bind_by_arc_checked()
+            .expect("OnceEvent has already been bound")
     }
 
-    /// Returns both the sender and receiver for this event, connected by Arc,
-    /// or [`None`] if endpoints have already been retrieved.
+    /// Binds the event to a sender-receiver pair connected by Arc,
+    /// or [`None`] if the event has already been bound.
     ///
     /// This method requires the event to be wrapped in an [`Arc`] and provides
     /// endpoints that own an Arc to the event.
@@ -179,11 +179,11 @@ where
     /// use events::OnceEvent;
     ///
     /// let event = Arc::new(OnceEvent::<i32>::new());
-    /// let endpoints = event.by_arc_checked().unwrap();
-    /// let endpoints2 = event.by_arc_checked(); // Returns None
+    /// let endpoints = event.bind_by_arc_checked().unwrap();
+    /// let endpoints2 = event.bind_by_arc_checked(); // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
-    pub fn by_arc_checked(self: &Arc<Self>) -> Option<(ByArcOnceSender<T>, ByArcOnceReceiver<T>)> {
+    pub fn bind_by_arc_checked(self: &Arc<Self>) -> Option<(ByArcOnceSender<T>, ByArcOnceReceiver<T>)> {
         if self.used.swap(true, Ordering::SeqCst) {
             return None;
         }
@@ -198,14 +198,14 @@ where
         ))
     }
 
-    /// Returns both the sender and receiver for this event, connected by Rc.
+    /// Binds the event to a sender-receiver pair connected by Rc.
     ///
     /// This method requires the event to be wrapped in an [`Rc`] and provides
     /// endpoints that own an Rc to the event.
     ///
     /// # Panics
     ///
-    /// Panics if endpoints have already been retrieved via any method.
+    /// Panics if the event has already been bound via any method.
     ///
     /// # Example
     ///
@@ -215,15 +215,15 @@ where
     /// use events::OnceEvent;
     ///
     /// let event = Rc::new(OnceEvent::<i32>::new());
-    /// let (sender, receiver) = event.by_rc();
+    /// let (sender, receiver) = event.bind_by_rc();
     /// ```
-    pub fn by_rc(self: &Rc<Self>) -> (ByRcOnceSender<T>, ByRcOnceReceiver<T>) {
-        self.by_rc_checked()
-            .expect("Event endpoints have already been retrieved")
+    pub fn bind_by_rc(self: &Rc<Self>) -> (ByRcOnceSender<T>, ByRcOnceReceiver<T>) {
+        self.bind_by_rc_checked()
+            .expect("OnceEvent has already been bound")
     }
 
-    /// Returns both the sender and receiver for this event, connected by Rc,
-    /// or [`None`] if endpoints have already been retrieved.
+    /// Binds the event to a sender-receiver pair connected by Rc,
+    /// or [`None`] if the event has already been bound.
     ///
     /// This method requires the event to be wrapped in an [`Rc`] and provides
     /// endpoints that own an Rc to the event.
@@ -236,11 +236,11 @@ where
     /// use events::OnceEvent;
     ///
     /// let event = Rc::new(OnceEvent::<i32>::new());
-    /// let endpoints = event.by_rc_checked().unwrap();
-    /// let endpoints2 = event.by_rc_checked(); // Returns None
+    /// let endpoints = event.bind_by_rc_checked().unwrap();
+    /// let endpoints2 = event.bind_by_rc_checked(); // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
-    pub fn by_rc_checked(self: &Rc<Self>) -> Option<(ByRcOnceSender<T>, ByRcOnceReceiver<T>)> {
+    pub fn bind_by_rc_checked(self: &Rc<Self>) -> Option<(ByRcOnceSender<T>, ByRcOnceReceiver<T>)> {
         if self.used.swap(true, Ordering::SeqCst) {
             return None;
         }
@@ -255,7 +255,7 @@ where
         ))
     }
 
-    /// Returns both the sender and receiver for this event, connected by raw pointer.
+    /// Binds the event to a sender-receiver pair connected by raw pointer.
     ///
     /// This method provides endpoints that hold raw pointers to the event instead
     /// of owning or borrowing it. The event must be pinned and the caller is
@@ -270,7 +270,7 @@ where
     ///
     /// # Panics
     ///
-    /// Panics if endpoints have already been retrieved via any method.
+    /// Panics if the event has already been bound via any method.
     ///
     /// # Example
     ///
@@ -284,7 +284,7 @@ where
     /// let mut event = OnceEvent::<i32>::new();
     /// let pinned_event = Pin::new(&mut event);
     /// // SAFETY: We ensure the event outlives the sender and receiver
-    /// let (sender, receiver) = unsafe { pinned_event.by_ptr() };
+    /// let (sender, receiver) = unsafe { pinned_event.bind_by_ptr() };
     ///
     /// sender.send(42);
     /// let value = receiver.await;
@@ -293,13 +293,13 @@ where
     /// # });
     /// ```
     #[must_use]
-    pub unsafe fn by_ptr(self: Pin<&mut Self>) -> (ByPtrOnceSender<T>, ByPtrOnceReceiver<T>) {
+    pub unsafe fn bind_by_ptr(self: Pin<&mut Self>) -> (ByPtrOnceSender<T>, ByPtrOnceReceiver<T>) {
         // SAFETY: Caller has guaranteed event lifetime management
-        unsafe { self.by_ptr_checked() }.expect("Event endpoints have already been retrieved")
+        unsafe { self.bind_by_ptr_checked() }.expect("OnceEvent has already been bound")
     }
 
-    /// Returns both the sender and receiver for this event, connected by raw pointer,
-    /// or [`None`] if endpoints have already been retrieved.
+    /// Binds the event to a sender-receiver pair connected by raw pointer,
+    /// or [`None`] if the event has already been bound.
     ///
     /// This method provides endpoints that hold raw pointers to the event instead
     /// of owning or borrowing it. The event must be pinned and the caller is
@@ -322,13 +322,13 @@ where
     /// let mut event = OnceEvent::<i32>::new();
     /// let pinned_event = Pin::new(&mut event);
     /// // SAFETY: We ensure the event outlives the sender and receiver
-    /// let endpoints = unsafe { pinned_event.by_ptr_checked() }.unwrap();
+    /// let endpoints = unsafe { pinned_event.bind_by_ptr_checked() }.unwrap();
     /// let pinned_event2 = Pin::new(&mut event);
-    /// let endpoints2 = unsafe { pinned_event2.by_ptr_checked() }; // Returns None
+    /// let endpoints2 = unsafe { pinned_event2.bind_by_ptr_checked() }; // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
     #[must_use]
-    pub unsafe fn by_ptr_checked(
+    pub unsafe fn bind_by_ptr_checked(
         self: Pin<&mut Self>,
     ) -> Option<(ByPtrOnceSender<T>, ByPtrOnceReceiver<T>)> {
         // SAFETY: We need to access the mutable reference to check/set the used flag
@@ -419,7 +419,7 @@ mod tests {
             futures::executor::block_on(async {
                 let event = OnceEvent::<i32>::new();
                 // Should be able to get endpoints once
-                let (sender, receiver) = event.by_ref();
+                let (sender, receiver) = event.bind_by_ref();
                 sender.send(42);
                 let value = receiver.await;
                 assert_eq!(value, 42);
@@ -432,7 +432,7 @@ mod tests {
         with_watchdog(|| {
             futures::executor::block_on(async {
                 let event = OnceEvent::<String>::default();
-                let (sender, receiver) = event.by_ref();
+                let (sender, receiver) = event.bind_by_ref();
                 sender.send("test".to_string());
                 let value = receiver.await;
                 assert_eq!(value, "test");
@@ -445,7 +445,7 @@ mod tests {
         with_watchdog(|| {
             futures::executor::block_on(async {
                 let event = OnceEvent::<u64>::new();
-                let (sender, receiver) = event.by_ref();
+                let (sender, receiver) = event.bind_by_ref();
 
                 sender.send(123);
                 let value = receiver.await;
@@ -455,27 +455,24 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Event endpoints have already been retrieved")]
+    #[should_panic(expected = "OnceEvent has already been bound")]
     fn event_by_ref_panics_on_second_call() {
         let event = OnceEvent::<i32>::new();
-        let _endpoints = event.by_ref();
-        let _endpoints2 = event.by_ref(); // Should panic
-    }
-
-    #[test]
+        let _endpoints = event.bind_by_ref();
+        let _endpoints2 = event.bind_by_ref(); // Should panic
+    }    #[test]
     fn event_by_ref_checked_returns_none_after_use() {
         let event = OnceEvent::<i32>::new();
-        let endpoints1 = event.by_ref_checked();
+        let endpoints1 = event.bind_by_ref_checked();
         assert!(endpoints1.is_some());
-
-        let endpoints2 = event.by_ref_checked();
+        let endpoints2 = event.bind_by_ref_checked();
         assert!(endpoints2.is_none());
     }
 
     #[test]
     fn event_send_succeeds_without_receiver() {
         let event = OnceEvent::<i32>::new();
-        let (sender, _receiver) = event.by_ref();
+        let (sender, _receiver) = event.bind_by_ref();
 
         // Send should still succeed even if we don't have a receiver
         sender.send(42);
@@ -485,7 +482,7 @@ mod tests {
     fn event_works_in_arc() {
         with_watchdog(|| {
             let event = Arc::new(OnceEvent::<String>::new());
-            let (sender, receiver) = event.by_ref();
+            let (sender, receiver) = event.bind_by_ref();
 
             sender.send("Hello from Arc".to_string());
             let value = futures::executor::block_on(receiver);
@@ -497,7 +494,7 @@ mod tests {
     fn event_works_in_rc() {
         with_watchdog(|| {
             let event = Rc::new(OnceEvent::<String>::new());
-            let (sender, receiver) = event.by_ref();
+            let (sender, receiver) = event.bind_by_ref();
 
             sender.send("Hello from Rc".to_string());
             let value = futures::executor::block_on(receiver);
@@ -512,7 +509,7 @@ mod tests {
             // In practice, this would typically be done with Arc<Event>
             static EVENT: std::sync::OnceLock<OnceEvent<String>> = std::sync::OnceLock::new();
             let event = EVENT.get_or_init(OnceEvent::<String>::new);
-            let (sender, receiver) = event.by_ref();
+            let (sender, receiver) = event.bind_by_ref();
 
             let sender_handle = thread::spawn(move || {
                 sender.send("Hello from thread!".to_string());
@@ -541,7 +538,7 @@ mod tests {
 
         with_watchdog(|| {
             let event = OnceEvent::<i32>::new();
-            let (sender, receiver) = event.by_ref();
+            let (sender, receiver) = event.bind_by_ref();
 
             sender.send(42);
             let value = block_on(receiver);
@@ -556,7 +553,7 @@ mod tests {
         with_watchdog(|| {
             static EVENT: std::sync::OnceLock<OnceEvent<String>> = std::sync::OnceLock::new();
             let event = EVENT.get_or_init(OnceEvent::<String>::new);
-            let (sender, receiver) = event.by_ref();
+            let (sender, receiver) = event.bind_by_ref();
 
             let sender_handle = thread::spawn(move || {
                 // Add a small delay to ensure receiver is waiting
@@ -579,10 +576,10 @@ mod tests {
         with_watchdog(|| {
             // Test that async can be used in different scenarios
             let event1 = OnceEvent::<i32>::new();
-            let (sender1, receiver1) = event1.by_ref();
+            let (sender1, receiver1) = event1.bind_by_ref();
 
             let event2 = OnceEvent::<i32>::new();
-            let (sender2, receiver2) = event2.by_ref();
+            let (sender2, receiver2) = event2.bind_by_ref();
 
             sender1.send(1);
             sender2.send(2);
@@ -599,7 +596,7 @@ mod tests {
     fn event_by_arc_basic() {
         with_watchdog(|| {
             let event = Arc::new(OnceEvent::<i32>::new());
-            let (sender, receiver) = event.by_arc();
+            let (sender, receiver) = event.bind_by_arc();
 
             sender.send(42);
             let value = futures::executor::block_on(receiver);
@@ -610,26 +607,26 @@ mod tests {
     #[test]
     fn event_by_arc_checked_returns_none_after_use() {
         let event = Arc::new(OnceEvent::<i32>::new());
-        let endpoints1 = event.by_arc_checked();
+        let endpoints1 = event.bind_by_arc_checked();
         assert!(endpoints1.is_some());
 
-        let endpoints2 = event.by_arc_checked();
+        let endpoints2 = event.bind_by_arc_checked();
         assert!(endpoints2.is_none());
     }
 
     #[test]
-    #[should_panic(expected = "Event endpoints have already been retrieved")]
+    #[should_panic(expected = "OnceEvent has already been bound")]
     fn event_by_arc_panics_on_second_call() {
         let event = Arc::new(OnceEvent::<i32>::new());
-        let _endpoints = event.by_arc();
-        let _endpoints2 = event.by_arc(); // Should panic
+        let _endpoints = event.bind_by_arc();
+        let _endpoints2 = event.bind_by_arc(); // Should panic
     }
 
     #[test]
     fn event_by_arc_cross_thread() {
         with_watchdog(|| {
             let event = Arc::new(OnceEvent::<String>::new());
-            let (sender, receiver) = event.by_arc();
+            let (sender, receiver) = event.bind_by_arc();
 
             let sender_handle = thread::spawn(move || {
                 sender.send("Hello from Arc thread!".to_string());
@@ -649,7 +646,7 @@ mod tests {
 
         with_watchdog(|| {
             let event = Arc::new(OnceEvent::<i32>::new());
-            let (sender, receiver) = event.by_arc();
+            let (sender, receiver) = event.bind_by_arc();
 
             sender.send(42);
             let value = block_on(receiver);
@@ -661,7 +658,7 @@ mod tests {
     fn event_by_rc_basic() {
         with_watchdog(|| {
             let event = Rc::new(OnceEvent::<i32>::new());
-            let (sender, receiver) = event.by_rc();
+            let (sender, receiver) = event.bind_by_rc();
 
             sender.send(42);
             let value = futures::executor::block_on(receiver);
@@ -672,19 +669,19 @@ mod tests {
     #[test]
     fn event_by_rc_checked_returns_none_after_use() {
         let event = Rc::new(OnceEvent::<i32>::new());
-        let endpoints1 = event.by_rc_checked();
+        let endpoints1 = event.bind_by_rc_checked();
         assert!(endpoints1.is_some());
 
-        let endpoints2 = event.by_rc_checked();
+        let endpoints2 = event.bind_by_rc_checked();
         assert!(endpoints2.is_none());
     }
 
     #[test]
-    #[should_panic(expected = "Event endpoints have already been retrieved")]
+    #[should_panic(expected = "OnceEvent has already been bound")]
     fn event_by_rc_panics_on_second_call() {
         let event = Rc::new(OnceEvent::<i32>::new());
-        let _endpoints = event.by_rc();
-        let _endpoints2 = event.by_rc(); // Should panic
+        let _endpoints = event.bind_by_rc();
+        let _endpoints2 = event.bind_by_rc(); // Should panic
     }
 
     #[test]
@@ -693,7 +690,7 @@ mod tests {
 
         with_watchdog(|| {
             let event = Rc::new(OnceEvent::<i32>::new());
-            let (sender, receiver) = event.by_rc();
+            let (sender, receiver) = event.bind_by_rc();
 
             sender.send(42);
             let value = block_on(receiver);
@@ -718,7 +715,7 @@ mod tests {
             let mut event = OnceEvent::<String>::new();
             let pinned_event = Pin::new(&mut event);
             // SAFETY: We ensure the event outlives the sender and receiver within this test
-            let (sender, receiver) = unsafe { pinned_event.by_ptr() };
+            let (sender, receiver) = unsafe { pinned_event.bind_by_ptr() };
 
             sender.send("Hello from pointer".to_string());
             let value = futures::executor::block_on(receiver);
@@ -733,13 +730,13 @@ mod tests {
             let mut event = OnceEvent::<String>::new();
             let pinned_event = Pin::new(&mut event);
             // SAFETY: We ensure the event outlives the sender and receiver within this test
-            let endpoints = unsafe { pinned_event.by_ptr_checked() };
+            let endpoints = unsafe { pinned_event.bind_by_ptr_checked() };
             assert!(endpoints.is_some());
 
             // Second call should return None
             let pinned_event2 = Pin::new(&mut event);
             // SAFETY: We ensure the event outlives the endpoints within this test
-            let endpoints2 = unsafe { pinned_event2.by_ptr_checked() };
+            let endpoints2 = unsafe { pinned_event2.bind_by_ptr_checked() };
             assert!(endpoints2.is_none());
         });
     }
@@ -750,7 +747,7 @@ mod tests {
             let mut event = OnceEvent::<i32>::new();
             let pinned_event = Pin::new(&mut event);
             // SAFETY: We ensure the event outlives the sender and receiver within this test
-            let (sender, receiver) = unsafe { pinned_event.by_ptr() };
+            let (sender, receiver) = unsafe { pinned_event.bind_by_ptr() };
 
             sender.send(42);
             let value = futures::executor::block_on(receiver);
