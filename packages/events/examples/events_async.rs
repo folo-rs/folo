@@ -26,7 +26,7 @@ fn basic_async_usage() {
         let (sender, receiver) = event.bind_by_ref();
 
         sender.send("Hello async world!".to_string());
-        let message = receiver.await.expect("sender should not have been dropped");
+        let message = receiver.await.expect("sender.send() was called immediately before this, so sender cannot be dropped");
         println!("Received: {message}");
     });
 }
@@ -48,7 +48,7 @@ fn cross_thread_async_communication() {
         });
 
         let receiver_handle = s.spawn(move || {
-            let value = block_on(receiver).expect("sender should not have been dropped");
+            let value = block_on(receiver).expect("sender thread is guaranteed to call send() before completing");
             println!("Received value {value} in background thread");
             value
         });
@@ -68,7 +68,7 @@ fn single_threaded_async_usage() {
         let (local_sender, local_receiver) = local_event.bind_by_ref();
 
         local_sender.send("Local async message".to_string());
-        let local_message = local_receiver.await.expect("sender should not have been dropped");
+        let local_message = local_receiver.await.expect("local_sender.send() was called immediately before this");
         println!("Received: {local_message}");
     });
 }
@@ -86,8 +86,8 @@ fn async_only_usage() {
         second_sender.send(SECOND_VALUE);
 
         // Use async receive for both
-        let sync_value = first_receiver.await.expect("sender should not have been dropped");
-        let async_value = second_receiver.await.expect("sender should not have been dropped");
+        let sync_value = first_receiver.await.expect("first_sender.send() was called immediately before this");
+        let async_value = second_receiver.await.expect("second_sender.send() was called immediately before this");
 
         println!("First received: {sync_value}, Second received: {async_value}");
     });

@@ -20,7 +20,7 @@ fn main() {
         sender.send("Hello from events!".to_string());
 
         println!("Receiving message through event...");
-        let message = receiver.await.expect("sender should not have been dropped");
+        let message = receiver.await.expect("sender.send() was called immediately before this, so sender cannot be dropped");
 
         println!("Received: {message}");
         println!("Example completed successfully!");
