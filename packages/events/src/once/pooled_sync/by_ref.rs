@@ -35,7 +35,7 @@ where
         // Get the event from the pool
         let pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
         let item = pool_guard.get(self.key);
-        let event = item.get();
+        let event = item.get().get_ref();
 
         drop(event.try_set(value));
     }
@@ -76,7 +76,7 @@ where
         let event_ptr = {
             let pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
             let item = pool_guard.get(self.key);
-            let event = item.get();
+            let event = item.get().get_ref();
             std::ptr::NonNull::from(event)
         };
 

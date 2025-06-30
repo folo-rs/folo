@@ -40,8 +40,8 @@ where
             .expect("pool mutex should not be poisoned");
         let item = pool_locked.get(self.key);
 
-        // SAFETY: The event pointer is valid as long as we hold a reference in the pool
-        let event: &Event<T> = unsafe { NonNull::from(item.get()).as_ref() };
+        // Get the event reference from the pinned wrapper
+        let event: &Event<T> = item.get().get_ref();
         drop(event.try_set(value));
     }
 }
@@ -88,7 +88,7 @@ where
                 .lock()
                 .expect("pool mutex should not be poisoned");
             let item = pool_locked.get(self.key);
-            NonNull::from(item.get())
+            NonNull::from(item.get().get_ref())
         };
 
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool

@@ -11,6 +11,7 @@ use std::rc::Rc;
 use pinned_pool::{Key, PinnedPool};
 
 use super::local::LocalEvent;
+use super::pinned_with_ref_count::PinnedWithRefCount;
 
 mod by_ptr;
 mod by_rc;
@@ -19,68 +20,6 @@ mod by_ref;
 pub use by_ptr::{ByPtrPooledLocalEventReceiver, ByPtrPooledLocalEventSender};
 pub use by_rc::{ByRcPooledLocalEventReceiver, ByRcPooledLocalEventSender};
 pub use by_ref::{ByRefPooledLocalEventReceiver, ByRefPooledLocalEventSender};
-
-/// Just combines a value and a reference count, for use in custom reference counting logic.
-/// This is the single-threaded variant that uses `RefCell` instead of `Mutex`.
-#[derive(Debug)]
-pub struct WithRefCountLocal<T> {
-    value: T,
-    ref_count: usize,
-}
-
-impl<T> WithRefCountLocal<T> {
-    /// Creates a new reference-counted wrapper with an initial reference count of 0.
-    #[must_use]
-    pub fn new(value: T) -> Self {
-        Self {
-            value,
-            ref_count: 0,
-        }
-    }
-
-    /// Returns a shared reference to the wrapped value.
-    #[must_use]
-    pub fn get(&self) -> &T {
-        &self.value
-    }
-
-    /// Returns an exclusive reference to the wrapped value.
-    #[must_use]
-    pub fn get_mut(&mut self) -> &mut T {
-        &mut self.value
-    }
-
-    /// Increments the reference count.
-    pub fn inc_ref(&mut self) {
-        self.ref_count = self.ref_count.saturating_add(1);
-    }
-
-    /// Decrements the reference count.
-    pub fn dec_ref(&mut self) {
-        self.ref_count = self.ref_count.saturating_sub(1);
-    }
-
-    /// Returns the current reference count.
-    #[must_use]
-    pub fn ref_count(&self) -> usize {
-        self.ref_count
-    }
-
-    /// Returns `true` if the reference count is greater than 0.
-    #[must_use]
-    pub fn is_referenced(&self) -> bool {
-        self.ref_count > 0
-    }
-}
-
-impl<T> Default for WithRefCountLocal<T>
-where
-    T: Default,
-{
-    fn default() -> Self {
-        Self::new(T::default())
-    }
-}
 
 /// A pool that manages single-threaded events with automatic cleanup.
 ///
@@ -106,7 +45,7 @@ where
 /// ```
 #[derive(Debug)]
 pub struct LocalEventPool<T> {
-    pool: RefCell<PinnedPool<WithRefCountLocal<LocalEvent<T>>>>,
+    pool: RefCell<PinnedPool<PinnedWithRefCount<LocalEvent<T>>>>,
 }
 
 impl<T> LocalEventPool<T> {
@@ -152,15 +91,13 @@ impl<T> LocalEventPool<T> {
         let mut pool_borrow = self.pool.borrow_mut();
         let inserter = pool_borrow.begin_insert();
         let key = inserter.key();
-        let _item = inserter.insert_mut(WithRefCountLocal::new(LocalEvent::new()));
+        let _item = inserter.insert_mut(PinnedWithRefCount::new(LocalEvent::new()));
 
         // Increment reference count for both sender and receiver
-        let item_mut = pool_borrow.get_mut(key);
-        // SAFETY: WithRefCountLocal doesn't contain self-references so it's safe to get_unchecked_mut
-        unsafe {
-            let item_ref = item_mut.get_unchecked_mut();
-            item_ref.inc_ref();
-            item_ref.inc_ref();
+        {
+            let mut item_mut = pool_borrow.get_mut(key);
+            item_mut.as_mut().inc_ref();
+            item_mut.as_mut().inc_ref();
         }
 
         // Drop the borrow before creating the endpoints
@@ -212,15 +149,13 @@ impl<T> LocalEventPool<T> {
         let mut pool_borrow = self.pool.borrow_mut();
         let inserter = pool_borrow.begin_insert();
         let key = inserter.key();
-        let _item = inserter.insert_mut(WithRefCountLocal::new(LocalEvent::new()));
+        let _item = inserter.insert_mut(PinnedWithRefCount::new(LocalEvent::new()));
 
         // Now increment reference count for both sender and receiver
-        let item_mut = pool_borrow.get_mut(key);
-        // SAFETY: WithRefCountLocal doesn't contain self-references so it's safe to get_unchecked_mut
-        unsafe {
-            let item_ref = item_mut.get_unchecked_mut();
-            item_ref.inc_ref();
-            item_ref.inc_ref();
+        {
+            let mut item_mut = pool_borrow.get_mut(key);
+            item_mut.as_mut().inc_ref();
+            item_mut.as_mut().inc_ref();
         }
 
         // Drop the borrow before creating the endpoints
@@ -280,15 +215,13 @@ impl<T> LocalEventPool<T> {
         let mut pool_borrow = self.pool.borrow_mut();
         let inserter = pool_borrow.begin_insert();
         let key = inserter.key();
-        let _item = inserter.insert_mut(WithRefCountLocal::new(LocalEvent::new()));
+        let _item = inserter.insert_mut(PinnedWithRefCount::new(LocalEvent::new()));
 
         // Now increment reference count for both sender and receiver
-        let item_mut = pool_borrow.get_mut(key);
-        // SAFETY: WithRefCountLocal doesn't contain self-references so it's safe to get_unchecked_mut
-        unsafe {
-            let item_ref = item_mut.get_unchecked_mut();
-            item_ref.inc_ref();
-            item_ref.inc_ref();
+        {
+            let mut item_mut = pool_borrow.get_mut(key);
+            item_mut.as_mut().inc_ref();
+            item_mut.as_mut().inc_ref();
         }
 
         // Drop the borrow before creating the endpoints
@@ -311,11 +244,9 @@ impl<T> LocalEventPool<T> {
     /// Decrements the reference count for an event and removes it if no longer referenced.
     fn dec_ref_and_cleanup(&self, key: Key) {
         let mut pool_borrow = self.pool.borrow_mut();
-        let item = pool_borrow.get_mut(key);
-        // SAFETY: WithRefCountLocal doesn't contain self-references so it's safe to get_unchecked_mut
-        let item_mut = unsafe { item.get_unchecked_mut() };
-        item_mut.dec_ref();
-        if !item_mut.is_referenced() {
+        let mut item = pool_borrow.get_mut(key);
+        item.as_mut().dec_ref();
+        if !item.is_referenced() {
             pool_borrow.remove(key);
         }
     }

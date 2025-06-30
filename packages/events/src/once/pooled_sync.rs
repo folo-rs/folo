@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use pinned_pool::{Key, PinnedPool};
 
+use super::pinned_with_ref_count::PinnedWithRefCount;
 use super::sync::Event;
 
 mod by_arc;
@@ -21,67 +22,6 @@ pub use by_arc::{ByArcPooledEventReceiver, ByArcPooledEventSender};
 pub use by_ptr::{ByPtrPooledEventReceiver, ByPtrPooledEventSender};
 pub use by_rc::{ByRcPooledEventReceiver, ByRcPooledEventSender};
 pub use by_ref::{ByRefPooledEventReceiver, ByRefPooledEventSender};
-
-/// Just combines a value and a reference count, for use in custom reference counting logic.
-#[derive(Debug)]
-pub struct WithRefCount<T> {
-    value: T,
-    ref_count: usize,
-}
-
-impl<T> WithRefCount<T> {
-    /// Creates a new reference-counted wrapper with an initial reference count of 0.
-    #[must_use]
-    pub fn new(value: T) -> Self {
-        Self {
-            value,
-            ref_count: 0,
-        }
-    }
-
-    /// Returns a shared reference to the wrapped value.
-    #[must_use]
-    pub fn get(&self) -> &T {
-        &self.value
-    }
-
-    /// Returns an exclusive reference to the wrapped value.
-    #[must_use]
-    pub fn get_mut(&mut self) -> &mut T {
-        &mut self.value
-    }
-
-    /// Increments the reference count.
-    pub fn inc_ref(&mut self) {
-        self.ref_count = self.ref_count.saturating_add(1);
-    }
-
-    /// Decrements the reference count.
-    pub fn dec_ref(&mut self) {
-        self.ref_count = self.ref_count.saturating_sub(1);
-    }
-
-    /// Returns the current reference count.
-    #[must_use]
-    pub fn ref_count(&self) -> usize {
-        self.ref_count
-    }
-
-    /// Returns `true` if the reference count is greater than 0.
-    #[must_use]
-    pub fn is_referenced(&self) -> bool {
-        self.ref_count > 0
-    }
-}
-
-impl<T> Default for WithRefCount<T>
-where
-    T: Default,
-{
-    fn default() -> Self {
-        Self::new(T::default())
-    }
-}
 
 /// A pool that manages thread-safe events with automatic cleanup.
 ///
@@ -110,7 +50,7 @@ pub struct EventPool<T>
 where
     T: Send,
 {
-    pool: Mutex<PinnedPool<WithRefCount<Event<T>>>>,
+    pool: Mutex<PinnedPool<PinnedWithRefCount<Event<T>>>>,
 }
 
 impl<T> EventPool<T>
@@ -162,15 +102,13 @@ where
         let mut pool_guard = self.pool.lock().expect("pool mutex should not be poisoned");
         let inserter = pool_guard.begin_insert();
         let key = inserter.key();
-        let _item = inserter.insert_mut(WithRefCount::new(Event::new()));
+        let _item = inserter.insert_mut(PinnedWithRefCount::new(Event::new()));
 
         // Increment reference count for both sender and receiver
-        let item_mut = pool_guard.get_mut(key);
-        // SAFETY: WithRefCount doesn't contain self-references so it's safe to get_unchecked_mut
-        unsafe {
-            let item_ref = item_mut.get_unchecked_mut();
-            item_ref.inc_ref();
-            item_ref.inc_ref();
+        {
+            let mut item_mut = pool_guard.get_mut(key);
+            item_mut.as_mut().inc_ref();
+            item_mut.as_mut().inc_ref();
         }
 
         // Drop the lock before creating the endpoints
@@ -222,15 +160,13 @@ where
         let mut pool_guard = self.pool.lock().expect("pool mutex should not be poisoned");
         let inserter = pool_guard.begin_insert();
         let key = inserter.key();
-        let _item = inserter.insert_mut(WithRefCount::new(Event::new()));
+        let _item = inserter.insert_mut(PinnedWithRefCount::new(Event::new()));
 
         // Now increment reference count for both sender and receiver
-        let item_mut = pool_guard.get_mut(key);
-        // SAFETY: WithRefCount doesn't contain self-references so it's safe to get_unchecked_mut
-        unsafe {
-            let item_ref = item_mut.get_unchecked_mut();
-            item_ref.inc_ref();
-            item_ref.inc_ref();
+        {
+            let mut item_mut = pool_guard.get_mut(key);
+            item_mut.as_mut().inc_ref();
+            item_mut.as_mut().inc_ref();
         }
 
         // Drop the lock before creating the endpoints
@@ -274,15 +210,13 @@ where
         let mut pool_guard = self.pool.lock().expect("pool mutex should not be poisoned");
         let inserter = pool_guard.begin_insert();
         let key = inserter.key();
-        let _item = inserter.insert_mut(WithRefCount::new(Event::new()));
+        let _item = inserter.insert_mut(PinnedWithRefCount::new(Event::new()));
 
         // Now increment reference count for both sender and receiver
-        let item_mut = pool_guard.get_mut(key);
-        // SAFETY: WithRefCount doesn't contain self-references so it's safe to get_unchecked_mut
-        unsafe {
-            let item_ref = item_mut.get_unchecked_mut();
-            item_ref.inc_ref();
-            item_ref.inc_ref();
+        {
+            let mut item_mut = pool_guard.get_mut(key);
+            item_mut.as_mut().inc_ref();
+            item_mut.as_mut().inc_ref();
         }
 
         // Drop the lock before creating the endpoints
@@ -336,15 +270,13 @@ where
         let mut pool_guard = self.pool.lock().expect("pool mutex should not be poisoned");
         let inserter = pool_guard.begin_insert();
         let key = inserter.key();
-        let _item = inserter.insert_mut(WithRefCount::new(Event::new()));
+        let _item = inserter.insert_mut(PinnedWithRefCount::new(Event::new()));
 
         // Now increment reference count for both sender and receiver
-        let item_mut = pool_guard.get_mut(key);
-        // SAFETY: WithRefCount doesn't contain self-references so it's safe to get_unchecked_mut
-        unsafe {
-            let item_ref = item_mut.get_unchecked_mut();
-            item_ref.inc_ref();
-            item_ref.inc_ref();
+        {
+            let mut item_mut = pool_guard.get_mut(key);
+            item_mut.as_mut().inc_ref();
+            item_mut.as_mut().inc_ref();
         }
 
         // Drop the lock before creating the endpoints
@@ -367,11 +299,9 @@ where
     /// Decrements the reference count for an event and removes it if no longer referenced.
     fn dec_ref_and_cleanup(&self, key: Key) {
         let mut pool_guard = self.pool.lock().expect("pool mutex should not be poisoned");
-        let item = pool_guard.get_mut(key);
-        // SAFETY: WithRefCount doesn't contain self-references so it's safe to get_unchecked_mut
-        let item_mut = unsafe { item.get_unchecked_mut() };
-        item_mut.dec_ref();
-        if !item_mut.is_referenced() {
+        let mut item = pool_guard.get_mut(key);
+        item.as_mut().dec_ref();
+        if !item.is_referenced() {
             pool_guard.remove(key);
         }
     }
@@ -419,22 +349,6 @@ mod tests {
     use testing::with_watchdog;
 
     use super::*;
-
-    #[test]
-    fn with_ref_count_basic() {
-        let mut wrapper = WithRefCount::new(42);
-        assert_eq!(*wrapper.get(), 42);
-        assert_eq!(wrapper.ref_count(), 0);
-        assert!(!wrapper.is_referenced());
-
-        wrapper.inc_ref();
-        assert_eq!(wrapper.ref_count(), 1);
-        assert!(wrapper.is_referenced());
-
-        wrapper.dec_ref();
-        assert_eq!(wrapper.ref_count(), 0);
-        assert!(!wrapper.is_referenced());
-    }
 
     #[test]
     fn event_pool_by_ref() {
@@ -802,26 +716,6 @@ mod tests {
             sender.send(42);
             let value = futures::executor::block_on(receiver.recv_async());
             assert_eq!(value, 42);
-        });
-    }
-
-    #[test]
-    fn ref_count_tracking_works() {
-        with_watchdog(|| {
-            let mut wrapper = WithRefCount::new(String::from("test"));
-
-            // Simulate what happens in the pool
-            wrapper.inc_ref(); // For sender
-            wrapper.inc_ref(); // For receiver
-            assert_eq!(wrapper.ref_count(), 2);
-
-            wrapper.dec_ref(); // Sender dropped
-            assert_eq!(wrapper.ref_count(), 1);
-            assert!(wrapper.is_referenced());
-
-            wrapper.dec_ref(); // Receiver dropped
-            assert_eq!(wrapper.ref_count(), 0);
-            assert!(!wrapper.is_referenced());
         });
     }
 

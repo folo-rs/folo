@@ -87,6 +87,7 @@
 //! ```
 
 mod local;
+mod pinned_with_ref_count;
 mod pooled_local;
 mod pooled_sync;
 mod sync;
@@ -99,12 +100,12 @@ pub use local::{
 pub use pooled_local::{
     ByPtrPooledLocalEventReceiver, ByPtrPooledLocalEventSender, ByRcPooledLocalEventReceiver,
     ByRcPooledLocalEventSender, ByRefPooledLocalEventReceiver, ByRefPooledLocalEventSender,
-    LocalEventPool, WithRefCountLocal,
+    LocalEventPool,
 };
 pub use pooled_sync::{
     ByArcPooledEventReceiver, ByArcPooledEventSender, ByPtrPooledEventReceiver,
     ByPtrPooledEventSender, ByRcPooledEventReceiver, ByRcPooledEventSender,
-    ByRefPooledEventReceiver, ByRefPooledEventSender, EventPool, WithRefCount,
+    ByRefPooledEventReceiver, ByRefPooledEventSender, EventPool,
 };
 pub use sync::{
     ByArcEventReceiver, ByArcEventSender, ByPtrEventReceiver, ByPtrEventSender, ByRcEventReceiver,

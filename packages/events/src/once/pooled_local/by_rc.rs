@@ -44,7 +44,7 @@ impl<T> ByRcPooledLocalEventSender<T> {
         // Get the event from the pool
         let pool_borrow = self.pool.pool.borrow();
         let item = pool_borrow.get(self.key);
-        let event = item.get();
+        let event = item.get().get_ref();
 
         drop(event.try_set(value));
     }
@@ -92,7 +92,7 @@ impl<T> Future for ByRcPooledLocalEventReceiver<T> {
         let poll_result = {
             let pool_borrow = this.pool.pool.borrow();
             let item = pool_borrow.get(key);
-            let event = item.get();
+            let event = item.get().get_ref();
             event.poll_recv(cx.waker())
         };
 
