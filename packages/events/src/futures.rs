@@ -7,35 +7,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use super::once::{LocalOnceEvent, OnceEvent};
+use super::once::OnceEvent;
 use crate::Disconnected;
-
-/// A `Future` that resolves when a single-threaded event receives a value.
-#[derive(Debug)]
-pub(crate) struct LocalEventFuture<'a, T> {
-    event: &'a LocalOnceEvent<T>,
-}
-
-impl<'a, T> LocalEventFuture<'a, T> {
-    /// Creates a new future for a single-threaded event.
-    #[allow(
-        dead_code,
-        reason = "Utility function kept for potential future use and API completeness"
-    )]
-    pub(crate) fn new(event: &'a LocalOnceEvent<T>) -> Self {
-        Self { event }
-    }
-}
-
-impl<T> Future for LocalEventFuture<'_, T> {
-    type Output = Result<T, Disconnected>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.event
-            .poll_recv(cx.waker())
-            .map_or_else(|| Poll::Pending, Poll::Ready)
-    }
-}
 
 /// A `Future` that resolves when a thread-safe event receives a value.
 #[derive(Debug)]
@@ -64,7 +37,7 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.event
-            .poll_recv(cx.waker())
+            .poll(cx.waker())
             .map_or_else(|| Poll::Pending, Poll::Ready)
     }
 }

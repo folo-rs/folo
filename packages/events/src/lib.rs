@@ -198,9 +198,11 @@
 //! # });
 //! ```
 
+mod constants;
 mod disconnected;
 mod futures;
 mod once;
 
+pub(crate) use constants::*;
 pub use disconnected::*;
 pub use once::*;

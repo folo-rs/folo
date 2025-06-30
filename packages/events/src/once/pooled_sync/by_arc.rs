@@ -6,6 +6,7 @@ use std::sync::Arc;
 use pinned_pool::Key;
 
 use super::{OnceEvent, OnceEventPool};
+use crate::ERR_POISONED_LOCK;
 
 /// A sender that sends values through pooled thread-safe events using Arc ownership.
 #[derive(Debug)]
@@ -32,17 +33,12 @@ where
 {
     /// Sends a value through the pooled event.
     pub fn send(self, value: T) {
-        // Get the pool item first
-        let pool_locked = self
-            .pool
-            .pool
-            .lock()
-            .expect("pool mutex should not be poisoned");
-        let item = pool_locked.get(self.key);
+        let inner_pool = self.pool.pool.lock().expect(ERR_POISONED_LOCK);
+        let item = inner_pool.get(self.key);
 
         // Get the event reference from the pinned wrapper
         let event: &OnceEvent<T> = item.get().get_ref();
-        drop(event.try_set(value));
+        event.set(value);
     }
 }
 
@@ -82,12 +78,12 @@ where
     pub async fn recv_async(self) -> Result<T, crate::disconnected::Disconnected> {
         // Get the event pointer without holding a lock across await
         let event_ptr = {
-            let pool_locked = self
+            let inner_pool = self
                 .pool
                 .pool
                 .lock()
                 .expect("pool mutex should not be poisoned");
-            let item = pool_locked.get(self.key);
+            let item = inner_pool.get(self.key);
             NonNull::from(item.get().get_ref())
         };
 

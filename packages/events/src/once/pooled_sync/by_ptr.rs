@@ -5,6 +5,7 @@ use std::ptr::NonNull;
 use pinned_pool::Key;
 
 use super::{OnceEvent, OnceEventPool};
+use crate::ERR_POISONED_LOCK;
 
 /// A sender that sends values through pooled thread-safe events using raw pointer.
 #[derive(Debug)]
@@ -34,12 +35,13 @@ where
         // Get the pool item first
         // SAFETY: The pool pointer is valid for the lifetime of this struct
         let pool = unsafe { &*self.pool };
-        let pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
-        let item = pool_guard.get(self.key);
+
+        let inner_pool = pool.pool.lock().expect(ERR_POISONED_LOCK);
+        let item = inner_pool.get(self.key);
 
         // Get the pinned event reference
         let event: &OnceEvent<T> = item.get().get_ref();
-        drop(event.try_set(value));
+        event.set(value);
     }
 }
 
@@ -83,8 +85,8 @@ where
         let event_ptr = {
             // SAFETY: The pool pointer is valid for the lifetime of this struct
             let pool = unsafe { &*self.pool };
-            let pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
-            let item = pool_guard.get(self.key);
+            let inner_pool = pool.pool.lock().expect(ERR_POISONED_LOCK);
+            let item = inner_pool.get(self.key);
             NonNull::from(item.get().get_ref())
         };
 

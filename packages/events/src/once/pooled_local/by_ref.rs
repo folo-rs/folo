@@ -1,6 +1,8 @@
 //! Reference-based pooled local event endpoints.
 
-use std::marker::PhantomData;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use pinned_pool::Key;
 
@@ -15,17 +17,15 @@ use super::LocalOnceEventPool;
 /// This is the single-threaded variant that cannot be sent across threads.
 #[derive(Debug)]
 pub struct ByRefPooledLocalOnceSender<'a, T> {
-    pub(super) pool: *const LocalOnceEventPool<T>,
+    pub(super) pool: &'a LocalOnceEventPool<T>,
     pub(super) key: Key,
-    pub(super) _phantom: PhantomData<&'a LocalOnceEventPool<T>>,
 }
 
 impl<T> ByRefPooledLocalOnceSender<'_, T> {
     /// Sends a value through the event.
     ///
-    /// If there is a receiver waiting, it will be woken up. If the receiver has been
-    /// dropped, the value is stored and will be returned when a new receiver attempts
-    /// to receive.
+    /// This method consumes the sender and always succeeds, regardless of whether
+    /// there is a receiver waiting.
     ///
     /// # Example
     ///
@@ -40,23 +40,19 @@ impl<T> ByRefPooledLocalOnceSender<'_, T> {
     /// assert_eq!(value, 42);
     /// ```
     pub fn send(self, value: T) {
-        // SAFETY: Pool is guaranteed to be valid by the lifetime parameter
-        let pool = unsafe { &*self.pool };
-
-        // Get the event from the pool
-        let pool_borrow = pool.pool.borrow();
-        let item = pool_borrow.get(self.key);
+        // TODO: There should not be any "get" here - we should have a
+        // direct reference to the event.
+        let inner_pool = self.pool.pool.borrow();
+        let item = inner_pool.get(self.key);
         let event = item.get().get_ref();
 
-        drop(event.try_set(value));
+        event.set(value);
     }
 }
 
 impl<T> Drop for ByRefPooledLocalOnceSender<'_, T> {
     fn drop(&mut self) {
-        // SAFETY: Pool is guaranteed to be valid by the lifetime parameter
-        let pool = unsafe { &*self.pool };
-        pool.dec_ref_and_cleanup(self.key);
+        self.pool.dec_ref_and_cleanup(self.key);
     }
 }
 
@@ -69,18 +65,9 @@ impl<T> Drop for ByRefPooledLocalOnceSender<'_, T> {
 /// This is the single-threaded variant that cannot be sent across threads.
 #[derive(Debug)]
 pub struct ByRefPooledLocalOnceReceiver<'a, T> {
-    pub(super) pool: *const LocalOnceEventPool<T>,
+    pub(super) pool: &'a LocalOnceEventPool<T>,
     pub(super) key: Option<Key>,
-    pub(super) _phantom: PhantomData<&'a LocalOnceEventPool<T>>,
 }
-
-impl<T> ByRefPooledLocalOnceReceiver<'_, T> {
-    // This receiver can be awaited directly as it implements Future
-}
-
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
 impl<T> Future for ByRefPooledLocalOnceReceiver<'_, T> {
     type Output = Result<T, crate::disconnected::Disconnected>;
@@ -93,21 +80,18 @@ impl<T> Future for ByRefPooledLocalOnceReceiver<'_, T> {
             panic!("ByRefPooledLocalOnceReceiver already consumed")
         };
 
-        // SAFETY: Pool is guaranteed to be valid by the lifetime parameter
-        let pool = unsafe { &*this.pool };
-
         // Get the event from the pool and poll it
-        let pool_borrow = pool.pool.borrow();
-        let item = pool_borrow.get(key);
+        let inner_pool = this.pool.pool.borrow();
+        let item = inner_pool.get(key);
         let event = item.get().get_ref();
-        let poll_result = event.poll_recv(cx.waker());
+        let poll_result = event.poll(cx.waker());
 
         if let Some(value) = poll_result {
             // Release the borrow before cleanup
-            drop(pool_borrow);
+            drop(inner_pool);
 
             // We got the value, clean up and return
-            pool.dec_ref_and_cleanup(key);
+            this.pool.dec_ref_and_cleanup(key);
 
             // Mark this receiver as consumed
             this.key = None;
@@ -123,9 +107,7 @@ impl<T> Drop for ByRefPooledLocalOnceReceiver<'_, T> {
     fn drop(&mut self) {
         // Clean up our reference if not consumed by Future
         if let Some(key) = self.key {
-            // SAFETY: Pool is guaranteed to be valid by the lifetime parameter
-            let pool = unsafe { &*self.pool };
-            pool.dec_ref_and_cleanup(key);
+            self.pool.dec_ref_and_cleanup(key);
         }
     }
 }

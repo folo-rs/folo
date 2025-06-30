@@ -6,6 +6,8 @@ use std::rc::Rc;
 use pinned_pool::Key;
 
 use super::{OnceEvent, OnceEventPool};
+use crate::ERR_POISONED_LOCK;
+use crate::futures::EventFuture;
 
 /// A sender that sends values through pooled thread-safe events using Rc ownership.
 #[derive(Debug)]
@@ -23,20 +25,12 @@ where
 {
     /// Sends a value through the pooled event.
     pub fn send(self, value: T) {
-        // Get the pool item first
-        let pool_guard = self
-            .pool
-            .pool
-            .lock()
-            .expect("pool mutex should not be poisoned");
-        let item = pool_guard.get(self.key);
+        let inner_pool = self.pool.pool.lock().expect(ERR_POISONED_LOCK);
+        let item = inner_pool.get(self.key);
 
         // Get the event reference from the pinned wrapper
         let event: &OnceEvent<T> = item.get().get_ref();
-        drop(event.try_set(value));
-
-        // Drop the borrow before cleanup
-        drop(pool_guard);
+        event.set(value);
     }
 }
 
@@ -67,18 +61,14 @@ where
     pub async fn recv_async(self) -> Result<T, crate::disconnected::Disconnected> {
         // Get the event pointer without holding a borrow across await
         let event_ptr = {
-            let pool_guard = self
-                .pool
-                .pool
-                .lock()
-                .expect("pool mutex should not be poisoned");
-            let item = pool_guard.get(self.key);
+            let inner_pool = self.pool.pool.lock().expect(ERR_POISONED_LOCK);
+            let item = inner_pool.get(self.key);
             NonNull::from(item.get().get_ref())
         };
 
-        // SAFETY: The event pointer is valid as long as we hold a reference in the pool
+        // SAFETY: The event pointer is valid as long as we hold a reference to the pool
         let event: &OnceEvent<T> = unsafe { event_ptr.as_ref() };
-        crate::futures::EventFuture::new(event).await
+        EventFuture::new(event).await
     }
 }
 

@@ -5,9 +5,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::Disconnected;
-
 use super::OnceEvent;
+use crate::Disconnected;
 
 /// A sender that can send a value through a thread-safe `OnceEvent` using Arc ownership.
 ///
@@ -19,7 +18,6 @@ where
     T: Send,
 {
     pub(super) once_event: Arc<OnceEvent<T>>,
-    pub(super) used: bool,
 }
 
 impl<T> ByArcOnceSender<T>
@@ -42,9 +40,8 @@ where
     /// let (sender, _receiver) = event.bind_by_arc();
     /// sender.send(42);
     /// ```
-    pub fn send(mut self, value: T) {
-        self.used = true;
-        drop(self.once_event.try_set(value));
+    pub fn send(self, value: T) {
+        self.once_event.set(value);
     }
 }
 
@@ -53,9 +50,7 @@ where
     T: Send,
 {
     fn drop(&mut self) {
-        if !self.used {
-            self.once_event.sender_dropped();
-        }
+        self.once_event.sender_dropped();
     }
 }
 
@@ -79,7 +74,7 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.once_event
-            .poll_recv(cx.waker())
+            .poll(cx.waker())
             .map_or_else(|| Poll::Pending, Poll::Ready)
     }
 }

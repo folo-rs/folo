@@ -1,6 +1,9 @@
 //! Rc-based pooled local event endpoints.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::rc::Rc;
+use std::task::{Context, Poll};
 
 use pinned_pool::Key;
 
@@ -41,12 +44,11 @@ impl<T> ByRcPooledLocalOnceSender<T> {
     /// assert_eq!(value, 42);
     /// ```
     pub fn send(self, value: T) {
-        // Get the event from the pool
-        let pool_borrow = self.pool.pool.borrow();
-        let item = pool_borrow.get(self.key);
+        let inner_pool = self.pool.pool.borrow();
+        let item = inner_pool.get(self.key);
         let event = item.get().get_ref();
 
-        drop(event.try_set(value));
+        event.set(value);
     }
 }
 
@@ -69,14 +71,6 @@ pub struct ByRcPooledLocalOnceReceiver<T> {
     pub(super) key: Option<Key>,
 }
 
-impl<T> ByRcPooledLocalOnceReceiver<T> {
-    // This receiver can be awaited directly as it implements Future
-}
-
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
 impl<T> Future for ByRcPooledLocalOnceReceiver<T> {
     type Output = Result<T, crate::disconnected::Disconnected>;
 
@@ -93,7 +87,7 @@ impl<T> Future for ByRcPooledLocalOnceReceiver<T> {
             let pool_borrow = this.pool.pool.borrow();
             let item = pool_borrow.get(key);
             let event = item.get().get_ref();
-            event.poll_recv(cx.waker())
+            event.poll(cx.waker())
         };
 
         if let Some(value) = poll_result {

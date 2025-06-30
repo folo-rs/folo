@@ -1,5 +1,9 @@
 //! Raw pointer-based pooled local event endpoints.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
 use pinned_pool::Key;
 
 use super::LocalOnceEventPool;
@@ -56,7 +60,7 @@ impl<T> ByPtrPooledLocalOnceSender<T> {
         let item = pool_borrow.get(self.key);
         let event = item.get().get_ref();
 
-        drop(event.try_set(value));
+        event.set(value);
     }
 }
 
@@ -88,14 +92,6 @@ pub struct ByPtrPooledLocalOnceReceiver<T> {
     pub(super) key: Option<Key>,
 }
 
-impl<T> ByPtrPooledLocalOnceReceiver<T> {
-    // This receiver can be awaited directly as it implements Future
-}
-
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
 impl<T> Future for ByPtrPooledLocalOnceReceiver<T> {
     type Output = Result<T, crate::disconnected::Disconnected>;
 
@@ -114,7 +110,7 @@ impl<T> Future for ByPtrPooledLocalOnceReceiver<T> {
         let pool_borrow = pool.pool.borrow();
         let item = pool_borrow.get(key);
         let event = item.get().get_ref();
-        let poll_result = event.poll_recv(cx.waker());
+        let poll_result = event.poll(cx.waker());
 
         if let Some(value) = poll_result {
             // Release the borrow before cleanup

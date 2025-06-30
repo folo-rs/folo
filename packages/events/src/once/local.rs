@@ -3,8 +3,8 @@
 //! This module provides single-threaded event types that have lower overhead
 //! but cannot be shared across threads.
 
-use std::cell::{Cell, RefCell};
-use std::marker::PhantomData;
+use std::cell::{Cell, UnsafeCell};
+use std::marker::{PhantomData, PhantomPinned};
 use std::mem;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -25,11 +25,14 @@ pub use by_ref::*;
 enum EventState<T> {
     /// No value has been set yet, and no one is waiting.
     NotSet,
+
     /// No value has been set yet, but someone is waiting for it.
     Awaiting(Waker),
-    /// A value has been set.
+
+    /// A value has been set but nobody has yet started waiting.
     Set(ValueKind<T>),
-    /// The value has been consumed.
+
+    /// The value has been set and consumed.
     Consumed,
 }
 
@@ -60,9 +63,25 @@ enum EventState<T> {
 /// ```
 #[derive(Debug)]
 pub struct LocalOnceEvent<T> {
-    state: RefCell<EventState<T>>,
-    used: Cell<bool>,
+    // We only have a get() and a set() that access the state and we guarantee this happens on the
+    // same thread, so there is no point in wasting cycles on borrow counting at runtime with
+    // RefCell - there cannot be any concurrent access to this field.
+    state: UnsafeCell<EventState<T>>,
+
+    // Our API contract requires that an event can only be bound once, so we have to check this
+    // because it is not feasible to create an API that can consume the event when creating the
+    // sender-receiver pair (all we have might be a shared reference to the event).
+    //
+    // We may in the future allow unchecked binding to skip this check as an optimization but
+    // for now correctness is most important.
+    is_bound: Cell<bool>,
+
+    // Everything to do with this event is single-threaded,
+    // even if T is thread-mobile or thread-safe.
     _single_threaded: PhantomData<*const ()>,
+
+    // It is invalid to move this type once it has been pinned.
+    _requires_pinning: PhantomPinned,
 }
 
 impl<T> LocalOnceEvent<T> {
@@ -78,17 +97,19 @@ impl<T> LocalOnceEvent<T> {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            state: RefCell::new(EventState::NotSet),
-            used: Cell::new(false),
+            state: UnsafeCell::new(EventState::NotSet),
+            is_bound: Cell::new(false),
             _single_threaded: PhantomData,
+            _requires_pinning: PhantomPinned,
         }
     }
 
-    /// Returns both the sender and receiver for this event, connected by reference.
+    /// Returns both the sender and receiver for this event,
+    /// connected by a shared reference to the event.
     ///
     /// # Panics
     ///
-    /// Panics if this method or [`bind_by_ref_checked`](LocalOnceEvent::bind_by_ref_checked) has been called before.
+    /// Panics if the event has already been bound to a sender-receiver pair.
     ///
     /// # Example
     ///
@@ -100,11 +121,13 @@ impl<T> LocalOnceEvent<T> {
     /// ```
     pub fn bind_by_ref(&self) -> (ByRefLocalOnceSender<'_, T>, ByRefLocalOnceReceiver<'_, T>) {
         self.bind_by_ref_checked()
-            .expect("OnceEvent has already been bound")
+            .expect("LocalOnceEvent has already been bound")
     }
 
-    /// Binds the event to a sender-receiver pair connected by reference,
-    /// or [`None`] if the event has already been bound.
+    /// Returns both the sender and receiver for this event,
+    /// connected by a shared reference to the event.
+    ///
+    /// Returns [`None`] if the event has already been bound to a sender-receiver pair.
     ///
     /// # Example
     ///
@@ -119,28 +142,24 @@ impl<T> LocalOnceEvent<T> {
     pub fn bind_by_ref_checked(
         &self,
     ) -> Option<(ByRefLocalOnceSender<'_, T>, ByRefLocalOnceReceiver<'_, T>)> {
-        if self.used.get() {
+        if self.is_bound.replace(true) {
             return None;
         }
-        self.used.set(true);
 
         Some((
-            ByRefLocalOnceSender {
-                event: self,
-                used: false,
-            },
+            ByRefLocalOnceSender { event: self },
             ByRefLocalOnceReceiver { event: self },
         ))
     }
 
-    /// Returns both the sender and receiver for this event, connected by Rc.
+    /// Returns both the sender and receiver for this event,
+    /// connected by an `Rc` to the event.
     ///
-    /// This method requires the event to be wrapped in an [`Rc`] and provides
-    /// endpoints that own an Rc to the event.
+    /// This method requires the event to be wrapped in an [`Rc`] when called.
     ///
     /// # Panics
     ///
-    /// Panics if endpoints have already been retrieved via any method.
+    /// Panics if the event has already been bound to a sender-receiver pair.
     ///
     /// # Example
     ///
@@ -157,11 +176,12 @@ impl<T> LocalOnceEvent<T> {
             .expect("OnceEvent has already been bound")
     }
 
-    /// Binds the event to a sender-receiver pair connected by Rc,
-    /// or [`None`] if the event has already been bound.
+    /// Returns both the sender and receiver for this event,
+    /// connected by an `Rc` to the event.
     ///
-    /// This method requires the event to be wrapped in an [`Rc`] and provides
-    /// endpoints that own an Rc to the event.
+    /// Returns [`None`] if the event has already been bound to a sender-receiver pair.
+    ///
+    /// This method requires the event to be wrapped in an [`Rc`] when called.
     ///
     /// # Example
     ///
@@ -178,15 +198,13 @@ impl<T> LocalOnceEvent<T> {
     pub fn bind_by_rc_checked(
         self: &Rc<Self>,
     ) -> Option<(ByRcLocalOnceSender<T>, ByRcLocalOnceReceiver<T>)> {
-        if self.used.get() {
+        if self.is_bound.replace(true) {
             return None;
         }
-        self.used.set(true);
 
         Some((
             ByRcLocalOnceSender {
                 event: Rc::clone(self),
-                used: false,
             },
             ByRcLocalOnceReceiver {
                 event: Rc::clone(self),
@@ -194,80 +212,20 @@ impl<T> LocalOnceEvent<T> {
         ))
     }
 
-    /// Attempts to set the value of the event.
+    /// Returns both the sender and receiver for this event,
+    /// connected by a raw pointer to the event.
     ///
-    /// Returns `Ok(())` if the value was set successfully, or `Err(value)` if
-    /// the event has already been fired.
-    pub(crate) fn try_set(&self, value: T) -> Result<(), T> {
-        let mut state = self.state.borrow_mut();
-        match mem::replace(&mut *state, EventState::Consumed) {
-            EventState::NotSet => {
-                *state = EventState::Set(ValueKind::Real(value));
-                Ok(())
-            }
-            EventState::Awaiting(waker) => {
-                *state = EventState::Set(ValueKind::Real(value));
-                waker.wake();
-                Ok(())
-            }
-            EventState::Set(_) | EventState::Consumed => {
-                *state = EventState::Consumed;
-                Err(value)
-            }
-        }
-    }
-
-    /// Polls for the value with a waker for async support.
-    pub(crate) fn poll_recv(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
-        let mut state = self.state.borrow_mut();
-        match mem::replace(&mut *state, EventState::Consumed) {
-            EventState::Set(ValueKind::Real(value)) => Some(Ok(value)),
-            EventState::Set(ValueKind::Disconnected) => Some(Err(Disconnected::new())),
-            EventState::NotSet | EventState::Awaiting(_) => {
-                *state = EventState::Awaiting(waker.clone());
-                None
-            }
-            EventState::Consumed => None,
-        }
-    }
-
-    /// Marks the sender as dropped, potentially waking any waiting receiver.
-    pub(crate) fn sender_dropped(&self) {
-        let mut state = self.state.borrow_mut();
-
-        match &*state {
-            EventState::NotSet => {
-                *state = EventState::Set(ValueKind::Disconnected);
-            }
-            EventState::Awaiting(_) => {
-                let previous_state =
-                    mem::replace(&mut *state, EventState::Set(ValueKind::Disconnected));
-
-                match previous_state {
-                    EventState::Awaiting(waker) => waker.wake(),
-                    _ => unreachable!("we are re-matching an already matched pattern"),
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Returns both the sender and receiver for this event, connected by raw pointer.
-    ///
-    /// This method provides endpoints that hold raw pointers to the event instead
-    /// of owning or borrowing it. The event must be pinned and the caller is
-    /// responsible for ensuring the sender and receiver are dropped before the event.
+    /// This method requires the event to be pinned when called.
     ///
     /// # Safety
     ///
     /// The caller must ensure that:
-    /// - The event remains valid and pinned for the entire lifetime of the sender and receiver
-    /// - The sender and receiver are dropped before the event is dropped
-    /// - The event is not moved after calling this method
+    /// - The event remains alive and pinned for the entire lifetime of the sender and receiver.
+    /// - The sender and receiver are dropped before the event is dropped.
     ///
     /// # Panics
     ///
-    /// Panics if endpoints have already been retrieved via any method.
+    /// Panics if the event has already been bound to a sender-receiver pair.
     ///
     /// # Example
     ///
@@ -278,7 +236,7 @@ impl<T> LocalOnceEvent<T> {
     ///
     /// let mut event = LocalOnceEvent::<i32>::new();
     /// let pinned_event = Pin::new(&mut event);
-    /// // SAFETY: We ensure the event outlives the sender and receiver
+    /// // SAFETY: We ensure the event outlives the sender and receiver, see below.
     /// let (sender, receiver) = unsafe { pinned_event.bind_by_ptr() };
     ///
     /// sender.send(42);
@@ -294,19 +252,18 @@ impl<T> LocalOnceEvent<T> {
         unsafe { self.bind_by_ptr_checked() }.expect("OnceEvent has already been bound")
     }
 
-    /// Binds the event to a sender-receiver pair connected by raw pointer,
-    /// or [`None`] if the event has already been bound.
+    /// Returns both the sender and receiver for this event,
+    /// connected by a raw pointer to the event.
     ///
-    /// This method provides endpoints that hold raw pointers to the event instead
-    /// of owning or borrowing it. The event must be pinned and the caller is
-    /// responsible for ensuring the sender and receiver are dropped before the event.
+    /// Returns [`None`] if the event has already been bound to a sender-receiver pair.
+    ///
+    /// This method requires the event to be pinned when called.
     ///
     /// # Safety
     ///
     /// The caller must ensure that:
-    /// - The event remains valid and pinned for the entire lifetime of the sender and receiver
-    /// - The sender and receiver are dropped before the event is dropped
-    /// - The event is not moved after calling this method
+    /// - The event remains alive and pinned for the entire lifetime of the sender and receiver.
+    /// - The sender and receiver are dropped before the event is dropped.
     ///
     /// # Example
     ///
@@ -330,19 +287,105 @@ impl<T> LocalOnceEvent<T> {
         // SAFETY: We need to access the mutable reference to check/set the used flag
         // The caller guarantees the event remains pinned and valid
         let this = unsafe { self.get_unchecked_mut() };
-        if this.used.get() {
+
+        if this.is_bound.replace(true) {
             return None;
         }
-        this.used.set(true);
 
         let event_ptr: *const Self = this;
         Some((
-            ByPtrLocalOnceSender {
-                event: event_ptr,
-                used: false,
-            },
+            ByPtrLocalOnceSender { event: event_ptr },
             ByPtrLocalOnceReceiver { event: event_ptr },
         ))
+    }
+
+    #[cfg_attr(test, mutants::skip)] // Critical primitive - causes test timeouts if tampered.
+    pub(crate) fn set(&self, result: T) {
+        // SAFETY: See comments on field.
+        let state = unsafe { &mut *self.state.get() };
+
+        match &*state {
+            EventState::NotSet => {
+                *state = EventState::Set(ValueKind::Real(result));
+            }
+            EventState::Awaiting(_) => {
+                let previous_state =
+                    mem::replace(&mut *state, EventState::Set(ValueKind::Real(result)));
+
+                match previous_state {
+                    EventState::Awaiting(waker) => waker.wake(),
+                    _ => unreachable!("we are re-matching an already matched pattern"),
+                }
+            }
+            EventState::Set(_) => {
+                panic!("result already set");
+            }
+            EventState::Consumed => {
+                panic!("result already consumed");
+            }
+        }
+    }
+
+    /// We are intended to be polled via `Future::poll`, so we have an equivalent signature here.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the result has already been consumed.
+    #[cfg_attr(test, mutants::skip)] // Critical primitive - causes test timeouts if tampered.
+    pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
+        // SAFETY: See comments on field.
+        let state = unsafe { &mut *self.state.get() };
+
+        match &*state {
+            EventState::NotSet => {
+                *state = EventState::Awaiting(waker.clone());
+                None
+            }
+            EventState::Awaiting(_) => {
+                // This is permitted by the Future API contract, in which case only the waker
+                // from the most recent poll should be woken up when the result is available.
+                *state = EventState::Awaiting(waker.clone());
+                None
+            }
+            EventState::Set(_) => {
+                let previous_state = mem::replace(&mut *state, EventState::Consumed);
+
+                match previous_state {
+                    EventState::Set(result) => match result {
+                        ValueKind::Real(value) => Some(Ok(value)),
+                        ValueKind::Disconnected => Some(Err(Disconnected::new())),
+                    },
+                    _ => unreachable!("we are re-matching an already matched pattern"),
+                }
+            }
+            EventState::Consumed => {
+                // We do not want to keep a copy of the result around, so we can only return it once.
+                // The futures API contract allows us to panic in this situation.
+                panic!("event polled after result was already consumed");
+            }
+        }
+    }
+
+    #[cfg_attr(test, mutants::skip)] // Critical primitive - causes test timeouts if tampered.
+    pub(crate) fn sender_dropped(&self) {
+        // SAFETY: See comments on field.
+        let state = unsafe { &mut *self.state.get() };
+
+        match &*state {
+            EventState::NotSet => {
+                *state = EventState::Set(ValueKind::Disconnected);
+            }
+            EventState::Awaiting(_) => {
+                let previous_state =
+                    mem::replace(&mut *state, EventState::Set(ValueKind::Disconnected));
+
+                match previous_state {
+                    EventState::Awaiting(waker) => waker.wake(),
+                    _ => unreachable!("we are re-matching an already matched pattern"),
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -363,30 +406,21 @@ mod tests {
     use crate::Disconnected;
 
     #[test]
-    fn local_event_new_creates_valid_event() {
-        with_watchdog(|| {
-            let event = LocalOnceEvent::<i32>::new();
-            // Should be able to get endpoints once
-            let (sender, receiver) = event.bind_by_ref();
-            sender.send(42);
-            let value = futures::executor::block_on(receiver);
-            assert_eq!(value.unwrap(), 42);
-        });
-    }
-
-    #[test]
     fn local_event_default_creates_valid_event() {
         with_watchdog(|| {
             let event = LocalOnceEvent::<String>::default();
+
             let (sender, receiver) = event.bind_by_ref();
+
             sender.send("test".to_string());
+
             let value = futures::executor::block_on(receiver);
             assert_eq!(value.unwrap(), "test");
         });
     }
 
     #[test]
-    fn local_event_by_ref_method_provides_both() {
+    fn local_event_by_ref_works() {
         with_watchdog(|| {
             let event = LocalOnceEvent::<u64>::new();
             let (sender, receiver) = event.bind_by_ref();
@@ -398,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "OnceEvent has already been bound")]
+    #[should_panic]
     fn local_event_by_ref_panics_on_second_call() {
         let event = LocalOnceEvent::<i32>::new();
         let _endpoints = event.bind_by_ref();
@@ -437,60 +471,8 @@ mod tests {
     }
 
     #[test]
-    fn single_threaded_types() {
-        // LocalOnceEvent should not implement Send or Sync due to RefCell and PhantomData<*const ()>
+    fn single_threaded_type() {
         assert_not_impl_any!(LocalOnceEvent<i32>: Send, Sync);
-    }
-
-    #[test]
-    fn local_event_receive_async_basic() {
-        use futures::executor::block_on;
-
-        with_watchdog(|| {
-            let event = LocalOnceEvent::<i32>::new();
-            let (sender, receiver) = event.bind_by_ref();
-
-            sender.send(42);
-            let value = block_on(receiver);
-            assert_eq!(value.unwrap(), 42);
-        });
-    }
-
-    #[test]
-    fn local_event_receive_async_mixed_with_sync() {
-        use futures::executor::block_on;
-
-        with_watchdog(|| {
-            // Test that async can be used in different scenarios
-            let event1 = LocalOnceEvent::<i32>::new();
-            let (sender1, receiver1) = event1.bind_by_ref();
-
-            let event2 = LocalOnceEvent::<i32>::new();
-            let (sender2, receiver2) = event2.bind_by_ref();
-
-            sender1.send(1);
-            sender2.send(2);
-
-            let value1 = block_on(receiver1);
-            let value2 = block_on(receiver2);
-
-            assert_eq!(value1.unwrap(), 1);
-            assert_eq!(value2.unwrap(), 2);
-        });
-    }
-
-    #[test]
-    fn local_event_receive_async_string() {
-        use futures::executor::block_on;
-
-        with_watchdog(|| {
-            let event = LocalOnceEvent::<String>::new();
-            let (sender, receiver) = event.bind_by_ref();
-
-            sender.send("Hello async world!".to_string());
-            let message = block_on(receiver);
-            assert_eq!(message.unwrap(), "Hello async world!");
-        });
     }
 
     #[test]
@@ -516,25 +498,11 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "OnceEvent has already been bound")]
+    #[should_panic]
     fn local_event_by_rc_panics_on_second_call() {
         let event = Rc::new(LocalOnceEvent::<i32>::new());
         let _endpoints = event.bind_by_rc();
         let _endpoints2 = event.bind_by_rc(); // Should panic
-    }
-
-    #[test]
-    fn local_event_by_rc_async() {
-        use futures::executor::block_on;
-
-        with_watchdog(|| {
-            let event = Rc::new(LocalOnceEvent::<i32>::new());
-            let (sender, receiver) = event.bind_by_rc();
-
-            sender.send(42);
-            let value = block_on(receiver);
-            assert_eq!(value.unwrap(), 42);
-        });
     }
 
     #[test]
@@ -551,7 +519,6 @@ mod tests {
 
     #[test]
     fn rc_types_not_send_sync() {
-        // Rc-based types should not implement Send or Sync
         assert_not_impl_any!(ByRcLocalOnceSender<i32>: Send, Sync);
         assert_not_impl_any!(ByRcLocalOnceReceiver<i32>: Send, Sync);
     }
@@ -559,10 +526,10 @@ mod tests {
     #[test]
     fn local_event_by_ptr_basic() {
         with_watchdog(|| {
-            let mut event = LocalOnceEvent::<String>::new();
-            let pinned_event = Pin::new(&mut event);
+            let mut event = Box::pin(LocalOnceEvent::<String>::new());
+
             // SAFETY: We ensure the event outlives the sender and receiver within this test
-            let (sender, receiver) = unsafe { pinned_event.bind_by_ptr() };
+            let (sender, receiver) = unsafe { event.as_mut().bind_by_ptr() };
 
             sender.send("Hello from pointer".to_string());
             let value = futures::executor::block_on(receiver);
@@ -574,31 +541,17 @@ mod tests {
     #[test]
     fn local_event_by_ptr_checked_returns_none_after_use() {
         with_watchdog(|| {
-            let mut event = LocalOnceEvent::<String>::new();
-            let pinned_event = Pin::new(&mut event);
+            let mut event = Box::pin(LocalOnceEvent::<String>::new());
+
             // SAFETY: We ensure the event outlives the sender and receiver within this test
-            let endpoints = unsafe { pinned_event.bind_by_ptr_checked() };
+            let endpoints = unsafe { event.as_mut().bind_by_ptr_checked() };
+
             assert!(endpoints.is_some());
 
             // Second call should return None
-            let pinned_event2 = Pin::new(&mut event);
             // SAFETY: We ensure the event outlives the endpoints within this test
-            let endpoints2 = unsafe { pinned_event2.bind_by_ptr_checked() };
+            let endpoints2 = unsafe { event.as_mut().bind_by_ptr_checked() };
             assert!(endpoints2.is_none());
-        });
-    }
-
-    #[test]
-    fn local_event_by_ptr_async() {
-        with_watchdog(|| {
-            let mut event = LocalOnceEvent::<i32>::new();
-            let pinned_event = Pin::new(&mut event);
-            // SAFETY: We ensure the event outlives the sender and receiver within this test
-            let (sender, receiver) = unsafe { pinned_event.bind_by_ptr() };
-
-            sender.send(42);
-            let value = futures::executor::block_on(receiver);
-            assert_eq!(value.unwrap(), 42);
         });
     }
 

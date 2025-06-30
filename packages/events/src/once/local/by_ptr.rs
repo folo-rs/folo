@@ -5,21 +5,22 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use super::LocalOnceEvent;
+use crate::Disconnected;
 
 /// A sender that can send a value through a single-threaded event using raw pointer access.
 ///
 /// The sender holds a raw pointer to the event and the caller is responsible for
 /// ensuring the event remains valid for the lifetime of the sender.
+///
 /// After calling [`send`](ByPtrLocalOnceSender::send), the sender is consumed.
 ///
 /// # Safety
 ///
-/// The caller must ensure that the event remains valid and pinned for the entire
-/// lifetime of this sender.
+/// The caller must ensure that the event this instance is bound to remains
+/// alive and pinned for the entire lifetime of this sender.
 #[derive(Debug)]
 pub struct ByPtrLocalOnceSender<T> {
     pub(super) event: *const LocalOnceEvent<T>,
-    pub(super) used: bool,
 }
 
 impl<T> ByPtrLocalOnceSender<T> {
@@ -41,21 +42,18 @@ impl<T> ByPtrLocalOnceSender<T> {
     /// let (sender, _receiver) = unsafe { pinned_event.bind_by_ptr() };
     /// sender.send(42);
     /// ```
-    pub fn send(mut self, value: T) {
-        self.used = true;
+    pub fn send(self, value: T) {
         // SAFETY: Caller guarantees the event pointer is valid
         let event = unsafe { &*self.event };
-        drop(event.try_set(value));
+        event.set(value);
     }
 }
 
 impl<T> Drop for ByPtrLocalOnceSender<T> {
     fn drop(&mut self) {
-        if !self.used {
-            // SAFETY: Caller guarantees the event pointer is valid
-            let event = unsafe { &*self.event };
-            event.sender_dropped();
-        }
+        // SAFETY: Caller guarantees the event pointer is valid
+        let event = unsafe { &*self.event };
+        event.sender_dropped();
     }
 }
 
@@ -75,13 +73,13 @@ pub struct ByPtrLocalOnceReceiver<T> {
 }
 
 impl<T> Future for ByPtrLocalOnceReceiver<T> {
-    type Output = Result<T, crate::disconnected::Disconnected>;
+    type Output = Result<T, Disconnected>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // SAFETY: Caller guarantees the event pointer is valid
         let event = unsafe { &*self.event };
         event
-            .poll_recv(cx.waker())
+            .poll(cx.waker())
             .map_or_else(|| Poll::Pending, Poll::Ready)
     }
 }

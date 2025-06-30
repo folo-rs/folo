@@ -5,6 +5,7 @@
 //! pool when both sender and receiver are dropped.
 
 use std::cell::RefCell;
+use std::marker::PhantomPinned;
 use std::pin::Pin;
 use std::rc::Rc;
 
@@ -56,6 +57,9 @@ pub use by_ref::*;
 #[derive(Debug)]
 pub struct LocalOnceEventPool<T> {
     pool: RefCell<PinnedPool<PinnedWithRefCount<LocalOnceEvent<T>>>>,
+
+    // It is invalid to move this type once it has been pinned.
+    _requires_pinning: PhantomPinned,
 }
 
 impl<T> LocalOnceEventPool<T> {
@@ -72,6 +76,7 @@ impl<T> LocalOnceEventPool<T> {
     pub fn new() -> Self {
         Self {
             pool: RefCell::new(PinnedPool::new()),
+            _requires_pinning: PhantomPinned,
         }
     }
 
@@ -105,34 +110,24 @@ impl<T> LocalOnceEventPool<T> {
         ByRefPooledLocalOnceSender<'_, T>,
         ByRefPooledLocalOnceReceiver<'_, T>,
     ) {
-        let mut pool_borrow = self.pool.borrow_mut();
-        let inserter = pool_borrow.begin_insert();
+        let mut inner_pool = self.pool.borrow_mut();
+        let inserter = inner_pool.begin_insert();
         let key = inserter.key();
         let _item = inserter.insert_mut(PinnedWithRefCount::new(LocalOnceEvent::new()));
 
         // Increment reference count for both sender and receiver
-        {
-            let mut item_mut = pool_borrow.get_mut(key);
-            item_mut.as_mut().inc_ref();
-            item_mut.as_mut().inc_ref();
-        }
+        let mut item_mut = inner_pool.get_mut(key);
+        item_mut.as_mut().inc_ref();
+        item_mut.as_mut().inc_ref();
 
         // Drop the borrow before creating the endpoints
-        drop(pool_borrow);
-
-        // Use raw pointer to avoid borrowing self twice
-        let pool_ptr: *const Self = self;
+        drop(inner_pool);
 
         (
-            ByRefPooledLocalOnceSender {
-                pool: pool_ptr,
-                key,
-                _phantom: std::marker::PhantomData,
-            },
+            ByRefPooledLocalOnceSender { pool: self, key },
             ByRefPooledLocalOnceReceiver {
-                pool: pool_ptr,
+                pool: self,
                 key: Some(key),
-                _phantom: std::marker::PhantomData,
             },
         )
     }
@@ -152,43 +147,40 @@ impl<T> LocalOnceEventPool<T> {
     /// let pool = Rc::new(LocalOnceEventPool::<i32>::new());
     ///
     /// // First usage
-    /// let (sender1, receiver1) = pool.bind_by_rc(&pool);
+    /// let (sender1, receiver1) = pool.bind_by_rc();
     /// sender1.send(42);
     /// let value1 = futures::executor::block_on(receiver1).unwrap();
     /// assert_eq!(value1, 42);
     ///
     /// // Second usage - reuses the same event from the pool
-    /// let (sender2, receiver2) = pool.bind_by_rc(&pool);
+    /// let (sender2, receiver2) = pool.bind_by_rc();
     /// sender2.send(200);
     /// let value2 = futures::executor::block_on(receiver2).unwrap();
     /// assert_eq!(value2, 200);
     /// ```
     pub fn bind_by_rc(
-        &self,
-        pool_rc: &Rc<Self>,
+        self: &Rc<Self>,
     ) -> (ByRcPooledLocalOnceSender<T>, ByRcPooledLocalOnceReceiver<T>) {
-        let mut pool_borrow = self.pool.borrow_mut();
-        let inserter = pool_borrow.begin_insert();
+        let mut inner_pool = self.pool.borrow_mut();
+        let inserter = inner_pool.begin_insert();
         let key = inserter.key();
         let _item = inserter.insert_mut(PinnedWithRefCount::new(LocalOnceEvent::new()));
 
         // Now increment reference count for both sender and receiver
-        {
-            let mut item_mut = pool_borrow.get_mut(key);
-            item_mut.as_mut().inc_ref();
-            item_mut.as_mut().inc_ref();
-        }
+        let mut item_mut = inner_pool.get_mut(key);
+        item_mut.as_mut().inc_ref();
+        item_mut.as_mut().inc_ref();
 
         // Drop the borrow before creating the endpoints
-        drop(pool_borrow);
+        drop(inner_pool);
 
         (
             ByRcPooledLocalOnceSender {
-                pool: Rc::clone(pool_rc),
+                pool: Rc::clone(self),
                 key,
             },
             ByRcPooledLocalOnceReceiver {
-                pool: Rc::clone(pool_rc),
+                pool: Rc::clone(self),
                 key: Some(key),
             },
         )
@@ -204,7 +196,6 @@ impl<T> LocalOnceEventPool<T> {
     /// The caller must ensure that:
     /// - The pool remains valid and pinned for the entire lifetime of the sender and receiver
     /// - The sender and receiver are dropped before the pool is dropped
-    /// - The pool is not moved after calling this method
     ///
     /// # Example
     ///
@@ -215,19 +206,18 @@ impl<T> LocalOnceEventPool<T> {
     /// # use futures::executor::block_on;
     ///
     /// # block_on(async {
-    /// let pool = LocalOnceEventPool::<i32>::new();
-    /// let pinned_pool = Pin::new(&pool);
+    /// let pool = Box::pin(LocalOnceEventPool::<i32>::new());
     ///
     /// // First usage
     /// // SAFETY: We ensure the pool outlives the sender and receiver
-    /// let (sender1, receiver1) = unsafe { pinned_pool.bind_by_ptr() };
+    /// let (sender1, receiver1) = unsafe { pool.as_ref().bind_by_ptr() };
     /// sender1.send(42);
     /// let value1 = receiver1.await.unwrap();
     /// assert_eq!(value1, 42);
     ///
     /// // Second usage - reuses the same event efficiently
     /// // SAFETY: Pool is still valid and pinned
-    /// let (sender2, receiver2) = unsafe { pinned_pool.bind_by_ptr() };
+    /// let (sender2, receiver2) = unsafe { pool.as_ref().bind_by_ptr() };
     /// sender2.send(100);
     /// let value2 = receiver2.await.unwrap();
     /// assert_eq!(value2, 100);
@@ -241,30 +231,28 @@ impl<T> LocalOnceEventPool<T> {
         ByPtrPooledLocalOnceSender<T>,
         ByPtrPooledLocalOnceReceiver<T>,
     ) {
-        let mut pool_borrow = self.pool.borrow_mut();
-        let inserter = pool_borrow.begin_insert();
+        let mut inner_pool = self.pool.borrow_mut();
+        let inserter = inner_pool.begin_insert();
         let key = inserter.key();
         let _item = inserter.insert_mut(PinnedWithRefCount::new(LocalOnceEvent::new()));
 
         // Now increment reference count for both sender and receiver
-        {
-            let mut item_mut = pool_borrow.get_mut(key);
-            item_mut.as_mut().inc_ref();
-            item_mut.as_mut().inc_ref();
-        }
+        let mut item_mut = inner_pool.get_mut(key);
+        item_mut.as_mut().inc_ref();
+        item_mut.as_mut().inc_ref();
 
         // Drop the borrow before creating the endpoints
-        drop(pool_borrow);
+        drop(inner_pool);
 
-        let pool_ptr: *const Self = self.get_ref();
+        let self_ptr: *const Self = self.get_ref();
 
         (
             ByPtrPooledLocalOnceSender {
-                pool: pool_ptr,
+                pool: self_ptr,
                 key,
             },
             ByPtrPooledLocalOnceReceiver {
-                pool: pool_ptr,
+                pool: self_ptr,
                 key: Some(key),
             },
         )
@@ -272,11 +260,13 @@ impl<T> LocalOnceEventPool<T> {
 
     /// Decrements the reference count for an event and removes it if no longer referenced.
     fn dec_ref_and_cleanup(&self, key: Key) {
-        let mut pool_borrow = self.pool.borrow_mut();
-        let mut item = pool_borrow.get_mut(key);
+        let mut inner_pool = self.pool.borrow_mut();
+        let mut item = inner_pool.get_mut(key);
+
         item.as_mut().dec_ref();
+
         if !item.is_referenced() {
-            pool_borrow.remove(key);
+            inner_pool.remove(key);
         }
     }
 
@@ -304,8 +294,8 @@ impl<T> LocalOnceEventPool<T> {
     /// pool.shrink_to_fit();
     /// ```
     pub fn shrink_to_fit(&self) {
-        let mut pool_borrow = self.pool.borrow_mut();
-        pool_borrow.shrink_to_fit();
+        let mut inner_pool = self.pool.borrow_mut();
+        inner_pool.shrink_to_fit();
     }
 }
 
@@ -317,7 +307,6 @@ impl<T> Default for LocalOnceEventPool<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::pin::Pin;
     use std::rc::Rc;
 
     use testing::with_watchdog;
@@ -343,7 +332,7 @@ mod tests {
         with_watchdog(|| {
             futures::executor::block_on(async {
                 let pool = Rc::new(LocalOnceEventPool::new());
-                let (sender, receiver) = pool.bind_by_rc(&pool);
+                let (sender, receiver) = pool.bind_by_rc();
 
                 sender.send(42);
                 let value = receiver.await.unwrap();
@@ -356,10 +345,10 @@ mod tests {
     fn local_event_pool_by_ptr_basic() {
         with_watchdog(|| {
             futures::executor::block_on(async {
-                let pool = LocalOnceEventPool::new();
-                let pinned_pool = Pin::new(&pool);
+                let pool = Box::pin(LocalOnceEventPool::new());
+
                 // SAFETY: We ensure the pool outlives the sender and receiver
-                let (sender, receiver) = unsafe { pinned_pool.bind_by_ptr() };
+                let (sender, receiver) = unsafe { pool.as_ref().bind_by_ptr() };
 
                 sender.send(42);
                 let value = receiver.await.unwrap();
@@ -419,10 +408,10 @@ mod tests {
                 let pool = Rc::new(LocalOnceEventPool::new());
 
                 // Create first event
-                let (sender1, receiver1) = pool.bind_by_rc(&pool);
+                let (sender1, receiver1) = pool.bind_by_rc();
 
                 // Create second event
-                let (sender2, receiver2) = pool.bind_by_rc(&pool);
+                let (sender2, receiver2) = pool.bind_by_rc();
 
                 // Send values
                 sender1.send(1);

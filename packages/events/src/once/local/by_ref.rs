@@ -4,9 +4,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use crate::Disconnected;
-
 use super::LocalOnceEvent;
+use crate::Disconnected;
 
 /// A sender that can send a value through a single-threaded event.
 ///
@@ -15,7 +14,6 @@ use super::LocalOnceEvent;
 #[derive(Debug)]
 pub struct ByRefLocalOnceSender<'e, T> {
     pub(super) event: &'e LocalOnceEvent<T>,
-    pub(super) used: bool,
 }
 
 impl<T> ByRefLocalOnceSender<'_, T> {
@@ -33,17 +31,14 @@ impl<T> ByRefLocalOnceSender<'_, T> {
     /// let (sender, _receiver) = event.bind_by_ref();
     /// sender.send(42);
     /// ```
-    pub fn send(mut self, value: T) {
-        self.used = true;
-        drop(self.event.try_set(value));
+    pub fn send(self, value: T) {
+        self.event.set(value);
     }
 }
 
 impl<T> Drop for ByRefLocalOnceSender<'_, T> {
     fn drop(&mut self) {
-        if !self.used {
-            self.event.sender_dropped();
-        }
+        self.event.sender_dropped();
     }
 }
 
@@ -61,7 +56,7 @@ impl<T> Future for ByRefLocalOnceReceiver<'_, T> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.event
-            .poll_recv(cx.waker())
+            .poll(cx.waker())
             .map_or_else(|| Poll::Pending, Poll::Ready)
     }
 }

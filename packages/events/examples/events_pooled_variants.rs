@@ -1,6 +1,5 @@
 //! Example demonstrating all the pooled event variants: `bind_by_ref`, `bind_by_rc`, `bind_by_arc`, and `bind_by_ptr`.
 
-use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -36,7 +35,7 @@ fn main() {
     {
         block_on(async {
             let pool = Rc::new(OnceEventPool::<i32>::new());
-            let (sender, receiver) = pool.bind_by_rc(&pool);
+            let (sender, receiver) = pool.bind_by_rc();
 
             sender.send(BY_RC_TEST_VALUE);
             let value = receiver.recv_async().await.expect(
@@ -50,7 +49,7 @@ fn main() {
     println!("\n3. Testing bind_by_arc variant:");
     {
         let pool = Arc::new(OnceEventPool::<i32>::new());
-        let (sender, receiver) = pool.bind_by_arc(&pool);
+        let (sender, receiver) = pool.bind_by_arc();
 
         // Can be moved across threads
         let sender_thread = std::thread::spawn(move || {
@@ -73,11 +72,10 @@ fn main() {
     println!("\n4. Testing bind_by_ptr variant:");
     {
         block_on(async {
-            let pool = OnceEventPool::<i32>::new();
-            let pinned_pool = Pin::new(&pool);
+            let pool = Box::pin(OnceEventPool::<i32>::new());
 
             // SAFETY: We ensure the pool outlives the sender and receiver
-            let (sender, receiver) = unsafe { pinned_pool.bind_by_ptr() };
+            let (sender, receiver) = unsafe { pool.as_ref().bind_by_ptr() };
 
             sender.send(BY_PTR_TEST_VALUE);
             let value = receiver.recv_async().await.expect(
@@ -92,7 +90,7 @@ fn main() {
     println!("\n5. Testing bind_by_arc with async:");
     {
         let pool = Arc::new(OnceEventPool::<String>::new());
-        let (sender, receiver) = pool.bind_by_arc(&pool);
+        let (sender, receiver) = pool.bind_by_arc();
 
         // Run both tasks in async block
         block_on(async {

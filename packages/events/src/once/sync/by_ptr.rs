@@ -4,9 +4,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use crate::Disconnected;
-
 use super::OnceEvent;
+use crate::Disconnected;
 
 /// A sender that can send a value through a thread-safe `OnceEvent` using raw pointer.
 ///
@@ -24,7 +23,6 @@ where
     T: Send,
 {
     pub(super) once_event: *const OnceEvent<T>,
-    pub(super) used: bool,
 }
 
 // SAFETY: ByPtrOnceSender can be Send as long as T: Send, since we only
@@ -58,11 +56,10 @@ where
     /// let (sender, _receiver) = unsafe { pinned_event.bind_by_ptr() };
     /// sender.send(42);
     /// ```
-    pub fn send(mut self, value: T) {
-        self.used = true;
+    pub fn send(self, value: T) {
         // SAFETY: The caller guarantees the once_event pointer is valid
         let once_event = unsafe { &*self.once_event };
-        drop(once_event.try_set(value));
+        once_event.set(value);
     }
 }
 
@@ -71,11 +68,9 @@ where
     T: Send,
 {
     fn drop(&mut self) {
-        if !self.used {
-            // SAFETY: The caller guarantees the once_event pointer is valid
-            let once_event = unsafe { &*self.once_event };
-            once_event.sender_dropped();
-        }
+        // SAFETY: The caller guarantees the once_event pointer is valid
+        let once_event = unsafe { &*self.once_event };
+        once_event.sender_dropped();
     }
 }
 
@@ -115,7 +110,7 @@ where
         // SAFETY: The caller guarantees the once_event pointer is valid
         let once_event = unsafe { &*self.once_event };
         once_event
-            .poll_recv(cx.waker())
+            .poll(cx.waker())
             .map_or_else(|| Poll::Pending, Poll::Ready)
     }
 }
