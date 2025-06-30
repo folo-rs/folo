@@ -310,6 +310,8 @@ Referencing types in `std` via absolute paths for no reason is especially sinful
 
 `use` statements go at the top of the file or module, not inside functions.
 
+Do not `use super::` except in unit tests. Instead, use the full path `use crate::` style.
+
 # Dependencies in cargo.toml
 
 Dependencies are sorted alphabetically by name of the package.
