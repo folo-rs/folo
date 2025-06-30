@@ -15,10 +15,10 @@ mod by_ptr;
 mod by_rc;
 mod by_ref;
 
-pub use by_arc::{ByArcEventReceiver, ByArcEventSender};
-pub use by_ptr::{ByPtrEventReceiver, ByPtrEventSender};
-pub use by_rc::{ByRcEventReceiver, ByRcEventSender};
-pub use by_ref::{ByRefEventReceiver, ByRefEventSender};
+pub use by_arc::{ByArcOnceReceiver, ByArcOnceSender};
+pub use by_ptr::{ByPtrOnceReceiver, ByPtrOnceSender};
+pub use by_rc::{ByRcOnceReceiver, ByRcOnceSender};
+pub use by_ref::{ByRefOnceReceiver, ByRefOnceSender};
 
 /// State of a thread-safe event.
 #[derive(Debug)]
@@ -42,7 +42,7 @@ enum EventState<T> {
 /// The event can only be used once - after obtaining the sender and receiver,
 /// subsequent calls to obtain them will panic (or return [`None`] for the checked variants).
 ///
-/// For single-threaded usage, see [`crate::once::LocalEvent`] which has lower overhead.
+/// For single-threaded usage, see [`crate::once::LocalOnceEvent`] which has lower overhead.
 ///
 /// # Thread Safety
 ///
@@ -56,11 +56,11 @@ enum EventState<T> {
 /// # Example
 ///
 /// ```rust
-/// use events::once::Event;
+/// use events::OnceEvent;
 /// # use futures::executor::block_on;
 ///
 /// # block_on(async {
-/// let event = Event::<String>::new();
+/// let event = OnceOnceEvent::<String>::new();
 /// let (sender, receiver) = event.by_ref();
 ///
 /// sender.send("Hello".to_string());
@@ -69,7 +69,7 @@ enum EventState<T> {
 /// # });
 /// ```
 #[derive(Debug)]
-pub struct Event<T>
+pub struct OnceEvent<T>
 where
     T: Send,
 {
@@ -77,7 +77,7 @@ where
     used: AtomicBool,
 }
 
-impl<T> Event<T>
+impl<T> OnceEvent<T>
 where
     T: Send,
 {
@@ -86,9 +86,9 @@ where
     /// # Example
     ///
     /// ```rust
-    /// use events::once::Event;
+    /// use events::OnceEvent;
     ///
-    /// let event = Event::<i32>::new();
+    /// let event = OnceEvent::<i32>::new();
     /// ```
     #[must_use]
     pub fn new() -> Self {
@@ -102,17 +102,17 @@ where
     ///
     /// # Panics
     ///
-    /// Panics if this method or [`by_ref_checked`](Event::by_ref_checked) has been called before.
+    /// Panics if this method or [`by_ref_checked`](OnceEvent::by_ref_checked) has been called before.
     ///
     /// # Example
     ///
     /// ```rust
-    /// use events::once::Event;
+    /// use events::OnceEvent;
     ///
-    /// let event = Event::<i32>::new();
+    /// let event = OnceEvent::<i32>::new();
     /// let (sender, receiver) = event.by_ref();
     /// ```
-    pub fn by_ref(&self) -> (ByRefEventSender<'_, T>, ByRefEventReceiver<'_, T>) {
+    pub fn by_ref(&self) -> (ByRefOnceSender<'_, T>, ByRefOnceReceiver<'_, T>) {
         self.by_ref_checked()
             .expect("Event endpoints have already been retrieved")
     }
@@ -123,21 +123,21 @@ where
     /// # Example
     ///
     /// ```rust
-    /// use events::once::Event;
+    /// use events::OnceEvent;
     ///
-    /// let event = Event::<i32>::new();
+    /// let event = OnceEvent::<i32>::new();
     /// let endpoints = event.by_ref_checked().unwrap();
     /// let endpoints2 = event.by_ref_checked(); // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
-    pub fn by_ref_checked(&self) -> Option<(ByRefEventSender<'_, T>, ByRefEventReceiver<'_, T>)> {
+    pub fn by_ref_checked(&self) -> Option<(ByRefOnceSender<'_, T>, ByRefOnceReceiver<'_, T>)> {
         if self.used.swap(true, Ordering::SeqCst) {
             return None;
         }
 
         Some((
-            ByRefEventSender { event: self },
-            ByRefEventReceiver { event: self },
+            ByRefOnceSender { once_event: self },
+            ByRefOnceReceiver { once_event: self },
         ))
     }
 
@@ -155,12 +155,12 @@ where
     /// ```rust
     /// use std::sync::Arc;
     ///
-    /// use events::once::Event;
+    /// use events::OnceEvent;
     ///
-    /// let event = Arc::new(Event::<i32>::new());
+    /// let event = Arc::new(OnceEvent::<i32>::new());
     /// let (sender, receiver) = event.by_arc();
     /// ```
-    pub fn by_arc(self: &Arc<Self>) -> (ByArcEventSender<T>, ByArcEventReceiver<T>) {
+    pub fn by_arc(self: &Arc<Self>) -> (ByArcOnceSender<T>, ByArcOnceReceiver<T>) {
         self.by_arc_checked()
             .expect("Event endpoints have already been retrieved")
     }
@@ -176,26 +176,24 @@ where
     /// ```rust
     /// use std::sync::Arc;
     ///
-    /// use events::once::Event;
+    /// use events::OnceEvent;
     ///
-    /// let event = Arc::new(Event::<i32>::new());
+    /// let event = Arc::new(OnceEvent::<i32>::new());
     /// let endpoints = event.by_arc_checked().unwrap();
     /// let endpoints2 = event.by_arc_checked(); // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
-    pub fn by_arc_checked(
-        self: &Arc<Self>,
-    ) -> Option<(ByArcEventSender<T>, ByArcEventReceiver<T>)> {
+    pub fn by_arc_checked(self: &Arc<Self>) -> Option<(ByArcOnceSender<T>, ByArcOnceReceiver<T>)> {
         if self.used.swap(true, Ordering::SeqCst) {
             return None;
         }
 
         Some((
-            ByArcEventSender {
-                event: Arc::clone(self),
+            ByArcOnceSender {
+                once_event: Arc::clone(self),
             },
-            ByArcEventReceiver {
-                event: Arc::clone(self),
+            ByArcOnceReceiver {
+                once_event: Arc::clone(self),
             },
         ))
     }
@@ -214,12 +212,12 @@ where
     /// ```rust
     /// use std::rc::Rc;
     ///
-    /// use events::once::Event;
+    /// use events::OnceEvent;
     ///
-    /// let event = Rc::new(Event::<i32>::new());
+    /// let event = Rc::new(OnceEvent::<i32>::new());
     /// let (sender, receiver) = event.by_rc();
     /// ```
-    pub fn by_rc(self: &Rc<Self>) -> (ByRcEventSender<T>, ByRcEventReceiver<T>) {
+    pub fn by_rc(self: &Rc<Self>) -> (ByRcOnceSender<T>, ByRcOnceReceiver<T>) {
         self.by_rc_checked()
             .expect("Event endpoints have already been retrieved")
     }
@@ -235,24 +233,24 @@ where
     /// ```rust
     /// use std::rc::Rc;
     ///
-    /// use events::once::Event;
+    /// use events::OnceEvent;
     ///
-    /// let event = Rc::new(Event::<i32>::new());
+    /// let event = Rc::new(OnceEvent::<i32>::new());
     /// let endpoints = event.by_rc_checked().unwrap();
     /// let endpoints2 = event.by_rc_checked(); // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
-    pub fn by_rc_checked(self: &Rc<Self>) -> Option<(ByRcEventSender<T>, ByRcEventReceiver<T>)> {
+    pub fn by_rc_checked(self: &Rc<Self>) -> Option<(ByRcOnceSender<T>, ByRcOnceReceiver<T>)> {
         if self.used.swap(true, Ordering::SeqCst) {
             return None;
         }
 
         Some((
-            ByRcEventSender {
-                event: Rc::clone(self),
+            ByRcOnceSender {
+                once_event: Rc::clone(self),
             },
-            ByRcEventReceiver {
-                event: Rc::clone(self),
+            ByRcOnceReceiver {
+                once_event: Rc::clone(self),
             },
         ))
     }
@@ -279,11 +277,11 @@ where
     /// ```rust
     /// use std::pin::Pin;
     ///
-    /// use events::once::Event;
+    /// use events::OnceEvent;
     /// # use futures::executor::block_on;
     ///
     /// # block_on(async {
-    /// let mut event = Event::<i32>::new();
+    /// let mut event = OnceEvent::<i32>::new();
     /// let pinned_event = Pin::new(&mut event);
     /// // SAFETY: We ensure the event outlives the sender and receiver
     /// let (sender, receiver) = unsafe { pinned_event.by_ptr() };
@@ -295,7 +293,7 @@ where
     /// # });
     /// ```
     #[must_use]
-    pub unsafe fn by_ptr(self: Pin<&mut Self>) -> (ByPtrEventSender<T>, ByPtrEventReceiver<T>) {
+    pub unsafe fn by_ptr(self: Pin<&mut Self>) -> (ByPtrOnceSender<T>, ByPtrOnceReceiver<T>) {
         // SAFETY: Caller has guaranteed event lifetime management
         unsafe { self.by_ptr_checked() }.expect("Event endpoints have already been retrieved")
     }
@@ -319,9 +317,9 @@ where
     /// ```rust
     /// use std::pin::Pin;
     ///
-    /// use events::once::Event;
+    /// use events::OnceEvent;
     ///
-    /// let mut event = Event::<i32>::new();
+    /// let mut event = OnceEvent::<i32>::new();
     /// let pinned_event = Pin::new(&mut event);
     /// // SAFETY: We ensure the event outlives the sender and receiver
     /// let endpoints = unsafe { pinned_event.by_ptr_checked() }.unwrap();
@@ -332,7 +330,7 @@ where
     #[must_use]
     pub unsafe fn by_ptr_checked(
         self: Pin<&mut Self>,
-    ) -> Option<(ByPtrEventSender<T>, ByPtrEventReceiver<T>)> {
+    ) -> Option<(ByPtrOnceSender<T>, ByPtrOnceReceiver<T>)> {
         // SAFETY: We need to access the mutable reference to check/set the used flag
         // The caller guarantees the event remains pinned and valid
         let this = unsafe { self.get_unchecked_mut() };
@@ -342,8 +340,12 @@ where
 
         let event_ptr: *const Self = this;
         Some((
-            ByPtrEventSender { event: event_ptr },
-            ByPtrEventReceiver { event: event_ptr },
+            ByPtrOnceSender {
+                once_event: event_ptr,
+            },
+            ByPtrOnceReceiver {
+                once_event: event_ptr,
+            },
         ))
     }
 
@@ -390,7 +392,7 @@ where
     }
 }
 
-impl<T> Default for Event<T>
+impl<T> Default for OnceEvent<T>
 where
     T: Send,
 {
@@ -415,7 +417,7 @@ mod tests {
     fn event_new_creates_valid_event() {
         with_watchdog(|| {
             futures::executor::block_on(async {
-                let event = Event::<i32>::new();
+                let event = OnceEvent::<i32>::new();
                 // Should be able to get endpoints once
                 let (sender, receiver) = event.by_ref();
                 sender.send(42);
@@ -429,7 +431,7 @@ mod tests {
     fn event_default_creates_valid_event() {
         with_watchdog(|| {
             futures::executor::block_on(async {
-                let event = Event::<String>::default();
+                let event = OnceEvent::<String>::default();
                 let (sender, receiver) = event.by_ref();
                 sender.send("test".to_string());
                 let value = receiver.await;
@@ -442,7 +444,7 @@ mod tests {
     fn event_by_ref_method_provides_both() {
         with_watchdog(|| {
             futures::executor::block_on(async {
-                let event = Event::<u64>::new();
+                let event = OnceEvent::<u64>::new();
                 let (sender, receiver) = event.by_ref();
 
                 sender.send(123);
@@ -455,14 +457,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "Event endpoints have already been retrieved")]
     fn event_by_ref_panics_on_second_call() {
-        let event = Event::<i32>::new();
+        let event = OnceEvent::<i32>::new();
         let _endpoints = event.by_ref();
         let _endpoints2 = event.by_ref(); // Should panic
     }
 
     #[test]
     fn event_by_ref_checked_returns_none_after_use() {
-        let event = Event::<i32>::new();
+        let event = OnceEvent::<i32>::new();
         let endpoints1 = event.by_ref_checked();
         assert!(endpoints1.is_some());
 
@@ -472,7 +474,7 @@ mod tests {
 
     #[test]
     fn event_send_succeeds_without_receiver() {
-        let event = Event::<i32>::new();
+        let event = OnceEvent::<i32>::new();
         let (sender, _receiver) = event.by_ref();
 
         // Send should still succeed even if we don't have a receiver
@@ -482,7 +484,7 @@ mod tests {
     #[test]
     fn event_works_in_arc() {
         with_watchdog(|| {
-            let event = Arc::new(Event::<String>::new());
+            let event = Arc::new(OnceEvent::<String>::new());
             let (sender, receiver) = event.by_ref();
 
             sender.send("Hello from Arc".to_string());
@@ -494,7 +496,7 @@ mod tests {
     #[test]
     fn event_works_in_rc() {
         with_watchdog(|| {
-            let event = Rc::new(Event::<String>::new());
+            let event = Rc::new(OnceEvent::<String>::new());
             let (sender, receiver) = event.by_ref();
 
             sender.send("Hello from Rc".to_string());
@@ -508,8 +510,8 @@ mod tests {
         with_watchdog(|| {
             // For cross-thread usage, we need the Event to live long enough
             // In practice, this would typically be done with Arc<Event>
-            static EVENT: std::sync::OnceLock<Event<String>> = std::sync::OnceLock::new();
-            let event = EVENT.get_or_init(Event::<String>::new);
+            static EVENT: std::sync::OnceLock<OnceEvent<String>> = std::sync::OnceLock::new();
+            let event = EVENT.get_or_init(OnceEvent::<String>::new);
             let (sender, receiver) = event.by_ref();
 
             let sender_handle = thread::spawn(move || {
@@ -526,11 +528,11 @@ mod tests {
     #[test]
     fn thread_safe_types() {
         // Event should implement Send and Sync
-        assert_impl_all!(Event<i32>: Send, Sync);
+        assert_impl_all!(OnceEvent<i32>: Send, Sync);
         // Sender should implement Send and Sync
-        assert_impl_all!(ByRefEventSender<'_, i32>: Send, Sync);
+        assert_impl_all!(ByRefOnceSender<'_, i32>: Send, Sync);
         // Receiver should implement Send but not necessarily Sync (based on oneshot::Receiver)
-        assert_impl_all!(ByRefEventReceiver<'_, i32>: Send);
+        assert_impl_all!(ByRefOnceReceiver<'_, i32>: Send);
     }
 
     #[test]
@@ -538,7 +540,7 @@ mod tests {
         use futures::executor::block_on;
 
         with_watchdog(|| {
-            let event = Event::<i32>::new();
+            let event = OnceEvent::<i32>::new();
             let (sender, receiver) = event.by_ref();
 
             sender.send(42);
@@ -552,8 +554,8 @@ mod tests {
         use futures::executor::block_on;
 
         with_watchdog(|| {
-            static EVENT: std::sync::OnceLock<Event<String>> = std::sync::OnceLock::new();
-            let event = EVENT.get_or_init(Event::<String>::new);
+            static EVENT: std::sync::OnceLock<OnceEvent<String>> = std::sync::OnceLock::new();
+            let event = EVENT.get_or_init(OnceEvent::<String>::new);
             let (sender, receiver) = event.by_ref();
 
             let sender_handle = thread::spawn(move || {
@@ -576,10 +578,10 @@ mod tests {
 
         with_watchdog(|| {
             // Test that async can be used in different scenarios
-            let event1 = Event::<i32>::new();
+            let event1 = OnceEvent::<i32>::new();
             let (sender1, receiver1) = event1.by_ref();
 
-            let event2 = Event::<i32>::new();
+            let event2 = OnceEvent::<i32>::new();
             let (sender2, receiver2) = event2.by_ref();
 
             sender1.send(1);
@@ -596,7 +598,7 @@ mod tests {
     #[test]
     fn event_by_arc_basic() {
         with_watchdog(|| {
-            let event = Arc::new(Event::<i32>::new());
+            let event = Arc::new(OnceEvent::<i32>::new());
             let (sender, receiver) = event.by_arc();
 
             sender.send(42);
@@ -607,7 +609,7 @@ mod tests {
 
     #[test]
     fn event_by_arc_checked_returns_none_after_use() {
-        let event = Arc::new(Event::<i32>::new());
+        let event = Arc::new(OnceEvent::<i32>::new());
         let endpoints1 = event.by_arc_checked();
         assert!(endpoints1.is_some());
 
@@ -618,7 +620,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Event endpoints have already been retrieved")]
     fn event_by_arc_panics_on_second_call() {
-        let event = Arc::new(Event::<i32>::new());
+        let event = Arc::new(OnceEvent::<i32>::new());
         let _endpoints = event.by_arc();
         let _endpoints2 = event.by_arc(); // Should panic
     }
@@ -626,7 +628,7 @@ mod tests {
     #[test]
     fn event_by_arc_cross_thread() {
         with_watchdog(|| {
-            let event = Arc::new(Event::<String>::new());
+            let event = Arc::new(OnceEvent::<String>::new());
             let (sender, receiver) = event.by_arc();
 
             let sender_handle = thread::spawn(move || {
@@ -646,7 +648,7 @@ mod tests {
         use futures::executor::block_on;
 
         with_watchdog(|| {
-            let event = Arc::new(Event::<i32>::new());
+            let event = Arc::new(OnceEvent::<i32>::new());
             let (sender, receiver) = event.by_arc();
 
             sender.send(42);
@@ -658,7 +660,7 @@ mod tests {
     #[test]
     fn event_by_rc_basic() {
         with_watchdog(|| {
-            let event = Rc::new(Event::<i32>::new());
+            let event = Rc::new(OnceEvent::<i32>::new());
             let (sender, receiver) = event.by_rc();
 
             sender.send(42);
@@ -669,7 +671,7 @@ mod tests {
 
     #[test]
     fn event_by_rc_checked_returns_none_after_use() {
-        let event = Rc::new(Event::<i32>::new());
+        let event = Rc::new(OnceEvent::<i32>::new());
         let endpoints1 = event.by_rc_checked();
         assert!(endpoints1.is_some());
 
@@ -680,7 +682,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Event endpoints have already been retrieved")]
     fn event_by_rc_panics_on_second_call() {
-        let event = Rc::new(Event::<i32>::new());
+        let event = Rc::new(OnceEvent::<i32>::new());
         let _endpoints = event.by_rc();
         let _endpoints2 = event.by_rc(); // Should panic
     }
@@ -690,7 +692,7 @@ mod tests {
         use futures::executor::block_on;
 
         with_watchdog(|| {
-            let event = Rc::new(Event::<i32>::new());
+            let event = Rc::new(OnceEvent::<i32>::new());
             let (sender, receiver) = event.by_rc();
 
             sender.send(42);
@@ -702,18 +704,18 @@ mod tests {
     #[test]
     fn arc_rc_types_send_sync() {
         // Arc-based types should implement Send and Sync
-        assert_impl_all!(ByArcEventSender<i32>: Send, Sync);
-        assert_impl_all!(ByArcEventReceiver<i32>: Send);
+        assert_impl_all!(ByArcOnceSender<i32>: Send, Sync);
+        assert_impl_all!(ByArcOnceReceiver<i32>: Send);
 
         // Rc-based types should not implement Send or Sync (due to Rc)
-        assert_not_impl_any!(ByRcEventSender<i32>: Send, Sync);
-        assert_not_impl_any!(ByRcEventReceiver<i32>: Send, Sync);
+        assert_not_impl_any!(ByRcOnceSender<i32>: Send, Sync);
+        assert_not_impl_any!(ByRcOnceReceiver<i32>: Send, Sync);
     }
 
     #[test]
     fn event_by_ptr_basic() {
         with_watchdog(|| {
-            let mut event = Event::<String>::new();
+            let mut event = OnceEvent::<String>::new();
             let pinned_event = Pin::new(&mut event);
             // SAFETY: We ensure the event outlives the sender and receiver within this test
             let (sender, receiver) = unsafe { pinned_event.by_ptr() };
@@ -728,7 +730,7 @@ mod tests {
     #[test]
     fn event_by_ptr_checked_returns_none_after_use() {
         with_watchdog(|| {
-            let mut event = Event::<String>::new();
+            let mut event = OnceEvent::<String>::new();
             let pinned_event = Pin::new(&mut event);
             // SAFETY: We ensure the event outlives the sender and receiver within this test
             let endpoints = unsafe { pinned_event.by_ptr_checked() };
@@ -745,7 +747,7 @@ mod tests {
     #[test]
     fn event_by_ptr_async() {
         with_watchdog(|| {
-            let mut event = Event::<i32>::new();
+            let mut event = OnceEvent::<i32>::new();
             let pinned_event = Pin::new(&mut event);
             // SAFETY: We ensure the event outlives the sender and receiver within this test
             let (sender, receiver) = unsafe { pinned_event.by_ptr() };

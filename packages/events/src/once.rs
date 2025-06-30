@@ -6,45 +6,45 @@
 //!
 //! ## Event Types
 //!
-//! - [`Event`] - Thread-safe events that can be shared across threads
-//! - [`LocalEvent`] - Single-threaded events with lower overhead
-//! - [`EventPool`] - Thread-safe pooled events with automatic resource management
-//! - [`LocalEventPool`] - Single-threaded pooled events with automatic resource management
+//! - [`OnceEvent`] - Thread-safe events that can be shared across threads
+//! - [`LocalOnceEvent`] - Single-threaded events with lower overhead
+//! - [`OnceEventPool`] - Thread-safe pooled events with automatic resource management
+//! - [`LocalOnceEventPool`] - Single-threaded pooled events with automatic resource management
 //!
 //! ## Single-threaded Usage Pattern
 //!
-//! 1. Create an instance of [`LocalEvent<T>`] (potentially inside an [`std::rc::Rc`])
-//! 2. Call [`LocalEvent::by_ref()`] or another activation method to get a tuple with both sender
+//! 1. Create an instance of [`LocalOnceEvent<T>`] (potentially inside an [`std::rc::Rc`])
+//! 2. Call [`LocalOnceEvent::by_ref()`] or another activation method to get a tuple with both sender
 //!    and receiver instances
-//! 3. You can only do this once (panic on 2nd call; [`LocalEvent::by_ref_checked()`] is also
+//! 3. You can only do this once (panic on 2nd call; [`LocalOnceEvent::by_ref_checked()`] is also
 //!    supported, returning [`None`] on 2nd call instead)
-//! 4. Use [`ByRefLocalEventSender`]/[`ByRefLocalEventReceiver`] as desired, either dropping them or
+//! 4. Use [`ByRefLocalOnceSender`]/[`ByRefLocalOnceReceiver`] as desired, either dropping them or
 //!    consuming them via self-taking methods
 //!
 //! ## Thread-safe Usage Pattern
 //!
-//! 1. Create an instance of [`Event<T>`] (potentially inside an [`std::sync::Arc`] or [`std::rc::Rc`])
-//! 2. Call [`Event::by_ref()`] or another activation method to get a tuple with both sender
+//! 1. Create an instance of [`OnceEvent<T>`] (potentially inside an [`std::sync::Arc`] or [`std::rc::Rc`])
+//! 2. Call [`OnceEvent::by_ref()`] or another activation method to get a tuple with both sender
 //!    and receiver instances
-//! 3. You can only do this once (panic on 2nd call; [`Event::by_ref_checked()`] is also
+//! 3. You can only do this once (panic on 2nd call; [`OnceEvent::by_ref_checked()`] is also
 //!    supported, returning [`None`] on 2nd call instead)
-//! 4. Use [`ByRefEventSender`]/[`ByRefEventReceiver`] as desired, either dropping them or
+//! 4. Use [`ByRefOnceSender`]/[`ByRefOnceReceiver`] as desired, either dropping them or
 //!    consuming them via self-taking methods
 //!
 //! ## Pooled Event Usage
 //!
-//! For automatic resource management, use [`EventPool`] (thread-safe) or [`LocalEventPool`]
+//! For automatic resource management, use [`OnceEventPool`] (thread-safe) or [`LocalOnceEventPool`]
 //! (single-threaded). These pools automatically create and clean up events without memory
 //! allocation overhead, making them suitable for high-frequency scenarios.
 //!
 //! # Example (Thread-safe)
 //!
 //! ```rust
-//! use events::once::Event;
+//! use events::OnceEvent;
 //! # use futures::executor::block_on;
 //!
 //! # block_on(async {
-//! let event = Event::<i32>::new();
+//! let event = OnceEvent::<i32>::new();
 //! let (sender, receiver) = event.by_ref();
 //!
 //! sender.send(42);
@@ -56,11 +56,11 @@
 //! # Example (Single-threaded)
 //!
 //! ```rust
-//! use events::once::LocalEvent;
+//! use events::LocalOnceEvent;
 //! # use futures::executor::block_on;
 //!
 //! # block_on(async {
-//! let event = LocalEvent::<i32>::new();
+//! let event = LocalOnceEvent::<i32>::new();
 //! let (sender, receiver) = event.by_ref();
 //!
 //! sender.send(42);
@@ -72,11 +72,11 @@
 //! # Example (Pooled Local Events)
 //!
 //! ```rust
-//! use events::once::LocalEventPool;
+//! use events::LocalOnceEventPool;
 //! # use futures::executor::block_on;
 //!
 //! # block_on(async {
-//! let mut pool = LocalEventPool::<i32>::new();
+//! let mut pool = LocalOnceEventPool::<i32>::new();
 //! let (sender, receiver) = pool.by_ref();
 //!
 //! sender.send(42);
@@ -94,20 +94,20 @@ mod sync;
 
 // Re-export all public types from all modules
 pub use local::{
-    ByPtrLocalEventReceiver, ByPtrLocalEventSender, ByRcLocalEventReceiver, ByRcLocalEventSender,
-    ByRefLocalEventReceiver, ByRefLocalEventSender, LocalEvent,
+    ByPtrLocalOnceReceiver, ByPtrLocalOnceSender, ByRcLocalOnceReceiver, ByRcLocalOnceSender,
+    ByRefLocalOnceReceiver, ByRefLocalOnceSender, LocalOnceEvent,
 };
 pub use pooled_local::{
-    ByPtrPooledLocalEventReceiver, ByPtrPooledLocalEventSender, ByRcPooledLocalEventReceiver,
-    ByRcPooledLocalEventSender, ByRefPooledLocalEventReceiver, ByRefPooledLocalEventSender,
-    LocalEventPool,
+    ByPtrPooledLocalOnceReceiver, ByPtrPooledLocalOnceSender, ByRcPooledLocalOnceReceiver,
+    ByRcPooledLocalOnceSender, ByRefPooledLocalOnceReceiver, ByRefPooledLocalOnceSender,
+    LocalOnceEventPool,
 };
 pub use pooled_sync::{
-    ByArcPooledEventReceiver, ByArcPooledEventSender, ByPtrPooledEventReceiver,
-    ByPtrPooledEventSender, ByRcPooledEventReceiver, ByRcPooledEventSender,
-    ByRefPooledEventReceiver, ByRefPooledEventSender, EventPool,
+    ByArcPooledOnceReceiver, ByArcPooledOnceSender, ByPtrPooledOnceReceiver, ByPtrPooledOnceSender,
+    ByRcPooledOnceReceiver, ByRcPooledOnceSender, ByRefPooledOnceReceiver, ByRefPooledOnceSender,
+    OnceEventPool,
 };
 pub use sync::{
-    ByArcEventReceiver, ByArcEventSender, ByPtrEventReceiver, ByPtrEventSender, ByRcEventReceiver,
-    ByRcEventSender, ByRefEventReceiver, ByRefEventSender, Event,
+    ByArcOnceReceiver, ByArcOnceSender, ByPtrOnceReceiver, ByPtrOnceSender, ByRcOnceReceiver,
+    ByRcOnceSender, ByRefOnceReceiver, ByRefOnceSender, OnceEvent,
 };

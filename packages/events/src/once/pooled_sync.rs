@@ -11,17 +11,17 @@ use std::sync::{Arc, Mutex};
 use pinned_pool::{Key, PinnedPool};
 
 use super::pinned_with_ref_count::PinnedWithRefCount;
-use super::sync::Event;
+use super::sync::OnceEvent;
 
 mod by_arc;
 mod by_ptr;
 mod by_rc;
 mod by_ref;
 
-pub use by_arc::{ByArcPooledEventReceiver, ByArcPooledEventSender};
-pub use by_ptr::{ByPtrPooledEventReceiver, ByPtrPooledEventSender};
-pub use by_rc::{ByRcPooledEventReceiver, ByRcPooledEventSender};
-pub use by_ref::{ByRefPooledEventReceiver, ByRefPooledEventSender};
+pub use by_arc::{ByArcPooledOnceReceiver, ByArcPooledOnceSender};
+pub use by_ptr::{ByPtrPooledOnceReceiver, ByPtrPooledOnceSender};
+pub use by_rc::{ByRcPooledOnceReceiver, ByRcPooledOnceSender};
+pub use by_ref::{ByRefPooledOnceReceiver, ByRefPooledOnceSender};
 
 /// A pool that manages thread-safe events with automatic cleanup.
 ///
@@ -32,11 +32,11 @@ pub use by_ref::{ByRefPooledEventReceiver, ByRefPooledEventSender};
 /// # Example
 ///
 /// ```rust
-/// use events::once::EventPool;
+/// use events::OnceEventPool;
 /// # use futures::executor::block_on;
 ///
 /// # block_on(async {
-/// let mut pool = EventPool::<i32>::new();
+/// let mut pool = OnceEventPool::<i32>::new();
 /// let (sender, receiver) = pool.by_ref();
 ///
 /// sender.send(42);
@@ -46,14 +46,14 @@ pub use by_ref::{ByRefPooledEventReceiver, ByRefPooledEventSender};
 /// # });
 /// ```
 #[derive(Debug)]
-pub struct EventPool<T>
+pub struct OnceEventPool<T>
 where
     T: Send,
 {
-    pool: Mutex<PinnedPool<PinnedWithRefCount<Event<T>>>>,
+    pool: Mutex<PinnedPool<PinnedWithRefCount<OnceEvent<T>>>>,
 }
 
-impl<T> EventPool<T>
+impl<T> OnceEventPool<T>
 where
     T: Send,
 {
@@ -62,9 +62,9 @@ where
     /// # Example
     ///
     /// ```rust
-    /// use events::once::EventPool;
+    /// use events::OnceEventPool;
     ///
-    /// let pool = EventPool::<String>::new();
+    /// let pool = OnceEventPool::<String>::new();
     /// ```
     #[must_use]
     pub fn new() -> Self {
@@ -81,11 +81,11 @@ where
     /// # Example
     ///
     /// ```rust
-    /// use events::once::EventPool;
+    /// use events::OnceEventPool;
     /// # use futures::executor::block_on;
     ///
     /// # block_on(async {
-    /// let pool = EventPool::<i32>::new();
+    /// let pool = OnceEventPool::<i32>::new();
     /// let (sender, receiver) = pool.by_ref();
     ///
     /// sender.send(42);
@@ -93,16 +93,11 @@ where
     /// assert_eq!(value, 42);
     /// # });
     /// ```
-    pub fn by_ref(
-        &self,
-    ) -> (
-        ByRefPooledEventSender<'_, T>,
-        ByRefPooledEventReceiver<'_, T>,
-    ) {
+    pub fn by_ref(&self) -> (ByRefPooledOnceSender<'_, T>, ByRefPooledOnceReceiver<'_, T>) {
         let mut pool_guard = self.pool.lock().expect("pool mutex should not be poisoned");
         let inserter = pool_guard.begin_insert();
         let key = inserter.key();
-        let _item = inserter.insert_mut(PinnedWithRefCount::new(Event::new()));
+        let _item = inserter.insert_mut(PinnedWithRefCount::new(OnceEvent::new()));
 
         // Increment reference count for both sender and receiver
         {
@@ -118,12 +113,12 @@ where
         let pool_ptr: *const Self = self;
 
         (
-            ByRefPooledEventSender {
+            ByRefPooledOnceSender {
                 pool: pool_ptr,
                 key,
                 _phantom: std::marker::PhantomData,
             },
-            ByRefPooledEventReceiver {
+            ByRefPooledOnceReceiver {
                 pool: pool_ptr,
                 key,
                 _phantom: std::marker::PhantomData,
@@ -141,11 +136,11 @@ where
     /// ```rust
     /// use std::rc::Rc;
     ///
-    /// use events::once::EventPool;
+    /// use events::OnceEventPool;
     /// # use futures::executor::block_on;
     ///
     /// # block_on(async {
-    /// let pool = Rc::new(EventPool::<i32>::new());
+    /// let pool = Rc::new(OnceEventPool::<i32>::new());
     /// let (sender, receiver) = pool.by_rc(&pool);
     ///
     /// sender.send(42);
@@ -156,11 +151,11 @@ where
     pub fn by_rc(
         &self,
         pool_rc: &Rc<Self>,
-    ) -> (ByRcPooledEventSender<T>, ByRcPooledEventReceiver<T>) {
+    ) -> (ByRcPooledOnceSender<T>, ByRcPooledOnceReceiver<T>) {
         let mut pool_guard = self.pool.lock().expect("pool mutex should not be poisoned");
         let inserter = pool_guard.begin_insert();
         let key = inserter.key();
-        let _item = inserter.insert_mut(PinnedWithRefCount::new(Event::new()));
+        let _item = inserter.insert_mut(PinnedWithRefCount::new(OnceEvent::new()));
 
         // Now increment reference count for both sender and receiver
         {
@@ -173,11 +168,11 @@ where
         drop(pool_guard);
 
         (
-            ByRcPooledEventSender {
+            ByRcPooledOnceSender {
                 pool: Rc::clone(pool_rc),
                 key,
             },
-            ByRcPooledEventReceiver {
+            ByRcPooledOnceReceiver {
                 pool: Rc::clone(pool_rc),
                 key,
             },
@@ -194,9 +189,9 @@ where
     /// ```rust
     /// use std::sync::Arc;
     ///
-    /// use events::once::EventPool;
+    /// use events::OnceEventPool;
     ///
-    /// let pool = Arc::new(EventPool::<i32>::new());
+    /// let pool = Arc::new(OnceEventPool::<i32>::new());
     /// let (sender, receiver) = pool.by_arc(&pool);
     ///
     /// sender.send(42);
@@ -206,11 +201,11 @@ where
     pub fn by_arc(
         &self,
         pool_arc: &Arc<Self>,
-    ) -> (ByArcPooledEventSender<T>, ByArcPooledEventReceiver<T>) {
+    ) -> (ByArcPooledOnceSender<T>, ByArcPooledOnceReceiver<T>) {
         let mut pool_guard = self.pool.lock().expect("pool mutex should not be poisoned");
         let inserter = pool_guard.begin_insert();
         let key = inserter.key();
-        let _item = inserter.insert_mut(PinnedWithRefCount::new(Event::new()));
+        let _item = inserter.insert_mut(PinnedWithRefCount::new(OnceEvent::new()));
 
         // Now increment reference count for both sender and receiver
         {
@@ -223,11 +218,11 @@ where
         drop(pool_guard);
 
         (
-            ByArcPooledEventSender {
+            ByArcPooledOnceSender {
                 pool: Arc::clone(pool_arc),
                 key,
             },
-            ByArcPooledEventReceiver {
+            ByArcPooledOnceReceiver {
                 pool: Arc::clone(pool_arc),
                 key,
             },
@@ -251,9 +246,9 @@ where
     /// ```rust
     /// use std::pin::Pin;
     ///
-    /// use events::once::EventPool;
+    /// use events::OnceEventPool;
     ///
-    /// let pool = EventPool::<i32>::new();
+    /// let pool = OnceEventPool::<i32>::new();
     /// let pinned_pool = Pin::new(&pool);
     /// // SAFETY: We ensure the pool outlives the sender and receiver
     /// let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
@@ -266,11 +261,11 @@ where
     #[must_use]
     pub unsafe fn by_ptr(
         self: Pin<&Self>,
-    ) -> (ByPtrPooledEventSender<T>, ByPtrPooledEventReceiver<T>) {
+    ) -> (ByPtrPooledOnceSender<T>, ByPtrPooledOnceReceiver<T>) {
         let mut pool_guard = self.pool.lock().expect("pool mutex should not be poisoned");
         let inserter = pool_guard.begin_insert();
         let key = inserter.key();
-        let _item = inserter.insert_mut(PinnedWithRefCount::new(Event::new()));
+        let _item = inserter.insert_mut(PinnedWithRefCount::new(OnceEvent::new()));
 
         // Now increment reference count for both sender and receiver
         {
@@ -285,11 +280,11 @@ where
         let pool_ptr: *const Self = self.get_ref();
 
         (
-            ByPtrPooledEventSender {
+            ByPtrPooledOnceSender {
                 pool: pool_ptr,
                 key,
             },
-            ByPtrPooledEventReceiver {
+            ByPtrPooledOnceReceiver {
                 pool: pool_ptr,
                 key,
             },
@@ -315,9 +310,9 @@ where
     /// # Example
     ///
     /// ```rust
-    /// use events::once::EventPool;
+    /// use events::OnceEventPool;
     ///
-    /// let pool = EventPool::<i32>::new();
+    /// let pool = OnceEventPool::<i32>::new();
     ///
     /// // Use the pool which may grow its capacity
     /// for _ in 0..100 {
@@ -335,7 +330,7 @@ where
     }
 }
 
-impl<T> Default for EventPool<T>
+impl<T> Default for OnceEventPool<T>
 where
     T: Send,
 {
@@ -353,7 +348,7 @@ mod tests {
     #[test]
     fn event_pool_by_ref() {
         with_watchdog(|| {
-            let pool = EventPool::<i32>::new();
+            let pool = OnceEventPool::<i32>::new();
             let (sender, receiver) = pool.by_ref();
 
             sender.send(42);
@@ -367,7 +362,7 @@ mod tests {
         use futures::executor::block_on;
 
         with_watchdog(|| {
-            let pool = EventPool::<i32>::new();
+            let pool = OnceEventPool::<i32>::new();
             let (sender, receiver) = pool.by_ref();
 
             sender.send(42);
@@ -379,7 +374,7 @@ mod tests {
     #[test]
     fn pool_drop_cleanup() {
         with_watchdog(|| {
-            let pool = EventPool::<i32>::new();
+            let pool = OnceEventPool::<i32>::new();
 
             // Create and drop sender/receiver without using them
             let (sender, receiver) = pool.by_ref();
@@ -394,7 +389,7 @@ mod tests {
     #[test]
     fn pool_multiple_events() {
         with_watchdog(|| {
-            let pool = EventPool::<i32>::new();
+            let pool = OnceEventPool::<i32>::new();
 
             // Test one event first
             let (sender1, receiver1) = pool.by_ref();
@@ -415,7 +410,7 @@ mod tests {
         use std::rc::Rc;
 
         with_watchdog(|| {
-            let pool = Rc::new(EventPool::<i32>::new());
+            let pool = Rc::new(OnceEventPool::<i32>::new());
             let (sender, receiver) = pool.by_rc(&pool);
 
             sender.send(42);
@@ -429,7 +424,7 @@ mod tests {
         use std::sync::Arc;
 
         with_watchdog(|| {
-            let pool = Arc::new(EventPool::<i32>::new());
+            let pool = Arc::new(OnceEventPool::<i32>::new());
             let (sender, receiver) = pool.by_arc(&pool);
 
             sender.send(42);
@@ -443,7 +438,7 @@ mod tests {
         use std::pin::Pin;
 
         with_watchdog(|| {
-            let pool = EventPool::<i32>::new();
+            let pool = OnceEventPool::<i32>::new();
             let pinned_pool = Pin::new(&pool);
             // SAFETY: We ensure the pool outlives the sender and receiver
             let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
@@ -462,7 +457,7 @@ mod tests {
         use futures::executor::block_on;
 
         with_watchdog(|| {
-            let pool = Rc::new(EventPool::<i32>::new());
+            let pool = Rc::new(OnceEventPool::<i32>::new());
             let (sender, receiver) = pool.by_rc(&pool);
 
             sender.send(42);
@@ -478,7 +473,7 @@ mod tests {
         use futures::executor::block_on;
 
         with_watchdog(|| {
-            let pool = Arc::new(EventPool::<i32>::new());
+            let pool = Arc::new(OnceEventPool::<i32>::new());
             let (sender, receiver) = pool.by_arc(&pool);
 
             sender.send(42);
@@ -494,7 +489,7 @@ mod tests {
         use futures::executor::block_on;
 
         with_watchdog(|| {
-            let pool = EventPool::<i32>::new();
+            let pool = OnceEventPool::<i32>::new();
             let pinned_pool = Pin::new(&pool);
             // SAFETY: We ensure the pool outlives the sender and receiver
             let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
@@ -510,7 +505,7 @@ mod tests {
     #[test]
     fn by_ref_sender_drop_cleanup() {
         with_watchdog(|| {
-            let pool = EventPool::<i32>::new();
+            let pool = OnceEventPool::<i32>::new();
             {
                 let (sender, _receiver) = pool.by_ref();
 
@@ -530,7 +525,7 @@ mod tests {
     #[test]
     fn by_ref_receiver_drop_cleanup() {
         with_watchdog(|| {
-            let pool = EventPool::<i32>::new();
+            let pool = OnceEventPool::<i32>::new();
             {
                 let (_sender, receiver) = pool.by_ref();
 
@@ -552,7 +547,7 @@ mod tests {
         use std::rc::Rc;
 
         with_watchdog(|| {
-            let pool = Rc::new(EventPool::<i32>::new());
+            let pool = Rc::new(OnceEventPool::<i32>::new());
             let (sender, _receiver) = pool.by_rc(&pool);
 
             // Force the sender to be dropped without being consumed by send()
@@ -571,7 +566,7 @@ mod tests {
         use std::rc::Rc;
 
         with_watchdog(|| {
-            let pool = Rc::new(EventPool::<i32>::new());
+            let pool = Rc::new(OnceEventPool::<i32>::new());
             let (_sender, receiver) = pool.by_rc(&pool);
 
             // Force the receiver to be dropped without being consumed by recv()
@@ -590,7 +585,7 @@ mod tests {
         use std::sync::Arc;
 
         with_watchdog(|| {
-            let pool = Arc::new(EventPool::<i32>::new());
+            let pool = Arc::new(OnceEventPool::<i32>::new());
             let (sender, _receiver) = pool.by_arc(&pool);
 
             // Force the sender to be dropped without being consumed by send()
@@ -609,7 +604,7 @@ mod tests {
         use std::sync::Arc;
 
         with_watchdog(|| {
-            let pool = Arc::new(EventPool::<i32>::new());
+            let pool = Arc::new(OnceEventPool::<i32>::new());
             let (_sender, receiver) = pool.by_arc(&pool);
 
             // Force the receiver to be dropped without being consumed by recv()
@@ -628,7 +623,7 @@ mod tests {
         use std::pin::Pin;
 
         with_watchdog(|| {
-            let pool = EventPool::<i32>::new();
+            let pool = OnceEventPool::<i32>::new();
             let pinned_pool = Pin::new(&pool);
 
             // SAFETY: We ensure the pool outlives the sender and receiver
@@ -651,7 +646,7 @@ mod tests {
         use std::pin::Pin;
 
         with_watchdog(|| {
-            let pool = EventPool::<i32>::new();
+            let pool = OnceEventPool::<i32>::new();
             let pinned_pool = Pin::new(&pool);
 
             // SAFETY: We ensure the pool outlives the sender and receiver
@@ -672,7 +667,7 @@ mod tests {
     #[test]
     fn dec_ref_and_cleanup_is_called() {
         with_watchdog(|| {
-            let pool = EventPool::<i32>::new();
+            let pool = OnceEventPool::<i32>::new();
 
             // Create multiple events and drop them without using
             for _ in 0..5 {
@@ -692,7 +687,7 @@ mod tests {
     #[test]
     fn pool_cleanup_verified_by_capacity() {
         with_watchdog(|| {
-            let pool = EventPool::<i32>::new();
+            let pool = OnceEventPool::<i32>::new();
 
             // Create many events and drop them without using - this should not grow the pool permanently
             for i in 0..10 {
@@ -722,7 +717,7 @@ mod tests {
     #[test]
     fn pool_stress_test_no_leak() {
         with_watchdog(|| {
-            let pool = EventPool::<u64>::new();
+            let pool = OnceEventPool::<u64>::new();
 
             // Stress test with many dropped events
             for _ in 0..100 {
@@ -742,7 +737,7 @@ mod tests {
 
     #[test]
     fn by_ref_drop_actually_cleans_up_pool() {
-        let pool = EventPool::<u32>::new();
+        let pool = OnceEventPool::<u32>::new();
 
         // Create many events but drop them without use
         for _ in 0..100 {
@@ -770,7 +765,7 @@ mod tests {
 
     #[test]
     fn by_rc_drop_actually_cleans_up_pool() {
-        let pool = Rc::new(EventPool::<u32>::new());
+        let pool = Rc::new(OnceEventPool::<u32>::new());
 
         // Create many events but drop them without use
         for _ in 0..100 {
@@ -797,7 +792,7 @@ mod tests {
 
     #[test]
     fn by_arc_drop_actually_cleans_up_pool() {
-        let pool = Arc::new(EventPool::<u32>::new());
+        let pool = Arc::new(OnceEventPool::<u32>::new());
 
         // Create many events but drop them without use
         for _ in 0..100 {
@@ -826,7 +821,7 @@ mod tests {
     fn by_ptr_drop_actually_cleans_up_pool() {
         // Test ptr-based pooled events cleanup by checking pool state
         for iteration in 0..10 {
-            let pool = EventPool::<u32>::new();
+            let pool = OnceEventPool::<u32>::new();
 
             {
                 let pool_pin = std::pin::pin!(pool);
@@ -843,7 +838,7 @@ mod tests {
 
     #[test]
     fn dec_ref_and_cleanup_actually_removes_events() {
-        let pool = EventPool::<u32>::new();
+        let pool = OnceEventPool::<u32>::new();
 
         // Test 1: Check that events are added to pool
         let pool_len_before = {

@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use events::once::LocalEvent;
+use events::LocalOnceEvent;
 use futures::executor::block_on;
 
 /// Example integer value for testing.
@@ -18,7 +18,7 @@ fn main() {
         // Example 1: Basic LocalEvent usage
         println!();
         println!("1. Basic LocalEvent usage:");
-        let event = LocalEvent::<String>::new();
+        let event = LocalOnceEvent::<String>::new();
         let (sender, receiver) = event.by_ref();
         sender.send("Hello from local event!".to_string());
         let message = receiver.await;
@@ -27,7 +27,7 @@ fn main() {
         // Example 2: LocalEvent with Rc for sharing (single-threaded only)
         println!();
         println!("2. LocalEvent with Rc for sharing:");
-        let event_rc = Rc::new(LocalEvent::<i32>::new());
+        let event_rc = Rc::new(LocalOnceEvent::<i32>::new());
         let (sender_rc, receiver_rc) = event_rc.by_ref();
         sender_rc.send(EXAMPLE_INTEGER);
         let value = receiver_rc.await;
@@ -37,7 +37,7 @@ fn main() {
         println!();
         println!("3. LocalEvent works with !Send types:");
         let rc_data = Rc::new("Shared data in Rc".to_string());
-        let event = LocalEvent::<Rc<String>>::new();
+        let event = LocalOnceEvent::<Rc<String>>::new();
         let (sender, receiver) = event.by_ref();
         sender.send(Rc::<String>::clone(&rc_data));
         let received_rc = receiver.await;
@@ -49,8 +49,8 @@ fn main() {
         println!("4. Type constraints demonstration:");
 
         // LocalEvent works with any type (including !Send types)
-        let _local_event_send = LocalEvent::<String>::new(); // String: Send ✓
-        let _local_event_not_send = LocalEvent::<Rc<String>>::new(); // Rc<String>: !Send ✓
+        let _local_event_send = LocalOnceEvent::<String>::new(); // String: Send ✓
+        let _local_event_not_send = LocalOnceEvent::<Rc<String>>::new(); // Rc<String>: !Send ✓
         println!("LocalEvent works with both Send and !Send types");
 
         println!();

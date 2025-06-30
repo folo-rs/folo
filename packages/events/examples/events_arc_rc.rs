@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
 
-use events::once::{Event, LocalEvent};
+use events::{LocalOnceEvent, OnceEvent};
 use futures::executor::block_on;
 
 /// Example integer value for testing.
@@ -28,7 +28,7 @@ fn main() {
 /// Demonstrates Arc-based event usage in single thread.
 fn arc_event_example() {
     block_on(async {
-        let event = Arc::new(Event::<String>::new());
+        let event = Arc::new(OnceEvent::<String>::new());
         let (sender, receiver) = event.by_arc();
 
         sender.send("Hello from Arc Event!".to_string());
@@ -40,7 +40,7 @@ fn arc_event_example() {
 /// Demonstrates Rc-based event usage.
 fn rc_event_example() {
     block_on(async {
-        let event = Rc::new(Event::<i32>::new());
+        let event = Rc::new(OnceEvent::<i32>::new());
         let (sender, receiver) = event.by_rc();
 
         sender.send(EXAMPLE_INTEGER);
@@ -52,7 +52,7 @@ fn rc_event_example() {
 /// Demonstrates Rc-based `LocalEvent` usage.
 fn rc_local_event_example() {
     block_on(async {
-        let event = Rc::new(LocalEvent::<f64>::new());
+        let event = Rc::new(LocalOnceEvent::<f64>::new());
         let (sender, receiver) = event.by_rc();
 
         sender.send(PI);
@@ -63,7 +63,7 @@ fn rc_local_event_example() {
 
 /// Demonstrates cross-thread communication with Arc events.
 fn cross_thread_arc_example() {
-    let event = Arc::new(Event::<String>::new());
+    let event = Arc::new(OnceEvent::<String>::new());
     let (sender, receiver) = event.by_arc();
 
     // Send from one thread

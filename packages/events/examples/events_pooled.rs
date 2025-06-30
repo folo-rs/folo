@@ -1,6 +1,6 @@
 //! Example demonstrating pooled events with automatic resource management.
 
-use events::once::EventPool;
+use events::OnceEventPool;
 use futures::executor::block_on;
 
 /// Example integer value for testing.
@@ -14,7 +14,7 @@ fn main() {
 
     block_on(async {
         // Pool for reusing i32 event instances to reduce allocation overhead
-        let pool = EventPool::<i32>::new();
+        let pool = OnceEventPool::<i32>::new();
 
         // Extract sender and receiver from an available pooled event
         let (sender, receiver) = pool.by_ref();

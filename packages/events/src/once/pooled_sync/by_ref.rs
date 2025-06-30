@@ -4,20 +4,20 @@ use std::marker::PhantomData;
 
 use pinned_pool::Key;
 
-use super::EventPool;
+use super::OnceEventPool;
 
 /// A sender that sends values through pooled thread-safe events using reference to pool.
 #[derive(Debug)]
-pub struct ByRefPooledEventSender<'p, T>
+pub struct ByRefPooledOnceSender<'p, T>
 where
     T: Send,
 {
-    pub(super) pool: *const EventPool<T>,
+    pub(super) pool: *const OnceEventPool<T>,
     pub(super) key: Key,
-    pub(super) _phantom: PhantomData<&'p EventPool<T>>,
+    pub(super) _phantom: PhantomData<&'p OnceEventPool<T>>,
 }
 
-impl<T> ByRefPooledEventSender<'_, T>
+impl<T> ByRefPooledOnceSender<'_, T>
 where
     T: Send,
 {
@@ -41,7 +41,7 @@ where
     }
 }
 
-impl<T> Drop for ByRefPooledEventSender<'_, T>
+impl<T> Drop for ByRefPooledOnceSender<'_, T>
 where
     T: Send,
 {
@@ -54,16 +54,16 @@ where
 
 /// A receiver that receives values from pooled thread-safe events using reference to pool.
 #[derive(Debug)]
-pub struct ByRefPooledEventReceiver<'p, T>
+pub struct ByRefPooledOnceReceiver<'p, T>
 where
     T: Send,
 {
-    pub(super) pool: *const EventPool<T>,
+    pub(super) pool: *const OnceEventPool<T>,
     pub(super) key: Key,
-    pub(super) _phantom: PhantomData<&'p EventPool<T>>,
+    pub(super) _phantom: PhantomData<&'p OnceEventPool<T>>,
 }
 
-impl<T> ByRefPooledEventReceiver<'_, T>
+impl<T> ByRefPooledOnceReceiver<'_, T>
 where
     T: Send,
 {
@@ -86,7 +86,7 @@ where
     }
 }
 
-impl<T> Drop for ByRefPooledEventReceiver<'_, T>
+impl<T> Drop for ByRefPooledOnceReceiver<'_, T>
 where
     T: Send,
 {

@@ -7,21 +7,21 @@ different parts of an application. The API is designed to be simple to use while
 high performance in concurrent scenarios.
 
 Both single-threaded and thread-safe variants are available:
-- `Event<T>`, `ByRefEventSender<T>`, `ByRefEventReceiver<T>` - Thread-safe variants
-- `LocalEvent<T>`, `ByRefLocalEventSender<T>`, `ByRefLocalEventReceiver<T>` - Single-threaded variants
+- `OnceEvent<T>`, `ByRefOnceSender<T>`, `ByRefOnceReceiver<T>` - Thread-safe variants
+- `LocalOnceEvent<T>`, `ByRefLocalOnceSender<T>`, `ByRefLocalOnceReceiver<T>` - Single-threaded variants
 
 ```rust
-use events::once::Event;
+use events::OnceEvent;
 
 // Create a thread-safe event for passing a string message
-let event = Event::<String>::new();
-let (sender, receiver) = event.endpoints();
+let event = OnceEvent::<String>::new();
+let (sender, receiver) = event.by_ref();
 
 // Send a message through the event
 sender.send("Hello, World!".to_string());
 
-// Receive the message
-let message = receiver.receive();
+// Receive the message (await since it's async)
+let message = receiver.await;
 assert_eq!(message, "Hello, World!");
 ```
 

@@ -14,9 +14,9 @@ mod by_ptr;
 mod by_rc;
 mod by_ref;
 
-pub use by_ptr::{ByPtrLocalEventReceiver, ByPtrLocalEventSender};
-pub use by_rc::{ByRcLocalEventReceiver, ByRcLocalEventSender};
-pub use by_ref::{ByRefLocalEventReceiver, ByRefLocalEventSender};
+pub use by_ptr::{ByPtrLocalOnceReceiver, ByPtrLocalOnceSender};
+pub use by_rc::{ByRcLocalOnceReceiver, ByRcLocalOnceSender};
+pub use by_ref::{ByRefLocalOnceReceiver, ByRefLocalOnceSender};
 
 /// State of a single-threaded event.
 #[derive(Debug)]
@@ -38,14 +38,14 @@ enum EventState<T> {
 /// subsequent calls to obtain them will panic (or return [`None`] for the checked variants).
 /// Likewise, the sender and receiver can only be used once each.
 ///
-/// For thread-safe usage, see [`crate::once::Event`] which can be used with `Arc<T>`.
+/// For thread-safe usage, see [`crate::once::OnceEvent`] which can be used with `Arc<T>`.
 ///
 /// # Example
 ///
 /// ```rust
-/// use events::once::LocalEvent;
+/// use events::LocalOnceEvent;
 ///
-/// let event = LocalEvent::<String>::new();
+/// let event = LocalOnceEvent::<String>::new();
 /// let (sender, receiver) = event.by_ref();
 ///
 /// sender.send("Hello".to_string());
@@ -53,21 +53,21 @@ enum EventState<T> {
 /// assert_eq!(message, "Hello");
 /// ```
 #[derive(Debug)]
-pub struct LocalEvent<T> {
+pub struct LocalOnceEvent<T> {
     state: RefCell<EventState<T>>,
     used: Cell<bool>,
     _single_threaded: PhantomData<*const ()>,
 }
 
-impl<T> LocalEvent<T> {
+impl<T> LocalOnceEvent<T> {
     /// Creates a new single-threaded event.
     ///
     /// # Example
     ///
     /// ```rust
-    /// use events::once::LocalEvent;
+    /// use events::LocalOnceEvent;
     ///
-    /// let event = LocalEvent::<i32>::new();
+    /// let event = LocalOnceEvent::<i32>::new();
     /// ```
     #[must_use]
     pub fn new() -> Self {
@@ -82,17 +82,17 @@ impl<T> LocalEvent<T> {
     ///
     /// # Panics
     ///
-    /// Panics if this method or [`by_ref_checked`](LocalEvent::by_ref_checked) has been called before.
+    /// Panics if this method or [`by_ref_checked`](LocalOnceEvent::by_ref_checked) has been called before.
     ///
     /// # Example
     ///
     /// ```rust
-    /// use events::once::LocalEvent;
+    /// use events::LocalOnceEvent;
     ///
-    /// let event = LocalEvent::<i32>::new();
+    /// let event = LocalOnceEvent::<i32>::new();
     /// let (sender, receiver) = event.by_ref();
     /// ```
-    pub fn by_ref(&self) -> (ByRefLocalEventSender<'_, T>, ByRefLocalEventReceiver<'_, T>) {
+    pub fn by_ref(&self) -> (ByRefLocalOnceSender<'_, T>, ByRefLocalOnceReceiver<'_, T>) {
         self.by_ref_checked()
             .expect("Event endpoints have already been retrieved")
     }
@@ -103,24 +103,24 @@ impl<T> LocalEvent<T> {
     /// # Example
     ///
     /// ```rust
-    /// use events::once::LocalEvent;
+    /// use events::LocalOnceEvent;
     ///
-    /// let event = LocalEvent::<i32>::new();
+    /// let event = LocalOnceEvent::<i32>::new();
     /// let endpoints = event.by_ref_checked().unwrap();
     /// let endpoints2 = event.by_ref_checked(); // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
     pub fn by_ref_checked(
         &self,
-    ) -> Option<(ByRefLocalEventSender<'_, T>, ByRefLocalEventReceiver<'_, T>)> {
+    ) -> Option<(ByRefLocalOnceSender<'_, T>, ByRefLocalOnceReceiver<'_, T>)> {
         if self.used.get() {
             return None;
         }
         self.used.set(true);
 
         Some((
-            ByRefLocalEventSender { event: self },
-            ByRefLocalEventReceiver { event: self },
+            ByRefLocalOnceSender { event: self },
+            ByRefLocalOnceReceiver { event: self },
         ))
     }
 
@@ -138,12 +138,12 @@ impl<T> LocalEvent<T> {
     /// ```rust
     /// use std::rc::Rc;
     ///
-    /// use events::once::LocalEvent;
+    /// use events::LocalOnceEvent;
     ///
-    /// let event = Rc::new(LocalEvent::<i32>::new());
+    /// let event = Rc::new(LocalOnceEvent::<i32>::new());
     /// let (sender, receiver) = event.by_rc();
     /// ```
-    pub fn by_rc(self: &Rc<Self>) -> (ByRcLocalEventSender<T>, ByRcLocalEventReceiver<T>) {
+    pub fn by_rc(self: &Rc<Self>) -> (ByRcLocalOnceSender<T>, ByRcLocalOnceReceiver<T>) {
         self.by_rc_checked()
             .expect("Event endpoints have already been retrieved")
     }
@@ -159,26 +159,26 @@ impl<T> LocalEvent<T> {
     /// ```rust
     /// use std::rc::Rc;
     ///
-    /// use events::once::LocalEvent;
+    /// use events::LocalOnceEvent;
     ///
-    /// let event = Rc::new(LocalEvent::<i32>::new());
+    /// let event = Rc::new(LocalOnceEvent::<i32>::new());
     /// let endpoints = event.by_rc_checked().unwrap();
     /// let endpoints2 = event.by_rc_checked(); // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
     pub fn by_rc_checked(
         self: &Rc<Self>,
-    ) -> Option<(ByRcLocalEventSender<T>, ByRcLocalEventReceiver<T>)> {
+    ) -> Option<(ByRcLocalOnceSender<T>, ByRcLocalOnceReceiver<T>)> {
         if self.used.get() {
             return None;
         }
         self.used.set(true);
 
         Some((
-            ByRcLocalEventSender {
+            ByRcLocalOnceSender {
                 event: Rc::clone(self),
             },
-            ByRcLocalEventReceiver {
+            ByRcLocalOnceReceiver {
                 event: Rc::clone(self),
             },
         ))
@@ -242,9 +242,9 @@ impl<T> LocalEvent<T> {
     /// ```rust
     /// use std::pin::Pin;
     ///
-    /// use events::once::LocalEvent;
+    /// use events::LocalOnceEvent;
     ///
-    /// let mut event = LocalEvent::<i32>::new();
+    /// let mut event = LocalOnceEvent::<i32>::new();
     /// let pinned_event = Pin::new(&mut event);
     /// // SAFETY: We ensure the event outlives the sender and receiver
     /// let (sender, receiver) = unsafe { pinned_event.by_ptr() };
@@ -257,7 +257,7 @@ impl<T> LocalEvent<T> {
     #[must_use]
     pub unsafe fn by_ptr(
         self: Pin<&mut Self>,
-    ) -> (ByPtrLocalEventSender<T>, ByPtrLocalEventReceiver<T>) {
+    ) -> (ByPtrLocalOnceSender<T>, ByPtrLocalOnceReceiver<T>) {
         // SAFETY: Caller has guaranteed event lifetime management
         unsafe { self.by_ptr_checked() }.expect("Event endpoints have already been retrieved")
     }
@@ -281,9 +281,9 @@ impl<T> LocalEvent<T> {
     /// ```rust
     /// use std::pin::Pin;
     ///
-    /// use events::once::LocalEvent;
+    /// use events::LocalOnceEvent;
     ///
-    /// let mut event = LocalEvent::<i32>::new();
+    /// let mut event = LocalOnceEvent::<i32>::new();
     /// let pinned_event = Pin::new(&mut event);
     /// // SAFETY: We ensure the event outlives the sender and receiver
     /// let endpoints = unsafe { pinned_event.by_ptr_checked() }.unwrap();
@@ -294,7 +294,7 @@ impl<T> LocalEvent<T> {
     #[must_use]
     pub unsafe fn by_ptr_checked(
         self: Pin<&mut Self>,
-    ) -> Option<(ByPtrLocalEventSender<T>, ByPtrLocalEventReceiver<T>)> {
+    ) -> Option<(ByPtrLocalOnceSender<T>, ByPtrLocalOnceReceiver<T>)> {
         // SAFETY: We need to access the mutable reference to check/set the used flag
         // The caller guarantees the event remains pinned and valid
         let this = unsafe { self.get_unchecked_mut() };
@@ -305,13 +305,13 @@ impl<T> LocalEvent<T> {
 
         let event_ptr: *const Self = this;
         Some((
-            ByPtrLocalEventSender { event: event_ptr },
-            ByPtrLocalEventReceiver { event: event_ptr },
+            ByPtrLocalOnceSender { event: event_ptr },
+            ByPtrLocalOnceReceiver { event: event_ptr },
         ))
     }
 }
 
-impl<T> Default for LocalEvent<T> {
+impl<T> Default for LocalOnceEvent<T> {
     fn default() -> Self {
         Self::new()
     }
@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn local_event_new_creates_valid_event() {
         with_watchdog(|| {
-            let event = LocalEvent::<i32>::new();
+            let event = LocalOnceEvent::<i32>::new();
             // Should be able to get endpoints once
             let (sender, receiver) = event.by_ref();
             sender.send(42);
@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn local_event_default_creates_valid_event() {
         with_watchdog(|| {
-            let event = LocalEvent::<String>::default();
+            let event = LocalOnceEvent::<String>::default();
             let (sender, receiver) = event.by_ref();
             sender.send("test".to_string());
             let value = futures::executor::block_on(receiver);
@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn local_event_by_ref_method_provides_both() {
         with_watchdog(|| {
-            let event = LocalEvent::<u64>::new();
+            let event = LocalOnceEvent::<u64>::new();
             let (sender, receiver) = event.by_ref();
 
             sender.send(123);
@@ -364,14 +364,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "Event endpoints have already been retrieved")]
     fn local_event_by_ref_panics_on_second_call() {
-        let event = LocalEvent::<i32>::new();
+        let event = LocalOnceEvent::<i32>::new();
         let _endpoints = event.by_ref();
         let _endpoints2 = event.by_ref(); // Should panic
     }
 
     #[test]
     fn local_event_by_ref_checked_returns_none_after_use() {
-        let event = LocalEvent::<i32>::new();
+        let event = LocalOnceEvent::<i32>::new();
         let endpoints1 = event.by_ref_checked();
         assert!(endpoints1.is_some());
 
@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn local_event_send_succeeds_without_receiver() {
-        let event = LocalEvent::<i32>::new();
+        let event = LocalOnceEvent::<i32>::new();
         let (sender, _receiver) = event.by_ref();
 
         // Send should still succeed even if we don't have a receiver
@@ -391,7 +391,7 @@ mod tests {
     #[test]
     fn local_event_works_in_rc() {
         with_watchdog(|| {
-            let event = Rc::new(LocalEvent::<String>::new());
+            let event = Rc::new(LocalOnceEvent::<String>::new());
             let (sender, receiver) = event.by_ref();
 
             sender.send("Hello from Rc".to_string());
@@ -402,8 +402,8 @@ mod tests {
 
     #[test]
     fn single_threaded_types() {
-        // LocalEvent should not implement Send or Sync due to RefCell and PhantomData<*const ()>
-        assert_not_impl_any!(LocalEvent<i32>: Send, Sync);
+        // LocalOnceEvent should not implement Send or Sync due to RefCell and PhantomData<*const ()>
+        assert_not_impl_any!(LocalOnceEvent<i32>: Send, Sync);
     }
 
     #[test]
@@ -411,7 +411,7 @@ mod tests {
         use futures::executor::block_on;
 
         with_watchdog(|| {
-            let event = LocalEvent::<i32>::new();
+            let event = LocalOnceEvent::<i32>::new();
             let (sender, receiver) = event.by_ref();
 
             sender.send(42);
@@ -426,10 +426,10 @@ mod tests {
 
         with_watchdog(|| {
             // Test that async can be used in different scenarios
-            let event1 = LocalEvent::<i32>::new();
+            let event1 = LocalOnceEvent::<i32>::new();
             let (sender1, receiver1) = event1.by_ref();
 
-            let event2 = LocalEvent::<i32>::new();
+            let event2 = LocalOnceEvent::<i32>::new();
             let (sender2, receiver2) = event2.by_ref();
 
             sender1.send(1);
@@ -448,7 +448,7 @@ mod tests {
         use futures::executor::block_on;
 
         with_watchdog(|| {
-            let event = LocalEvent::<String>::new();
+            let event = LocalOnceEvent::<String>::new();
             let (sender, receiver) = event.by_ref();
 
             sender.send("Hello async world!".to_string());
@@ -460,7 +460,7 @@ mod tests {
     #[test]
     fn local_event_by_rc_basic() {
         with_watchdog(|| {
-            let event = Rc::new(LocalEvent::<i32>::new());
+            let event = Rc::new(LocalOnceEvent::<i32>::new());
             let (sender, receiver) = event.by_rc();
 
             sender.send(42);
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn local_event_by_rc_checked_returns_none_after_use() {
-        let event = Rc::new(LocalEvent::<i32>::new());
+        let event = Rc::new(LocalOnceEvent::<i32>::new());
         let endpoints1 = event.by_rc_checked();
         assert!(endpoints1.is_some());
 
@@ -482,7 +482,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Event endpoints have already been retrieved")]
     fn local_event_by_rc_panics_on_second_call() {
-        let event = Rc::new(LocalEvent::<i32>::new());
+        let event = Rc::new(LocalOnceEvent::<i32>::new());
         let _endpoints = event.by_rc();
         let _endpoints2 = event.by_rc(); // Should panic
     }
@@ -492,7 +492,7 @@ mod tests {
         use futures::executor::block_on;
 
         with_watchdog(|| {
-            let event = Rc::new(LocalEvent::<i32>::new());
+            let event = Rc::new(LocalOnceEvent::<i32>::new());
             let (sender, receiver) = event.by_rc();
 
             sender.send(42);
@@ -504,7 +504,7 @@ mod tests {
     #[test]
     fn local_event_by_rc_string() {
         with_watchdog(|| {
-            let event = Rc::new(LocalEvent::<String>::new());
+            let event = Rc::new(LocalOnceEvent::<String>::new());
             let (sender, receiver) = event.by_rc();
 
             sender.send("Hello from Rc".to_string());
@@ -516,14 +516,14 @@ mod tests {
     #[test]
     fn rc_types_not_send_sync() {
         // Rc-based types should not implement Send or Sync
-        assert_not_impl_any!(ByRcLocalEventSender<i32>: Send, Sync);
-        assert_not_impl_any!(ByRcLocalEventReceiver<i32>: Send, Sync);
+        assert_not_impl_any!(ByRcLocalOnceSender<i32>: Send, Sync);
+        assert_not_impl_any!(ByRcLocalOnceReceiver<i32>: Send, Sync);
     }
 
     #[test]
     fn local_event_by_ptr_basic() {
         with_watchdog(|| {
-            let mut event = LocalEvent::<String>::new();
+            let mut event = LocalOnceEvent::<String>::new();
             let pinned_event = Pin::new(&mut event);
             // SAFETY: We ensure the event outlives the sender and receiver within this test
             let (sender, receiver) = unsafe { pinned_event.by_ptr() };
@@ -538,7 +538,7 @@ mod tests {
     #[test]
     fn local_event_by_ptr_checked_returns_none_after_use() {
         with_watchdog(|| {
-            let mut event = LocalEvent::<String>::new();
+            let mut event = LocalOnceEvent::<String>::new();
             let pinned_event = Pin::new(&mut event);
             // SAFETY: We ensure the event outlives the sender and receiver within this test
             let endpoints = unsafe { pinned_event.by_ptr_checked() };
@@ -555,7 +555,7 @@ mod tests {
     #[test]
     fn local_event_by_ptr_async() {
         with_watchdog(|| {
-            let mut event = LocalEvent::<i32>::new();
+            let mut event = LocalOnceEvent::<i32>::new();
             let pinned_event = Pin::new(&mut event);
             // SAFETY: We ensure the event outlives the sender and receiver within this test
             let (sender, receiver) = unsafe { pinned_event.by_ptr() };

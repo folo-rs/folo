@@ -6,7 +6,7 @@
 use std::thread;
 use std::time::Duration;
 
-use events::once::{Event, LocalEvent};
+use events::{LocalOnceEvent, OnceEvent};
 use futures::executor::block_on;
 
 /// Example integer value for testing.
@@ -22,7 +22,7 @@ const SIMULATED_WORK_DURATION_MS: u64 = 100;
 fn basic_async_usage() {
     println!("1. Basic async usage with thread-safe events:");
     block_on(async {
-        let event = Event::<String>::new();
+        let event = OnceEvent::<String>::new();
         let (sender, receiver) = event.by_ref();
 
         sender.send("Hello async world!".to_string());
@@ -35,7 +35,7 @@ fn cross_thread_async_communication() {
     println!("2. Cross-thread async communication:");
 
     // For cross-thread communication, we need to extract endpoints before threading
-    let event = Event::<i32>::new();
+    let event = OnceEvent::<i32>::new();
     let (sender, receiver) = event.by_ref();
 
     // Use scoped threads to ensure all operations complete before event is dropped
@@ -64,7 +64,7 @@ fn cross_thread_async_communication() {
 fn single_threaded_async_usage() {
     println!("3. Single-threaded async usage:");
     block_on(async {
-        let local_event = LocalEvent::<String>::new();
+        let local_event = LocalOnceEvent::<String>::new();
         let (local_sender, local_receiver) = local_event.by_ref();
 
         local_sender.send("Local async message".to_string());
@@ -76,10 +76,10 @@ fn single_threaded_async_usage() {
 fn async_only_usage() {
     println!("4. Async-only usage:");
     block_on(async {
-        let first_event = Event::<u64>::new();
+        let first_event = OnceEvent::<u64>::new();
         let (first_sender, first_receiver) = first_event.by_ref();
 
-        let second_event = Event::<u64>::new();
+        let second_event = OnceEvent::<u64>::new();
         let (second_sender, second_receiver) = second_event.by_ref();
 
         first_sender.send(FIRST_VALUE);

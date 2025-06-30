@@ -3,7 +3,7 @@
 //! This example shows the methods available for getting sender and receiver
 //! endpoints from an event, including the checked variants.
 
-use events::once::Event;
+use events::OnceEvent;
 use futures::executor::block_on;
 
 /// Example integer value for testing.
@@ -19,7 +19,7 @@ fn main() {
         // Method 1: Get both endpoints at once using by_ref
         println!();
         println!("1. Using by_ref() method:");
-        let event1 = Event::<i32>::new();
+        let event1 = OnceEvent::<i32>::new();
         let (sender1, receiver1) = event1.by_ref();
 
         sender1.send(EXAMPLE_INTEGER);
@@ -29,7 +29,7 @@ fn main() {
         // Method 2: Using checked variant
         println!();
         println!("2. Using by_ref_checked() method:");
-        let event2 = Event::<u64>::new();
+        let event2 = OnceEvent::<u64>::new();
 
         if let Some((sender2, receiver2)) = event2.by_ref_checked() {
             sender2.send(EXAMPLE_LARGE_VALUE);
@@ -47,7 +47,7 @@ fn main() {
         // Method 3: Demonstrating panic behavior when trying to get endpoints twice
         println!();
         println!("3. Demonstrating panic behavior:");
-        let event3 = Event::<String>::new();
+        let event3 = OnceEvent::<String>::new();
         let (_sender3, _receiver3) = event3.by_ref();
 
         // This would panic if uncommented:

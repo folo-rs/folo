@@ -4,23 +4,23 @@ use std::marker::PhantomData;
 
 use pinned_pool::Key;
 
-use super::LocalEventPool;
+use super::LocalOnceEventPool;
 
 /// A sender endpoint for pooled local events that holds a reference to the pool.
 ///
-/// This sender is created from [`LocalEventPool::by_ref`] and automatically manages
+/// This sender is created from [`LocalOnceEventPool::by_ref`] and automatically manages
 /// the lifetime of the underlying event. When both sender and receiver are dropped,
 /// the event is automatically returned to the pool.
 ///
 /// This is the single-threaded variant that cannot be sent across threads.
 #[derive(Debug)]
-pub struct ByRefPooledLocalEventSender<'a, T> {
-    pub(super) pool: *const LocalEventPool<T>,
+pub struct ByRefPooledLocalOnceSender<'a, T> {
+    pub(super) pool: *const LocalOnceEventPool<T>,
     pub(super) key: Key,
-    pub(super) _phantom: PhantomData<&'a LocalEventPool<T>>,
+    pub(super) _phantom: PhantomData<&'a LocalOnceEventPool<T>>,
 }
 
-impl<T> ByRefPooledLocalEventSender<'_, T> {
+impl<T> ByRefPooledLocalOnceSender<'_, T> {
     /// Sends a value through the event.
     ///
     /// If there is a receiver waiting, it will be woken up. If the receiver has been
@@ -30,9 +30,9 @@ impl<T> ByRefPooledLocalEventSender<'_, T> {
     /// # Example
     ///
     /// ```rust
-    /// use events::once::LocalEventPool;
+    /// use events::once::LocalOnceEventPool;
     ///
-    /// let pool = LocalEventPool::new();
+    /// let pool = LocalOnceEventPool::new();
     /// let (sender, receiver) = pool.by_ref();
     ///
     /// sender.send(42);
@@ -52,7 +52,7 @@ impl<T> ByRefPooledLocalEventSender<'_, T> {
     }
 }
 
-impl<T> Drop for ByRefPooledLocalEventSender<'_, T> {
+impl<T> Drop for ByRefPooledLocalOnceSender<'_, T> {
     fn drop(&mut self) {
         // SAFETY: Pool is guaranteed to be valid by the lifetime parameter
         let pool = unsafe { &*self.pool };
@@ -62,19 +62,19 @@ impl<T> Drop for ByRefPooledLocalEventSender<'_, T> {
 
 /// A receiver endpoint for pooled local events that holds a reference to the pool.
 ///
-/// This receiver is created from [`LocalEventPool::by_ref`] and automatically manages
+/// This receiver is created from [`LocalOnceEventPool::by_ref`] and automatically manages
 /// the lifetime of the underlying event. When both sender and receiver are dropped,
 /// the event is automatically returned to the pool.
 ///
 /// This is the single-threaded variant that cannot be sent across threads.
 #[derive(Debug)]
-pub struct ByRefPooledLocalEventReceiver<'a, T> {
-    pub(super) pool: *const LocalEventPool<T>,
+pub struct ByRefPooledLocalOnceReceiver<'a, T> {
+    pub(super) pool: *const LocalOnceEventPool<T>,
     pub(super) key: Option<Key>,
-    pub(super) _phantom: PhantomData<&'a LocalEventPool<T>>,
+    pub(super) _phantom: PhantomData<&'a LocalOnceEventPool<T>>,
 }
 
-impl<T> ByRefPooledLocalEventReceiver<'_, T> {
+impl<T> ByRefPooledLocalOnceReceiver<'_, T> {
     // This receiver can be awaited directly as it implements Future
 }
 
@@ -82,7 +82,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-impl<T> Future for ByRefPooledLocalEventReceiver<'_, T> {
+impl<T> Future for ByRefPooledLocalOnceReceiver<'_, T> {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -90,7 +90,7 @@ impl<T> Future for ByRefPooledLocalEventReceiver<'_, T> {
 
         // Check if this receiver has already been consumed
         let Some(key) = this.key else {
-            panic!("ByRefPooledLocalEventReceiver already consumed")
+            panic!("ByRefPooledLocalOnceReceiver already consumed")
         };
 
         // SAFETY: Pool is guaranteed to be valid by the lifetime parameter
@@ -119,7 +119,7 @@ impl<T> Future for ByRefPooledLocalEventReceiver<'_, T> {
     }
 }
 
-impl<T> Drop for ByRefPooledLocalEventReceiver<'_, T> {
+impl<T> Drop for ByRefPooledLocalOnceReceiver<'_, T> {
     fn drop(&mut self) {
         // Clean up our reference if not consumed by Future
         if let Some(key) = self.key {

@@ -7,23 +7,23 @@
 //! high performance in concurrent scenarios.
 //!
 //! Both single-threaded and thread-safe variants are available:
-//! - [`Event<T>`], [`ByRefEventSender<T>`], [`ByRefEventReceiver<T>`] - Thread-safe variants using references
-//! - [`ByArcEventSender<T>`], [`ByArcEventReceiver<T>`] - Thread-safe variants using Arc ownership
-//! - [`ByRcEventSender<T>`], [`ByRcEventReceiver<T>`] - Thread-safe variants using Rc ownership (single-threaded)
-//! - [`LocalEvent<T>`], [`ByRefLocalEventSender<T>`], [`ByRefLocalEventReceiver<T>`] - Single-threaded variants using references
-//! - [`ByRcLocalEventSender<T>`], [`ByRcLocalEventReceiver<T>`] - Single-threaded variants using Rc ownership
+//! - [`OnceEvent<T>`], [`ByRefOnceSender<T>`], [`ByRefOnceReceiver<T>`] - Thread-safe variants using references
+//! - [`ByArcOnceSender<T>`], [`ByArcOnceReceiver<T>`] - Thread-safe variants using Arc ownership
+//! - [`ByRcOnceSender<T>`], [`ByRcOnceReceiver<T>`] - Thread-safe variants using Rc ownership (single-threaded)
+//! - [`LocalOnceEvent<T>`], [`ByRefLocalOnceSender<T>`], [`ByRefLocalOnceReceiver<T>`] - Single-threaded variants using references
+//! - [`ByRcLocalOnceSender<T>`], [`ByRcLocalOnceReceiver<T>`] - Single-threaded variants using Rc ownership
 //!
 //! Each receiver type implements [`Future`], allowing you to `.await` them directly.
 //!
 //! # Thread-safe Example
 //!
 //! ```rust
-//! use events::once::Event;
+//! use events::OnceEvent;
 //! # use futures::executor::block_on;
 //!
 //! # block_on(async {
 //! // Create a thread-safe event for passing a string message
-//! let event = Event::<String>::new();
+//! let event = OnceEvent::<String>::new();
 //! let (sender, receiver) = event.by_ref();
 //!
 //! // Send a message through the event
@@ -38,12 +38,12 @@
 //! # Single-threaded Example
 //!
 //! ```rust
-//! use events::once::LocalEvent;
+//! use events::LocalOnceEvent;
 //! # use futures::executor::block_on;
 //!
 //! # block_on(async {
 //! // Create a local event for passing a string message
-//! let event = LocalEvent::<String>::new();
+//! let event = LocalOnceEvent::<String>::new();
 //! let (sender, receiver) = event.by_ref();
 //!
 //! // Send a message through the event
@@ -60,12 +60,12 @@
 //! ```rust
 //! use std::sync::Arc;
 //!
-//! use events::once::Event;
+//! use events::OnceEvent;
 //! # use futures::executor::block_on;
 //!
 //! # block_on(async {
 //! // Create an Arc-wrapped event for shared ownership
-//! let event = Arc::new(Event::<String>::new());
+//! let event = Arc::new(OnceEvent::<String>::new());
 //! let (sender, receiver) = event.by_arc();
 //!
 //! // Send a message through the event
@@ -82,12 +82,12 @@
 //! ```rust
 //! use std::rc::Rc;
 //!
-//! use events::once::LocalEvent;
+//! use events::LocalOnceEvent;
 //! # use futures::executor::block_on;
 //!
 //! # block_on(async {
 //! // Create an Rc-wrapped local event for shared ownership (single-threaded)
-//! let event = Rc::new(LocalEvent::<String>::new());
+//! let event = Rc::new(LocalOnceEvent::<String>::new());
 //! let (sender, receiver) = event.by_rc();
 //!
 //! // Send a message through the event

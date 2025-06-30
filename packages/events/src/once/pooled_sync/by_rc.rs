@@ -5,19 +5,19 @@ use std::rc::Rc;
 
 use pinned_pool::Key;
 
-use super::{Event, EventPool};
+use super::{OnceEvent, OnceEventPool};
 
 /// A sender that sends values through pooled thread-safe events using Rc ownership.
 #[derive(Debug)]
-pub struct ByRcPooledEventSender<T>
+pub struct ByRcPooledOnceSender<T>
 where
     T: Send,
 {
-    pub(super) pool: Rc<EventPool<T>>,
+    pub(super) pool: Rc<OnceEventPool<T>>,
     pub(super) key: Key,
 }
 
-impl<T> ByRcPooledEventSender<T>
+impl<T> ByRcPooledOnceSender<T>
 where
     T: Send,
 {
@@ -32,7 +32,7 @@ where
         let item = pool_guard.get(self.key);
 
         // Get the event reference from the pinned wrapper
-        let event: &Event<T> = item.get().get_ref();
+        let event: &OnceEvent<T> = item.get().get_ref();
         drop(event.try_set(value));
 
         // Drop the borrow before cleanup
@@ -40,7 +40,7 @@ where
     }
 }
 
-impl<T> Drop for ByRcPooledEventSender<T>
+impl<T> Drop for ByRcPooledOnceSender<T>
 where
     T: Send,
 {
@@ -51,15 +51,15 @@ where
 
 /// A receiver that receives values from pooled thread-safe events using Rc ownership.
 #[derive(Debug)]
-pub struct ByRcPooledEventReceiver<T>
+pub struct ByRcPooledOnceReceiver<T>
 where
     T: Send,
 {
-    pub(super) pool: Rc<EventPool<T>>,
+    pub(super) pool: Rc<OnceEventPool<T>>,
     pub(super) key: Key,
 }
 
-impl<T> ByRcPooledEventReceiver<T>
+impl<T> ByRcPooledOnceReceiver<T>
 where
     T: Send,
 {
@@ -77,12 +77,12 @@ where
         };
 
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
-        let event: &Event<T> = unsafe { event_ptr.as_ref() };
+        let event: &OnceEvent<T> = unsafe { event_ptr.as_ref() };
         crate::futures::EventFuture::new(event).await
     }
 }
 
-impl<T> Drop for ByRcPooledEventReceiver<T>
+impl<T> Drop for ByRcPooledOnceReceiver<T>
 where
     T: Send,
 {

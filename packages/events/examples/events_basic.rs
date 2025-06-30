@@ -3,7 +3,7 @@
 //! This example demonstrates the simplest usage pattern of the events package:
 //! creating an event, obtaining sender and receiver endpoints, and communicating through them.
 
-use events::once::Event;
+use events::OnceEvent;
 use futures::executor::block_on;
 
 fn main() {
@@ -11,7 +11,7 @@ fn main() {
 
     block_on(async {
         // Event for passing string messages between application components
-        let event = Event::<String>::new();
+        let event = OnceEvent::<String>::new();
 
         // Extract both communication endpoints
         let (sender, receiver) = event.by_ref();

@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use events::once::EventPool;
+use events::OnceEventPool;
 use futures::executor::block_on;
 
 /// Test values for different pooled event variants.
@@ -20,7 +20,7 @@ fn main() {
     println!("\n1. Testing by_ref variant:");
     {
         block_on(async {
-            let pool = EventPool::<i32>::new();
+            let pool = OnceEventPool::<i32>::new();
             let (sender, receiver) = pool.by_ref();
 
             sender.send(BY_REF_TEST_VALUE);
@@ -33,7 +33,7 @@ fn main() {
     println!("\n2. Testing by_rc variant:");
     {
         block_on(async {
-            let pool = Rc::new(EventPool::<i32>::new());
+            let pool = Rc::new(OnceEventPool::<i32>::new());
             let (sender, receiver) = pool.by_rc(&pool);
 
             sender.send(BY_RC_TEST_VALUE);
@@ -45,7 +45,7 @@ fn main() {
     // 3. by_arc variant (Arc-based, thread-safe)
     println!("\n3. Testing by_arc variant:");
     {
-        let pool = Arc::new(EventPool::<i32>::new());
+        let pool = Arc::new(OnceEventPool::<i32>::new());
         let (sender, receiver) = pool.by_arc(&pool);
 
         // Can be moved across threads
@@ -68,7 +68,7 @@ fn main() {
     println!("\n4. Testing by_ptr variant:");
     {
         block_on(async {
-            let pool = EventPool::<i32>::new();
+            let pool = OnceEventPool::<i32>::new();
             let pinned_pool = Pin::new(&pool);
 
             // SAFETY: We ensure the pool outlives the sender and receiver
@@ -84,7 +84,7 @@ fn main() {
     // 5. Async example with by_arc
     println!("\n5. Testing by_arc with async:");
     {
-        let pool = Arc::new(EventPool::<String>::new());
+        let pool = Arc::new(OnceEventPool::<String>::new());
         let (sender, receiver) = pool.by_arc(&pool);
 
         // Run both tasks in async block
@@ -102,7 +102,7 @@ fn main() {
     println!("\n6. Testing pool reuse:");
     {
         block_on(async {
-            let pool = EventPool::<&str>::new();
+            let pool = OnceEventPool::<&str>::new();
 
             // First event using by_ref
             let (sender1, receiver1) = pool.by_ref();

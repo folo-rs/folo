@@ -4,18 +4,18 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use super::LocalEvent;
+use super::LocalOnceEvent;
 
 /// A sender that can send a value through a single-threaded event.
 ///
 /// The sender holds a reference to the event and can only be used once.
-/// After calling [`send`](ByRefLocalEventSender::send), the sender is consumed.
+/// After calling [`send`](ByRefLocalOnceSender::send), the sender is consumed.
 #[derive(Debug)]
-pub struct ByRefLocalEventSender<'e, T> {
-    pub(super) event: &'e LocalEvent<T>,
+pub struct ByRefLocalOnceSender<'e, T> {
+    pub(super) event: &'e LocalOnceEvent<T>,
 }
 
-impl<T> ByRefLocalEventSender<'_, T> {
+impl<T> ByRefLocalOnceSender<'_, T> {
     /// Sends a value through the event.
     ///
     /// This method consumes the sender and always succeeds, regardless of whether
@@ -24,9 +24,9 @@ impl<T> ByRefLocalEventSender<'_, T> {
     /// # Example
     ///
     /// ```rust
-    /// use events::once::LocalEvent;
+    /// use events::once::LocalOnceEvent;
     ///
-    /// let event = LocalEvent::<i32>::new();
+    /// let event = LocalOnceEvent::<i32>::new();
     /// let (sender, _receiver) = event.by_ref();
     /// sender.send(42);
     /// ```
@@ -40,11 +40,11 @@ impl<T> ByRefLocalEventSender<'_, T> {
 /// The receiver holds a reference to the event and can only be used once.
 /// After awaiting the receiver, it is consumed.
 #[derive(Debug)]
-pub struct ByRefLocalEventReceiver<'e, T> {
-    pub(super) event: &'e LocalEvent<T>,
+pub struct ByRefLocalOnceReceiver<'e, T> {
+    pub(super) event: &'e LocalOnceEvent<T>,
 }
 
-impl<T> Future for ByRefLocalEventReceiver<'_, T> {
+impl<T> Future for ByRefLocalOnceReceiver<'_, T> {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

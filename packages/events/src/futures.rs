@@ -7,12 +7,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use super::once::{Event, LocalEvent};
+use super::once::{LocalOnceEvent, OnceEvent};
 
 /// A `Future` that resolves when a single-threaded event receives a value.
 #[derive(Debug)]
 pub(crate) struct LocalEventFuture<'a, T> {
-    event: &'a LocalEvent<T>,
+    event: &'a LocalOnceEvent<T>,
 }
 
 impl<'a, T> LocalEventFuture<'a, T> {
@@ -21,7 +21,7 @@ impl<'a, T> LocalEventFuture<'a, T> {
         dead_code,
         reason = "Utility function kept for potential future use and API completeness"
     )]
-    pub(crate) fn new(event: &'a LocalEvent<T>) -> Self {
+    pub(crate) fn new(event: &'a LocalOnceEvent<T>) -> Self {
         Self { event }
     }
 }
@@ -42,7 +42,7 @@ pub(crate) struct EventFuture<'a, T>
 where
     T: Send,
 {
-    event: &'a Event<T>,
+    event: &'a OnceEvent<T>,
 }
 
 impl<'a, T> EventFuture<'a, T>
@@ -50,7 +50,7 @@ where
     T: Send,
 {
     /// Creates a new future for a thread-safe event.
-    pub(crate) fn new(event: &'a Event<T>) -> Self {
+    pub(crate) fn new(event: &'a OnceEvent<T>) -> Self {
         Self { event }
     }
 }

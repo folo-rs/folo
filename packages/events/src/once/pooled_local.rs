@@ -10,16 +10,16 @@ use std::rc::Rc;
 
 use pinned_pool::{Key, PinnedPool};
 
-use super::local::LocalEvent;
+use super::local::LocalOnceEvent;
 use super::pinned_with_ref_count::PinnedWithRefCount;
 
 mod by_ptr;
 mod by_rc;
 mod by_ref;
 
-pub use by_ptr::{ByPtrPooledLocalEventReceiver, ByPtrPooledLocalEventSender};
-pub use by_rc::{ByRcPooledLocalEventReceiver, ByRcPooledLocalEventSender};
-pub use by_ref::{ByRefPooledLocalEventReceiver, ByRefPooledLocalEventSender};
+pub use by_ptr::{ByPtrPooledLocalOnceReceiver, ByPtrPooledLocalOnceSender};
+pub use by_rc::{ByRcPooledLocalOnceReceiver, ByRcPooledLocalOnceSender};
+pub use by_ref::{ByRefPooledLocalOnceReceiver, ByRefPooledLocalOnceSender};
 
 /// A pool that manages single-threaded events with automatic cleanup.
 ///
@@ -28,14 +28,14 @@ pub use by_ref::{ByRefPooledLocalEventReceiver, ByRefPooledLocalEventSender};
 /// track when they are no longer in use.
 ///
 /// This is the single-threaded variant that cannot be shared across threads but has
-/// lower overhead than the thread-safe [`super::EventPool`].
+/// lower overhead than the thread-safe [`super::OnceEventPool`].
 ///
 /// # Example
 ///
 /// ```rust
-/// use events::once::LocalEventPool;
+/// use events::LocalOnceEventPool;
 ///
-/// let mut pool = LocalEventPool::<i32>::new();
+/// let mut pool = LocalOnceEventPool::<i32>::new();
 /// let (sender, receiver) = pool.by_ref();
 ///
 /// sender.send(42);
@@ -44,19 +44,19 @@ pub use by_ref::{ByRefPooledLocalEventReceiver, ByRefPooledLocalEventSender};
 /// // Event is automatically returned to pool when sender/receiver are dropped
 /// ```
 #[derive(Debug)]
-pub struct LocalEventPool<T> {
-    pool: RefCell<PinnedPool<PinnedWithRefCount<LocalEvent<T>>>>,
+pub struct LocalOnceEventPool<T> {
+    pool: RefCell<PinnedPool<PinnedWithRefCount<LocalOnceEvent<T>>>>,
 }
 
-impl<T> LocalEventPool<T> {
+impl<T> LocalOnceEventPool<T> {
     /// Creates a new empty local event pool.
     ///
     /// # Example
     ///
     /// ```rust
-    /// use events::once::LocalEventPool;
+    /// use events::LocalOnceEventPool;
     ///
-    /// let pool = LocalEventPool::<String>::new();
+    /// let pool = LocalOnceEventPool::<String>::new();
     /// ```
     #[must_use]
     pub fn new() -> Self {
@@ -73,9 +73,9 @@ impl<T> LocalEventPool<T> {
     /// # Example
     ///
     /// ```rust
-    /// use events::once::LocalEventPool;
+    /// use events::LocalOnceEventPool;
     ///
-    /// let pool = LocalEventPool::<i32>::new();
+    /// let pool = LocalOnceEventPool::<i32>::new();
     /// let (sender, receiver) = pool.by_ref();
     ///
     /// sender.send(42);
@@ -85,13 +85,13 @@ impl<T> LocalEventPool<T> {
     pub fn by_ref(
         &self,
     ) -> (
-        ByRefPooledLocalEventSender<'_, T>,
-        ByRefPooledLocalEventReceiver<'_, T>,
+        ByRefPooledLocalOnceSender<'_, T>,
+        ByRefPooledLocalOnceReceiver<'_, T>,
     ) {
         let mut pool_borrow = self.pool.borrow_mut();
         let inserter = pool_borrow.begin_insert();
         let key = inserter.key();
-        let _item = inserter.insert_mut(PinnedWithRefCount::new(LocalEvent::new()));
+        let _item = inserter.insert_mut(PinnedWithRefCount::new(LocalOnceEvent::new()));
 
         // Increment reference count for both sender and receiver
         {
@@ -107,12 +107,12 @@ impl<T> LocalEventPool<T> {
         let pool_ptr: *const Self = self;
 
         (
-            ByRefPooledLocalEventSender {
+            ByRefPooledLocalOnceSender {
                 pool: pool_ptr,
                 key,
                 _phantom: std::marker::PhantomData,
             },
-            ByRefPooledLocalEventReceiver {
+            ByRefPooledLocalOnceReceiver {
                 pool: pool_ptr,
                 key: Some(key),
                 _phantom: std::marker::PhantomData,
@@ -130,9 +130,9 @@ impl<T> LocalEventPool<T> {
     /// ```rust
     /// use std::rc::Rc;
     ///
-    /// use events::once::LocalEventPool;
+    /// use events::LocalOnceEventPool;
     ///
-    /// let pool = Rc::new(LocalEventPool::<i32>::new());
+    /// let pool = Rc::new(LocalOnceEventPool::<i32>::new());
     /// let (sender, receiver) = pool.by_rc(&pool);
     ///
     /// sender.send(42);
@@ -142,14 +142,11 @@ impl<T> LocalEventPool<T> {
     pub fn by_rc(
         &self,
         pool_rc: &Rc<Self>,
-    ) -> (
-        ByRcPooledLocalEventSender<T>,
-        ByRcPooledLocalEventReceiver<T>,
-    ) {
+    ) -> (ByRcPooledLocalOnceSender<T>, ByRcPooledLocalOnceReceiver<T>) {
         let mut pool_borrow = self.pool.borrow_mut();
         let inserter = pool_borrow.begin_insert();
         let key = inserter.key();
-        let _item = inserter.insert_mut(PinnedWithRefCount::new(LocalEvent::new()));
+        let _item = inserter.insert_mut(PinnedWithRefCount::new(LocalOnceEvent::new()));
 
         // Now increment reference count for both sender and receiver
         {
@@ -162,11 +159,11 @@ impl<T> LocalEventPool<T> {
         drop(pool_borrow);
 
         (
-            ByRcPooledLocalEventSender {
+            ByRcPooledLocalOnceSender {
                 pool: Rc::clone(pool_rc),
                 key,
             },
-            ByRcPooledLocalEventReceiver {
+            ByRcPooledLocalOnceReceiver {
                 pool: Rc::clone(pool_rc),
                 key: Some(key),
             },
@@ -190,11 +187,11 @@ impl<T> LocalEventPool<T> {
     /// ```rust
     /// use std::pin::Pin;
     ///
-    /// use events::once::LocalEventPool;
+    /// use events::LocalOnceEventPool;
     /// # use futures::executor::block_on;
     ///
     /// # block_on(async {
-    /// let pool = LocalEventPool::<i32>::new();
+    /// let pool = LocalOnceEventPool::<i32>::new();
     /// let pinned_pool = Pin::new(&pool);
     /// // SAFETY: We ensure the pool outlives the sender and receiver
     /// let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
@@ -209,13 +206,13 @@ impl<T> LocalEventPool<T> {
     pub unsafe fn by_ptr(
         self: Pin<&Self>,
     ) -> (
-        ByPtrPooledLocalEventSender<T>,
-        ByPtrPooledLocalEventReceiver<T>,
+        ByPtrPooledLocalOnceSender<T>,
+        ByPtrPooledLocalOnceReceiver<T>,
     ) {
         let mut pool_borrow = self.pool.borrow_mut();
         let inserter = pool_borrow.begin_insert();
         let key = inserter.key();
-        let _item = inserter.insert_mut(PinnedWithRefCount::new(LocalEvent::new()));
+        let _item = inserter.insert_mut(PinnedWithRefCount::new(LocalOnceEvent::new()));
 
         // Now increment reference count for both sender and receiver
         {
@@ -230,11 +227,11 @@ impl<T> LocalEventPool<T> {
         let pool_ptr: *const Self = self.get_ref();
 
         (
-            ByPtrPooledLocalEventSender {
+            ByPtrPooledLocalOnceSender {
                 pool: pool_ptr,
                 key,
             },
-            ByPtrPooledLocalEventReceiver {
+            ByPtrPooledLocalOnceReceiver {
                 pool: pool_ptr,
                 key: Some(key),
             },
@@ -260,9 +257,9 @@ impl<T> LocalEventPool<T> {
     /// # Example
     ///
     /// ```rust
-    /// use events::once::LocalEventPool;
+    /// use events::LocalOnceEventPool;
     ///
-    /// let pool = LocalEventPool::<i32>::new();
+    /// let pool = LocalOnceEventPool::<i32>::new();
     ///
     /// // Use the pool which may grow its capacity
     /// for _ in 0..100 {
@@ -280,7 +277,7 @@ impl<T> LocalEventPool<T> {
     }
 }
 
-impl<T> Default for LocalEventPool<T> {
+impl<T> Default for LocalOnceEventPool<T> {
     fn default() -> Self {
         Self::new()
     }
@@ -299,7 +296,7 @@ mod tests {
     fn local_event_pool_by_ref_basic() {
         with_watchdog(|| {
             futures::executor::block_on(async {
-                let pool = LocalEventPool::new();
+                let pool = LocalOnceEventPool::new();
                 let (sender, receiver) = pool.by_ref();
 
                 sender.send(42);
@@ -313,7 +310,7 @@ mod tests {
     fn local_event_pool_by_rc_basic() {
         with_watchdog(|| {
             futures::executor::block_on(async {
-                let pool = Rc::new(LocalEventPool::new());
+                let pool = Rc::new(LocalOnceEventPool::new());
                 let (sender, receiver) = pool.by_rc(&pool);
 
                 sender.send(42);
@@ -327,7 +324,7 @@ mod tests {
     fn local_event_pool_by_ptr_basic() {
         with_watchdog(|| {
             futures::executor::block_on(async {
-                let pool = LocalEventPool::new();
+                let pool = LocalOnceEventPool::new();
                 let pinned_pool = Pin::new(&pool);
                 // SAFETY: We ensure the pool outlives the sender and receiver
                 let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
@@ -343,7 +340,7 @@ mod tests {
     fn local_event_pool_multiple_events() {
         with_watchdog(|| {
             futures::executor::block_on(async {
-                let pool = LocalEventPool::new();
+                let pool = LocalOnceEventPool::new();
 
                 // Test multiple events sequentially
                 {
@@ -367,7 +364,7 @@ mod tests {
     fn local_event_pool_cleanup() {
         with_watchdog(|| {
             futures::executor::block_on(async {
-                let pool = LocalEventPool::new();
+                let pool = LocalOnceEventPool::new();
 
                 {
                     let (sender, receiver) = pool.by_ref();
@@ -387,7 +384,7 @@ mod tests {
     fn local_event_pool_rc_multiple_events() {
         with_watchdog(|| {
             futures::executor::block_on(async {
-                let pool = Rc::new(LocalEventPool::new());
+                let pool = Rc::new(LocalOnceEventPool::new());
 
                 // Create first event
                 let (sender1, receiver1) = pool.by_rc(&pool);

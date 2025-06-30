@@ -1,29 +1,29 @@
-//! Arc-based senders and receivers for thread-safe events.
+//! Arc-based senders and receivers for thread-safe OnceEvents.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::Event;
+use super::OnceEvent;
 
-/// A sender that can send a value through a thread-safe event using Arc ownership.
+/// A sender that can send a value through a thread-safe OnceEvent using Arc ownership.
 ///
-/// The sender owns an Arc to the event and can be moved across threads.
-/// After calling [`send`](ByArcEventSender::send), the sender is consumed.
+/// The sender owns an Arc to the OnceEvent and can be moved across threads.
+/// After calling [`send`](ByArcOnceSender::send), the sender is consumed.
 #[derive(Debug)]
-pub struct ByArcEventSender<T>
+pub struct ByArcOnceSender<T>
 where
     T: Send,
 {
-    pub(super) event: Arc<Event<T>>,
+    pub(super) once_event: Arc<OnceEvent<T>>,
 }
 
-impl<T> ByArcEventSender<T>
+impl<T> ByArcOnceSender<T>
 where
     T: Send,
 {
-    /// Sends a value through the event.
+    /// Sends a value through the OnceEvent.
     ///
     /// This method consumes the sender and always succeeds, regardless of whether
     /// there is a receiver waiting.
@@ -33,37 +33,37 @@ where
     /// ```rust
     /// use std::sync::Arc;
     ///
-    /// use events::once::Event;
+    /// use OnceEvents::once::OnceEvent;
     ///
-    /// let event = Arc::new(Event::<i32>::new());
-    /// let (sender, _receiver) = event.by_arc();
+    /// let OnceEvent = Arc::new(once_event::<i32>::new());
+    /// let (sender, _receiver) = OnceEvent.by_arc();
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {
-        drop(self.event.try_set(value));
+        drop(self.once_event.try_set(value));
     }
 }
 
-/// A receiver that can receive a value from a thread-safe event using Arc ownership.
+/// A receiver that can receive a value from a thread-safe OnceEvent using Arc ownership.
 ///
-/// The receiver owns an Arc to the event and can be moved across threads.
+/// The receiver owns an Arc to the OnceEvent and can be moved across threads.
 /// After awaiting the receiver, it is consumed.
 #[derive(Debug)]
-pub struct ByArcEventReceiver<T>
+pub struct ByArcOnceReceiver<T>
 where
     T: Send,
 {
-    pub(super) event: Arc<Event<T>>,
+    pub(super) once_event: Arc<OnceEvent<T>>,
 }
 
-impl<T> Future for ByArcEventReceiver<T>
+impl<T> Future for ByArcOnceReceiver<T>
 where
     T: Send,
 {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.event
+        self.once_event
             .poll_recv(cx.waker())
             .map_or_else(|| Poll::Pending, |value| Poll::Ready(value))
     }

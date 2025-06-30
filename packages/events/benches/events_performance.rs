@@ -28,7 +28,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.bench_function("events_once_single_thread", |b| {
         b.iter(|| {
-            let event = events::once::Event::<i32>::new();
+            let event = events::OnceEvent::<i32>::new();
             let (sender, receiver) = event.by_ref();
             sender.send(hint::black_box(42));
             let value = block_on(receiver);

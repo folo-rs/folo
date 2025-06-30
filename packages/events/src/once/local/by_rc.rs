@@ -5,18 +5,18 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use super::LocalEvent;
+use super::LocalOnceEvent;
 
 /// A sender that can send a value through a single-threaded event using Rc ownership.
 ///
 /// The sender owns an Rc to the event and is single-threaded.
-/// After calling [`send`](ByRcLocalEventSender::send), the sender is consumed.
+/// After calling [`send`](ByRcLocalOnceSender::send), the sender is consumed.
 #[derive(Debug)]
-pub struct ByRcLocalEventSender<T> {
-    pub(super) event: Rc<LocalEvent<T>>,
+pub struct ByRcLocalOnceSender<T> {
+    pub(super) event: Rc<LocalOnceEvent<T>>,
 }
 
-impl<T> ByRcLocalEventSender<T> {
+impl<T> ByRcLocalOnceSender<T> {
     /// Sends a value through the event.
     ///
     /// This method consumes the sender and always succeeds, regardless of whether
@@ -27,9 +27,9 @@ impl<T> ByRcLocalEventSender<T> {
     /// ```rust
     /// use std::rc::Rc;
     ///
-    /// use events::once::LocalEvent;
+    /// use events::once::LocalOnceEvent;
     ///
-    /// let event = Rc::new(LocalEvent::<i32>::new());
+    /// let event = Rc::new(LocalOnceEvent::<i32>::new());
     /// let (sender, _receiver) = event.by_rc();
     /// sender.send(42);
     /// ```
@@ -43,11 +43,11 @@ impl<T> ByRcLocalEventSender<T> {
 /// The receiver owns an Rc to the event and is single-threaded.
 /// After awaiting the receiver, it is consumed.
 #[derive(Debug)]
-pub struct ByRcLocalEventReceiver<T> {
-    pub(super) event: Rc<LocalEvent<T>>,
+pub struct ByRcLocalOnceReceiver<T> {
+    pub(super) event: Rc<LocalOnceEvent<T>>,
 }
 
-impl<T> Future for ByRcLocalEventReceiver<T> {
+impl<T> Future for ByRcLocalOnceReceiver<T> {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

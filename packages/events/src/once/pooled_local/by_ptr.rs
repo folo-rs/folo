@@ -2,11 +2,11 @@
 
 use pinned_pool::Key;
 
-use super::LocalEventPool;
+use super::LocalOnceEventPool;
 
 /// A sender endpoint for pooled local events that holds a raw pointer to the pool.
 ///
-/// This sender is created from [`LocalEventPool::by_ptr`] and automatically manages
+/// This sender is created from [`LocalOnceEventPool::by_ptr`] and automatically manages
 /// the lifetime of the underlying event. When both sender and receiver are dropped,
 /// the event is automatically returned to the pool.
 ///
@@ -19,12 +19,12 @@ use super::LocalEventPool;
 /// - This sender is dropped before the pool is dropped
 /// - The pool is not moved after creating this sender
 #[derive(Debug)]
-pub struct ByPtrPooledLocalEventSender<T> {
-    pub(super) pool: *const LocalEventPool<T>,
+pub struct ByPtrPooledLocalOnceSender<T> {
+    pub(super) pool: *const LocalOnceEventPool<T>,
     pub(super) key: Key,
 }
 
-impl<T> ByPtrPooledLocalEventSender<T> {
+impl<T> ByPtrPooledLocalOnceSender<T> {
     /// Sends a value through the event.
     ///
     /// If there is a receiver waiting, it will be woken up. If the receiver has been
@@ -36,9 +36,9 @@ impl<T> ByPtrPooledLocalEventSender<T> {
     /// ```rust
     /// use std::pin::Pin;
     ///
-    /// use events::once::LocalEventPool;
+    /// use events::once::LocalOnceEventPool;
     ///
-    /// let pool = LocalEventPool::new();
+    /// let pool = LocalOnceEventPool::new();
     /// let pinned_pool = Pin::new(&pool);
     /// // SAFETY: We ensure the pool outlives the sender and receiver
     /// let (sender, receiver) = unsafe { pinned_pool.by_ptr() };
@@ -60,7 +60,7 @@ impl<T> ByPtrPooledLocalEventSender<T> {
     }
 }
 
-impl<T> Drop for ByPtrPooledLocalEventSender<T> {
+impl<T> Drop for ByPtrPooledLocalOnceSender<T> {
     fn drop(&mut self) {
         // SAFETY: Caller guarantees pool is valid for the lifetime of this sender
         let pool = unsafe { &*self.pool };
@@ -70,7 +70,7 @@ impl<T> Drop for ByPtrPooledLocalEventSender<T> {
 
 /// A receiver endpoint for pooled local events that holds a raw pointer to the pool.
 ///
-/// This receiver is created from [`LocalEventPool::by_ptr`] and automatically manages
+/// This receiver is created from [`LocalOnceEventPool::by_ptr`] and automatically manages
 /// the lifetime of the underlying event. When both sender and receiver are dropped,
 /// the event is automatically returned to the pool.
 ///
@@ -83,12 +83,12 @@ impl<T> Drop for ByPtrPooledLocalEventSender<T> {
 /// - This receiver is dropped before the pool is dropped
 /// - The pool is not moved after creating this receiver
 #[derive(Debug)]
-pub struct ByPtrPooledLocalEventReceiver<T> {
-    pub(super) pool: *const LocalEventPool<T>,
+pub struct ByPtrPooledLocalOnceReceiver<T> {
+    pub(super) pool: *const LocalOnceEventPool<T>,
     pub(super) key: Option<Key>,
 }
 
-impl<T> ByPtrPooledLocalEventReceiver<T> {
+impl<T> ByPtrPooledLocalOnceReceiver<T> {
     // This receiver can be awaited directly as it implements Future
 }
 
@@ -96,7 +96,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-impl<T> Future for ByPtrPooledLocalEventReceiver<T> {
+impl<T> Future for ByPtrPooledLocalOnceReceiver<T> {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -104,7 +104,7 @@ impl<T> Future for ByPtrPooledLocalEventReceiver<T> {
 
         // Check if this receiver has already been consumed
         let Some(key) = this.key else {
-            panic!("ByPtrPooledLocalEventReceiver already consumed")
+            panic!("ByPtrPooledLocalOnceReceiver already consumed")
         };
 
         // SAFETY: Caller guarantees pool is valid for the lifetime of this receiver
@@ -133,7 +133,7 @@ impl<T> Future for ByPtrPooledLocalEventReceiver<T> {
     }
 }
 
-impl<T> Drop for ByPtrPooledLocalEventReceiver<T> {
+impl<T> Drop for ByPtrPooledLocalOnceReceiver<T> {
     fn drop(&mut self) {
         // Clean up our reference if not consumed by Future
         if let Some(key) = self.key {

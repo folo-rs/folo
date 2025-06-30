@@ -4,22 +4,22 @@ use std::rc::Rc;
 
 use pinned_pool::Key;
 
-use super::LocalEventPool;
+use super::LocalOnceEventPool;
 
 /// A sender endpoint for pooled local events that holds an Rc to the pool.
 ///
-/// This sender is created from [`LocalEventPool::by_rc`] and automatically manages
+/// This sender is created from [`LocalOnceEventPool::by_rc`] and automatically manages
 /// the lifetime of the underlying event. When both sender and receiver are dropped,
 /// the event is automatically returned to the pool.
 ///
 /// This is the single-threaded variant that cannot be sent across threads.
 #[derive(Debug)]
-pub struct ByRcPooledLocalEventSender<T> {
-    pub(super) pool: Rc<LocalEventPool<T>>,
+pub struct ByRcPooledLocalOnceSender<T> {
+    pub(super) pool: Rc<LocalOnceEventPool<T>>,
     pub(super) key: Key,
 }
 
-impl<T> ByRcPooledLocalEventSender<T> {
+impl<T> ByRcPooledLocalOnceSender<T> {
     /// Sends a value through the event.
     ///
     /// If there is a receiver waiting, it will be woken up. If the receiver has been
@@ -31,9 +31,9 @@ impl<T> ByRcPooledLocalEventSender<T> {
     /// ```rust
     /// use std::rc::Rc;
     ///
-    /// use events::once::LocalEventPool;
+    /// use events::once::LocalOnceEventPool;
     ///
-    /// let pool = Rc::new(LocalEventPool::new());
+    /// let pool = Rc::new(LocalOnceEventPool::new());
     /// let (sender, receiver) = pool.by_rc(&pool);
     ///
     /// sender.send(42);
@@ -50,7 +50,7 @@ impl<T> ByRcPooledLocalEventSender<T> {
     }
 }
 
-impl<T> Drop for ByRcPooledLocalEventSender<T> {
+impl<T> Drop for ByRcPooledLocalOnceSender<T> {
     fn drop(&mut self) {
         self.pool.dec_ref_and_cleanup(self.key);
     }
@@ -58,18 +58,18 @@ impl<T> Drop for ByRcPooledLocalEventSender<T> {
 
 /// A receiver endpoint for pooled local events that holds an Rc to the pool.
 ///
-/// This receiver is created from [`LocalEventPool::by_rc`] and automatically manages
+/// This receiver is created from [`LocalOnceEventPool::by_rc`] and automatically manages
 /// the lifetime of the underlying event. When both sender and receiver are dropped,
 /// the event is automatically returned to the pool.
 ///
 /// This is the single-threaded variant that cannot be sent across threads.
 #[derive(Debug)]
-pub struct ByRcPooledLocalEventReceiver<T> {
-    pub(super) pool: Rc<LocalEventPool<T>>,
+pub struct ByRcPooledLocalOnceReceiver<T> {
+    pub(super) pool: Rc<LocalOnceEventPool<T>>,
     pub(super) key: Option<Key>,
 }
 
-impl<T> ByRcPooledLocalEventReceiver<T> {
+impl<T> ByRcPooledLocalOnceReceiver<T> {
     // This receiver can be awaited directly as it implements Future
 }
 
@@ -77,7 +77,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-impl<T> Future for ByRcPooledLocalEventReceiver<T> {
+impl<T> Future for ByRcPooledLocalOnceReceiver<T> {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -85,7 +85,7 @@ impl<T> Future for ByRcPooledLocalEventReceiver<T> {
 
         // Check if this receiver has already been consumed
         let Some(key) = this.key else {
-            panic!("ByRcPooledLocalEventReceiver already consumed")
+            panic!("ByRcPooledLocalOnceReceiver already consumed")
         };
 
         // Get the event from the pool and poll it
@@ -110,7 +110,7 @@ impl<T> Future for ByRcPooledLocalEventReceiver<T> {
     }
 }
 
-impl<T> Drop for ByRcPooledLocalEventReceiver<T> {
+impl<T> Drop for ByRcPooledLocalOnceReceiver<T> {
     fn drop(&mut self) {
         // Clean up our reference if not consumed by Future
         if let Some(key) = self.key {
