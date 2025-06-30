@@ -18,19 +18,18 @@ mod by_ptr;
 mod by_rc;
 mod by_ref;
 
-pub use by_arc::{ByArcPooledOnceReceiver, ByArcPooledOnceSender};
-pub use by_ptr::{ByPtrPooledOnceReceiver, ByPtrPooledOnceSender};
-pub use by_rc::{ByRcPooledOnceReceiver, ByRcPooledOnceSender};
-pub use by_ref::{ByRefPooledOnceReceiver, ByRefPooledOnceSender};
+pub use by_arc::*;
+pub use by_ptr::*;
+pub use by_rc::*;
+pub use by_ref::*;
 
 /// A pool that manages thread-safe events with automatic cleanup.
 ///
 /// The pool creates events on demand and automatically cleans them up when both
-/// sender and receiver endpoints are dropped. Events are reference-counted to
-/// track when they are no longer in use.
+/// sender and receiver endpoints are dropped.
 ///
-/// This pool provides zero-allocation event reuse for high-frequency scenarios
-/// while maintaining thread-safety across multiple threads.
+/// This pool provides zero-allocation event reuse for high-frequency eventing scenarios
+/// in a thread-safe manner.
 ///
 /// # Example
 ///

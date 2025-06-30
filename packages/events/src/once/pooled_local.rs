@@ -17,20 +17,19 @@ mod by_ptr;
 mod by_rc;
 mod by_ref;
 
-pub use by_ptr::{ByPtrPooledLocalOnceReceiver, ByPtrPooledLocalOnceSender};
-pub use by_rc::{ByRcPooledLocalOnceReceiver, ByRcPooledLocalOnceSender};
-pub use by_ref::{ByRefPooledLocalOnceReceiver, ByRefPooledLocalOnceSender};
+pub use by_ptr::*;
+pub use by_rc::*;
+pub use by_ref::*;
 
 /// A pool that manages single-threaded events with automatic cleanup.
 ///
 /// The pool creates local events on demand and automatically cleans them up when both
-/// sender and receiver endpoints are dropped. Events are reference-counted to
-/// track when they are no longer in use.
+/// sender and receiver endpoints are dropped.
 ///
 /// This is the single-threaded variant that cannot be shared across threads but has
 /// lower overhead than the thread-safe [`super::OnceEventPool`].
 ///
-/// The pool provides zero-allocation event reuse for high-frequency scenarios
+/// The pool provides zero-allocation event reuse for high-frequency eventing scenarios
 /// within a single thread.
 ///
 /// # Example

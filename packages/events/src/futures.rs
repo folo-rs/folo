@@ -7,9 +7,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use crate::Disconnected;
-
 use super::once::{LocalOnceEvent, OnceEvent};
+use crate::Disconnected;
 
 /// A `Future` that resolves when a single-threaded event receives a value.
 #[derive(Debug)]

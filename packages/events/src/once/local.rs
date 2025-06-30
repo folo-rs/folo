@@ -16,9 +16,9 @@ mod by_ptr;
 mod by_rc;
 mod by_ref;
 
-pub use by_ptr::{ByPtrLocalOnceReceiver, ByPtrLocalOnceSender};
-pub use by_rc::{ByRcLocalOnceReceiver, ByRcLocalOnceSender};
-pub use by_ref::{ByRefLocalOnceReceiver, ByRefLocalOnceSender};
+pub use by_ptr::*;
+pub use by_rc::*;
+pub use by_ref::*;
 
 /// State of a single-threaded event.
 #[derive(Debug)]
@@ -33,21 +33,18 @@ enum EventState<T> {
     Consumed,
 }
 
-/// A one-time event that can send and receive a value of type `T` (single-threaded variant).
+/// A one-time event that can send and receive a value of type `T` on a single thread.
 ///
-/// This is the single-threaded variant that has lower overhead but cannot be shared across threads.
-/// The event can only be used once - after obtaining the sender and receiver,
-/// subsequent calls to obtain them will panic (or return [`None`] for the checked variants).
-/// Likewise, the sender and receiver can only be used once each.
+/// The event can only be used once - after binding a sender and receiver,
+/// subsequent bind calls will panic (or return [`None`] for the checked variants).
 ///
-/// For thread-safe usage, see [`crate::once::OnceEvent`] which can be used with `Arc<T>`.
+/// Similarly, sending a value will consume the sender, preventing further use.
+/// You need to create a new event instance to create another sender-receiver pair.
 ///
-/// # Single-Threaded Optimizations
+/// To reuse event resources for many operations and avoid constantly recreating events, use
+/// [`LocalOnceEventPool`][crate::LocalOnceEventPool].
 ///
-/// Without thread safety requirements, this type uses more efficient primitives:
-/// - [`std::cell::RefCell`] instead of [`std::sync::Mutex`]
-/// - [`std::cell::Cell`] instead of [`std::sync::atomic::AtomicBool`]
-/// - No atomic operations required
+/// For an event that can send the value across threads, see [`OnceEvent`][crate::OnceEvent].
 ///
 /// # Example
 ///
@@ -362,9 +359,8 @@ mod tests {
     use static_assertions::assert_not_impl_any;
     use testing::with_watchdog;
 
-    use crate::Disconnected;
-
     use super::*;
+    use crate::Disconnected;
 
     #[test]
     fn local_event_new_creates_valid_event() {

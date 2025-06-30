@@ -17,10 +17,10 @@ mod by_ptr;
 mod by_rc;
 mod by_ref;
 
-pub use by_arc::{ByArcOnceReceiver, ByArcOnceSender};
-pub use by_ptr::{ByPtrOnceReceiver, ByPtrOnceSender};
-pub use by_rc::{ByRcOnceReceiver, ByRcOnceSender};
-pub use by_ref::{ByRefOnceReceiver, ByRefOnceSender};
+pub use by_arc::*;
+pub use by_ptr::*;
+pub use by_rc::*;
+pub use by_ref::*;
 
 /// State of a thread-safe event.
 #[derive(Debug)]
@@ -35,25 +35,19 @@ enum EventState<T> {
     Consumed,
 }
 
-/// A one-time event that can send and receive a value of type `T`.
+/// A one-time event that can send and receive a value of type `T`, potentially across threads.
 ///
-/// This is the thread-safe variant that can create sender and receiver endpoints
-/// that can be used across threads. The event itself can be shared across threads
-/// but is typically used as a factory to create endpoints and then discarded.
+/// The event can only be used once - after binding a sender and receiver,
+/// subsequent bind calls will panic (or return [`None`] for the checked variants).
 ///
-/// The event can only be used once - after obtaining the sender and receiver,
-/// subsequent calls to obtain them will panic (or return [`None`] for the checked variants).
+/// Similarly, sending a value will consume the sender, preventing further use.
+/// You need to create a new event instance to create another sender-receiver pair.
 ///
-/// For single-threaded usage, see [`crate::once::LocalOnceEvent`] which has lower overhead.
+/// To reuse event resources for many operations and avoid constantly recreating events, use
+/// [`OnceEventPool`][crate::OnceEventPool].
 ///
-/// # Thread Safety
-///
-/// This type requires `T: Send` as values will be sent across thread boundaries.
-/// The sender and receiver implement `Send + Sync` when `T: Send`.
-/// The Event itself is thread-safe because it can be referenced from other threads
-/// via the sender and receiver endpoints (which hold references to the Event).
-/// This thread-safety is needed even though the Event is typically used once
-/// and then discarded.
+/// For single-threaded usage, see [`LocalOnceEvent`][crate::LocalOnceEvent] which has
+/// lower overhead.
 ///
 /// # Example
 ///
@@ -448,9 +442,8 @@ mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
     use testing::with_watchdog;
 
-    use crate::Disconnected;
-
     use super::*;
+    use crate::Disconnected;
 
     #[test]
     fn event_new_creates_valid_event() {

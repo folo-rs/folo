@@ -6,6 +6,17 @@
 //! different parts of an application. The API is designed to be simple to use while offering
 //! high performance in concurrent scenarios.
 //!
+//! ## Event Types
+//!
+//! This module provides one-time use events in both single-threaded and thread-safe variants.
+//! Each event can only be used once - after sending and receiving a value, the sender and
+//! receiver are consumed.
+//!
+//! - [`OnceEvent`] - Thread-safe events that can be shared across threads
+//! - [`LocalOnceEvent`] - Single-threaded events with lower overhead
+//! - [`OnceEventPool`] - Thread-safe pooled events with automatic resource management
+//! - [`LocalOnceEventPool`] - Single-threaded pooled events with automatic resource management
+//!
 //! # Design Philosophy: Explicit Event Management
 //!
 //! Unlike traditional communication primitives (such as `oneshot` channels) where the
@@ -135,6 +146,55 @@
 //! // Receive the message
 //! let message = receiver.await.unwrap();
 //! assert_eq!(message, "Hello, Rc!");
+//! # });
+//! ```
+//!
+//! # Example (Pooled Local Events)
+//!
+//! ```rust
+//! use events::LocalOnceEventPool;
+//! # use futures::executor::block_on;
+//!
+//! # block_on(async {
+//! let pool = LocalOnceEventPool::<i32>::new();
+//!
+//! // First usage - creates new event
+//! let (sender1, receiver1) = pool.bind_by_ref();
+//! sender1.send(42);
+//! let value1 = receiver1.await.unwrap();
+//! assert_eq!(value1, 42);
+//! // Event automatically returned to pool when endpoints are dropped
+//!
+//! // Second usage - reuses the same event instance efficiently
+//! let (sender2, receiver2) = pool.bind_by_ref();
+//! sender2.send(100);
+//! let value2 = receiver2.await.unwrap();
+//! assert_eq!(value2, 100);
+//! // Same event reused - no additional allocation overhead
+//! # });
+//! ```
+//!
+//! # Example (Pooled Thread-safe Events)
+//!
+//! ```rust
+//! use events::OnceEventPool;
+//! # use futures::executor::block_on;
+//!
+//! # block_on(async {
+//! let pool = OnceEventPool::<i32>::new();
+//!
+//! // First usage - creates new event
+//! let (sender1, receiver1) = pool.bind_by_ref();
+//! sender1.send(42);
+//! let value1 = receiver1.recv_async().await.unwrap();
+//! assert_eq!(value1, 42);
+//!
+//! // Second usage - efficiently reuses the same underlying event
+//! let (sender2, receiver2) = pool.bind_by_ref();
+//! sender2.send(200);
+//! let value2 = receiver2.recv_async().await.unwrap();
+//! assert_eq!(value2, 200);
+//! // Pool automatically manages event lifecycle and reuse
 //! # });
 //! ```
 
