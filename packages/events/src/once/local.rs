@@ -3,7 +3,7 @@
 //! This module provides single-threaded event types that have lower overhead
 //! but cannot be shared across threads.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 use std::mem;
 use std::pin::Pin;
@@ -55,7 +55,7 @@ enum EventState<T> {
 #[derive(Debug)]
 pub struct LocalEvent<T> {
     state: RefCell<EventState<T>>,
-    used: RefCell<bool>,
+    used: Cell<bool>,
     _single_threaded: PhantomData<*const ()>,
 }
 
@@ -73,7 +73,7 @@ impl<T> LocalEvent<T> {
     pub fn new() -> Self {
         Self {
             state: RefCell::new(EventState::NotSet),
-            used: RefCell::new(false),
+            used: Cell::new(false),
             _single_threaded: PhantomData,
         }
     }
@@ -113,11 +113,10 @@ impl<T> LocalEvent<T> {
     pub fn by_ref_checked(
         &self,
     ) -> Option<(ByRefLocalEventSender<'_, T>, ByRefLocalEventReceiver<'_, T>)> {
-        let mut used = self.used.borrow_mut();
-        if *used {
+        if self.used.get() {
             return None;
         }
-        *used = true;
+        self.used.set(true);
 
         Some((
             ByRefLocalEventSender { event: self },
@@ -170,11 +169,10 @@ impl<T> LocalEvent<T> {
     pub fn by_rc_checked(
         self: &Rc<Self>,
     ) -> Option<(ByRcLocalEventSender<T>, ByRcLocalEventReceiver<T>)> {
-        let mut used = self.used.borrow_mut();
-        if *used {
+        if self.used.get() {
             return None;
         }
-        *used = true;
+        self.used.set(true);
 
         Some((
             ByRcLocalEventSender {
@@ -300,11 +298,10 @@ impl<T> LocalEvent<T> {
         // SAFETY: We need to access the mutable reference to check/set the used flag
         // The caller guarantees the event remains pinned and valid
         let this = unsafe { self.get_unchecked_mut() };
-        let mut used = this.used.borrow_mut();
-        if *used {
+        if this.used.get() {
             return None;
         }
-        *used = true;
+        this.used.set(true);
 
         let event_ptr: *const Self = this;
         Some((
