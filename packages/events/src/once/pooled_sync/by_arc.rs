@@ -39,15 +39,6 @@ where
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
         let event: &Event<T> = unsafe { NonNull::from(item.get()).as_ref() };
         drop(event.try_set(value));
-
-        // Drop the lock before cleanup
-        drop(pool_locked);
-
-        // Clean up our reference
-        self.pool.lock().unwrap().dec_ref_and_cleanup(self.key);
-
-        // Prevent double cleanup in Drop
-        std::mem::forget(self);
     }
 }
 
@@ -56,7 +47,6 @@ where
     T: Send,
 {
     fn drop(&mut self) {
-        // Clean up our reference if not consumed by send()
         self.pool.lock().unwrap().dec_ref_and_cleanup(self.key);
     }
 }
@@ -93,18 +83,7 @@ where
 
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
         let event: &Event<T> = unsafe { NonNull::from(item.get()).as_ref() };
-        let result = futures::executor::block_on(crate::futures::EventFuture::new(event));
-
-        // Drop the lock before cleanup
-        drop(pool_locked);
-
-        // Clean up our reference
-        self.pool.lock().unwrap().dec_ref_and_cleanup(self.key);
-
-        // Prevent double cleanup in Drop
-        std::mem::forget(self);
-
-        result
+        futures::executor::block_on(crate::futures::EventFuture::new(event))
     }
 
     /// Receives a value from the pooled event asynchronously.
@@ -118,15 +97,7 @@ where
 
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
         let event: &Event<T> = unsafe { event_ptr.as_ref() };
-        let result = crate::futures::EventFuture::new(event).await;
-
-        // Clean up our reference
-        self.pool.lock().unwrap().dec_ref_and_cleanup(self.key);
-
-        // Prevent double cleanup in Drop
-        std::mem::forget(self);
-
-        result
+        crate::futures::EventFuture::new(event).await
     }
 }
 
@@ -135,7 +106,6 @@ where
     T: Send,
 {
     fn drop(&mut self) {
-        // Clean up our reference if not consumed by recv()
         self.pool.lock().unwrap().dec_ref_and_cleanup(self.key);
     }
 }

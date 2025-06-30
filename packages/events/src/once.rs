@@ -14,7 +14,8 @@
 //! ## Single-threaded Usage Pattern
 //!
 //! 1. Create an instance of [`LocalEvent<T>`] (potentially inside an [`std::rc::Rc`])
-//! 2. Call [`LocalEvent::by_ref()`] to get a tuple with both sender and receiver instances
+//! 2. Call [`LocalEvent::by_ref()`] or another activation method to get a tuple with both sender
+//!    and receiver instances
 //! 3. You can only do this once (panic on 2nd call; [`LocalEvent::by_ref_checked()`] is also
 //!    supported, returning [`None`] on 2nd call instead)
 //! 4. Use [`ByRefLocalEventSender`]/[`ByRefLocalEventReceiver`] as desired, either dropping them or
@@ -22,8 +23,9 @@
 //!
 //! ## Thread-safe Usage Pattern
 //!
-//! 1. Create an instance of [`Event<T>`] (potentially inside an [`std::sync::Arc`])
-//! 2. Call [`Event::by_ref()`] to get a tuple with both sender and receiver instances
+//! 1. Create an instance of [`Event<T>`] (potentially inside an [`std::sync::Arc`] or [`std::rc::Rc`])
+//! 2. Call [`Event::by_ref()`] or another activation method to get a tuple with both sender
+//!    and receiver instances
 //! 3. You can only do this once (panic on 2nd call; [`Event::by_ref_checked()`] is also
 //!    supported, returning [`None`] on 2nd call instead)
 //! 4. Use [`ByRefEventSender`]/[`ByRefEventReceiver`] as desired, either dropping them or
@@ -32,8 +34,8 @@
 //! ## Pooled Event Usage
 //!
 //! For automatic resource management, use [`EventPool`] (thread-safe) or [`LocalEventPool`]
-//! (single-threaded). These pools automatically create and clean up events, making them
-//! suitable for high-frequency scenarios.
+//! (single-threaded). These pools automatically create and clean up events without memory
+//! allocation overhead, making them suitable for high-frequency scenarios.
 //!
 //! # Example (Thread-safe)
 //!

@@ -54,27 +54,7 @@
 //!     assert_eq!(message, "Hello, World!");
 //! });
 //! ```
-//!
-//! # Async Example
-//!
-//! ```rust
-//! use events::once::Event;
-//! use futures::executor::block_on;
-//!
-//! block_on(async {
-//!     // Create a thread-safe event for async communication
-//!     let event = Event::<i32>::new();
-//!     let (sender, receiver) = event.by_ref();
-//!
-//!     // Send a value through the event
-//!     sender.send(42);
-//!
-//!     // Receive the value asynchronously
-//!     let value = receiver.await;
-//!     assert_eq!(value, 42);
-//! });
-//! ```
-//!
+//! 
 //! # Arc-based Example
 //!
 //! ```rust

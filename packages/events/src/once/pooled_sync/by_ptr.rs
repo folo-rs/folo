@@ -39,14 +39,6 @@ where
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
         let event: &Event<T> = unsafe { NonNull::from(item.get()).as_ref() };
         drop(event.try_set(value));
-
-        // Clean up our reference
-        // SAFETY: The pool pointer is valid for the lifetime of this struct
-        let pool = unsafe { &mut *self.pool };
-        pool.dec_ref_and_cleanup(self.key);
-
-        // Prevent double cleanup in Drop
-        std::mem::forget(self);
     }
 }
 
@@ -55,7 +47,6 @@ where
     T: Send,
 {
     fn drop(&mut self) {
-        // Clean up our reference if not consumed by send()
         // SAFETY: The pool pointer is valid for the lifetime of this struct
         let pool = unsafe { &mut *self.pool };
         pool.dec_ref_and_cleanup(self.key);
@@ -95,17 +86,7 @@ where
 
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
         let event: &Event<T> = unsafe { NonNull::from(item.get()).as_ref() };
-        let result = futures::executor::block_on(crate::futures::EventFuture::new(event));
-
-        // Clean up our reference
-        // SAFETY: The pool pointer is valid for the lifetime of this struct
-        let pool = unsafe { &mut *self.pool };
-        pool.dec_ref_and_cleanup(self.key);
-
-        // Prevent double cleanup in Drop
-        std::mem::forget(self);
-
-        result
+        futures::executor::block_on(crate::futures::EventFuture::new(event))
     }
 
     /// Receives a value from the pooled event asynchronously.
@@ -120,17 +101,7 @@ where
 
         // SAFETY: The event pointer is valid as long as we hold a reference in the pool
         let event: &Event<T> = unsafe { event_ptr.as_ref() };
-        let result = crate::futures::EventFuture::new(event).await;
-
-        // Clean up our reference
-        // SAFETY: The pool pointer is valid for the lifetime of this struct
-        let pool = unsafe { &mut *self.pool };
-        pool.dec_ref_and_cleanup(self.key);
-
-        // Prevent double cleanup in Drop
-        std::mem::forget(self);
-
-        result
+        crate::futures::EventFuture::new(event).await
     }
 }
 
@@ -139,7 +110,6 @@ where
     T: Send,
 {
     fn drop(&mut self) {
-        // Clean up our reference if not consumed by recv()
         // SAFETY: The pool pointer is valid for the lifetime of this struct
         let pool = unsafe { &mut *self.pool };
         pool.dec_ref_and_cleanup(self.key);

@@ -45,26 +45,19 @@ impl<T> ByRcPooledLocalEventSender<T> {
     pub fn send(self, value: T) {
         let key = self.key;
         {
-            let mut pool = self.pool.borrow_mut();
+            let pool = self.pool.borrow_mut();
 
             // Get the event from the pool
             let item = pool.pool.get(key);
             let event = item.get();
 
             drop(event.try_set(value));
-
-            // Clean up our reference
-            pool.dec_ref_and_cleanup(key);
         }
-
-        // Prevent double cleanup in Drop
-        std::mem::forget(self);
     }
 }
 
 impl<T> Drop for ByRcPooledLocalEventSender<T> {
     fn drop(&mut self) {
-        // Clean up our reference if not consumed by send()
         let mut pool = self.pool.borrow_mut();
         pool.dec_ref_and_cleanup(self.key);
     }

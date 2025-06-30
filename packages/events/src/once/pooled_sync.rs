@@ -705,18 +705,17 @@ mod tests {
 
         with_watchdog(|| {
             let mut pool = EventPool::<i32>::new();
-            let pinned_pool = Pin::new(&mut pool);
+            let mut pinned_pool = Pin::new(&mut pool);
 
             // SAFETY: We ensure the pool outlives the sender and receiver
-            let (sender, _receiver) = unsafe { pinned_pool.by_ptr() };
+            let (sender, _receiver) = unsafe { pinned_pool.as_mut().by_ptr() };
 
             // Force the sender to be dropped without being consumed by send()
             drop(sender);
 
             // Create a new event to verify the pool is still functional
-            let pinned_pool2 = Pin::new(&mut pool);
             // SAFETY: We ensure the pool outlives the sender and receiver
-            let (sender2, receiver2) = unsafe { pinned_pool2.by_ptr() };
+            let (sender2, receiver2) = unsafe { pinned_pool.by_ptr() };
             sender2.send(147);
             let value = receiver2.recv();
             assert_eq!(value, 147);
@@ -729,18 +728,17 @@ mod tests {
 
         with_watchdog(|| {
             let mut pool = EventPool::<i32>::new();
-            let pinned_pool = Pin::new(&mut pool);
+            let mut pinned_pool = Pin::new(&mut pool);
 
             // SAFETY: We ensure the pool outlives the sender and receiver
-            let (_sender, receiver) = unsafe { pinned_pool.by_ptr() };
+            let (_sender, receiver) = unsafe { pinned_pool.as_mut().by_ptr() };
 
             // Force the receiver to be dropped without being consumed by recv()
             drop(receiver);
 
             // Create a new event to verify the pool is still functional
-            let pinned_pool2 = Pin::new(&mut pool);
             // SAFETY: We ensure the pool outlives the sender and receiver
-            let (sender2, receiver2) = unsafe { pinned_pool2.by_ptr() };
+            let (sender2, receiver2) = unsafe { pinned_pool.by_ptr() };
             sender2.send(258);
             let value = receiver2.recv();
             assert_eq!(value, 258);

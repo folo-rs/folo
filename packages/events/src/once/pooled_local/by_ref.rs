@@ -48,18 +48,11 @@ impl<T> ByRefPooledLocalEventSender<'_, T> {
         let event = item.get();
 
         drop(event.try_set(value));
-
-        // Clean up our reference
-        pool.dec_ref_and_cleanup(self.key);
-
-        // Prevent double cleanup in Drop
-        std::mem::forget(self);
     }
 }
 
 impl<T> Drop for ByRefPooledLocalEventSender<'_, T> {
     fn drop(&mut self) {
-        // Clean up our reference if not consumed by send()
         // SAFETY: Pool is guaranteed to be valid by the lifetime parameter
         let pool = unsafe { &mut *self.pool };
         pool.dec_ref_and_cleanup(self.key);

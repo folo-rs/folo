@@ -36,6 +36,7 @@ enum EventState<T> {
 /// This is the single-threaded variant that has lower overhead but cannot be shared across threads.
 /// The event can only be used once - after obtaining the sender and receiver,
 /// subsequent calls to obtain them will panic (or return [`None`] for the checked variants).
+/// Likewise, the sender and receiver can only be used once each.
 ///
 /// For thread-safe usage, see [`crate::once::Event`] which can be used with `Arc<T>`.
 ///

@@ -67,10 +67,3 @@ where
             .map_or_else(|| Poll::Pending, |value| Poll::Ready(value))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    // These tests were moved to the respective receiver type implementations
-    // in sync.rs and local.rs since Future is now implemented directly on
-    // the receiver types rather than using wrapper futures.
-}
