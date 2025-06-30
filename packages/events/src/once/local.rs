@@ -128,7 +128,7 @@ impl<T> LocalEvent<T> {
     /// Returns both the sender and receiver for this event, connected by Rc.
     ///
     /// This method requires the event to be wrapped in an [`Rc`] and provides
-    /// endpoints that own an Rc to the event instead of borrowing it.
+    /// endpoints that own an Rc to the event.
     ///
     /// # Panics
     ///
@@ -153,7 +153,7 @@ impl<T> LocalEvent<T> {
     /// or [`None`] if endpoints have already been retrieved.
     ///
     /// This method requires the event to be wrapped in an [`Rc`] and provides
-    /// endpoints that own an Rc to the event instead of borrowing it.
+    /// endpoints that own an Rc to the event.
     ///
     /// # Example
     ///

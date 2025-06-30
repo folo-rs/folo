@@ -144,7 +144,7 @@ where
     /// Returns both the sender and receiver for this event, connected by Arc.
     ///
     /// This method requires the event to be wrapped in an [`Arc`] and provides
-    /// endpoints that own an Arc to the event instead of borrowing it.
+    /// endpoints that own an Arc to the event.
     ///
     /// # Panics
     ///
@@ -169,7 +169,7 @@ where
     /// or [`None`] if endpoints have already been retrieved.
     ///
     /// This method requires the event to be wrapped in an [`Arc`] and provides
-    /// endpoints that own an Arc to the event instead of borrowing it.
+    /// endpoints that own an Arc to the event.
     ///
     /// # Example
     ///
@@ -203,7 +203,7 @@ where
     /// Returns both the sender and receiver for this event, connected by Rc.
     ///
     /// This method requires the event to be wrapped in an [`Rc`] and provides
-    /// endpoints that own an Rc to the event instead of borrowing it.
+    /// endpoints that own an Rc to the event.
     ///
     /// # Panics
     ///
@@ -228,7 +228,7 @@ where
     /// or [`None`] if endpoints have already been retrieved.
     ///
     /// This method requires the event to be wrapped in an [`Rc`] and provides
-    /// endpoints that own an Rc to the event instead of borrowing it.
+    /// endpoints that own an Rc to the event.
     ///
     /// # Example
     ///

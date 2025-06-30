@@ -32,27 +32,29 @@ impl<T> PinnedWithRefCount<T> {
     }
 
     /// Increments the reference count.
-    /// 
+    ///
     /// # Panics
-    /// 
+    ///
     /// Panics if the reference count would overflow.
     pub(crate) fn inc_ref(self: Pin<&mut Self>) {
         // SAFETY: We're only modifying the ref_count field, not moving the struct
         let this = unsafe { self.get_unchecked_mut() };
-        this.ref_count = this.ref_count.checked_add(1)
-            .expect("reference count overflow - indicates a serious bug in reference counting logic");
+        this.ref_count = this.ref_count.checked_add(1).expect(
+            "reference count overflow - indicates a serious bug in reference counting logic",
+        );
     }
 
     /// Decrements the reference count.
-    /// 
+    ///
     /// # Panics
-    /// 
+    ///
     /// Panics if the reference count would underflow (go below zero).
     pub(crate) fn dec_ref(self: Pin<&mut Self>) {
         // SAFETY: We're only modifying the ref_count field, not moving the struct
         let this = unsafe { self.get_unchecked_mut() };
-        this.ref_count = this.ref_count.checked_sub(1)
-            .expect("reference count underflow - indicates a serious bug in reference counting logic");
+        this.ref_count = this.ref_count.checked_sub(1).expect(
+            "reference count underflow - indicates a serious bug in reference counting logic",
+        );
     }
 
     /// Returns the current reference count.
