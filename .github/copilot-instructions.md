@@ -385,3 +385,21 @@ pub use events::{Event, LocalEvent, EventPool, LocalEventPool};
 
 We do not use `pub(super)` and other fine-grained visibility modifiers. A type is either private
 to a module, public, or public within the whole crate.
+
+# Checked arithmetic
+
+Unless there is a specific reason to use saturating/wrapping arithmetic, use checked arithmetic
+(`.checked_add()` and similar) and handle the error case. Do not use regular unchecked arithmetic
+(`+`, `-`, `*`, `/`, `%`) as it can overflow and panic.
+
+It is fine to `.expect()` success if there is some reason to believe overflow can never happen,
+e.g. because it is guarded by an assertion or because it would require some data structure to
+exceed the size of virtual memory.
+
+This only applies to non-test code - in tests and benchmarks, it is fine to use whatever arithmetic
+is most convenient.
+
+# Examples show good practices
+
+Examples are production code. Use proper patterns and practices - examples are not tests, where
+looser rules can be allowed.
