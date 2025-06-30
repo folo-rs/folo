@@ -347,7 +347,8 @@ files to which they apply. Use regular `//` comments, not API documentation comm
 
 # Hide async entrypoint in examples
 
-In inline code examples that use `.await`, do not render the async entrypoint in documentation.
+In inline code examples that use `.await`, do not render the async
+entrypoint/wrapper in generated API documentation.
 
 Example:
 
