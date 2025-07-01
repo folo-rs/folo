@@ -104,7 +104,7 @@ Do not forget proper language in tests, doctests and examples.
 
 # Use of unwrap() and expect()
 
-Only use `unwrap()` in test code.
+Use `unwrap()` in test code and only in test code. Do not use `expect()` in test code.
 
 You may use `expect()` in non-test code but only if there is a reason to believe that the expectation
 will never fail. That is, we do not use `expect()` as an assertion, we use it to cut off unreachable
