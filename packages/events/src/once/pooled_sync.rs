@@ -984,6 +984,36 @@ mod tests {
     }
 
     #[test]
+    fn shrink_to_fit_with_empty_pool_shrinks_to_zero() {
+        let pool = OnceEventPool::<u32>::new();
+
+        // Create and drop events without using them
+        for _ in 0..10 {
+            drop(pool.bind_by_ref());
+        }
+
+        assert_eq!(pool.pool.lock().unwrap().len(), 0);
+
+        // Shrink the pool to fit
+        pool.shrink_to_fit();
+
+        assert_eq!(
+            pool.pool.lock().unwrap().capacity(),
+            0,
+            "Empty pool should shrink to capacity 0"
+        );
+    }
+
+    #[test]
+    fn event_removed_from_pool_after_endpoints_immediate_drop() {
+        let pool = OnceEventPool::<u32>::new();
+
+        drop(pool.bind_by_ref());
+
+        assert_eq!(pool.pool.lock().unwrap().len(), 0);
+    }
+
+    #[test]
     fn thread_safety() {
         // The pool is accessed across threads, so requires Sync as well as Send.
         assert_impl_all!(OnceEventPool<u32>: Send, Sync);

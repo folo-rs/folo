@@ -659,6 +659,36 @@ mod tests {
     }
 
     #[test]
+    fn shrink_to_fit_with_empty_pool_shrinks_to_zero() {
+        let pool = LocalOnceEventPool::<u32>::new();
+
+        // Create and drop events without using them
+        for _ in 0..10 {
+            drop(pool.bind_by_ref());
+        }
+
+        assert_eq!(pool.pool.borrow().len(), 0);
+
+        // Shrink the pool to fit
+        pool.shrink_to_fit();
+
+        assert_eq!(
+            pool.pool.borrow().capacity(),
+            0,
+            "Empty pool should shrink to capacity 0"
+        );
+    }
+
+    #[test]
+    fn event_removed_from_pool_after_endpoints_immediate_drop() {
+        let pool = LocalOnceEventPool::<u32>::new();
+
+        drop(pool.bind_by_ref());
+
+        assert_eq!(pool.pool.borrow().len(), 0);
+    }
+
+    #[test]
     fn thread_safety() {
         // Nothing is Send or Sync - everything is stuck on one thread.
         assert_not_impl_any!(LocalOnceEventPool<u32>: Send, Sync);

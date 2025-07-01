@@ -119,6 +119,7 @@ impl<T> LocalWithRefCount<T> {
     /// # Panics
     ///
     /// Panics if the reference count would underflow (go below zero).
+    #[cfg_attr(test, mutants::skip)] // Can cause infinite loops - resource management is very sensitive to this.
     pub(crate) fn dec_ref(&self) -> bool {
         let previous = self.ref_count.get();
 
