@@ -303,7 +303,7 @@ impl<T> Default for LocalOnceEventPool<T> {
 }
 
 /// Enables a sender or receiver to reference the pool that stores the event that connects them.
-/// 
+///
 /// This is a sealed trait and exists for internal use only. You never need to use it.
 #[expect(private_bounds, reason = "intentional - sealed trait")]
 pub trait LocalPoolRef<T>: Deref<Target = LocalOnceEventPool<T>> + Sealed {}

@@ -1,9 +1,9 @@
 mod local;
-mod with_ref_count;
 mod pooled_local;
 mod pooled_sync;
 mod sync;
 mod value_kind;
+mod with_ref_count;
 
 pub use local::*;
 pub use pooled_local::*;
