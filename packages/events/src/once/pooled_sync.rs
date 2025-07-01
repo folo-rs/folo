@@ -4,6 +4,7 @@
 //! using reference counting. Events are created from pools and automatically returned to the
 //! pool when both sender and receiver are dropped.
 
+use std::future::Future;
 use std::marker::PhantomPinned;
 use std::ops::Deref;
 use std::pin::Pin;
@@ -977,7 +978,8 @@ mod tests {
         };
         assert_eq!(
             pool_len_after, pool_len_before,
-            "Pool not cleaned up after dropping events - dec_ref_and_cleanup not working, key: {sender_key:?}"
+            "Pool not cleaned up after dropping events - dec_ref_and_cleanup not working, \
+             key: {sender_key:?}"
         );
     }
 

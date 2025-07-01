@@ -308,6 +308,8 @@ fn foo(i: std::time::Instant) { }
 
 Referencing types in `std` via absolute paths for no reason is especially sinful.
 
+It is fine to rely on the Rust prelude - no need to explicitly import types from the Rust prelude.
+
 `use` statements go at the top of the file or module, not inside functions.
 
 Do not `use super::` except in unit tests. Instead, use the full path `use crate::` style.

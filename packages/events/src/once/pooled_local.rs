@@ -5,6 +5,7 @@
 //! pool when both sender and receiver are dropped.
 
 use std::cell::RefCell;
+use std::future::Future;
 use std::marker::PhantomPinned;
 use std::ops::Deref;
 use std::pin::Pin;

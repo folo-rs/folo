@@ -4,6 +4,7 @@
 //! and used for cross-thread communication.
 
 use std::cell::Cell;
+use std::future::Future;
 use std::marker::{PhantomData, PhantomPinned};
 use std::ops::Deref;
 use std::pin::Pin;

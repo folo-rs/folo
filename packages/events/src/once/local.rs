@@ -4,6 +4,7 @@
 //! but cannot be shared across threads.
 
 use std::cell::{Cell, UnsafeCell};
+use std::future::Future;
 use std::marker::{PhantomData, PhantomPinned};
 use std::ops::Deref;
 use std::pin::Pin;
@@ -187,7 +188,7 @@ impl<T> LocalOnceEvent<T> {
         LocalOnceReceiver<T, ByRcLocalEvent<T>>,
     ) {
         self.bind_by_rc_checked()
-            .expect("OnceEvent has already been bound")
+            .expect("LocalOnceEvent has already been bound")
     }
 
     /// Returns both the sender and receiver for this event,
@@ -271,7 +272,7 @@ impl<T> LocalOnceEvent<T> {
         LocalOnceReceiver<T, ByPtrLocalEvent<T>>,
     ) {
         // SAFETY: Caller has guaranteed event lifetime management
-        unsafe { self.bind_by_ptr_checked() }.expect("OnceEvent has already been bound")
+        unsafe { self.bind_by_ptr_checked() }.expect("LocalOnceEvent has already been bound")
     }
 
     /// Returns both the sender and receiver for this event,
