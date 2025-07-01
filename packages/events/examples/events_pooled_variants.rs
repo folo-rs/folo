@@ -1,6 +1,5 @@
-//! Example demonstrating all the pooled event variants: `bind_by_ref`, `bind_by_rc`, `bind_by_arc`, and `bind_by_ptr`.
+//! Example demonstrating all the pooled event variants: `bind_by_ref`, `bind_by_arc`, and `bind_by_ptr`.
 
-use std::rc::Rc;
 use std::sync::Arc;
 
 use events::OnceEventPool;
@@ -8,7 +7,6 @@ use futures::executor::block_on;
 
 /// Test values for different pooled event variants.
 const BY_REF_TEST_VALUE: i32 = 10;
-const BY_RC_TEST_VALUE: i32 = 20;
 const BY_ARC_TEST_VALUE: i32 = 30;
 const BY_PTR_TEST_VALUE: i32 = 40;
 
@@ -23,25 +21,10 @@ fn main() {
             let (sender, receiver) = pool.bind_by_ref();
 
             sender.send(BY_REF_TEST_VALUE);
-            let value = receiver.recv_async().await.expect(
+            let value = receiver.await.expect(
                 "sender.send() was called immediately before this, so sender cannot be dropped",
             );
             println!("   bind_by_ref received: {value}");
-        });
-    }
-
-    // 2. bind_by_rc variant (Rc-based, single-threaded)
-    println!("\n2. Testing bind_by_rc variant:");
-    {
-        block_on(async {
-            let pool = Rc::new(OnceEventPool::<i32>::new());
-            let (sender, receiver) = pool.bind_by_rc();
-
-            sender.send(BY_RC_TEST_VALUE);
-            let value = receiver.recv_async().await.expect(
-                "sender.send() was called immediately before this, so sender cannot be dropped",
-            );
-            println!("   bind_by_rc received: {value}");
         });
     }
 
@@ -56,7 +39,7 @@ fn main() {
             sender.send(BY_ARC_TEST_VALUE);
         });
 
-        let receiver_thread = std::thread::spawn(move || block_on(receiver.recv_async()));
+        let receiver_thread = std::thread::spawn(move || block_on(receiver));
 
         sender_thread
             .join()
@@ -78,30 +61,11 @@ fn main() {
             let (sender, receiver) = unsafe { pool.as_ref().bind_by_ptr() };
 
             sender.send(BY_PTR_TEST_VALUE);
-            let value = receiver.recv_async().await.expect(
+            let value = receiver.await.expect(
                 "sender.send() was called immediately before this, so sender cannot be dropped",
             );
             println!("   bind_by_ptr received: {value}");
             // sender and receiver are dropped here, before pool
-        });
-    }
-
-    // 5. Async example with bind_by_arc
-    println!("\n5. Testing bind_by_arc with async:");
-    {
-        let pool = Arc::new(OnceEventPool::<String>::new());
-        let (sender, receiver) = pool.bind_by_arc();
-
-        // Run both tasks in async block
-        block_on(async {
-            // Send the message
-            sender.send("Hello async!".to_string());
-
-            // Receive the message
-            let value = receiver.recv_async().await.expect(
-                "sender.send() was called immediately before this, so sender cannot be dropped",
-            );
-            println!("   bind_by_arc async received: {value}");
         });
     }
 
@@ -126,7 +90,7 @@ fn main() {
                 };
 
                 sender.send(message);
-                let value = receiver.recv_async().await.expect(
+                let value = receiver.await.expect(
                     "sender.send() was called immediately before this, so sender cannot be dropped",
                 );
                 println!("     Event {i}: {value}");
@@ -143,7 +107,7 @@ fn main() {
     println!("✓ Subsequent `pool.bind_*()` calls reuse existing event instances");
     println!("✓ This minimizes allocation overhead in high-frequency scenarios");
     println!(
-        "✓ Different endpoint types (bind_by_ref, bind_by_rc, bind_by_arc, bind_by_ptr) can all reuse the same pool"
+        "✓ Different endpoint types (bind_by_ref, bind_by_arc, bind_by_ptr) can all reuse the same pool"
     );
 
     println!("\nAll pooled event variants work correctly with efficient resource reuse!");
@@ -152,7 +116,6 @@ fn main() {
         "Each variant provides different ownership semantics suitable for different use cases:"
     );
     println!("- bind_by_ref: Lightweight, lifetime-based (when pool lifetime is clear)");
-    println!("- bind_by_rc: Single-threaded reference counting (when pool needs to be shared)");
     println!("- bind_by_arc: Multi-threaded reference counting (for concurrent access)");
     println!(
         "- bind_by_ptr: Unsafe but flexible (for advanced use cases with manual lifetime management)"

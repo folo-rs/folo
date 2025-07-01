@@ -1,5 +1,5 @@
 mod local;
-mod pinned_with_ref_count;
+mod with_ref_count;
 mod pooled_local;
 mod pooled_sync;
 mod sync;

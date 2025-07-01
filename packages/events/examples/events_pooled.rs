@@ -36,7 +36,7 @@ fn main() {
             sender.send(FIRST_VALUE);
             println!("   - Sent value: {FIRST_VALUE}");
 
-            let received = receiver.recv_async().await.expect(
+            let received = receiver.await.expect(
                 "sender.send() was called immediately before this, so sender cannot be dropped",
             );
             println!("   - Received value: {received}");
@@ -56,7 +56,7 @@ fn main() {
             sender.send(SECOND_VALUE);
             println!("   - Sent value: {SECOND_VALUE}");
 
-            let received = receiver.recv_async().await.expect(
+            let received = receiver.await.expect(
                 "sender.send() was called immediately before this, so sender cannot be dropped",
             );
             println!("   - Received value: {received}");
@@ -73,7 +73,7 @@ fn main() {
             sender.send(THIRD_VALUE);
             println!("   - Sent value: {THIRD_VALUE}");
 
-            let received = receiver.recv_async().await.expect(
+            let received = receiver.await.expect(
                 "sender.send() was called immediately before this, so sender cannot be dropped",
             );
             println!("   - Received value: {received}");
@@ -90,7 +90,7 @@ fn main() {
             sender.send(FOURTH_VALUE);
             println!("   - Sent value: {FOURTH_VALUE}");
 
-            let received = receiver.recv_async().await.expect(
+            let received = receiver.await.expect(
                 "sender.send() was called immediately before this, so sender cannot be dropped",
             );
             println!("   - Received value: {received}");

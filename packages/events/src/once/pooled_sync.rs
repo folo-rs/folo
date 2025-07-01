@@ -5,24 +5,17 @@
 //! pool when both sender and receiver are dropped.
 
 use std::marker::PhantomPinned;
+use std::ops::Deref;
 use std::pin::Pin;
-use std::rc::Rc;
+use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
+use std::task;
 
 use pinned_pool::{Key, PinnedPool};
 
-use super::pinned_with_ref_count::PinnedWithRefCount;
 use super::sync::OnceEvent;
-
-mod by_arc;
-mod by_ptr;
-mod by_rc;
-mod by_ref;
-
-pub use by_arc::*;
-pub use by_ptr::*;
-pub use by_rc::*;
-pub use by_ref::*;
+use super::with_ref_count::WithRefCount;
+use crate::{Disconnected, ERR_POISONED_LOCK, Sealed};
 
 /// A pool that manages thread-safe events with automatic cleanup.
 ///
@@ -44,14 +37,14 @@ pub use by_ref::*;
 /// // First usage - creates new event
 /// let (sender1, receiver1) = pool.bind_by_ref();
 /// sender1.send(42);
-/// let value1 = receiver1.recv_async().await.unwrap();
+/// let value1 = receiver1.await.unwrap();
 /// assert_eq!(value1, 42);
 /// // Event returned to pool when sender1/receiver1 are dropped
 ///
 /// // Second usage - reuses the same event instance (efficient!)
 /// let (sender2, receiver2) = pool.bind_by_ref();
 /// sender2.send(100);
-/// let value2 = receiver2.recv_async().await.unwrap();
+/// let value2 = receiver2.await.unwrap();
 /// assert_eq!(value2, 100);
 /// // Same event reused - no additional allocation overhead
 /// # });
@@ -61,7 +54,7 @@ pub struct OnceEventPool<T>
 where
     T: Send,
 {
-    pool: Mutex<PinnedPool<PinnedWithRefCount<OnceEvent<T>>>>,
+    pool: Mutex<PinnedPool<WithRefCount<OnceEvent<T>>>>,
 
     // It is invalid to move this type once it has been pinned.
     _requires_pinning: PhantomPinned,
@@ -105,86 +98,45 @@ where
     /// // First event usage
     /// let (sender1, receiver1) = pool.bind_by_ref();
     /// sender1.send(42);
-    /// let value1 = receiver1.recv_async().await.unwrap();
+    /// let value1 = receiver1.await.unwrap();
     /// assert_eq!(value1, 42);
     ///
     /// // Second event usage - efficiently reuses the same underlying event
     /// let (sender2, receiver2) = pool.bind_by_ref();
     /// sender2.send(100);
-    /// let value2 = receiver2.recv_async().await.unwrap();
+    /// let value2 = receiver2.await.unwrap();
     /// assert_eq!(value2, 100);
     /// # });
     /// ```
-    pub fn bind_by_ref(&self) -> (ByRefPooledOnceSender<'_, T>, ByRefPooledOnceReceiver<'_, T>) {
-        let mut inner_pool = self.pool.lock().expect("pool mutex should not be poisoned");
+    pub fn bind_by_ref(
+        &self,
+    ) -> (
+        PooledOnceSender<T, ByRefPool<'_, T>>,
+        PooledOnceReceiver<T, ByRefPool<'_, T>>,
+    ) {
+        let mut inner_pool = self.pool.lock().expect(ERR_POISONED_LOCK);
+
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
-        let _item = inserter.insert_mut(PinnedWithRefCount::new(OnceEvent::new()));
 
-        // Increment reference count for both sender and receiver
-        let mut item_mut = inner_pool.get_mut(key);
-        item_mut.as_mut().inc_ref();
-        item_mut.as_mut().inc_ref();
+        let item = inserter.insert(WithRefCount::new(OnceEvent::new()));
 
-        // Drop the lock before creating the endpoints
-        drop(inner_pool);
+        // It starts with a ref count of 1 but we add one more for the other endpoint.
+        item.inc_ref();
 
-        (
-            ByRefPooledOnceSender { pool: self, key },
-            ByRefPooledOnceReceiver { pool: self, key },
-        )
-    }
+        let item_ptr = NonNull::from(item.get_ref());
 
-    /// Creates sender and receiver endpoints connected by Rc to the pool.
-    ///
-    /// The pool will create a new event and return endpoints that hold Rc references.
-    /// When both endpoints are dropped, the event will be automatically cleaned up.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use std::rc::Rc;
-    ///
-    /// use events::OnceEventPool;
-    /// # use futures::executor::block_on;
-    ///
-    /// # block_on(async {
-    /// let pool = Rc::new(OnceEventPool::<i32>::new());
-    ///
-    /// // First usage
-    /// let (sender1, receiver1) = pool.bind_by_rc();
-    /// sender1.send(42);
-    /// let value1 = receiver1.recv_async().await.unwrap();
-    /// assert_eq!(value1, 42);
-    ///
-    /// // Second usage - reuses the same event from the pool
-    /// let (sender2, receiver2) = pool.bind_by_rc();
-    /// sender2.send(100);
-    /// let value2 = receiver2.recv_async().await.unwrap();
-    /// assert_eq!(value2, 100);
-    /// # });
-    /// ```
-    pub fn bind_by_rc(self: &Rc<Self>) -> (ByRcPooledOnceSender<T>, ByRcPooledOnceReceiver<T>) {
-        let mut inner_pool = self.pool.lock().expect("pool mutex should not be poisoned");
-        let inserter = inner_pool.begin_insert();
-        let key = inserter.key();
-        let _item = inserter.insert_mut(PinnedWithRefCount::new(OnceEvent::new()));
-
-        // Now increment reference count for both sender and receiver
-        let mut item_mut = inner_pool.get_mut(key);
-        item_mut.as_mut().inc_ref();
-        item_mut.as_mut().inc_ref();
-
-        // Drop the lock before creating the endpoints
-        drop(inner_pool);
+        let pool_ref = ByRefPool { pool: self };
 
         (
-            ByRcPooledOnceSender {
-                pool: Rc::clone(self),
+            PooledOnceSender {
+                event: Some(item_ptr),
+                pool_ref: pool_ref.clone(),
                 key,
             },
-            ByRcPooledOnceReceiver {
-                pool: Rc::clone(self),
+            PooledOnceReceiver {
+                event: Some(item_ptr),
+                pool_ref,
                 key,
             },
         )
@@ -207,36 +159,46 @@ where
     /// // First usage
     /// let (sender1, receiver1) = pool.bind_by_arc();
     /// sender1.send(42);
-    /// let value1 = futures::executor::block_on(receiver1.recv_async()).unwrap();
+    /// let value1 = futures::executor::block_on(receiver1).unwrap();
     /// assert_eq!(value1, 42);
     ///
     /// // Second usage - efficiently reuses the same pooled event
     /// let (sender2, receiver2) = pool.bind_by_arc();
     /// sender2.send(200);
-    /// let value2 = futures::executor::block_on(receiver2.recv_async()).unwrap();
+    /// let value2 = futures::executor::block_on(receiver2).unwrap();
     /// assert_eq!(value2, 200);
     /// ```
-    pub fn bind_by_arc(self: &Arc<Self>) -> (ByArcPooledOnceSender<T>, ByArcPooledOnceReceiver<T>) {
-        let mut inner_pool = self.pool.lock().expect("pool mutex should not be poisoned");
+    pub fn bind_by_arc(
+        self: &Arc<Self>,
+    ) -> (
+        PooledOnceSender<T, ByArcPool<T>>,
+        PooledOnceReceiver<T, ByArcPool<T>>,
+    ) {
+        let mut inner_pool = self.pool.lock().expect(ERR_POISONED_LOCK);
+
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
-        let _item = inserter.insert_mut(PinnedWithRefCount::new(OnceEvent::new()));
 
-        // Now increment reference count for both sender and receiver
-        let mut item_mut = inner_pool.get_mut(key);
-        item_mut.as_mut().inc_ref();
-        item_mut.as_mut().inc_ref();
+        let item = inserter.insert(WithRefCount::new(OnceEvent::new()));
 
-        // Drop the lock before creating the endpoints
-        drop(inner_pool);
+        // It starts with a ref count of 1 but we add one more for the other endpoint.
+        item.inc_ref();
+
+        let item_ptr = NonNull::from(item.get_ref());
+
+        let pool_ref = ByArcPool {
+            pool: Arc::clone(self),
+        };
 
         (
-            ByArcPooledOnceSender {
-                pool: Arc::clone(self),
+            PooledOnceSender {
+                event: Some(item_ptr),
+                pool_ref: pool_ref.clone(),
                 key,
             },
-            ByArcPooledOnceReceiver {
-                pool: Arc::clone(self),
+            PooledOnceReceiver {
+                event: Some(item_ptr),
+                pool_ref,
                 key,
             },
         )
@@ -264,58 +226,52 @@ where
     /// // SAFETY: We ensure the pool outlives the sender and receiver
     /// let (sender1, receiver1) = unsafe { pool.as_ref().bind_by_ptr() };
     /// sender1.send(42);
-    /// let value1 = futures::executor::block_on(receiver1.recv_async()).unwrap();
+    /// let value1 = futures::executor::block_on(receiver1).unwrap();
     /// assert_eq!(value1, 42);
     ///
     /// // Second usage - reuses the same event from the pool efficiently
     /// // SAFETY: Pool is still valid and pinned
     /// let (sender2, receiver2) = unsafe { pool.as_ref().bind_by_ptr() };
     /// sender2.send(100);
-    /// let value2 = futures::executor::block_on(receiver2.recv_async()).unwrap();
+    /// let value2 = futures::executor::block_on(receiver2).unwrap();
     /// assert_eq!(value2, 100);
     /// // Both sender and receiver pairs are dropped here, before pool
     /// ```
     #[must_use]
     pub unsafe fn bind_by_ptr(
         self: Pin<&Self>,
-    ) -> (ByPtrPooledOnceSender<T>, ByPtrPooledOnceReceiver<T>) {
-        let mut inner_pool = self.pool.lock().expect("pool mutex should not be poisoned");
+    ) -> (
+        PooledOnceSender<T, ByPtrPool<T>>,
+        PooledOnceReceiver<T, ByPtrPool<T>>,
+    ) {
+        let mut inner_pool = self.pool.lock().expect(ERR_POISONED_LOCK);
+
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
-        let _item = inserter.insert_mut(PinnedWithRefCount::new(OnceEvent::new()));
 
-        // Now increment reference count for both sender and receiver
-        let mut item_mut = inner_pool.get_mut(key);
-        item_mut.as_mut().inc_ref();
-        item_mut.as_mut().inc_ref();
+        let item = inserter.insert(WithRefCount::new(OnceEvent::new()));
 
-        // Drop the lock before creating the endpoints
-        drop(inner_pool);
+        // It starts with a ref count of 1 but we add one more for the other endpoint.
+        item.inc_ref();
 
-        let self_ptr: *const Self = self.get_ref();
+        let item_ptr = NonNull::from(item.get_ref());
+
+        let pool_ref = ByPtrPool {
+            pool: NonNull::from(self.get_ref()),
+        };
 
         (
-            ByPtrPooledOnceSender {
-                pool: self_ptr,
+            PooledOnceSender {
+                event: Some(item_ptr),
+                pool_ref: pool_ref.clone(),
                 key,
             },
-            ByPtrPooledOnceReceiver {
-                pool: self_ptr,
+            PooledOnceReceiver {
+                event: Some(item_ptr),
+                pool_ref,
                 key,
             },
         )
-    }
-
-    /// Decrements the reference count for an event and removes it if no longer referenced.
-    fn dec_ref_and_cleanup(&self, key: Key) {
-        let mut inner_pool = self.pool.lock().expect("pool mutex should not be poisoned");
-
-        let mut item = inner_pool.get_mut(key);
-        item.as_mut().dec_ref();
-
-        if !item.is_referenced() {
-            inner_pool.remove(key);
-        }
     }
 
     /// Shrinks the capacity of the pool to reduce memory usage.
@@ -335,7 +291,7 @@ where
     /// for _ in 0..100 {
     ///     let (sender, receiver) = pool.bind_by_ref();
     ///     sender.send(42);
-    ///     let _value = futures::executor::block_on(receiver.recv_async());
+    ///     let _value = futures::executor::block_on(receiver);
     /// }
     ///
     /// // Attempt to shrink to reduce memory usage
@@ -356,8 +312,307 @@ where
     }
 }
 
+/// Enables a sender or receiver to reference the pool that stores the event that connects them.
+///
+/// This is a sealed trait and exists for internal use only. You never need to use it.
+#[expect(private_bounds, reason = "intentional - sealed trait")]
+pub trait PoolRef<T>: Deref<Target = OnceEventPool<T>> + Sealed
+where
+    T: Send,
+{
+}
+
+/// An event pool referenced via `&` shared reference.
+///
+/// Only used in type names. Instances are created internally by [`OnceEventPool`].
+#[derive(Copy, Debug)]
+pub struct ByRefPool<'a, T>
+where
+    T: Send,
+{
+    pool: &'a OnceEventPool<T>,
+}
+
+impl<T> Sealed for ByRefPool<'_, T> where T: Send {}
+impl<T> PoolRef<T> for ByRefPool<'_, T> where T: Send {}
+impl<T> Deref for ByRefPool<'_, T>
+where
+    T: Send,
+{
+    type Target = OnceEventPool<T>;
+
+    fn deref(&self) -> &Self::Target {
+        self.pool
+    }
+}
+impl<T> Clone for ByRefPool<'_, T>
+where
+    T: Send,
+{
+    fn clone(&self) -> Self {
+        Self { pool: self.pool }
+    }
+}
+
+/// An event pool referenced via `Arc` shared reference.
+///
+/// Only used in type names. Instances are created internally by [`OnceEventPool`].
+#[derive(Debug)]
+pub struct ByArcPool<T>
+where
+    T: Send,
+{
+    pool: Arc<OnceEventPool<T>>,
+}
+
+impl<T> Sealed for ByArcPool<T> where T: Send {}
+impl<T> PoolRef<T> for ByArcPool<T> where T: Send {}
+impl<T> Deref for ByArcPool<T>
+where
+    T: Send,
+{
+    type Target = OnceEventPool<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.pool
+    }
+}
+impl<T> Clone for ByArcPool<T>
+where
+    T: Send,
+{
+    fn clone(&self) -> Self {
+        Self {
+            pool: Arc::clone(&self.pool),
+        }
+    }
+}
+
+/// An event pool referenced via raw pointer.
+///
+/// Only used in type names. Instances are created internally by [`OnceEventPool`].
+#[derive(Copy, Debug)]
+pub struct ByPtrPool<T>
+where
+    T: Send,
+{
+    pool: NonNull<OnceEventPool<T>>,
+}
+
+impl<T> Sealed for ByPtrPool<T> where T: Send {}
+impl<T> PoolRef<T> for ByPtrPool<T> where T: Send {}
+impl<T> Deref for ByPtrPool<T>
+where
+    T: Send,
+{
+    type Target = OnceEventPool<T>;
+
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: The creator of the reference is responsible for ensuring the pool outlives it.
+        unsafe { self.pool.as_ref() }
+    }
+}
+impl<T> Clone for ByPtrPool<T>
+where
+    T: Send,
+{
+    fn clone(&self) -> Self {
+        Self { pool: self.pool }
+    }
+}
+// SAFETY: This is only used with the thread-safe pool (the pool is Sync).
+unsafe impl<T> Send for ByPtrPool<T> where T: Send {}
+
+/// A sender endpoint for pooled  events that holds a reference to the pool.
+///
+/// This sender is created from [`OnceEventPool::bind_by_ref`] and automatically manages
+/// the lifetime of the underlying event. When both sender and receiver are dropped,
+/// the event is automatically returned to the pool.
+///
+/// This is the single-threaded variant that cannot be sent across threads.
+#[derive(Debug)]
+pub struct PooledOnceSender<T, R>
+where
+    T: Send,
+    R: PoolRef<T>,
+{
+    // This is a pointer to avoid contaminating the type signature with the event lifetime.
+    //
+    // SAFETY: We rely on the inner pool guaranteeing pinning and us owning a counted reference.
+    event: Option<NonNull<WithRefCount<OnceEvent<T>>>>,
+
+    pool_ref: R,
+    key: Key,
+}
+
+impl<T, R> PooledOnceSender<T, R>
+where
+    T: Send,
+    R: PoolRef<T>,
+{
+    /// Sends a value through the event.
+    ///
+    /// This method consumes the sender and always succeeds, regardless of whether
+    /// there is a receiver waiting.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use events::OnceEventPool;
+    ///
+    /// let pool = OnceEventPool::new();
+    /// let (sender, receiver) = pool.bind_by_ref();
+    ///
+    /// sender.send(42);
+    /// let value = futures::executor::block_on(receiver).unwrap();
+    /// assert_eq!(value, 42);
+    /// ```
+    pub fn send(self, value: T) {
+        // SAFETY: See comments on field.
+        let event = unsafe {
+            self.event
+                .expect("event is only None during destruction")
+                .as_ref()
+        };
+
+        event.set(value);
+    }
+}
+
+impl<T, R> Drop for PooledOnceSender<T, R>
+where
+    T: Send,
+    R: PoolRef<T>,
+{
+    fn drop(&mut self) {
+        // SAFETY: See comments on field.
+        let event = unsafe { self.event.expect("only possible on double drop").as_ref() };
+
+        if event.dec_ref() {
+            // The event is going to be destroyed, so we cannot reference it anymore.
+            self.event = None;
+
+            self.pool_ref
+                .pool
+                .lock()
+                .expect(ERR_POISONED_LOCK)
+                .remove(self.key);
+        }
+    }
+}
+
+// SAFETY: The NonNull marks it !Send by default but we know that everything behind the pointer
+// is thread-safe, so all is well. We also require `Send` from `R` to be extra safe here.
+unsafe impl<T, R> Send for PooledOnceSender<T, R>
+where
+    T: Send,
+    R: PoolRef<T> + Send,
+{
+}
+
+/// A receiver endpoint for pooled  events that holds a reference to the pool.
+///
+/// This receiver is created from [`OnceEventPool::bind_by_ref`] and automatically manages
+/// the lifetime of the underlying event. When both sender and receiver are dropped,
+/// the event is automatically returned to the pool.
+///
+/// This is the single-threaded variant that cannot be sent across threads.
+#[derive(Debug)]
+pub struct PooledOnceReceiver<T, R>
+where
+    T: Send,
+    R: PoolRef<T>,
+{
+    // This is a pointer to avoid contaminating the type signature with the event lifetime.
+    //
+    // SAFETY: We rely on the inner pool guaranteeing pinning and us owning a counted reference.
+    event: Option<NonNull<WithRefCount<OnceEvent<T>>>>,
+
+    pool_ref: R,
+    key: Key,
+}
+
+impl<T, R> PooledOnceReceiver<T, R>
+where
+    T: Send,
+    R: PoolRef<T>,
+{
+    /// Drops the inner state, releasing the event back to the pool.
+    /// May also be used from contexts where the receiver itself is not yet consumed.
+    fn drop_inner(&mut self) {
+        let Some(event) = self.event else {
+            // Already pseudo-consumed the receiver as part of the Future impl.
+            return;
+        };
+
+        // SAFETY: See comments on field.
+        let event = unsafe { event.as_ref() };
+
+        if event.dec_ref() {
+            // The event is going to be destroyed, so we cannot reference it anymore.
+            self.event = None;
+
+            self.pool_ref
+                .pool
+                .lock()
+                .expect(ERR_POISONED_LOCK)
+                .remove(self.key);
+        }
+    }
+}
+
+impl<T, R> Future for PooledOnceReceiver<T, R>
+where
+    T: Send,
+    R: PoolRef<T>,
+{
+    type Output = Result<T, Disconnected>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
+        // SAFETY: We are not moving anything, just touching internal state.
+        let this = unsafe { self.get_unchecked_mut() };
+
+        // SAFETY: See comments on field.
+        let event = unsafe {
+            this.event
+                .expect("polling a Future after completion is invalid")
+                .as_ref()
+        };
+
+        let poll_result = event.poll(cx.waker());
+
+        poll_result.map_or_else(
+            || task::Poll::Pending,
+            |value| {
+                this.drop_inner();
+                task::Poll::Ready(value)
+            },
+        )
+    }
+}
+
+impl<T, R> Drop for PooledOnceReceiver<T, R>
+where
+    T: Send,
+    R: PoolRef<T>,
+{
+    fn drop(&mut self) {
+        self.drop_inner();
+    }
+}
+
+// SAFETY: The NonNull marks it !Send by default but we know that everything behind the pointer
+// is thread-safe, so all is well. We also require `Send` from `R` to be extra safe here.
+unsafe impl<T, R> Send for PooledOnceReceiver<T, R>
+where
+    T: Send,
+    R: PoolRef<T> + Send,
+{
+}
+
 #[cfg(test)]
 mod tests {
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
     use testing::with_watchdog;
 
     use super::*;
@@ -369,7 +624,7 @@ mod tests {
             let (sender, receiver) = pool.bind_by_ref();
 
             sender.send(42);
-            let value = futures::executor::block_on(receiver.recv_async()).unwrap();
+            let value = futures::executor::block_on(receiver).unwrap();
             assert_eq!(value, 42);
         });
     }
@@ -397,41 +652,25 @@ mod tests {
             // Test one event first
             let (sender1, receiver1) = pool.bind_by_ref();
             sender1.send(1);
-            let value1 = futures::executor::block_on(receiver1.recv_async()).unwrap();
+            let value1 = futures::executor::block_on(receiver1).unwrap();
             assert_eq!(value1, 1);
 
             // Test another event
             let (sender2, receiver2) = pool.bind_by_ref();
             sender2.send(2);
-            let value2 = futures::executor::block_on(receiver2.recv_async()).unwrap();
+            let value2 = futures::executor::block_on(receiver2).unwrap();
             assert_eq!(value2, 2);
         });
     }
 
     #[test]
-    fn event_pool_by_rc() {
-        use std::rc::Rc;
-
-        with_watchdog(|| {
-            let pool = Rc::new(OnceEventPool::<i32>::new());
-            let (sender, receiver) = pool.bind_by_rc();
-
-            sender.send(42);
-            let value = futures::executor::block_on(receiver.recv_async()).unwrap();
-            assert_eq!(value, 42);
-        });
-    }
-
-    #[test]
     fn event_pool_by_arc() {
-        use std::sync::Arc;
-
         with_watchdog(|| {
             let pool = Arc::new(OnceEventPool::<i32>::new());
             let (sender, receiver) = pool.bind_by_arc();
 
             sender.send(42);
-            let value = futures::executor::block_on(receiver.recv_async()).unwrap();
+            let value = futures::executor::block_on(receiver).unwrap();
             assert_eq!(value, 42);
         });
     }
@@ -445,7 +684,7 @@ mod tests {
             let (sender, receiver) = unsafe { pool.as_ref().bind_by_ptr() };
 
             sender.send(42);
-            let value = futures::executor::block_on(receiver.recv_async()).unwrap();
+            let value = futures::executor::block_on(receiver).unwrap();
             assert_eq!(value, 42);
             // sender and receiver are dropped here, before pool
         });
@@ -467,7 +706,7 @@ mod tests {
             // Create a new event to verify the pool is still functional
             let (sender2, receiver2) = pool.bind_by_ref();
             sender2.send(123);
-            let value = futures::executor::block_on(receiver2.recv_async()).unwrap();
+            let value = futures::executor::block_on(receiver2).unwrap();
             assert_eq!(value, 123);
         });
     }
@@ -487,53 +726,13 @@ mod tests {
             // Create a new event to verify the pool is still functional
             let (sender2, receiver2) = pool.bind_by_ref();
             sender2.send(456);
-            let value = futures::executor::block_on(receiver2.recv_async()).unwrap();
+            let value = futures::executor::block_on(receiver2).unwrap();
             assert_eq!(value, 456);
         });
     }
 
     #[test]
-    fn by_rc_sender_drop_cleanup() {
-        use std::rc::Rc;
-
-        with_watchdog(|| {
-            let pool = Rc::new(OnceEventPool::<i32>::new());
-            let (sender, _receiver) = pool.bind_by_rc();
-
-            // Force the sender to be dropped without being consumed by send()
-            drop(sender);
-
-            // Create a new event to verify the pool is still functional
-            let (sender2, receiver2) = pool.bind_by_rc();
-            sender2.send(789);
-            let value = futures::executor::block_on(receiver2.recv_async()).unwrap();
-            assert_eq!(value, 789);
-        });
-    }
-
-    #[test]
-    fn by_rc_receiver_drop_cleanup() {
-        use std::rc::Rc;
-
-        with_watchdog(|| {
-            let pool = Rc::new(OnceEventPool::<i32>::new());
-            let (_sender, receiver) = pool.bind_by_rc();
-
-            // Force the receiver to be dropped without being consumed by recv()
-            drop(receiver);
-
-            // Create a new event to verify the pool is still functional
-            let (sender2, receiver2) = pool.bind_by_rc();
-            sender2.send(321);
-            let value = futures::executor::block_on(receiver2.recv_async()).unwrap();
-            assert_eq!(value, 321);
-        });
-    }
-
-    #[test]
     fn by_arc_sender_drop_cleanup() {
-        use std::sync::Arc;
-
         with_watchdog(|| {
             let pool = Arc::new(OnceEventPool::<i32>::new());
             let (sender, _receiver) = pool.bind_by_arc();
@@ -544,15 +743,13 @@ mod tests {
             // Create a new event to verify the pool is still functional
             let (sender2, receiver2) = pool.bind_by_arc();
             sender2.send(654);
-            let value = futures::executor::block_on(receiver2.recv_async()).unwrap();
+            let value = futures::executor::block_on(receiver2).unwrap();
             assert_eq!(value, 654);
         });
     }
 
     #[test]
     fn by_arc_receiver_drop_cleanup() {
-        use std::sync::Arc;
-
         with_watchdog(|| {
             let pool = Arc::new(OnceEventPool::<i32>::new());
             let (_sender, receiver) = pool.bind_by_arc();
@@ -563,7 +760,7 @@ mod tests {
             // Create a new event to verify the pool is still functional
             let (sender2, receiver2) = pool.bind_by_arc();
             sender2.send(987);
-            let value = futures::executor::block_on(receiver2.recv_async()).unwrap();
+            let value = futures::executor::block_on(receiver2).unwrap();
             assert_eq!(value, 987);
         });
     }
@@ -583,7 +780,7 @@ mod tests {
             // SAFETY: We ensure the pool outlives the sender and receiver
             let (sender2, receiver2) = unsafe { pool.as_ref().bind_by_ptr() };
             sender2.send(147);
-            let value = futures::executor::block_on(receiver2.recv_async()).unwrap();
+            let value = futures::executor::block_on(receiver2).unwrap();
             assert_eq!(value, 147);
         });
     }
@@ -603,7 +800,7 @@ mod tests {
             // SAFETY: We ensure the pool outlives the sender and receiver
             let (sender2, receiver2) = unsafe { pool.as_ref().bind_by_ptr() };
             sender2.send(258);
-            let value = futures::executor::block_on(receiver2.recv_async()).unwrap();
+            let value = futures::executor::block_on(receiver2).unwrap();
             assert_eq!(value, 258);
         });
     }
@@ -623,7 +820,7 @@ mod tests {
             // Verify pool still works correctly after cleanup
             let (sender, receiver) = pool.bind_by_ref();
             sender.send(999);
-            let value = futures::executor::block_on(receiver.recv_async()).unwrap();
+            let value = futures::executor::block_on(receiver).unwrap();
             assert_eq!(value, 999);
         });
     }
@@ -642,7 +839,7 @@ mod tests {
                 } else {
                     // Use some events normally
                     sender.send(i);
-                    let _value = futures::executor::block_on(receiver.recv_async());
+                    let _value = futures::executor::block_on(receiver);
                 }
             }
 
@@ -653,7 +850,7 @@ mod tests {
             // Create one more event to verify pool still works
             let (sender, receiver) = pool.bind_by_ref();
             sender.send(42);
-            let value = futures::executor::block_on(receiver.recv_async()).unwrap();
+            let value = futures::executor::block_on(receiver).unwrap();
             assert_eq!(value, 42);
         });
     }
@@ -674,7 +871,7 @@ mod tests {
             // Pool should still work efficiently
             let (sender, receiver) = pool.bind_by_ref();
             sender.send(999);
-            let value = futures::executor::block_on(receiver.recv_async()).unwrap();
+            let value = futures::executor::block_on(receiver).unwrap();
             assert_eq!(value, 999);
         });
     }
@@ -691,33 +888,6 @@ mod tests {
 
         // Pool should be cleaned up - all events should be removed
         // If Drop implementations don't work, pool will retain unused events
-        let mut pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
-        assert_eq!(
-            pool_guard.len(),
-            0,
-            "Pool still contains unused events - Drop implementations not working"
-        );
-
-        // An empty pool should be able to shrink to capacity 0
-        pool_guard.shrink_to_fit();
-        assert_eq!(
-            pool_guard.capacity(),
-            0,
-            "Empty pool should shrink to capacity 0"
-        );
-    }
-
-    #[test]
-    fn by_rc_drop_actually_cleans_up_pool() {
-        let pool = Rc::new(OnceEventPool::<u32>::new());
-
-        // Create many events but drop them without use
-        for _ in 0..100 {
-            let (_sender, _receiver) = pool.bind_by_rc();
-            // Both sender and receiver will be dropped here
-        }
-
-        // Pool should be cleaned up - all events should be removed
         let mut pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
         assert_eq!(
             pool_guard.len(),
@@ -809,5 +979,26 @@ mod tests {
             pool_len_after, pool_len_before,
             "Pool not cleaned up after dropping events - dec_ref_and_cleanup not working, key: {sender_key:?}"
         );
+    }
+
+    #[test]
+    fn thread_safe_types() {
+        // The pool is accessed across threads, so requires Sync as well as Send.
+        assert_impl_all!(OnceEventPool<u32>: Send, Sync);
+
+        // These are all meant to be consumed locally - they may move between threads but are
+        // not shared between threads, so Sync is not expected, only Send.
+        assert_impl_all!(PooledOnceSender<u32, ByRefPool<'static, u32>>: Send);
+        assert_impl_all!(PooledOnceReceiver<u32, ByRefPool<'static, u32>>: Send);
+        assert_impl_all!(PooledOnceSender<u32, ByArcPool<u32>>: Send);
+        assert_impl_all!(PooledOnceReceiver<u32, ByArcPool<u32>>: Send);
+        assert_impl_all!(PooledOnceSender<u32, ByPtrPool<u32>>: Send);
+        assert_impl_all!(PooledOnceReceiver<u32, ByPtrPool<u32>>: Send);
+        assert_not_impl_any!(PooledOnceSender<u32, ByRefPool<'static, u32>>: Sync);
+        assert_not_impl_any!(PooledOnceReceiver<u32, ByRefPool<'static, u32>>: Sync);
+        assert_not_impl_any!(PooledOnceSender<u32, ByArcPool<u32>>: Sync);
+        assert_not_impl_any!(PooledOnceReceiver<u32, ByArcPool<u32>>: Sync);
+        assert_not_impl_any!(PooledOnceSender<u32, ByPtrPool<u32>>: Sync);
+        assert_not_impl_any!(PooledOnceReceiver<u32, ByPtrPool<u32>>: Sync);
     }
 }
