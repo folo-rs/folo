@@ -255,7 +255,7 @@ where
     /// # block_on(async {
     /// let mut event = Box::pin(OnceEvent::<i32>::new());
     /// // SAFETY: We ensure the event outlives the sender and receiver
-    /// let (sender, receiver) = unsafe { event.as_mut().bind_by_ptr() };
+    /// let (sender, receiver) = unsafe { event.as_ref().bind_by_ptr() };
     ///
     /// sender.send(42);
     /// let value = receiver.await.unwrap();
@@ -293,8 +293,8 @@ where
     ///
     /// let mut event = Box::pin(OnceEvent::<i32>::new());
     /// // SAFETY: We ensure the event outlives the sender and receiver
-    /// let endpoints = unsafe { event.as_mut().bind_by_ptr_checked() }.unwrap();
-    /// let endpoints2 = unsafe { event.as_mut().bind_by_ptr_checked() }; // Returns None
+    /// let endpoints = unsafe { event.as_ref().bind_by_ptr_checked() }.unwrap();
+    /// let endpoints2 = unsafe { event.as_ref().bind_by_ptr_checked() }; // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
     #[must_use]
@@ -569,12 +569,12 @@ where
     /// # Example
     ///
     /// ```rust
-    /// use std::rc::Rc;
+    /// use std::sync::Arc;
     ///
     /// use events::OnceEvent;
     ///
-    /// let event = Rc::new(OnceEvent::<i32>::new());
-    /// let (sender, _receiver) = event.bind_by_rc();
+    /// let event = Arc::new(OnceEvent::<i32>::new());
+    /// let (sender, _receiver) = event.bind_by_arc();
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {

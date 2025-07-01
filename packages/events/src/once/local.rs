@@ -256,7 +256,7 @@ impl<T> LocalOnceEvent<T> {
     ///
     /// let mut event = Box::pin(LocalOnceEvent::<i32>::new());
     /// // SAFETY: We ensure the event outlives the sender and receiver, see below.
-    /// let (sender, receiver) = unsafe { event.as_mut().bind_by_ptr() };
+    /// let (sender, receiver) = unsafe { event.as_ref().bind_by_ptr() };
     ///
     /// sender.send(42);
     /// let value = futures::executor::block_on(receiver).unwrap();
@@ -294,8 +294,8 @@ impl<T> LocalOnceEvent<T> {
     ///
     /// let mut event = Box::pin(LocalOnceEvent::<i32>::new());
     /// // SAFETY: We ensure the event outlives the sender and receiver
-    /// let endpoints = unsafe { event.as_mut().bind_by_ptr_checked() }.unwrap();
-    /// let endpoints2 = unsafe { event.as_mut().bind_by_ptr_checked() }; // Returns None
+    /// let endpoints = unsafe { event.as_ref().bind_by_ptr_checked() }.unwrap();
+    /// let endpoints2 = unsafe { event.as_ref().bind_by_ptr_checked() }; // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
     #[must_use]

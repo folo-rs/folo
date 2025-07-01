@@ -57,11 +57,8 @@
 //! dynamic allocation pattern.
 //!
 //! Both single-threaded and thread-safe variants are available:
-//! - [`OnceEvent<T>`], [`ByRefOnceSender<T>`], [`ByRefOnceReceiver<T>`] - Thread-safe variants using references
-//! - [`ByArcOnceSender<T>`], [`ByArcOnceReceiver<T>`] - Thread-safe variants using Arc ownership
-//! - [`ByRcOnceSender<T>`], [`ByRcOnceReceiver<T>`] - Thread-safe variants using Rc ownership (single-threaded)
-//! - [`LocalOnceEvent<T>`], [`ByRefLocalOnceSender<T>`], [`ByRefLocalOnceReceiver<T>`] - Single-threaded variants using references
-//! - [`ByRcLocalOnceSender<T>`], [`ByRcLocalOnceReceiver<T>`] - Single-threaded variants using Rc ownership
+//! - [`OnceEvent<T>`], [`OnceSender<T, R>`], [`OnceReceiver<T, R>`] - Thread-safe variants
+//! - [`LocalOnceEvent<T>`], [`LocalOnceSender<T, R>`], [`LocalOnceReceiver<T, R>`] - Single-threaded variants
 //!
 //! Each receiver type implements [`Future`], allowing you to `.await` them directly.
 //!
