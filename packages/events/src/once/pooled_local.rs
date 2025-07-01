@@ -538,6 +538,7 @@ where
 mod tests {
     use std::rc::Rc;
 
+    use static_assertions::assert_not_impl_any;
     use testing::with_watchdog;
 
     use super::*;
@@ -654,5 +655,17 @@ mod tests {
                 assert_eq!(value2, 2);
             });
         });
+    }
+
+    #[test]
+    fn thread_safety() {
+        // Nothing is Send or Sync - everything is stuck on one thread.
+        assert_not_impl_any!(LocalOnceEventPool<u32>: Send, Sync);
+        assert_not_impl_any!(PooledLocalOnceSender<u32, ByRefLocalPool<'static, u32>>: Send, Sync);
+        assert_not_impl_any!(PooledLocalOnceReceiver<u32, ByRefLocalPool<'static, u32>>: Send, Sync);
+        assert_not_impl_any!(PooledLocalOnceSender<u32, ByRcLocalPool<u32>>: Send, Sync);
+        assert_not_impl_any!(PooledLocalOnceReceiver<u32, ByRcLocalPool<u32>>: Send, Sync);
+        assert_not_impl_any!(PooledLocalOnceSender<u32, ByPtrLocalPool<u32>>: Send, Sync);
+        assert_not_impl_any!(PooledLocalOnceReceiver<u32, ByPtrLocalPool<u32>>: Send, Sync);
     }
 }

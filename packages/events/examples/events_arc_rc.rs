@@ -8,15 +8,9 @@ use std::thread;
 use events::{LocalOnceEvent, OnceEvent};
 use futures::executor::block_on;
 
-/// Example integer value for testing.
-const EXAMPLE_INTEGER: i32 = 42;
-
 fn main() {
     println!("=== Arc-based Event Example ===");
     arc_event_example();
-
-    println!("\n=== Rc-based Event Example ===");
-    rc_event_example();
 
     println!("\n=== Rc-based LocalEvent Example ===");
     rc_local_event_example();
@@ -36,20 +30,6 @@ fn arc_event_example() {
             "sender.send() was called immediately before this, so sender cannot be dropped",
         );
         println!("Received: {message}");
-    });
-}
-
-/// Demonstrates Rc-based event usage.
-fn rc_event_example() {
-    block_on(async {
-        let event = Rc::new(OnceEvent::<i32>::new());
-        let (sender, receiver) = event.bind_by_rc();
-
-        sender.send(EXAMPLE_INTEGER);
-        let value = receiver.await.expect(
-            "sender.send() was called immediately before this, so sender cannot be dropped",
-        );
-        println!("Received: {value}");
     });
 }
 

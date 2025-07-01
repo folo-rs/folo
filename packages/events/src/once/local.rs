@@ -5,20 +5,14 @@
 
 use std::cell::{Cell, UnsafeCell};
 use std::marker::{PhantomData, PhantomPinned};
-use std::mem;
+use std::ops::Deref;
 use std::pin::Pin;
+use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::Waker;
+use std::{mem, task};
 
-use crate::{Disconnected, ValueKind};
-
-mod by_ptr;
-mod by_rc;
-mod by_ref;
-
-pub use by_ptr::*;
-pub use by_rc::*;
-pub use by_ref::*;
+use crate::{Disconnected, Sealed, ValueKind};
 
 /// State of a single-threaded event.
 #[derive(Debug)]
@@ -119,7 +113,13 @@ impl<T> LocalOnceEvent<T> {
     /// let event = LocalOnceEvent::<i32>::new();
     /// let (sender, receiver) = event.bind_by_ref();
     /// ```
-    pub fn bind_by_ref(&self) -> (ByRefLocalOnceSender<'_, T>, ByRefLocalOnceReceiver<'_, T>) {
+    #[must_use]
+    pub fn bind_by_ref(
+        &self,
+    ) -> (
+        LocalOnceSender<T, ByRefLocalEvent<'_, T>>,
+        LocalOnceReceiver<T, ByRefLocalEvent<'_, T>>,
+    ) {
         self.bind_by_ref_checked()
             .expect("LocalOnceEvent has already been bound")
     }
@@ -139,16 +139,24 @@ impl<T> LocalOnceEvent<T> {
     /// let endpoints2 = event.bind_by_ref_checked(); // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
+    #[must_use]
+    #[expect(
+        clippy::type_complexity,
+        reason = "caller is expected to destructure and never to use this type"
+    )]
     pub fn bind_by_ref_checked(
         &self,
-    ) -> Option<(ByRefLocalOnceSender<'_, T>, ByRefLocalOnceReceiver<'_, T>)> {
+    ) -> Option<(
+        LocalOnceSender<T, ByRefLocalEvent<'_, T>>,
+        LocalOnceReceiver<T, ByRefLocalEvent<'_, T>>,
+    )> {
         if self.is_bound.replace(true) {
             return None;
         }
 
         Some((
-            ByRefLocalOnceSender { event: self },
-            ByRefLocalOnceReceiver { event: self },
+            LocalOnceSender::new(ByRefLocalEvent { event: self }),
+            LocalOnceReceiver::new(ByRefLocalEvent { event: self }),
         ))
     }
 
@@ -171,7 +179,13 @@ impl<T> LocalOnceEvent<T> {
     /// let event = Rc::new(LocalOnceEvent::<i32>::new());
     /// let (sender, receiver) = event.bind_by_rc();
     /// ```
-    pub fn bind_by_rc(self: &Rc<Self>) -> (ByRcLocalOnceSender<T>, ByRcLocalOnceReceiver<T>) {
+    #[must_use]
+    pub fn bind_by_rc(
+        self: &Rc<Self>,
+    ) -> (
+        LocalOnceSender<T, ByRcLocalEvent<T>>,
+        LocalOnceReceiver<T, ByRcLocalEvent<T>>,
+    ) {
         self.bind_by_rc_checked()
             .expect("OnceEvent has already been bound")
     }
@@ -195,20 +209,28 @@ impl<T> LocalOnceEvent<T> {
     /// let endpoints2 = event.bind_by_rc_checked(); // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
+    #[must_use]
+    #[expect(
+        clippy::type_complexity,
+        reason = "caller is expected to destructure and never to use this type"
+    )]
     pub fn bind_by_rc_checked(
         self: &Rc<Self>,
-    ) -> Option<(ByRcLocalOnceSender<T>, ByRcLocalOnceReceiver<T>)> {
+    ) -> Option<(
+        LocalOnceSender<T, ByRcLocalEvent<T>>,
+        LocalOnceReceiver<T, ByRcLocalEvent<T>>,
+    )> {
         if self.is_bound.replace(true) {
             return None;
         }
 
         Some((
-            ByRcLocalOnceSender {
+            LocalOnceSender::new(ByRcLocalEvent {
                 event: Rc::clone(self),
-            },
-            ByRcLocalOnceReceiver {
+            }),
+            LocalOnceReceiver::new(ByRcLocalEvent {
                 event: Rc::clone(self),
-            },
+            }),
         ))
     }
 
@@ -243,8 +265,11 @@ impl<T> LocalOnceEvent<T> {
     /// ```
     #[must_use]
     pub unsafe fn bind_by_ptr(
-        self: Pin<&mut Self>,
-    ) -> (ByPtrLocalOnceSender<T>, ByPtrLocalOnceReceiver<T>) {
+        self: Pin<&Self>,
+    ) -> (
+        LocalOnceSender<T, ByPtrLocalEvent<T>>,
+        LocalOnceReceiver<T, ByPtrLocalEvent<T>>,
+    ) {
         // SAFETY: Caller has guaranteed event lifetime management
         unsafe { self.bind_by_ptr_checked() }.expect("OnceEvent has already been bound")
     }
@@ -274,21 +299,25 @@ impl<T> LocalOnceEvent<T> {
     /// assert!(endpoints2.is_none());
     /// ```
     #[must_use]
+    #[expect(
+        clippy::type_complexity,
+        reason = "caller is expected to destructure and never to use this type"
+    )]
     pub unsafe fn bind_by_ptr_checked(
-        self: Pin<&mut Self>,
-    ) -> Option<(ByPtrLocalOnceSender<T>, ByPtrLocalOnceReceiver<T>)> {
-        // SAFETY: We need to access the mutable reference to check/set the used flag
-        // The caller guarantees the event remains pinned and valid
-        let this = unsafe { self.get_unchecked_mut() };
-
-        if this.is_bound.replace(true) {
+        self: Pin<&Self>,
+    ) -> Option<(
+        LocalOnceSender<T, ByPtrLocalEvent<T>>,
+        LocalOnceReceiver<T, ByPtrLocalEvent<T>>,
+    )> {
+        if self.is_bound.replace(true) {
             return None;
         }
 
-        let event_ptr: *const Self = this;
+        let event_ptr = NonNull::from(self.get_ref());
+
         Some((
-            ByPtrLocalOnceSender { event: event_ptr },
-            ByPtrLocalOnceReceiver { event: event_ptr },
+            LocalOnceSender::new(ByPtrLocalEvent { event: event_ptr }),
+            LocalOnceReceiver::new(ByPtrLocalEvent { event: event_ptr }),
         ))
     }
 
@@ -360,7 +389,7 @@ impl<T> LocalOnceEvent<T> {
     }
 
     #[cfg_attr(test, mutants::skip)] // Critical primitive - causes test timeouts if tampered.
-    pub(crate) fn sender_dropped(&self) {
+    fn sender_dropped(&self) {
         // SAFETY: See comments on field.
         let state = unsafe { &mut *self.state.get() };
 
@@ -385,6 +414,178 @@ impl<T> LocalOnceEvent<T> {
 impl<T> Default for LocalOnceEvent<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Enables a sender or receiver to reference the event that connects them.
+///
+/// This is a sealed trait and exists for internal use only. You never need to use it.
+#[expect(private_bounds, reason = "intentional - sealed trait")]
+pub trait LocalEventRef<T>: Deref<Target = LocalOnceEvent<T>> + Sealed {}
+
+/// An event referenced via `&` shared reference.
+///
+/// Only used in type names. Instances are created internally by [`LocalOnceEvent`].
+#[derive(Copy, Debug)]
+pub struct ByRefLocalEvent<'a, T> {
+    event: &'a LocalOnceEvent<T>,
+}
+
+impl<T> Sealed for ByRefLocalEvent<'_, T> {}
+impl<T> LocalEventRef<T> for ByRefLocalEvent<'_, T> {}
+impl<T> Deref for ByRefLocalEvent<'_, T> {
+    type Target = LocalOnceEvent<T>;
+
+    fn deref(&self) -> &Self::Target {
+        self.event
+    }
+}
+impl<T> Clone for ByRefLocalEvent<'_, T> {
+    fn clone(&self) -> Self {
+        Self { event: self.event }
+    }
+}
+
+/// An event referenced via `Rc` shared reference.
+///
+/// Only used in type names. Instances are created internally by [`LocalOnceEvent`].
+#[derive(Debug)]
+pub struct ByRcLocalEvent<T> {
+    event: Rc<LocalOnceEvent<T>>,
+}
+
+impl<T> Sealed for ByRcLocalEvent<T> {}
+impl<T> LocalEventRef<T> for ByRcLocalEvent<T> {}
+impl<T> Deref for ByRcLocalEvent<T> {
+    type Target = LocalOnceEvent<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.event
+    }
+}
+impl<T> Clone for ByRcLocalEvent<T> {
+    fn clone(&self) -> Self {
+        Self {
+            event: Rc::clone(&self.event),
+        }
+    }
+}
+
+/// An event referenced via raw pointer.
+///
+/// Only used in type names. Instances are created internally by [`LocalOnceEvent`].
+#[derive(Copy, Debug)]
+pub struct ByPtrLocalEvent<T> {
+    event: NonNull<LocalOnceEvent<T>>,
+}
+
+impl<T> Sealed for ByPtrLocalEvent<T> {}
+impl<T> LocalEventRef<T> for ByPtrLocalEvent<T> {}
+impl<T> Deref for ByPtrLocalEvent<T> {
+    type Target = LocalOnceEvent<T>;
+
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: The creator of the reference is responsible for ensuring the event outlives it.
+        unsafe { self.event.as_ref() }
+    }
+}
+impl<T> Clone for ByPtrLocalEvent<T> {
+    fn clone(&self) -> Self {
+        Self { event: self.event }
+    }
+}
+
+/// A sender that can send a value through a single-threaded event using Rc ownership.
+///
+/// The sender owns an Rc to the event and is single-threaded.
+/// After calling [`send`](LocalOnceSender::send), the sender is consumed.
+#[derive(Debug)]
+pub struct LocalOnceSender<T, R>
+where
+    R: LocalEventRef<T>,
+{
+    event_ref: R,
+
+    _t: PhantomData<T>,
+}
+
+impl<T, R> LocalOnceSender<T, R>
+where
+    R: LocalEventRef<T>,
+{
+    fn new(event_ref: R) -> Self {
+        Self {
+            event_ref,
+            _t: PhantomData,
+        }
+    }
+
+    /// Sends a value through the event.
+    ///
+    /// This method consumes the sender and always succeeds, regardless of whether
+    /// there is a receiver waiting.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::rc::Rc;
+    ///
+    /// use events::LocalOnceEvent;
+    ///
+    /// let event = Rc::new(LocalOnceEvent::<i32>::new());
+    /// let (sender, _receiver) = event.bind_by_rc();
+    /// sender.send(42);
+    /// ```
+    pub fn send(self, value: T) {
+        self.event_ref.set(value);
+    }
+}
+
+impl<T, R> Drop for LocalOnceSender<T, R>
+where
+    R: LocalEventRef<T>,
+{
+    fn drop(&mut self) {
+        self.event_ref.sender_dropped();
+    }
+}
+
+/// A receiver that can receive a value from a single-threaded event using Rc ownership.
+///
+/// The receiver owns an Rc to the event and is single-threaded.
+/// After awaiting the receiver, it is consumed.
+#[derive(Debug)]
+pub struct LocalOnceReceiver<T, R>
+where
+    R: LocalEventRef<T>,
+{
+    event_ref: R,
+
+    _t: PhantomData<T>,
+}
+
+impl<T, R> LocalOnceReceiver<T, R>
+where
+    R: LocalEventRef<T>,
+{
+    fn new(event_ref: R) -> Self {
+        Self {
+            event_ref,
+            _t: PhantomData,
+        }
+    }
+}
+
+impl<T, R> Future for LocalOnceReceiver<T, R>
+where
+    R: LocalEventRef<T>,
+{
+    type Output = Result<T, Disconnected>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
+        self.event_ref
+            .poll(cx.waker())
+            .map_or_else(|| task::Poll::Pending, task::Poll::Ready)
     }
 }
 
@@ -511,18 +712,12 @@ mod tests {
     }
 
     #[test]
-    fn rc_types_not_send_sync() {
-        assert_not_impl_any!(ByRcLocalOnceSender<i32>: Send, Sync);
-        assert_not_impl_any!(ByRcLocalOnceReceiver<i32>: Send, Sync);
-    }
-
-    #[test]
     fn local_event_by_ptr_basic() {
         with_watchdog(|| {
-            let mut event = Box::pin(LocalOnceEvent::<String>::new());
+            let event = Box::pin(LocalOnceEvent::<String>::new());
 
             // SAFETY: We ensure the event outlives the sender and receiver within this test
-            let (sender, receiver) = unsafe { event.as_mut().bind_by_ptr() };
+            let (sender, receiver) = unsafe { event.as_ref().bind_by_ptr() };
 
             sender.send("Hello from pointer".to_string());
             let value = futures::executor::block_on(receiver);
@@ -534,16 +729,16 @@ mod tests {
     #[test]
     fn local_event_by_ptr_checked_returns_none_after_use() {
         with_watchdog(|| {
-            let mut event = Box::pin(LocalOnceEvent::<String>::new());
+            let event = Box::pin(LocalOnceEvent::<String>::new());
 
             // SAFETY: We ensure the event outlives the sender and receiver within this test
-            let endpoints = unsafe { event.as_mut().bind_by_ptr_checked() };
+            let endpoints = unsafe { event.as_ref().bind_by_ptr_checked() };
 
             assert!(endpoints.is_some());
 
             // Second call should return None
             // SAFETY: We ensure the event outlives the endpoints within this test
-            let endpoints2 = unsafe { event.as_mut().bind_by_ptr_checked() };
+            let endpoints2 = unsafe { event.as_ref().bind_by_ptr_checked() };
             assert!(endpoints2.is_none());
         });
     }
@@ -564,5 +759,17 @@ mod tests {
                 assert!(matches!(result, Err(Disconnected { .. })));
             });
         });
+    }
+
+    #[test]
+    fn thread_safety() {
+        // Nothing is Send or Sync - everything is stuck on one thread.
+        assert_not_impl_any!(LocalOnceEvent<u32>: Send, Sync);
+        assert_not_impl_any!(LocalOnceSender<u32, ByRefLocalEvent<'static, u32>>: Send, Sync);
+        assert_not_impl_any!(LocalOnceReceiver<u32, ByRefLocalEvent<'static, u32>>: Send, Sync);
+        assert_not_impl_any!(LocalOnceSender<u32, ByRcLocalEvent<u32>>: Send, Sync);
+        assert_not_impl_any!(LocalOnceReceiver<u32, ByRcLocalEvent<u32>>: Send, Sync);
+        assert_not_impl_any!(LocalOnceSender<u32, ByPtrLocalEvent<u32>>: Send, Sync);
+        assert_not_impl_any!(LocalOnceReceiver<u32, ByPtrLocalEvent<u32>>: Send, Sync);
     }
 }

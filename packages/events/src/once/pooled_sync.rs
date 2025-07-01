@@ -982,7 +982,7 @@ mod tests {
     }
 
     #[test]
-    fn thread_safe_types() {
+    fn thread_safety() {
         // The pool is accessed across threads, so requires Sync as well as Send.
         assert_impl_all!(OnceEventPool<u32>: Send, Sync);
 
