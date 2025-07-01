@@ -287,7 +287,7 @@ regular_field: just some text
 special_field: ':::starts with special characters, needs quoting'
 ```
 
-# Use imports
+# Use imports and do not reference types via absolute paths
 
 Types we reference should be imported via `use` statements. Unless there is a specific need
 to disambiguate between similarly named types, do not use absolute paths to types.
@@ -409,3 +409,11 @@ looser rules can be allowed.
 # Replacing text in code files
 
 Prefer applying diffs over generating regex-replace commands for the terminal.
+
+# Avoid the `pin!` macro in tests and examples
+
+This macro is special-purpose and not intended for general use. Instead, use
+`Box::pin(value)` to pin a value in examples.
+
+If there is some reason `Box::pin(value)` would not work, you can use `std::pin::pin!(value)`
+as a last resort but leave a comment to justify why this is the case.

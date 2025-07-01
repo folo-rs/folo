@@ -32,14 +32,11 @@ impl<T> ByPtrLocalOnceSender<T> {
     /// # Example
     ///
     /// ```rust
-    /// use std::pin::Pin;
-    ///
     /// use events::LocalOnceEvent;
     ///
-    /// let mut event = LocalOnceEvent::<i32>::new();
-    /// let pinned_event = Pin::new(&mut event);
+    /// let mut event = Box::pin(LocalOnceEvent::<i32>::new());
     /// // SAFETY: We ensure the event outlives the sender and receiver
-    /// let (sender, _receiver) = unsafe { pinned_event.bind_by_ptr() };
+    /// let (sender, _receiver) = unsafe { event.as_mut().bind_by_ptr() };
     /// sender.send(42);
     /// ```
     pub fn send(self, value: T) {

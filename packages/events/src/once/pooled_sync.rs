@@ -152,13 +152,13 @@ where
     /// let pool = Rc::new(OnceEventPool::<i32>::new());
     ///
     /// // First usage
-    /// let (sender1, receiver1) = pool.bind_by_rc(&pool);
+    /// let (sender1, receiver1) = pool.bind_by_rc();
     /// sender1.send(42);
     /// let value1 = receiver1.recv_async().await.unwrap();
     /// assert_eq!(value1, 42);
     ///
     /// // Second usage - reuses the same event from the pool
-    /// let (sender2, receiver2) = pool.bind_by_rc(&pool);
+    /// let (sender2, receiver2) = pool.bind_by_rc();
     /// sender2.send(100);
     /// let value2 = receiver2.recv_async().await.unwrap();
     /// assert_eq!(value2, 100);
@@ -205,13 +205,13 @@ where
     /// let pool = Arc::new(OnceEventPool::<i32>::new());
     ///
     /// // First usage
-    /// let (sender1, receiver1) = pool.bind_by_arc(&pool);
+    /// let (sender1, receiver1) = pool.bind_by_arc();
     /// sender1.send(42);
     /// let value1 = futures::executor::block_on(receiver1.recv_async()).unwrap();
     /// assert_eq!(value1, 42);
     ///
     /// // Second usage - efficiently reuses the same pooled event
-    /// let (sender2, receiver2) = pool.bind_by_arc(&pool);
+    /// let (sender2, receiver2) = pool.bind_by_arc();
     /// sender2.send(200);
     /// let value2 = futures::executor::block_on(receiver2.recv_async()).unwrap();
     /// assert_eq!(value2, 200);
@@ -256,23 +256,20 @@ where
     /// # Example
     ///
     /// ```rust
-    /// use std::pin::Pin;
-    ///
     /// use events::OnceEventPool;
     ///
-    /// let pool = OnceEventPool::<i32>::new();
-    /// let pinned_pool = Pin::new(&pool);
+    /// let pool = Box::pin(OnceEventPool::<i32>::new());
     ///
     /// // First usage
     /// // SAFETY: We ensure the pool outlives the sender and receiver
-    /// let (sender1, receiver1) = unsafe { pinned_pool.bind_by_ptr() };
+    /// let (sender1, receiver1) = unsafe { pool.as_ref().bind_by_ptr() };
     /// sender1.send(42);
     /// let value1 = futures::executor::block_on(receiver1.recv_async()).unwrap();
     /// assert_eq!(value1, 42);
     ///
     /// // Second usage - reuses the same event from the pool efficiently
     /// // SAFETY: Pool is still valid and pinned
-    /// let (sender2, receiver2) = unsafe { pinned_pool.bind_by_ptr() };
+    /// let (sender2, receiver2) = unsafe { pool.as_ref().bind_by_ptr() };
     /// sender2.send(100);
     /// let value2 = futures::executor::block_on(receiver2.recv_async()).unwrap();
     /// assert_eq!(value2, 100);
@@ -768,12 +765,10 @@ mod tests {
     fn by_ptr_drop_actually_cleans_up_pool() {
         // Test ptr-based pooled events cleanup by checking pool state
         for iteration in 0..10 {
-            let pool = OnceEventPool::<u32>::new();
-
             {
-                let pool_pin = std::pin::pin!(pool);
+                let pool = Box::pin(OnceEventPool::<u32>::new());
                 // SAFETY: We pin the pool for the duration of by_ptr call
-                let (_sender, _receiver) = unsafe { pool_pin.as_ref().bind_by_ptr() };
+                let (_sender, _receiver) = unsafe { pool.as_ref().bind_by_ptr() };
                 // sender and receiver will be dropped here
             }
 

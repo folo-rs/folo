@@ -293,16 +293,13 @@ where
     /// # Example
     ///
     /// ```rust
-    /// use std::pin::Pin;
-    ///
     /// use events::OnceEvent;
     /// # use futures::executor::block_on;
     ///
     /// # block_on(async {
-    /// let mut event = OnceEvent::<i32>::new();
-    /// let pinned_event = Pin::new(&mut event);
+    /// let mut event = Box::pin(OnceEvent::<i32>::new());
     /// // SAFETY: We ensure the event outlives the sender and receiver
-    /// let (sender, receiver) = unsafe { pinned_event.bind_by_ptr() };
+    /// let (sender, receiver) = unsafe { event.as_mut().bind_by_ptr() };
     ///
     /// sender.send(42);
     /// let value = receiver.await.unwrap();
@@ -336,12 +333,10 @@ where
     ///
     /// use events::OnceEvent;
     ///
-    /// let mut event = OnceEvent::<i32>::new();
-    /// let pinned_event = Pin::new(&mut event);
+    /// let mut event = Box::pin(OnceEvent::<i32>::new());
     /// // SAFETY: We ensure the event outlives the sender and receiver
-    /// let endpoints = unsafe { pinned_event.bind_by_ptr_checked() }.unwrap();
-    /// let pinned_event2 = Pin::new(&mut event);
-    /// let endpoints2 = unsafe { pinned_event2.bind_by_ptr_checked() }; // Returns None
+    /// let endpoints = unsafe { event.as_mut().bind_by_ptr_checked() }.unwrap();
+    /// let endpoints2 = unsafe { event.as_mut().bind_by_ptr_checked() }; // Returns None
     /// assert!(endpoints2.is_none());
     /// ```
     #[must_use]

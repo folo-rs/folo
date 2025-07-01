@@ -37,7 +37,7 @@ impl<T> ByRcPooledLocalOnceSender<T> {
     /// use events::LocalOnceEventPool;
     ///
     /// let pool = Rc::new(LocalOnceEventPool::new());
-    /// let (sender, receiver) = pool.bind_by_rc(&pool);
+    /// let (sender, receiver) = pool.bind_by_rc();
     ///
     /// sender.send(42);
     /// let value = futures::executor::block_on(receiver).unwrap();
