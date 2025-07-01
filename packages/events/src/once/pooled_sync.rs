@@ -889,7 +889,7 @@ mod tests {
 
         // Pool should be cleaned up - all events should be removed
         // If Drop implementations don't work, pool will retain unused events
-        let mut pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
+        let mut pool_guard = pool.pool.lock().unwrap();
         assert_eq!(
             pool_guard.len(),
             0,
@@ -916,7 +916,7 @@ mod tests {
         }
 
         // Pool should be cleaned up - all events should be removed
-        let mut pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
+        let mut pool_guard = pool.pool.lock().unwrap();
         assert_eq!(
             pool_guard.len(),
             0,
@@ -955,7 +955,7 @@ mod tests {
 
         // Test 1: Check that events are added to pool
         let pool_len_before = {
-            let pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
+            let pool_guard = pool.pool.lock().unwrap();
             pool_guard.len()
         };
 
@@ -973,7 +973,7 @@ mod tests {
 
         // Now check that cleanup worked
         let pool_len_after = {
-            let pool_guard = pool.pool.lock().expect("pool mutex should not be poisoned");
+            let pool_guard = pool.pool.lock().unwrap();
             pool_guard.len()
         };
         assert_eq!(
