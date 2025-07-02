@@ -12,7 +12,7 @@ use std::alloc::System;
 use std::hint::black_box;
 use std::time::Instant;
 
-use alloc_tracker::{Allocator, Session, TrackedOperation, TrackedOperationSet};
+use alloc_tracker::{Allocator, Session, Operation, OperationSet};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 
 criterion_group!(benches, entrypoint);
@@ -24,15 +24,15 @@ static ALLOCATOR: Allocator<System> = Allocator::system();
 fn entrypoint(c: &mut Criterion) {
     let session = Session::new();
 
-    let mut memory_results = TrackedOperationSet::new();
+    let mut memory_results = OperationSet::new();
 
     let mut group = c.benchmark_group("memory_usage");
 
     group.bench_function("string_formatting", |b| {
-        let mut average_memory_delta = TrackedOperation::new("string_formatting".to_string());
+        let mut average_memory_delta = Operation::new("string_formatting".to_string());
 
         b.iter(|| {
-            let _contributor = average_memory_delta.contribute(&session);
+            let _contributor = average_memory_delta.span(&session);
 
             let part1 = black_box("Hello, ");
             let part2 = black_box("world!");
@@ -45,12 +45,12 @@ fn entrypoint(c: &mut Criterion) {
 
     group.bench_function("string_formatting_batched", |b| {
         let mut average_memory_delta =
-            TrackedOperation::new("string_formatting_batched".to_string());
+            Operation::new("string_formatting_batched".to_string());
 
         b.iter_batched_ref(
             || (),
             |()| {
-                let _contributor = average_memory_delta.contribute(&session);
+                let _contributor = average_memory_delta.span(&session);
 
                 let part1 = black_box("Hello, ");
                 let part2 = black_box("world!");
@@ -65,13 +65,13 @@ fn entrypoint(c: &mut Criterion) {
 
     group.bench_function("string_formatting_custom", |b| {
         let mut average_memory_delta =
-            TrackedOperation::new("string_formatting_custom".to_string());
+            Operation::new("string_formatting_custom".to_string());
 
         b.iter_custom(|iters| {
             let start = Instant::now();
 
             for _ in 0..iters {
-                let _contributor = average_memory_delta.contribute(&session);
+                let _contributor = average_memory_delta.span(&session);
 
                 let part1 = black_box("Hello, ");
                 let part2 = black_box("world!");
@@ -86,10 +86,10 @@ fn entrypoint(c: &mut Criterion) {
     });
 
     group.bench_function("vector_allocation", |b| {
-        let mut average_memory_delta = TrackedOperation::new("vector_allocation".to_string());
+        let mut average_memory_delta = Operation::new("vector_allocation".to_string());
 
         b.iter(|| {
-            let _contributor = average_memory_delta.contribute(&session);
+            let _contributor = average_memory_delta.span(&session);
 
             let size = black_box(100);
             let data = vec![0_u64; size];
@@ -100,10 +100,10 @@ fn entrypoint(c: &mut Criterion) {
     });
 
     group.bench_function("box_allocation", |b| {
-        let mut average_memory_delta = TrackedOperation::new("box_allocation".to_string());
+        let mut average_memory_delta = Operation::new("box_allocation".to_string());
 
         b.iter(|| {
-            let _contributor = average_memory_delta.contribute(&session);
+            let _contributor = average_memory_delta.span(&session);
 
             let data = Box::new([0_u8; 1000]);
             black_box(data);

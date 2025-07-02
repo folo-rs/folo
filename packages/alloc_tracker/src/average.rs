@@ -1,6 +1,6 @@
 //! Average memory allocation tracking.
 
-use crate::delta::TrackedSpan;
+use crate::delta::Span;
 use crate::session::Session;
 
 /// Calculates average memory allocation per operation across multiple iterations.
@@ -13,17 +13,17 @@ use crate::session::Session;
 /// ```
 /// use std::alloc::System;
 ///
-/// use alloc_tracker::{Session, TrackedOperation, Allocator};
+/// use alloc_tracker::{Session, Operation, Allocator};
 ///
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<System> = Allocator::system();
 ///
 /// let session = Session::new();
-/// let mut average = TrackedOperation::new("string_allocations".to_string());
+/// let mut average = Operation::new("string_allocations".to_string());
 ///
 /// // Simulate multiple operations
 /// for i in 0..5 {
-///     let _contributor = average.contribute(&session);
+///     let _contributor = average.span(&session);
 ///     let _data = vec![0; i + 1]; // Allocate different amounts
 /// }
 ///
@@ -31,13 +31,13 @@ use crate::session::Session;
 /// println!("Average allocation: {} bytes per operation", avg_bytes);
 /// ```
 #[derive(Debug)]
-pub struct TrackedOperation {
+pub struct Operation {
     name: String,
     total_bytes_allocated: u64,
     iterations: u64,
 }
 
-impl TrackedOperation {
+impl Operation {
     /// Creates a new average memory delta calculator with the given name.
     #[must_use]
     pub fn new(name: String) -> Self {
@@ -56,35 +56,35 @@ impl TrackedOperation {
 
     /// Adds a memory delta measurement to the average calculation.
     ///
-    /// This method is typically called by [`TrackedOperationSpan`] when it is dropped.
+    /// This method is typically called by [`OperationSpan`] when it is dropped.
     pub fn add(&mut self, delta: u64) {
         // Never going to overflow u64, so no point doing slower checked arithmetic here.
         self.total_bytes_allocated = self.total_bytes_allocated.wrapping_add(delta);
         self.iterations = self.iterations.wrapping_add(1);
     }
 
-    /// Creates a contributor that will automatically measure and add a memory delta
-    /// when it is dropped.
+    /// Creates a span that is associated the the operation and will automatically
+    /// track allocations from now until it is dropped.
     ///
     /// # Examples
     ///
     /// ```
     /// use std::alloc::System;
     ///
-    /// use alloc_tracker::{Session, TrackedOperation, Allocator};
+    /// use alloc_tracker::{Session, Operation, Allocator};
     ///
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<System> = Allocator::system();
     ///
     /// let session = Session::new();
-    /// let mut average = TrackedOperation::new("test".to_string());
+    /// let mut average = Operation::new("test".to_string());
     /// {
-    ///     let _contributor = average.contribute(&session);
+    ///     let _contributor = average.span(&session);
     ///     let _data = vec![1, 2, 3]; // This allocation will be measured
     /// } // Contributor is dropped here, measurement is added to average
     /// ```
-    pub fn contribute<'a>(&'a mut self, session: &'a Session) -> TrackedOperationSpan<'a> {
-        TrackedOperationSpan::new(self, session)
+    pub fn span<'a>(&'a mut self, session: &'a Session) -> OperationSpan<'a> {
+        OperationSpan::new(self, session)
     }
 
     /// Calculates the average bytes allocated per iteration.
@@ -117,43 +117,39 @@ impl TrackedOperation {
     }
 }
 
-/// A contributor to average memory delta calculation that automatically measures
-/// memory allocation when dropped.
-///
-/// This type is created by [`TrackedOperation::contribute()`] and should not be
-/// constructed directly. When dropped, it automatically measures the memory delta
-/// since its creation and adds it to the associated [`TrackedOperation`].
+/// An allocation tracker span that is associated with an operation. It will take measurements
+/// between creation and drop and contribute them to the operation's statistics.
 ///
 /// # Examples
 ///
 /// ```
 /// use std::alloc::System;
 ///
-/// use alloc_tracker::{Session, TrackedOperation, Allocator};
+/// use alloc_tracker::{Session, Operation, Allocator};
 ///
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<System> = Allocator::system();
 ///
 /// let session = Session::new();
-/// let mut average = TrackedOperation::new("test".to_string());
+/// let mut average = Operation::new("test".to_string());
 /// {
-///     let _contributor = average.contribute(&session);
+///     let _contributor = average.span(&session);
 ///     // Perform some operation that allocates memory
 ///     let _data = String::from("Hello, world!");
 /// } // Memory delta is automatically measured and recorded here
 /// ```
 #[derive(Debug)]
-pub struct TrackedOperationSpan<'a> {
-    average_memory_delta: &'a mut TrackedOperation,
-    memory_delta_tracker: TrackedSpan<'a>,
+pub struct OperationSpan<'a> {
+    average_memory_delta: &'a mut Operation,
+    memory_delta_tracker: Span<'a>,
 }
 
-impl<'a> TrackedOperationSpan<'a> {
+impl<'a> OperationSpan<'a> {
     pub(crate) fn new(
-        average_memory_delta: &'a mut TrackedOperation,
+        average_memory_delta: &'a mut Operation,
         session: &'a Session,
     ) -> Self {
-        let memory_delta_tracker = TrackedSpan::new(session);
+        let memory_delta_tracker = Span::new(session);
 
         Self {
             average_memory_delta,
@@ -162,7 +158,7 @@ impl<'a> TrackedOperationSpan<'a> {
     }
 }
 
-impl Drop for TrackedOperationSpan<'_> {
+impl Drop for OperationSpan<'_> {
     fn drop(&mut self) {
         let delta = self.memory_delta_tracker.to_delta();
         self.average_memory_delta.add(delta);
@@ -188,7 +184,7 @@ mod tests {
 
     #[test]
     fn average_memory_delta_new() {
-        let average = TrackedOperation::new("test".to_string());
+        let average = Operation::new("test".to_string());
         assert_eq!(average.name(), "test");
         assert_eq!(average.average(), 0);
         assert_eq!(average.iterations(), 0);
@@ -197,7 +193,7 @@ mod tests {
 
     #[test]
     fn average_memory_delta_add_single() {
-        let mut average = TrackedOperation::new("test".to_string());
+        let mut average = Operation::new("test".to_string());
         average.add(100);
 
         assert_eq!(average.average(), 100);
@@ -207,7 +203,7 @@ mod tests {
 
     #[test]
     fn average_memory_delta_add_multiple() {
-        let mut average = TrackedOperation::new("test".to_string());
+        let mut average = Operation::new("test".to_string());
         average.add(100);
         average.add(200);
         average.add(300);
@@ -219,7 +215,7 @@ mod tests {
 
     #[test]
     fn average_memory_delta_add_zero() {
-        let mut average = TrackedOperation::new("test".to_string());
+        let mut average = Operation::new("test".to_string());
         average.add(0);
         average.add(0);
 
@@ -231,10 +227,10 @@ mod tests {
     #[test]
     fn average_memory_delta_contributor_drop() {
         let session = create_test_session();
-        let mut average = TrackedOperation::new("test".to_string());
+        let mut average = Operation::new("test".to_string());
 
         {
-            let _contributor = average.contribute(&session);
+            let _contributor = average.span(&session);
             // Simulate allocation
             TOTAL_BYTES_ALLOCATED.fetch_add(75, atomic::Ordering::Relaxed);
         } // Contributor drops here
@@ -247,17 +243,17 @@ mod tests {
     #[test]
     fn average_memory_delta_multiple_contributors() {
         let session = create_test_session();
-        let mut average = TrackedOperation::new("test".to_string());
+        let mut average = Operation::new("test".to_string());
 
         // First contributor
         {
-            let _contributor = average.contribute(&session);
+            let _contributor = average.span(&session);
             TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
         }
 
         // Second contributor
         {
-            let _contributor = average.contribute(&session);
+            let _contributor = average.span(&session);
             TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
         }
 
@@ -269,10 +265,10 @@ mod tests {
     #[test]
     fn average_memory_delta_contributor_no_allocation() {
         let session = create_test_session();
-        let mut average = TrackedOperation::new("test".to_string());
+        let mut average = Operation::new("test".to_string());
 
         {
-            let _contributor = average.contribute(&session);
+            let _contributor = average.span(&session);
             // No allocation
         }
 

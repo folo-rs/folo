@@ -16,24 +16,24 @@ use crate::tracker::TOTAL_BYTES_ALLOCATED;
 /// ```
 /// use std::alloc::System;
 ///
-/// use alloc_tracker::{Session, TrackedSpan, Allocator};
+/// use alloc_tracker::{Session, Span, Allocator};
 ///
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<System> = Allocator::system();
 ///
 /// let session = Session::new();
-/// let tracker = TrackedSpan::new(&session);
+/// let tracker = Span::new(&session);
 /// let data = vec![1, 2, 3, 4, 5]; // This allocates memory
 /// let delta = tracker.to_delta();
 /// // delta will be >= the size of the vector allocation
 /// ```
 #[derive(Debug)]
-pub struct TrackedSpan<'a> {
+pub struct Span<'a> {
     initial_bytes_allocated: u64,
     _session: &'a Session,
 }
 
-impl<'a> TrackedSpan<'a> {
+impl<'a> Span<'a> {
     /// Creates a new memory delta tracker, capturing the current allocation count.
     ///
     /// Requires an active allocation tracking session to ensure tracking is enabled.
@@ -81,14 +81,14 @@ mod tests {
     #[test]
     fn memory_delta_tracker_new() {
         let session = create_test_session();
-        let tracker = TrackedSpan::new(&session);
+        let tracker = Span::new(&session);
         assert_eq!(tracker.to_delta(), 0);
     }
 
     #[test]
     fn memory_delta_tracker_with_simulated_allocation() {
         let session = create_test_session();
-        let tracker = TrackedSpan::new(&session);
+        let tracker = Span::new(&session);
 
         // Simulate some allocation by manually adding to the counter
         TOTAL_BYTES_ALLOCATED.fetch_add(150, atomic::Ordering::Relaxed);
@@ -99,12 +99,12 @@ mod tests {
     #[test]
     fn memory_delta_tracker_multiple_trackers() {
         let session = create_test_session();
-        let tracker1 = TrackedSpan::new(&session);
+        let tracker1 = Span::new(&session);
 
         // Simulate allocation
         TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
 
-        let tracker2 = TrackedSpan::new(&session);
+        let tracker2 = Span::new(&session);
 
         // Simulate more allocation
         TOTAL_BYTES_ALLOCATED.fetch_add(50, atomic::Ordering::Relaxed);

@@ -11,7 +11,7 @@
 
 use std::alloc::System;
 
-use alloc_tracker::{Allocator, Session, TrackedOperation, TrackedOperationSet};
+use alloc_tracker::{Allocator, Session, Operation, OperationSet};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -23,7 +23,7 @@ fn main() {
     println!("=== Simplified Allocation Tracking API ===\n");
 
     // Track different operations
-    let mut results = TrackedOperationSet::new();
+    let mut results = OperationSet::new();
 
     // Vector operations
     let vec_measurement = measure_vector_operations(&session);
@@ -49,12 +49,12 @@ fn main() {
     println!("\nTotal operations measured: {}", results.len());
 }
 
-fn measure_vector_operations(session: &Session) -> TrackedOperation {
-    let mut measurement = TrackedOperation::new("vector_operations".to_string());
+fn measure_vector_operations(session: &Session) -> Operation {
+    let mut measurement = Operation::new("vector_operations".to_string());
 
     println!("Measuring vector operations...");
     for size in [10, 100, 1000] {
-        let _contributor = measurement.contribute(session);
+        let _contributor = measurement.span(session);
         let _vec: Vec<u64> = (0..size).collect();
     }
 
@@ -62,12 +62,12 @@ fn measure_vector_operations(session: &Session) -> TrackedOperation {
     measurement
 }
 
-fn measure_string_operations(session: &Session) -> TrackedOperation {
-    let mut measurement = TrackedOperation::new("string_operations".to_string());
+fn measure_string_operations(session: &Session) -> Operation {
+    let mut measurement = Operation::new("string_operations".to_string());
 
     println!("Measuring string operations...");
     for i in 0..5 {
-        let _contributor = measurement.contribute(session);
+        let _contributor = measurement.span(session);
         let _string = format!("Test string number {i} with variable length content");
     }
 
@@ -75,12 +75,12 @@ fn measure_string_operations(session: &Session) -> TrackedOperation {
     measurement
 }
 
-fn measure_hashmap_operations(session: &Session) -> TrackedOperation {
-    let mut measurement = TrackedOperation::new("hashmap_operations".to_string());
+fn measure_hashmap_operations(session: &Session) -> Operation {
+    let mut measurement = Operation::new("hashmap_operations".to_string());
 
     println!("Measuring HashMap operations...");
     for size in [5, 10, 20] {
-        let _contributor = measurement.contribute(session);
+        let _contributor = measurement.span(session);
         let mut map = std::collections::HashMap::new();
         for i in 0..size {
             map.insert(format!("key_{i}"), i * 2);

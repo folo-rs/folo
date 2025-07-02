@@ -6,9 +6,9 @@
 //! The core functionality includes:
 //! - [`Allocator`] - A Rust memory allocator wrapper that enables allocation tracking
 //! - [`Session`] - Configures allocation tracking and provides access to tracking data
-//! - [`TrackedSpan`] - Tracks memory allocation changes over a time period
-//! - [`TrackedOperation`] - Calculates average memory allocation per operation
-//! - [`TrackedOperationSet`] - Collects and displays memory usage measurements
+//! - [`Span`] - Tracks memory allocation changes over a time period
+//! - [`Operation`] - Calculates average memory allocation per operation
+//! - [`OperationSet`] - Collects and displays memory usage measurements
 //!
 //! # Quick Start
 //!
@@ -26,7 +26,7 @@
 //! ```
 //! use std::alloc::System;
 //!
-//! use alloc_tracker::{Session, TrackedSpan, Allocator};
+//! use alloc_tracker::{Session, Span, Allocator};
 //!
 //! #[global_allocator]
 //! static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -35,7 +35,7 @@
 //!     let session = Session::new();
 //!
 //!     // Track a single operation
-//!     let tracker = TrackedSpan::new(&session);
+//!     let tracker = Span::new(&session);
 //!     let data = vec![1, 2, 3, 4, 5]; // This allocates memory
 //!     let delta = tracker.to_delta();
 //!     println!("Allocated {} bytes", delta);
@@ -46,23 +46,23 @@
 //!
 //! # Tracking Average Allocations
 //!
-//! For benchmarking scenarios, use [`TrackedOperation`]:
+//! For benchmarking scenarios, use [`Operation`]:
 //!
 //! ```
 //! use std::alloc::System;
 //!
-//! use alloc_tracker::{Session, TrackedOperation, Allocator};
+//! use alloc_tracker::{Session, Operation, Allocator};
 //!
 //! #[global_allocator]
 //! static ALLOCATOR: Allocator<System> = Allocator::system();
 //!
 //! fn main() {
 //!     let session = Session::new();
-//!     let mut average = TrackedOperation::new("string_allocations".to_string());
+//!     let mut average = Operation::new("string_allocations".to_string());
 //!
 //!     // Track average over multiple operations
 //!     for i in 0..10 {
-//!         let _contributor = average.contribute(&session);
+//!         let _contributor = average.span(&session);
 //!         let _data = format!("String number {}", i); // This allocates memory
 //!     }
 //!
@@ -82,7 +82,7 @@
 //! ```rust
 //! use std::alloc::System;
 //!
-//! use alloc_tracker::{Session, TrackedSpan, Allocator};
+//! use alloc_tracker::{Session, Span, Allocator};
 //!
 //! #[global_allocator]
 //! static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -92,7 +92,7 @@
 //!     let session = Session::new();
 //!
 //!     // Track a single operation
-//!     let tracker = TrackedSpan::new(&session);
+//!     let tracker = Span::new(&session);
 //!     let data = vec![1, 2, 3, 4, 5]; // This allocates memory
 //!     let bytes_allocated = tracker.to_delta();
 //!
@@ -104,13 +104,13 @@
 //!
 //! ## Collecting multiple measurements
 //!
-//! Use [`TrackedOperationSet`] to collect and display measurements from different operations:
+//! Use [`OperationSet`] to collect and display measurements from different operations:
 //!
 //! ```
 //! use std::alloc::System;
 //!
 //! use alloc_tracker::{
-//!     Session, TrackedOperation, TrackedOperationSet, Allocator,
+//!     Session, Operation, OperationSet, Allocator,
 //! };
 //!
 //! #[global_allocator]
@@ -118,19 +118,19 @@
 //!
 //! fn main() {
 //!     let session = Session::new();
-//!     let mut results = TrackedOperationSet::new();
+//!     let mut results = OperationSet::new();
 //!
 //!     // Create and measure different operations
-//!     let mut vec_measurement = TrackedOperation::new("vector_creation".to_string());
+//!     let mut vec_measurement = Operation::new("vector_creation".to_string());
 //!     {
-//!         let _contributor = vec_measurement.contribute(&session);
+//!         let _contributor = vec_measurement.span(&session);
 //!         let _vec = vec![1, 2, 3, 4, 5]; // This allocates memory
 //!     }
 //!     results.add(vec_measurement);
 //!
-//!     let mut string_measurement = TrackedOperation::new("string_creation".to_string());
+//!     let mut string_measurement = Operation::new("string_creation".to_string());
 //!     {
-//!         let _contributor = string_measurement.contribute(&session);
+//!         let _contributor = string_measurement.span(&session);
 //!         let _string = String::from("Hello, world!"); // This allocates memory  
 //!     }
 //!     results.add(string_measurement);
@@ -152,7 +152,7 @@
 //! ```rust
 //! use std::alloc::System;
 //!
-//! use alloc_tracker::{Session, TrackedOperation, Allocator};
+//! use alloc_tracker::{Session, Operation, Allocator};
 //! use criterion::{Criterion, criterion_group, criterion_main};
 //!
 //! #[global_allocator]
@@ -164,10 +164,10 @@
 //!     let mut group = c.benchmark_group("memory_usage");
 //!
 //!     group.bench_function("string_formatting", |b| {
-//!         let mut average_memory_delta = TrackedOperation::new("string_formatting".to_string());
+//!         let mut average_memory_delta = Operation::new("string_formatting".to_string());
 //!
 //!         b.iter(|| {
-//!             let _contributor = average_memory_delta.contribute(&session);
+//!             let _contributor = average_memory_delta.span(&session);
 //!             let s = format!("Hello, {}!", "world");
 //!             std::hint::black_box(s);
 //!         });

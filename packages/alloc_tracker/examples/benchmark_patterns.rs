@@ -14,7 +14,7 @@
 use std::alloc::System;
 use std::time::Instant;
 
-use alloc_tracker::{Allocator, Session, TrackedOperation};
+use alloc_tracker::{Allocator, Session, Operation};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -43,22 +43,22 @@ fn benchmark_string_operations(session: &Session) {
     const ITERATIONS: usize = 1000;
 
     // Test string concatenation with format!
-    let mut format_average = TrackedOperation::new("format_strings".to_string());
+    let mut format_average = Operation::new("format_strings".to_string());
     let format_start = Instant::now();
 
     for i in 0..ITERATIONS {
-        let _contributor = format_average.contribute(session);
+        let _contributor = format_average.span(session);
         let _result = format!("Item number {}", i);
     }
 
     let format_duration = format_start.elapsed();
 
     // Test string concatenation with String::push_str
-    let mut push_str_average = TrackedOperation::new("push_str_strings".to_string());
+    let mut push_str_average = Operation::new("push_str_strings".to_string());
     let push_str_start = Instant::now();
 
     for i in 0..ITERATIONS {
-        let _contributor = push_str_average.contribute(session);
+        let _contributor = push_str_average.span(session);
         let mut result = String::from("Item number ");
         result.push_str(&i.to_string());
         drop(result);
@@ -67,11 +67,11 @@ fn benchmark_string_operations(session: &Session) {
     let push_str_duration = push_str_start.elapsed();
 
     // Test string concatenation with + operator
-    let mut concat_average = TrackedOperation::new("concat_strings".to_string());
+    let mut concat_average = Operation::new("concat_strings".to_string());
     let concat_start = Instant::now();
 
     for i in 0..ITERATIONS {
-        let _contributor = concat_average.contribute(session);
+        let _contributor = concat_average.span(session);
         let _result = "Item number ".to_string() + &i.to_string();
     }
 
@@ -107,11 +107,11 @@ fn benchmark_collection_operations(session: &Session) {
     const COLLECTION_SIZE: usize = 1000;
 
     // Test Vec::new() + push
-    let mut vec_push_average = TrackedOperation::new("vec_push".to_string());
+    let mut vec_push_average = Operation::new("vec_push".to_string());
     let vec_push_start = Instant::now();
 
     for _ in 0..ITERATIONS {
-        let _contributor = vec_push_average.contribute(session);
+        let _contributor = vec_push_average.span(session);
         let mut vec = Vec::new();
         for i in 0..COLLECTION_SIZE {
             vec.push(i);
@@ -122,11 +122,11 @@ fn benchmark_collection_operations(session: &Session) {
     let vec_push_duration = vec_push_start.elapsed();
 
     // Test Vec::with_capacity + push
-    let mut vec_capacity_average = TrackedOperation::new("vec_capacity".to_string());
+    let mut vec_capacity_average = Operation::new("vec_capacity".to_string());
     let vec_capacity_start = Instant::now();
 
     for _ in 0..ITERATIONS {
-        let _contributor = vec_capacity_average.contribute(session);
+        let _contributor = vec_capacity_average.span(session);
         let mut vec = Vec::with_capacity(COLLECTION_SIZE);
         for i in 0..COLLECTION_SIZE {
             vec.push(i);
@@ -137,11 +137,11 @@ fn benchmark_collection_operations(session: &Session) {
     let vec_capacity_duration = vec_capacity_start.elapsed();
 
     // Test vec! macro
-    let mut vec_macro_average = TrackedOperation::new("vec_macro".to_string());
+    let mut vec_macro_average = Operation::new("vec_macro".to_string());
     let vec_macro_start = Instant::now();
 
     for _ in 0..ITERATIONS {
-        let _contributor = vec_macro_average.contribute(session);
+        let _contributor = vec_macro_average.span(session);
         let _vec = vec![0; COLLECTION_SIZE];
     }
 

@@ -18,13 +18,13 @@ use crate::tracker::MemoryTracker;
 /// ```rust
 /// use std::alloc::System;
 ///
-/// use alloc_tracker::{Session, TrackedSpan, Allocator};
+/// use alloc_tracker::{Session, Span, Allocator};
 ///
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<System> = Allocator::system();
 ///
 /// let session = Session::new();
-/// let tracker = TrackedSpan::new(&session);
+/// let tracker = Span::new(&session);
 /// let data = vec![1, 2, 3, 4, 5];
 /// let delta = tracker.to_delta();
 /// // Session automatically disables tracking when dropped

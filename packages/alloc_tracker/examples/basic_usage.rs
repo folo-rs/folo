@@ -5,7 +5,7 @@
 
 use std::alloc::System;
 
-use alloc_tracker::{Allocator, Session, TrackedOperation, TrackedSpan};
+use alloc_tracker::{Allocator, Session, Operation, Span};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -37,7 +37,7 @@ fn main() {
 }
 
 fn single_operation_example(session: &Session) {
-    let tracker = TrackedSpan::new(session);
+    let tracker = Span::new(session);
 
     // Allocate a vector with 1000 elements
     let data = vec![42_u64; 1000];
@@ -51,11 +51,11 @@ fn single_operation_example(session: &Session) {
 }
 
 fn average_operations_example(session: &Session) {
-    let mut average = TrackedOperation::new("string_formatting".to_string());
+    let mut average = Operation::new("string_formatting".to_string());
 
     // Perform multiple string allocations
     for i in 1..=5 {
-        let _contributor = average.contribute(session);
+        let _contributor = average.span(session);
         let text = format!("This is string number {i} with some content");
         println!("  Created string: \"{text}\"");
     }
@@ -76,17 +76,17 @@ fn comparison_example(session: &Session) {
     // Compare Vec vs String allocations
 
     // Vector allocation
-    let vec_tracker = TrackedSpan::new(session);
+    let vec_tracker = Span::new(session);
     let _vec_data = vec![1_u32; 100];
     let vec_bytes = vec_tracker.to_delta();
 
     // String allocation
-    let string_tracker = TrackedSpan::new(session);
+    let string_tracker = Span::new(session);
     let _string_data = "A".repeat(100);
     let string_bytes = string_tracker.to_delta();
 
     // Box allocation
-    let box_tracker = TrackedSpan::new(session);
+    let box_tracker = Span::new(session);
     let _box_data = Box::new([0_u8; 100]);
     let box_bytes = box_tracker.to_delta();
 
