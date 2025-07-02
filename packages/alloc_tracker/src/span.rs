@@ -16,7 +16,7 @@ use crate::tracker::TOTAL_BYTES_ALLOCATED;
 /// ```
 /// use std::alloc::System;
 ///
-/// use alloc_tracker::{Session, Span, Allocator};
+/// use alloc_tracker::{Allocator, Session, Span};
 ///
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<System> = Allocator::system();

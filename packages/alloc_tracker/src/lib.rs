@@ -26,7 +26,7 @@
 //! ```
 //! use std::alloc::System;
 //!
-//! use alloc_tracker::{Session, Span, Allocator};
+//! use alloc_tracker::{Allocator, Session, Span};
 //!
 //! #[global_allocator]
 //! static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -51,7 +51,7 @@
 //! ```
 //! use std::alloc::System;
 //!
-//! use alloc_tracker::{Session, Operation, Allocator};
+//! use alloc_tracker::{Allocator, Operation, Session};
 //!
 //! #[global_allocator]
 //! static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -82,7 +82,7 @@
 //! ```rust
 //! use std::alloc::System;
 //!
-//! use alloc_tracker::{Session, Span, Allocator};
+//! use alloc_tracker::{Allocator, Session, Span};
 //!
 //! #[global_allocator]
 //! static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -109,9 +109,7 @@
 //! ```
 //! use std::alloc::System;
 //!
-//! use alloc_tracker::{
-//!     Session, Operation, OperationSet, Allocator,
-//! };
+//! use alloc_tracker::{Allocator, Operation, OperationSet, Session};
 //!
 //! #[global_allocator]
 //! static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -152,7 +150,7 @@
 //! ```rust
 //! use std::alloc::System;
 //!
-//! use alloc_tracker::{Session, Operation, Allocator};
+//! use alloc_tracker::{Allocator, Operation, Session};
 //! use criterion::{Criterion, criterion_group, criterion_main};
 //!
 //! #[global_allocator]
@@ -198,14 +196,12 @@
 //! state is properly managed and measurements are accurate.
 
 mod allocator;
-mod average;
-mod delta;
-mod results;
+mod operation;
 mod session;
+mod span;
 mod tracker;
 
 pub use allocator::*;
-pub use average::*;
-pub use delta::*;
-pub use results::*;
+pub use operation::*;
 pub use session::*;
+pub use span::*;

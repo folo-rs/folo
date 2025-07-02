@@ -1,7 +1,9 @@
 //! Average memory allocation tracking.
 
-use crate::delta::Span;
+use std::fmt;
+
 use crate::session::Session;
+use crate::span::Span;
 
 /// Calculates average memory allocation per operation across multiple iterations.
 ///
@@ -13,7 +15,7 @@ use crate::session::Session;
 /// ```
 /// use std::alloc::System;
 ///
-/// use alloc_tracker::{Session, Operation, Allocator};
+/// use alloc_tracker::{Allocator, Operation, Session};
 ///
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -40,9 +42,9 @@ pub struct Operation {
 impl Operation {
     /// Creates a new average memory delta calculator with the given name.
     #[must_use]
-    pub fn new(name: String) -> Self {
+    pub fn new(name: impl Into<String>) -> Self {
         Self {
-            name,
+            name: name.into(),
             total_bytes_allocated: 0,
             iterations: 0,
         }
@@ -71,7 +73,7 @@ impl Operation {
     /// ```
     /// use std::alloc::System;
     ///
-    /// use alloc_tracker::{Session, Operation, Allocator};
+    /// use alloc_tracker::{Allocator, Operation, Session};
     ///
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -117,6 +119,13 @@ impl Operation {
     }
 }
 
+impl fmt::Display for Operation {
+    #[cfg_attr(test, mutants::skip)] // No API contract.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {} bytes (mean)", self.name, self.average())
+    }
+}
+
 /// An allocation tracker span that is associated with an operation. It will take measurements
 /// between creation and drop and contribute them to the operation's statistics.
 ///
@@ -125,7 +134,7 @@ impl Operation {
 /// ```
 /// use std::alloc::System;
 ///
-/// use alloc_tracker::{Session, Operation, Allocator};
+/// use alloc_tracker::{Allocator, Operation, Session};
 ///
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -145,10 +154,7 @@ pub struct OperationSpan<'a> {
 }
 
 impl<'a> OperationSpan<'a> {
-    pub(crate) fn new(
-        average_memory_delta: &'a mut Operation,
-        session: &'a Session,
-    ) -> Self {
+    pub(crate) fn new(average_memory_delta: &'a mut Operation, session: &'a Session) -> Self {
         let memory_delta_tracker = Span::new(session);
 
         Self {
