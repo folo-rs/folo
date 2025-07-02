@@ -164,7 +164,6 @@ mod tests {
     use super::*;
     use crate::AllocationTrackingSession;
     use crate::tracker::TRACKER_BYTES_ALLOCATED;
-    use crate::utils::reset_allocation_counter;
 
     // Helper function to create a mock session for testing
     // Note: This won't actually enable allocation tracking since we're not using
@@ -219,7 +218,6 @@ mod tests {
 
     #[test]
     fn average_memory_delta_contributor_drop() {
-        reset_allocation_counter();
         let session = create_test_session();
         let mut average = AverageMemoryDelta::new("test".to_string());
 
@@ -236,7 +234,6 @@ mod tests {
 
     #[test]
     fn average_memory_delta_multiple_contributors() {
-        reset_allocation_counter();
         let session = create_test_session();
         let mut average = AverageMemoryDelta::new("test".to_string());
 
@@ -259,7 +256,6 @@ mod tests {
 
     #[test]
     fn average_memory_delta_contributor_no_allocation() {
-        reset_allocation_counter();
         let session = create_test_session();
         let mut average = AverageMemoryDelta::new("test".to_string());
 

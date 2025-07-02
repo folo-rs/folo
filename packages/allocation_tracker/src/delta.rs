@@ -63,7 +63,6 @@ mod tests {
     use super::*;
     use crate::AllocationTrackingSession;
     use crate::tracker::TRACKER_BYTES_ALLOCATED;
-    use crate::utils::reset_allocation_counter;
 
     // Helper function to create a mock session for testing
     // Note: This won't actually enable allocation tracking since we're not using
@@ -76,7 +75,6 @@ mod tests {
 
     #[test]
     fn memory_delta_tracker_new() {
-        reset_allocation_counter();
         let session = create_test_session();
         let tracker = MemoryDeltaTracker::new(&session);
         assert_eq!(tracker.to_delta(), 0);
@@ -84,7 +82,6 @@ mod tests {
 
     #[test]
     fn memory_delta_tracker_with_simulated_allocation() {
-        reset_allocation_counter();
         let session = create_test_session();
         let tracker = MemoryDeltaTracker::new(&session);
 
@@ -96,7 +93,6 @@ mod tests {
 
     #[test]
     fn memory_delta_tracker_multiple_trackers() {
-        reset_allocation_counter();
         let session = create_test_session();
         let tracker1 = MemoryDeltaTracker::new(&session);
 
