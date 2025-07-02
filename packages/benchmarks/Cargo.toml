@@ -40,9 +40,5 @@ harness = false
 name = "effects_of_memory_windows"
 harness = false
 
-[[bench]]
-name = "memory_usage"
-harness = false
-
 [lints]
 workspace = true

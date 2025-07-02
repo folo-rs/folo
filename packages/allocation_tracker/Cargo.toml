@@ -1,0 +1,23 @@
+[package]
+name = "allocation_tracker"
+description = "Memory allocation tracking utilities for benchmarks and performance analysis"
+version = "0.1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tracking-allocator = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "memory_usage"
+harness = false
+
+[lints]
+workspace = true
