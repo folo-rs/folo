@@ -3,35 +3,35 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::average::AverageMemoryDelta;
+use crate::average::TrackedOperation;
 
 /// Results collector for memory usage measurements across multiple benchmarks or operations.
 ///
 /// This type provides a convenient way to collect and display memory allocation measurements
 /// from multiple operations or benchmark runs. It automatically extracts the name and
-/// average from [`AverageMemoryDelta`] instances.
+/// average from [`TrackedOperation`] instances.
 ///
 /// # Examples
 ///
 /// ```
 /// use std::alloc::System;
 ///
-/// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults, TrackingAllocator};
+/// use allocation_tracker::{Session, TrackedOperation, TrackedOperationSet, Allocator};
 ///
 /// #[global_allocator]
-/// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
+/// static ALLOCATOR: Allocator<System> = Allocator::system();
 ///
-/// let session = AllocationTrackingSession::new();
-/// let mut results = MemoryUsageResults::new();
+/// let session = Session::new();
+/// let mut results = TrackedOperationSet::new();
 ///
 /// // Create measurements
-/// let mut measurement1 = AverageMemoryDelta::new("operation_1".to_string());
+/// let mut measurement1 = TrackedOperation::new("operation_1".to_string());
 /// {
 ///     let _contributor = measurement1.contribute(&session);
 ///     // Simulate some allocation
 /// }
 ///
-/// let mut measurement2 = AverageMemoryDelta::new("operation_2".to_string());
+/// let mut measurement2 = TrackedOperation::new("operation_2".to_string());
 /// {
 ///     let _contributor = measurement2.contribute(&session);
 ///     // Simulate some allocation
@@ -44,11 +44,11 @@ use crate::average::AverageMemoryDelta;
 /// println!("{}", results);
 /// ```
 #[derive(Debug)]
-pub struct MemoryUsageResults {
+pub struct TrackedOperationSet {
     average_allocated_per_benchmark_iteration: HashMap<String, u64>,
 }
 
-impl MemoryUsageResults {
+impl TrackedOperationSet {
     /// Creates a new empty results collector.
     #[must_use]
     pub fn new() -> Self {
@@ -57,7 +57,7 @@ impl MemoryUsageResults {
         }
     }
 
-    /// Adds a memory usage measurement from an [`AverageMemoryDelta`].
+    /// Adds a memory usage measurement from an [`TrackedOperation`].
     ///
     /// The name and average from the measurement are automatically extracted.
     ///
@@ -66,14 +66,14 @@ impl MemoryUsageResults {
     /// ```
     /// use std::alloc::System;
     ///
-    /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults, TrackingAllocator};
+    /// use allocation_tracker::{Session, TrackedOperation, TrackedOperationSet, Allocator};
     ///
     /// #[global_allocator]
-    /// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
+    /// static ALLOCATOR: Allocator<System> = Allocator::system();
     ///
-    /// let session = AllocationTrackingSession::new();
-    /// let mut results = MemoryUsageResults::new();
-    /// let mut measurement = AverageMemoryDelta::new("test_op".to_string());
+    /// let session = Session::new();
+    /// let mut results = TrackedOperationSet::new();
+    /// let mut measurement = TrackedOperation::new("test_op".to_string());
     ///
     /// // Perform measurements...
     /// results.add(measurement);
@@ -82,7 +82,7 @@ impl MemoryUsageResults {
         clippy::needless_pass_by_value,
         reason = "we need to consume the measurement to extract its data"
     )]
-    pub fn add(&mut self, measurement: AverageMemoryDelta) {
+    pub fn add(&mut self, measurement: TrackedOperation) {
         self.average_allocated_per_benchmark_iteration
             .insert(measurement.name().to_string(), measurement.average());
     }
@@ -90,14 +90,14 @@ impl MemoryUsageResults {
     /// Adds a memory usage measurement with explicit name and average.
     ///
     /// This is a convenience method for cases where you have the data directly
-    /// rather than from an [`AverageMemoryDelta`] instance.
+    /// rather than from an [`TrackedOperation`] instance.
     ///
     /// # Examples
     ///
     /// ```
-    /// use allocation_tracker::MemoryUsageResults;
+    /// use allocation_tracker::TrackedOperationSet;
     ///
-    /// let mut results = MemoryUsageResults::new();
+    /// let mut results = TrackedOperationSet::new();
     /// results.add_explicit("string_formatting".to_string(), 24);
     /// results.add_explicit("vector_allocation".to_string(), 800);
     /// ```
@@ -115,14 +115,14 @@ impl MemoryUsageResults {
     /// ```
     /// use std::alloc::System;
     ///
-    /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults, TrackingAllocator};
+    /// use allocation_tracker::{Session, TrackedOperation, TrackedOperationSet, Allocator};
     ///
     /// #[global_allocator]
-    /// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
+    /// static ALLOCATOR: Allocator<System> = Allocator::system();
     ///
-    /// let session = AllocationTrackingSession::new();
-    /// let mut results = MemoryUsageResults::new();
-    /// let measurement = AverageMemoryDelta::new("test_op".to_string());
+    /// let session = Session::new();
+    /// let mut results = TrackedOperationSet::new();
+    /// let measurement = TrackedOperation::new("test_op".to_string());
     /// results.add(measurement);
     ///
     /// assert_eq!(results.get("test_op"), Some(0)); // No allocations recorded
@@ -142,15 +142,15 @@ impl MemoryUsageResults {
     /// ```
     /// use std::alloc::System;
     ///
-    /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults, TrackingAllocator};
+    /// use allocation_tracker::{Session, TrackedOperation, TrackedOperationSet, Allocator};
     ///
     /// #[global_allocator]
-    /// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
+    /// static ALLOCATOR: Allocator<System> = Allocator::system();
     ///
-    /// let session = AllocationTrackingSession::new();
-    /// let mut results = MemoryUsageResults::new();
-    /// let measurement1 = AverageMemoryDelta::new("op1".to_string());
-    /// let measurement2 = AverageMemoryDelta::new("op2".to_string());
+    /// let session = Session::new();
+    /// let mut results = TrackedOperationSet::new();
+    /// let measurement1 = TrackedOperation::new("op1".to_string());
+    /// let measurement2 = TrackedOperation::new("op2".to_string());
     /// results.add(measurement1);
     /// results.add(measurement2);
     ///
@@ -169,16 +169,16 @@ impl MemoryUsageResults {
     /// ```
     /// use std::alloc::System;
     ///
-    /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults, TrackingAllocator};
+    /// use allocation_tracker::{Session, TrackedOperation, TrackedOperationSet, Allocator};
     ///
     /// #[global_allocator]
-    /// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
+    /// static ALLOCATOR: Allocator<System> = Allocator::system();
     ///
-    /// let session = AllocationTrackingSession::new();
-    /// let mut results = MemoryUsageResults::new();
+    /// let session = Session::new();
+    /// let mut results = TrackedOperationSet::new();
     /// assert_eq!(results.len(), 0);
     ///
-    /// let measurement = AverageMemoryDelta::new("test".to_string());
+    /// let measurement = TrackedOperation::new("test".to_string());
     /// results.add(measurement);
     /// assert_eq!(results.len(), 1);
     /// ```
@@ -194,16 +194,16 @@ impl MemoryUsageResults {
     /// ```
     /// use std::alloc::System;
     ///
-    /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults, TrackingAllocator};
+    /// use allocation_tracker::{Session, TrackedOperation, TrackedOperationSet, Allocator};
     ///
     /// #[global_allocator]
-    /// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
+    /// static ALLOCATOR: Allocator<System> = Allocator::system();
     ///
-    /// let session = AllocationTrackingSession::new();
-    /// let mut results = MemoryUsageResults::new();
+    /// let session = Session::new();
+    /// let mut results = TrackedOperationSet::new();
     /// assert!(results.is_empty());
     ///
-    /// let measurement = AverageMemoryDelta::new("test".to_string());
+    /// let measurement = TrackedOperation::new("test".to_string());
     /// results.add(measurement);
     /// assert!(!results.is_empty());
     /// ```
@@ -213,13 +213,13 @@ impl MemoryUsageResults {
     }
 }
 
-impl Default for MemoryUsageResults {
+impl Default for TrackedOperationSet {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl fmt::Display for MemoryUsageResults {
+impl fmt::Display for TrackedOperationSet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Memory allocated:")?;
 
@@ -236,15 +236,15 @@ mod tests {
 
     #[test]
     fn memory_usage_results_new() {
-        let results = MemoryUsageResults::new();
+        let results = TrackedOperationSet::new();
         assert_eq!(results.len(), 0);
         assert!(results.is_empty());
     }
 
     #[test]
     fn memory_usage_results_add_and_get() {
-        let mut results = MemoryUsageResults::new();
-        let measurement = AverageMemoryDelta::new("test_op".to_string());
+        let mut results = TrackedOperationSet::new();
+        let measurement = TrackedOperation::new("test_op".to_string());
 
         results.add(measurement);
         assert_eq!(results.len(), 1);
@@ -255,7 +255,7 @@ mod tests {
 
     #[test]
     fn memory_usage_results_add_explicit() {
-        let mut results = MemoryUsageResults::new();
+        let mut results = TrackedOperationSet::new();
 
         results.add_explicit("test_op".to_string(), 42);
         assert_eq!(results.len(), 1);
@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn memory_usage_results_multiple_operations() {
-        let mut results = MemoryUsageResults::new();
+        let mut results = TrackedOperationSet::new();
 
         results.add_explicit("op1".to_string(), 100);
         results.add_explicit("op2".to_string(), 200);
@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn memory_usage_results_iter() {
-        let mut results = MemoryUsageResults::new();
+        let mut results = TrackedOperationSet::new();
 
         results.add_explicit("op1".to_string(), 100);
         results.add_explicit("op2".to_string(), 200);
@@ -295,7 +295,7 @@ mod tests {
 
     #[test]
     fn memory_usage_results_display() {
-        let mut results = MemoryUsageResults::new();
+        let mut results = TrackedOperationSet::new();
 
         results.add_explicit("string_op".to_string(), 24);
         results.add_explicit("vector_op".to_string(), 800);

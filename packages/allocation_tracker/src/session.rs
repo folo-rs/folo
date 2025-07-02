@@ -18,26 +18,26 @@ use crate::tracker::MemoryTracker;
 /// ```rust
 /// use std::alloc::System;
 ///
-/// use allocation_tracker::{AllocationTrackingSession, MemoryDeltaTracker, TrackingAllocator};
+/// use allocation_tracker::{Session, TrackedSpan, Allocator};
 ///
 /// #[global_allocator]
-/// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
+/// static ALLOCATOR: Allocator<System> = Allocator::system();
 ///
-/// let session = AllocationTrackingSession::new();
-/// let tracker = MemoryDeltaTracker::new(&session);
+/// let session = Session::new();
+/// let tracker = TrackedSpan::new(&session);
 /// let data = vec![1, 2, 3, 4, 5];
 /// let delta = tracker.to_delta();
 /// // Session automatically disables tracking when dropped
 /// ```
 #[derive(Debug)]
-pub struct AllocationTrackingSession {
+pub struct Session {
     _private: (),
 }
 
 static TRACKING_SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TRACKER_INITIALIZED: OnceLock<()> = OnceLock::new();
 
-impl AllocationTrackingSession {
+impl Session {
     /// Creates a new allocation tracking session.
     ///
     /// This will automatically set up the global tracker (on first use) and enable
@@ -52,12 +52,12 @@ impl AllocationTrackingSession {
     /// ```rust
     /// use std::alloc::System;
     ///
-    /// use allocation_tracker::{AllocationTrackingSession, TrackingAllocator};
+    /// use allocation_tracker::{Session, Allocator};
     ///
     /// #[global_allocator]
-    /// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
+    /// static ALLOCATOR: Allocator<System> = Allocator::system();
     ///
-    /// let session = AllocationTrackingSession::new();
+    /// let session = Session::new();
     /// // Allocation tracking is now enabled
     /// // Session will disable tracking when dropped
     /// ```
@@ -90,7 +90,7 @@ impl AllocationTrackingSession {
     }
 }
 
-impl Drop for AllocationTrackingSession {
+impl Drop for Session {
     fn drop(&mut self) {
         AllocationRegistry::disable_tracking();
         TRACKING_SESSION_ACTIVE.store(false, atomic::Ordering::Release);

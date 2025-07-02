@@ -2,7 +2,7 @@
 
 use std::sync::atomic;
 
-use crate::session::AllocationTrackingSession;
+use crate::session::Session;
 use crate::tracker::TOTAL_BYTES_ALLOCATED;
 
 /// Tracks memory allocation changes over a specific time period.
@@ -16,28 +16,28 @@ use crate::tracker::TOTAL_BYTES_ALLOCATED;
 /// ```
 /// use std::alloc::System;
 ///
-/// use allocation_tracker::{AllocationTrackingSession, MemoryDeltaTracker, TrackingAllocator};
+/// use allocation_tracker::{Session, TrackedSpan, Allocator};
 ///
 /// #[global_allocator]
-/// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
+/// static ALLOCATOR: Allocator<System> = Allocator::system();
 ///
-/// let session = AllocationTrackingSession::new();
-/// let tracker = MemoryDeltaTracker::new(&session);
+/// let session = Session::new();
+/// let tracker = TrackedSpan::new(&session);
 /// let data = vec![1, 2, 3, 4, 5]; // This allocates memory
 /// let delta = tracker.to_delta();
 /// // delta will be >= the size of the vector allocation
 /// ```
 #[derive(Debug)]
-pub struct MemoryDeltaTracker<'a> {
+pub struct TrackedSpan<'a> {
     initial_bytes_allocated: u64,
-    _session: &'a AllocationTrackingSession,
+    _session: &'a Session,
 }
 
-impl<'a> MemoryDeltaTracker<'a> {
+impl<'a> TrackedSpan<'a> {
     /// Creates a new memory delta tracker, capturing the current allocation count.
     ///
     /// Requires an active allocation tracking session to ensure tracking is enabled.
-    pub fn new(session: &'a AllocationTrackingSession) -> Self {
+    pub fn new(session: &'a Session) -> Self {
         let initial_bytes_allocated = TOTAL_BYTES_ALLOCATED.load(atomic::Ordering::Relaxed);
 
         Self {
@@ -66,29 +66,29 @@ mod tests {
     use std::sync::atomic;
 
     use super::*;
-    use crate::AllocationTrackingSession;
+    use crate::Session;
     use crate::tracker::TOTAL_BYTES_ALLOCATED;
 
     // Helper function to create a mock session for testing
     // Note: This won't actually enable allocation tracking since we're not using
     // a global allocator in unit tests, but it allows us to test the API structure
-    fn create_test_session() -> AllocationTrackingSession {
+    fn create_test_session() -> Session {
         // This function simplifies test setup by providing a session
         // We can now directly call new() since it's infallible
-        AllocationTrackingSession::new()
+        Session::new()
     }
 
     #[test]
     fn memory_delta_tracker_new() {
         let session = create_test_session();
-        let tracker = MemoryDeltaTracker::new(&session);
+        let tracker = TrackedSpan::new(&session);
         assert_eq!(tracker.to_delta(), 0);
     }
 
     #[test]
     fn memory_delta_tracker_with_simulated_allocation() {
         let session = create_test_session();
-        let tracker = MemoryDeltaTracker::new(&session);
+        let tracker = TrackedSpan::new(&session);
 
         // Simulate some allocation by manually adding to the counter
         TOTAL_BYTES_ALLOCATED.fetch_add(150, atomic::Ordering::Relaxed);
@@ -99,12 +99,12 @@ mod tests {
     #[test]
     fn memory_delta_tracker_multiple_trackers() {
         let session = create_test_session();
-        let tracker1 = MemoryDeltaTracker::new(&session);
+        let tracker1 = TrackedSpan::new(&session);
 
         // Simulate allocation
         TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
 
-        let tracker2 = MemoryDeltaTracker::new(&session);
+        let tracker2 = TrackedSpan::new(&session);
 
         // Simulate more allocation
         TOTAL_BYTES_ALLOCATED.fetch_add(50, atomic::Ordering::Relaxed);

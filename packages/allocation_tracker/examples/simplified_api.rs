@@ -11,21 +11,19 @@
 
 use std::alloc::System;
 
-use allocation_tracker::{
-    AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults, TrackingAllocator,
-};
+use allocation_tracker::{Allocator, Session, TrackedOperation, TrackedOperationSet};
 
 #[global_allocator]
-static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
+static ALLOCATOR: Allocator<System> = Allocator::system();
 
 fn main() {
     // Simple setup - just create a session
-    let session = AllocationTrackingSession::new();
+    let session = Session::new();
 
     println!("=== Simplified Allocation Tracking API ===\n");
 
     // Track different operations
-    let mut results = MemoryUsageResults::new();
+    let mut results = TrackedOperationSet::new();
 
     // Vector operations
     let vec_measurement = measure_vector_operations(&session);
@@ -51,8 +49,8 @@ fn main() {
     println!("\nTotal operations measured: {}", results.len());
 }
 
-fn measure_vector_operations(session: &AllocationTrackingSession) -> AverageMemoryDelta {
-    let mut measurement = AverageMemoryDelta::new("vector_operations".to_string());
+fn measure_vector_operations(session: &Session) -> TrackedOperation {
+    let mut measurement = TrackedOperation::new("vector_operations".to_string());
 
     println!("Measuring vector operations...");
     for size in [10, 100, 1000] {
@@ -64,8 +62,8 @@ fn measure_vector_operations(session: &AllocationTrackingSession) -> AverageMemo
     measurement
 }
 
-fn measure_string_operations(session: &AllocationTrackingSession) -> AverageMemoryDelta {
-    let mut measurement = AverageMemoryDelta::new("string_operations".to_string());
+fn measure_string_operations(session: &Session) -> TrackedOperation {
+    let mut measurement = TrackedOperation::new("string_operations".to_string());
 
     println!("Measuring string operations...");
     for i in 0..5 {
@@ -77,8 +75,8 @@ fn measure_string_operations(session: &AllocationTrackingSession) -> AverageMemo
     measurement
 }
 
-fn measure_hashmap_operations(session: &AllocationTrackingSession) -> AverageMemoryDelta {
-    let mut measurement = AverageMemoryDelta::new("hashmap_operations".to_string());
+fn measure_hashmap_operations(session: &Session) -> TrackedOperation {
+    let mut measurement = TrackedOperation::new("hashmap_operations".to_string());
 
     println!("Measuring HashMap operations...");
     for size in [5, 10, 20] {

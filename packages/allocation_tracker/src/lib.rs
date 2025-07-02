@@ -4,11 +4,11 @@
 //! enabling measurement of memory usage patterns in benchmarks and performance tests.
 //!
 //! The core functionality includes:
-//! - [`TrackingAllocator`] - A Rust memory allocator wrapper that enables allocation tracking
-//! - [`AllocationTrackingSession`] - Configures allocation tracking and provides access to tracking data
-//! - [`MemoryDeltaTracker`] - Tracks memory allocation changes over a time period
-//! - [`AverageMemoryDelta`] - Calculates average memory allocation per operation
-//! - [`MemoryUsageResults`] - Collects and displays memory usage measurements
+//! - [`Allocator`] - A Rust memory allocator wrapper that enables allocation tracking
+//! - [`Session`] - Configures allocation tracking and provides access to tracking data
+//! - [`TrackedSpan`] - Tracks memory allocation changes over a time period
+//! - [`TrackedOperation`] - Calculates average memory allocation per operation
+//! - [`TrackedOperationSet`] - Collects and displays memory usage measurements
 //!
 //! # Quick Start
 //!
@@ -26,16 +26,16 @@
 //! ```
 //! use std::alloc::System;
 //!
-//! use allocation_tracker::{AllocationTrackingSession, MemoryDeltaTracker, TrackingAllocator};
+//! use allocation_tracker::{Session, TrackedSpan, Allocator};
 //!
 //! #[global_allocator]
-//! static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
+//! static ALLOCATOR: Allocator<System> = Allocator::system();
 //!
 //! fn main() {
-//!     let session = AllocationTrackingSession::new();
+//!     let session = Session::new();
 //!
 //!     // Track a single operation
-//!     let tracker = MemoryDeltaTracker::new(&session);
+//!     let tracker = TrackedSpan::new(&session);
 //!     let data = vec![1, 2, 3, 4, 5]; // This allocates memory
 //!     let delta = tracker.to_delta();
 //!     println!("Allocated {} bytes", delta);
@@ -46,19 +46,19 @@
 //!
 //! # Tracking Average Allocations
 //!
-//! For benchmarking scenarios, use [`AverageMemoryDelta`]:
+//! For benchmarking scenarios, use [`TrackedOperation`]:
 //!
 //! ```
 //! use std::alloc::System;
 //!
-//! use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, TrackingAllocator};
+//! use allocation_tracker::{Session, TrackedOperation, Allocator};
 //!
 //! #[global_allocator]
-//! static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
+//! static ALLOCATOR: Allocator<System> = Allocator::system();
 //!
 //! fn main() {
-//!     let session = AllocationTrackingSession::new();
-//!     let mut average = AverageMemoryDelta::new("string_allocations".to_string());
+//!     let session = Session::new();
+//!     let mut average = TrackedOperation::new("string_allocations".to_string());
 //!
 //!     // Track average over multiple operations
 //!     for i in 0..10 {
@@ -76,23 +76,23 @@
 //!
 //! ## Global allocator setup
 //!
-//! For real allocation tracking, you need to set up [`TrackingAllocator`] as your global allocator.
+//! For real allocation tracking, you need to set up [`Allocator`] as your global allocator.
 //! This requires a binary crate (application), not a library crate:
 //!
 //! ```rust
 //! use std::alloc::System;
 //!
-//! use allocation_tracker::{AllocationTrackingSession, MemoryDeltaTracker, TrackingAllocator};
+//! use allocation_tracker::{Session, TrackedSpan, Allocator};
 //!
 //! #[global_allocator]
-//! static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
+//! static ALLOCATOR: Allocator<System> = Allocator::system();
 //!
 //! fn main() {
 //!     // Create a tracking session (automatically handles setup)
-//!     let session = AllocationTrackingSession::new();
+//!     let session = Session::new();
 //!
 //!     // Track a single operation
-//!     let tracker = MemoryDeltaTracker::new(&session);
+//!     let tracker = TrackedSpan::new(&session);
 //!     let data = vec![1, 2, 3, 4, 5]; // This allocates memory
 //!     let bytes_allocated = tracker.to_delta();
 //!
@@ -104,31 +104,31 @@
 //!
 //! ## Collecting multiple measurements
 //!
-//! Use [`MemoryUsageResults`] to collect and display measurements from different operations:
+//! Use [`TrackedOperationSet`] to collect and display measurements from different operations:
 //!
 //! ```
 //! use std::alloc::System;
 //!
 //! use allocation_tracker::{
-//!     AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults, TrackingAllocator,
+//!     Session, TrackedOperation, TrackedOperationSet, Allocator,
 //! };
 //!
 //! #[global_allocator]
-//! static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
+//! static ALLOCATOR: Allocator<System> = Allocator::system();
 //!
 //! fn main() {
-//!     let session = AllocationTrackingSession::new();
-//!     let mut results = MemoryUsageResults::new();
+//!     let session = Session::new();
+//!     let mut results = TrackedOperationSet::new();
 //!
 //!     // Create and measure different operations
-//!     let mut vec_measurement = AverageMemoryDelta::new("vector_creation".to_string());
+//!     let mut vec_measurement = TrackedOperation::new("vector_creation".to_string());
 //!     {
 //!         let _contributor = vec_measurement.contribute(&session);
 //!         let _vec = vec![1, 2, 3, 4, 5]; // This allocates memory
 //!     }
 //!     results.add(vec_measurement);
 //!
-//!     let mut string_measurement = AverageMemoryDelta::new("string_creation".to_string());
+//!     let mut string_measurement = TrackedOperation::new("string_creation".to_string());
 //!     {
 //!         let _contributor = string_measurement.contribute(&session);
 //!         let _string = String::from("Hello, world!"); // This allocates memory  
@@ -152,19 +152,19 @@
 //! ```rust
 //! use std::alloc::System;
 //!
-//! use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, TrackingAllocator};
+//! use allocation_tracker::{Session, TrackedOperation, Allocator};
 //! use criterion::{Criterion, criterion_group, criterion_main};
 //!
 //! #[global_allocator]
-//! static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
+//! static ALLOCATOR: Allocator<System> = Allocator::system();
 //!
 //! fn bench_string_allocation(c: &mut Criterion) {
-//!     let session = AllocationTrackingSession::new();
+//!     let session = Session::new();
 //!
 //!     let mut group = c.benchmark_group("memory_usage");
 //!
 //!     group.bench_function("string_formatting", |b| {
-//!         let mut average_memory_delta = AverageMemoryDelta::new("string_formatting".to_string());
+//!         let mut average_memory_delta = TrackedOperation::new("string_formatting".to_string());
 //!
 //!         b.iter(|| {
 //!             let _contributor = average_memory_delta.contribute(&session);
@@ -193,7 +193,7 @@
 //!
 //! # Session Management
 //!
-//! Only one [`AllocationTrackingSession`] can be active at a time. Attempting to create
+//! Only one [`Session`] can be active at a time. Attempting to create
 //! multiple sessions simultaneously will result in an error. This ensures that tracking
 //! state is properly managed and measurements are accurate.
 

@@ -5,16 +5,14 @@
 
 use std::alloc::System;
 
-use allocation_tracker::{
-    AllocationTrackingSession, AverageMemoryDelta, MemoryDeltaTracker, TrackingAllocator,
-};
+use allocation_tracker::{Allocator, Session, TrackedOperation, TrackedSpan};
 
 #[global_allocator]
-static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
+static ALLOCATOR: Allocator<System> = Allocator::system();
 
 fn main() {
     // Create a tracking session (automatically handles setup)
-    let session = AllocationTrackingSession::new();
+    let session = Session::new();
 
     println!("=== Allocation Tracker Example (Simplified API) ===\n");
 
@@ -38,8 +36,8 @@ fn main() {
     println!("\nDone!");
 }
 
-fn single_operation_example(session: &AllocationTrackingSession) {
-    let tracker = MemoryDeltaTracker::new(session);
+fn single_operation_example(session: &Session) {
+    let tracker = TrackedSpan::new(session);
 
     // Allocate a vector with 1000 elements
     let data = vec![42_u64; 1000];
@@ -52,8 +50,8 @@ fn single_operation_example(session: &AllocationTrackingSession) {
     println!("  Vector length: {}", data.len());
 }
 
-fn average_operations_example(session: &AllocationTrackingSession) {
-    let mut average = AverageMemoryDelta::new("string_formatting".to_string());
+fn average_operations_example(session: &Session) {
+    let mut average = TrackedOperation::new("string_formatting".to_string());
 
     // Perform multiple string allocations
     for i in 1..=5 {
@@ -74,21 +72,21 @@ fn average_operations_example(session: &AllocationTrackingSession) {
     );
 }
 
-fn comparison_example(session: &AllocationTrackingSession) {
+fn comparison_example(session: &Session) {
     // Compare Vec vs String allocations
 
     // Vector allocation
-    let vec_tracker = MemoryDeltaTracker::new(session);
+    let vec_tracker = TrackedSpan::new(session);
     let _vec_data = vec![1_u32; 100];
     let vec_bytes = vec_tracker.to_delta();
 
     // String allocation
-    let string_tracker = MemoryDeltaTracker::new(session);
+    let string_tracker = TrackedSpan::new(session);
     let _string_data = "A".repeat(100);
     let string_bytes = string_tracker.to_delta();
 
     // Box allocation
-    let box_tracker = MemoryDeltaTracker::new(session);
+    let box_tracker = TrackedSpan::new(session);
     let _box_data = Box::new([0_u8; 100]);
     let box_bytes = box_tracker.to_delta();
 

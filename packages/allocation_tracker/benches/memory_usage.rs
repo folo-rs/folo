@@ -12,26 +12,24 @@ use std::alloc::System;
 use std::hint::black_box;
 use std::time::Instant;
 
-use allocation_tracker::{
-    AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults, TrackingAllocator,
-};
+use allocation_tracker::{Allocator, Session, TrackedOperation, TrackedOperationSet};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
 #[global_allocator]
-static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
+static ALLOCATOR: Allocator<System> = Allocator::system();
 
 fn entrypoint(c: &mut Criterion) {
-    let session = AllocationTrackingSession::new();
+    let session = Session::new();
 
-    let mut memory_results = MemoryUsageResults::new();
+    let mut memory_results = TrackedOperationSet::new();
 
     let mut group = c.benchmark_group("memory_usage");
 
     group.bench_function("string_formatting", |b| {
-        let mut average_memory_delta = AverageMemoryDelta::new("string_formatting".to_string());
+        let mut average_memory_delta = TrackedOperation::new("string_formatting".to_string());
 
         b.iter(|| {
             let _contributor = average_memory_delta.contribute(&session);
@@ -47,7 +45,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.bench_function("string_formatting_batched", |b| {
         let mut average_memory_delta =
-            AverageMemoryDelta::new("string_formatting_batched".to_string());
+            TrackedOperation::new("string_formatting_batched".to_string());
 
         b.iter_batched_ref(
             || (),
@@ -67,7 +65,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.bench_function("string_formatting_custom", |b| {
         let mut average_memory_delta =
-            AverageMemoryDelta::new("string_formatting_custom".to_string());
+            TrackedOperation::new("string_formatting_custom".to_string());
 
         b.iter_custom(|iters| {
             let start = Instant::now();
@@ -88,7 +86,7 @@ fn entrypoint(c: &mut Criterion) {
     });
 
     group.bench_function("vector_allocation", |b| {
-        let mut average_memory_delta = AverageMemoryDelta::new("vector_allocation".to_string());
+        let mut average_memory_delta = TrackedOperation::new("vector_allocation".to_string());
 
         b.iter(|| {
             let _contributor = average_memory_delta.contribute(&session);
@@ -102,7 +100,7 @@ fn entrypoint(c: &mut Criterion) {
     });
 
     group.bench_function("box_allocation", |b| {
-        let mut average_memory_delta = AverageMemoryDelta::new("box_allocation".to_string());
+        let mut average_memory_delta = TrackedOperation::new("box_allocation".to_string());
 
         b.iter(|| {
             let _contributor = average_memory_delta.contribute(&session);

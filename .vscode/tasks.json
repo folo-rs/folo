@@ -83,6 +83,7 @@
             "type": "pickString",
             "options": [
                 "",
+                "allocation_tracker",
                 "benchmark_utils",
                 "benchmarks",
                 "cpulist",

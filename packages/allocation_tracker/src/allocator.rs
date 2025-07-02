@@ -3,7 +3,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::fmt;
 
-use tracking_allocator::Allocator;
+use tracking_allocator::Allocator as TrackingAllocatorImpl;
 
 /// A memory allocator that enables tracking of memory allocations and deallocations.
 ///
@@ -16,25 +16,25 @@ use tracking_allocator::Allocator;
 /// ```rust
 /// use std::alloc::System;
 ///
-/// use allocation_tracker::TrackingAllocator;
+/// use allocation_tracker::Allocator;
 ///
 /// #[global_allocator]
-/// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
+/// static ALLOCATOR: Allocator<System> = Allocator::system();
 /// ```
-pub struct TrackingAllocator<A: GlobalAlloc> {
-    inner: Allocator<A>,
+pub struct Allocator<A: GlobalAlloc> {
+    inner: TrackingAllocatorImpl<A>,
 }
 
-impl<A: GlobalAlloc> fmt::Debug for TrackingAllocator<A> {
+impl<A: GlobalAlloc> fmt::Debug for Allocator<A> {
     #[cfg_attr(test, mutants::skip)] // No API contract to test.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TrackingAllocator")
+        f.debug_struct("Allocator")
             .field("inner", &"<allocator>")
             .finish()
     }
 }
 
-impl TrackingAllocator<System> {
+impl Allocator<System> {
     /// Creates a new tracking allocator using the system's default allocator.
     ///
     /// This is a convenience method for the common case of wanting to track
@@ -42,12 +42,12 @@ impl TrackingAllocator<System> {
     #[must_use]
     pub const fn system() -> Self {
         Self {
-            inner: Allocator::system(),
+            inner: TrackingAllocatorImpl::system(),
         }
     }
 }
 
-impl<A: GlobalAlloc> TrackingAllocator<A> {
+impl<A: GlobalAlloc> Allocator<A> {
     /// Creates a new tracking allocator that enables allocation tracking for the provided allocator.
     ///
     /// The resulting allocator will have the same performance and behavior characteristics
@@ -55,14 +55,14 @@ impl<A: GlobalAlloc> TrackingAllocator<A> {
     #[must_use]
     pub const fn new(allocator: A) -> Self {
         Self {
-            inner: Allocator::from_allocator(allocator),
+            inner: TrackingAllocatorImpl::from_allocator(allocator),
         }
     }
 }
 
 // SAFETY: We delegate all allocation operations to the underlying allocator,
 // which already implements GlobalAlloc safely, while adding tracking functionality.
-unsafe impl<A: GlobalAlloc> GlobalAlloc for TrackingAllocator<A> {
+unsafe impl<A: GlobalAlloc> GlobalAlloc for Allocator<A> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // SAFETY: We forward the call to the underlying allocator which implements GlobalAlloc.
         unsafe { self.inner.alloc(layout) }
