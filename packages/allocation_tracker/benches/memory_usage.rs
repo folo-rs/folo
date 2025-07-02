@@ -12,7 +12,9 @@ use std::alloc::System;
 use std::hint::black_box;
 use std::time::Instant;
 
-use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, TrackingAllocator, MemoryUsageResults};
+use allocation_tracker::{
+    AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults, TrackingAllocator,
+};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 
 criterion_group!(benches, entrypoint);
@@ -44,7 +46,8 @@ fn entrypoint(c: &mut Criterion) {
     });
 
     group.bench_function("string_formatting_batched", |b| {
-        let mut average_memory_delta = AverageMemoryDelta::new("string_formatting_batched".to_string());
+        let mut average_memory_delta =
+            AverageMemoryDelta::new("string_formatting_batched".to_string());
 
         b.iter_batched_ref(
             || (),
@@ -63,7 +66,8 @@ fn entrypoint(c: &mut Criterion) {
     });
 
     group.bench_function("string_formatting_custom", |b| {
-        let mut average_memory_delta = AverageMemoryDelta::new("string_formatting_custom".to_string());
+        let mut average_memory_delta =
+            AverageMemoryDelta::new("string_formatting_custom".to_string());
 
         b.iter_custom(|iters| {
             let start = Instant::now();

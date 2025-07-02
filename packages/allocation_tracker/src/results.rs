@@ -19,7 +19,7 @@ use crate::average::AverageMemoryDelta;
 /// let session = AllocationTrackingSession::new().unwrap();
 /// let mut results = MemoryUsageResults::new();
 ///
-/// // Create measurements  
+/// // Create measurements
 /// let mut measurement1 = AverageMemoryDelta::new("operation_1".to_string());
 /// {
 ///     let _contributor = measurement1.contribute(&session);
@@ -197,5 +197,83 @@ impl fmt::Display for MemoryUsageResults {
             writeln!(f, "{name}: {average} bytes per iteration")?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_usage_results_new() {
+        let results = MemoryUsageResults::new();
+        assert_eq!(results.len(), 0);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn memory_usage_results_add_and_get() {
+        let mut results = MemoryUsageResults::new();
+        let measurement = AverageMemoryDelta::new("test_op".to_string());
+
+        results.add(measurement);
+        assert_eq!(results.len(), 1);
+        assert!(!results.is_empty());
+        assert_eq!(results.get("test_op"), Some(0)); // No actual allocations in unit test
+        assert_eq!(results.get("nonexistent"), None);
+    }
+
+    #[test]
+    fn memory_usage_results_add_explicit() {
+        let mut results = MemoryUsageResults::new();
+
+        results.add_explicit("test_op".to_string(), 42);
+        assert_eq!(results.len(), 1);
+        assert!(!results.is_empty());
+        assert_eq!(results.get("test_op"), Some(42));
+        assert_eq!(results.get("nonexistent"), None);
+    }
+
+    #[test]
+    fn memory_usage_results_multiple_operations() {
+        let mut results = MemoryUsageResults::new();
+
+        results.add_explicit("op1".to_string(), 100);
+        results.add_explicit("op2".to_string(), 200);
+        results.add_explicit("op3".to_string(), 300);
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results.get("op1"), Some(100));
+        assert_eq!(results.get("op2"), Some(200));
+        assert_eq!(results.get("op3"), Some(300));
+    }
+
+    #[test]
+    fn memory_usage_results_iter() {
+        let mut results = MemoryUsageResults::new();
+
+        results.add_explicit("op1".to_string(), 100);
+        results.add_explicit("op2".to_string(), 200);
+
+        let mut collected: Vec<_> = results.iter().collect();
+        collected.sort_by_key(|(name, _)| name.as_str());
+
+        assert_eq!(collected.len(), 2);
+        assert_eq!(collected.first(), Some(&(&"op1".to_string(), &100_u64)));
+        assert_eq!(collected.get(1), Some(&(&"op2".to_string(), &200_u64)));
+    }
+
+    #[test]
+    fn memory_usage_results_display() {
+        let mut results = MemoryUsageResults::new();
+
+        results.add_explicit("string_op".to_string(), 24);
+        results.add_explicit("vector_op".to_string(), 800);
+
+        let display_str = format!("{results}");
+
+        assert!(display_str.contains("Memory allocated:"));
+        assert!(display_str.contains("string_op: 24 bytes per iteration"));
+        assert!(display_str.contains("vector_op: 800 bytes per iteration"));
     }
 }

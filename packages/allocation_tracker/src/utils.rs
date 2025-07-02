@@ -13,10 +13,11 @@ use crate::tracker::TRACKER_BYTES_ALLOCATED;
 /// # Examples
 ///
 /// ```
-/// use allocation_tracker::{reset_allocation_counter, MemoryDeltaTracker};
+/// use allocation_tracker::{AllocationTrackingSession, MemoryDeltaTracker, reset_allocation_counter};
 ///
+/// let session = AllocationTrackingSession::new().unwrap();
 /// reset_allocation_counter();
-/// let tracker = MemoryDeltaTracker::new();
+/// let tracker = MemoryDeltaTracker::new(&session);
 /// let data = vec![1, 2, 3];
 /// let delta = tracker.to_delta();
 /// // delta now reflects only the allocation since reset
@@ -42,4 +43,36 @@ pub fn reset_allocation_counter() {
 /// ```
 pub fn current_allocation_count() -> u64 {
     TRACKER_BYTES_ALLOCATED.load(atomic::Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic;
+
+    use super::*;
+    use crate::tracker::TRACKER_BYTES_ALLOCATED;
+
+    #[test]
+    fn reset_and_current_allocation_count() {
+        // Set some value
+        TRACKER_BYTES_ALLOCATED.store(500, atomic::Ordering::Relaxed);
+        assert_eq!(current_allocation_count(), 500);
+
+        // Reset to zero
+        reset_allocation_counter();
+        assert_eq!(current_allocation_count(), 0);
+    }
+
+    /// This test ensures our internal access to `TRACKER_BYTES_ALLOCATED` works correctly.
+    #[test]
+    fn internal_counter_access() {
+        reset_allocation_counter();
+        assert_eq!(current_allocation_count(), 0);
+
+        TRACKER_BYTES_ALLOCATED.fetch_add(42, atomic::Ordering::Relaxed);
+        assert_eq!(current_allocation_count(), 42);
+
+        reset_allocation_counter();
+        assert_eq!(current_allocation_count(), 0);
+    }
 }

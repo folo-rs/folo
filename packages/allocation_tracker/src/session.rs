@@ -1,9 +1,8 @@
 //! Session management for allocation tracking.
 
 use std::fmt;
-use std::sync::atomic;
 use std::sync::atomic::AtomicBool;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, atomic};
 
 use tracking_allocator::AllocationRegistry;
 
@@ -62,7 +61,12 @@ impl AllocationTrackingSession {
 
         // Try to acquire the session lock
         if TRACKING_SESSION_ACTIVE
-            .compare_exchange(false, true, atomic::Ordering::Acquire, atomic::Ordering::Relaxed)
+            .compare_exchange(
+                false,
+                true,
+                atomic::Ordering::Acquire,
+                atomic::Ordering::Relaxed,
+            )
             .is_err()
         {
             return Err(AllocationTrackingError::SessionAlreadyActive);
@@ -82,7 +86,7 @@ impl Drop for AllocationTrackingSession {
 }
 
 /// Errors that can occur when creating an allocation tracking session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum AllocationTrackingError {
     /// Another allocation tracking session is already active.

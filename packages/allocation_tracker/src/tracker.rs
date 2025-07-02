@@ -8,7 +8,7 @@ use tracking_allocator::AllocationTracker;
 // The tracking allocator works with static data all over the place, so this is how it be.
 pub(crate) static TRACKER_BYTES_ALLOCATED: AtomicU64 = AtomicU64::new(0);
 
-/// A memory allocation tracker that integrates with [`tracking_allocator`].
+/// A memory allocation tracker that measures allocation activity.
 ///
 /// This tracker only counts allocations, not deallocations, as it is designed
 /// to measure the memory footprint of operations rather than the net memory usage.
@@ -17,11 +17,10 @@ pub(crate) static TRACKER_BYTES_ALLOCATED: AtomicU64 = AtomicU64::new(0);
 ///
 /// ```
 /// use allocation_tracker::MemoryTracker;
-/// use tracking_allocator::{AllocationRegistry, AllocationTracker};
 ///
 /// let tracker = MemoryTracker::new();
-/// // The tracker would typically be registered with AllocationRegistry
-/// // in an integration test or application that sets up a global allocator.
+/// // The tracker automatically integrates with the global allocator setup
+/// // when used with TrackingAllocator.
 /// ```
 #[derive(Debug)]
 #[non_exhaustive]

@@ -156,3 +156,123 @@ impl Drop for AverageMemoryDeltaContributor<'_> {
         self.average_memory_delta.add(delta);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic;
+
+    use super::*;
+    use crate::tracker::TRACKER_BYTES_ALLOCATED;
+    use crate::{AllocationTrackingSession, reset_allocation_counter};
+
+    // Helper function to create a mock session for testing
+    // Note: This won't actually enable allocation tracking since we're not using
+    // a global allocator in unit tests, but it allows us to test the API structure
+    fn create_test_session() -> AllocationTrackingSession {
+        // For unit tests, we'll create a session that might fail but we'll ignore it
+        // since these tests are focused on logic that doesn't require real allocation tracking
+        AllocationTrackingSession::new().unwrap_or_else(|_| {
+            // If session creation fails, we can still test the basic logic
+            // This is a bit of a hack for unit testing
+            AllocationTrackingSession { _private: () }
+        })
+    }
+
+    #[test]
+    fn average_memory_delta_new() {
+        let average = AverageMemoryDelta::new("test".to_string());
+        assert_eq!(average.name(), "test");
+        assert_eq!(average.average(), 0);
+        assert_eq!(average.iterations(), 0);
+        assert_eq!(average.total_bytes_allocated(), 0);
+    }
+
+    #[test]
+    fn average_memory_delta_add_single() {
+        let mut average = AverageMemoryDelta::new("test".to_string());
+        average.add(100);
+
+        assert_eq!(average.average(), 100);
+        assert_eq!(average.iterations(), 1);
+        assert_eq!(average.total_bytes_allocated(), 100);
+    }
+
+    #[test]
+    fn average_memory_delta_add_multiple() {
+        let mut average = AverageMemoryDelta::new("test".to_string());
+        average.add(100);
+        average.add(200);
+        average.add(300);
+
+        assert_eq!(average.average(), 200); // (100 + 200 + 300) / 3
+        assert_eq!(average.iterations(), 3);
+        assert_eq!(average.total_bytes_allocated(), 600);
+    }
+
+    #[test]
+    fn average_memory_delta_add_zero() {
+        let mut average = AverageMemoryDelta::new("test".to_string());
+        average.add(0);
+        average.add(0);
+
+        assert_eq!(average.average(), 0);
+        assert_eq!(average.iterations(), 2);
+        assert_eq!(average.total_bytes_allocated(), 0);
+    }
+
+    #[test]
+    fn average_memory_delta_contributor_drop() {
+        reset_allocation_counter();
+        let session = create_test_session();
+        let mut average = AverageMemoryDelta::new("test".to_string());
+
+        {
+            let _contributor = average.contribute(&session);
+            // Simulate allocation
+            TRACKER_BYTES_ALLOCATED.fetch_add(75, atomic::Ordering::Relaxed);
+        } // Contributor drops here
+
+        assert_eq!(average.average(), 75);
+        assert_eq!(average.iterations(), 1);
+        assert_eq!(average.total_bytes_allocated(), 75);
+    }
+
+    #[test]
+    fn average_memory_delta_multiple_contributors() {
+        reset_allocation_counter();
+        let session = create_test_session();
+        let mut average = AverageMemoryDelta::new("test".to_string());
+
+        // First contributor
+        {
+            let _contributor = average.contribute(&session);
+            TRACKER_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
+        }
+
+        // Second contributor
+        {
+            let _contributor = average.contribute(&session);
+            TRACKER_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
+        }
+
+        assert_eq!(average.average(), 150); // (100 + 200) / 2
+        assert_eq!(average.iterations(), 2);
+        assert_eq!(average.total_bytes_allocated(), 300);
+    }
+
+    #[test]
+    fn average_memory_delta_contributor_no_allocation() {
+        reset_allocation_counter();
+        let session = create_test_session();
+        let mut average = AverageMemoryDelta::new("test".to_string());
+
+        {
+            let _contributor = average.contribute(&session);
+            // No allocation
+        }
+
+        assert_eq!(average.average(), 0);
+        assert_eq!(average.iterations(), 1);
+        assert_eq!(average.total_bytes_allocated(), 0);
+    }
+}

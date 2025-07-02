@@ -5,11 +5,12 @@
     reason = "No need for API documentation in benchmark code"
 )]
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use std::sync::Arc;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use events::{OnceEvent, OnceEventPool};
 use futures::executor::block_on;
-use many_cpus_benchmarking::{execute_runs, Payload, WorkDistribution};
-use std::sync::Arc;
+use many_cpus_benchmarking::{Payload, WorkDistribution, execute_runs};
 
 /// Benchmark payload for testing Arc binding of individual events.
 #[derive(Debug, Default)]
@@ -24,10 +25,10 @@ impl Payload for EventArcBinding {
         // Create a fresh event for this iteration
         let event = Arc::new(OnceEvent::<u64>::new());
         let (sender, receiver) = event.bind_by_arc();
-        
+
         // Send a value
         sender.send(42);
-        
+
         // Receive the value
         let value = block_on(receiver).expect("Failed to receive value");
         assert_eq!(value, 42);
@@ -48,10 +49,10 @@ impl Payload for EventPtrBinding {
         let event = Box::pin(OnceEvent::<u64>::new());
         // SAFETY: The event is pinned and will remain valid for the duration of the binding.
         let (sender, receiver) = unsafe { event.as_ref().bind_by_ptr() };
-        
+
         // Send a value
         sender.send(42);
-        
+
         // Receive the value
         let value = block_on(receiver).expect("Failed to receive value");
         assert_eq!(value, 42);
@@ -68,7 +69,9 @@ impl Payload for EventPoolArcBinding {
     fn new_pair() -> (Self, Self) {
         let pool = Arc::new(OnceEventPool::new());
         (
-            Self { pool: Arc::clone(&pool) },
+            Self {
+                pool: Arc::clone(&pool),
+            },
             Self { pool },
         )
     }
@@ -76,10 +79,10 @@ impl Payload for EventPoolArcBinding {
     fn process(&mut self) {
         // Get a fresh event from the pool for this iteration
         let (sender, receiver) = self.pool.bind_by_arc();
-        
+
         // Send a value
         sender.send(42);
-        
+
         // Receive the value
         let value = block_on(receiver).expect("Failed to receive value");
         assert_eq!(value, 42);
@@ -95,8 +98,12 @@ struct EventPoolPtrBinding {
 impl Payload for EventPoolPtrBinding {
     fn new_pair() -> (Self, Self) {
         (
-            Self { pool: Box::pin(OnceEventPool::new()) },
-            Self { pool: Box::pin(OnceEventPool::new()) },
+            Self {
+                pool: Box::pin(OnceEventPool::new()),
+            },
+            Self {
+                pool: Box::pin(OnceEventPool::new()),
+            },
         )
     }
 
@@ -104,10 +111,10 @@ impl Payload for EventPoolPtrBinding {
         // Get a fresh event from the pool for this iteration
         // SAFETY: The pool is pinned and will remain valid for the duration of the binding.
         let (sender, receiver) = unsafe { self.pool.as_ref().bind_by_ptr() };
-        
+
         // Send a value
         sender.send(42);
-        
+
         // Receive the value
         let value = block_on(receiver).expect("Failed to receive value");
         assert_eq!(value, 42);
@@ -126,10 +133,10 @@ impl Payload for BaselineOneshotChannel {
     fn process(&mut self) {
         // Create a fresh oneshot channel for this iteration
         let (sender, receiver) = oneshot::channel::<u64>();
-        
+
         // Send a value
         sender.send(42).expect("Failed to send value");
-        
+
         // Receive the value
         let value = block_on(receiver).expect("Failed to receive value");
         assert_eq!(value, 42);
