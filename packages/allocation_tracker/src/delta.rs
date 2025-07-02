@@ -3,7 +3,7 @@
 use std::sync::atomic;
 
 use crate::session::AllocationTrackingSession;
-use crate::tracker::TRACKER_BYTES_ALLOCATED;
+use crate::tracker::TOTAL_BYTES_ALLOCATED;
 
 /// Tracks memory allocation changes over a specific time period.
 ///
@@ -33,7 +33,7 @@ impl<'a> MemoryDeltaTracker<'a> {
     ///
     /// Requires an active allocation tracking session to ensure tracking is enabled.
     pub fn new(session: &'a AllocationTrackingSession) -> Self {
-        let initial_bytes_allocated = TRACKER_BYTES_ALLOCATED.load(atomic::Ordering::Relaxed);
+        let initial_bytes_allocated = TOTAL_BYTES_ALLOCATED.load(atomic::Ordering::Relaxed);
 
         Self {
             initial_bytes_allocated,
@@ -48,7 +48,7 @@ impl<'a> MemoryDeltaTracker<'a> {
     /// Panics if the total bytes allocated has somehow decreased since the tracker
     /// was created, which should never happen in normal operation.
     pub fn to_delta(&self) -> u64 {
-        let final_bytes_allocated = TRACKER_BYTES_ALLOCATED.load(atomic::Ordering::Relaxed);
+        let final_bytes_allocated = TOTAL_BYTES_ALLOCATED.load(atomic::Ordering::Relaxed);
 
         final_bytes_allocated
             .checked_sub(self.initial_bytes_allocated)
@@ -62,7 +62,7 @@ mod tests {
 
     use super::*;
     use crate::AllocationTrackingSession;
-    use crate::tracker::TRACKER_BYTES_ALLOCATED;
+    use crate::tracker::TOTAL_BYTES_ALLOCATED;
 
     // Helper function to create a mock session for testing
     // Note: This won't actually enable allocation tracking since we're not using
@@ -86,7 +86,7 @@ mod tests {
         let tracker = MemoryDeltaTracker::new(&session);
 
         // Simulate some allocation by manually adding to the counter
-        TRACKER_BYTES_ALLOCATED.fetch_add(150, atomic::Ordering::Relaxed);
+        TOTAL_BYTES_ALLOCATED.fetch_add(150, atomic::Ordering::Relaxed);
 
         assert_eq!(tracker.to_delta(), 150);
     }
@@ -97,12 +97,12 @@ mod tests {
         let tracker1 = MemoryDeltaTracker::new(&session);
 
         // Simulate allocation
-        TRACKER_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
+        TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
 
         let tracker2 = MemoryDeltaTracker::new(&session);
 
         // Simulate more allocation
-        TRACKER_BYTES_ALLOCATED.fetch_add(50, atomic::Ordering::Relaxed);
+        TOTAL_BYTES_ALLOCATED.fetch_add(50, atomic::Ordering::Relaxed);
 
         assert_eq!(tracker1.to_delta(), 150); // Total since tracker1 was created
         assert_eq!(tracker2.to_delta(), 50); // Only since tracker2 was created

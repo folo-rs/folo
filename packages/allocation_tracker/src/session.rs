@@ -26,7 +26,7 @@ use crate::tracker::MemoryTracker;
 /// ```
 #[derive(Debug)]
 pub struct AllocationTrackingSession {
-    pub(crate) _private: (),
+    _private: (),
 }
 
 static TRACKING_SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -51,29 +51,28 @@ impl AllocationTrackingSession {
     /// // Allocation tracking is now enabled
     /// // Session will disable tracking when dropped
     /// ```
-    #[allow(
+    #[expect(
         clippy::new_without_default,
         reason = "Default implementation would be inappropriate as new() can panic"
     )]
     pub fn new() -> Self {
-        // Initialize the tracker on first use
+        // Initialize the tracker on first use.
         TRACKER_INITIALIZED.get_or_init(|| {
-            AllocationRegistry::set_global_tracker(MemoryTracker::new())
-                .expect("failed to set global allocation tracker");
+            // If this fails, it might conceivably be another crate that is concurrently
+            // using tracking_allocator, in which case we panic because there is nothing we can do.
+            AllocationRegistry::set_global_tracker(MemoryTracker)
+                .expect("global allocation tracker was already set by someone else");
         });
 
         // Try to acquire the session lock
-        if TRACKING_SESSION_ACTIVE
+        TRACKING_SESSION_ACTIVE
             .compare_exchange(
                 false,
                 true,
                 atomic::Ordering::Acquire,
                 atomic::Ordering::Relaxed,
             )
-            .is_err()
-        {
-            panic!("allocation tracking session is already active");
-        }
+            .expect("another allocation tracking session is already active");
 
         AllocationRegistry::enable_tracking();
 

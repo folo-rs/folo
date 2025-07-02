@@ -163,7 +163,7 @@ mod tests {
 
     use super::*;
     use crate::AllocationTrackingSession;
-    use crate::tracker::TRACKER_BYTES_ALLOCATED;
+    use crate::tracker::TOTAL_BYTES_ALLOCATED;
 
     // Helper function to create a mock session for testing
     // Note: This won't actually enable allocation tracking since we're not using
@@ -224,7 +224,7 @@ mod tests {
         {
             let _contributor = average.contribute(&session);
             // Simulate allocation
-            TRACKER_BYTES_ALLOCATED.fetch_add(75, atomic::Ordering::Relaxed);
+            TOTAL_BYTES_ALLOCATED.fetch_add(75, atomic::Ordering::Relaxed);
         } // Contributor drops here
 
         assert_eq!(average.average(), 75);
@@ -240,13 +240,13 @@ mod tests {
         // First contributor
         {
             let _contributor = average.contribute(&session);
-            TRACKER_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
+            TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
         }
 
         // Second contributor
         {
             let _contributor = average.contribute(&session);
-            TRACKER_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
+            TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
         }
 
         assert_eq!(average.average(), 150); // (100 + 200) / 2
