@@ -22,9 +22,9 @@ use crate::tracker::TOTAL_BYTES_ALLOCATED;
 /// static ALLOCATOR: Allocator<System> = Allocator::system();
 ///
 /// let session = Session::new();
-/// let tracker = Span::new(&session);
+/// let span = Span::new(&session);
 /// let data = vec![1, 2, 3, 4, 5]; // This allocates memory
-/// let delta = tracker.to_delta();
+/// let delta = span.to_delta();
 /// // delta will be >= the size of the vector allocation
 /// ```
 #[derive(Debug)]
@@ -79,37 +79,37 @@ mod tests {
     }
 
     #[test]
-    fn memory_delta_tracker_new() {
+    fn span_new() {
         let session = create_test_session();
-        let tracker = Span::new(&session);
-        assert_eq!(tracker.to_delta(), 0);
+        let span = Span::new(&session);
+        assert_eq!(span.to_delta(), 0);
     }
 
     #[test]
-    fn memory_delta_tracker_with_simulated_allocation() {
+    fn span_with_simulated_allocation() {
         let session = create_test_session();
-        let tracker = Span::new(&session);
+        let span = Span::new(&session);
 
         // Simulate some allocation by manually adding to the counter
         TOTAL_BYTES_ALLOCATED.fetch_add(150, atomic::Ordering::Relaxed);
 
-        assert_eq!(tracker.to_delta(), 150);
+        assert_eq!(span.to_delta(), 150);
     }
 
     #[test]
-    fn memory_delta_tracker_multiple_trackers() {
+    fn span_multiple_spans() {
         let session = create_test_session();
-        let tracker1 = Span::new(&session);
+        let span1 = Span::new(&session);
 
         // Simulate allocation
         TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
 
-        let tracker2 = Span::new(&session);
+        let span2 = Span::new(&session);
 
         // Simulate more allocation
         TOTAL_BYTES_ALLOCATED.fetch_add(50, atomic::Ordering::Relaxed);
 
-        assert_eq!(tracker1.to_delta(), 150); // Total since tracker1 was created
-        assert_eq!(tracker2.to_delta(), 50); // Only since tracker2 was created
+        assert_eq!(span1.to_delta(), 150); // Total since span1 was created
+        assert_eq!(span2.to_delta(), 50); // Only since span2 was created
     }
 }

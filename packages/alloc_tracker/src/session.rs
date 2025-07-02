@@ -24,9 +24,9 @@ use crate::tracker::MemoryTracker;
 /// static ALLOCATOR: Allocator<System> = Allocator::system();
 ///
 /// let session = Session::new();
-/// let tracker = Span::new(&session);
+/// let span = Span::new(&session);
 /// let data = vec![1, 2, 3, 4, 5];
-/// let delta = tracker.to_delta();
+/// let delta = span.to_delta();
 /// // Session automatically disables tracking when dropped
 /// ```
 #[derive(Debug)]

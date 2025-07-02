@@ -1,14 +1,13 @@
 //! Memory allocation tracking utilities for benchmarks and performance analysis.
 //!
 //! This crate provides utilities to track memory allocations during code execution,
-//! enabling measurement of memory usage patterns in benchmarks and performance tests.
+//! enabling analysis of allocation patterns in benchmarks and performance tests.
 //!
 //! The core functionality includes:
 //! - [`Allocator`] - A Rust memory allocator wrapper that enables allocation tracking
 //! - [`Session`] - Configures allocation tracking and provides access to tracking data
 //! - [`Span`] - Tracks memory allocation changes over a time period
 //! - [`Operation`] - Calculates average memory allocation per operation
-//! - [`OperationSet`] - Collects and displays memory usage measurements
 //!
 //! # Quick Start
 //!
@@ -35,9 +34,9 @@
 //!     let session = Session::new();
 //!
 //!     // Track a single operation
-//!     let tracker = Span::new(&session);
+//!     let span = Span::new(&session);
 //!     let data = vec![1, 2, 3, 4, 5]; // This allocates memory
-//!     let delta = tracker.to_delta();
+//!     let delta = span.to_delta();
 //!     println!("Allocated {} bytes", delta);
 //!
 //!     // Session automatically cleans up when dropped
@@ -92,9 +91,9 @@
 //!     let session = Session::new();
 //!
 //!     // Track a single operation
-//!     let tracker = Span::new(&session);
+//!     let span = Span::new(&session);
 //!     let data = vec![1, 2, 3, 4, 5]; // This allocates memory
-//!     let bytes_allocated = tracker.to_delta();
+//!     let bytes_allocated = span.to_delta();
 //!
 //!     println!("Allocated {} bytes", bytes_allocated);
 //!
@@ -102,39 +101,41 @@
 //! }
 //! ```
 //!
-//! ## Collecting multiple measurements
+//! ## Collecting statistics from multiple operations
 //!
-//! Use [`OperationSet`] to collect and display measurements from different operations:
+//! Use a collection to gather and display statistics from different operations:
 //!
 //! ```
 //! use std::alloc::System;
 //!
-//! use alloc_tracker::{Allocator, Operation, OperationSet, Session};
+//! use alloc_tracker::{Allocator, Operation, Session};
 //!
 //! #[global_allocator]
 //! static ALLOCATOR: Allocator<System> = Allocator::system();
 //!
 //! fn main() {
 //!     let session = Session::new();
-//!     let mut results = OperationSet::new();
+//!     let mut results = std::collections::HashMap::new();
 //!
-//!     // Create and measure different operations
-//!     let mut vec_measurement = Operation::new("vector_creation".to_string());
+//!     // Create and track different operations
+//!     let mut vec_operation = Operation::new("vector_creation".to_string());
 //!     {
-//!         let _contributor = vec_measurement.span(&session);
+//!         let _contributor = vec_operation.span(&session);
 //!         let _vec = vec![1, 2, 3, 4, 5]; // This allocates memory
 //!     }
-//!     results.add(vec_measurement);
+//!     results.insert(vec_operation.name().to_string(), vec_operation.average());
 //!
-//!     let mut string_measurement = Operation::new("string_creation".to_string());
+//!     let mut string_operation = Operation::new("string_creation".to_string());
 //!     {
-//!         let _contributor = string_measurement.span(&session);
+//!         let _contributor = string_operation.span(&session);
 //!         let _string = String::from("Hello, world!"); // This allocates memory  
 //!     }
-//!     results.add(string_measurement);
+//!     results.insert(string_operation.name().to_string(), string_operation.average());
 //!
 //!     // Print all results
-//!     println!("{}", results);
+//!     for (name, bytes) in &results {
+//!         println!("{}: {} bytes", name, bytes);
+//!     }
 //!
 //!     // Access individual results
 //!     if let Some(bytes) = results.get("vector_creation") {
@@ -185,15 +186,15 @@
 //!
 //! # Thread Safety
 //!
-//! The allocation tracking is thread-safe using atomic operations. Measurements are global
+//! The allocation tracking is thread-safe using atomic operations. Statistics are global
 //! and account for all allocations on all threads, so single-threaded testing is recommended
-//! for precise measurements.
+//! for precise statistics.
 //!
 //! # Session Management
 //!
 //! Only one [`Session`] can be active at a time. Attempting to create
 //! multiple sessions simultaneously will result in an error. This ensures that tracking
-//! state is properly managed and measurements are accurate.
+//! state is properly managed and statistics are accurate.
 
 mod allocator;
 mod operation;

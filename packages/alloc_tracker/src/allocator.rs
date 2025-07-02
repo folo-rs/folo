@@ -1,4 +1,4 @@
-//! Allocation wrapper for tracking memory usage.
+//! Allocation wrapper for tracking memory allocations.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::fmt;

@@ -1,6 +1,6 @@
-//! Memory usage tracking benchmarks demonstrating the `alloc_tracker` crate.
+//! Memory allocation tracking benchmarks demonstrating the `alloc_tracker` crate.
 //!
-//! This benchmark demonstrates how to track memory usage (bytes per iteration)
+//! This benchmark demonstrates how to track memory allocations (bytes per iteration)
 //! in Criterion benchmarks using the `alloc_tracker` utilities.
 
 #![allow(
@@ -25,7 +25,7 @@ fn entrypoint(c: &mut Criterion) {
     let alloc_tracker_session = Session::new();
     let mut all_operations = Vec::new();
 
-    let mut group = c.benchmark_group("memory_usage");
+    let mut group = c.benchmark_group("allocation_tracking");
 
     group.bench_function("string_formatting", |b| {
         let mut operation = Operation::new("string_formatting");
@@ -84,7 +84,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.finish();
 
-    println!("Memory allocation results:");
+    println!("Memory allocation statistics:");
 
     for operation in all_operations {
         println!("{operation}");

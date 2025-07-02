@@ -50,13 +50,13 @@ impl Operation {
         }
     }
 
-    /// Returns the name of this measurement.
+    /// Returns the name of this operation.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Adds a memory delta measurement to the average calculation.
+    /// Adds a memory delta value to the average calculation.
     ///
     /// This method is typically called by [`OperationSpan`] when it is dropped.
     pub fn add(&mut self, delta: u64) {
@@ -82,8 +82,8 @@ impl Operation {
     /// let mut average = Operation::new("test".to_string());
     /// {
     ///     let _contributor = average.span(&session);
-    ///     let _data = vec![1, 2, 3]; // This allocation will be measured
-    /// } // Contributor is dropped here, measurement is added to average
+    ///     let _data = vec![1, 2, 3]; // This allocation will be tracked
+    /// } // Contributor is dropped here, allocation is added to average
     /// ```
     pub fn span<'a>(&'a mut self, session: &'a Session) -> OperationSpan<'a> {
         OperationSpan::new(self, session)
@@ -126,7 +126,7 @@ impl fmt::Display for Operation {
     }
 }
 
-/// An allocation tracker span that is associated with an operation. It will take measurements
+/// An allocation tracker span that is associated with an operation. It will track allocations
 /// between creation and drop and contribute them to the operation's statistics.
 ///
 /// # Examples
@@ -145,28 +145,28 @@ impl fmt::Display for Operation {
 ///     let _contributor = average.span(&session);
 ///     // Perform some operation that allocates memory
 ///     let _data = String::from("Hello, world!");
-/// } // Memory delta is automatically measured and recorded here
+/// } // Memory delta is automatically tracked and recorded here
 /// ```
 #[derive(Debug)]
 pub struct OperationSpan<'a> {
     average_memory_delta: &'a mut Operation,
-    memory_delta_tracker: Span<'a>,
+    span: Span<'a>,
 }
 
 impl<'a> OperationSpan<'a> {
     pub(crate) fn new(average_memory_delta: &'a mut Operation, session: &'a Session) -> Self {
-        let memory_delta_tracker = Span::new(session);
+        let span = Span::new(session);
 
         Self {
             average_memory_delta,
-            memory_delta_tracker,
+            span,
         }
     }
 }
 
 impl Drop for OperationSpan<'_> {
     fn drop(&mut self) {
-        let delta = self.memory_delta_tracker.to_delta();
+        let delta = self.span.to_delta();
         self.average_memory_delta.add(delta);
     }
 }
