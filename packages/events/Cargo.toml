@@ -33,3 +33,7 @@ workspace = true
 [[bench]]
 name = "events_performance"
 harness = false
+
+[[bench]]
+name = "events_multithreaded_performance"
+harness = false

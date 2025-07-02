@@ -5,7 +5,9 @@
     reason = "No need for API documentation in benchmark code"
 )]
 
-use std::{hint, rc::Rc, sync::Arc};
+use std::hint;
+use std::rc::Rc;
+use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use futures::executor::block_on;
