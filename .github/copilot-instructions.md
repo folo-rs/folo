@@ -95,6 +95,8 @@ the inline examples in API documentation.
 
 Use proper English grammar, spelling and punctuation.
 
+Titles are normal sentences, do not capitalize every word in a title.
+
 Sentences end with punctuation:
 
 * This is wrong: "//! // Create a pool for storing u64 values"
@@ -275,6 +277,9 @@ via `bench_on_threadpool()` to ensure that overheads are comparable.
 
 Inside the benchmark closure, use `std::hint::black_box()` to consume output values from the code
 being benchmarked, to avoid unrealistic eager optimizations due to output values that are discarded.
+
+Benchmarks that are meant to be compared to each other must be in the same benchmark function
+and in the same benchmark group.
 
 # YAML formatting
 
