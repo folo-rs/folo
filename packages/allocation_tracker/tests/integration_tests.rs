@@ -1,4 +1,4 @@
-//! Integration tests for allocation_tracker with real memory allocations.
+//! Integration tests for `allocation_tracker` with real memory allocations.
 //!
 //! These tests use a global allocator setup to test the full functionality
 //! of the allocation tracking system.
@@ -21,7 +21,7 @@ fn cleanup_tracking() {
 }
 
 #[test]
-fn test_memory_delta_tracker_with_real_allocation() {
+fn memory_delta_tracker_with_real_allocation() {
     let session = setup_tracking();
 
     let tracker = MemoryDeltaTracker::new(&session);
@@ -32,7 +32,7 @@ fn test_memory_delta_tracker_with_real_allocation() {
     let delta = tracker.to_delta();
 
     // We should have allocated at least 1000 bytes (vector capacity might be larger)
-    assert!(delta >= 1000, "Expected at least 1000 bytes, got {}", delta);
+    assert!(delta >= 1000, "Expected at least 1000 bytes, got {delta}");
 
     // Keep data alive to prevent premature deallocation
     assert_eq!(data.len(), 1000);
@@ -41,7 +41,7 @@ fn test_memory_delta_tracker_with_real_allocation() {
 }
 
 #[test]
-fn test_memory_delta_tracker_no_allocation() {
+fn memory_delta_tracker_no_allocation() {
     let session = setup_tracking();
 
     let tracker = MemoryDeltaTracker::new(&session);
@@ -53,7 +53,7 @@ fn test_memory_delta_tracker_no_allocation() {
     let delta = tracker.to_delta();
 
     // Should be zero or very close to zero
-    assert_eq!(delta, 0, "Expected no allocation, got {} bytes", delta);
+    assert_eq!(delta, 0, "Expected no allocation, got {delta} bytes");
 
     // Use variables to prevent optimization
     assert_eq!(y, 43);
@@ -62,7 +62,7 @@ fn test_memory_delta_tracker_no_allocation() {
 }
 
 #[test]
-fn test_average_memory_delta_with_real_allocations() {
+fn average_memory_delta_with_real_allocations() {
     let session = setup_tracking();
 
     let mut average = AverageMemoryDelta::new("test_average".to_string());
@@ -80,20 +80,18 @@ fn test_average_memory_delta_with_real_allocations() {
     assert_eq!(iterations, 5);
     assert!(
         total >= 1500,
-        "Expected at least 1500 bytes total, got {}",
-        total
+        "Expected at least 1500 bytes total, got {total}"
     ); // 100+200+300+400+500
     assert!(
         avg >= 300,
-        "Expected average of at least 300 bytes, got {}",
-        avg
+        "Expected average of at least 300 bytes, got {avg}"
     ); // 1500/5
 
     cleanup_tracking();
 }
 
 #[test]
-fn test_string_allocation_tracking() {
+fn string_allocation_tracking() {
     let session = setup_tracking();
 
     let tracker = MemoryDeltaTracker::new(&session);
@@ -108,8 +106,7 @@ fn test_string_allocation_tracking() {
     // Should have allocated memory for the strings
     assert!(
         delta > 0,
-        "Expected some allocation for strings, got {}",
-        delta
+        "Expected some allocation for strings, got {delta}"
     );
 
     // Keep strings alive
@@ -121,7 +118,7 @@ fn test_string_allocation_tracking() {
 }
 
 #[test]
-fn test_boxed_allocation_tracking() {
+fn boxed_allocation_tracking() {
     let session = setup_tracking();
 
     let tracker = MemoryDeltaTracker::new(&session);
@@ -133,7 +130,7 @@ fn test_boxed_allocation_tracking() {
     let delta = tracker.to_delta();
 
     // Should have allocated at least 1000 bytes
-    assert!(delta >= 1000, "Expected at least 1000 bytes, got {}", delta);
+    assert!(delta >= 1000, "Expected at least 1000 bytes, got {delta}");
 
     // Keep boxed values alive
     assert_eq!(boxed_array.len(), 100);
@@ -143,7 +140,7 @@ fn test_boxed_allocation_tracking() {
 }
 
 #[test]
-fn test_allocation_tracking_across_scopes() {
+fn allocation_tracking_across_scopes() {
     let session = setup_tracking();
 
     let tracker = MemoryDeltaTracker::new(&session);
@@ -161,23 +158,31 @@ fn test_allocation_tracking_across_scopes() {
     let delta = tracker.to_delta();
 
     // Should have tracked both allocations (500 + 300 = 800 bytes minimum)
-    assert!(delta >= 800, "Expected at least 800 bytes, got {}", delta);
+    assert!(delta >= 800, "Expected at least 800 bytes, got {delta}");
 
     cleanup_tracking();
 }
 
 #[test]
-fn test_multiple_trackers_independence() {
+fn multiple_trackers_independence() {
     let session = setup_tracking();
 
     let tracker1 = MemoryDeltaTracker::new(&session);
 
-    // Allocate some data
+    // Allocate some data - use vec! to ensure heap allocation
+    #[allow(
+        clippy::useless_vec,
+        reason = "Need to allocate memory on heap for testing"
+    )]
     let _data1 = vec![0_u8; 100];
 
     let tracker2 = MemoryDeltaTracker::new(&session);
 
     // Allocate more data
+    #[allow(
+        clippy::useless_vec,
+        reason = "Need to allocate memory on heap for testing"
+    )]
     let _data2 = vec![1_u8; 200];
 
     let delta1 = tracker1.to_delta();
@@ -186,15 +191,13 @@ fn test_multiple_trackers_independence() {
     // tracker1 should see both allocations (100 + 200 = 300 minimum)
     assert!(
         delta1 >= 300,
-        "Tracker1 expected at least 300 bytes, got {}",
-        delta1
+        "Tracker1 expected at least 300 bytes, got {delta1}"
     );
 
     // tracker2 should only see the second allocation (200 minimum)
     assert!(
         delta2 >= 200,
-        "Tracker2 expected at least 200 bytes, got {}",
-        delta2
+        "Tracker2 expected at least 200 bytes, got {delta2}"
     );
     assert!(
         delta2 < delta1,

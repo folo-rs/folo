@@ -9,20 +9,8 @@ use crate::tracker::TRACKER_BYTES_ALLOCATED;
 /// This function is primarily intended for testing purposes to ensure a clean
 /// state between test runs. It should not be used in production code as it can
 /// interfere with concurrent allocation tracking.
-///
-/// # Examples
-///
-/// ```
-/// use allocation_tracker::{AllocationTrackingSession, MemoryDeltaTracker, reset_allocation_counter};
-///
-/// let session = AllocationTrackingSession::new();
-/// reset_allocation_counter();
-/// let tracker = MemoryDeltaTracker::new(&session);
-/// let data = vec![1, 2, 3];
-/// let delta = tracker.to_delta();
-/// // delta now reflects only the allocation since reset
-/// ```
-pub fn reset_allocation_counter() {
+#[allow(dead_code, reason = "used in doctests and unit tests")]
+pub(crate) fn reset_allocation_counter() {
     TRACKER_BYTES_ALLOCATED.store(0, atomic::Ordering::Relaxed);
 }
 
@@ -30,18 +18,8 @@ pub fn reset_allocation_counter() {
 ///
 /// This function provides direct access to the internal allocation counter
 /// and is primarily intended for testing and diagnostic purposes.
-///
-/// # Examples
-///
-/// ```
-/// use allocation_tracker::current_allocation_count;
-///
-/// let initial = current_allocation_count();
-/// let data = vec![1, 2, 3, 4, 5];
-/// let after = current_allocation_count();
-/// assert!(after >= initial);
-/// ```
-pub fn current_allocation_count() -> u64 {
+#[allow(dead_code, reason = "used in doctests and unit tests")]
+pub(crate) fn current_allocation_count() -> u64 {
     TRACKER_BYTES_ALLOCATED.load(atomic::Ordering::Relaxed)
 }
 

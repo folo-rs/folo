@@ -1,4 +1,12 @@
-//! Example demonstrating how to use allocation_tracker in benchmark-style scenarios.
+#![allow(
+    clippy::items_after_statements,
+    clippy::uninlined_format_args,
+    clippy::arithmetic_side_effects,
+    clippy::cast_precision_loss,
+    reason = "This is an example file with intentional patterns that trigger these warnings"
+)]
+
+//! Example demonstrating how to use `allocation_tracker` in benchmark-style scenarios.
 //!
 //! This example shows patterns commonly used in performance testing where you
 //! want to measure both execution time and memory allocation.

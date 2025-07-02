@@ -12,26 +12,16 @@ pub(crate) static TRACKER_BYTES_ALLOCATED: AtomicU64 = AtomicU64::new(0);
 ///
 /// This tracker only counts allocations, not deallocations, as it is designed
 /// to measure the memory footprint of operations rather than the net memory usage.
-///
-/// # Examples
-///
-/// ```
-/// use allocation_tracker::MemoryTracker;
-///
-/// let tracker = MemoryTracker::new();
-/// // The tracker automatically integrates with the global allocator setup
-/// // when used with TrackingAllocator.
-/// ```
 #[derive(Debug)]
 #[non_exhaustive]
-pub struct MemoryTracker {
+pub(crate) struct MemoryTracker {
     _private: (),
 }
 
 impl MemoryTracker {
     /// Creates a new memory tracker instance.
     #[must_use]
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self { _private: () }
     }
 }

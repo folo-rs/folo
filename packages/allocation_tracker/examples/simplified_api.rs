@@ -1,7 +1,13 @@
+#![allow(
+    clippy::collection_is_never_read,
+    clippy::arithmetic_side_effects,
+    reason = "This is an example file with intentional patterns that trigger these warnings"
+)]
+
 //! Example demonstrating the simplified allocation tracking API.
 //!
 //! This example shows the new user-friendly API that hides the complexity
-//! of setting up tracking_allocator and managing sessions.
+//! of setting up `tracking_allocator` and managing sessions.
 
 use std::alloc::System;
 

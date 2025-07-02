@@ -61,8 +61,9 @@ mod tests {
     use std::sync::atomic;
 
     use super::*;
+    use crate::AllocationTrackingSession;
     use crate::tracker::TRACKER_BYTES_ALLOCATED;
-    use crate::{AllocationTrackingSession, reset_allocation_counter};
+    use crate::utils::reset_allocation_counter;
 
     // Helper function to create a mock session for testing
     // Note: This won't actually enable allocation tracking since we're not using

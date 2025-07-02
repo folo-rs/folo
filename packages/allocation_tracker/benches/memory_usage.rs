@@ -1,7 +1,7 @@
-//! Memory usage tracking benchmarks demonstrating the allocation_tracker crate.
+//! Memory usage tracking benchmarks demonstrating the `allocation_tracker` crate.
 //!
 //! This benchmark demonstrates how to track memory usage (bytes per iteration)
-//! in Criterion benchmarks using the allocation_tracker utilities.
+//! in Criterion benchmarks using the `allocation_tracker` utilities.
 
 #![allow(
     missing_docs,
@@ -24,7 +24,7 @@ criterion_main!(benches);
 static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
 
 fn entrypoint(c: &mut Criterion) {
-    let session = AllocationTrackingSession::new().expect("Failed to start tracking session");
+    let session = AllocationTrackingSession::new();
 
     let mut memory_results = MemoryUsageResults::new();
 

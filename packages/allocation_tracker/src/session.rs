@@ -51,7 +51,10 @@ impl AllocationTrackingSession {
     /// // Allocation tracking is now enabled
     /// // Session will disable tracking when dropped
     /// ```
-    #[allow(clippy::new_without_default, reason = "Default implementation would be inappropriate as new() can panic")]
+    #[allow(
+        clippy::new_without_default,
+        reason = "Default implementation would be inappropriate as new() can panic"
+    )]
     pub fn new() -> Self {
         // Initialize the tracker on first use
         TRACKER_INITIALIZED.get_or_init(|| {
@@ -84,5 +87,3 @@ impl Drop for AllocationTrackingSession {
         TRACKING_SESSION_ACTIVE.store(false, atomic::Ordering::Release);
     }
 }
-
-
