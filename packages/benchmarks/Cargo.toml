@@ -23,6 +23,7 @@ fake_headers = { workspace = true }
 frozen-collections = { workspace = true }
 http = { workspace = true }
 scc = { workspace = true }
+tracking-allocator = { workspace = true }
 
 [target.'cfg(windows)'.dev-dependencies]
 windows = { workspace = true, features = ["Win32_System_Memory"] }
@@ -37,6 +38,10 @@ harness = false
 
 [[bench]]
 name = "effects_of_memory_windows"
+harness = false
+
+[[bench]]
+name = "memory_usage"
 harness = false
 
 [lints]
