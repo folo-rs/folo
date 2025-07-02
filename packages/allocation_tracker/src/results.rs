@@ -14,7 +14,12 @@ use crate::average::AverageMemoryDelta;
 /// # Examples
 ///
 /// ```
-/// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults};
+/// use std::alloc::System;
+///
+/// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults, TrackingAllocator};
+///
+/// #[global_allocator]
+/// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
 ///
 /// let session = AllocationTrackingSession::new();
 /// let mut results = MemoryUsageResults::new();
@@ -59,7 +64,12 @@ impl MemoryUsageResults {
     /// # Examples
     ///
     /// ```
-    /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults};
+    /// use std::alloc::System;
+    ///
+    /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults, TrackingAllocator};
+    ///
+    /// #[global_allocator]
+    /// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
     ///
     /// let session = AllocationTrackingSession::new();
     /// let mut results = MemoryUsageResults::new();
@@ -103,7 +113,12 @@ impl MemoryUsageResults {
     /// # Examples
     ///
     /// ```
-    /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults};
+    /// use std::alloc::System;
+    ///
+    /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults, TrackingAllocator};
+    ///
+    /// #[global_allocator]
+    /// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
     ///
     /// let session = AllocationTrackingSession::new();
     /// let mut results = MemoryUsageResults::new();
@@ -125,7 +140,12 @@ impl MemoryUsageResults {
     /// # Examples
     ///
     /// ```
-    /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults};
+    /// use std::alloc::System;
+    ///
+    /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults, TrackingAllocator};
+    ///
+    /// #[global_allocator]
+    /// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
     ///
     /// let session = AllocationTrackingSession::new();
     /// let mut results = MemoryUsageResults::new();
@@ -147,7 +167,12 @@ impl MemoryUsageResults {
     /// # Examples
     ///
     /// ```
-    /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults};
+    /// use std::alloc::System;
+    ///
+    /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults, TrackingAllocator};
+    ///
+    /// #[global_allocator]
+    /// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
     ///
     /// let session = AllocationTrackingSession::new();
     /// let mut results = MemoryUsageResults::new();
@@ -167,7 +192,12 @@ impl MemoryUsageResults {
     /// # Examples
     ///
     /// ```
-    /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults};
+    /// use std::alloc::System;
+    ///
+    /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults, TrackingAllocator};
+    ///
+    /// #[global_allocator]
+    /// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
     ///
     /// let session = AllocationTrackingSession::new();
     /// let mut results = MemoryUsageResults::new();

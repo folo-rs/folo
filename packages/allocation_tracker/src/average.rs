@@ -11,7 +11,12 @@ use crate::session::AllocationTrackingSession;
 /// # Examples
 ///
 /// ```
-/// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta};
+/// use std::alloc::System;
+///
+/// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, TrackingAllocator};
+///
+/// #[global_allocator]
+/// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
 ///
 /// let session = AllocationTrackingSession::new();
 /// let mut average = AverageMemoryDelta::new("string_allocations".to_string());
@@ -64,7 +69,12 @@ impl AverageMemoryDelta {
     /// # Examples
     ///
     /// ```
-    /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta};
+    /// use std::alloc::System;
+    ///
+    /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, TrackingAllocator};
+    ///
+    /// #[global_allocator]
+    /// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
     ///
     /// let session = AllocationTrackingSession::new();
     /// let mut average = AverageMemoryDelta::new("test".to_string());
@@ -120,7 +130,12 @@ impl AverageMemoryDelta {
 /// # Examples
 ///
 /// ```
-/// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta};
+/// use std::alloc::System;
+///
+/// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, TrackingAllocator};
+///
+/// #[global_allocator]
+/// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
 ///
 /// let session = AllocationTrackingSession::new();
 /// let mut average = AverageMemoryDelta::new("test".to_string());

@@ -16,7 +16,12 @@ use crate::tracker::MemoryTracker;
 /// # Examples
 ///
 /// ```rust
-/// use allocation_tracker::{AllocationTrackingSession, MemoryDeltaTracker};
+/// use std::alloc::System;
+///
+/// use allocation_tracker::{AllocationTrackingSession, MemoryDeltaTracker, TrackingAllocator};
+///
+/// #[global_allocator]
+/// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
 ///
 /// let session = AllocationTrackingSession::new();
 /// let tracker = MemoryDeltaTracker::new(&session);
@@ -45,7 +50,12 @@ impl AllocationTrackingSession {
     /// # Examples
     ///
     /// ```rust
-    /// use allocation_tracker::AllocationTrackingSession;
+    /// use std::alloc::System;
+    ///
+    /// use allocation_tracker::{AllocationTrackingSession, TrackingAllocator};
+    ///
+    /// #[global_allocator]
+    /// static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
     ///
     /// let session = AllocationTrackingSession::new();
     /// // Allocation tracking is now enabled
