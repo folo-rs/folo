@@ -6,55 +6,51 @@
 use std::alloc::System;
 use std::time::Instant;
 
-use allocation_tracker::{AverageMemoryDelta, MemoryTracker, reset_allocation_counter};
-use tracking_allocator::{AllocationRegistry, Allocator};
+use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, TrackingAllocator};
 
 #[global_allocator]
-static ALLOCATOR: Allocator<System> = Allocator::system();
+static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
 
 fn main() {
     // Set up the allocation tracker
-    AllocationRegistry::set_global_tracker(MemoryTracker).unwrap();
-    AllocationRegistry::enable_tracking();
+    let session = AllocationTrackingSession::new().expect("Failed to start tracking session");
 
     println!("=== Benchmark-Style Memory Tracking Example ===\n");
 
     // Benchmark different string operations
-    benchmark_string_operations();
+    benchmark_string_operations(&session);
 
     println!();
 
     // Benchmark collection operations
-    benchmark_collection_operations();
+    benchmark_collection_operations(&session);
 
-    // Clean up
-    AllocationRegistry::disable_tracking();
+    // Session cleanup happens automatically when session is dropped
     println!("\nBenchmarking complete!");
 }
 
-fn benchmark_string_operations() {
+fn benchmark_string_operations(session: &AllocationTrackingSession) {
     println!("Benchmarking string operations:");
 
     const ITERATIONS: usize = 1000;
 
     // Test string concatenation with format!
-    let mut format_average = AverageMemoryDelta::new();
+    let mut format_average = AverageMemoryDelta::new("format_strings".to_string());
     let format_start = Instant::now();
 
     for i in 0..ITERATIONS {
-        let _contributor = format_average.contribute();
+        let _contributor = format_average.contribute(session);
         let _result = format!("Item number {}", i);
     }
 
     let format_duration = format_start.elapsed();
 
     // Test string concatenation with String::push_str
-    reset_allocation_counter();
-    let mut push_str_average = AverageMemoryDelta::new();
+    let mut push_str_average = AverageMemoryDelta::new("push_str_strings".to_string());
     let push_str_start = Instant::now();
 
     for i in 0..ITERATIONS {
-        let _contributor = push_str_average.contribute();
+        let _contributor = push_str_average.contribute(session);
         let mut result = String::from("Item number ");
         result.push_str(&i.to_string());
         drop(result);
@@ -63,12 +59,11 @@ fn benchmark_string_operations() {
     let push_str_duration = push_str_start.elapsed();
 
     // Test string concatenation with + operator
-    reset_allocation_counter();
-    let mut concat_average = AverageMemoryDelta::new();
+    let mut concat_average = AverageMemoryDelta::new("concat_strings".to_string());
     let concat_start = Instant::now();
 
     for i in 0..ITERATIONS {
-        let _contributor = concat_average.contribute();
+        let _contributor = concat_average.contribute(session);
         let _result = "Item number ".to_string() + &i.to_string();
     }
 
@@ -97,19 +92,18 @@ fn benchmark_string_operations() {
     );
 }
 
-fn benchmark_collection_operations() {
+fn benchmark_collection_operations(session: &AllocationTrackingSession) {
     println!("Benchmarking collection operations:");
 
     const ITERATIONS: usize = 100;
     const COLLECTION_SIZE: usize = 1000;
 
     // Test Vec::new() + push
-    reset_allocation_counter();
-    let mut vec_push_average = AverageMemoryDelta::new();
+    let mut vec_push_average = AverageMemoryDelta::new("vec_push".to_string());
     let vec_push_start = Instant::now();
 
     for _ in 0..ITERATIONS {
-        let _contributor = vec_push_average.contribute();
+        let _contributor = vec_push_average.contribute(session);
         let mut vec = Vec::new();
         for i in 0..COLLECTION_SIZE {
             vec.push(i);
@@ -120,12 +114,11 @@ fn benchmark_collection_operations() {
     let vec_push_duration = vec_push_start.elapsed();
 
     // Test Vec::with_capacity + push
-    reset_allocation_counter();
-    let mut vec_capacity_average = AverageMemoryDelta::new();
+    let mut vec_capacity_average = AverageMemoryDelta::new("vec_capacity".to_string());
     let vec_capacity_start = Instant::now();
 
     for _ in 0..ITERATIONS {
-        let _contributor = vec_capacity_average.contribute();
+        let _contributor = vec_capacity_average.contribute(session);
         let mut vec = Vec::with_capacity(COLLECTION_SIZE);
         for i in 0..COLLECTION_SIZE {
             vec.push(i);
@@ -136,12 +129,11 @@ fn benchmark_collection_operations() {
     let vec_capacity_duration = vec_capacity_start.elapsed();
 
     // Test vec! macro
-    reset_allocation_counter();
-    let mut vec_macro_average = AverageMemoryDelta::new();
+    let mut vec_macro_average = AverageMemoryDelta::new("vec_macro".to_string());
     let vec_macro_start = Instant::now();
 
     for _ in 0..ITERATIONS {
-        let _contributor = vec_macro_average.contribute();
+        let _contributor = vec_macro_average.contribute(session);
         let _vec = vec![0; COLLECTION_SIZE];
     }
 

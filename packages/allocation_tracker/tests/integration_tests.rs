@@ -6,31 +6,28 @@
 use std::alloc::System;
 
 use allocation_tracker::{
-    AverageMemoryDelta, MemoryDeltaTracker, MemoryTracker, reset_allocation_counter,
+    AllocationTrackingSession, AverageMemoryDelta, MemoryDeltaTracker, TrackingAllocator,
 };
-use tracking_allocator::{AllocationRegistry, Allocator};
 
 #[global_allocator]
-static ALLOCATOR: Allocator<System> = Allocator::system();
+static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
 
-fn setup_tracking() {
-    AllocationRegistry::set_global_tracker(MemoryTracker).unwrap();
-    AllocationRegistry::enable_tracking();
-    reset_allocation_counter();
+fn setup_tracking() -> AllocationTrackingSession {
+    AllocationTrackingSession::new().expect("Failed to start tracking session")
 }
 
 fn cleanup_tracking() {
-    AllocationRegistry::disable_tracking();
+    // Session cleanup happens automatically when session is dropped
 }
 
 #[test]
 fn test_memory_delta_tracker_with_real_allocation() {
-    setup_tracking();
+    let session = setup_tracking();
 
-    let tracker = MemoryDeltaTracker::new();
+    let tracker = MemoryDeltaTracker::new(&session);
 
     // Allocate a vector - this should be tracked
-    let data = vec![1u8; 1000];
+    let data = vec![1_u8; 1000];
 
     let delta = tracker.to_delta();
 
@@ -45,9 +42,9 @@ fn test_memory_delta_tracker_with_real_allocation() {
 
 #[test]
 fn test_memory_delta_tracker_no_allocation() {
-    setup_tracking();
+    let session = setup_tracking();
 
-    let tracker = MemoryDeltaTracker::new();
+    let tracker = MemoryDeltaTracker::new(&session);
 
     // Do some work that doesn't allocate
     let x = 42;
@@ -66,14 +63,14 @@ fn test_memory_delta_tracker_no_allocation() {
 
 #[test]
 fn test_average_memory_delta_with_real_allocations() {
-    setup_tracking();
+    let session = setup_tracking();
 
-    let mut average = AverageMemoryDelta::new();
+    let mut average = AverageMemoryDelta::new("test_average".to_string());
 
     // Perform multiple allocations of different sizes
     for i in 1..=5 {
-        let _contributor = average.contribute();
-        let _data = vec![0u8; i * 100]; // 100, 200, 300, 400, 500 bytes
+        let _contributor = average.contribute(&session);
+        let _data = vec![0_u8; i * 100]; // 100, 200, 300, 400, 500 bytes
     }
 
     let avg = average.average();
@@ -97,9 +94,9 @@ fn test_average_memory_delta_with_real_allocations() {
 
 #[test]
 fn test_string_allocation_tracking() {
-    setup_tracking();
+    let session = setup_tracking();
 
-    let tracker = MemoryDeltaTracker::new();
+    let tracker = MemoryDeltaTracker::new(&session);
 
     // Allocate strings
     let s1 = String::from("Hello, world!");
@@ -125,13 +122,13 @@ fn test_string_allocation_tracking() {
 
 #[test]
 fn test_boxed_allocation_tracking() {
-    setup_tracking();
+    let session = setup_tracking();
 
-    let tracker = MemoryDeltaTracker::new();
+    let tracker = MemoryDeltaTracker::new(&session);
 
     // Allocate boxed values
-    let boxed_array = Box::new([0u64; 100]); // 800 bytes
-    let boxed_vec = Box::new(vec![1u32; 50]); // At least 200 bytes
+    let boxed_array = Box::new([0_u64; 100]); // 800 bytes
+    let boxed_vec = Box::new(vec![1_u32; 50]); // At least 200 bytes
 
     let delta = tracker.to_delta();
 
@@ -147,19 +144,19 @@ fn test_boxed_allocation_tracking() {
 
 #[test]
 fn test_allocation_tracking_across_scopes() {
-    setup_tracking();
+    let session = setup_tracking();
 
-    let tracker = MemoryDeltaTracker::new();
+    let tracker = MemoryDeltaTracker::new(&session);
 
     {
         // Allocate in inner scope
-        let _temp_data = vec![0u8; 500];
+        let _temp_data = vec![0_u8; 500];
 
         // Even though this goes out of scope, we only track allocations, not deallocations
     }
 
     // Allocate more in outer scope
-    let _persistent_data = vec![1u8; 300];
+    let _persistent_data = vec![1_u8; 300];
 
     let delta = tracker.to_delta();
 
@@ -171,17 +168,17 @@ fn test_allocation_tracking_across_scopes() {
 
 #[test]
 fn test_multiple_trackers_independence() {
-    setup_tracking();
+    let session = setup_tracking();
 
-    let tracker1 = MemoryDeltaTracker::new();
+    let tracker1 = MemoryDeltaTracker::new(&session);
 
     // Allocate some data
-    let _data1 = vec![0u8; 100];
+    let _data1 = vec![0_u8; 100];
 
-    let tracker2 = MemoryDeltaTracker::new();
+    let tracker2 = MemoryDeltaTracker::new(&session);
 
     // Allocate more data
-    let _data2 = vec![1u8; 200];
+    let _data2 = vec![1_u8; 200];
 
     let delta1 = tracker1.to_delta();
     let delta2 = tracker2.to_delta();
