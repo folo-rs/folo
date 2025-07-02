@@ -319,6 +319,22 @@ It is fine to rely on the Rust prelude - no need to explicitly import types from
 
 Do not `use super::` except in unit tests. Instead, use the full path `use crate::` style.
 
+Prefer importing types at the highest level they are visible. For example, if a type is defined
+in `src/session.rs` but also re-exported at the crate root, you should import it from the crate
+root.
+
+Wrong:
+
+```rust
+use crate::session::AllocationTrackingSession;
+```
+
+Correct:
+
+```rust
+use crate::AllocationTrackingSession;
+```
+
 # Dependencies in cargo.toml
 
 Dependencies are sorted alphabetically by name of the package.
