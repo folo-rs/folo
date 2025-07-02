@@ -1,4 +1,4 @@
-# allocation_tracker
+# alloc_tracker
 
 Memory allocation tracking utilities for benchmarks and performance analysis.
 
@@ -14,7 +14,7 @@ The core functionality includes:
 ## Example
 
 ```rust
-use allocation_tracker::{MemoryTracker, MemoryDeltaTracker};
+use alloc_tracker::{MemoryTracker, MemoryDeltaTracker};
 use tracking_allocator::{AllocationRegistry, Allocator};
 use std::alloc::System;
 
@@ -38,7 +38,7 @@ fn main() {
 }
 ```
 
-More details in the [package documentation](https://docs.rs/allocation_tracker/).
+More details in the [package documentation](https://docs.rs/alloc_tracker/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
 high-performance hardware-aware programming in Rust.

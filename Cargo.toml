@@ -22,7 +22,7 @@ debug = "none"
 
 [workspace.dependencies]
 # The packages we publish.
-allocation_tracker = { version = "0.1.0", path = "packages/allocation_tracker" }
+alloc_tracker = { version = "0.1.0", path = "packages/alloc_tracker" }
 blind_pool = { version = "0.1.2", path = "packages/blind_pool" }
 cpulist = { version = "0.2.7", path = "packages/cpulist" }
 events = { version = "0.1.0", path = "packages/events" }

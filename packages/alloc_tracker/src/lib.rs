@@ -16,7 +16,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! allocation_tracker = "0.1.0"
+//! alloc_tracker = "0.1.0"
 //! ```
 //!
 //! # Simple Usage
@@ -26,7 +26,7 @@
 //! ```
 //! use std::alloc::System;
 //!
-//! use allocation_tracker::{Session, TrackedSpan, Allocator};
+//! use alloc_tracker::{Session, TrackedSpan, Allocator};
 //!
 //! #[global_allocator]
 //! static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -51,7 +51,7 @@
 //! ```
 //! use std::alloc::System;
 //!
-//! use allocation_tracker::{Session, TrackedOperation, Allocator};
+//! use alloc_tracker::{Session, TrackedOperation, Allocator};
 //!
 //! #[global_allocator]
 //! static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -82,7 +82,7 @@
 //! ```rust
 //! use std::alloc::System;
 //!
-//! use allocation_tracker::{Session, TrackedSpan, Allocator};
+//! use alloc_tracker::{Session, TrackedSpan, Allocator};
 //!
 //! #[global_allocator]
 //! static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -109,7 +109,7 @@
 //! ```
 //! use std::alloc::System;
 //!
-//! use allocation_tracker::{
+//! use alloc_tracker::{
 //!     Session, TrackedOperation, TrackedOperationSet, Allocator,
 //! };
 //!
@@ -152,7 +152,7 @@
 //! ```rust
 //! use std::alloc::System;
 //!
-//! use allocation_tracker::{Session, TrackedOperation, Allocator};
+//! use alloc_tracker::{Session, TrackedOperation, Allocator};
 //! use criterion::{Criterion, criterion_group, criterion_main};
 //!
 //! #[global_allocator]

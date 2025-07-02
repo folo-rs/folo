@@ -18,7 +18,7 @@ use crate::tracker::MemoryTracker;
 /// ```rust
 /// use std::alloc::System;
 ///
-/// use allocation_tracker::{Session, TrackedSpan, Allocator};
+/// use alloc_tracker::{Session, TrackedSpan, Allocator};
 ///
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -52,7 +52,7 @@ impl Session {
     /// ```rust
     /// use std::alloc::System;
     ///
-    /// use allocation_tracker::{Session, Allocator};
+    /// use alloc_tracker::{Session, Allocator};
     ///
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<System> = Allocator::system();

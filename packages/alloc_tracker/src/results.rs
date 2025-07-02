@@ -16,7 +16,7 @@ use crate::average::TrackedOperation;
 /// ```
 /// use std::alloc::System;
 ///
-/// use allocation_tracker::{Session, TrackedOperation, TrackedOperationSet, Allocator};
+/// use alloc_tracker::{Session, TrackedOperation, TrackedOperationSet, Allocator};
 ///
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -66,7 +66,7 @@ impl TrackedOperationSet {
     /// ```
     /// use std::alloc::System;
     ///
-    /// use allocation_tracker::{Session, TrackedOperation, TrackedOperationSet, Allocator};
+    /// use alloc_tracker::{Session, TrackedOperation, TrackedOperationSet, Allocator};
     ///
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -95,7 +95,7 @@ impl TrackedOperationSet {
     /// # Examples
     ///
     /// ```
-    /// use allocation_tracker::TrackedOperationSet;
+    /// use alloc_tracker::TrackedOperationSet;
     ///
     /// let mut results = TrackedOperationSet::new();
     /// results.add_explicit("string_formatting".to_string(), 24);
@@ -115,7 +115,7 @@ impl TrackedOperationSet {
     /// ```
     /// use std::alloc::System;
     ///
-    /// use allocation_tracker::{Session, TrackedOperation, TrackedOperationSet, Allocator};
+    /// use alloc_tracker::{Session, TrackedOperation, TrackedOperationSet, Allocator};
     ///
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -142,7 +142,7 @@ impl TrackedOperationSet {
     /// ```
     /// use std::alloc::System;
     ///
-    /// use allocation_tracker::{Session, TrackedOperation, TrackedOperationSet, Allocator};
+    /// use alloc_tracker::{Session, TrackedOperation, TrackedOperationSet, Allocator};
     ///
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -169,7 +169,7 @@ impl TrackedOperationSet {
     /// ```
     /// use std::alloc::System;
     ///
-    /// use allocation_tracker::{Session, TrackedOperation, TrackedOperationSet, Allocator};
+    /// use alloc_tracker::{Session, TrackedOperation, TrackedOperationSet, Allocator};
     ///
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -194,7 +194,7 @@ impl TrackedOperationSet {
     /// ```
     /// use std::alloc::System;
     ///
-    /// use allocation_tracker::{Session, TrackedOperation, TrackedOperationSet, Allocator};
+    /// use alloc_tracker::{Session, TrackedOperation, TrackedOperationSet, Allocator};
     ///
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<System> = Allocator::system();

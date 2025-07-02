@@ -6,7 +6,7 @@
     reason = "This is an example file with intentional patterns that trigger these warnings"
 )]
 
-//! Example demonstrating how to use `allocation_tracker` in benchmark-style scenarios.
+//! Example demonstrating how to use `alloc_tracker` in benchmark-style scenarios.
 //!
 //! This example shows patterns commonly used in performance testing where you
 //! want to measure both execution time and memory allocation.
@@ -14,7 +14,7 @@
 use std::alloc::System;
 use std::time::Instant;
 
-use allocation_tracker::{Allocator, Session, TrackedOperation};
+use alloc_tracker::{Allocator, Session, TrackedOperation};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<System> = Allocator::system();

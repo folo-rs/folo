@@ -1,11 +1,11 @@
-//! Integration tests for `allocation_tracker` with real memory allocations.
+//! Integration tests for `alloc_tracker` with real memory allocations.
 //!
 //! These tests use a global allocator setup to test the full functionality
 //! of the allocation tracking system.
 
 use std::alloc::System;
 
-use allocation_tracker::{Allocator, Session, TrackedOperation, TrackedSpan};
+use alloc_tracker::{Allocator, Session, TrackedOperation, TrackedSpan};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<System> = Allocator::system();

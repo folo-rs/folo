@@ -1,11 +1,11 @@
-//! Example demonstrating basic usage of `allocation_tracker`.
+//! Example demonstrating basic usage of `alloc_tracker`.
 //!
 //! This example shows how to use the memory tracking utilities to measure
 //! memory allocations in different scenarios using the simplified API.
 
 use std::alloc::System;
 
-use allocation_tracker::{Allocator, Session, TrackedOperation, TrackedSpan};
+use alloc_tracker::{Allocator, Session, TrackedOperation, TrackedSpan};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<System> = Allocator::system();

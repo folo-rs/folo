@@ -1,5 +1,5 @@
 [package]
-name = "allocation_tracker"
+name = "alloc_tracker"
 description = "Memory allocation tracking utilities for benchmarks and performance analysis"
 version = "0.1.0"
 

@@ -1,7 +1,7 @@
-//! Memory usage tracking benchmarks demonstrating the `allocation_tracker` crate.
+//! Memory usage tracking benchmarks demonstrating the `alloc_tracker` crate.
 //!
 //! This benchmark demonstrates how to track memory usage (bytes per iteration)
-//! in Criterion benchmarks using the `allocation_tracker` utilities.
+//! in Criterion benchmarks using the `alloc_tracker` utilities.
 
 #![allow(
     missing_docs,
@@ -12,7 +12,7 @@ use std::alloc::System;
 use std::hint::black_box;
 use std::time::Instant;
 
-use allocation_tracker::{Allocator, Session, TrackedOperation, TrackedOperationSet};
+use alloc_tracker::{Allocator, Session, TrackedOperation, TrackedOperationSet};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 
 criterion_group!(benches, entrypoint);

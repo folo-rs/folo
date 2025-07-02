@@ -13,7 +13,7 @@ use crate::session::Session;
 /// ```
 /// use std::alloc::System;
 ///
-/// use allocation_tracker::{Session, TrackedOperation, Allocator};
+/// use alloc_tracker::{Session, TrackedOperation, Allocator};
 ///
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -71,7 +71,7 @@ impl TrackedOperation {
     /// ```
     /// use std::alloc::System;
     ///
-    /// use allocation_tracker::{Session, TrackedOperation, Allocator};
+    /// use alloc_tracker::{Session, TrackedOperation, Allocator};
     ///
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -129,7 +129,7 @@ impl TrackedOperation {
 /// ```
 /// use std::alloc::System;
 ///
-/// use allocation_tracker::{Session, TrackedOperation, Allocator};
+/// use alloc_tracker::{Session, TrackedOperation, Allocator};
 ///
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<System> = Allocator::system();

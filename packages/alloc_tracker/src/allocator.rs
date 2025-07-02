@@ -16,7 +16,7 @@ use tracking_allocator::Allocator as TrackingAllocatorImpl;
 /// ```rust
 /// use std::alloc::System;
 ///
-/// use allocation_tracker::Allocator;
+/// use alloc_tracker::Allocator;
 ///
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<System> = Allocator::system();

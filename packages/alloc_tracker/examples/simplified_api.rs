@@ -11,7 +11,7 @@
 
 use std::alloc::System;
 
-use allocation_tracker::{Allocator, Session, TrackedOperation, TrackedOperationSet};
+use alloc_tracker::{Allocator, Session, TrackedOperation, TrackedOperationSet};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<System> = Allocator::system();
