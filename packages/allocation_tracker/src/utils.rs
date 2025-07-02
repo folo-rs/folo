@@ -15,7 +15,7 @@ use crate::tracker::TRACKER_BYTES_ALLOCATED;
 /// ```
 /// use allocation_tracker::{AllocationTrackingSession, MemoryDeltaTracker, reset_allocation_counter};
 ///
-/// let session = AllocationTrackingSession::new().unwrap();
+/// let session = AllocationTrackingSession::new();
 /// reset_allocation_counter();
 /// let tracker = MemoryDeltaTracker::new(&session);
 /// let data = vec![1, 2, 3];

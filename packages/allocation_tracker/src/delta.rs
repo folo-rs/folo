@@ -16,7 +16,7 @@ use crate::tracker::TRACKER_BYTES_ALLOCATED;
 /// ```
 /// use allocation_tracker::{AllocationTrackingSession, MemoryDeltaTracker};
 ///
-/// let session = AllocationTrackingSession::new().unwrap();
+/// let session = AllocationTrackingSession::new();
 /// let tracker = MemoryDeltaTracker::new(&session);
 /// let data = vec![1, 2, 3, 4, 5]; // This allocates memory
 /// let delta = tracker.to_delta();
@@ -68,13 +68,9 @@ mod tests {
     // Note: This won't actually enable allocation tracking since we're not using
     // a global allocator in unit tests, but it allows us to test the API structure
     fn create_test_session() -> AllocationTrackingSession {
-        // For unit tests, we'll create a session that might fail but we'll ignore it
-        // since these tests are focused on logic that doesn't require real allocation tracking
-        AllocationTrackingSession::new().unwrap_or_else(|_| {
-            // If session creation fails, we can still test the basic logic
-            // This is a bit of a hack for unit testing
-            AllocationTrackingSession { _private: () }
-        })
+        // This function simplifies test setup by providing a session
+        // We can now directly call new() since it's infallible
+        AllocationTrackingSession::new()
     }
 
     #[test]

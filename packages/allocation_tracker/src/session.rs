@@ -1,6 +1,5 @@
 //! Session management for allocation tracking.
 
-use std::fmt;
 use std::sync::atomic::AtomicBool;
 use std::sync::{OnceLock, atomic};
 
@@ -19,7 +18,7 @@ use crate::tracker::MemoryTracker;
 /// ```rust
 /// use allocation_tracker::{AllocationTrackingSession, MemoryDeltaTracker};
 ///
-/// let session = AllocationTrackingSession::new().unwrap();
+/// let session = AllocationTrackingSession::new();
 /// let tracker = MemoryDeltaTracker::new(&session);
 /// let data = vec![1, 2, 3, 4, 5];
 /// let delta = tracker.to_delta();
@@ -39,20 +38,21 @@ impl AllocationTrackingSession {
     /// This will automatically set up the global tracker (on first use) and enable
     /// allocation tracking. Only one session can be active at a time.
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// Returns an error if another allocation tracking session is already active.
+    /// Panics if another allocation tracking session is already active.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use allocation_tracker::AllocationTrackingSession;
     ///
-    /// let session = AllocationTrackingSession::new().unwrap();
+    /// let session = AllocationTrackingSession::new();
     /// // Allocation tracking is now enabled
     /// // Session will disable tracking when dropped
     /// ```
-    pub fn new() -> Result<Self, AllocationTrackingError> {
+    #[allow(clippy::new_without_default, reason = "Default implementation would be inappropriate as new() can panic")]
+    pub fn new() -> Self {
         // Initialize the tracker on first use
         TRACKER_INITIALIZED.get_or_init(|| {
             AllocationRegistry::set_global_tracker(MemoryTracker::new())
@@ -69,12 +69,12 @@ impl AllocationTrackingSession {
             )
             .is_err()
         {
-            return Err(AllocationTrackingError::SessionAlreadyActive);
+            panic!("allocation tracking session is already active");
         }
 
         AllocationRegistry::enable_tracking();
 
-        Ok(Self { _private: () })
+        Self { _private: () }
     }
 }
 
@@ -85,22 +85,4 @@ impl Drop for AllocationTrackingSession {
     }
 }
 
-/// Errors that can occur when creating an allocation tracking session.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum AllocationTrackingError {
-    /// Another allocation tracking session is already active.
-    SessionAlreadyActive,
-}
 
-impl fmt::Display for AllocationTrackingError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::SessionAlreadyActive => {
-                write!(f, "allocation tracking session is already active")
-            }
-        }
-    }
-}
-
-impl std::error::Error for AllocationTrackingError {}

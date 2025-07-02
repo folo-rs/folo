@@ -16,7 +16,7 @@ use crate::average::AverageMemoryDelta;
 /// ```
 /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults};
 ///
-/// let session = AllocationTrackingSession::new().unwrap();
+/// let session = AllocationTrackingSession::new();
 /// let mut results = MemoryUsageResults::new();
 ///
 /// // Create measurements
@@ -61,7 +61,7 @@ impl MemoryUsageResults {
     /// ```
     /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults};
     ///
-    /// let session = AllocationTrackingSession::new().unwrap();
+    /// let session = AllocationTrackingSession::new();
     /// let mut results = MemoryUsageResults::new();
     /// let mut measurement = AverageMemoryDelta::new("test_op".to_string());
     ///
@@ -105,7 +105,7 @@ impl MemoryUsageResults {
     /// ```
     /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults};
     ///
-    /// let session = AllocationTrackingSession::new().unwrap();
+    /// let session = AllocationTrackingSession::new();
     /// let mut results = MemoryUsageResults::new();
     /// let measurement = AverageMemoryDelta::new("test_op".to_string());
     /// results.add(measurement);
@@ -127,7 +127,7 @@ impl MemoryUsageResults {
     /// ```
     /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults};
     ///
-    /// let session = AllocationTrackingSession::new().unwrap();
+    /// let session = AllocationTrackingSession::new();
     /// let mut results = MemoryUsageResults::new();
     /// let measurement1 = AverageMemoryDelta::new("op1".to_string());
     /// let measurement2 = AverageMemoryDelta::new("op2".to_string());
@@ -149,7 +149,7 @@ impl MemoryUsageResults {
     /// ```
     /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults};
     ///
-    /// let session = AllocationTrackingSession::new().unwrap();
+    /// let session = AllocationTrackingSession::new();
     /// let mut results = MemoryUsageResults::new();
     /// assert_eq!(results.len(), 0);
     ///
@@ -169,7 +169,7 @@ impl MemoryUsageResults {
     /// ```
     /// use allocation_tracker::{AllocationTrackingSession, AverageMemoryDelta, MemoryUsageResults};
     ///
-    /// let session = AllocationTrackingSession::new().unwrap();
+    /// let session = AllocationTrackingSession::new();
     /// let mut results = MemoryUsageResults::new();
     /// assert!(results.is_empty());
     ///

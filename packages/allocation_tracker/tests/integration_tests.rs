@@ -13,7 +13,7 @@ use allocation_tracker::{
 static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
 
 fn setup_tracking() -> AllocationTrackingSession {
-    AllocationTrackingSession::new().expect("Failed to start tracking session")
+    AllocationTrackingSession::new()
 }
 
 fn cleanup_tracking() {

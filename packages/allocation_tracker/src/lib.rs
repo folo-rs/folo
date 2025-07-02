@@ -32,7 +32,7 @@
 //! static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
 //!
 //! fn main() {
-//!     let session = AllocationTrackingSession::new().unwrap();
+//!     let session = AllocationTrackingSession::new();
 //!
 //!     // Track a single operation
 //!     let tracker = MemoryDeltaTracker::new(&session);
@@ -57,7 +57,7 @@
 //! static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
 //!
 //! fn main() {
-//!     let session = AllocationTrackingSession::new().unwrap();
+//!     let session = AllocationTrackingSession::new();
 //!     let mut average = AverageMemoryDelta::new("string_allocations".to_string());
 //!
 //!     // Track average over multiple operations
@@ -89,7 +89,7 @@
 //!
 //! fn main() {
 //!     // Create a tracking session (automatically handles setup)
-//!     let session = AllocationTrackingSession::new().unwrap();
+//!     let session = AllocationTrackingSession::new();
 //!
 //!     // Track a single operation
 //!     let tracker = MemoryDeltaTracker::new(&session);
@@ -117,7 +117,7 @@
 //! static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
 //!
 //! fn main() {
-//!     let session = AllocationTrackingSession::new().unwrap();
+//!     let session = AllocationTrackingSession::new();
 //!     let mut results = MemoryUsageResults::new();
 //!
 //!     // Create and measure different operations
@@ -159,7 +159,7 @@
 //! static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
 //!
 //! fn bench_string_allocation(c: &mut Criterion) {
-//!     let session = AllocationTrackingSession::new().unwrap();
+//!     let session = AllocationTrackingSession::new();
 //!
 //!     let mut group = c.benchmark_group("memory_usage");
 //!

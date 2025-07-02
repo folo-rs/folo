@@ -14,7 +14,7 @@ static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
 
 fn main() {
     // Simple setup - just create a session
-    let session = AllocationTrackingSession::new().unwrap();
+    let session = AllocationTrackingSession::new();
 
     println!("=== Simplified Allocation Tracking API ===\n");
 

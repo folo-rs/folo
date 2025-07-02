@@ -13,7 +13,7 @@ static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::system();
 
 fn main() {
     // Set up the allocation tracker
-    let session = AllocationTrackingSession::new().expect("Failed to start tracking session");
+    let session = AllocationTrackingSession::new();
 
     println!("=== Benchmark-Style Memory Tracking Example ===\n");
 
