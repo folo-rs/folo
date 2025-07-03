@@ -1,9 +1,9 @@
 //! Average memory allocation tracking.
 
 use std::fmt;
+use std::sync::atomic;
 
-use crate::session::Session;
-use crate::span::Span;
+use crate::tracker::TOTAL_BYTES_ALLOCATED;
 
 /// Calculates average memory allocation per operation across multiple iterations.
 ///
@@ -85,8 +85,8 @@ impl Operation {
     ///     let _data = vec![1, 2, 3]; // This allocation will be tracked
     /// } // Contributor is dropped here, allocation is added to average
     /// ```
-    pub fn span<'a>(&'a mut self, session: &'a Session) -> OperationSpan<'a> {
-        OperationSpan::new(self, session)
+    pub fn span(&mut self) -> OperationSpan<'_> {
+        OperationSpan::new(self)
     }
 
     /// Calculates the average bytes allocated per iteration.
@@ -149,25 +149,34 @@ impl fmt::Display for Operation {
 /// ```
 #[derive(Debug)]
 pub struct OperationSpan<'a> {
-    average_memory_delta: &'a mut Operation,
-    span: Span<'a>,
+    operation: &'a mut Operation,
+    start_bytes: u64,
 }
 
 impl<'a> OperationSpan<'a> {
-    pub(crate) fn new(average_memory_delta: &'a mut Operation, session: &'a Session) -> Self {
-        let span = Span::new(session);
+    pub(crate) fn new(operation: &'a mut Operation) -> Self {
+        let start_bytes = TOTAL_BYTES_ALLOCATED.load(atomic::Ordering::Relaxed);
 
         Self {
-            average_memory_delta,
-            span,
+            operation,
+            start_bytes,
         }
+    }
+    
+    /// Calculates the allocation delta since this span was created.
+    #[must_use]
+    pub fn to_delta(&self) -> u64 {
+        let current_bytes = TOTAL_BYTES_ALLOCATED.load(atomic::Ordering::Relaxed);
+        current_bytes
+            .checked_sub(self.start_bytes)
+            .expect("total bytes allocated could not possibly decrease")
     }
 }
 
 impl Drop for OperationSpan<'_> {
     fn drop(&mut self) {
-        let delta = self.span.to_delta();
-        self.average_memory_delta.add(delta);
+        let delta = self.to_delta();
+        self.operation.add(delta);
     }
 }
 
@@ -232,11 +241,11 @@ mod tests {
 
     #[test]
     fn average_memory_delta_span_drop() {
-        let session = create_test_session();
-        let mut average = Operation::new("test".to_string());
+        let mut session = create_test_session();
+        let average = session.operation("test");
 
         {
-            let _span = average.span(&session);
+            let _span = average.span();
             // Simulate allocation
             TOTAL_BYTES_ALLOCATED.fetch_add(75, atomic::Ordering::Relaxed);
         } // Contributor drops here
@@ -248,18 +257,18 @@ mod tests {
 
     #[test]
     fn average_memory_delta_multiple_spans() {
-        let session = create_test_session();
-        let mut average = Operation::new("test".to_string());
+        let mut session = create_test_session();
+        let average = session.operation("test");
 
         // First contributor
         {
-            let _span = average.span(&session);
+            let _span = average.span();
             TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
         }
 
         // Second contributor
         {
-            let _span = average.span(&session);
+            let _span = average.span();
             TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
         }
 
@@ -270,11 +279,11 @@ mod tests {
 
     #[test]
     fn average_memory_delta_span_no_allocation() {
-        let session = create_test_session();
-        let mut average = Operation::new("test".to_string());
+        let mut session = create_test_session();
+        let average = session.operation("test");
 
         {
-            let _span = average.span(&session);
+            let _span = average.span();
             // No allocation
         }
 

@@ -1,37 +1,45 @@
 //! Session management for allocation tracking.
 
+use std::collections::HashMap;
+use std::fmt;
 use std::sync::atomic::AtomicBool;
 use std::sync::{OnceLock, atomic};
 
 use tracking_allocator::AllocationRegistry;
 
 use crate::tracker::MemoryTracker;
+use crate::operation::Operation;
 
-/// Manages allocation tracking session state.
+/// Manages allocation tracking session state and contains operations.
 ///
 /// This type ensures that allocation tracking is properly enabled and disabled,
 /// and prevents multiple concurrent tracking sessions which would interfere with
-/// each other.
+/// each other. It also serves as a container for tracking operations.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use std::alloc::System;
 ///
-/// use alloc_tracker::{Session, Span, Allocator};
+/// use alloc_tracker::{Session, Allocator};
 ///
 /// #[global_allocator]
-/// static ALLOCATOR: Allocator<System> = Allocator::system();
+/// static ALLOCATOR: Allocator<s> = Allocator::system();
 ///
-/// let session = Session::new();
-/// let span = Span::new(&session);
-/// let data = vec![1, 2, 3, 4, 5];
-/// let delta = span.to_delta();
-/// // Session automatically disables tracking when dropped
+/// let mut session = Session::new();
+/// let mut string_op = session.operation("do_stuff_with_strings");
+///
+/// for _ in 0..3 {
+///     let _span = string_op.span();
+///     // TODO: Some string stuff here that we want to analyze.    
+/// }
+///
+/// // Output statistics of all operations to console.
+/// println!("{session}");
 /// ```
 #[derive(Debug)]
 pub struct Session {
-    _private: (),
+    operations: HashMap<String, Operation>,
 }
 
 static TRACKING_SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -55,9 +63,9 @@ impl Session {
     /// use alloc_tracker::{Session, Allocator};
     ///
     /// #[global_allocator]
-    /// static ALLOCATOR: Allocator<System> = Allocator::system();
+    /// static ALLOCATOR: Allocator<s> = Allocator::system();
     ///
-    /// let session = Session::new();
+    /// let mut session = Session::new();
     /// // Allocation tracking is now enabled
     /// // Session will disable tracking when dropped
     /// ```
@@ -86,7 +94,40 @@ impl Session {
 
         AllocationRegistry::enable_tracking();
 
-        Self { _private: () }
+        Self {
+            operations: HashMap::new(),
+        }
+    }
+
+    /// Creates or retrieves an operation with the given name.
+    ///
+    /// This method exclusively borrows the session, ensuring that operations
+    /// cannot be created concurrently. If an operation with the given name
+    /// already exists, its existing statistics are preserved.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::alloc::System;
+    ///
+    /// use alloc_tracker::{Session, Allocator};
+    ///
+    /// #[global_allocator]
+    /// static ALLOCATOR: Allocator<s> = Allocator::system();
+    ///
+    /// let mut session = Session::new();
+    /// let mut string_op = session.operation("string_operations");
+    /// 
+    /// for _ in 0..3 {
+    ///     let _span = string_op.span();
+    ///     let _s = String::from("test"); // This allocation will be tracked
+    /// }
+    /// ```
+    pub fn operation(&mut self, name: impl Into<String>) -> &mut Operation {
+        let name = name.into();
+        
+        // Get or create the operation
+        self.operations.entry(name).or_insert_with_key(|name| Operation::new(name.clone()))
     }
 }
 
@@ -94,5 +135,26 @@ impl Drop for Session {
     fn drop(&mut self) {
         AllocationRegistry::disable_tracking();
         TRACKING_SESSION_ACTIVE.store(false, atomic::Ordering::Release);
+    }
+}
+
+impl fmt::Display for Session {
+    #[cfg_attr(test, mutants::skip)] // No API contract.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.operations.is_empty() {
+            writeln!(f, "No operations recorded.")?;
+        } else {
+            writeln!(f, "Allocation statistics:")?;
+            
+            // Sort operations by name for consistent output
+            let mut sorted_ops: Vec<_> = self.operations.iter().collect();
+            sorted_ops.sort_by_key(|(name, _)| *name);
+            
+            for (_, operation) in sorted_ops {
+                writeln!(f, "  {operation}")?;
+            }
+        }
+        
+        Ok(())
     }
 }
