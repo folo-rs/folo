@@ -24,7 +24,7 @@ use crate::operation::Operation;
 /// use alloc_tracker::{Session, Allocator};
 ///
 /// #[global_allocator]
-/// static ALLOCATOR: Allocator<s> = Allocator::system();
+/// static ALLOCATOR: Allocator<System> = Allocator::system();
 ///
 /// let mut session = Session::new();
 /// let mut string_op = session.operation("do_stuff_with_strings");
@@ -63,7 +63,7 @@ impl Session {
     /// use alloc_tracker::{Session, Allocator};
     ///
     /// #[global_allocator]
-    /// static ALLOCATOR: Allocator<s> = Allocator::system();
+    /// static ALLOCATOR: Allocator<System> = Allocator::system();
     ///
     /// let mut session = Session::new();
     /// // Allocation tracking is now enabled
@@ -113,7 +113,7 @@ impl Session {
     /// use alloc_tracker::{Session, Allocator};
     ///
     /// #[global_allocator]
-    /// static ALLOCATOR: Allocator<s> = Allocator::system();
+    /// static ALLOCATOR: Allocator<System> = Allocator::system();
     ///
     /// let mut session = Session::new();
     /// let mut string_op = session.operation("string_operations");

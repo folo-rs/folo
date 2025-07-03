@@ -26,7 +26,7 @@
 //!
 //!     // Track a single operation
 //!     {
-//!         let _span = Span::new(&session);
+//!         let span = Span::new(&session);
 //!         let data = vec![1, 2, 3, 4, 5]; // This allocates memory
 //!         let delta = span.to_delta();
 //!         println!("Allocated {delta} bytes");
@@ -49,20 +49,17 @@
 //! static ALLOCATOR: Allocator<System> = Allocator::system();
 //!
 //! fn main() {
-//!     let session = Session::new();
-//!     let mut average = Operation::new("string_allocations".to_string());
-//!
+//!     let mut session = Session::new();
+//!     
 //!     // Track average over multiple operations
 //!     for i in 0..10 {
-//!         let _span = average.span(&session);
+//!         let string_op = session.operation("string_allocations");
+//!         let _span = string_op.span();
 //!         let _data = format!("String number {}", i); // This allocates memory
 //!     }
 //!
-//!     println!(
-//!         "Average allocation: {} bytes per operation",
-//!         average.average()
-//!     );
-//!     println!("Operation name: {}", average.name());
+//!     // Output statistics of all operations to console
+//!     println!("{}", session);
 //! }
 //! ```
 //!

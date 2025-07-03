@@ -25,7 +25,7 @@ use crate::tracker::TOTAL_BYTES_ALLOCATED;
 ///
 /// // Simulate multiple operations
 /// for i in 0..5 {
-///     let _span = average.span(&session);
+///     let _span = average.span();
 ///     let _data = vec![0; i + 1]; // Allocate different amounts
 /// }
 ///
@@ -81,7 +81,7 @@ impl Operation {
     /// let session = Session::new();
     /// let mut average = Operation::new("test".to_string());
     /// {
-    ///     let _span = average.span(&session);
+    ///     let _span = average.span();
     ///     let _data = vec![1, 2, 3]; // This allocation will be tracked
     /// } // Contributor is dropped here, allocation is added to average
     /// ```
@@ -142,7 +142,7 @@ impl fmt::Display for Operation {
 /// let session = Session::new();
 /// let mut average = Operation::new("test".to_string());
 /// {
-///     let _span = average.span(&session);
+///     let _span = average.span();
 ///     // Perform some operation that allocates memory
 ///     let _data = String::from("Hello, world!");
 /// } // Memory delta is automatically tracked and recorded here
