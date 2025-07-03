@@ -446,3 +446,12 @@ This macro is special-purpose and not intended for general use. Instead, use
 
 If there is some reason `Box::pin(value)` would not work, you can use `std::pin::pin!(value)`
 as a last resort but leave a comment to justify why this is the case.
+
+# Multiple statements per command
+
+You can execute multiple statements per command in the terminal, separated by semicolons. Do not
+waste time executing one command at a time when you can execute multiple commands in one go.
+
+```powershell
+mv src/old.rs src/new.rs; cargo fmt; cargo clippy --fix --allow-dirty --allow-staged; cargo test
+```
