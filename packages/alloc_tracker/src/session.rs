@@ -33,7 +33,10 @@ use crate::tracker::MemoryTracker;
 /// }
 ///
 /// // Output statistics of all operations to console.
-/// println!("{session}");
+/// // Using print_to_stdout() here is important in benchmarks because it will
+/// // print nothing if no spans were recorded, not even an empty line, which can
+/// // be functionally critical for benchmark harness behavior.
+/// session.print_to_stdout();
 /// ```
 #[derive(Debug)]
 pub struct Session {
