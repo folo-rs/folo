@@ -17,11 +17,11 @@ use criterion::{Criterion, criterion_group, criterion_main};
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 fn entrypoint(c: &mut Criterion) {
-    let mut alloc_tracker_session = Session::new();
+    let mut allocs = Session::new();
 
     let mut group = c.benchmark_group("alloc_tracker");
 
-    let string_op = alloc_tracker_session.operation("string_formatting");
+    let string_op = allocs.operation("string_formatting");
     group.bench_function("string_formatting", |b| {
         b.iter(|| {
             let _span = string_op.span();
@@ -33,7 +33,7 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let vector_op = alloc_tracker_session.operation("vector_creation");
+    let vector_op = allocs.operation("vector_creation");
     group.bench_function("vector_creation", |b| {
         b.iter(|| {
             let _span = vector_op.span();
@@ -45,8 +45,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.finish();
 
-    println!("Memory allocation statistics:");
-    println!("{alloc_tracker_session}");
+    allocs.print_to_stdout();
 }
 
 criterion_group!(benches, entrypoint);

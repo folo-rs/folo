@@ -124,6 +124,25 @@ impl Session {
             .entry(name)
             .or_insert_with_key(|name| Operation::new(name.clone()))
     }
+
+    /// Prints the allocation statistics of all operations to stdout.
+    ///
+    /// Prints nothing if no spans were captured. This may indicate that the session
+    /// was part of a "list available benchmarks" probe run instead of some real activity,
+    /// in which case printing anything might violate the output protocol the tool is speaking.
+    pub fn print_to_stdout(&self) {
+        if self.is_empty() {
+            return;
+        }
+
+        println!("{self}");
+    }
+
+    /// Whether there is any recorded activity in this session.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.operations.is_empty() || self.operations.values().all(|op| op.iterations() == 0)
+    }
 }
 
 impl Drop for Session {
@@ -136,8 +155,8 @@ impl Drop for Session {
 impl fmt::Display for Session {
     #[cfg_attr(test, mutants::skip)] // No API contract.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.operations.is_empty() {
-            writeln!(f, "No operations recorded.")?;
+        if self.operations.is_empty() || self.operations.values().all(|op| op.iterations() == 0) {
+            writeln!(f, "No allocation statistics captured.")?;
         } else {
             writeln!(f, "Allocation statistics:")?;
 
