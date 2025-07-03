@@ -18,7 +18,7 @@ use crate::tracker::TOTAL_BYTES_ALLOCATED;
 /// use alloc_tracker::{Allocator, Operation, Session};
 ///
 /// #[global_allocator]
-/// static ALLOCATOR: Allocator<System> = Allocator::system();
+/// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
 /// let session = Session::new();
 /// let mut average = Operation::new("string_allocations".to_string());
@@ -76,7 +76,7 @@ impl Operation {
     /// use alloc_tracker::{Allocator, Operation, Session};
     ///
     /// #[global_allocator]
-    /// static ALLOCATOR: Allocator<System> = Allocator::system();
+    /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
     /// let session = Session::new();
     /// let mut average = Operation::new("test".to_string());
@@ -137,7 +137,7 @@ impl fmt::Display for Operation {
 /// use alloc_tracker::{Allocator, Operation, Session};
 ///
 /// #[global_allocator]
-/// static ALLOCATOR: Allocator<System> = Allocator::system();
+/// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
 /// let session = Session::new();
 /// let mut average = Operation::new("test".to_string());

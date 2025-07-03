@@ -15,7 +15,7 @@ use alloc_tracker::{Allocator, Session};
 use criterion::{Criterion, criterion_group, criterion_main};
 
 #[global_allocator]
-static ALLOCATOR: Allocator<System> = Allocator::system();
+static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 fn entrypoint(c: &mut Criterion) {
     let mut alloc_tracker_session = Session::new();

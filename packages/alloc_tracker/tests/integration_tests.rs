@@ -5,12 +5,10 @@
 
 #![cfg(not(miri))] // Miri replaces the global allocator, so cannot be used here.
 
-use std::alloc::System;
-
 use alloc_tracker::{Allocator, Session, Span};
 
 #[global_allocator]
-static ALLOCATOR: Allocator<System> = Allocator::system();
+static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 // Test constants to avoid magic numbers
 const TEST_VECTOR_SIZE: usize = 1000;

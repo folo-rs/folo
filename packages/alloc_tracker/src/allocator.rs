@@ -19,7 +19,7 @@ use tracking_allocator::Allocator as TrackingAllocatorImpl;
 /// use alloc_tracker::Allocator;
 ///
 /// #[global_allocator]
-/// static ALLOCATOR: Allocator<System> = Allocator::system();
+/// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 /// ```
 pub struct Allocator<A: GlobalAlloc> {
     inner: TrackingAllocatorImpl<A>,
@@ -34,7 +34,7 @@ impl<A: GlobalAlloc> fmt::Debug for Allocator<A> {
     }
 }
 
-impl Allocator<System> {
+impl Allocator<std::alloc::System> {
     /// Creates a new tracking allocator using the system's default allocator.
     ///
     /// This is a convenience method for the common case of wanting to track

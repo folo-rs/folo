@@ -24,7 +24,7 @@ use crate::tracker::MemoryTracker;
 /// use alloc_tracker::{Allocator, Session};
 ///
 /// #[global_allocator]
-/// static ALLOCATOR: Allocator<System> = Allocator::system();
+/// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
 /// let mut session = Session::new();
 /// let mut string_op = session.operation("do_stuff_with_strings");
@@ -62,7 +62,7 @@ impl Session {
     /// use alloc_tracker::{Allocator, Session};
     ///
     /// #[global_allocator]
-    /// static ALLOCATOR: Allocator<System> = Allocator::system();
+    /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
     /// let mut session = Session::new();
     /// // Allocation tracking is now enabled
@@ -112,7 +112,7 @@ impl Session {
     /// use alloc_tracker::{Allocator, Session};
     ///
     /// #[global_allocator]
-    /// static ALLOCATOR: Allocator<System> = Allocator::system();
+    /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
     /// let mut session = Session::new();
     /// let mut string_op = session.operation("string_operations");

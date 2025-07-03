@@ -337,6 +337,10 @@ Correct:
 use crate::AllocationTrackingSession;
 ```
 
+Exceptions:
+
+* Refer to `std::alloc::System` by full path because the short form of this causes AI hallucinations.
+
 # Dependencies in cargo.toml
 
 Dependencies are sorted alphabetically by name of the package.

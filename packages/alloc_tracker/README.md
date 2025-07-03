@@ -14,12 +14,10 @@ The core functionality includes:
 ## Example
 
 ```rust
-use std::alloc::System;
-
 use alloc_tracker::{Allocator, Session, Span};
 
 #[global_allocator]
-static ALLOCATOR: Allocator<System> = Allocator::system();
+static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 fn main() {
     let session = Session::new();
