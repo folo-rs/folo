@@ -76,9 +76,9 @@
 //! Only one [`Session`] can be active at a time. Attempting to create
 //! multiple sessions simultaneously will result in an error. This ensures that tracking
 //! state is properly managed and statistics are accurate.
-//! 
+//!
 //! # Miri compatibility
-//! 
+//!
 //! Miri replaces the global allocator with its own logic, so you cannot execute code that uses
 //! this crate under Miri.
 
