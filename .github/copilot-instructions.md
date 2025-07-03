@@ -102,6 +102,8 @@ Sentences end with punctuation:
 * This is wrong: "//! // Create a pool for storing u64 values"
 * This is correct: "//! Create a pool for storing u64 values."
 
+Comments are regular sentences and END WITH A PERIOD or other punctuation.
+
 Do not forget proper language in tests, doctests and examples.
 
 # Use of unwrap() and expect()
