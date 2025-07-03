@@ -8,7 +8,7 @@ use opaque_pool::OpaquePool;
 
 fn main() {
     println!("=== Opaque Pool README Example ===");
-    
+
     // Create a pool for storing values that match the layout of `u64`.
     let layout = Layout::new::<u64>();
     let mut pool = OpaquePool::builder().layout(layout).build();
@@ -21,12 +21,10 @@ fn main() {
 
     // Read data back from the pooled items.
     // SAFETY: The pointer is valid and the value was just inserted.
-    let value1 = unsafe {
-        pooled1.ptr().read()
-    };
-    
+    let value1 = unsafe { pooled1.ptr().read() };
+
     println!("Retrieved value: {value1}");
     assert_eq!(value1, 42);
-    
+
     println!("README example completed successfully!");
 }

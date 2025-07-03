@@ -9,7 +9,7 @@ static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 fn main() {
     println!("=== Alloc Tracker README Example ===");
-    
+
     let session = Session::new();
 
     // Track a single operation
@@ -18,7 +18,7 @@ fn main() {
         let data = vec![1, 2, 3, 4, 5]; // This allocates memory
         let delta = span.to_delta();
         println!("Allocated {delta} bytes");
-        
+
         // Keep data alive to prevent early deallocation
         std::hint::black_box(data);
     }

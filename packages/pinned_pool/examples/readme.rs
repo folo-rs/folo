@@ -6,7 +6,7 @@ use pinned_pool::PinnedPool;
 
 fn main() {
     println!("=== Pinned Pool README Example ===");
-    
+
     let mut pool = PinnedPool::<String>::new();
 
     // Inserting an item gives you a key that you can later use to look up the item again.
@@ -25,6 +25,6 @@ fn main() {
     let mut alice = pool.get_mut(alice_key);
     alice.push_str(" Smith");
     println!("Modified item: {alice}");
-    
+
     println!("README example completed successfully!");
 }

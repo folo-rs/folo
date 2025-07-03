@@ -7,7 +7,7 @@ use futures::executor::block_on;
 
 fn main() {
     println!("=== Events README Example ===");
-    
+
     block_on(async {
         // Create a thread-safe event for passing a string message
         let event = OnceEvent::<String>::new();
@@ -19,7 +19,7 @@ fn main() {
         // Receive the message (await since it's async)
         let message = receiver.await.unwrap();
         assert_eq!(message, "Hello, World!");
-        
+
         println!("Received message: {message}");
         println!("README example completed successfully!");
     });

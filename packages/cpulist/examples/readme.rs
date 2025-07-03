@@ -4,7 +4,7 @@
 
 fn main() {
     println!("=== CPUList README Example ===");
-    
+
     let selected_processors = cpulist::parse("0-9,32-35,40").unwrap();
     assert_eq!(
         selected_processors,
@@ -13,6 +13,6 @@ fn main() {
 
     println!("Selected processors: {selected_processors:?}");
     println!("As cpulist: {}", cpulist::emit(selected_processors));
-    
+
     println!("README example completed successfully!");
 }

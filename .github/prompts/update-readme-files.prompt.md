@@ -14,7 +14,7 @@ The contents of a `README.md` file should be:
 2. A very succinct example.
 3. The standard footer.
 
-The example in the readme should have a corresponding `src/examples/packagename_readme.rs` file to verify
+The example in the readme should have a corresponding `src/examples/readme.rs` file to verify
 that it builds and succeeds when executed.
 
 The standard footer is:

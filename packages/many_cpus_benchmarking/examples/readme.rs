@@ -2,7 +2,7 @@
 //!
 //! This shows how to use the `many_cpus_benchmarking` crate for benchmark harnesses.
 
-use many_cpus_benchmarking::{execute_runs, Payload, WorkDistribution};
+use many_cpus_benchmarking::{Payload, WorkDistribution, execute_runs};
 
 #[derive(Debug, Default)]
 struct MyBenchmark {
@@ -20,7 +20,13 @@ impl Payload for MyBenchmark {
 
     fn process(&mut self) {
         // Your benchmark logic here
-        let _sum: u32 = self.data.as_ref().unwrap().iter().map(|&x| u32::from(x)).sum();
+        let _sum: u32 = self
+            .data
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|&x| u32::from(x))
+            .sum();
     }
 }
 
@@ -32,12 +38,12 @@ fn benchmark(c: &mut criterion::Criterion) {
 
 fn main() {
     println!("=== Many CPUs Benchmarking README Example ===");
-    
+
     // Create a dummy benchmark instance to demonstrate the structure
     let mut benchmark = MyBenchmark::default();
     benchmark.prepare();
     benchmark.process();
-    
+
     println!("MyBenchmark prepared and processed successfully");
     println!("In real usage, this would be called by Criterion benchmark framework");
     println!("README example completed successfully!");
