@@ -16,8 +16,6 @@
 //! You can track allocations like this:
 //!
 //! ```
-//! use std::alloc::System;
-//!
 //! use alloc_tracker::{Allocator, Session, Span};
 //!
 //! #[global_allocator]
@@ -43,8 +41,6 @@
 //! For benchmarking scenarios, where you run multiple iterations of an operation, use [`Operation`]:
 //!
 //! ```
-//! use std::alloc::System;
-//!
 //! use alloc_tracker::{Allocator, Operation, Session};
 //!
 //! #[global_allocator]
