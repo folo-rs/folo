@@ -48,8 +48,7 @@ static TRACKER_INITIALIZED: OnceLock<()> = OnceLock::new();
 impl Session {
     /// Creates a new allocation tracking session.
     ///
-    /// This will automatically set up the global tracker (on first use) and enable
-    /// allocation tracking. Only one session can be active at a time.
+    /// Only one session can be active at a time.
     ///
     /// # Panics
     ///
