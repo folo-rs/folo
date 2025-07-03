@@ -3,6 +3,8 @@
 //! These tests use a global allocator setup to test the full functionality
 //! of the allocation tracking system.
 
+#![cfg(not(miri))] // Miri replaces the global allocator, so cannot be used here.
+
 use std::alloc::System;
 
 use alloc_tracker::{Allocator, Session, Span};
@@ -19,17 +21,9 @@ const EXPECTED_TOTAL_BYTES: u64 = (BYTES_PER_ITERATION * (1 + 2 + 3 + 4 + 5)) as
 const EXPECTED_AVERAGE_BYTES: u64 = EXPECTED_TOTAL_BYTES / TEST_ITERATIONS as u64; // 300
 const TEST_VALUE: i32 = 42;
 
-fn setup_tracking() -> Session {
-    Session::new()
-}
-
-fn cleanup_tracking() {
-    // Session cleanup happens automatically when session is dropped
-}
-
 #[test]
 fn span_with_real_allocation() {
-    let session = setup_tracking();
+    let session = Session::new();
 
     let span = Span::new(&session);
 
@@ -46,13 +40,11 @@ fn span_with_real_allocation() {
 
     // Keep data alive to prevent premature deallocation
     assert_eq!(data.len(), TEST_VECTOR_SIZE);
-
-    cleanup_tracking();
 }
 
 #[test]
 fn span_no_allocation() {
-    let session = setup_tracking();
+    let session = Session::new();
 
     let span = Span::new(&session);
 
@@ -67,13 +59,11 @@ fn span_no_allocation() {
 
     // Use variables to prevent optimization
     assert_eq!(y, TEST_VALUE + 1);
-
-    cleanup_tracking();
 }
 
 #[test]
 fn average_memory_delta_with_real_allocations() {
-    let mut session = setup_tracking();
+    let mut session = Session::new();
 
     let average = session.operation("test_average");
 
@@ -96,13 +86,11 @@ fn average_memory_delta_with_real_allocations() {
         avg >= EXPECTED_AVERAGE_BYTES,
         "Expected average of at least {EXPECTED_AVERAGE_BYTES} bytes, got {avg}"
     ); // 1500/5
-
-    cleanup_tracking();
 }
 
 #[test]
 fn string_allocation_tracking() {
-    let session = setup_tracking();
+    let session = Session::new();
 
     let span = Span::new(&session);
 
@@ -123,13 +111,11 @@ fn string_allocation_tracking() {
     assert!(!s1.is_empty());
     assert!(!s2.is_empty());
     assert!(!s3.is_empty());
-
-    cleanup_tracking();
 }
 
 #[test]
 fn boxed_allocation_tracking() {
-    let session = setup_tracking();
+    let session = Session::new();
 
     let span = Span::new(&session);
 
@@ -145,13 +131,11 @@ fn boxed_allocation_tracking() {
     // Keep boxed values alive
     assert_eq!(boxed_array.len(), 100);
     assert_eq!(boxed_vec.len(), 50);
-
-    cleanup_tracking();
 }
 
 #[test]
 fn allocation_tracking_across_scopes() {
-    let session = setup_tracking();
+    let session = Session::new();
 
     let span = Span::new(&session);
 
@@ -169,13 +153,11 @@ fn allocation_tracking_across_scopes() {
 
     // Should have tracked both allocations (500 + 300 = 800 bytes minimum)
     assert!(delta >= 800, "Expected at least 800 bytes, got {delta}");
-
-    cleanup_tracking();
 }
 
 #[test]
 fn multiple_spans_independence() {
-    let session = setup_tracking();
+    let session = Session::new();
 
     let span1 = Span::new(&session);
 
@@ -213,6 +195,4 @@ fn multiple_spans_independence() {
         delta2 < delta1,
         "Span2 should see less allocation than span1"
     );
-
-    cleanup_tracking();
 }

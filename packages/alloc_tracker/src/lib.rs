@@ -1,6 +1,6 @@
 //! Memory allocation tracking utilities for benchmarks and performance analysis.
 //!
-//! This crate provides utilities to track memory allocations during code execution,
+//! This package provides utilities to track memory allocations during code execution,
 //! enabling analysis of allocation patterns in benchmarks and performance tests.
 //!
 //! The core functionality includes:
@@ -9,6 +9,8 @@
 //! - [`Span`] - Tracks memory allocation changes over a time period
 //! - [`Operation`] - Calculates average memory allocation per operation
 //!
+//! This package is not meant for use in production, serving only as a development tool.
+//!  
 //! # Simple Usage
 //!
 //! You can track allocations like this:
@@ -69,11 +71,16 @@
 //! memory allocations are tracked globally. Single-threaded testing/benchmarking is recommended
 //! to ensure meaningful data.
 //!
-//! # Session Management
+//! # Session management
 //!
 //! Only one [`Session`] can be active at a time. Attempting to create
 //! multiple sessions simultaneously will result in an error. This ensures that tracking
 //! state is properly managed and statistics are accurate.
+//! 
+//! # Miri compatibility
+//! 
+//! Miri replaces the global allocator with its own logic, so you cannot execute code that uses
+//! this crate under Miri.
 
 mod allocator;
 mod operation;
