@@ -18,7 +18,7 @@ criterion = { workspace = true }
 mutants = { workspace = true }
 
 [[bench]]
-name = "memory_usage"
+name = "alloc_tracker_bench_example"
 harness = false
 
 [lints]
