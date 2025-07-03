@@ -4,21 +4,23 @@ This package provides utilities to track memory allocations during code executio
 enabling analysis of allocation patterns in benchmarks and performance tests.
 
 ```rust
-use alloc_tracker::{Allocator, Session, Span};
+use alloc_tracker::{Allocator, Session};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 fn main() {
-    let session = Session::new();
+    let mut session = Session::new();
 
     // Track a single operation
     {
-        let span = Span::new(&session);
-        let data = vec![1, 2, 3, 4, 5]; // This allocates memory
-        let delta = span.to_delta();
-        println!("Allocated {delta} bytes");
+        let operation = session.operation("my_operation");
+        let _span = operation.span();
+        let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
     }
+
+    // Print results
+    session.print_to_stdout();
 
     // Session automatically cleans up when dropped
 }
