@@ -25,11 +25,10 @@ fn entrypoint(c: &mut Criterion) {
     let alloc_tracker_session = Session::new();
     let mut all_operations = Vec::new();
 
-    let mut group = c.benchmark_group("allocation_tracking");
+    let mut group = c.benchmark_group("alloc_tracker");
 
+    let mut operation = Operation::new("string_formatting");
     group.bench_function("string_formatting", |b| {
-        let mut operation = Operation::new("string_formatting");
-
         b.iter(|| {
             let _span = operation.span(&alloc_tracker_session);
 
@@ -38,13 +37,11 @@ fn entrypoint(c: &mut Criterion) {
             let s = format!("{part1}{part2}!");
             black_box(s);
         });
-
-        all_operations.push(operation);
     });
+    all_operations.push(operation);
 
+    let mut operation = Operation::new("string_formatting_batched");
     group.bench_function("string_formatting_batched", |b| {
-        let mut operation = Operation::new("string_formatting_batched");
-
         b.iter_batched_ref(
             || (),
             |()| {
@@ -57,13 +54,11 @@ fn entrypoint(c: &mut Criterion) {
             },
             BatchSize::SmallInput,
         );
-
-        all_operations.push(operation);
     });
+    all_operations.push(operation);
 
+    let mut operation = Operation::new("string_formatting_custom");
     group.bench_function("string_formatting_custom", |b| {
-        let mut operation = Operation::new("string_formatting_custom");
-
         b.iter_custom(|iters| {
             let start = Instant::now();
 
@@ -78,9 +73,8 @@ fn entrypoint(c: &mut Criterion) {
 
             start.elapsed()
         });
-
-        all_operations.push(operation);
     });
+    all_operations.push(operation);
 
     group.finish();
 

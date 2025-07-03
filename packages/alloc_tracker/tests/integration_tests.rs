@@ -10,6 +10,15 @@ use alloc_tracker::{Allocator, Operation, Session, Span};
 #[global_allocator]
 static ALLOCATOR: Allocator<System> = Allocator::system();
 
+// Test constants to avoid magic numbers
+const TEST_VECTOR_SIZE: usize = 1000;
+const BYTES_PER_ITERATION: usize = 100;
+const TEST_ITERATIONS: usize = 5;
+const EXPECTED_TOTAL_BYTES: u64 = (BYTES_PER_ITERATION * (1 + 2 + 3 + 4 + 5)) as u64; // 1500
+#[expect(clippy::integer_division, reason = "test constant calculation")]
+const EXPECTED_AVERAGE_BYTES: u64 = EXPECTED_TOTAL_BYTES / TEST_ITERATIONS as u64; // 300
+const TEST_VALUE: i32 = 42;
+
 fn setup_tracking() -> Session {
     Session::new()
 }
@@ -25,15 +34,18 @@ fn span_with_real_allocation() {
     let span = Span::new(&session);
 
     // Allocate a vector - this should be tracked
-    let data = vec![1_u8; 1000];
+    let data = vec![1_u8; TEST_VECTOR_SIZE];
 
     let delta = span.to_delta();
 
-    // We should have allocated at least 1000 bytes (vector capacity might be larger)
-    assert!(delta >= 1000, "Expected at least 1000 bytes, got {delta}");
+    // We should have allocated at least TEST_VECTOR_SIZE bytes (vector capacity might be larger)
+    assert!(
+        delta >= TEST_VECTOR_SIZE as u64,
+        "Expected at least {TEST_VECTOR_SIZE} bytes, got {delta}"
+    );
 
     // Keep data alive to prevent premature deallocation
-    assert_eq!(data.len(), 1000);
+    assert_eq!(data.len(), TEST_VECTOR_SIZE);
 
     cleanup_tracking();
 }
@@ -45,7 +57,7 @@ fn span_no_allocation() {
     let span = Span::new(&session);
 
     // Do some work that doesn't allocate
-    let x = 42;
+    let x = TEST_VALUE;
     let y = x + 1;
 
     let delta = span.to_delta();
@@ -54,7 +66,7 @@ fn span_no_allocation() {
     assert_eq!(delta, 0, "Expected no allocation, got {delta} bytes");
 
     // Use variables to prevent optimization
-    assert_eq!(y, 43);
+    assert_eq!(y, TEST_VALUE + 1);
 
     cleanup_tracking();
 }
@@ -66,23 +78,23 @@ fn average_memory_delta_with_real_allocations() {
     let mut average = Operation::new("test_average".to_string());
 
     // Perform multiple allocations of different sizes
-    for i in 1..=5 {
+    for i in 1..=TEST_ITERATIONS {
         let _span = average.span(&session);
-        let _data = vec![0_u8; i * 100]; // 100, 200, 300, 400, 500 bytes
+        let _data = vec![0_u8; i * BYTES_PER_ITERATION]; // 100, 200, 300, 400, 500 bytes
     }
 
     let avg = average.average();
     let iterations = average.iterations();
     let total = average.total_bytes_allocated();
 
-    assert_eq!(iterations, 5);
+    assert_eq!(iterations, TEST_ITERATIONS as u64);
     assert!(
-        total >= 1500,
-        "Expected at least 1500 bytes total, got {total}"
+        total >= EXPECTED_TOTAL_BYTES,
+        "Expected at least {EXPECTED_TOTAL_BYTES} bytes total, got {total}"
     ); // 100+200+300+400+500
     assert!(
-        avg >= 300,
-        "Expected average of at least 300 bytes, got {avg}"
+        avg >= EXPECTED_AVERAGE_BYTES,
+        "Expected average of at least {EXPECTED_AVERAGE_BYTES} bytes, got {avg}"
     ); // 1500/5
 
     cleanup_tracking();
@@ -96,7 +108,7 @@ fn string_allocation_tracking() {
 
     // Allocate strings
     let s1 = String::from("Hello, world!");
-    let s2 = format!("Number: {}", 42);
+    let s2 = format!("Number: {TEST_VALUE}");
     let s3 = "Static string".to_string();
 
     let delta = span.to_delta();
