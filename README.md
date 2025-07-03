@@ -55,3 +55,19 @@ There are also some development-only packages in this repo, which are not publis
 # Development environment setup
 
 See [DEVELOPMENT.md](DEVELOPMENT.md).
+
+# Quality assurance
+
+This project aims for high quality standards:
+
+✅ **Comprehensive testing** - All packages tested with extensive unit tests, integration tests, and doctests  
+✅ **Miri validation** - All packages pass strict Rust memory safety validation via Miri  
+✅ **Mutation testing** - Code quality verified through comprehensive mutation testing with `cargo-mutants`  
+✅ **High test coverage** - Test coverage measured and maintained via `cargo-llvm-cov`  
+✅ **Zero warnings policy** - All code must compile without any compiler or Clippy warnings  
+✅ **Extensive Clippy rules** - 100+ custom Clippy lint rules enforced across the workspace  
+✅ **Cross-platform validation** - All code tested on both Windows and Linux platforms  
+✅ **Automated CI/CD** - Continuous integration runs full validation suite on every commit  
+✅ **API documentation** - Complete API documentation with inline examples for all public APIs  
+✅ **Dependency auditing** - Regular security audits of all dependencies via `cargo-audit`  
+✅ **Semver compliance** - API changes validated for semantic versioning compliance via `cargo-semver-checks`
