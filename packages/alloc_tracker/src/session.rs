@@ -133,6 +133,7 @@ impl Session {
     /// Prints nothing if no spans were captured. This may indicate that the session
     /// was part of a "list available benchmarks" probe run instead of some real activity,
     /// in which case printing anything might violate the output protocol the tool is speaking.
+    #[cfg_attr(test, mutants::skip)] // Too difficult to test stdout output reliably - manually tested.
     pub fn print_to_stdout(&self) {
         if self.is_empty() {
             return;

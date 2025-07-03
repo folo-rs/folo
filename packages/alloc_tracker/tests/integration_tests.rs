@@ -41,6 +41,29 @@ fn span_with_real_allocation() {
 }
 
 #[test]
+fn no_span_is_empty_session() {
+    let mut session = Session::new();
+
+    _ = session.operation("test_no_span");
+
+    assert!(session.is_empty());
+}
+
+#[test]
+fn span_with_no_allocation_is_not_empty_session() {
+    let mut session = Session::new();
+
+    let op = session.operation("test_no_allocation");
+
+    drop(op.span());
+
+    assert!(
+        !session.is_empty(),
+        "Session should not be empty after creating a span"
+    );
+}
+
+#[test]
 fn span_no_allocation() {
     let session = Session::new();
 
