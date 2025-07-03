@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::hint::black_box;
 
-use alloc_tracker::{Allocator, Session, Span};
+use alloc_tracker::{Allocator, Session};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
@@ -22,21 +22,6 @@ fn main() {
     // Create a tracking session - this enables allocation monitoring
     let mut session = Session::new();
     println!("✓ Created tracking session\n");
-
-    // Example 1: Basic span tracking for a single operation
-    println!("1. Basic Span Tracking:");
-    println!("   Creating a vector and measuring its allocation...");
-
-    let span = Span::new(&session);
-    let data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-    let delta = span.to_delta();
-    black_box(data); // Prevent optimization
-
-    println!("   Allocated {delta} bytes for vector");
-    println!();
-
-    // Example 2: Multiple operations for comparison
-    println!("2. Multiple Operation Comparison:");
 
     // Track string formatting
     {
@@ -71,19 +56,7 @@ fn main() {
         }
     }
 
-    println!("   Average allocations by operation type:");
-    println!("   All operations are now tracked in the session.");
-    println!();
-
-    // Summary
-    println!("=== Summary ===");
-    println!("✓ Demonstrated Span for measuring individual allocations");
-    println!("✓ Demonstrated Operation for averaging across iterations");
-    println!("✓ Compared different operation types");
-
-    // Output statistics of all operations to console.
-    println!("\nSession statistics:");
-    println!("{session}");
+    session.print_to_stdout();
 
     println!("\nSession automatically cleaned up when dropped.");
 }

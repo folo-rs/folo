@@ -81,10 +81,7 @@
 mod allocator;
 mod operation;
 mod session;
-mod span;
-mod tracker;
 
 pub use allocator::*;
 pub use operation::*;
 pub use session::*;
-pub use span::*;

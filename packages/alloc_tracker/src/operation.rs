@@ -3,7 +3,7 @@
 use std::fmt;
 use std::sync::atomic;
 
-use crate::tracker::TOTAL_BYTES_ALLOCATED;
+use crate::TOTAL_BYTES_ALLOCATED;
 
 /// Calculates average memory allocation per operation across multiple iterations.
 ///
@@ -34,7 +34,7 @@ use crate::tracker::TOTAL_BYTES_ALLOCATED;
 pub struct Operation {
     name: String,
     total_bytes_allocated: u64,
-    iterations: u64,
+    spans: u64,
 }
 
 impl Operation {
@@ -44,7 +44,7 @@ impl Operation {
         Self {
             name: name.into(),
             total_bytes_allocated: 0,
-            iterations: 0,
+            spans: 0,
         }
     }
 
@@ -57,10 +57,10 @@ impl Operation {
     /// Adds a memory delta value to the average calculation.
     ///
     /// This method is typically called by [`OperationSpan`] when it is dropped.
-    pub fn add(&mut self, delta: u64) {
+    fn add(&mut self, delta: u64) {
         // Never going to overflow u64, so no point doing slower checked arithmetic here.
         self.total_bytes_allocated = self.total_bytes_allocated.wrapping_add(delta);
-        self.iterations = self.iterations.wrapping_add(1);
+        self.spans = self.spans.wrapping_add(1);
     }
 
     /// Creates a span that is associated the the operation and will automatically
@@ -81,13 +81,13 @@ impl Operation {
     ///     let _data = vec![1, 2, 3]; // This allocation will be tracked
     /// } // Contributor is dropped here, allocation is added to average
     /// ```
-    pub fn span(&mut self) -> OperationSpan<'_> {
-        OperationSpan::new(self)
+    pub fn span(&mut self) -> Span<'_> {
+        Span::new(self)
     }
 
-    /// Calculates the average bytes allocated per iteration.
+    /// Calculates the average bytes allocated per span.
     ///
-    /// Returns 0 if no iterations have been recorded.
+    /// Returns 0 if no spans have been recorded.
     #[expect(clippy::integer_division, reason = "we accept loss of precision")]
     #[expect(
         clippy::arithmetic_side_effects,
@@ -95,20 +95,20 @@ impl Operation {
     )]
     #[must_use]
     pub fn average(&self) -> u64 {
-        if self.iterations == 0 {
+        if self.spans == 0 {
             0
         } else {
-            self.total_bytes_allocated / self.iterations
+            self.total_bytes_allocated / self.spans
         }
     }
 
-    /// Returns the total number of iterations recorded.
+    /// Returns the total number of spans recorded.
     #[must_use]
-    pub fn iterations(&self) -> u64 {
-        self.iterations
+    pub fn spans(&self) -> u64 {
+        self.spans
     }
 
-    /// Returns the total bytes allocated across all iterations.
+    /// Returns the total bytes allocated across all spans.
     #[must_use]
     pub fn total_bytes_allocated(&self) -> u64 {
         self.total_bytes_allocated
@@ -122,8 +122,8 @@ impl fmt::Display for Operation {
     }
 }
 
-/// An allocation tracker span that is associated with an operation. It will track allocations
-/// between creation and drop and contribute them to the operation's statistics.
+/// A tracked span of code that is associated with an operation. We will track allocations
+/// between creation and drop and account for them in the operation level statistics.
 ///
 /// # Examples
 ///
@@ -142,12 +142,12 @@ impl fmt::Display for Operation {
 /// } // Memory delta is automatically tracked and recorded here
 /// ```
 #[derive(Debug)]
-pub struct OperationSpan<'a> {
+pub struct Span<'a> {
     operation: &'a mut Operation,
     start_bytes: u64,
 }
 
-impl<'a> OperationSpan<'a> {
+impl<'a> Span<'a> {
     pub(crate) fn new(operation: &'a mut Operation) -> Self {
         let start_bytes = TOTAL_BYTES_ALLOCATED.load(atomic::Ordering::Relaxed);
 
@@ -159,7 +159,7 @@ impl<'a> OperationSpan<'a> {
 
     /// Calculates the allocation delta since this span was created.
     #[must_use]
-    pub fn to_delta(&self) -> u64 {
+    fn to_delta(&self) -> u64 {
         let current_bytes = TOTAL_BYTES_ALLOCATED.load(atomic::Ordering::Relaxed);
         current_bytes
             .checked_sub(self.start_bytes)
@@ -167,7 +167,7 @@ impl<'a> OperationSpan<'a> {
     }
 }
 
-impl Drop for OperationSpan<'_> {
+impl Drop for Span<'_> {
     fn drop(&mut self) {
         let delta = self.to_delta();
         self.operation.add(delta);
@@ -179,8 +179,7 @@ mod tests {
     use std::sync::atomic;
 
     use super::*;
-    use crate::Session;
-    use crate::tracker::TOTAL_BYTES_ALLOCATED;
+    use crate::{Session, TOTAL_BYTES_ALLOCATED};
 
     // Helper function to create a mock session for testing
     // Note: This won't actually enable allocation tracking since we're not using
@@ -196,7 +195,7 @@ mod tests {
         let average = Operation::new("test".to_string());
         assert_eq!(average.name(), "test");
         assert_eq!(average.average(), 0);
-        assert_eq!(average.iterations(), 0);
+        assert_eq!(average.spans(), 0);
         assert_eq!(average.total_bytes_allocated(), 0);
     }
 
@@ -206,7 +205,7 @@ mod tests {
         average.add(100);
 
         assert_eq!(average.average(), 100);
-        assert_eq!(average.iterations(), 1);
+        assert_eq!(average.spans(), 1);
         assert_eq!(average.total_bytes_allocated(), 100);
     }
 
@@ -218,7 +217,7 @@ mod tests {
         average.add(300);
 
         assert_eq!(average.average(), 200); // (100 + 200 + 300) / 3
-        assert_eq!(average.iterations(), 3);
+        assert_eq!(average.spans(), 3);
         assert_eq!(average.total_bytes_allocated(), 600);
     }
 
@@ -229,7 +228,7 @@ mod tests {
         average.add(0);
 
         assert_eq!(average.average(), 0);
-        assert_eq!(average.iterations(), 2);
+        assert_eq!(average.spans(), 2);
         assert_eq!(average.total_bytes_allocated(), 0);
     }
 
@@ -245,7 +244,7 @@ mod tests {
         } // Contributor drops here
 
         assert_eq!(average.average(), 75);
-        assert_eq!(average.iterations(), 1);
+        assert_eq!(average.spans(), 1);
         assert_eq!(average.total_bytes_allocated(), 75);
     }
 
@@ -267,7 +266,7 @@ mod tests {
         }
 
         assert_eq!(average.average(), 150); // (100 + 200) / 2
-        assert_eq!(average.iterations(), 2);
+        assert_eq!(average.spans(), 2);
         assert_eq!(average.total_bytes_allocated(), 300);
     }
 
@@ -282,7 +281,7 @@ mod tests {
         }
 
         assert_eq!(average.average(), 0);
-        assert_eq!(average.iterations(), 1);
+        assert_eq!(average.spans(), 1);
         assert_eq!(average.total_bytes_allocated(), 0);
     }
 }

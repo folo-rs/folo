@@ -2,8 +2,12 @@
 
 use std::alloc::{GlobalAlloc, Layout};
 use std::fmt;
+use std::sync::atomic::{self, AtomicU64};
 
-use tracking_allocator::Allocator as TrackingAllocatorImpl;
+// The tracking allocator works with static data all over the place, so this is how it be.
+// This is global state - we could theoretically optimize via thread-local counter but that
+// might only matter in extremely allocation-heavy scenarios which are not a priority (yet?).
+pub(crate) static TOTAL_BYTES_ALLOCATED: AtomicU64 = AtomicU64::new(0);
 
 /// A memory allocator that enables tracking of memory allocations and deallocations.
 ///
@@ -20,7 +24,7 @@ use tracking_allocator::Allocator as TrackingAllocatorImpl;
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 /// ```
 pub struct Allocator<A: GlobalAlloc> {
-    inner: TrackingAllocatorImpl<A>,
+    inner: A,
 }
 
 impl<A: GlobalAlloc> fmt::Debug for Allocator<A> {
@@ -40,7 +44,7 @@ impl Allocator<std::alloc::System> {
     #[must_use]
     pub const fn system() -> Self {
         Self {
-            inner: TrackingAllocatorImpl::system(),
+            inner: std::alloc::System,
         }
     }
 }
@@ -52,9 +56,7 @@ impl<A: GlobalAlloc> Allocator<A> {
     /// as the underlying allocator, with the addition of allocation tracking capabilities.
     #[must_use]
     pub const fn new(allocator: A) -> Self {
-        Self {
-            inner: TrackingAllocatorImpl::from_allocator(allocator),
-        }
+        Self { inner: allocator }
     }
 }
 
@@ -62,6 +64,14 @@ impl<A: GlobalAlloc> Allocator<A> {
 // which already implements GlobalAlloc safely, while adding tracking functionality.
 unsafe impl<A: GlobalAlloc> GlobalAlloc for Allocator<A> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        TOTAL_BYTES_ALLOCATED.fetch_add(
+            layout
+                .size()
+                .try_into()
+                .expect("usize always fits into u64"),
+            atomic::Ordering::Relaxed,
+        );
+
         // SAFETY: We forward the call to the underlying allocator which implements GlobalAlloc.
         unsafe { self.inner.alloc(layout) }
     }
@@ -72,11 +82,24 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Allocator<A> {
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        TOTAL_BYTES_ALLOCATED.fetch_add(
+            layout
+                .size()
+                .try_into()
+                .expect("usize always fits into u64"),
+            atomic::Ordering::Relaxed,
+        );
+
         // SAFETY: We forward the call to the underlying allocator which implements GlobalAlloc.
         unsafe { self.inner.alloc_zeroed(layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        TOTAL_BYTES_ALLOCATED.fetch_add(
+            new_size.try_into().expect("usize always fits into u64"),
+            atomic::Ordering::Relaxed,
+        );
+
         // SAFETY: We forward the call to the underlying allocator which implements GlobalAlloc.
         unsafe { self.inner.realloc(ptr, layout, new_size) }
     }

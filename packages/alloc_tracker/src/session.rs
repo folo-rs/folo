@@ -2,13 +2,8 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::atomic::AtomicBool;
-use std::sync::{OnceLock, atomic};
 
-use tracking_allocator::AllocationRegistry;
-
-use crate::operation::Operation;
-use crate::tracker::MemoryTracker;
+use crate::Operation;
 
 /// Manages allocation tracking session state and contains operations.
 ///
@@ -43,17 +38,8 @@ pub struct Session {
     operations: HashMap<String, Operation>,
 }
 
-static TRACKING_SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
-static TRACKER_INITIALIZED: OnceLock<()> = OnceLock::new();
-
 impl Session {
     /// Creates a new allocation tracking session.
-    ///
-    /// Only one session can be active at a time.
-    ///
-    /// # Panics
-    ///
-    /// Panics if another allocation tracking session is already active.
     ///
     /// # Examples
     ///
@@ -69,29 +55,10 @@ impl Session {
     /// ```
     #[expect(
         clippy::new_without_default,
-        reason = "Default implementation would be inappropriate as new() can panic"
+        reason = "to avoid ambiguity with the notion of a 'default session' that is not actually a default session"
     )]
+    #[must_use]
     pub fn new() -> Self {
-        // Initialize the tracker on first use.
-        TRACKER_INITIALIZED.get_or_init(|| {
-            // If this fails, it might conceivably be another crate that is concurrently
-            // using tracking_allocator, in which case we panic because there is nothing we can do.
-            AllocationRegistry::set_global_tracker(MemoryTracker)
-                .expect("global allocation tracker was already set by someone else");
-        });
-
-        // Try to acquire the session lock
-        TRACKING_SESSION_ACTIVE
-            .compare_exchange(
-                false,
-                true,
-                atomic::Ordering::Acquire,
-                atomic::Ordering::Relaxed,
-            )
-            .expect("another allocation tracking session is already active");
-
-        AllocationRegistry::enable_tracking();
-
         Self {
             operations: HashMap::new(),
         }
@@ -145,21 +112,14 @@ impl Session {
     /// Whether there is any recorded activity in this session.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.operations.is_empty() || self.operations.values().all(|op| op.iterations() == 0)
-    }
-}
-
-impl Drop for Session {
-    fn drop(&mut self) {
-        AllocationRegistry::disable_tracking();
-        TRACKING_SESSION_ACTIVE.store(false, atomic::Ordering::Release);
+        self.operations.is_empty() || self.operations.values().all(|op| op.spans() == 0)
     }
 }
 
 impl fmt::Display for Session {
     #[cfg_attr(test, mutants::skip)] // No API contract.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.operations.is_empty() || self.operations.values().all(|op| op.iterations() == 0) {
+        if self.operations.is_empty() || self.operations.values().all(|op| op.spans() == 0) {
             writeln!(f, "No allocation statistics captured.")?;
         } else {
             writeln!(f, "Allocation statistics:")?;
