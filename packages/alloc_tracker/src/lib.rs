@@ -61,7 +61,7 @@
 //!
 //!     // Track average over multiple operations
 //!     for i in 0..10 {
-//!         let _contributor = average.span(&session);
+//!         let _span = average.span(&session);
 //!         let _data = format!("String number {}", i); // This allocates memory
 //!     }
 //!
@@ -120,14 +120,14 @@
 //!     // Create and track different operations
 //!     let mut vec_operation = Operation::new("vector_creation".to_string());
 //!     {
-//!         let _contributor = vec_operation.span(&session);
+//!         let _span = vec_operation.span(&session);
 //!         let _vec = vec![1, 2, 3, 4, 5]; // This allocates memory
 //!     }
 //!     results.insert(vec_operation.name().to_string(), vec_operation.average());
 //!
 //!     let mut string_operation = Operation::new("string_creation".to_string());
 //!     {
-//!         let _contributor = string_operation.span(&session);
+//!         let _span = string_operation.span(&session);
 //!         let _string = String::from("Hello, world!"); // This allocates memory  
 //!     }
 //!     results.insert(string_operation.name().to_string(), string_operation.average());
@@ -166,7 +166,7 @@
 //!         let mut average_memory_delta = Operation::new("string_formatting".to_string());
 //!
 //!         b.iter(|| {
-//!             let _contributor = average_memory_delta.span(&session);
+//!             let _span = average_memory_delta.span(&session);
 //!             let s = format!("Hello, {}!", "world");
 //!             std::hint::black_box(s);
 //!         });

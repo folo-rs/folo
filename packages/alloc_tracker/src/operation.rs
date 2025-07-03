@@ -25,7 +25,7 @@ use crate::span::Span;
 ///
 /// // Simulate multiple operations
 /// for i in 0..5 {
-///     let _contributor = average.span(&session);
+///     let _span = average.span(&session);
 ///     let _data = vec![0; i + 1]; // Allocate different amounts
 /// }
 ///
@@ -81,7 +81,7 @@ impl Operation {
     /// let session = Session::new();
     /// let mut average = Operation::new("test".to_string());
     /// {
-    ///     let _contributor = average.span(&session);
+    ///     let _span = average.span(&session);
     ///     let _data = vec![1, 2, 3]; // This allocation will be tracked
     /// } // Contributor is dropped here, allocation is added to average
     /// ```
@@ -142,7 +142,7 @@ impl fmt::Display for Operation {
 /// let session = Session::new();
 /// let mut average = Operation::new("test".to_string());
 /// {
-///     let _contributor = average.span(&session);
+///     let _span = average.span(&session);
 ///     // Perform some operation that allocates memory
 ///     let _data = String::from("Hello, world!");
 /// } // Memory delta is automatically tracked and recorded here
@@ -231,12 +231,12 @@ mod tests {
     }
 
     #[test]
-    fn average_memory_delta_contributor_drop() {
+    fn average_memory_delta_span_drop() {
         let session = create_test_session();
         let mut average = Operation::new("test".to_string());
 
         {
-            let _contributor = average.span(&session);
+            let _span = average.span(&session);
             // Simulate allocation
             TOTAL_BYTES_ALLOCATED.fetch_add(75, atomic::Ordering::Relaxed);
         } // Contributor drops here
@@ -247,19 +247,19 @@ mod tests {
     }
 
     #[test]
-    fn average_memory_delta_multiple_contributors() {
+    fn average_memory_delta_multiple_spans() {
         let session = create_test_session();
         let mut average = Operation::new("test".to_string());
 
         // First contributor
         {
-            let _contributor = average.span(&session);
+            let _span = average.span(&session);
             TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
         }
 
         // Second contributor
         {
-            let _contributor = average.span(&session);
+            let _span = average.span(&session);
             TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
         }
 
@@ -269,12 +269,12 @@ mod tests {
     }
 
     #[test]
-    fn average_memory_delta_contributor_no_allocation() {
+    fn average_memory_delta_span_no_allocation() {
         let session = create_test_session();
         let mut average = Operation::new("test".to_string());
 
         {
-            let _contributor = average.span(&session);
+            let _span = average.span(&session);
             // No allocation
         }
 

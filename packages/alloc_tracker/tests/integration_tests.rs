@@ -5,7 +5,7 @@
 
 use std::alloc::System;
 
-use alloc_tracker::{Allocator, Session, Operation, Span};
+use alloc_tracker::{Allocator, Operation, Session, Span};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -67,7 +67,7 @@ fn average_memory_delta_with_real_allocations() {
 
     // Perform multiple allocations of different sizes
     for i in 1..=5 {
-        let _contributor = average.span(&session);
+        let _span = average.span(&session);
         let _data = vec![0_u8; i * 100]; // 100, 200, 300, 400, 500 bytes
     }
 
