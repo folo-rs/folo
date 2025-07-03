@@ -1,6 +1,7 @@
 [package]
 name = "alloc_tracker"
 description = "Memory allocation tracking utilities for benchmarks and performance analysis"
+publish = true
 version = "0.1.0"
 
 authors.workspace = true
