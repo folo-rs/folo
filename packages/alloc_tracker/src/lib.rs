@@ -50,7 +50,7 @@
 //!
 //! fn main() {
 //!     let mut session = Session::new();
-//!     
+//!
 //!     // Track average over multiple operations
 //!     for i in 0..10 {
 //!         let string_op = session.operation("string_allocations");
@@ -64,7 +64,7 @@
 //! ```
 //!
 //! # Threading
-//! 
+//!
 //! The allocation tracking types are primarily intended for single-threaded use cases. However,
 //! memory allocations are tracked globally. Single-threaded testing/benchmarking is recommended
 //! to ensure meaningful data.

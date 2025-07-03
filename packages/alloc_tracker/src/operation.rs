@@ -162,7 +162,7 @@ impl<'a> OperationSpan<'a> {
             start_bytes,
         }
     }
-    
+
     /// Calculates the allocation delta since this span was created.
     #[must_use]
     pub fn to_delta(&self) -> u64 {

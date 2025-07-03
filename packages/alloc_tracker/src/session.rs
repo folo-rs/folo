@@ -7,8 +7,8 @@ use std::sync::{OnceLock, atomic};
 
 use tracking_allocator::AllocationRegistry;
 
-use crate::tracker::MemoryTracker;
 use crate::operation::Operation;
+use crate::tracker::MemoryTracker;
 
 /// Manages allocation tracking session state and contains operations.
 ///
@@ -21,7 +21,7 @@ use crate::operation::Operation;
 /// ```rust
 /// use std::alloc::System;
 ///
-/// use alloc_tracker::{Session, Allocator};
+/// use alloc_tracker::{Allocator, Session};
 ///
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -31,7 +31,7 @@ use crate::operation::Operation;
 ///
 /// for _ in 0..3 {
 ///     let _span = string_op.span();
-///     // TODO: Some string stuff here that we want to analyze.    
+///     // TODO: Some string stuff here that we want to analyze.
 /// }
 ///
 /// // Output statistics of all operations to console.
@@ -60,7 +60,7 @@ impl Session {
     /// ```rust
     /// use std::alloc::System;
     ///
-    /// use alloc_tracker::{Session, Allocator};
+    /// use alloc_tracker::{Allocator, Session};
     ///
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<System> = Allocator::system();
@@ -110,14 +110,14 @@ impl Session {
     /// ```rust
     /// use std::alloc::System;
     ///
-    /// use alloc_tracker::{Session, Allocator};
+    /// use alloc_tracker::{Allocator, Session};
     ///
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<System> = Allocator::system();
     ///
     /// let mut session = Session::new();
     /// let mut string_op = session.operation("string_operations");
-    /// 
+    ///
     /// for _ in 0..3 {
     ///     let _span = string_op.span();
     ///     let _s = String::from("test"); // This allocation will be tracked
@@ -125,9 +125,11 @@ impl Session {
     /// ```
     pub fn operation(&mut self, name: impl Into<String>) -> &mut Operation {
         let name = name.into();
-        
+
         // Get or create the operation
-        self.operations.entry(name).or_insert_with_key(|name| Operation::new(name.clone()))
+        self.operations
+            .entry(name)
+            .or_insert_with_key(|name| Operation::new(name.clone()))
     }
 }
 
@@ -145,16 +147,16 @@ impl fmt::Display for Session {
             writeln!(f, "No operations recorded.")?;
         } else {
             writeln!(f, "Allocation statistics:")?;
-            
+
             // Sort operations by name for consistent output
             let mut sorted_ops: Vec<_> = self.operations.iter().collect();
             sorted_ops.sort_by_key(|(name, _)| *name);
-            
+
             for (_, operation) in sorted_ops {
                 writeln!(f, "  {operation}")?;
             }
         }
-        
+
         Ok(())
     }
 }
