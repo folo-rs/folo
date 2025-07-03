@@ -14,9 +14,8 @@ The contents of a `README.md` file should be:
 2. A very succinct example.
 3. The standard footer.
 
-The example should be a direct copy-paste of an example from the API documentation of the package,
-to ensure that it is a valid example that compiles and is tested. Do not make up examples, always
-copy an existing one.
+The example in the readme should have a corresponding `src/examples/readme.rs` file to verify
+that it builds and succeeds when executed.
 
 The standard footer is:
 
