@@ -13,8 +13,6 @@ use crate::tracker::TOTAL_BYTES_ALLOCATED;
 /// # Examples
 ///
 /// ```
-/// use std::alloc::System;
-///
 /// use alloc_tracker::{Allocator, Operation, Session};
 ///
 /// #[global_allocator]
@@ -71,8 +69,6 @@ impl Operation {
     /// # Examples
     ///
     /// ```
-    /// use std::alloc::System;
-    ///
     /// use alloc_tracker::{Allocator, Operation, Session};
     ///
     /// #[global_allocator]
@@ -132,8 +128,6 @@ impl fmt::Display for Operation {
 /// # Examples
 ///
 /// ```
-/// use std::alloc::System;
-///
 /// use alloc_tracker::{Allocator, Operation, Session};
 ///
 /// #[global_allocator]

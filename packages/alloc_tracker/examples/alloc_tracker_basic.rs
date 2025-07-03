@@ -8,7 +8,6 @@
 //!
 //! Run with: `cargo run --example comprehensive_tracking`
 
-use std::alloc::System;
 use std::collections::HashMap;
 use std::hint::black_box;
 

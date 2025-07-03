@@ -8,7 +8,6 @@
     reason = "No need for API documentation in benchmark code"
 )]
 
-use std::alloc::System;
 use std::hint::black_box;
 
 use alloc_tracker::{Allocator, Session};

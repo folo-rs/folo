@@ -1,6 +1,6 @@
 //! Allocation wrapper for tracking memory allocations.
 
-use std::alloc::{GlobalAlloc, Layout, System};
+use std::alloc::{GlobalAlloc, Layout};
 use std::fmt;
 
 use tracking_allocator::Allocator as TrackingAllocatorImpl;
@@ -14,8 +14,6 @@ use tracking_allocator::Allocator as TrackingAllocatorImpl;
 /// # Examples
 ///
 /// ```rust
-/// use std::alloc::System;
-///
 /// use alloc_tracker::Allocator;
 ///
 /// #[global_allocator]

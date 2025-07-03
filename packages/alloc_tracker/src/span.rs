@@ -14,8 +14,6 @@ use crate::tracker::TOTAL_BYTES_ALLOCATED;
 /// # Examples
 ///
 /// ```
-/// use std::alloc::System;
-///
 /// use alloc_tracker::{Allocator, Session, Span};
 ///
 /// #[global_allocator]

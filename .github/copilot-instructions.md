@@ -455,3 +455,15 @@ waste time executing one command at a time when you can execute multiple command
 ```powershell
 mv src/old.rs src/new.rs; cargo fmt; cargo clippy --fix --allow-dirty --allow-staged; cargo test
 ```
+
+# Examples for README.md files
+
+In each package with a `README.md` file, there should be a corresponding `examples/readme.rs` file
+that contains the Rust code present in the example. This is important to verify that the example
+code actually works.
+
+If the two are out of sync, use the `readme.rs` as the authoritative source and update the
+`README.md` file to match it.
+
+It is fine to disable Clippy rules in the `readme.rs` file, as it is not production code and
+often needs to take shortcuts to be short and simple.

@@ -3,6 +3,16 @@
 //! This shows how to use linked objects for creating families of linked objects
 //! that can collaborate across threads while being internally single-threaded.
 
+#![allow(
+    missing_debug_implementations,
+    missing_docs,
+    clippy::new_without_default,
+    clippy::must_use_candidate,
+    clippy::mutex_atomic,
+    clippy::arithmetic_side_effects,
+    reason = "example code"
+)]
+
 use std::cell::Cell;
 use std::sync::{Arc, Mutex};
 use std::thread;
