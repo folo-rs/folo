@@ -15,8 +15,8 @@ use cpu_time::{ProcessTime, ThreadTime};
 /// ```
 /// use cpu_time_tracker::{Operation, Session};
 ///
-/// let session = Session::new();
-/// let mut average = Operation::new("cpu_intensive_work".to_string());
+/// let mut session = Session::new();
+/// let average = session.operation("cpu_intensive_work");
 ///
 /// // Simulate multiple operations
 /// for i in 0..5 {
@@ -41,7 +41,7 @@ pub struct Operation {
 impl Operation {
     /// Creates a new average CPU time calculator with the given name.
     #[must_use]
-    pub fn new(name: impl Into<String>) -> Self {
+    pub(crate) fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             total_cpu_time: Duration::ZERO,
@@ -80,8 +80,8 @@ impl Operation {
     /// ```
     /// use cpu_time_tracker::{Operation, Session};
     ///
-    /// let session = Session::new();
-    /// let mut average = Operation::new("thread_work".to_string());
+    /// let mut session = Session::new();
+    /// let average = session.operation("thread_work");
     /// {
     ///     let _span = average.measure_thread();
     ///     // Perform some CPU-intensive work in this thread
@@ -106,8 +106,8 @@ impl Operation {
     /// ```
     /// use cpu_time_tracker::{Operation, Session};
     ///
-    /// let session = Session::new();
-    /// let mut average = Operation::new("process_work".to_string());
+    /// let mut session = Session::new();
+    /// let average = session.operation("process_work");
     /// {
     ///     let _span = average.measure_process();
     ///     // Perform some CPU-intensive work that might spawn threads
@@ -164,8 +164,8 @@ impl fmt::Display for Operation {
 /// ```
 /// use cpu_time_tracker::{Operation, Session};
 ///
-/// let session = Session::new();
-/// let mut average = Operation::new("test".to_string());
+/// let mut session = Session::new();
+/// let average = session.operation("test");
 /// {
 ///     let _span = average.measure_thread();
 ///     // Perform some CPU-intensive operation
@@ -214,8 +214,8 @@ impl Drop for ThreadSpan<'_> {
 /// ```
 /// use cpu_time_tracker::{Operation, Session};
 ///
-/// let session = Session::new();
-/// let mut average = Operation::new("test".to_string());
+/// let mut session = Session::new();
+/// let average = session.operation("test");
 /// {
 ///     let _span = average.measure_process();
 ///     // Perform some CPU-intensive operation
@@ -415,5 +415,75 @@ mod tests {
         assert_eq!(operation.spans(), 1);
         // Even with no work, some time may have passed
         assert!(operation.total_cpu_time() >= Duration::ZERO);
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn thread_span_to_duration_returns_non_zero() {
+        let mut operation = Operation::new("test".to_string());
+
+        // Create a span without doing any work
+        {
+            let _span = operation.measure_thread();
+            // Minimal work to avoid optimization
+            black_box(42);
+        }
+        let time_without_work = operation.total_cpu_time();
+
+        // Reset for second test
+        let mut operation2 = Operation::new("test2".to_string());
+
+        // Create a span with significant CPU work
+        {
+            let _span = operation2.measure_thread();
+            let mut sum = 0_u64;
+            for i in 0..50000 {
+                sum = sum.wrapping_add(i);
+            }
+            black_box(sum);
+        }
+        let time_with_work = operation2.total_cpu_time();
+
+        // This test will fail if to_duration() is replaced with Default::default()
+        // because doing more work should result in at least as much CPU time
+        assert!(
+            time_with_work >= time_without_work,
+            "Expected work to take at least as much CPU time as no work: {time_with_work:?} >= {time_without_work:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn process_span_to_duration_returns_non_zero() {
+        let mut operation = Operation::new("test".to_string());
+
+        // Create a span without doing any work
+        {
+            let _span = operation.measure_process();
+            // Minimal work to avoid optimization
+            black_box(42);
+        }
+        let time_without_work = operation.total_cpu_time();
+
+        // Reset for second test
+        let mut operation2 = Operation::new("test2".to_string());
+
+        // Create a span with significant CPU work
+        {
+            let _span = operation2.measure_process();
+            let mut sum = 0_u64;
+            for i in 0..50000 {
+                sum = sum.wrapping_add(i);
+            }
+            black_box(sum);
+        }
+        let time_with_work = operation2.total_cpu_time();
+
+        // This test will fail if to_duration() is replaced with Default::default()
+        // because doing more work should result in at least as much CPU time
+        assert!(
+            time_with_work >= time_without_work,
+            "Expected work to take at least as much CPU time as no work: {time_with_work:?} >= {time_without_work:?}"
+        );
     }
 }

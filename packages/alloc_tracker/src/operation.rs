@@ -18,8 +18,8 @@ use crate::allocator::{THREAD_BYTES_ALLOCATED, TOTAL_BYTES_ALLOCATED};
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
-/// let session = Session::new();
-/// let mut average = Operation::new("string_allocations".to_string());
+/// let mut session = Session::new();
+/// let average = session.operation("string_allocations");
 ///
 /// // Simulate multiple operations
 /// for i in 0..5 {
@@ -40,7 +40,7 @@ pub struct Operation {
 impl Operation {
     /// Creates a new average memory delta calculator with the given name.
     #[must_use]
-    pub fn new(name: impl Into<String>) -> Self {
+    pub(crate) fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             total_bytes_allocated: 0,
@@ -76,8 +76,8 @@ impl Operation {
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
-    /// let session = Session::new();
-    /// let mut average = Operation::new("test".to_string());
+    /// let mut session = Session::new();
+    /// let average = session.operation("test");
     /// {
     ///     let _span = average.measure_process();
     ///     let _data = vec![1, 2, 3]; // This allocation will be tracked
@@ -101,8 +101,8 @@ impl Operation {
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
-    /// let session = Session::new();
-    /// let mut average = Operation::new("thread_work".to_string());
+    /// let mut session = Session::new();
+    /// let average = session.operation("thread_work");
     /// {
     ///     let _span = average.measure_thread();
     ///     let _data = vec![1, 2, 3]; // This allocation will be tracked for this thread
@@ -161,8 +161,8 @@ impl fmt::Display for Operation {
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
-/// let session = Session::new();
-/// let mut average = Operation::new("test".to_string());
+/// let mut session = Session::new();
+/// let average = session.operation("test");
 /// {
 ///     let _span = average.measure_process();
 ///     // Perform some operation that allocates memory
@@ -214,8 +214,8 @@ impl Drop for ProcessSpan<'_> {
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
-/// let session = Session::new();
-/// let mut average = Operation::new("test".to_string());
+/// let mut session = Session::new();
+/// let average = session.operation("test");
 /// {
 ///     let _span = average.measure_thread();
 ///     // Perform some operation that allocates memory
