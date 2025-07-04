@@ -6,7 +6,8 @@
 //! The core functionality includes:
 //! - [`Allocator`] - A Rust memory allocator wrapper that enables allocation tracking
 //! - [`Session`] - Configures allocation tracking and provides access to tracking data
-//! - [`Span`] - Tracks memory allocation changes over a time period
+//! - [`ProcessSpan`] - Tracks process-wide memory allocation changes over a time period
+//! - [`ThreadSpan`] - Tracks thread-local memory allocation changes over a time period
 //! - [`Operation`] - Calculates average memory allocation per operation
 //!
 //! This package is not meant for use in production, serving only as a development tool.
@@ -65,9 +66,9 @@
 //!
 //! # Threading
 //!
-//! The allocation tracking types are primarily intended for single-threaded use cases. However,
-//! memory allocations are tracked globally. Single-threaded testing/benchmarking is recommended
-//! to ensure meaningful data.
+//! The allocation tracking provides both process-wide and thread-local measurement:
+//! - [`Operation::measure_process`] tracks allocations across all threads
+//! - [`Operation::measure_thread`] tracks allocations in the current thread only
 //!
 //! # Session management
 //!

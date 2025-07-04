@@ -66,3 +66,62 @@ fn operation_allocations() {
         "Expected average of at least {EXPECTED_AVERAGE_BYTES} bytes, got {avg}"
     ); // 1500/5
 }
+
+#[test]
+fn thread_scoped_operation_allocations() {
+    let mut session = Session::new();
+
+    let average = session.operation("test_thread_average");
+
+    // Perform multiple allocations of different sizes using thread tracking
+    for i in 1..=TEST_ITERATIONS {
+        let _span = average.measure_thread();
+        let _data = vec![0_u8; i * BYTES_PER_ITERATION]; // 100, 200, 300, 400, 500 bytes
+    }
+
+    let avg = average.average();
+    let iterations = average.spans();
+    let total = average.total_bytes_allocated();
+
+    assert_eq!(iterations, TEST_ITERATIONS as u64);
+    assert!(
+        total >= EXPECTED_TOTAL_BYTES,
+        "Expected at least {EXPECTED_TOTAL_BYTES} bytes total, got {total}"
+    ); // 100+200+300+400+500
+    assert!(
+        avg >= EXPECTED_AVERAGE_BYTES,
+        "Expected average of at least {EXPECTED_AVERAGE_BYTES} bytes, got {avg}"
+    ); // 1500/5
+}
+
+#[test]
+fn mixed_span_types_operation_allocations() {
+    let mut session = Session::new();
+
+    let average = session.operation("test_mixed_average");
+
+    // Perform allocations using both process and thread tracking
+    for i in 1..=TEST_ITERATIONS {
+        if i % 2 == 0 {
+            let _span = average.measure_process();
+            let _data = vec![0_u8; i * BYTES_PER_ITERATION];
+        } else {
+            let _span = average.measure_thread();
+            let _data = vec![0_u8; i * BYTES_PER_ITERATION];
+        }
+    }
+
+    let avg = average.average();
+    let iterations = average.spans();
+    let total = average.total_bytes_allocated();
+
+    assert_eq!(iterations, TEST_ITERATIONS as u64);
+    assert!(
+        total >= EXPECTED_TOTAL_BYTES,
+        "Expected at least {EXPECTED_TOTAL_BYTES} bytes total, got {total}"
+    ); // 100+200+300+400+500
+    assert!(
+        avg >= EXPECTED_AVERAGE_BYTES,
+        "Expected average of at least {EXPECTED_AVERAGE_BYTES} bytes, got {avg}"
+    ); // 1500/5
+}
