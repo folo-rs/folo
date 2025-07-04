@@ -1,20 +1,10 @@
 use std::error::Error;
 use std::fmt::Display;
-use std::marker::PhantomData;
 
 /// Indicates that a sender-receiver pair has disconnected.
 #[derive(Debug)]
-pub struct Disconnected {
-    _private: PhantomData<()>,
-}
-
-impl Disconnected {
-    pub(crate) fn new() -> Self {
-        Self {
-            _private: PhantomData,
-        }
-    }
-}
+#[expect(clippy::exhaustive_structs, reason = "intentionally an empty struct")]
+pub struct Disconnected;
 
 impl Error for Disconnected {}
 

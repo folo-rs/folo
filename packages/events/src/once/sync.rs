@@ -376,7 +376,7 @@ where
                 match previous_state {
                     EventState::Set(result) => match result {
                         ValueKind::Real(value) => Some(Ok(value)),
-                        ValueKind::Disconnected => Some(Err(Disconnected::new())),
+                        ValueKind::Disconnected => Some(Err(Disconnected)),
                     },
                     _ => unreachable!("we are re-matching an already matched pattern"),
                 }
@@ -642,10 +642,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::pin::pin;
     use std::rc::Rc;
     use std::sync::Arc;
     use std::thread;
 
+    use futures::task::noop_waker_ref;
     use static_assertions::{assert_impl_all, assert_not_impl_any};
     use testing::with_watchdog;
 
@@ -821,9 +823,30 @@ mod tests {
                 // Receiver should get a Disconnected error
                 let result = receiver.await;
                 assert!(result.is_err());
-                assert!(matches!(result, Err(Disconnected { .. })));
+                assert!(matches!(result, Err(Disconnected)));
             });
         });
+    }
+
+    #[test]
+    fn sender_dropped_when_awaiting_signals_disconnected() {
+        let event = OnceEvent::<i32>::new();
+        let (sender, receiver) = event.bind_by_ref();
+
+        let mut receiver = pin!(receiver);
+        let mut context = task::Context::from_waker(noop_waker_ref());
+        assert!(matches!(
+            receiver.as_mut().poll(&mut context),
+            task::Poll::Pending
+        ));
+
+        drop(sender);
+
+        let mut context = task::Context::from_waker(noop_waker_ref());
+        assert!(matches!(
+            receiver.as_mut().poll(&mut context),
+            task::Poll::Ready(Err(Disconnected))
+        ));
     }
 
     #[test]

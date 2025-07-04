@@ -36,6 +36,7 @@ impl<T> WithRefCount<T> {
     /// # Panics
     ///
     /// Panics if the reference count would underflow (go below zero).
+    #[cfg_attr(test, mutants::skip)] // Deletes the unreachable match arm and complains about it...
     pub(crate) fn dec_ref(&self) -> bool {
         match self.ref_count.fetch_sub(1, atomic::Ordering::Relaxed) {
             1 => {
