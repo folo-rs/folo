@@ -14,11 +14,11 @@ use cpu_time_tracker::Session;
 use criterion::{Criterion, criterion_group, criterion_main};
 
 fn entrypoint(c: &mut Criterion) {
-    let mut cpu_times = Session::new();
+    let mut cpu_time = Session::new();
 
     let mut group = c.benchmark_group("cpu_time_tracker");
 
-    let string_op = cpu_times.operation("string_formatting");
+    let string_op = cpu_time.operation("string_formatting");
     group.bench_function("string_formatting", |b| {
         b.iter(|| {
             let _span = string_op.thread_span();
@@ -30,7 +30,7 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let computation_op = cpu_times.operation("computation");
+    let computation_op = cpu_time.operation("computation");
     group.bench_function("computation", |b| {
         b.iter(|| {
             let _span = computation_op.thread_span();
@@ -50,7 +50,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.finish();
 
-    cpu_times.print_to_stdout();
+    cpu_time.print_to_stdout();
 }
 
 criterion_group!(benches, entrypoint);

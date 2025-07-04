@@ -13,9 +13,12 @@ fn main() {
         let _span = operation.thread_span();
         // Perform some CPU-intensive work
         let mut sum = 0_u64;
-        for i in 0..10000_u64 {
+        for i in 0..1_000_000_u64 {
             sum = sum
-                .checked_add(i)
+                .checked_add(
+                    i.checked_mul(i % 1000)
+                        .expect("multiplication should not overflow for small test values"),
+                )
                 .expect("addition should not overflow for small test values");
         }
         std::hint::black_box(sum);
