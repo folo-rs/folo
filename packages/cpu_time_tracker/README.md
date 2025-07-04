@@ -1,4 +1,3 @@
-````markdown
 CPU time tracking utilities for benchmarks and performance analysis.
 
 This package provides utilities to track CPU time during code execution,
@@ -32,5 +31,3 @@ More details in the [package documentation](https://docs.rs/cpu_time_tracker/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
 high-performance hardware-aware programming in Rust.
-
-````
