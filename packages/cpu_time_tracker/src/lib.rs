@@ -24,7 +24,7 @@
 //! // Track a single operation
 //! {
 //!     let operation = session.operation("my_operation");
-//!     let _span = operation.thread_span();
+//!     let _span = operation.measure_thread();
 //!     // Perform some CPU-intensive work
 //!     let mut sum = 0;
 //!     for i in 0..10000 {
@@ -52,7 +52,7 @@
 //! // Track average over multiple operations
 //! for i in 0..10 {
 //!     let string_op = session.operation("cpu_intensive_work");
-//!     let _span = string_op.thread_span();
+//!     let _span = string_op.measure_thread();
 //!     // Perform some CPU-intensive work
 //!     let mut sum = 0;
 //!     for j in 0..i * 1000 {
@@ -78,14 +78,14 @@
 //! // Track thread CPU time
 //! {
 //!     let op = session.operation("thread_work");
-//!     let _span = op.thread_span();
+//!     let _span = op.measure_thread();
 //!     // Work done here is measured for the current thread only
 //! }
 //!
 //! // Track process CPU time (all threads)
 //! {
 //!     let op = session.operation("process_work");
-//!     let _span = op.process_span();
+//!     let _span = op.measure_process();
 //!     // Work done here is measured for the entire process
 //! }
 //! # }

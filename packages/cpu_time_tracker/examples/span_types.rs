@@ -1,9 +1,9 @@
-//! Example demonstrating the difference between `thread_span()` and `process_span()`.
+//! Example demonstrating the difference between `measure_thread()` and `measure_process()`.
 //!
-//! This example shows how to use both `thread_span()` and `process_span()` methods
+//! This example shows how to use both `measure_thread()` and `measure_process()` methods
 //! to track different types of CPU time:
-//! - `thread_span()`: Tracks CPU time for the current thread only
-//! - `process_span()`: Tracks CPU time for the entire process (all threads)
+//! - `measure_thread()`: Tracks CPU time for the current thread only
+//! - `measure_process()`: Tracks CPU time for the entire process (all threads)
 //!
 //! Run with: `cargo run --example span_types`
 
@@ -60,31 +60,31 @@ fn main() {
 
     let mut session = Session::new();
 
-    // Example 1: Using thread_span() - only measures current thread's CPU time
-    // Even though multithreaded_work() spawns multiple threads, thread_span()
+    // Example 1: Using measure_thread() - only measures current thread's CPU time
+    // Even though multithreaded_work() spawns multiple threads, measure_thread()
     // only captures the CPU time used by the main thread (mostly coordination overhead)
     {
         let thread_op = session.operation("thread_span_multithreaded");
         for _ in 0..3 {
-            let _span = thread_op.thread_span();
+            let _span = thread_op.measure_thread();
             multithreaded_work();
         }
     }
 
-    // Example 2: Using process_span() - measures entire process CPU time
+    // Example 2: Using measure_process() - measures entire process CPU time
     // This captures CPU time from all threads spawned by multithreaded_work()
     {
         let process_op = session.operation("process_span_multithreaded");
         for _ in 0..3 {
-            let _span = process_op.process_span();
+            let _span = process_op.measure_process();
             multithreaded_work();
         }
     }
 
     session.print_to_stdout();
 
-    println!("\nNote: thread_span should show much lower times than process_span.");
-    println!("This is because thread_span only measures the main thread's CPU time,");
-    println!("while process_span measures CPU time from all threads in the process.");
+    println!("\nNote: measure_thread should show much lower times than measure_process.");
+    println!("This is because measure_thread only measures the main thread's CPU time,");
+    println!("while measure_process measures CPU time from all threads in the process.");
     println!("The main thread mostly just coordinates the worker threads.");
 }

@@ -23,7 +23,7 @@ use crate::TOTAL_BYTES_ALLOCATED;
 ///
 /// // Simulate multiple operations
 /// for i in 0..5 {
-///     let _span = average.span();
+///     let _span = average.measure_process();
 ///     let _data = vec![0; i + 1]; // Allocate different amounts
 /// }
 ///
@@ -66,6 +66,8 @@ impl Operation {
     /// Creates a span that is associated the the operation and will automatically
     /// track allocations from now until it is dropped.
     ///
+    /// This method collects process-wide allocation data during the span.
+    ///
     /// # Examples
     ///
     /// ```
@@ -77,11 +79,11 @@ impl Operation {
     /// let session = Session::new();
     /// let mut average = Operation::new("test".to_string());
     /// {
-    ///     let _span = average.span();
+    ///     let _span = average.measure_process();
     ///     let _data = vec![1, 2, 3]; // This allocation will be tracked
     /// } // Contributor is dropped here, allocation is added to average
     /// ```
-    pub fn span(&mut self) -> Span<'_> {
+    pub fn measure_process(&mut self) -> Span<'_> {
         Span::new(self)
     }
 
@@ -136,7 +138,7 @@ impl fmt::Display for Operation {
 /// let session = Session::new();
 /// let mut average = Operation::new("test".to_string());
 /// {
-///     let _span = average.span();
+///     let _span = average.measure_process();
 ///     // Perform some operation that allocates memory
 ///     let _data = String::from("Hello, world!");
 /// } // Memory delta is automatically tracked and recorded here
@@ -238,7 +240,7 @@ mod tests {
         let average = session.operation("test");
 
         {
-            let _span = average.span();
+            let _span = average.measure_process();
             // Simulate allocation
             TOTAL_BYTES_ALLOCATED.fetch_add(75, atomic::Ordering::Relaxed);
         } // Contributor drops here
@@ -255,13 +257,13 @@ mod tests {
 
         // First contributor
         {
-            let _span = average.span();
+            let _span = average.measure_process();
             TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
         }
 
         // Second contributor
         {
-            let _span = average.span();
+            let _span = average.measure_process();
             TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
         }
 
@@ -276,7 +278,7 @@ mod tests {
         let average = session.operation("test");
 
         {
-            let _span = average.span();
+            let _span = average.measure_process();
             // No allocation
         }
 

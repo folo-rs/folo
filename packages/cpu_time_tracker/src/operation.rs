@@ -20,7 +20,7 @@ use cpu_time::{ProcessTime, ThreadTime};
 ///
 /// // Simulate multiple operations
 /// for i in 0..5 {
-///     let _span = average.thread_span();
+///     let _span = average.measure_thread();
 ///     // Perform some CPU-intensive work
 ///     let mut sum = 0;
 ///     for j in 0..i * 1000 {
@@ -83,7 +83,7 @@ impl Operation {
     /// let session = Session::new();
     /// let mut average = Operation::new("thread_work".to_string());
     /// {
-    ///     let _span = average.thread_span();
+    ///     let _span = average.measure_thread();
     ///     // Perform some CPU-intensive work in this thread
     ///     let mut sum = 0;
     ///     for i in 0..1000 {
@@ -91,7 +91,7 @@ impl Operation {
     ///     }
     /// } // Thread CPU time is tracked
     /// ```
-    pub fn thread_span(&mut self) -> ThreadSpan<'_> {
+    pub fn measure_thread(&mut self) -> ThreadSpan<'_> {
         ThreadSpan::new(self)
     }
 
@@ -109,7 +109,7 @@ impl Operation {
     /// let session = Session::new();
     /// let mut average = Operation::new("process_work".to_string());
     /// {
-    ///     let _span = average.process_span();
+    ///     let _span = average.measure_process();
     ///     // Perform some CPU-intensive work that might spawn threads
     ///     let mut sum = 0;
     ///     for i in 0..1000 {
@@ -117,7 +117,7 @@ impl Operation {
     ///     }
     /// } // Total process CPU time is tracked
     /// ```
-    pub fn process_span(&mut self) -> ProcessSpan<'_> {
+    pub fn measure_process(&mut self) -> ProcessSpan<'_> {
         ProcessSpan::new(self)
     }
 
@@ -167,7 +167,7 @@ impl fmt::Display for Operation {
 /// let session = Session::new();
 /// let mut average = Operation::new("test".to_string());
 /// {
-///     let _span = average.thread_span();
+///     let _span = average.measure_thread();
 ///     // Perform some CPU-intensive operation
 ///     let mut sum = 0;
 ///     for i in 0..1000 {
@@ -217,7 +217,7 @@ impl Drop for ThreadSpan<'_> {
 /// let session = Session::new();
 /// let mut average = Operation::new("test".to_string());
 /// {
-///     let _span = average.process_span();
+///     let _span = average.measure_process();
 ///     // Perform some CPU-intensive operation
 ///     let mut sum = 0;
 ///     for i in 0..1000 {
@@ -310,12 +310,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(miri))]
     fn operation_span_drop() {
         let mut session = create_test_session();
         let operation = session.operation("test");
 
         {
-            let _span = operation.thread_span();
+            let _span = operation.measure_thread();
             // Perform some CPU work
             let mut sum = 0;
             for i in 0..1000 {
@@ -330,12 +331,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(miri))]
     fn operation_thread_span_drop() {
         let mut session = create_test_session();
         let operation = session.operation("test");
 
         {
-            let _span = operation.thread_span();
+            let _span = operation.measure_thread();
             // Perform some CPU work
             let mut sum = 0;
             for i in 0..1000 {
@@ -349,12 +351,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(miri))]
     fn operation_process_span_drop() {
         let mut session = create_test_session();
         let operation = session.operation("test");
 
         {
-            let _span = operation.process_span();
+            let _span = operation.measure_process();
             // Perform some CPU work
             let mut sum = 0;
             for i in 0..1000 {
@@ -368,13 +371,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(miri))]
     fn operation_multiple_spans() {
         let mut session = create_test_session();
         let operation = session.operation("test");
 
         // First span (thread)
         {
-            let _span = operation.thread_span();
+            let _span = operation.measure_thread();
             let mut sum = 0;
             for i in 0..100 {
                 sum += i;
@@ -384,7 +388,7 @@ mod tests {
 
         // Second span (process)
         {
-            let _span = operation.process_span();
+            let _span = operation.measure_process();
             let mut sum = 0;
             for i in 0..200 {
                 sum += i;
@@ -397,12 +401,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(miri))]
     fn operation_span_no_work() {
         let mut session = create_test_session();
         let operation = session.operation("test");
 
         {
-            let _span = operation.thread_span();
+            let _span = operation.measure_thread();
             // No work - but we should consume some time anyway
             black_box(42);
         }

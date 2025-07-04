@@ -21,7 +21,7 @@ fn entrypoint(c: &mut Criterion) {
     let string_op = cpu_time.operation("string_formatting");
     group.bench_function("string_formatting", |b| {
         b.iter(|| {
-            let _span = string_op.thread_span();
+            let _span = string_op.measure_thread();
 
             let part1 = black_box("Hello, ");
             let part2 = black_box("world!");
@@ -33,7 +33,7 @@ fn entrypoint(c: &mut Criterion) {
     let computation_op = cpu_time.operation("computation");
     group.bench_function("computation", |b| {
         b.iter(|| {
-            let _span = computation_op.thread_span();
+            let _span = computation_op.measure_thread();
 
             let mut sum = 0_u64;
             for i in 0..1000_u64 {

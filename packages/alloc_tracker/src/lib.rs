@@ -27,7 +27,7 @@
 //!     // Track a single operation
 //!     {
 //!         let operation = session.operation("my_operation");
-//!         let _span = operation.span();
+//!         let _span = operation.measure_process();
 //!         let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
 //!     }
 //!
@@ -54,7 +54,7 @@
 //!     // Track average over multiple operations
 //!     for i in 0..10 {
 //!         let string_op = session.operation("string_allocations");
-//!         let _span = string_op.span();
+//!         let _span = string_op.measure_process();
 //!         let _data = format!("String number {}", i); // This allocates memory
 //!     }
 //!

@@ -23,7 +23,7 @@ use crate::Operation;
 /// let mut string_op = session.operation("do_stuff_with_strings");
 ///
 /// for _ in 0..3 {
-///     let _span = string_op.span();
+///     let _span = string_op.measure_process();
 ///     // TODO: Some string stuff here that we want to analyze.
 /// }
 ///
@@ -82,7 +82,7 @@ impl Session {
     /// let mut string_op = session.operation("string_operations");
     ///
     /// for _ in 0..3 {
-    ///     let _span = string_op.span();
+    ///     let _span = string_op.measure_process();
     ///     let _s = String::from("test"); // This allocation will be tracked
     /// }
     /// ```

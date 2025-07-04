@@ -4,13 +4,14 @@ use cpu_time_tracker::Session;
 use std::time::Duration;
 
 #[test]
+#[cfg(not(miri))]
 fn session_integration() {
     let mut session = Session::new();
 
     // Test that we can create operations and track time
     {
         let op1 = session.operation("test_operation_1");
-        let _span = op1.thread_span();
+        let _span = op1.measure_thread();
         // Some work
         let mut sum = 0;
         for i in 0..1000 {
@@ -21,7 +22,7 @@ fn session_integration() {
 
     {
         let op2 = session.operation("test_operation_2");
-        let _span = op2.thread_span();
+        let _span = op2.measure_thread();
         // Some different work
         let mut sum = 0;
         for i in 0..500 {
@@ -47,25 +48,26 @@ fn session_integration() {
 }
 
 #[test]
+#[cfg(not(miri))]
 fn multiple_spans_per_operation() {
     let mut session = Session::new();
     let op = session.operation("multi_span_operation");
 
     // First span
     {
-        let _span = op.thread_span();
+        let _span = op.measure_thread();
         std::hint::black_box(42);
     }
 
     // Second span
     {
-        let _span = op.thread_span();
+        let _span = op.measure_thread();
         std::hint::black_box(84);
     }
 
     // Third span
     {
-        let _span = op.thread_span();
+        let _span = op.measure_thread();
         std::hint::black_box(126);
     }
 

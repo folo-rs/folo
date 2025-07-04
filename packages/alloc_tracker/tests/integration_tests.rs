@@ -32,7 +32,7 @@ fn span_with_no_allocation_is_not_empty_session() {
 
     let op = session.operation("test_no_allocation");
 
-    drop(op.span());
+    drop(op.measure_process());
 
     assert!(
         !session.is_empty(),
@@ -48,7 +48,7 @@ fn operation_allocations() {
 
     // Perform multiple allocations of different sizes
     for i in 1..=TEST_ITERATIONS {
-        let _span = average.span();
+        let _span = average.measure_process();
         let _data = vec![0_u8; i * BYTES_PER_ITERATION]; // 100, 200, 300, 400, 500 bytes
     }
 
