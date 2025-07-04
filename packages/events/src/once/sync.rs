@@ -578,6 +578,7 @@ where
     /// let (sender, _receiver) = event.bind_by_arc();
     /// sender.send(42);
     /// ```
+    #[cfg_attr(test, mutants::skip)] // Can cause infinite loops - resource management is very sensitive to this.
     pub fn send(self, value: T) {
         self.event_ref.set(value);
     }

@@ -27,6 +27,7 @@ impl<T> WithRefCount<T> {
     /// Panics if the reference count would overflow.
     ///
     /// Panics if the reference count was zero (indicating resurrection).
+    #[cfg_attr(test, mutants::skip)] // Can cause infinite loops - resource management is very sensitive to this.
     pub(crate) fn inc_ref(&self) {
         assert_ne!(0, self.ref_count.fetch_add(1, atomic::Ordering::Acquire));
     }
@@ -36,7 +37,7 @@ impl<T> WithRefCount<T> {
     /// # Panics
     ///
     /// Panics if the reference count would underflow (go below zero).
-    #[cfg_attr(test, mutants::skip)] // Deletes the unreachable match arm and complains about it...
+    #[cfg_attr(test, mutants::skip)] // Can cause infinite loops - resource management is very sensitive to this.
     pub(crate) fn dec_ref(&self) -> bool {
         match self.ref_count.fetch_sub(1, atomic::Ordering::Relaxed) {
             1 => {

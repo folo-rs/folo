@@ -468,6 +468,7 @@ where
     /// let value = futures::executor::block_on(receiver).unwrap();
     /// assert_eq!(value, 42);
     /// ```
+    #[cfg_attr(test, mutants::skip)] // Can cause infinite loops - resource management is very sensitive to this.
     pub fn send(self, value: T) {
         // SAFETY: See comments on field.
         let event = unsafe {

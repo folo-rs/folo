@@ -53,7 +53,7 @@ where
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
             // Test timed out - this indicates the test is hanging
-            panic!("Test exceeded 10-second timeout - likely hanging in recv()");
+            panic!("Test exceeded 10-second timeout");
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
             // Thread panicked, join it to get the panic
