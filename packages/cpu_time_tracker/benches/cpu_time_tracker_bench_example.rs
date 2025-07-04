@@ -35,9 +35,14 @@ fn entrypoint(c: &mut Criterion) {
         b.iter(|| {
             let _span = computation_op.thread_span();
 
-            let mut sum = 0;
-            for i in 0..1000 {
-                sum += i * i;
+            let mut sum = 0_u64;
+            for i in 0..1000_u64 {
+                sum = sum
+                    .checked_add(
+                        i.checked_mul(i)
+                            .expect("multiplication should not overflow for small test values"),
+                    )
+                    .expect("addition should not overflow for small test values");
             }
             black_box(sum);
         });

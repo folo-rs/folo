@@ -20,7 +20,7 @@ use cpu_time::{ProcessTime, ThreadTime};
 ///
 /// // Simulate multiple operations
 /// for i in 0..5 {
-///     let _span = average.span();
+///     let _span = average.thread_span();
 ///     // Perform some CPU-intensive work
 ///     let mut sum = 0;
 ///     for j in 0..i * 1000 {

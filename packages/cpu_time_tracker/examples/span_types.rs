@@ -1,4 +1,4 @@
-//! Example demonstrating the difference between thread_span() and process_span().
+//! Example demonstrating the difference between `thread_span()` and `process_span()`.
 //!
 //! This example shows how to use both `thread_span()` and `process_span()` methods
 //! to track different types of CPU time:
@@ -18,11 +18,18 @@ fn main() {
     // Example 1: Using thread_span() for single-threaded work
     {
         let thread_op = session.operation("thread_only_work");
-        for i in 0..5 {
+        for i in 0..5_u32 {
             let _span = thread_op.thread_span();
-            let mut sum = 0u64;
-            for j in 0..50000 {
-                sum += (j as u64 * i as u64) % 1000;
+            let mut sum = 0_u64;
+            for j in 0..50000_u32 {
+                sum = sum
+                    .checked_add(
+                        u64::from(j)
+                            .checked_mul(u64::from(i))
+                            .expect("multiplication should not overflow for small test values")
+                            % 1000,
+                    )
+                    .expect("addition should not overflow for small test values");
             }
             black_box(sum);
         }
@@ -31,24 +38,38 @@ fn main() {
     // Example 2: Using process_span() for process-wide measurement
     {
         let process_op = session.operation("process_wide_work");
-        for i in 0..5 {
+        for i in 0..5_u32 {
             let _span = process_op.process_span();
-            let mut sum = 0u64;
-            for j in 0..50000 {
-                sum += (j as u64 * i as u64) % 1000;
+            let mut sum = 0_u64;
+            for j in 0..50000_u32 {
+                sum = sum
+                    .checked_add(
+                        u64::from(j)
+                            .checked_mul(u64::from(i))
+                            .expect("multiplication should not overflow for small test values")
+                            % 1000,
+                    )
+                    .expect("addition should not overflow for small test values");
             }
             black_box(sum);
         }
     }
 
-    // Example 3: Using the default span() method (equivalent to thread_span())
+    // Example 3: Using thread_span() again (since there's no default span method)
     {
         let default_op = session.operation("default_span_work");
-        for i in 0..5 {
-            let _span = default_op.thread_span(); // This is equivalent to thread_span()
-            let mut sum = 0u64;
-            for j in 0..50000 {
-                sum += (j as u64 * i as u64) % 1000;
+        for i in 0..5_u32 {
+            let _span = default_op.thread_span();
+            let mut sum = 0_u64;
+            for j in 0..50000_u32 {
+                sum = sum
+                    .checked_add(
+                        u64::from(j)
+                            .checked_mul(u64::from(i))
+                            .expect("multiplication should not overflow for small test values")
+                            % 1000,
+                    )
+                    .expect("addition should not overflow for small test values");
             }
             black_box(sum);
         }

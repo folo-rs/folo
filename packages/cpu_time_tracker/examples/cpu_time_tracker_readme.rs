@@ -4,7 +4,6 @@
 
 use cpu_time_tracker::Session;
 
-#[expect(clippy::useless_vec, reason = "example needs to show CPU work")]
 fn main() {
     let mut session = Session::new();
 
@@ -13,9 +12,11 @@ fn main() {
         let operation = session.operation("my_operation");
         let _span = operation.thread_span();
         // Perform some CPU-intensive work
-        let mut sum = 0;
-        for i in 0..10000 {
-            sum += i;
+        let mut sum = 0_u64;
+        for i in 0..10000_u64 {
+            sum = sum
+                .checked_add(i)
+                .expect("addition should not overflow for small test values");
         }
         std::hint::black_box(sum);
     }

@@ -5,7 +5,6 @@
 //!
 //! The core functionality includes:
 //! - [`Session`] - Configures CPU time tracking and provides access to tracking data
-//! - [`Span`] - Tracks CPU time changes over a time period (alias for [`ThreadSpan`])
 //! - [`ThreadSpan`] - Tracks thread CPU time over a time period
 //! - [`ProcessSpan`] - Tracks process CPU time over a time period
 //! - [`Operation`] - Calculates average CPU time per operation
@@ -25,7 +24,7 @@
 //! // Track a single operation
 //! {
 //!     let operation = session.operation("my_operation");
-//!     let _span = operation.span();
+//!     let _span = operation.thread_span();
 //!     // Perform some CPU-intensive work
 //!     let mut sum = 0;
 //!     for i in 0..10000 {
@@ -53,7 +52,7 @@
 //! // Track average over multiple operations
 //! for i in 0..10 {
 //!     let string_op = session.operation("cpu_intensive_work");
-//!     let _span = string_op.span();
+//!     let _span = string_op.thread_span();
 //!     // Perform some CPU-intensive work
 //!     let mut sum = 0;
 //!     for j in 0..i * 1000 {
@@ -76,10 +75,10 @@
 //! # fn main() {
 //! let mut session = Session::new();
 //!
-//! // Track thread CPU time (default)
+//! // Track thread CPU time
 //! {
 //!     let op = session.operation("thread_work");
-//!     let _span = op.thread_span(); // or just op.span()
+//!     let _span = op.thread_span();
 //!     // Work done here is measured for the current thread only
 //! }
 //!

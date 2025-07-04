@@ -1,10 +1,10 @@
-//! Integration tests for cpu_time_tracker
+//! Integration tests for `cpu_time_tracker`
 
 use cpu_time_tracker::Session;
 use std::time::Duration;
 
 #[test]
-fn test_session_integration() {
+fn session_integration() {
     let mut session = Session::new();
 
     // Test that we can create operations and track time
@@ -47,7 +47,7 @@ fn test_session_integration() {
 }
 
 #[test]
-fn test_multiple_spans_per_operation() {
+fn multiple_spans_per_operation() {
     let mut session = Session::new();
     let op = session.operation("multi_span_operation");
 
@@ -75,13 +75,13 @@ fn test_multiple_spans_per_operation() {
 }
 
 #[test]
-fn test_empty_session() {
+fn empty_session() {
     let session = Session::new();
     assert!(session.is_empty());
 }
 
 #[test]
-fn test_session_with_operations_but_no_spans() {
+fn session_with_operations_but_no_spans() {
     let mut session = Session::new();
     let _op = session.operation("unused_operation");
     // Don't create any spans
