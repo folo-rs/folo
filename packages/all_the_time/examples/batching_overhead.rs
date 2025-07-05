@@ -96,5 +96,7 @@ fn main() {
     println!("- Both approaches measure the same total work (1000 multiplications)");
     println!("- Batching reduces measurement overhead by taking fewer timing measurements");
     println!("- For fast operations, measurement overhead can dominate actual work time");
-    println!("- The 'substantial_work' operation shows processor times when overhead is negligible");
+    println!(
+        "- The 'substantial_work' operation shows processor times when overhead is negligible"
+    );
 }
