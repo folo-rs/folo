@@ -122,7 +122,7 @@ impl Operation {
 
     /// Returns the total number of spans recorded.
     #[must_use]
-    pub fn spans(&self) -> u64 {
+    pub(crate) fn spans(&self) -> u64 {
         self.spans
     }
 

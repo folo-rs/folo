@@ -51,7 +51,6 @@ fn single_thread_allocations() {
             let _data = vec![0_u8; i * BYTES_PER_ITERATION];
             black_box(&_data);
         }
-        assert_eq!(process_op.spans(), TEST_ITERATIONS as u64);
         process_op.total_bytes_allocated()
     };
 
@@ -63,7 +62,6 @@ fn single_thread_allocations() {
             let _data = vec![0_u8; i * BYTES_PER_ITERATION];
             black_box(&_data);
         }
-        assert_eq!(thread_op.spans(), TEST_ITERATIONS as u64);
         thread_op.total_bytes_allocated()
     };
 
@@ -129,7 +127,6 @@ fn multithreaded_allocations_show_span_differences() {
             let _span = process_op.measure_process();
             spawn_workers();
         }
-        assert_eq!(process_op.spans(), TEST_ITERATIONS as u64);
         process_op.total_bytes_allocated()
     };
 
@@ -140,7 +137,6 @@ fn multithreaded_allocations_show_span_differences() {
             let _span = thread_op.measure_thread();
             spawn_workers();
         }
-        assert_eq!(thread_op.spans(), TEST_ITERATIONS as u64);
         thread_op.total_bytes_allocated()
     };
 
@@ -190,6 +186,5 @@ fn mixed_span_types_in_multithreaded_context() {
     }
 
     let total = mixed_op.total_bytes_allocated();
-    assert_eq!(mixed_op.spans(), ITERATIONS as u64);
     assert!(total > 0, "Mixed spans should track some allocations");
 }

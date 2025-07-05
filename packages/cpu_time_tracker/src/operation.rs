@@ -141,13 +141,14 @@ impl Operation {
 
     /// Returns the total number of spans recorded.
     #[must_use]
-    pub fn spans(&self) -> u64 {
+    pub(crate) fn spans(&self) -> u64 {
         self.spans
     }
 
     /// Returns the total CPU time across all spans.
     #[must_use]
-    pub fn total_cpu_time(&self) -> Duration {
+    #[cfg(test)]
+    pub(crate) fn total_cpu_time(&self) -> Duration {
         self.total_cpu_time
     }
 }
