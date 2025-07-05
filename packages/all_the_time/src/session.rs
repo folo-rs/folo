@@ -141,3 +141,88 @@ impl fmt::Display for Session {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pal::{FakePlatform, PlatformFacade};
+
+    fn create_test_session() -> Session {
+        let fake_platform = FakePlatform::new();
+        let platform_facade = PlatformFacade::fake(fake_platform);
+        Session::with_platform(platform_facade)
+    }
+
+    #[test]
+    fn is_empty_returns_true_for_no_operations() {
+        let session = create_test_session();
+        assert!(session.is_empty());
+    }
+
+    #[test]
+    fn is_empty_returns_true_for_operations_with_no_spans() {
+        let mut session = create_test_session();
+
+        // Create operations but don't record any spans
+        let _operation1 = session.operation("test1");
+        let _operation2 = session.operation("test2");
+
+        assert!(session.is_empty());
+    }
+
+    #[test]
+    fn is_empty_returns_false_for_operations_with_spans() {
+        let mut session = create_test_session();
+        let operation = session.operation("test");
+
+        // Record a span
+        {
+            let _span = operation.iterations(1).measure_thread();
+        }
+
+        assert!(!session.is_empty());
+    }
+
+    #[test]
+    fn is_empty_mixed_operations_some_with_spans() {
+        let mut session = create_test_session();
+
+        // Create some operations without spans
+        let _operation1 = session.operation("no_spans1");
+        let _operation2 = session.operation("no_spans2");
+
+        // Create an operation with spans
+        let operation_with_spans = session.operation("with_spans");
+        {
+            let _span = operation_with_spans.iterations(1).measure_process();
+        }
+
+        // Session should not be empty because at least one operation has spans
+        assert!(!session.is_empty());
+    }
+
+    #[test]
+    fn is_empty_multiple_operations_all_empty() {
+        let mut session = create_test_session();
+
+        // Create multiple operations but don't record spans
+        for i in 0..5 {
+            let _operation = session.operation(format!("test_{i}"));
+        }
+
+        assert!(session.is_empty());
+    }
+
+    #[test]
+    fn is_empty_multiple_operations_all_with_spans() {
+        let mut session = create_test_session();
+
+        // Create multiple operations with spans
+        for i in 0..3 {
+            let operation = session.operation(format!("test_{i}"));
+            let _span = operation.iterations(1).measure_thread();
+        }
+
+        assert!(!session.is_empty());
+    }
+}
