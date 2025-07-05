@@ -1,6 +1,6 @@
 [package]
-name = "cpu_time_tracker"
-description = "CPU time tracking utilities for benchmarks and performance analysis"
+name = "all_the_time"
+description = "Processor time tracking utilities for benchmarks and performance analysis"
 publish = true
 version = "0.1.0"
 
@@ -18,7 +18,7 @@ criterion = { workspace = true }
 mutants = { workspace = true }
 
 [[bench]]
-name = "cpu_time_tracker_bench_example"
+name = "all_the_time_bench_example"
 harness = false
 
 [lints]

@@ -1,7 +1,7 @@
-//! CPU time tracking benchmarks demonstrating the `cpu_time_tracker` crate.
+//! processor time tracking benchmarks demonstrating the `all_the_time` crate.
 //!
-//! This benchmark demonstrates how to track CPU time (duration per iteration)
-//! in Criterion benchmarks using the `cpu_time_tracker` utilities.
+//! This benchmark demonstrates how to track processor time (duration per iteration)
+//! in Criterion benchmarks using the `all_the_time` utilities.
 #![allow(
     missing_docs,
     reason = "No need for API documentation in benchmark code"
@@ -11,12 +11,12 @@ use std::cell::Cell;
 use std::hint::black_box;
 use std::time::Instant;
 
-use cpu_time_tracker::Session;
+use all_the_time::Session;
 use criterion::{Criterion, criterion_group, criterion_main};
 
 fn entrypoint(c: &mut Criterion) {
     let mut cpu_time = Session::new();
-    let mut group = c.benchmark_group("cpu_time_tracker");
+    let mut group = c.benchmark_group("all_the_time");
 
     let cell = Cell::new(1234);
     let read_cell_op = cpu_time.operation("read_cell");

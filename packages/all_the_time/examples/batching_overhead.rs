@@ -6,10 +6,10 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use cpu_time_tracker::Session;
+use all_the_time::Session;
 
 fn main() {
-    println!("=== CPU Time Batching Overhead Demonstration ===");
+    println!("=== processor time Batching Overhead Demonstration ===");
     println!();
 
     let mut session = Session::new();
@@ -96,5 +96,5 @@ fn main() {
     println!("- Both approaches measure the same total work (1000 multiplications)");
     println!("- Batching reduces measurement overhead by taking fewer timing measurements");
     println!("- For fast operations, measurement overhead can dominate actual work time");
-    println!("- The 'substantial_work' operation shows CPU times when overhead is negligible");
+    println!("- The 'substantial_work' operation shows processor times when overhead is negligible");
 }

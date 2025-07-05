@@ -1,11 +1,11 @@
-//! Simplified example demonstrating key `cpu_time_tracker` types working together.
+//! Simplified example demonstrating key `all_the_time` types working together.
 //!
-//! This example shows how to use the main types in the `cpu_time_tracker` crate:
-//! - `Session`: Manages CPU time tracking state
-//! - `Span`: Tracks CPU time over a time period  
-//! - `Operation`: Calculates average CPU time across multiple spans
+//! This example shows how to use the main types in the `all_the_time` crate:
+//! - `Session`: Manages processor time tracking state
+//! - `Span`: Tracks processor time over a time period  
+//! - `Operation`: Calculates mean processor time across multiple spans
 //!
-//! Run with: `cargo run --example cpu_time_tracker_basic`
+//! Run with: `cargo run --example all_the_time_basic`
 #![expect(
     clippy::arithmetic_side_effects,
     clippy::cast_sign_loss,
@@ -16,16 +16,16 @@
 use std::collections::HashMap;
 use std::hint::black_box;
 
-use cpu_time_tracker::Session;
+use all_the_time::Session;
 
 fn main() {
-    println!("=== CPU Time Tracking Example ===\n");
+    println!("=== processor time Tracking Example ===\n");
 
-    // Create a tracking session - this enables CPU time monitoring
+    // Create a tracking session - this enables processor time monitoring
     let mut session = Session::new();
     println!("✓ Created tracking session\n");
 
-    // Track string formatting - do more work to get measurable CPU time
+    // Track string formatting - do more work to get measurable processor time
     {
         let string_op = session.operation("string_formatting");
         {
@@ -47,7 +47,7 @@ fn main() {
         }
     }
 
-    // Track hashmap creation - do more work to get measurable CPU time
+    // Track hashmap creation - do more work to get measurable processor time
     {
         let hashmap_op = session.operation("hashmap_creation");
         {
@@ -67,7 +67,7 @@ fn main() {
         }
     }
 
-    // Track computation - do more work to get measurable CPU time
+    // Track computation - do more work to get measurable processor time
     {
         let computation_op = session.operation("computation");
         {

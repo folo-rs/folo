@@ -1,21 +1,21 @@
-//! Average CPU time tracking.
+//! Mean processor time tracking.
 
 use std::fmt;
 use std::time::Duration;
 
 use crate::SpanBuilder;
 use crate::pal::PlatformFacade;
-/// Calculates average CPU time per operation across multiple iterations.
+/// Calculates mean processor time per operation across multiple iterations.
 ///
 /// This utility is particularly useful for benchmarking scenarios where you want
-/// to understand the average CPU time footprint of repeated operations.
+/// to understand the mean processor time footprint of repeated operations.
 ///
 /// # Examples
 ///
 /// ```
 /// use std::num::NonZero;
 ///
-/// use cpu_time_tracker::Session;
+/// use all_the_time::Session;
 ///
 /// let mut session = Session::new();
 /// let operation = session.operation("cpu_intensive_work");
@@ -23,29 +23,29 @@ use crate::pal::PlatformFacade;
 /// // Simulate multiple operations - note explicit iteration count
 /// for i in 0..5 {
 ///     let _span = operation.iterations(1).measure_thread();
-///     // Perform some CPU-intensive work
+///     // Perform some processor-intensive work
 ///     let mut sum = 0;
 ///     for j in 0..i * 1000 {
 ///         sum += j;
 ///     }
 /// }
 ///
-/// let avg_duration = operation.mean();
-/// println!("Average CPU time: {:?} per operation", avg_duration);
+/// let mean_duration = operation.mean();
+/// println!("Mean processor time: {:?} per operation", mean_duration);
 /// ```
 #[derive(Debug)]
 pub struct Operation {
-    total_cpu_time: Duration,
+    total_processor_time: Duration,
     spans: u64,
     platform: PlatformFacade,
 }
 
 impl Operation {
-    /// Creates a new average CPU time calculator with the given name.
+    /// Creates a new mean processor time calculator with the given name.
     #[must_use]
     pub(crate) fn new(platform: PlatformFacade) -> Self {
         Self {
-            total_cpu_time: Duration::ZERO,
+            total_processor_time: Duration::ZERO,
             spans: 0,
             platform,
         }
@@ -57,14 +57,14 @@ impl Operation {
         &self.platform
     }
 
-    /// Adds a CPU time duration to the average calculation.
+    /// Adds a processor time duration to the mean calculation.
     ///
     /// This method is typically called by span types when they are dropped.
     pub(crate) fn add(&mut self, duration: Duration) {
-        self.total_cpu_time = self
-            .total_cpu_time
+        self.total_processor_time = self
+            .total_processor_time
             .checked_add(duration)
-            .expect("CPU time duration overflow - this should not happen in practice");
+            .expect("processor time duration overflow - this should not happen in practice");
 
         self.spans = self
             .spans
@@ -83,7 +83,7 @@ impl Operation {
     /// ```
     /// use std::num::NonZero;
     ///
-    /// use cpu_time_tracker::Session;
+    /// use all_the_time::Session;
     ///
     /// let mut session = Session::new();
     /// let operation = session.operation("single_op");
@@ -101,7 +101,7 @@ impl Operation {
     /// ```
     /// use std::num::NonZero;
     ///
-    /// use cpu_time_tracker::Session;
+    /// use all_the_time::Session;
     ///
     /// let mut session = Session::new();
     /// let operation = session.operation("batch_ops");
@@ -119,7 +119,7 @@ impl Operation {
         SpanBuilder::new(self, iterations)
     }
 
-    /// Calculates the mean CPU time per span.
+    /// Calculates the mean processor time per span.
     ///
     /// Returns zero duration if no spans have been recorded.
     #[must_use]
@@ -129,7 +129,7 @@ impl Operation {
         } else {
             // Use div_ceil for proper division, falling back to manual calculation if needed
             Duration::from_nanos(
-                self.total_cpu_time
+                self.total_processor_time
                     .as_nanos()
                     .checked_div(u128::from(self.spans))
                     .expect("mean calculation should not overflow")
@@ -145,11 +145,11 @@ impl Operation {
         self.spans
     }
 
-    /// Returns the total CPU time across all spans.
+    /// Returns the total processor time across all spans.
     #[must_use]
     #[cfg(test)]
-    pub(crate) fn total_cpu_time(&self) -> Duration {
-        self.total_cpu_time
+    pub(crate) fn total_processor_time(&self) -> Duration {
+        self.total_processor_time
     }
 }
 
@@ -181,7 +181,7 @@ mod tests {
         let operation = session.operation("test");
         assert_eq!(operation.mean(), Duration::ZERO);
         assert_eq!(operation.spans(), 0);
-        assert_eq!(operation.total_cpu_time(), Duration::ZERO);
+        assert_eq!(operation.total_processor_time(), Duration::ZERO);
     }
 
     #[test]
@@ -191,7 +191,7 @@ mod tests {
         operation.add(Duration::from_millis(100));
         assert_eq!(operation.mean(), Duration::from_millis(100));
         assert_eq!(operation.spans(), 1);
-        assert_eq!(operation.total_cpu_time(), Duration::from_millis(100));
+        assert_eq!(operation.total_processor_time(), Duration::from_millis(100));
     }
 
     #[test]
@@ -203,7 +203,7 @@ mod tests {
         operation.add(Duration::from_millis(300));
         assert_eq!(operation.mean(), Duration::from_millis(200)); // (100 + 200 + 300) / 3
         assert_eq!(operation.spans(), 3);
-        assert_eq!(operation.total_cpu_time(), Duration::from_millis(600));
+        assert_eq!(operation.total_processor_time(), Duration::from_millis(600));
     }
 
     #[test]
@@ -214,7 +214,7 @@ mod tests {
         operation.add(Duration::ZERO);
         assert_eq!(operation.mean(), Duration::ZERO);
         assert_eq!(operation.spans(), 2);
-        assert_eq!(operation.total_cpu_time(), Duration::ZERO);
+        assert_eq!(operation.total_processor_time(), Duration::ZERO);
     }
 
     #[test]
@@ -233,7 +233,7 @@ mod tests {
 
         assert_eq!(operation.spans(), 1);
         // We can't test the exact time, but it should be greater than zero
-        assert!(operation.total_cpu_time() >= Duration::ZERO);
+        assert!(operation.total_processor_time() >= Duration::ZERO);
     }
 
     #[test]
@@ -253,6 +253,6 @@ mod tests {
         } // Span drops here
 
         assert_eq!(operation.spans(), 10);
-        assert!(operation.total_cpu_time() >= Duration::ZERO);
+        assert!(operation.total_processor_time() >= Duration::ZERO);
     }
 }

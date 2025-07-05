@@ -1,27 +1,27 @@
-//! Session management for CPU time tracking.
+//! Session management for processor time tracking.
 use std::collections::HashMap;
 use std::fmt;
 
 use crate::Operation;
 use crate::pal::PlatformFacade;
-/// Manages CPU time tracking session state and contains operations.
+/// Manages processor time tracking session state and contains operations.
 ///
 /// This type serves as a container for tracking operations and provides
-/// methods to analyze CPU time usage patterns across different operations.
+/// methods to analyze processor time usage patterns across different operations.
 ///
 /// # Examples
 ///
 /// ```
 /// use std::num::NonZero;
 ///
-/// use cpu_time_tracker::Session;
+/// use all_the_time::Session;
 ///
 /// let mut session = Session::new();
-/// let mut cpu_op = session.operation("cpu_intensive_work");
+/// let mut processor_op = session.operation("processor_intensive_work");
 ///
 /// for _ in 0..3 {
-///     let _span = cpu_op.iterations(1).measure_thread();
-///     // Perform some CPU-intensive work
+///     let _span = processor_op.iterations(1).measure_thread();
+///     // Perform some processor-intensive work
 ///     let mut sum = 0;
 ///     for i in 0..1000 {
 ///         sum += i;
@@ -40,15 +40,15 @@ pub struct Session {
     platform: PlatformFacade,
 }
 impl Session {
-    /// Creates a new CPU time tracking session.
+    /// Creates a new processor time tracking session.
     ///
     /// # Examples
     ///
     /// ```
-    /// use cpu_time_tracker::Session;
+    /// use all_the_time::Session;
     ///
     /// let mut session = Session::new();
-    /// // CPU time tracking is now enabled
+    /// // Processor time tracking is now enabled
     /// // Session will disable tracking when dropped
     /// ```
     #[expect(
@@ -63,7 +63,7 @@ impl Session {
         }
     }
 
-    /// Creates a new CPU time tracking session with a specific platform.
+    /// Creates a new processor time tracking session with a specific platform.
     ///
     /// This method is primarily used for testing purposes to inject a fake platform
     /// that doesn't rely on actual system calls.
@@ -86,17 +86,17 @@ impl Session {
     /// ```
     /// use std::num::NonZero;
     ///
-    /// use cpu_time_tracker::Session;
+    /// use all_the_time::Session;
     ///
     /// let mut session = Session::new();
-    /// let mut cpu_op = session.operation("cpu_operations");
+    /// let mut processor_op = session.operation("processor_operations");
     ///
     /// for _ in 0..3 {
-    ///     let _span = cpu_op.iterations(1).measure_thread();
-    ///     // Perform some CPU-intensive work
+    ///     let _span = processor_op.iterations(1).measure_thread();
+    ///     // Perform some processor-intensive work
     ///     let mut sum = 0;
     ///     for i in 0..1000 {
-    ///         sum += i; // This CPU time will be tracked
+    ///         sum += i; // This processor time will be tracked
     ///     }
     /// }
     /// ```

@@ -6,7 +6,7 @@ use crate::pal::abstractions::Platform;
 
 /// Fake implementation of the platform abstraction for testing.
 ///
-/// This implementation allows tests to control the CPU time values
+/// This implementation allows tests to control the processor time values
 /// instead of relying on actual system calls.
 #[derive(Clone, Debug)]
 #[cfg(test)]
@@ -25,12 +25,12 @@ impl FakePlatform {
         }
     }
 
-    /// Sets the thread CPU time value.
+    /// Sets the thread processor time value.
     pub(crate) fn set_thread_time(&mut self, time: Duration) {
         self.thread_time = time;
     }
 
-    /// Sets the process CPU time value.
+    /// Sets the process processor time value.
     pub(crate) fn set_process_time(&mut self, time: Duration) {
         self.process_time = time;
     }

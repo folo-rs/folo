@@ -1,35 +1,35 @@
-//! Process-wide CPU time tracking spans.
+//! Process-wide processor time tracking spans.
 
 use std::time::Duration;
 
 use crate::Operation;
 use crate::pal::Platform;
 
-/// A span of code for which we track process CPU time between creation and drop.
+/// A span of code for which we track process processor time between creation and drop.
 ///
-/// Measures CPU time consumed by the entire process (all threads).
+/// Measures processor time consumed by the entire process (all threads).
 ///
 /// # Examples
 ///
 /// ```
-/// use cpu_time_tracker::Session;
+/// use all_the_time::Session;
 ///
 /// let mut session = Session::new();
 /// let operation = session.operation("test");
 /// {
 ///     let _span = operation.iterations(1).measure_process();
-///     // Perform some CPU-intensive operation
+///     // Perform some processor-intensive operation
 ///     let mut sum = 0;
 ///     for i in 0..1000 {
 ///         sum += i;
 ///     }
-/// } // Process CPU time is automatically tracked and recorded here
+/// } // Process processor time is automatically tracked and recorded here
 /// ```
 ///
 /// For benchmarks with many iterations:
 ///
 /// ```
-/// use cpu_time_tracker::Session;
+/// use all_the_time::Session;
 ///
 /// let mut session = Session::new();
 /// let operation = session.operation("benchmark");
@@ -40,7 +40,7 @@ use crate::pal::Platform;
 ///         let mut sum = 0;
 ///         sum += i;
 ///     }
-/// } // CPU time is measured once and divided by 1000
+/// } // Processor time is measured once and divided by 1000
 /// ```
 #[derive(Debug)]
 pub struct ProcessSpan<'a> {
@@ -68,7 +68,7 @@ impl<'a> ProcessSpan<'a> {
         }
     }
 
-    /// Calculates the process CPU time delta since this span was created.
+    /// Calculates the process processor time delta since this span was created.
     #[must_use]
     fn to_duration(&self) -> Duration {
         let current_time = self.operation.platform().process_time();
@@ -165,7 +165,7 @@ mod tests {
 
         // Should extract time from PAL and record one span with zero duration
         assert_eq!(operation.spans(), 1);
-        assert_eq!(operation.total_cpu_time(), Duration::ZERO);
+        assert_eq!(operation.total_processor_time(), Duration::ZERO);
     }
 
     #[test]

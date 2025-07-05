@@ -18,9 +18,9 @@ use crate::allocator::THREAD_BYTES_ALLOCATED;
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
 /// let mut session = Session::new();
-/// let average = session.operation("test");
+/// let mean_calc = session.operation("test");
 /// {
-///     let _span = average.measure_thread();
+///     let _span = mean_calc.measure_thread();
 ///     // Perform some operation that allocates memory
 ///     let _data = String::from("Hello, world!");
 /// } // Thread allocation is automatically tracked and recorded here

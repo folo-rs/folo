@@ -1,8 +1,8 @@
 //! Example that demonstrates the exact usage shown in the README.md file.
 //!
-//! This shows how to use the `cpu_time_tracker` crate for tracking CPU time.
+//! This shows how to use the `all_the_time` crate for tracking processor time.
 
-use cpu_time_tracker::Session;
+use all_the_time::Session;
 
 fn main() {
     let mut session = Session::new();

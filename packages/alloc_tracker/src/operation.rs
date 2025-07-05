@@ -1,14 +1,14 @@
-//! Average memory allocation tracking.
+//! Mean memory allocation tracking.
 
 use std::fmt;
 
 use crate::process_span::ProcessSpan;
 use crate::thread_span::ThreadSpan;
 
-/// Calculates average memory allocation per operation across multiple iterations.
+/// Calculates mean memory allocation per operation across multiple iterations.
 ///
 /// This utility is particularly useful for benchmarking scenarios where you want
-/// to understand the average memory footprint of repeated operations.
+/// to understand the mean memory footprint of repeated operations.
 ///
 /// # Examples
 ///
@@ -19,16 +19,16 @@ use crate::thread_span::ThreadSpan;
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
 /// let mut session = Session::new();
-/// let average = session.operation("string_allocations");
+/// let mean_calc = session.operation("string_allocations");
 ///
 /// // Simulate multiple operations
 /// for i in 0..5 {
-///     let _span = average.measure_process();
+///     let _span = mean_calc.measure_process();
 ///     let _data = vec![0; i + 1]; // Allocate different amounts
 /// }
 ///
-/// let avg_bytes = average.average();
-/// println!("Average allocation: {} bytes per operation", avg_bytes);
+/// let mean_bytes = mean_calc.mean();
+/// println!("Mean allocation: {} bytes per operation", mean_bytes);
 /// ```
 #[derive(Debug)]
 pub struct Operation {
@@ -45,7 +45,7 @@ impl Operation {
         }
     }
 
-    /// Adds a memory delta value to the average calculation.
+    /// Adds a memory delta value to the mean calculation.
     ///
     /// This method is called by [`ProcessSpan`] or [`ThreadSpan`] when it is dropped.
     pub(crate) fn add(&mut self, delta: u64) {
@@ -68,11 +68,11 @@ impl Operation {
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
     /// let mut session = Session::new();
-    /// let average = session.operation("test");
+    /// let mean_calc = session.operation("test");
     /// {
-    ///     let _span = average.measure_process();
+    ///     let _span = mean_calc.measure_process();
     ///     let _data = vec![1, 2, 3]; // This allocation will be tracked
-    /// } // Span is dropped here, allocation is added to average
+    /// } // Span is dropped here, allocation is added to mean calculation
     /// ```
     pub fn measure_process(&mut self) -> ProcessSpan<'_> {
         ProcessSpan::new(self)
@@ -93,9 +93,9 @@ impl Operation {
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
     /// let mut session = Session::new();
-    /// let average = session.operation("thread_work");
+    /// let mean_calc = session.operation("thread_work");
     /// {
-    ///     let _span = average.measure_thread();
+    ///     let _span = mean_calc.measure_thread();
     ///     let _data = vec![1, 2, 3]; // This allocation will be tracked for this thread
     /// }
     /// ```

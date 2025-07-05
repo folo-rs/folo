@@ -1,10 +1,10 @@
-CPU time tracking utilities for benchmarks and performance analysis.
+Processor time tracking utilities for benchmarks and performance analysis.
 
-This package provides utilities to track CPU time during code execution,
+This package provides utilities to track processor time during code execution,
 enabling analysis of CPU usage patterns in benchmarks and performance tests.
 
 ```rust
-use cpu_time_tracker::Session;
+use all_the_time::Session;
 
 fn main() {
     let mut session = Session::new();
@@ -27,7 +27,7 @@ fn main() {
 }
 ```
 
-More details in the [package documentation](https://docs.rs/cpu_time_tracker/).
+More details in the [package documentation](https://docs.rs/all_the_time/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
 high-performance hardware-aware programming in Rust.

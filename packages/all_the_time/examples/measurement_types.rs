@@ -1,16 +1,16 @@
 //! Example demonstrating the difference between `iterations(1).measure_thread()` and `iterations(1).measure_process()`.
 //!
 //! This example shows how to use both `iterations(1).measure_thread()` and `iterations(1).measure_process()` methods
-//! to track different types of CPU time:
-//! - `iterations(1).measure_thread()`: Tracks CPU time for the current thread only
-//! - `iterations(1).measure_process()`: Tracks CPU time for the entire process (all threads)
+//! to track different types of processor time:
+//! - `iterations(1).measure_thread()`: Tracks processor time for the current thread only
+//! - `iterations(1).measure_process()`: Tracks processor time for the entire process (all threads)
 //!
 //! Run with: `cargo run --example span_types`
 
 use std::hint::black_box;
 use std::thread;
 
-use cpu_time_tracker::Session;
+use all_the_time::Session;
 
 /// Performs CPU-intensive work across multiple threads.
 /// This function spawns worker threads that each perform computational work.
@@ -61,13 +61,13 @@ fn multithreaded_work() {
 }
 
 fn main() {
-    println!("=== CPU Time Measurement Types Example ===\n");
+    println!("=== processor time Measurement Types Example ===\n");
 
     let mut session = Session::new();
 
-    // Example 1: Using iterations(1).measure_thread() - only measures current thread's CPU time
+    // Example 1: Using iterations(1).measure_thread() - only measures current thread's processor time
     // Even though multithreaded_work() spawns multiple threads, iterations(1).measure_thread()
-    // only captures the CPU time used by the main thread (mostly coordination overhead)
+    // only captures the processor time used by the main thread (mostly coordination overhead)
     {
         let thread_op = session.operation("thread_span_multithreaded");
 
@@ -77,8 +77,8 @@ fn main() {
         }
     }
 
-    // Example 2: Using iterations(1).measure_process() - measures entire process CPU time
-    // This captures CPU time from all threads spawned by multithreaded_work()
+    // Example 2: Using iterations(1).measure_process() - measures entire process processor time
+    // This captures processor time from all threads spawned by multithreaded_work()
     {
         let process_op = session.operation("process_span_multithreaded");
 
@@ -91,7 +91,7 @@ fn main() {
     session.print_to_stdout();
 
     println!("\nNote: measure_thread should show much lower times than measure_process.");
-    println!("This is because measure_thread only measures the main thread's CPU time,");
-    println!("while measure_process measures CPU time from all threads in the process.");
+    println!("This is because measure_thread only measures the main thread's processor time,");
+    println!("while measure_process measures processor time from all threads in the process.");
     println!("The main thread mostly just coordinates the worker threads.");
 }

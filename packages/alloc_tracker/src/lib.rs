@@ -8,7 +8,7 @@
 //! - [`Session`] - Configures allocation tracking and provides access to tracking data
 //! - [`ProcessSpan`] - Tracks process-wide memory allocation changes over a time period
 //! - [`ThreadSpan`] - Tracks thread-local memory allocation changes over a time period
-//! - [`Operation`] - Calculates average memory allocation per operation
+//! - [`Operation`] - Calculates mean memory allocation per operation
 //!
 //! This package is not meant for use in production, serving only as a development tool.
 //!  
@@ -39,7 +39,7 @@
 //! }
 //! ```
 //!
-//! # Tracking Average Allocations
+//! # Tracking Mean Allocations
 //!
 //! For benchmarking scenarios, where you run multiple iterations of an operation, use [`Operation`]:
 //!
@@ -52,7 +52,7 @@
 //! fn main() {
 //!     let mut session = Session::new();
 //!
-//!     // Track average over multiple operations
+//!     // Track mean over multiple operations
 //!     for i in 0..10 {
 //!         let string_op = session.operation("string_allocations");
 //!         let _span = string_op.measure_process();

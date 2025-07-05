@@ -18,9 +18,9 @@ use crate::allocator::TOTAL_BYTES_ALLOCATED;
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
 /// let mut session = Session::new();
-/// let average = session.operation("test");
+/// let mean_calc = session.operation("test");
 /// {
-///     let _span = average.measure_process();
+///     let _span = mean_calc.measure_process();
 ///     // Perform some operation that allocates memory
 ///     let _data = String::from("Hello, world!");
 /// } // Memory delta is automatically tracked and recorded here

@@ -1,7 +1,7 @@
-//! Platform abstraction layer for CPU time tracking.
+//! Platform abstraction layer for processor time tracking.
 //!
 //! This module provides a platform abstraction that allows switching between
-//! real CPU time tracking (using the `cpu_time` crate) and fake implementations
+//! real processor time tracking (using the `cpu_time` crate) and fake implementations
 //! for testing purposes.
 
 mod abstractions;

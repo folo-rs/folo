@@ -1,34 +1,34 @@
-//! Thread-specific CPU time tracking spans.
+//! Thread-specific processor time tracking spans.
 
 use std::time::Duration;
 
 use crate::Operation;
 use crate::pal::Platform;
-/// A tracked span of code that tracks thread CPU time between creation and drop.
+/// A tracked span of code that tracks thread processor time between creation and drop.
 ///
-/// This span tracks CPU time consumed by the current thread only.
+/// This span tracks processor time consumed by the current thread only.
 ///
 /// # Examples
 ///
 /// ```
-/// use cpu_time_tracker::Session;
+/// use all_the_time::Session;
 ///
 /// let mut session = Session::new();
 /// let operation = session.operation("test");
 /// {
 ///     let _span = operation.iterations(1).measure_thread();
-///     // Perform some CPU-intensive operation
+///     // Perform some processor-intensive operation
 ///     let mut sum = 0;
 ///     for i in 0..1000 {
 ///         sum += i;
 ///     }
-/// } // Thread CPU time is automatically tracked and recorded here
+/// } // Thread processor time is automatically tracked and recorded here
 /// ```
 ///
 /// For benchmarks with many iterations:
 ///
 /// ```
-/// use cpu_time_tracker::Session;
+/// use all_the_time::Session;
 ///
 /// let mut session = Session::new();
 /// let operation = session.operation("test");
@@ -39,7 +39,7 @@ use crate::pal::Platform;
 ///         let mut sum = 0;
 ///         sum += i;
 ///     }
-/// } // CPU time is measured once and divided by 1000
+/// } // Processor time is measured once and divided by 1000
 /// ```
 #[derive(Debug)]
 pub struct ThreadSpan<'a> {
@@ -67,7 +67,7 @@ impl<'a> ThreadSpan<'a> {
         }
     }
 
-    /// Calculates the thread CPU time delta since this span was created.
+    /// Calculates the thread processor time delta since this span was created.
     #[must_use]
     fn to_duration(&self) -> Duration {
         let current_time = self.operation.platform().thread_time();
@@ -146,7 +146,7 @@ mod tests {
 
         // Should extract time from PAL and record one span with zero duration
         assert_eq!(operation.spans(), 1);
-        assert_eq!(operation.total_cpu_time(), Duration::ZERO);
+        assert_eq!(operation.total_processor_time(), Duration::ZERO);
     }
 
     #[test]
