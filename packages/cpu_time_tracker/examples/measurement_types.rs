@@ -57,7 +57,7 @@ fn multithreaded_work() {
 }
 
 fn main() {
-    println!("=== CPU Time Span Types Example ===\n");
+    println!("=== CPU Time Measurement Types Example ===\n");
 
     let mut session = Session::new();
 

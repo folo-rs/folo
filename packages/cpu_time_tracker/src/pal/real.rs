@@ -12,10 +12,10 @@ pub(crate) struct RealPlatform;
 
 impl Platform for RealPlatform {
     fn thread_time(&self) -> Duration {
-        ThreadTime::now().elapsed()
+        ThreadTime::now().as_duration()
     }
 
     fn process_time(&self) -> Duration {
-        ProcessTime::now().elapsed()
+        ProcessTime::now().as_duration()
     }
 }
