@@ -3,9 +3,10 @@
 //! This example shows the measurable difference between batched and unbatched
 //! measurements for operations with significant overhead.
 
-use cpu_time_tracker::Session;
 use std::hint::black_box;
 use std::time::Instant;
+
+use cpu_time_tracker::Session;
 
 fn main() {
     println!("=== CPU Time Batching Overhead Demonstration ===");

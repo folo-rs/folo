@@ -13,9 +13,10 @@
     reason = "this is example code that doesn't need production-level safety"
 )]
 
-use cpu_time_tracker::Session;
 use std::collections::HashMap;
 use std::hint::black_box;
+
+use cpu_time_tracker::Session;
 
 fn main() {
     println!("=== CPU Time Tracking Example ===\n");

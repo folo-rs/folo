@@ -7,9 +7,10 @@
 //!
 //! Run with: `cargo run --example span_types`
 
-use cpu_time_tracker::Session;
 use std::hint::black_box;
 use std::thread;
+
+use cpu_time_tracker::Session;
 
 /// Performs CPU-intensive work across multiple threads.
 /// This function spawns worker threads that each perform computational work.

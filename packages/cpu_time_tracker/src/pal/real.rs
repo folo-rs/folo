@@ -1,8 +1,10 @@
 //! Real platform implementation using system calls.
 
-use crate::pal::abstractions::Platform;
-use cpu_time::{ProcessTime, ThreadTime};
 use std::time::Duration;
+
+use cpu_time::{ProcessTime, ThreadTime};
+
+use crate::pal::abstractions::Platform;
 
 /// Real implementation of the platform abstraction using the `cpu_time` crate.
 #[derive(Clone, Debug)]

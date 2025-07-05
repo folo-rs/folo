@@ -1,10 +1,11 @@
 //! Platform facade for switching between real and fake implementations.
 
+use std::time::Duration;
+
 use crate::pal::abstractions::Platform;
 #[cfg(test)]
 use crate::pal::fake::FakePlatform;
 use crate::pal::real::RealPlatform;
-use std::time::Duration;
 
 /// Facade that allows switching between real and fake platform implementations.
 ///
@@ -55,20 +56,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn platform_facade_real() {
+    fn creates_real_facade() {
         let facade = PlatformFacade::real();
         matches!(facade, PlatformFacade::Real(_));
     }
 
     #[test]
-    fn platform_facade_fake() {
+    fn creates_fake_facade() {
         let fake_platform = FakePlatform::new();
         let facade = PlatformFacade::fake(fake_platform);
         matches!(facade, PlatformFacade::Fake(_));
     }
 
     #[test]
-    fn platform_facade_thread_time() {
+    fn delegates_thread_time() {
         let mut fake_platform = FakePlatform::new();
         fake_platform.set_thread_time(Duration::from_millis(300));
         let facade = PlatformFacade::fake(fake_platform);
@@ -79,7 +80,7 @@ mod tests {
     }
 
     #[test]
-    fn platform_facade_process_time() {
+    fn delegates_process_time() {
         let mut fake_platform = FakePlatform::new();
         fake_platform.set_process_time(Duration::from_millis(400));
         let facade = PlatformFacade::fake(fake_platform);

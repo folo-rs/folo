@@ -30,7 +30,7 @@ use crate::pal::PlatformFacade;
 ///     }
 /// }
 ///
-/// let avg_duration = operation.average();
+/// let avg_duration = operation.mean();
 /// println!("Average CPU time: {:?} per operation", avg_duration);
 /// ```
 #[derive(Debug)]
@@ -175,7 +175,7 @@ mod tests {
     }
 
     #[test]
-    fn operation_new() {
+    fn starts_with_zero_values() {
         let mut session = create_test_session();
         let operation = session.operation("test");
         assert_eq!(operation.mean(), Duration::ZERO);
@@ -184,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    fn operation_add_single() {
+    fn tracks_single_duration() {
         let mut session = create_test_session();
         let operation = session.operation("test");
         operation.add(Duration::from_millis(100));
@@ -194,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn operation_add_multiple() {
+    fn calculates_mean_of_multiple_durations() {
         let mut session = create_test_session();
         let operation = session.operation("test");
         operation.add(Duration::from_millis(100));
@@ -206,7 +206,7 @@ mod tests {
     }
 
     #[test]
-    fn operation_add_zero() {
+    fn handles_zero_durations() {
         let mut session = create_test_session();
         let operation = session.operation("test");
         operation.add(Duration::ZERO);
@@ -217,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn operation_with_new_api() {
+    fn integrates_with_span_api() {
         let mut session = create_test_session();
         let operation = session.operation("test");
         {
@@ -236,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn operation_batch_iterations() {
+    fn handles_batch_iterations() {
         let mut session = create_test_session();
         let operation = session.operation("test");
         {

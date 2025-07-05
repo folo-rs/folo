@@ -1,7 +1,8 @@
 //! Integration tests for `cpu_time_tracker`
 
-use cpu_time_tracker::Session;
 use std::time::Duration;
+
+use cpu_time_tracker::Session;
 
 #[test]
 #[cfg(not(miri))]

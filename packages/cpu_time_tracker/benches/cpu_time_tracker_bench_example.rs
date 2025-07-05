@@ -7,11 +7,12 @@
     reason = "No need for API documentation in benchmark code"
 )]
 
-use cpu_time_tracker::Session;
-use criterion::{Criterion, criterion_group, criterion_main};
 use std::cell::Cell;
 use std::hint::black_box;
 use std::time::Instant;
+
+use cpu_time_tracker::Session;
+use criterion::{Criterion, criterion_group, criterion_main};
 
 fn entrypoint(c: &mut Criterion) {
     let mut cpu_time = Session::new();

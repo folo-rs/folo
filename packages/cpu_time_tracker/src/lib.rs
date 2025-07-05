@@ -68,9 +68,7 @@
 //! // Or track with batch measurements (multiple iterations in one span)
 //! {
 //!     let batch_op = session.operation("batch_work");
-//!     let _span = batch_op
-//!         .iterations(1000)
-//!         .measure_thread();
+//!     let _span = batch_op.iterations(1000).measure_thread();
 //!     for _ in 0..1000 {
 //!         // Fast operation - measured once and divided by 1000
 //!         std::hint::black_box(42 * 2);
