@@ -83,8 +83,12 @@
 
 mod allocator;
 mod operation;
+mod process_span;
 mod session;
+mod thread_span;
 
 pub use allocator::*;
 pub use operation::*;
+pub use process_span::ProcessSpan;
 pub use session::*;
+pub use thread_span::ThreadSpan;
