@@ -131,9 +131,15 @@ impl Operation {
         if self.spans == 0 {
             Duration::ZERO
         } else {
-            self.total_cpu_time
-                .checked_div(self.spans.try_into().expect("spans count fits into u32"))
-                .expect("average calculation should not overflow")
+            // Use div_ceil for proper division, falling back to manual calculation if needed
+            Duration::from_nanos(
+                self.total_cpu_time
+                    .as_nanos()
+                    .checked_div(u128::from(self.spans))
+                    .expect("average calculation should not overflow")
+                    .try_into()
+                    .expect("result should fit in u64"),
+            )
         }
     }
 
@@ -177,10 +183,28 @@ impl fmt::Display for Operation {
 ///     }
 /// } // Thread CPU time is automatically tracked and recorded here
 /// ```
+///
+/// For benchmarks with many iterations, use batching to reduce overhead:
+///
+/// ```
+/// use cpu_time_tracker::{Operation, Session};
+///
+/// let mut session = Session::new();
+/// let average = session.operation("test");
+/// {
+///     let _span = average.measure_thread().batch(1000);
+///     for i in 0..1000 {
+///         // Perform the operation being benchmarked
+///         let mut sum = 0;
+///         sum += i;
+///     }
+/// } // CPU time is measured once and divided by 1000
+/// ```
 #[derive(Debug)]
 pub struct ThreadSpan<'a> {
     operation: &'a mut Operation,
     start_time: Duration,
+    iterations: u64,
 }
 
 impl<'a> ThreadSpan<'a> {
@@ -190,21 +214,69 @@ impl<'a> ThreadSpan<'a> {
         Self {
             operation,
             start_time,
+            iterations: 1,
         }
+    }
+
+    /// Sets the number of iterations this span represents.
+    ///
+    /// When measuring many iterations of the same operation in a loop,
+    /// this method reduces measurement overhead by measuring the total
+    /// time once and dividing by the iteration count.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cpu_time_tracker::{Operation, Session};
+    ///
+    /// let mut session = Session::new();
+    /// let average = session.operation("fast_operation");
+    /// {
+    ///     let _span = average.measure_thread().batch(10000);
+    ///     for i in 0..10000 {
+    ///         // Fast operation that would be dominated by measurement overhead
+    ///         std::hint::black_box(i * 2);
+    ///     }
+    /// } // Total time is measured once and divided by 10000
+    /// ```
+    #[must_use]
+    pub fn batch(mut self, iterations: u64) -> Self {
+        self.iterations = iterations;
+        self
     }
 
     /// Calculates the thread CPU time delta since this span was created.
     #[must_use]
     fn to_duration(&self) -> Duration {
         let current_time = self.operation.platform.thread_time();
-        current_time.saturating_sub(self.start_time)
+        let total_duration = current_time.saturating_sub(self.start_time);
+
+        if self.iterations > 1 {
+            Duration::from_nanos(
+                total_duration
+                    .as_nanos()
+                    .checked_div(u128::from(self.iterations))
+                    .unwrap_or(0)
+                    .try_into()
+                    .unwrap_or(0),
+            )
+        } else {
+            total_duration
+        }
     }
 }
 
 impl Drop for ThreadSpan<'_> {
     fn drop(&mut self) {
+        if self.iterations == 0 {
+            return; // No iterations means no work to record
+        }
+
         let duration = self.to_duration();
-        self.operation.add(duration);
+        // Add the per-iteration duration, but record the number of iterations
+        for _ in 0..self.iterations {
+            self.operation.add(duration);
+        }
     }
 }
 
@@ -228,10 +300,28 @@ impl Drop for ThreadSpan<'_> {
 ///     }
 /// } // Process CPU time is automatically tracked and recorded here
 /// ```
+///
+/// For benchmarks with many iterations, use batching to reduce overhead:
+///
+/// ```
+/// use cpu_time_tracker::{Operation, Session};
+///
+/// let mut session = Session::new();
+/// let average = session.operation("test");
+/// {
+///     let _span = average.measure_process().batch(1000);
+///     for i in 0..1000 {
+///         // Perform the operation being benchmarked
+///         let mut sum = 0;
+///         sum += i;
+///     }
+/// } // CPU time is measured once and divided by 1000
+/// ```
 #[derive(Debug)]
 pub struct ProcessSpan<'a> {
     operation: &'a mut Operation,
     start_time: Duration,
+    iterations: u64,
 }
 
 impl<'a> ProcessSpan<'a> {
@@ -241,21 +331,69 @@ impl<'a> ProcessSpan<'a> {
         Self {
             operation,
             start_time,
+            iterations: 1,
         }
+    }
+
+    /// Sets the number of iterations this span represents.
+    ///
+    /// When measuring many iterations of the same operation in a loop,
+    /// this method reduces measurement overhead by measuring the total
+    /// time once and dividing by the iteration count.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cpu_time_tracker::{Operation, Session};
+    ///
+    /// let mut session = Session::new();
+    /// let average = session.operation("fast_operation");
+    /// {
+    ///     let _span = average.measure_process().batch(10000);
+    ///     for i in 0..10000 {
+    ///         // Fast operation that would be dominated by measurement overhead
+    ///         std::hint::black_box(i * 2);
+    ///     }
+    /// } // Total time is measured once and divided by 10000
+    /// ```
+    #[must_use]
+    pub fn batch(mut self, iterations: u64) -> Self {
+        self.iterations = iterations;
+        self
     }
 
     /// Calculates the process CPU time delta since this span was created.
     #[must_use]
     fn to_duration(&self) -> Duration {
         let current_time = self.operation.platform.process_time();
-        current_time.saturating_sub(self.start_time)
+        let total_duration = current_time.saturating_sub(self.start_time);
+
+        if self.iterations > 1 {
+            Duration::from_nanos(
+                total_duration
+                    .as_nanos()
+                    .checked_div(u128::from(self.iterations))
+                    .unwrap_or(0)
+                    .try_into()
+                    .unwrap_or(0),
+            )
+        } else {
+            total_duration
+        }
     }
 }
 
 impl Drop for ProcessSpan<'_> {
     fn drop(&mut self) {
+        if self.iterations == 0 {
+            return; // No iterations means no work to record
+        }
+
         let duration = self.to_duration();
-        self.operation.add(duration);
+        // Add the per-iteration duration, but record the number of iterations
+        for _ in 0..self.iterations {
+            self.operation.add(duration);
+        }
     }
 }
 
@@ -521,5 +659,81 @@ mod tests {
             time_with_work >= time_without_work,
             "Expected work to take at least as much CPU time as no work: {time_with_work:?} >= {time_without_work:?}"
         );
+    }
+
+    #[test]
+    fn thread_span_batch_single_iteration() {
+        let mut session = create_test_session();
+        let operation = session.operation("test");
+
+        {
+            let _span = operation.measure_thread().batch(1);
+            // No actual work needed for this test
+        }
+
+        // With batch(1), should record 1 span regardless of actual time
+        assert_eq!(operation.spans(), 1);
+    }
+
+    #[test]
+    fn thread_span_batch_multiple_iterations() {
+        let mut session = create_test_session();
+        let operation = session.operation("test");
+
+        {
+            let _span = operation.measure_thread().batch(10);
+            // No actual work needed for this test
+        }
+
+        // With batch(10), should record 10 spans
+        assert_eq!(operation.spans(), 10);
+    }
+
+    #[test]
+    fn process_span_batch_single_iteration() {
+        let mut session = create_test_session();
+        let operation = session.operation("test");
+
+        {
+            let _span = operation.measure_process().batch(1);
+            // No actual work needed for this test
+        }
+
+        // With batch(1), should record 1 span regardless of actual time
+        assert_eq!(operation.spans(), 1);
+    }
+
+    #[test]
+    fn process_span_batch_multiple_iterations() {
+        let mut session = create_test_session();
+        let operation = session.operation("test");
+
+        {
+            let _span = operation.measure_process().batch(5);
+            // No actual work needed for this test
+        }
+
+        // With batch(5), should record 5 spans
+        assert_eq!(operation.spans(), 5);
+    }
+
+    #[test]
+    fn thread_span_batch_zero_division_protection() {
+        use crate::pal::{FakePlatform, PlatformFacade};
+
+        let mut fake_platform = FakePlatform::new();
+        fake_platform.set_thread_time(Duration::from_millis(100));
+        let platform_facade = PlatformFacade::fake(fake_platform);
+        let mut session = Session::with_platform(platform_facade);
+        let operation = session.operation("test");
+
+        {
+            let _span = operation.measure_thread().batch(0);
+            // This should not panic or cause division by zero
+        }
+
+        // With 0 iterations, nothing should be recorded
+        assert_eq!(operation.spans(), 0);
+        assert_eq!(operation.total_cpu_time(), Duration::ZERO);
     }
 }

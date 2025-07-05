@@ -8,7 +8,7 @@ use crate::pal::abstractions::Platform;
 ///
 /// This implementation allows tests to control the CPU time values
 /// instead of relying on actual system calls.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 #[cfg(test)]
 pub(crate) struct FakePlatform {
     thread_time: Duration,

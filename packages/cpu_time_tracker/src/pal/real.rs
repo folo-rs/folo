@@ -7,7 +7,7 @@ use cpu_time::{ProcessTime, ThreadTime};
 use crate::pal::abstractions::Platform;
 
 /// Real implementation of the platform abstraction using the `cpu_time` crate.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct RealPlatform;
 
 impl Platform for RealPlatform {

@@ -11,7 +11,7 @@ use crate::pal::real::RealPlatform;
 ///
 /// This enum provides a unified interface to either the real platform
 /// (using actual system calls) or fake platform (for testing).
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum PlatformFacade {
     /// Real platform implementation using system calls.
     Real(RealPlatform),
