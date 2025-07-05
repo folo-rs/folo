@@ -1,6 +1,10 @@
 //! Example that demonstrates the exact usage shown in the README.md file.
 //!
 //! This shows how to use the `all_the_time` crate for tracking processor time.
+#![expect(
+    clippy::arithmetic_side_effects,
+    reason = "this is example code that doesn't need production-level safety"
+)]
 
 use all_the_time::Session;
 
@@ -12,16 +16,10 @@ fn main() {
         let operation = session.operation("my_operation");
         let _span = operation.iterations(1).measure_thread();
 
-        // Perform some CPU-intensive work
-        let mut sum = 0_u64;
-
-        for i in 0..1_000_000_u64 {
-            sum = sum
-                .checked_add(
-                    i.checked_mul(i % 1000)
-                        .expect("multiplication should not overflow for small test values"),
-                )
-                .expect("addition should not overflow for small test values");
+        // Perform some processor-intensive work
+        let mut sum = 0;
+        for i in 0..10000 {
+            sum += i;
         }
 
         std::hint::black_box(sum);

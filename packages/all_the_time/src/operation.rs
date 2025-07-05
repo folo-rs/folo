@@ -13,12 +13,10 @@ use crate::pal::PlatformFacade;
 /// # Examples
 ///
 /// ```
-/// use std::num::NonZero;
-///
 /// use all_the_time::Session;
 ///
 /// let mut session = Session::new();
-/// let operation = session.operation("cpu_intensive_work");
+/// let operation = session.operation("processor_intensive_work");
 ///
 /// // Simulate multiple operations - note explicit iteration count
 /// for i in 0..5 {
@@ -81,8 +79,6 @@ impl Operation {
     ///
     /// For single operations:
     /// ```
-    /// use std::num::NonZero;
-    ///
     /// use all_the_time::Session;
     ///
     /// let mut session = Session::new();
@@ -99,8 +95,6 @@ impl Operation {
     ///
     /// For batch operations (reduces measurement overhead):
     /// ```
-    /// use std::num::NonZero;
-    ///
     /// use all_the_time::Session;
     ///
     /// let mut session = Session::new();

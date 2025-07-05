@@ -1,7 +1,7 @@
 Processor time tracking utilities for benchmarks and performance analysis.
 
 This package provides utilities to track processor time during code execution,
-enabling analysis of CPU usage patterns in benchmarks and performance tests.
+enabling analysis of processor usage patterns in benchmarks and performance tests.
 
 ```rust
 use all_the_time::Session;
@@ -12,8 +12,8 @@ fn main() {
     // Track a single operation
     {
         let operation = session.operation("my_operation");
-        let _span = operation.measure_thread();
-        // Perform some CPU-intensive work
+        let _span = operation.iterations(1).measure_thread();
+        // Perform some processor-intensive work
         let mut sum = 0;
         for i in 0..10000 {
             sum += i;

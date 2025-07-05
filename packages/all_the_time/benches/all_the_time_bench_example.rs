@@ -1,10 +1,14 @@
-//! processor time tracking benchmarks demonstrating the `all_the_time` crate.
+//! Processor time tracking benchmarks demonstrating the `all_the_time` crate.
 //!
 //! This benchmark demonstrates how to track processor time (duration per iteration)
 //! in Criterion benchmarks using the `all_the_time` utilities.
 #![allow(
     missing_docs,
     reason = "No need for API documentation in benchmark code"
+)]
+#![expect(
+    clippy::arithmetic_side_effects,
+    reason = "this is benchmark code that doesn't need production-level safety"
 )]
 
 use std::cell::Cell;
@@ -71,11 +75,7 @@ fn entrypoint(c: &mut Criterion) {
                     let mut sum = 0_u64;
 
                     for i in 0..1000_u64 {
-                        sum =
-                            sum.checked_add(i.checked_mul(i).expect(
-                                "multiplication should not overflow for small test values",
-                            ))
-                            .expect("addition should not overflow for small test values");
+                        sum += i * i;
                     }
 
                     black_box(sum);

@@ -1,18 +1,22 @@
-//! Example demonstrating the difference between `iterations(1).measure_thread()` and `iterations(1).measure_process()`.
+//! Example demonstrating the difference between `measure_thread()` and `measure_process()`.
 //!
-//! This example shows how to use both `iterations(1).measure_thread()` and `iterations(1).measure_process()` methods
+//! This example shows how to use both `measure_thread()` and `measure_process()` methods
 //! to track different types of processor time:
-//! - `iterations(1).measure_thread()`: Tracks processor time for the current thread only
-//! - `iterations(1).measure_process()`: Tracks processor time for the entire process (all threads)
+//! - `measure_thread()`: Tracks processor time for the current thread only
+//! - `measure_process()`: Tracks processor time for the entire process (all threads)
 //!
-//! Run with: `cargo run --example span_types`
+//! Run with: `cargo run --example measurement_types`
+#![expect(
+    clippy::arithmetic_side_effects,
+    reason = "this is example code that doesn't need production-level safety"
+)]
 
 use std::hint::black_box;
 use std::thread;
 
 use all_the_time::Session;
 
-/// Performs CPU-intensive work across multiple threads.
+/// Performs processor-intensive work across multiple threads.
 /// This function spawns worker threads that each perform computational work.
 fn multithreaded_work() {
     let num_threads = 4_u32;
@@ -24,18 +28,7 @@ fn multithreaded_work() {
                 let mut sum = 0_u64;
 
                 for i in 0..work_per_thread {
-                    sum = sum
-                        .checked_add(
-                            u64::from(i)
-                                .checked_mul(u64::from(
-                                    thread_id.checked_add(1).expect(
-                                        "addition should not overflow for small test values",
-                                    ),
-                                ))
-                                .expect("multiplication should not overflow for small test values")
-                                % 1000,
-                        )
-                        .expect("addition should not overflow for small test values");
+                    sum += u64::from(i) * u64::from(thread_id + 1) % 1000;
                 }
 
                 black_box(sum);
@@ -43,31 +36,29 @@ fn multithreaded_work() {
         })
         .collect();
 
-    // Do some work on the main thread while waiting
+    // Do some work on the main thread while waiting.
     let mut main_sum = 0_u64;
 
     for i in 0..500_000_u32 {
-        main_sum = main_sum
-            .checked_add(u64::from(i) % 1000)
-            .expect("addition should not overflow for small test values");
+        main_sum += u64::from(i) % 1000;
     }
 
     black_box(main_sum);
 
-    // Wait for all threads to complete
+    // Wait for all threads to complete.
     for handle in handles {
         handle.join().expect("thread should complete successfully");
     }
 }
 
 fn main() {
-    println!("=== processor time Measurement Types Example ===\n");
+    println!("=== Processor Time Measurement Types Example ===\n");
 
     let mut session = Session::new();
 
-    // Example 1: Using iterations(1).measure_thread() - only measures current thread's processor time
-    // Even though multithreaded_work() spawns multiple threads, iterations(1).measure_thread()
-    // only captures the processor time used by the main thread (mostly coordination overhead)
+    // Example 1: Using measure_thread() - only measures current thread's processor time.
+    // Even though multithreaded_work() spawns multiple threads, measure_thread()
+    // only captures the processor time used by the main thread (mostly coordination overhead).
     {
         let thread_op = session.operation("thread_span_multithreaded");
 
@@ -77,8 +68,8 @@ fn main() {
         }
     }
 
-    // Example 2: Using iterations(1).measure_process() - measures entire process processor time
-    // This captures processor time from all threads spawned by multithreaded_work()
+    // Example 2: Using measure_process() - measures entire process processor time.
+    // This captures processor time from all threads spawned by multithreaded_work().
     {
         let process_op = session.operation("process_span_multithreaded");
 

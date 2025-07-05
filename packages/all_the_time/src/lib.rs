@@ -17,8 +17,6 @@
 //! You can track processor time like this:
 //!
 //! ```
-//! use std::num::NonZero;
-//!
 //! use all_the_time::Session;
 //!
 //! # fn main() {
@@ -28,7 +26,7 @@
 //! {
 //!     let operation = session.operation("my_operation");
 //!     let _span = operation.iterations(1).measure_thread();
-//!     // Perform some CPU-intensive work
+//!     // Perform some processor-intensive work
 //!     let mut sum = 0;
 //!     for i in 0..10000 {
 //!         sum += i;
@@ -47,8 +45,6 @@
 //! For benchmarking scenarios, where you run multiple iterations of an operation, use batched measurements:
 //!
 //! ```
-//! use std::num::NonZero;
-//!
 //! use all_the_time::Session;
 //!
 //! # fn main() {
@@ -56,9 +52,9 @@
 //!
 //! // Track mean over multiple operations (single spans)
 //! for i in 0..10 {
-//!     let string_op = session.operation("cpu_intensive_work");
+//!     let string_op = session.operation("processor_intensive_work");
 //!     let _span = string_op.iterations(1).measure_thread();
-//!     // Perform some CPU-intensive work
+//!     // Perform some processor-intensive work
 //!     let mut sum = 0;
 //!     for j in 0..i * 1000 {
 //!         sum += j;
@@ -85,8 +81,6 @@
 //! You can choose between tracking thread processor time or process processor time:
 //!
 //! ```
-//! use std::num::NonZero;
-//!
 //! use all_the_time::Session;
 //!
 //! # fn main() {

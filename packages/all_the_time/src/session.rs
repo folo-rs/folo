@@ -12,8 +12,6 @@ use crate::pal::PlatformFacade;
 /// # Examples
 ///
 /// ```
-/// use std::num::NonZero;
-///
 /// use all_the_time::Session;
 ///
 /// let mut session = Session::new();
@@ -84,8 +82,6 @@ impl Session {
     /// # Examples
     ///
     /// ```
-    /// use std::num::NonZero;
-    ///
     /// use all_the_time::Session;
     ///
     /// let mut session = Session::new();
