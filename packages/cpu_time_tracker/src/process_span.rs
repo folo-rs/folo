@@ -1,11 +1,13 @@
 //! Process-wide CPU time tracking spans.
 
+use std::time::Duration;
+
 use crate::Operation;
 use crate::pal::Platform;
-use std::time::Duration;
-/// A tracked span of code that tracks process CPU time between creation and drop.
+
+/// A span of code for which we track process CPU time between creation and drop.
 ///
-/// This span tracks CPU time consumed by the entire process (all threads).
+/// Measures CPU time consumed by the entire process (all threads).
 ///
 /// # Examples
 ///
@@ -103,7 +105,6 @@ mod tests {
     use crate::Session;
 
     #[test]
-    #[cfg(not(miri))]
     fn process_span_new() {
         let mut session = Session::new();
         let operation = session.operation("test");
@@ -120,7 +121,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(miri))]
     fn process_span_tracks_time() {
         let mut session = Session::new();
         let operation = session.operation("test");

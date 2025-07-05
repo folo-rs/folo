@@ -103,7 +103,7 @@ impl Operation {
         ThreadSpan::new(self)
     }
 
-    /// Calculates the average bytes allocated per span.
+    /// Calculates the mean bytes allocated per span.
     ///
     /// Returns 0 if no spans have been recorded.
     #[expect(clippy::integer_division, reason = "we accept loss of precision")]
@@ -112,7 +112,7 @@ impl Operation {
         reason = "division by zero excluded via if-else"
     )]
     #[must_use]
-    pub fn average(&self) -> u64 {
+    pub fn mean(&self) -> u64 {
         if self.spans == 0 {
             0
         } else {
@@ -136,7 +136,7 @@ impl Operation {
 impl fmt::Display for Operation {
     #[cfg_attr(test, mutants::skip)] // No API contract.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} bytes (mean)", self.average())
+        write!(f, "{} bytes (mean)", self.mean())
     }
 }
 
@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn operation_new() {
         let operation = Operation::new();
-        assert_eq!(operation.average(), 0);
+        assert_eq!(operation.mean(), 0);
         assert_eq!(operation.spans(), 0);
         assert_eq!(operation.total_bytes_allocated(), 0);
     }
@@ -160,7 +160,7 @@ mod tests {
         let mut operation = Operation::new();
         operation.add(100);
 
-        assert_eq!(operation.average(), 100);
+        assert_eq!(operation.mean(), 100);
         assert_eq!(operation.spans(), 1);
         assert_eq!(operation.total_bytes_allocated(), 100);
     }
@@ -172,7 +172,7 @@ mod tests {
         operation.add(200);
         operation.add(300);
 
-        assert_eq!(operation.average(), 200); // (100 + 200 + 300) / 3
+        assert_eq!(operation.mean(), 200); // (100 + 200 + 300) / 3
         assert_eq!(operation.spans(), 3);
         assert_eq!(operation.total_bytes_allocated(), 600);
     }
@@ -183,7 +183,7 @@ mod tests {
         operation.add(0);
         operation.add(0);
 
-        assert_eq!(operation.average(), 0);
+        assert_eq!(operation.mean(), 0);
         assert_eq!(operation.spans(), 2);
         assert_eq!(operation.total_bytes_allocated(), 0);
     }
@@ -198,7 +198,7 @@ mod tests {
             TOTAL_BYTES_ALLOCATED.fetch_add(75, atomic::Ordering::Relaxed);
         }
 
-        assert_eq!(operation.average(), 75);
+        assert_eq!(operation.mean(), 75);
         assert_eq!(operation.spans(), 1);
         assert_eq!(operation.total_bytes_allocated(), 75);
     }
@@ -217,7 +217,7 @@ mod tests {
             TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
         }
 
-        assert_eq!(operation.average(), 150); // (100 + 200) / 2
+        assert_eq!(operation.mean(), 150); // (100 + 200) / 2
         assert_eq!(operation.spans(), 2);
         assert_eq!(operation.total_bytes_allocated(), 300);
     }
@@ -231,7 +231,7 @@ mod tests {
             // No allocation
         }
 
-        assert_eq!(operation.average(), 0);
+        assert_eq!(operation.mean(), 0);
         assert_eq!(operation.spans(), 1);
         assert_eq!(operation.total_bytes_allocated(), 0);
     }
@@ -249,7 +249,7 @@ mod tests {
             });
         }
 
-        assert_eq!(operation.average(), 50);
+        assert_eq!(operation.mean(), 50);
         assert_eq!(operation.spans(), 1);
         assert_eq!(operation.total_bytes_allocated(), 50);
     }
@@ -270,7 +270,7 @@ mod tests {
             TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
         }
 
-        assert_eq!(operation.average(), 150); // (100 + 200) / 2
+        assert_eq!(operation.mean(), 150); // (100 + 200) / 2
         assert_eq!(operation.spans(), 2);
         assert_eq!(operation.total_bytes_allocated(), 300);
     }
@@ -284,7 +284,7 @@ mod tests {
             // No allocation
         }
 
-        assert_eq!(operation.average(), 0);
+        assert_eq!(operation.mean(), 0);
         assert_eq!(operation.spans(), 1);
         assert_eq!(operation.total_bytes_allocated(), 0);
     }

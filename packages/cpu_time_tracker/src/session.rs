@@ -1,8 +1,9 @@
 //! Session management for CPU time tracking.
-use crate::Operation;
-use crate::pal::PlatformFacade;
 use std::collections::HashMap;
 use std::fmt;
+
+use crate::Operation;
+use crate::pal::PlatformFacade;
 /// Manages CPU time tracking session state and contains operations.
 ///
 /// This type serves as a container for tracking operations and provides
@@ -103,11 +104,11 @@ impl Session {
         let name = name.into();
         // Get or create the operation
         self.operations
-            .entry(name.clone())
-            .or_insert_with(|| Operation::new(name, self.platform.clone()))
+            .entry(name)
+            .or_insert_with(|| Operation::new(self.platform.clone()))
     }
 
-    /// Prints the CPU time statistics of all operations to stdout.
+    /// Prints the processor time statistics of all operations to stdout.
     ///
     /// Prints nothing if no spans were captured. This may indicate that the session
     /// was part of a "list available benchmarks" probe run instead of some real activity,
@@ -131,14 +132,14 @@ impl fmt::Display for Session {
     #[cfg_attr(test, mutants::skip)] // No API contract.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.operations.is_empty() || self.operations.values().all(|op| op.spans() == 0) {
-            writeln!(f, "No CPU time statistics captured.")?;
+            writeln!(f, "No processor time statistics captured.")?;
         } else {
-            writeln!(f, "CPU time statistics:")?;
+            writeln!(f, "Processor time statistics:")?;
             // Sort operations by name for consistent output
             let mut sorted_ops: Vec<_> = self.operations.iter().collect();
             sorted_ops.sort_by_key(|(name, _)| *name);
-            for (_, operation) in sorted_ops {
-                writeln!(f, "  {operation}")?;
+            for (name, operation) in sorted_ops {
+                writeln!(f, "  {name}: {operation}")?;
             }
         }
         Ok(())

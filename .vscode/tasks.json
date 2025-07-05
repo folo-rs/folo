@@ -86,6 +86,7 @@
                 "alloc_tracker",
                 "benchmark_utils",
                 "benchmarks",
+                "cpu_time_tracker",
                 "cpulist",
                 "events",
                 "folo_ffi",

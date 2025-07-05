@@ -1,9 +1,10 @@
 //! Average CPU time tracking.
 
-use crate::SpanBuilder;
-use crate::pal::PlatformFacade;
 use std::fmt;
 use std::time::Duration;
+
+use crate::SpanBuilder;
+use crate::pal::PlatformFacade;
 /// Calculates average CPU time per operation across multiple iterations.
 ///
 /// This utility is particularly useful for benchmarking scenarios where you want
@@ -34,7 +35,6 @@ use std::time::Duration;
 /// ```
 #[derive(Debug)]
 pub struct Operation {
-    name: String,
     total_cpu_time: Duration,
     spans: u64,
     platform: PlatformFacade,
@@ -43,19 +43,12 @@ pub struct Operation {
 impl Operation {
     /// Creates a new average CPU time calculator with the given name.
     #[must_use]
-    pub(crate) fn new(name: impl Into<String>, platform: PlatformFacade) -> Self {
+    pub(crate) fn new(platform: PlatformFacade) -> Self {
         Self {
-            name: name.into(),
             total_cpu_time: Duration::ZERO,
             spans: 0,
             platform,
         }
-    }
-
-    /// Returns the name of this operation.
-    #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
     }
 
     /// Returns a reference to the platform facade for creating spans.
@@ -126,11 +119,11 @@ impl Operation {
         SpanBuilder::new(self, iterations)
     }
 
-    /// Calculates the average CPU time per span.
+    /// Calculates the mean CPU time per span.
     ///
     /// Returns zero duration if no spans have been recorded.
     #[must_use]
-    pub fn average(&self) -> Duration {
+    pub fn mean(&self) -> Duration {
         if self.spans == 0 {
             Duration::ZERO
         } else {
@@ -139,7 +132,7 @@ impl Operation {
                 self.total_cpu_time
                     .as_nanos()
                     .checked_div(u128::from(self.spans))
-                    .expect("average calculation should not overflow")
+                    .expect("mean calculation should not overflow")
                     .try_into()
                     .expect("result should fit in u64"),
             )
@@ -162,15 +155,16 @@ impl Operation {
 impl fmt::Display for Operation {
     #[cfg_attr(test, mutants::skip)] // No API contract.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {:?} (mean)", self.name, self.average())
+        write!(f, "{:?} (mean)", self.mean())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::hint::black_box;
+
     use super::*;
     use crate::Session;
-    use std::hint::black_box;
 
     // Helper function to create a mock session for testing
     fn create_test_session() -> Session {
@@ -184,8 +178,7 @@ mod tests {
     fn operation_new() {
         let mut session = create_test_session();
         let operation = session.operation("test");
-        assert_eq!(operation.name(), "test");
-        assert_eq!(operation.average(), Duration::ZERO);
+        assert_eq!(operation.mean(), Duration::ZERO);
         assert_eq!(operation.spans(), 0);
         assert_eq!(operation.total_cpu_time(), Duration::ZERO);
     }
@@ -195,7 +188,7 @@ mod tests {
         let mut session = create_test_session();
         let operation = session.operation("test");
         operation.add(Duration::from_millis(100));
-        assert_eq!(operation.average(), Duration::from_millis(100));
+        assert_eq!(operation.mean(), Duration::from_millis(100));
         assert_eq!(operation.spans(), 1);
         assert_eq!(operation.total_cpu_time(), Duration::from_millis(100));
     }
@@ -207,7 +200,7 @@ mod tests {
         operation.add(Duration::from_millis(100));
         operation.add(Duration::from_millis(200));
         operation.add(Duration::from_millis(300));
-        assert_eq!(operation.average(), Duration::from_millis(200)); // (100 + 200 + 300) / 3
+        assert_eq!(operation.mean(), Duration::from_millis(200)); // (100 + 200 + 300) / 3
         assert_eq!(operation.spans(), 3);
         assert_eq!(operation.total_cpu_time(), Duration::from_millis(600));
     }
@@ -218,13 +211,12 @@ mod tests {
         let operation = session.operation("test");
         operation.add(Duration::ZERO);
         operation.add(Duration::ZERO);
-        assert_eq!(operation.average(), Duration::ZERO);
+        assert_eq!(operation.mean(), Duration::ZERO);
         assert_eq!(operation.spans(), 2);
         assert_eq!(operation.total_cpu_time(), Duration::ZERO);
     }
 
     #[test]
-    #[cfg(not(miri))]
     fn operation_with_new_api() {
         let mut session = create_test_session();
         let operation = session.operation("test");
@@ -244,7 +236,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(miri))]
     fn operation_batch_iterations() {
         let mut session = create_test_session();
         let operation = session.operation("test");

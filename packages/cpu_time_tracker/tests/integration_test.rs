@@ -79,7 +79,7 @@ fn multiple_spans_per_operation() {
 
     assert_eq!(op.spans(), 3);
     assert!(op.total_cpu_time() >= Duration::ZERO);
-    assert!(op.average() >= Duration::ZERO);
+    assert!(op.mean() >= Duration::ZERO);
 }
 
 #[test]
