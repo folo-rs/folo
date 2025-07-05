@@ -368,6 +368,8 @@ similar call), you must use a watchdog timer to force a timeout after 10 seconds
 Avoid magic values in the code and use named constants instead. It does not matter how many
 times the magic value is present, even one instance is enough to warrant a named constant.
 
+If constants are only used in one function, put them at the top of that function.
+
 The exception is example code - if a magic value is only used once in an example, it is
 fine to leave it inline.
 
