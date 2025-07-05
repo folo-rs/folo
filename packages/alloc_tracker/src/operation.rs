@@ -257,8 +257,6 @@ impl Drop for ThreadSpan<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic;
-
     use super::*;
     use crate::Session;
     use crate::allocator::{THREAD_BYTES_ALLOCATED, TOTAL_BYTES_ALLOCATED};

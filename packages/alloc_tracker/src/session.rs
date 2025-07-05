@@ -24,7 +24,7 @@ use crate::Operation;
 ///
 /// for _ in 0..3 {
 ///     let _span = string_op.measure_process();
-///     // TODO: Some string stuff here that we want to analyze.
+///     let _data = String::from("example string allocation");
 /// }
 ///
 /// // Output statistics of all operations to console.
