@@ -1,16 +1,15 @@
-//! Example demonstrating the difference between `measure_thread()` and `measure_process()`.
+//! Example demonstrating the difference between `iterations(1).thread_span()` and `iterations(1).process_span()`.
 //!
-//! This example shows how to use both `measure_thread()` and `measure_process()` methods
+//! This example shows how to use both `iterations(1).thread_span()` and `iterations(1).process_span()` methods
 //! to track different types of CPU time:
-//! - `measure_thread()`: Tracks CPU time for the current thread only
-//! - `measure_process()`: Tracks CPU time for the entire process (all threads)
+//! - `iterations(1).thread_span()`: Tracks CPU time for the current thread only
+//! - `iterations(1).process_span()`: Tracks CPU time for the entire process (all threads)
 //!
 //! Run with: `cargo run --example span_types`
 
+use cpu_time_tracker::Session;
 use std::hint::black_box;
 use std::thread;
-
-use cpu_time_tracker::Session;
 
 /// Performs CPU-intensive work across multiple threads.
 /// This function spawns worker threads that each perform computational work.
@@ -22,6 +21,7 @@ fn multithreaded_work() {
         .map(|thread_id| {
             thread::spawn(move || {
                 let mut sum = 0_u64;
+
                 for i in 0..work_per_thread {
                     sum = sum
                         .checked_add(
@@ -36,6 +36,7 @@ fn multithreaded_work() {
                         )
                         .expect("addition should not overflow for small test values");
                 }
+
                 black_box(sum);
             })
         })
@@ -43,11 +44,13 @@ fn multithreaded_work() {
 
     // Do some work on the main thread while waiting
     let mut main_sum = 0_u64;
+
     for i in 0..500_000_u32 {
         main_sum = main_sum
             .checked_add(u64::from(i) % 1000)
             .expect("addition should not overflow for small test values");
     }
+
     black_box(main_sum);
 
     // Wait for all threads to complete
@@ -61,23 +64,25 @@ fn main() {
 
     let mut session = Session::new();
 
-    // Example 1: Using measure_thread() - only measures current thread's CPU time
-    // Even though multithreaded_work() spawns multiple threads, measure_thread()
+    // Example 1: Using iterations(1).thread_span() - only measures current thread's CPU time
+    // Even though multithreaded_work() spawns multiple threads, iterations(1).thread_span()
     // only captures the CPU time used by the main thread (mostly coordination overhead)
     {
         let thread_op = session.operation("thread_span_multithreaded");
+
         for _ in 0..3 {
-            let _span = thread_op.measure_thread();
+            let _span = thread_op.iterations(1).thread_span();
             multithreaded_work();
         }
     }
 
-    // Example 2: Using measure_process() - measures entire process CPU time
+    // Example 2: Using iterations(1).process_span() - measures entire process CPU time
     // This captures CPU time from all threads spawned by multithreaded_work()
     {
         let process_op = session.operation("process_span_multithreaded");
+
         for _ in 0..3 {
-            let _span = process_op.measure_process();
+            let _span = process_op.iterations(1).process_span();
             multithreaded_work();
         }
     }

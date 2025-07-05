@@ -1,11 +1,10 @@
 //! Demonstrates batching functionality for reducing measurement overhead.
 //!
-//! This example shows how to use the `.batch()` method to measure many iterations
-//! of fast operations with minimal overhead.
-
-use std::hint::black_box;
+//! This example shows how to use the new API with explicit iteration counts
+//! to measure many iterations of fast operations with minimal overhead.
 
 use cpu_time_tracker::Session;
+use std::hint::black_box;
 
 fn main() {
     println!("=== CPU Time Batching Example ===");
@@ -15,7 +14,7 @@ fn main() {
     // Example 1: Fast operation without batching (high overhead)
     let fast_op_unbatched = session.operation("fast_operation_unbatched");
     for _ in 0..1000 {
-        let _span = fast_op_unbatched.measure_thread();
+        let _span = fast_op_unbatched.iterations(1).thread_span();
         // Very fast operation
         black_box(42 * 2);
     }
@@ -23,7 +22,7 @@ fn main() {
     // Example 2: Fast operation with batching (low overhead)
     let fast_op_batched = session.operation("fast_operation_batched");
     {
-        let _span = fast_op_batched.measure_thread().batch(1000);
+        let _span = fast_op_batched.iterations(1000).thread_span();
         for _ in 0..1000 {
             // Same very fast operation
             black_box(42 * 2);
@@ -32,20 +31,22 @@ fn main() {
 
     // Example 3: Medium operation for comparison
     let medium_op = session.operation("medium_operation");
-    for _ in 0..10 {
-        let _span = medium_op.measure_thread();
-        // Medium-sized operation
-        let mut sum = 0_u64;
-        for i in 0..10000_u64 {
-            sum = sum.wrapping_add(i.wrapping_mul(i));
+    {
+        let _span = medium_op.iterations(10).thread_span();
+        for _ in 0..10 {
+            // Medium-sized operation
+            let mut sum = 0_u64;
+            for i in 0..10000_u64 {
+                sum = sum.wrapping_add(i.wrapping_mul(i));
+            }
+            black_box(sum);
         }
-        black_box(sum);
     }
 
     // Example 4: Process-level batching
     let process_batched = session.operation("process_operation_batched");
     {
-        let _span = process_batched.measure_process().batch(500);
+        let _span = process_batched.iterations(500).process_span();
         for _ in 0..500 {
             // Fast operation measured at process level
             black_box(std::ptr::null::<i32>() as usize);
@@ -53,8 +54,8 @@ fn main() {
     }
 
     session.print_to_stdout();
-
     println!();
+
     println!("Notes:");
     println!(
         "- 'fast_operation_unbatched' likely shows higher per-operation times due to measurement overhead"

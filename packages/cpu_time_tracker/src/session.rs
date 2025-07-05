@@ -1,11 +1,8 @@
 //! Session management for CPU time tracking.
-
-use std::collections::HashMap;
-use std::fmt;
-
 use crate::Operation;
 use crate::pal::PlatformFacade;
-
+use std::collections::HashMap;
+use std::fmt;
 /// Manages CPU time tracking session state and contains operations.
 ///
 /// This type serves as a container for tracking operations and provides
@@ -14,13 +11,15 @@ use crate::pal::PlatformFacade;
 /// # Examples
 ///
 /// ```
+/// use std::num::NonZero;
+///
 /// use cpu_time_tracker::Session;
 ///
 /// let mut session = Session::new();
 /// let mut cpu_op = session.operation("cpu_intensive_work");
 ///
 /// for _ in 0..3 {
-///     let _span = cpu_op.measure_thread();
+///     let _span = cpu_op.iterations(1).thread_span();
 ///     // Perform some CPU-intensive work
 ///     let mut sum = 0;
 ///     for i in 0..1000 {
@@ -39,7 +38,6 @@ pub struct Session {
     operations: HashMap<String, Operation>,
     platform: PlatformFacade,
 }
-
 impl Session {
     /// Creates a new CPU time tracking session.
     ///
@@ -85,13 +83,15 @@ impl Session {
     /// # Examples
     ///
     /// ```
+    /// use std::num::NonZero;
+    ///
     /// use cpu_time_tracker::Session;
     ///
     /// let mut session = Session::new();
     /// let mut cpu_op = session.operation("cpu_operations");
     ///
     /// for _ in 0..3 {
-    ///     let _span = cpu_op.measure_thread();
+    ///     let _span = cpu_op.iterations(1).thread_span();
     ///     // Perform some CPU-intensive work
     ///     let mut sum = 0;
     ///     for i in 0..1000 {
@@ -101,7 +101,6 @@ impl Session {
     /// ```
     pub fn operation(&mut self, name: impl Into<String>) -> &mut Operation {
         let name = name.into();
-
         // Get or create the operation
         self.operations
             .entry(name.clone())
@@ -118,7 +117,6 @@ impl Session {
         if self.is_empty() {
             return;
         }
-
         println!("{self}");
     }
 
@@ -136,16 +134,13 @@ impl fmt::Display for Session {
             writeln!(f, "No CPU time statistics captured.")?;
         } else {
             writeln!(f, "CPU time statistics:")?;
-
             // Sort operations by name for consistent output
             let mut sorted_ops: Vec<_> = self.operations.iter().collect();
             sorted_ops.sort_by_key(|(name, _)| *name);
-
             for (_, operation) in sorted_ops {
                 writeln!(f, "  {operation}")?;
             }
         }
-
         Ok(())
     }
 }

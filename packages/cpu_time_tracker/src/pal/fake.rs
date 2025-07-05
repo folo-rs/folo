@@ -1,8 +1,7 @@
 //! Fake platform implementation for testing.
 
-use std::time::Duration;
-
 use crate::pal::abstractions::Platform;
+use std::time::Duration;
 
 /// Fake implementation of the platform abstraction for testing.
 ///
@@ -62,6 +61,7 @@ mod tests {
     fn fake_platform_thread_time() {
         let mut platform = FakePlatform::new();
         platform.set_thread_time(Duration::from_millis(150));
+
         assert_eq!(platform.thread_time(), Duration::from_millis(150));
     }
 
@@ -69,6 +69,7 @@ mod tests {
     fn fake_platform_process_time() {
         let mut platform = FakePlatform::new();
         platform.set_process_time(Duration::from_millis(250));
+
         assert_eq!(platform.process_time(), Duration::from_millis(250));
     }
 }

@@ -1,0 +1,106 @@
+//! Span builder for CPU time tracking.
+
+use crate::{Operation, ProcessSpan, ThreadSpan};
+/// Builder for creating CPU time tracking spans with explicit iteration counts.
+///
+/// This builder ensures that all CPU time measurements require an explicit iteration
+/// count, making the measurement overhead visible in the API.
+///
+/// # Examples
+///
+/// ```
+/// use cpu_time_tracker::Session;
+///
+/// let mut session = Session::new();
+/// let operation = session.operation("test");
+///
+/// // Single iteration - explicit
+/// {
+///     let _span = operation.iterations(1).thread_span();
+///     // Perform work for a single iteration
+/// }
+///
+/// // Multiple iterations - batch processing
+/// {
+///     let _span = operation.iterations(1000).thread_span();
+///     for _ in 0..1000 {
+///         // Perform the same operation 1000 times
+///     }
+/// }
+/// ```
+#[derive(Debug)]
+pub struct SpanBuilder<'a> {
+    operation: &'a mut Operation,
+    iterations: u64,
+}
+
+impl<'a> SpanBuilder<'a> {
+    /// Creates a new span builder with the specified iteration count.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `iterations` is zero.
+    #[must_use]
+    pub(crate) fn new(operation: &'a mut Operation, iterations: u64) -> Self {
+        assert!(iterations != 0, "Iterations cannot be zero");
+
+        Self {
+            operation,
+            iterations,
+        }
+    }
+
+    /// Creates a span that tracks thread CPU time from now until it is dropped.
+    ///
+    /// This method tracks CPU time consumed by the current thread only.
+    /// Use this when you want to measure CPU time for single-threaded operations
+    /// or when you want to track per-thread CPU usage.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cpu_time_tracker::Session;
+    ///
+    /// let mut session = Session::new();
+    /// let operation = session.operation("thread_work");
+    /// {
+    ///     let _span = operation.iterations(1).thread_span();
+    ///     // Perform some CPU-intensive work in this thread
+    ///     let mut sum = 0;
+    ///     for i in 0..1000 {
+    ///         sum += i;
+    ///     }
+    /// } // Thread CPU time is tracked
+    /// ```
+    #[must_use]
+    pub fn thread_span(self) -> ThreadSpan<'a> {
+        ThreadSpan::new(self.operation, self.iterations)
+    }
+
+    /// Creates a span that tracks process CPU time from now until it is dropped.
+    ///
+    /// This method tracks CPU time consumed by the entire process (all threads).
+    /// Use this when you want to measure total CPU time including multi-threaded
+    /// operations or when you want to track overall process CPU usage.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cpu_time_tracker::Session;
+    ///
+    /// let mut session = Session::new();
+    /// let operation = session.operation("process_work");
+    /// {
+    ///     let _span = operation.iterations(1).process_span();
+    ///     // Perform some CPU-intensive work that might spawn threads
+    ///     let mut sum = 0;
+    ///     for i in 0..1000 {
+    ///         sum += i;
+    ///     }
+    /// } // Total process CPU time is tracked
+    /// ```
+    #[must_use]
+    pub fn process_span(self) -> ProcessSpan<'a> {
+        ProcessSpan::new(self.operation, self.iterations)
+    }
+}

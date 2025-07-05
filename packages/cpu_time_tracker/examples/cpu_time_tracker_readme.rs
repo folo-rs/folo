@@ -10,9 +10,11 @@ fn main() {
     // Track a single operation
     {
         let operation = session.operation("my_operation");
-        let _span = operation.measure_thread();
+        let _span = operation.iterations(1).thread_span();
+
         // Perform some CPU-intensive work
         let mut sum = 0_u64;
+
         for i in 0..1_000_000_u64 {
             sum = sum
                 .checked_add(
@@ -21,6 +23,7 @@ fn main() {
                 )
                 .expect("addition should not overflow for small test values");
         }
+
         std::hint::black_box(sum);
     }
 

@@ -1,11 +1,10 @@
 //! Platform facade for switching between real and fake implementations.
 
-use std::time::Duration;
-
 use crate::pal::abstractions::Platform;
 #[cfg(test)]
 use crate::pal::fake::FakePlatform;
 use crate::pal::real::RealPlatform;
+use std::time::Duration;
 
 /// Facade that allows switching between real and fake platform implementations.
 ///
@@ -15,7 +14,6 @@ use crate::pal::real::RealPlatform;
 pub(crate) enum PlatformFacade {
     /// Real platform implementation using system calls.
     Real(RealPlatform),
-
     /// Fake platform implementation for testing.
     #[cfg(test)]
     Fake(FakePlatform),
@@ -76,6 +74,7 @@ mod tests {
         let facade = PlatformFacade::fake(fake_platform);
 
         let time = facade.thread_time();
+
         assert_eq!(time, Duration::from_millis(300));
     }
 
@@ -86,6 +85,7 @@ mod tests {
         let facade = PlatformFacade::fake(fake_platform);
 
         let time = facade.process_time();
+
         assert_eq!(time, Duration::from_millis(400));
     }
 }

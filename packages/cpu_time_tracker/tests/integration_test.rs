@@ -1,8 +1,7 @@
 //! Integration tests for `cpu_time_tracker`
 
-use std::time::Duration;
-
 use cpu_time_tracker::Session;
+use std::time::Duration;
 
 #[test]
 #[cfg(not(miri))]
@@ -12,23 +11,29 @@ fn session_integration() {
     // Test that we can create operations and track time
     {
         let op1 = session.operation("test_operation_1");
-        let _span = op1.measure_thread();
+        let _span = op1.iterations(1).thread_span();
+
         // Some work
         let mut sum = 0_u64;
+
         for i in 0..1000 {
             sum = sum.wrapping_add(i);
         }
+
         std::hint::black_box(sum);
     }
 
     {
         let op2 = session.operation("test_operation_2");
-        let _span = op2.measure_thread();
+        let _span = op2.iterations(1).thread_span();
+
         // Some different work
         let mut sum = 0_u64;
+
         for i in 0_u64..500 {
             sum = sum.wrapping_add(i.wrapping_mul(2));
         }
+
         std::hint::black_box(sum);
     }
 
@@ -56,19 +61,19 @@ fn multiple_spans_per_operation() {
 
     // First span
     {
-        let _span = op.measure_thread();
+        let _span = op.iterations(1).thread_span();
         std::hint::black_box(42);
     }
 
     // Second span
     {
-        let _span = op.measure_thread();
+        let _span = op.iterations(1).thread_span();
         std::hint::black_box(84);
     }
 
     // Third span
     {
-        let _span = op.measure_thread();
+        let _span = op.iterations(1).thread_span();
         std::hint::black_box(126);
     }
 
@@ -87,6 +92,7 @@ fn empty_session() {
 fn session_with_operations_but_no_spans() {
     let mut session = Session::new();
     let _op = session.operation("unused_operation");
+
     // Don't create any spans
     assert!(session.is_empty());
 }

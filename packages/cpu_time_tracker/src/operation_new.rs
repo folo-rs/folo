@@ -1,9 +1,12 @@
 //! Average CPU time tracking.
 
+use std::fmt;
+use std::num::NonZero;
+use std::time::Duration;
+
 use crate::SpanBuilder;
 use crate::pal::PlatformFacade;
-use std::fmt;
-use std::time::Duration;
+
 /// Calculates average CPU time per operation across multiple iterations.
 ///
 /// This utility is particularly useful for benchmarking scenarios where you want
@@ -12,16 +15,15 @@ use std::time::Duration;
 /// # Examples
 ///
 /// ```
-/// use std::num::NonZero;
-///
 /// use cpu_time_tracker::Session;
+/// use std::num::NonZero;
 ///
 /// let mut session = Session::new();
 /// let operation = session.operation("cpu_intensive_work");
 ///
 /// // Simulate multiple operations - note explicit iteration count
 /// for i in 0..5 {
-///     let _span = operation.iterations(1).thread_span();
+///     let _span = operation.iterations(NonZero::new(1).unwrap()).thread_span();
 ///     // Perform some CPU-intensive work
 ///     let mut sum = 0;
 ///     for j in 0..i * 1000 {
@@ -72,7 +74,6 @@ impl Operation {
             .total_cpu_time
             .checked_add(duration)
             .expect("CPU time duration overflow - this should not happen in practice");
-
         self.spans = self
             .spans
             .checked_add(1)
@@ -88,14 +89,13 @@ impl Operation {
     ///
     /// For single operations:
     /// ```
-    /// use std::num::NonZero;
-    ///
     /// use cpu_time_tracker::Session;
+    /// use std::num::NonZero;
     ///
     /// let mut session = Session::new();
     /// let operation = session.operation("single_op");
     /// {
-    ///     let _span = operation.iterations(1).thread_span();
+    ///     let _span = operation.iterations(NonZero::new(1).unwrap()).thread_span();
     ///     // Perform a single operation
     ///     let mut sum = 0;
     ///     for i in 0..1000 {
@@ -106,14 +106,13 @@ impl Operation {
     ///
     /// For batch operations (reduces measurement overhead):
     /// ```
-    /// use std::num::NonZero;
-    ///
     /// use cpu_time_tracker::Session;
+    /// use std::num::NonZero;
     ///
     /// let mut session = Session::new();
     /// let operation = session.operation("batch_ops");
     /// {
-    ///     let iterations = 10000;
+    ///     let iterations = NonZero::new(10000).unwrap();
     ///     let _span = operation.iterations(iterations).thread_span();
     ///     for _ in 0..10000 {
     ///         // Fast operation that would be dominated by measurement overhead
@@ -122,7 +121,7 @@ impl Operation {
     /// } // Total time is measured once and divided by 10000
     /// ```
     #[must_use]
-    pub fn iterations(&mut self, iterations: u64) -> SpanBuilder<'_> {
+    pub fn iterations(&mut self, iterations: NonZero<u64>) -> SpanBuilder<'_> {
         SpanBuilder::new(self, iterations)
     }
 
@@ -168,13 +167,16 @@ impl fmt::Display for Operation {
 
 #[cfg(test)]
 mod tests {
+    use std::hint::black_box;
+    use std::num::NonZero;
+
     use super::*;
     use crate::Session;
-    use std::hint::black_box;
 
     // Helper function to create a mock session for testing
     fn create_test_session() -> Session {
         use crate::pal::{FakePlatform, PlatformFacade};
+
         let fake_platform = FakePlatform::new();
         let platform_facade = PlatformFacade::fake(fake_platform);
         Session::with_platform(platform_facade)
@@ -195,6 +197,7 @@ mod tests {
         let mut session = create_test_session();
         let operation = session.operation("test");
         operation.add(Duration::from_millis(100));
+
         assert_eq!(operation.average(), Duration::from_millis(100));
         assert_eq!(operation.spans(), 1);
         assert_eq!(operation.total_cpu_time(), Duration::from_millis(100));
@@ -207,6 +210,7 @@ mod tests {
         operation.add(Duration::from_millis(100));
         operation.add(Duration::from_millis(200));
         operation.add(Duration::from_millis(300));
+
         assert_eq!(operation.average(), Duration::from_millis(200)); // (100 + 200 + 300) / 3
         assert_eq!(operation.spans(), 3);
         assert_eq!(operation.total_cpu_time(), Duration::from_millis(600));
@@ -218,6 +222,7 @@ mod tests {
         let operation = session.operation("test");
         operation.add(Duration::ZERO);
         operation.add(Duration::ZERO);
+
         assert_eq!(operation.average(), Duration::ZERO);
         assert_eq!(operation.spans(), 2);
         assert_eq!(operation.total_cpu_time(), Duration::ZERO);
@@ -228,8 +233,9 @@ mod tests {
     fn operation_with_new_api() {
         let mut session = create_test_session();
         let operation = session.operation("test");
+
         {
-            let _span = operation.iterations(1).thread_span();
+            let _span = operation.iterations(NonZero::new(1).unwrap()).thread_span();
             // Perform some CPU work
             let mut sum = 0;
             for i in 0..1000 {
@@ -248,8 +254,9 @@ mod tests {
     fn operation_batch_iterations() {
         let mut session = create_test_session();
         let operation = session.operation("test");
+
         {
-            let _span = operation.iterations(10).thread_span();
+            let _span = operation.iterations(NonZero::new(10).unwrap()).thread_span();
             // Perform some CPU work in a batch
             for i in 0..10 {
                 let mut sum = 0;

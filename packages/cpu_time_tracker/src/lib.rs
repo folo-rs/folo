@@ -8,6 +8,7 @@
 //! - [`ThreadSpan`] - Tracks thread CPU time over a time period
 //! - [`ProcessSpan`] - Tracks process CPU time over a time period
 //! - [`Operation`] - Calculates average CPU time per operation
+//! - [`SpanBuilder`] - Builder for creating spans with explicit iteration counts
 //!
 //! This package is not meant for use in production, serving only as a development tool.
 //!  
@@ -16,6 +17,8 @@
 //! You can track CPU time like this:
 //!
 //! ```
+//! use std::num::NonZero;
+//!
 //! use cpu_time_tracker::Session;
 //!
 //! # fn main() {
@@ -24,7 +27,7 @@
 //! // Track a single operation
 //! {
 //!     let operation = session.operation("my_operation");
-//!     let _span = operation.measure_thread();
+//!     let _span = operation.iterations(1).thread_span();
 //!     // Perform some CPU-intensive work
 //!     let mut sum = 0;
 //!     for i in 0..10000 {
@@ -41,22 +44,36 @@
 //!
 //! # Tracking Average CPU Time
 //!
-//! For benchmarking scenarios, where you run multiple iterations of an operation, use [`Operation`]:
+//! For benchmarking scenarios, where you run multiple iterations of an operation, use batched measurements:
 //!
 //! ```
-//! use cpu_time_tracker::{Operation, Session};
+//! use std::num::NonZero;
+//!
+//! use cpu_time_tracker::Session;
 //!
 //! # fn main() {
 //! let mut session = Session::new();
 //!
-//! // Track average over multiple operations
+//! // Track average over multiple operations (single spans)
 //! for i in 0..10 {
 //!     let string_op = session.operation("cpu_intensive_work");
-//!     let _span = string_op.measure_thread();
+//!     let _span = string_op.iterations(1).thread_span();
 //!     // Perform some CPU-intensive work
 //!     let mut sum = 0;
 //!     for j in 0..i * 1000 {
 //!         sum += j;
+//!     }
+//! }
+//!
+//! // Or track with batch measurements (multiple iterations in one span)
+//! {
+//!     let batch_op = session.operation("batch_work");
+//!     let _span = batch_op
+//!         .iterations(1000)
+//!         .thread_span();
+//!     for _ in 0..1000 {
+//!         // Fast operation - measured once and divided by 1000
+//!         std::hint::black_box(42 * 2);
 //!     }
 //! }
 //!
@@ -70,6 +87,8 @@
 //! You can choose between tracking thread CPU time or process CPU time:
 //!
 //! ```
+//! use std::num::NonZero;
+//!
 //! use cpu_time_tracker::Session;
 //!
 //! # fn main() {
@@ -78,14 +97,14 @@
 //! // Track thread CPU time
 //! {
 //!     let op = session.operation("thread_work");
-//!     let _span = op.measure_thread();
+//!     let _span = op.iterations(1).thread_span();
 //!     // Work done here is measured for the current thread only
 //! }
 //!
 //! // Track process CPU time (all threads)
 //! {
 //!     let op = session.operation("process_work");
-//!     let _span = op.measure_process();
+//!     let _span = op.iterations(1).process_span();
 //!     // Work done here is measured for the entire process
 //! }
 //! # }
@@ -104,7 +123,13 @@
 
 mod operation;
 mod pal;
+mod process_span;
 mod session;
+mod span_builder;
+mod thread_span;
 
-pub use operation::*;
-pub use session::*;
+pub use operation::Operation;
+pub use process_span::ProcessSpan;
+pub use session::Session;
+pub use span_builder::SpanBuilder;
+pub use thread_span::ThreadSpan;
