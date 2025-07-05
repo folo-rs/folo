@@ -1,6 +1,7 @@
 //! Average memory allocation tracking.
 
 use std::fmt;
+use std::marker::PhantomData;
 use std::sync::atomic;
 
 use crate::allocator::{THREAD_BYTES_ALLOCATED, TOTAL_BYTES_ALLOCATED};
@@ -32,31 +33,22 @@ use crate::allocator::{THREAD_BYTES_ALLOCATED, TOTAL_BYTES_ALLOCATED};
 /// ```
 #[derive(Debug)]
 pub struct Operation {
-    name: String,
     total_bytes_allocated: u64,
     spans: u64,
 }
 
 impl Operation {
-    /// Creates a new average memory delta calculator with the given name.
     #[must_use]
-    pub(crate) fn new(name: impl Into<String>) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            name: name.into(),
             total_bytes_allocated: 0,
             spans: 0,
         }
     }
 
-    /// Returns the name of this operation.
-    #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
     /// Adds a memory delta value to the average calculation.
     ///
-    /// This method is typically called by [`OperationSpan`] when it is dropped.
+    /// This method is called by [`ProcessSpan`] or [`ThreadSpan`] when it is dropped.
     fn add(&mut self, delta: u64) {
         // Never going to overflow u64, so no point doing slower checked arithmetic here.
         self.total_bytes_allocated = self.total_bytes_allocated.wrapping_add(delta);
@@ -81,13 +73,13 @@ impl Operation {
     /// {
     ///     let _span = average.measure_process();
     ///     let _data = vec![1, 2, 3]; // This allocation will be tracked
-    /// } // Contributor is dropped here, allocation is added to average
+    /// } // Span is dropped here, allocation is added to average
     /// ```
     pub fn measure_process(&mut self) -> ProcessSpan<'_> {
         ProcessSpan::new(self)
     }
 
-    /// Creates a span that tracks thread-local allocations from now until it is dropped.
+    /// Creates a span that tracks allocations on this thread from now until it is dropped.
     ///
     /// This method tracks allocations made by the current thread only.
     /// Use this when you want to measure per-thread allocation patterns
@@ -106,7 +98,7 @@ impl Operation {
     /// {
     ///     let _span = average.measure_thread();
     ///     let _data = vec![1, 2, 3]; // This allocation will be tracked for this thread
-    /// } // Thread allocation is tracked
+    /// }
     /// ```
     pub fn measure_thread(&mut self) -> ThreadSpan<'_> {
         ThreadSpan::new(self)
@@ -145,7 +137,7 @@ impl Operation {
 impl fmt::Display for Operation {
     #[cfg_attr(test, mutants::skip)] // No API contract.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {} bytes (mean)", self.name, self.average())
+        write!(f, "{} bytes (mean)", self.average())
     }
 }
 
@@ -197,12 +189,11 @@ impl<'a> ProcessSpan<'a> {
 
 impl Drop for ProcessSpan<'_> {
     fn drop(&mut self) {
-        let delta = self.to_delta();
-        self.operation.add(delta);
+        self.operation.add(self.to_delta());
     }
 }
 
-/// A tracked span of code that tracks thread-local allocations between creation and drop.
+/// A tracked span of code that tracks allocations on this thread between creation and drop.
 ///
 /// This span tracks allocations made by the current thread only.
 ///
@@ -226,6 +217,8 @@ impl Drop for ProcessSpan<'_> {
 pub struct ThreadSpan<'a> {
     operation: &'a mut Operation,
     start_bytes: u64,
+
+    _single_threaded: PhantomData<*const ()>,
 }
 
 impl<'a> ThreadSpan<'a> {
@@ -235,6 +228,7 @@ impl<'a> ThreadSpan<'a> {
         Self {
             operation,
             start_bytes,
+            _single_threaded: PhantomData,
         }
     }
 
@@ -250,175 +244,154 @@ impl<'a> ThreadSpan<'a> {
 
 impl Drop for ThreadSpan<'_> {
     fn drop(&mut self) {
-        let delta = self.to_delta();
-        self.operation.add(delta);
+        self.operation.add(self.to_delta());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Session;
     use crate::allocator::{THREAD_BYTES_ALLOCATED, TOTAL_BYTES_ALLOCATED};
 
-    // Helper function to create a mock session for testing
-    // Note: This won't actually enable allocation tracking since we're not using
-    // a global allocator in unit tests, but it allows us to test the API structure
-    fn create_test_session() -> Session {
-        // This function simplifies test setup by providing a session
-        // We can now directly call new() since it's infallible
-        Session::new()
+    #[test]
+    fn operation_new() {
+        let operation = Operation::new();
+        assert_eq!(operation.average(), 0);
+        assert_eq!(operation.spans(), 0);
+        assert_eq!(operation.total_bytes_allocated(), 0);
     }
 
     #[test]
-    fn average_memory_delta_new() {
-        let average = Operation::new("test".to_string());
-        assert_eq!(average.name(), "test");
-        assert_eq!(average.average(), 0);
-        assert_eq!(average.spans(), 0);
-        assert_eq!(average.total_bytes_allocated(), 0);
+    fn operation_add_single() {
+        let mut operation = Operation::new();
+        operation.add(100);
+
+        assert_eq!(operation.average(), 100);
+        assert_eq!(operation.spans(), 1);
+        assert_eq!(operation.total_bytes_allocated(), 100);
     }
 
     #[test]
-    fn average_memory_delta_add_single() {
-        let mut average = Operation::new("test".to_string());
-        average.add(100);
+    fn operation_add_multiple() {
+        let mut operation = Operation::new();
+        operation.add(100);
+        operation.add(200);
+        operation.add(300);
 
-        assert_eq!(average.average(), 100);
-        assert_eq!(average.spans(), 1);
-        assert_eq!(average.total_bytes_allocated(), 100);
+        assert_eq!(operation.average(), 200); // (100 + 200 + 300) / 3
+        assert_eq!(operation.spans(), 3);
+        assert_eq!(operation.total_bytes_allocated(), 600);
     }
 
     #[test]
-    fn average_memory_delta_add_multiple() {
-        let mut average = Operation::new("test".to_string());
-        average.add(100);
-        average.add(200);
-        average.add(300);
+    fn operation_add_zero() {
+        let mut operation = Operation::new();
+        operation.add(0);
+        operation.add(0);
 
-        assert_eq!(average.average(), 200); // (100 + 200 + 300) / 3
-        assert_eq!(average.spans(), 3);
-        assert_eq!(average.total_bytes_allocated(), 600);
+        assert_eq!(operation.average(), 0);
+        assert_eq!(operation.spans(), 2);
+        assert_eq!(operation.total_bytes_allocated(), 0);
     }
 
     #[test]
-    fn average_memory_delta_add_zero() {
-        let mut average = Operation::new("test".to_string());
-        average.add(0);
-        average.add(0);
-
-        assert_eq!(average.average(), 0);
-        assert_eq!(average.spans(), 2);
-        assert_eq!(average.total_bytes_allocated(), 0);
-    }
-
-    #[test]
-    fn average_memory_delta_span_drop() {
-        let mut session = create_test_session();
-        let average = session.operation("test");
+    fn operation_span_drop() {
+        let mut operation = Operation::new();
 
         {
-            let _span = average.measure_process();
+            let _span = operation.measure_process();
             // Simulate allocation
             TOTAL_BYTES_ALLOCATED.fetch_add(75, atomic::Ordering::Relaxed);
-        } // Contributor drops here
+        }
 
-        assert_eq!(average.average(), 75);
-        assert_eq!(average.spans(), 1);
-        assert_eq!(average.total_bytes_allocated(), 75);
+        assert_eq!(operation.average(), 75);
+        assert_eq!(operation.spans(), 1);
+        assert_eq!(operation.total_bytes_allocated(), 75);
     }
 
     #[test]
-    fn average_memory_delta_multiple_spans() {
-        let mut session = create_test_session();
-        let average = session.operation("test");
+    fn operation_multiple_spans() {
+        let mut operation = Operation::new();
 
-        // First contributor
         {
-            let _span = average.measure_process();
+            let _span = operation.measure_process();
             TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
         }
 
-        // Second contributor
         {
-            let _span = average.measure_process();
+            let _span = operation.measure_process();
             TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
         }
 
-        assert_eq!(average.average(), 150); // (100 + 200) / 2
-        assert_eq!(average.spans(), 2);
-        assert_eq!(average.total_bytes_allocated(), 300);
+        assert_eq!(operation.average(), 150); // (100 + 200) / 2
+        assert_eq!(operation.spans(), 2);
+        assert_eq!(operation.total_bytes_allocated(), 300);
     }
 
     #[test]
-    fn average_memory_delta_span_no_allocation() {
-        let mut session = create_test_session();
-        let average = session.operation("test");
+    fn operation_process_span_no_allocation() {
+        let mut operation = Operation::new();
 
         {
-            let _span = average.measure_process();
+            let _span = operation.measure_process();
             // No allocation
         }
 
-        assert_eq!(average.average(), 0);
-        assert_eq!(average.spans(), 1);
-        assert_eq!(average.total_bytes_allocated(), 0);
+        assert_eq!(operation.average(), 0);
+        assert_eq!(operation.spans(), 1);
+        assert_eq!(operation.total_bytes_allocated(), 0);
     }
 
     #[test]
-    fn average_memory_delta_thread_span_drop() {
-        let mut session = create_test_session();
-        let average = session.operation("test");
+    fn operation_thread_span_drop() {
+        let mut operation = Operation::new();
 
         {
-            let _span = average.measure_thread();
+            let _span = operation.measure_thread();
+
             // Simulate thread-local allocation
             THREAD_BYTES_ALLOCATED.with(|counter| {
                 counter.set(counter.get() + 50);
             });
-        } // ThreadSpan drops here
+        }
 
-        assert_eq!(average.average(), 50);
-        assert_eq!(average.spans(), 1);
-        assert_eq!(average.total_bytes_allocated(), 50);
+        assert_eq!(operation.average(), 50);
+        assert_eq!(operation.spans(), 1);
+        assert_eq!(operation.total_bytes_allocated(), 50);
     }
 
     #[test]
-    fn average_memory_delta_mixed_spans() {
-        let mut session = create_test_session();
-        let average = session.operation("test");
+    fn operation_mixed_spans() {
+        let mut operation = Operation::new();
 
-        // First thread span
         {
-            let _span = average.measure_thread();
+            let _span = operation.measure_thread();
             THREAD_BYTES_ALLOCATED.with(|counter| {
                 counter.set(counter.get() + 100);
             });
         }
 
-        // Second process span
         {
-            let _span = average.measure_process();
+            let _span = operation.measure_process();
             TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
         }
 
-        assert_eq!(average.average(), 150); // (100 + 200) / 2
-        assert_eq!(average.spans(), 2);
-        assert_eq!(average.total_bytes_allocated(), 300);
+        assert_eq!(operation.average(), 150); // (100 + 200) / 2
+        assert_eq!(operation.spans(), 2);
+        assert_eq!(operation.total_bytes_allocated(), 300);
     }
 
     #[test]
-    fn average_memory_delta_thread_span_no_allocation() {
-        let mut session = create_test_session();
-        let average = session.operation("test");
+    fn operation_thread_span_no_allocation() {
+        let mut operation = Operation::new();
 
         {
-            let _span = average.measure_thread();
+            let _span = operation.measure_thread();
             // No allocation
         }
 
-        assert_eq!(average.average(), 0);
-        assert_eq!(average.spans(), 1);
-        assert_eq!(average.total_bytes_allocated(), 0);
+        assert_eq!(operation.average(), 0);
+        assert_eq!(operation.spans(), 1);
+        assert_eq!(operation.total_bytes_allocated(), 0);
     }
 }

@@ -1,10 +1,4 @@
-//! Simplified example demonstrating key `alloc_tracker` types working together.
-//!
-//! This example shows how to use the main types in the `alloc_tracker` crate:
-//! - `Allocator`: Global allocator wrapper that enables tracking
-//! - `Session`: Manages allocation tracking state
-//! - `Span`: Tracks allocations over a time period  
-//! - `Operation`: Calculates average allocations across multiple spans
+//! Demonstrating key `alloc_tracker` types working together.
 //!
 //! Run with: `cargo run --example comprehensive_tracking`
 

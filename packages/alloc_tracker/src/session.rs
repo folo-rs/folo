@@ -87,12 +87,9 @@ impl Session {
     /// }
     /// ```
     pub fn operation(&mut self, name: impl Into<String>) -> &mut Operation {
-        let name = name.into();
-
-        // Get or create the operation
         self.operations
-            .entry(name)
-            .or_insert_with_key(|name| Operation::new(name.clone()))
+            .entry(name.into())
+            .or_insert_with(Operation::new)
     }
 
     /// Prints the allocation statistics of all operations to stdout.
@@ -128,8 +125,8 @@ impl fmt::Display for Session {
             let mut sorted_ops: Vec<_> = self.operations.iter().collect();
             sorted_ops.sort_by_key(|(name, _)| *name);
 
-            for (_, operation) in sorted_ops {
-                writeln!(f, "  {operation}")?;
+            for (name, operation) in sorted_ops {
+                writeln!(f, "  {name}: {operation}")?;
             }
         }
 
