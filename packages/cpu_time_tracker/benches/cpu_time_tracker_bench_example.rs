@@ -41,31 +41,46 @@ fn entrypoint(c: &mut Criterion) {
 
     let string_op = cpu_time.operation("string_formatting");
     group.bench_function("string_formatting", |b| {
-        b.iter(|| {
-            let _span = string_op.measure_thread();
+        b.iter_custom(|iters| {
+            let start = Instant::now();
 
-            let part1 = black_box("Hello, ");
-            let part2 = black_box("world!");
-            let s = format!("{part1}{part2}!");
-            black_box(s);
+            {
+                let _span = string_op.measure_thread().batch(iters);
+
+                for _ in 0..iters {
+                    let part1 = black_box("Hello, ");
+                    let part2 = black_box("world!");
+                    let s = format!("{part1}{part2}!");
+                    black_box(s);
+                }
+            }
+
+            start.elapsed()
         });
     });
 
     let computation_op = cpu_time.operation("computation");
     group.bench_function("computation", |b| {
-        b.iter(|| {
-            let _span = computation_op.measure_thread();
+        b.iter_custom(|iters| {
+            let start = Instant::now();
 
-            let mut sum = 0_u64;
-            for i in 0..1000_u64 {
-                sum = sum
-                    .checked_add(
-                        i.checked_mul(i)
-                            .expect("multiplication should not overflow for small test values"),
-                    )
-                    .expect("addition should not overflow for small test values");
+            {
+                let _span = computation_op.measure_thread().batch(iters);
+
+                for _ in 0..iters {
+                    let mut sum = 0_u64;
+                    for i in 0..1000_u64 {
+                        sum =
+                            sum.checked_add(i.checked_mul(i).expect(
+                                "multiplication should not overflow for small test values",
+                            ))
+                            .expect("addition should not overflow for small test values");
+                    }
+                    black_box(sum);
+                }
             }
-            black_box(sum);
+
+            start.elapsed()
         });
     });
 
