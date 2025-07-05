@@ -15,7 +15,7 @@ use std::time::Duration;
 /// let mut session = Session::new();
 /// let operation = session.operation("test");
 /// {
-///     let _span = operation.iterations(1).process_span();
+///     let _span = operation.iterations(1).measure_process();
 ///     // Perform some CPU-intensive operation
 ///     let mut sum = 0;
 ///     for i in 0..1000 {
@@ -32,7 +32,7 @@ use std::time::Duration;
 /// let mut session = Session::new();
 /// let operation = session.operation("benchmark");
 /// {
-///     let _span = operation.iterations(1000).process_span();
+///     let _span = operation.iterations(1000).measure_process();
 ///     for i in 0..1000 {
 ///         // Perform the operation being benchmarked
 ///         let mut sum = 0;
@@ -103,10 +103,11 @@ mod tests {
     use crate::Session;
 
     #[test]
+    #[cfg(not(miri))]
     fn process_span_new() {
         let mut session = Session::new();
         let operation = session.operation("test");
-        let span = operation.iterations(5).process_span();
+        let span = operation.iterations(5).measure_process();
         assert_eq!(span.iterations, 5);
     }
 
@@ -115,15 +116,16 @@ mod tests {
     fn process_span_new_zero_iterations() {
         let mut session = Session::new();
         let operation = session.operation("test");
-        let _span = operation.iterations(0).process_span();
+        let _span = operation.iterations(0).measure_process();
     }
 
     #[test]
+    #[cfg(not(miri))]
     fn process_span_tracks_time() {
         let mut session = Session::new();
         let operation = session.operation("test");
         {
-            let _span = operation.iterations(1).process_span();
+            let _span = operation.iterations(1).measure_process();
             // Perform some work
             let mut sum = 0;
             for i in 0..1000 {

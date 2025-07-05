@@ -11,7 +11,7 @@ fn session_integration() {
     // Test that we can create operations and track time
     {
         let op1 = session.operation("test_operation_1");
-        let _span = op1.iterations(1).thread_span();
+        let _span = op1.iterations(1).measure_thread();
 
         // Some work
         let mut sum = 0_u64;
@@ -25,7 +25,7 @@ fn session_integration() {
 
     {
         let op2 = session.operation("test_operation_2");
-        let _span = op2.iterations(1).thread_span();
+        let _span = op2.iterations(1).measure_thread();
 
         // Some different work
         let mut sum = 0_u64;
@@ -61,19 +61,19 @@ fn multiple_spans_per_operation() {
 
     // First span
     {
-        let _span = op.iterations(1).thread_span();
+        let _span = op.iterations(1).measure_thread();
         std::hint::black_box(42);
     }
 
     // Second span
     {
-        let _span = op.iterations(1).thread_span();
+        let _span = op.iterations(1).measure_thread();
         std::hint::black_box(84);
     }
 
     // Third span
     {
-        let _span = op.iterations(1).thread_span();
+        let _span = op.iterations(1).measure_thread();
         std::hint::black_box(126);
     }
 

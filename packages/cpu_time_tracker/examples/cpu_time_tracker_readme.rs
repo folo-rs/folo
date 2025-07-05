@@ -10,7 +10,7 @@ fn main() {
     // Track a single operation
     {
         let operation = session.operation("my_operation");
-        let _span = operation.iterations(1).thread_span();
+        let _span = operation.iterations(1).measure_thread();
 
         // Perform some CPU-intensive work
         let mut sum = 0_u64;

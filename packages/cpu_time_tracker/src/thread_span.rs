@@ -15,7 +15,7 @@ use std::time::Duration;
 /// let mut session = Session::new();
 /// let operation = session.operation("test");
 /// {
-///     let _span = operation.iterations(1).thread_span();
+///     let _span = operation.iterations(1).measure_thread();
 ///     // Perform some CPU-intensive operation
 ///     let mut sum = 0;
 ///     for i in 0..1000 {
@@ -32,7 +32,7 @@ use std::time::Duration;
 /// let mut session = Session::new();
 /// let operation = session.operation("test");
 /// {
-///     let _span = operation.iterations(1000).thread_span();
+///     let _span = operation.iterations(1000).measure_thread();
 ///     for i in 0..1000 {
 ///         // Perform the operation being benchmarked
 ///         let mut sum = 0;

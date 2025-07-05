@@ -27,7 +27,7 @@
 //! // Track a single operation
 //! {
 //!     let operation = session.operation("my_operation");
-//!     let _span = operation.iterations(1).thread_span();
+//!     let _span = operation.iterations(1).measure_thread();
 //!     // Perform some CPU-intensive work
 //!     let mut sum = 0;
 //!     for i in 0..10000 {
@@ -57,7 +57,7 @@
 //! // Track average over multiple operations (single spans)
 //! for i in 0..10 {
 //!     let string_op = session.operation("cpu_intensive_work");
-//!     let _span = string_op.iterations(1).thread_span();
+//!     let _span = string_op.iterations(1).measure_thread();
 //!     // Perform some CPU-intensive work
 //!     let mut sum = 0;
 //!     for j in 0..i * 1000 {
@@ -70,7 +70,7 @@
 //!     let batch_op = session.operation("batch_work");
 //!     let _span = batch_op
 //!         .iterations(1000)
-//!         .thread_span();
+//!         .measure_thread();
 //!     for _ in 0..1000 {
 //!         // Fast operation - measured once and divided by 1000
 //!         std::hint::black_box(42 * 2);
@@ -97,14 +97,14 @@
 //! // Track thread CPU time
 //! {
 //!     let op = session.operation("thread_work");
-//!     let _span = op.iterations(1).thread_span();
+//!     let _span = op.iterations(1).measure_thread();
 //!     // Work done here is measured for the current thread only
 //! }
 //!
 //! // Track process CPU time (all threads)
 //! {
 //!     let op = session.operation("process_work");
-//!     let _span = op.iterations(1).process_span();
+//!     let _span = op.iterations(1).measure_process();
 //!     // Work done here is measured for the entire process
 //! }
 //! # }

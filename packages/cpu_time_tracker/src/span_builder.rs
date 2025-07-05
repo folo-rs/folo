@@ -16,13 +16,13 @@ use crate::{Operation, ProcessSpan, ThreadSpan};
 ///
 /// // Single iteration - explicit
 /// {
-///     let _span = operation.iterations(1).thread_span();
+///     let _span = operation.iterations(1).measure_thread();
 ///     // Perform work for a single iteration
 /// }
 ///
 /// // Multiple iterations - batch processing
 /// {
-///     let _span = operation.iterations(1000).thread_span();
+///     let _span = operation.iterations(1000).measure_thread();
 ///     for _ in 0..1000 {
 ///         // Perform the same operation 1000 times
 ///     }
@@ -64,7 +64,7 @@ impl<'a> SpanBuilder<'a> {
     /// let mut session = Session::new();
     /// let operation = session.operation("thread_work");
     /// {
-    ///     let _span = operation.iterations(1).thread_span();
+    ///     let _span = operation.iterations(1).measure_thread();
     ///     // Perform some CPU-intensive work in this thread
     ///     let mut sum = 0;
     ///     for i in 0..1000 {
@@ -73,7 +73,7 @@ impl<'a> SpanBuilder<'a> {
     /// } // Thread CPU time is tracked
     /// ```
     #[must_use]
-    pub fn thread_span(self) -> ThreadSpan<'a> {
+    pub fn measure_thread(self) -> ThreadSpan<'a> {
         ThreadSpan::new(self.operation, self.iterations)
     }
 
@@ -91,7 +91,7 @@ impl<'a> SpanBuilder<'a> {
     /// let mut session = Session::new();
     /// let operation = session.operation("process_work");
     /// {
-    ///     let _span = operation.iterations(1).process_span();
+    ///     let _span = operation.iterations(1).measure_process();
     ///     // Perform some CPU-intensive work that might spawn threads
     ///     let mut sum = 0;
     ///     for i in 0..1000 {
@@ -100,7 +100,7 @@ impl<'a> SpanBuilder<'a> {
     /// } // Total process CPU time is tracked
     /// ```
     #[must_use]
-    pub fn process_span(self) -> ProcessSpan<'a> {
+    pub fn measure_process(self) -> ProcessSpan<'a> {
         ProcessSpan::new(self.operation, self.iterations)
     }
 }

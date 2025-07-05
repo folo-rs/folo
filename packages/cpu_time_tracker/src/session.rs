@@ -19,7 +19,7 @@ use std::fmt;
 /// let mut cpu_op = session.operation("cpu_intensive_work");
 ///
 /// for _ in 0..3 {
-///     let _span = cpu_op.iterations(1).thread_span();
+///     let _span = cpu_op.iterations(1).measure_thread();
 ///     // Perform some CPU-intensive work
 ///     let mut sum = 0;
 ///     for i in 0..1000 {
@@ -91,7 +91,7 @@ impl Session {
     /// let mut cpu_op = session.operation("cpu_operations");
     ///
     /// for _ in 0..3 {
-    ///     let _span = cpu_op.iterations(1).thread_span();
+    ///     let _span = cpu_op.iterations(1).measure_thread();
     ///     // Perform some CPU-intensive work
     ///     let mut sum = 0;
     ///     for i in 0..1000 {

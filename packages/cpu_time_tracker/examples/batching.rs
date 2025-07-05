@@ -14,7 +14,7 @@ fn main() {
     // Example 1: Fast operation without batching (high overhead)
     let fast_op_unbatched = session.operation("fast_operation_unbatched");
     for _ in 0..1000 {
-        let _span = fast_op_unbatched.iterations(1).thread_span();
+        let _span = fast_op_unbatched.iterations(1).measure_thread();
         // Very fast operation
         black_box(42 * 2);
     }
@@ -22,7 +22,7 @@ fn main() {
     // Example 2: Fast operation with batching (low overhead)
     let fast_op_batched = session.operation("fast_operation_batched");
     {
-        let _span = fast_op_batched.iterations(1000).thread_span();
+        let _span = fast_op_batched.iterations(1000).measure_thread();
         for _ in 0..1000 {
             // Same very fast operation
             black_box(42 * 2);
@@ -32,7 +32,7 @@ fn main() {
     // Example 3: Medium operation for comparison
     let medium_op = session.operation("medium_operation");
     {
-        let _span = medium_op.iterations(10).thread_span();
+        let _span = medium_op.iterations(10).measure_thread();
         for _ in 0..10 {
             // Medium-sized operation
             let mut sum = 0_u64;
@@ -46,7 +46,7 @@ fn main() {
     // Example 4: Process-level batching
     let process_batched = session.operation("process_operation_batched");
     {
-        let _span = process_batched.iterations(500).process_span();
+        let _span = process_batched.iterations(500).measure_process();
         for _ in 0..500 {
             // Fast operation measured at process level
             black_box(std::ptr::null::<i32>() as usize);

@@ -23,7 +23,7 @@ use crate::pal::PlatformFacade;
 ///
 /// // Simulate multiple operations - note explicit iteration count
 /// for i in 0..5 {
-///     let _span = operation.iterations(NonZero::new(1).unwrap()).thread_span();
+///     let _span = operation.iterations(NonZero::new(1).unwrap()).measure_thread();
 ///     // Perform some CPU-intensive work
 ///     let mut sum = 0;
 ///     for j in 0..i * 1000 {
@@ -95,7 +95,7 @@ impl Operation {
     /// let mut session = Session::new();
     /// let operation = session.operation("single_op");
     /// {
-    ///     let _span = operation.iterations(NonZero::new(1).unwrap()).thread_span();
+    ///     let _span = operation.iterations(NonZero::new(1).unwrap()).measure_thread();
     ///     // Perform a single operation
     ///     let mut sum = 0;
     ///     for i in 0..1000 {
@@ -113,7 +113,7 @@ impl Operation {
     /// let operation = session.operation("batch_ops");
     /// {
     ///     let iterations = NonZero::new(10000).unwrap();
-    ///     let _span = operation.iterations(iterations).thread_span();
+    ///     let _span = operation.iterations(iterations).measure_thread();
     ///     for _ in 0..10000 {
     ///         // Fast operation that would be dominated by measurement overhead
     ///         std::hint::black_box(42 * 2);
@@ -235,7 +235,7 @@ mod tests {
         let operation = session.operation("test");
 
         {
-            let _span = operation.iterations(NonZero::new(1).unwrap()).thread_span();
+            let _span = operation.iterations(NonZero::new(1).unwrap()).measure_thread();
             // Perform some CPU work
             let mut sum = 0;
             for i in 0..1000 {
@@ -256,7 +256,7 @@ mod tests {
         let operation = session.operation("test");
 
         {
-            let _span = operation.iterations(NonZero::new(10).unwrap()).thread_span();
+            let _span = operation.iterations(NonZero::new(10).unwrap()).measure_thread();
             // Perform some CPU work in a batch
             for i in 0..10 {
                 let mut sum = 0;

@@ -1,9 +1,9 @@
-//! Example demonstrating the difference between `iterations(1).thread_span()` and `iterations(1).process_span()`.
+//! Example demonstrating the difference between `iterations(1).measure_thread()` and `iterations(1).measure_process()`.
 //!
-//! This example shows how to use both `iterations(1).thread_span()` and `iterations(1).process_span()` methods
+//! This example shows how to use both `iterations(1).measure_thread()` and `iterations(1).measure_process()` methods
 //! to track different types of CPU time:
-//! - `iterations(1).thread_span()`: Tracks CPU time for the current thread only
-//! - `iterations(1).process_span()`: Tracks CPU time for the entire process (all threads)
+//! - `iterations(1).measure_thread()`: Tracks CPU time for the current thread only
+//! - `iterations(1).measure_process()`: Tracks CPU time for the entire process (all threads)
 //!
 //! Run with: `cargo run --example span_types`
 
@@ -64,25 +64,25 @@ fn main() {
 
     let mut session = Session::new();
 
-    // Example 1: Using iterations(1).thread_span() - only measures current thread's CPU time
-    // Even though multithreaded_work() spawns multiple threads, iterations(1).thread_span()
+    // Example 1: Using iterations(1).measure_thread() - only measures current thread's CPU time
+    // Even though multithreaded_work() spawns multiple threads, iterations(1).measure_thread()
     // only captures the CPU time used by the main thread (mostly coordination overhead)
     {
         let thread_op = session.operation("thread_span_multithreaded");
 
         for _ in 0..3 {
-            let _span = thread_op.iterations(1).thread_span();
+            let _span = thread_op.iterations(1).measure_thread();
             multithreaded_work();
         }
     }
 
-    // Example 2: Using iterations(1).process_span() - measures entire process CPU time
+    // Example 2: Using iterations(1).measure_process() - measures entire process CPU time
     // This captures CPU time from all threads spawned by multithreaded_work()
     {
         let process_op = session.operation("process_span_multithreaded");
 
         for _ in 0..3 {
-            let _span = process_op.iterations(1).process_span();
+            let _span = process_op.iterations(1).measure_process();
             multithreaded_work();
         }
     }

@@ -25,7 +25,7 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             {
-                let _span = read_cell_op.iterations(iters).thread_span();
+                let _span = read_cell_op.iterations(iters).measure_thread();
 
                 for _ in 0..iters {
                     black_box(cell.get());
@@ -43,7 +43,7 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             {
-                let _span = string_op.iterations(iters).thread_span();
+                let _span = string_op.iterations(iters).measure_thread();
 
                 for _ in 0..iters {
                     let part1 = black_box("Hello, ");
@@ -64,7 +64,7 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             {
-                let _span = computation_op.iterations(iters).thread_span();
+                let _span = computation_op.iterations(iters).measure_thread();
 
                 for _ in 0..iters {
                     let mut sum = 0_u64;
