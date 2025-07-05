@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::Operation;
+use crate::pal::PlatformFacade;
 
 /// Manages CPU time tracking session state and contains operations.
 ///
@@ -36,6 +37,7 @@ use crate::Operation;
 #[derive(Debug)]
 pub struct Session {
     operations: HashMap<String, Operation>,
+    platform: PlatformFacade,
 }
 
 impl Session {
@@ -58,6 +60,19 @@ impl Session {
     pub fn new() -> Self {
         Self {
             operations: HashMap::new(),
+            platform: PlatformFacade::real(),
+        }
+    }
+
+    /// Creates a new CPU time tracking session with a specific platform.
+    ///
+    /// This method is primarily used for testing purposes to inject a fake platform
+    /// that doesn't rely on actual system calls.
+    #[cfg(test)]
+    pub(crate) fn with_platform(platform: PlatformFacade) -> Self {
+        Self {
+            operations: HashMap::new(),
+            platform,
         }
     }
 
@@ -89,8 +104,8 @@ impl Session {
 
         // Get or create the operation
         self.operations
-            .entry(name)
-            .or_insert_with_key(|name| Operation::new(name.clone()))
+            .entry(name.clone())
+            .or_insert_with(|| Operation::new(name, self.platform.clone()))
     }
 
     /// Prints the CPU time statistics of all operations to stdout.

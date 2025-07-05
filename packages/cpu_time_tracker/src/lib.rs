@@ -103,6 +103,7 @@
 //! Each session maintains its own set of operations and statistics.
 
 mod operation;
+mod pal;
 mod session;
 
 pub use operation::*;

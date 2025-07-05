@@ -1,0 +1,16 @@
+//! Platform abstraction layer for CPU time tracking.
+//!
+//! This module provides a platform abstraction that allows switching between
+//! real CPU time tracking (using the `cpu_time` crate) and fake implementations
+//! for testing purposes.
+
+mod abstractions;
+mod facade;
+#[cfg(test)]
+mod fake;
+mod real;
+
+pub(crate) use abstractions::Platform;
+pub(crate) use facade::PlatformFacade;
+#[cfg(test)]
+pub(crate) use fake::FakePlatform;

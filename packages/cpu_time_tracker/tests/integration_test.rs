@@ -14,9 +14,9 @@ fn session_integration() {
         let op1 = session.operation("test_operation_1");
         let _span = op1.measure_thread();
         // Some work
-        let mut sum = 0;
+        let mut sum = 0_u64;
         for i in 0..1000 {
-            sum += i;
+            sum = sum.wrapping_add(i);
         }
         std::hint::black_box(sum);
     }
@@ -25,9 +25,9 @@ fn session_integration() {
         let op2 = session.operation("test_operation_2");
         let _span = op2.measure_thread();
         // Some different work
-        let mut sum = 0;
-        for i in 0..500 {
-            sum += i * 2;
+        let mut sum = 0_u64;
+        for i in 0_u64..500 {
+            sum = sum.wrapping_add(i.wrapping_mul(2));
         }
         std::hint::black_box(sum);
     }

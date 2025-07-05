@@ -3,7 +3,7 @@
 use std::fmt;
 use std::time::Duration;
 
-use cpu_time::{ProcessTime, ThreadTime};
+use crate::pal::{Platform, PlatformFacade};
 
 /// Calculates average CPU time per operation across multiple iterations.
 ///
@@ -36,16 +36,18 @@ pub struct Operation {
     name: String,
     total_cpu_time: Duration,
     spans: u64,
+    platform: PlatformFacade,
 }
 
 impl Operation {
     /// Creates a new average CPU time calculator with the given name.
     #[must_use]
-    pub(crate) fn new(name: impl Into<String>) -> Self {
+    pub(crate) fn new(name: impl Into<String>, platform: PlatformFacade) -> Self {
         Self {
             name: name.into(),
             total_cpu_time: Duration::ZERO,
             spans: 0,
+            platform,
         }
     }
 
@@ -178,12 +180,12 @@ impl fmt::Display for Operation {
 #[derive(Debug)]
 pub struct ThreadSpan<'a> {
     operation: &'a mut Operation,
-    start_time: ThreadTime,
+    start_time: Duration,
 }
 
 impl<'a> ThreadSpan<'a> {
     pub(crate) fn new(operation: &'a mut Operation) -> Self {
-        let start_time = ThreadTime::now();
+        let start_time = operation.platform.thread_time();
 
         Self {
             operation,
@@ -194,7 +196,8 @@ impl<'a> ThreadSpan<'a> {
     /// Calculates the thread CPU time delta since this span was created.
     #[must_use]
     fn to_duration(&self) -> Duration {
-        self.start_time.elapsed()
+        let current_time = self.operation.platform.thread_time();
+        current_time.saturating_sub(self.start_time)
     }
 }
 
@@ -228,12 +231,12 @@ impl Drop for ThreadSpan<'_> {
 #[derive(Debug)]
 pub struct ProcessSpan<'a> {
     operation: &'a mut Operation,
-    start_time: ProcessTime,
+    start_time: Duration,
 }
 
 impl<'a> ProcessSpan<'a> {
     pub(crate) fn new(operation: &'a mut Operation) -> Self {
-        let start_time = ProcessTime::now();
+        let start_time = operation.platform.process_time();
 
         Self {
             operation,
@@ -244,7 +247,8 @@ impl<'a> ProcessSpan<'a> {
     /// Calculates the process CPU time delta since this span was created.
     #[must_use]
     fn to_duration(&self) -> Duration {
-        self.start_time.elapsed()
+        let current_time = self.operation.platform.process_time();
+        current_time.saturating_sub(self.start_time)
     }
 }
 
@@ -264,12 +268,17 @@ mod tests {
 
     // Helper function to create a mock session for testing
     fn create_test_session() -> Session {
-        Session::new()
+        use crate::pal::{FakePlatform, PlatformFacade};
+
+        let fake_platform = FakePlatform::new();
+        let platform_facade = PlatformFacade::fake(fake_platform);
+        Session::with_platform(platform_facade)
     }
 
     #[test]
     fn operation_new() {
-        let operation = Operation::new("test".to_string());
+        let mut session = create_test_session();
+        let operation = session.operation("test");
         assert_eq!(operation.name(), "test");
         assert_eq!(operation.average(), Duration::ZERO);
         assert_eq!(operation.spans(), 0);
@@ -278,7 +287,8 @@ mod tests {
 
     #[test]
     fn operation_add_single() {
-        let mut operation = Operation::new("test".to_string());
+        let mut session = create_test_session();
+        let operation = session.operation("test");
         operation.add(Duration::from_millis(100));
 
         assert_eq!(operation.average(), Duration::from_millis(100));
@@ -288,7 +298,8 @@ mod tests {
 
     #[test]
     fn operation_add_multiple() {
-        let mut operation = Operation::new("test".to_string());
+        let mut session = create_test_session();
+        let operation = session.operation("test");
         operation.add(Duration::from_millis(100));
         operation.add(Duration::from_millis(200));
         operation.add(Duration::from_millis(300));
@@ -300,7 +311,8 @@ mod tests {
 
     #[test]
     fn operation_add_zero() {
-        let mut operation = Operation::new("test".to_string());
+        let mut session = create_test_session();
+        let operation = session.operation("test");
         operation.add(Duration::ZERO);
         operation.add(Duration::ZERO);
 
@@ -420,7 +432,15 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn thread_span_to_duration_returns_non_zero() {
-        let mut operation = Operation::new("test".to_string());
+        use crate::pal::{FakePlatform, PlatformFacade};
+
+        // Create a fake platform that returns progressively more time
+        let mut fake_platform = FakePlatform::new();
+        fake_platform.set_thread_time(Duration::from_millis(10));
+        let platform_facade = PlatformFacade::fake(fake_platform);
+        let mut session = Session::with_platform(platform_facade);
+
+        let operation = session.operation("test");
 
         // Create a span without doing any work
         {
@@ -430,8 +450,12 @@ mod tests {
         }
         let time_without_work = operation.total_cpu_time();
 
-        // Reset for second test
-        let mut operation2 = Operation::new("test2".to_string());
+        // Reset for second test with more CPU time
+        let mut fake_platform2 = FakePlatform::new();
+        fake_platform2.set_thread_time(Duration::from_millis(20));
+        let platform_facade2 = PlatformFacade::fake(fake_platform2);
+        let mut session2 = Session::with_platform(platform_facade2);
+        let operation2 = session2.operation("test2");
 
         // Create a span with significant CPU work
         {
@@ -455,7 +479,15 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn process_span_to_duration_returns_non_zero() {
-        let mut operation = Operation::new("test".to_string());
+        use crate::pal::{FakePlatform, PlatformFacade};
+
+        // Create a fake platform that returns progressively more time
+        let mut fake_platform = FakePlatform::new();
+        fake_platform.set_process_time(Duration::from_millis(15));
+        let platform_facade = PlatformFacade::fake(fake_platform);
+        let mut session = Session::with_platform(platform_facade);
+
+        let operation = session.operation("test");
 
         // Create a span without doing any work
         {
@@ -465,8 +497,12 @@ mod tests {
         }
         let time_without_work = operation.total_cpu_time();
 
-        // Reset for second test
-        let mut operation2 = Operation::new("test2".to_string());
+        // Reset for second test with more CPU time
+        let mut fake_platform2 = FakePlatform::new();
+        fake_platform2.set_process_time(Duration::from_millis(30));
+        let platform_facade2 = PlatformFacade::fake(fake_platform2);
+        let mut session2 = Session::with_platform(platform_facade2);
+        let operation2 = session2.operation("test2");
 
         // Create a span with significant CPU work
         {
