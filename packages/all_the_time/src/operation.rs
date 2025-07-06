@@ -84,21 +84,18 @@ impl Operation {
             .checked_mul(u128::from(iterations))
             .expect("duration multiplied by iterations overflows u128 - this indicates an unrealistic scenario");
 
-        let total_duration = Duration::from_nanos(
-            total_nanos
-                .try_into()
-                .expect("total duration exceeds Duration::MAX - this indicates an unrealistic scenario"),
-        );
+        let total_duration = Duration::from_nanos(total_nanos.try_into().expect(
+            "total duration exceeds Duration::MAX - this indicates an unrealistic scenario",
+        ));
 
         self.total_processor_time = self
             .total_processor_time
             .checked_add(total_duration)
             .expect("accumulating total processor time overflows Duration - this indicates an unrealistic scenario");
 
-        self.total_iterations = self
-            .total_iterations
-            .checked_add(iterations)
-            .expect("total iterations count overflows u64 - this indicates an unrealistic scenario");
+        self.total_iterations = self.total_iterations.checked_add(iterations).expect(
+            "total iterations count overflows u64 - this indicates an unrealistic scenario",
+        );
     }
 
     /// Creates a span builder with the specified iteration count.
@@ -285,10 +282,10 @@ mod tests {
     fn add_iterations_direct_call() {
         let mut session = create_test_session();
         let operation = session.operation("test");
-        
+
         // Test direct call to add_iterations
         operation.add_iterations(Duration::from_millis(100), 5);
-        
+
         assert_eq!(operation.total_iterations(), 5);
         assert_eq!(operation.total_processor_time(), Duration::from_millis(500));
         assert_eq!(operation.mean(), Duration::from_millis(100));
@@ -298,10 +295,10 @@ mod tests {
     fn add_iterations_zero_iterations() {
         let mut session = create_test_session();
         let operation = session.operation("test");
-        
+
         // Adding zero iterations should work and do nothing
         operation.add_iterations(Duration::from_millis(100), 0);
-        
+
         assert_eq!(operation.total_iterations(), 0);
         assert_eq!(operation.total_processor_time(), Duration::ZERO);
         assert_eq!(operation.mean(), Duration::ZERO);
@@ -311,10 +308,10 @@ mod tests {
     fn add_iterations_zero_duration() {
         let mut session = create_test_session();
         let operation = session.operation("test");
-        
+
         // Adding zero duration should work
         operation.add_iterations(Duration::ZERO, 1000);
-        
+
         assert_eq!(operation.total_iterations(), 1000);
         assert_eq!(operation.total_processor_time(), Duration::ZERO);
         assert_eq!(operation.mean(), Duration::ZERO);
