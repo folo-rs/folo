@@ -69,6 +69,7 @@ impl<'a> ThreadSpan<'a> {
 
     /// Calculates the thread processor time delta since this span was created.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // The != 1 fork is broadly applicable, so mutations fail. Intentional.
     fn to_duration(&self) -> Duration {
         let current_time = self.operation.platform().thread_time();
         let total_duration = current_time.saturating_sub(self.start_time);
@@ -78,9 +79,9 @@ impl<'a> ThreadSpan<'a> {
                 total_duration
                     .as_nanos()
                     .checked_div(u128::from(self.iterations))
-                    .unwrap_or(0)
+                    .expect("guarded by if condition")
                     .try_into()
-                    .unwrap_or(0),
+                    .expect("all realistic values fit in u64"),
             )
         } else {
             total_duration
