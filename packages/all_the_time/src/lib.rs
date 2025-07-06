@@ -59,9 +59,9 @@
 //! }
 //! # }
 //! ```
-//! 
+//!
 //! # Overhead
-//! 
+//!
 //! Capturing a single measurement by calling `measure_xyz()` incurs an overhead of
 //! approximately 500 nanoseconds on an arbitrary sample machine. You are recommended to measure
 //! multiple consecutive iterations to minimize the impact of overhead on your benchmarks:
