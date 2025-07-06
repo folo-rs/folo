@@ -34,7 +34,7 @@ use crate::pal::PlatformFacade;
 #[derive(Debug)]
 pub struct Operation {
     total_processor_time: Duration,
-    spans: u64,
+    total_iterations: u64,
     platform: PlatformFacade,
 }
 
@@ -44,7 +44,7 @@ impl Operation {
     pub(crate) fn new(platform: PlatformFacade) -> Self {
         Self {
             total_processor_time: Duration::ZERO,
-            spans: 0,
+            total_iterations: 0,
             platform,
         }
     }
@@ -62,12 +62,10 @@ impl Operation {
         self.total_processor_time = self
             .total_processor_time
             .checked_add(duration)
-            .expect("processor time duration overflow - this should not happen in practice");
+            .expect("accumulating more time than Duration can contain is not realistic under any conditions");
 
-        self.spans = self
-            .spans
-            .checked_add(1)
-            .expect("span count overflow - this should not happen in practice");
+        // Never going to overflow u64, so no point doing slower checked arithmetic here.
+        self.total_iterations = self.total_iterations.wrapping_add(1);
     }
 
     /// Creates a span builder with the specified iteration count.
@@ -118,25 +116,25 @@ impl Operation {
     /// Returns zero duration if no spans have been recorded.
     #[must_use]
     pub fn mean(&self) -> Duration {
-        if self.spans == 0 {
+        if self.total_iterations == 0 {
             Duration::ZERO
         } else {
             // Use div_ceil for proper division, falling back to manual calculation if needed
             Duration::from_nanos(
                 self.total_processor_time
                     .as_nanos()
-                    .checked_div(u128::from(self.spans))
-                    .expect("mean calculation should not overflow")
+                    .checked_div(u128::from(self.total_iterations))
+                    .expect("guarded by if condition")
                     .try_into()
-                    .expect("result should fit in u64"),
+                    .expect("all realistic values fit in u64"),
             )
         }
     }
 
     /// Returns the total number of spans recorded.
     #[must_use]
-    pub(crate) fn spans(&self) -> u64 {
-        self.spans
+    pub(crate) fn total_iterations(&self) -> u64 {
+        self.total_iterations
     }
 
     /// Returns the total processor time across all spans.
@@ -174,7 +172,7 @@ mod tests {
         let mut session = create_test_session();
         let operation = session.operation("test");
         assert_eq!(operation.mean(), Duration::ZERO);
-        assert_eq!(operation.spans(), 0);
+        assert_eq!(operation.total_iterations(), 0);
         assert_eq!(operation.total_processor_time(), Duration::ZERO);
     }
 
@@ -184,7 +182,7 @@ mod tests {
         let operation = session.operation("test");
         operation.add(Duration::from_millis(100));
         assert_eq!(operation.mean(), Duration::from_millis(100));
-        assert_eq!(operation.spans(), 1);
+        assert_eq!(operation.total_iterations(), 1);
         assert_eq!(operation.total_processor_time(), Duration::from_millis(100));
     }
 
@@ -196,7 +194,7 @@ mod tests {
         operation.add(Duration::from_millis(200));
         operation.add(Duration::from_millis(300));
         assert_eq!(operation.mean(), Duration::from_millis(200)); // (100 + 200 + 300) / 3
-        assert_eq!(operation.spans(), 3);
+        assert_eq!(operation.total_iterations(), 3);
         assert_eq!(operation.total_processor_time(), Duration::from_millis(600));
     }
 
@@ -207,7 +205,7 @@ mod tests {
         operation.add(Duration::ZERO);
         operation.add(Duration::ZERO);
         assert_eq!(operation.mean(), Duration::ZERO);
-        assert_eq!(operation.spans(), 2);
+        assert_eq!(operation.total_iterations(), 2);
         assert_eq!(operation.total_processor_time(), Duration::ZERO);
     }
 
@@ -225,7 +223,7 @@ mod tests {
             black_box(sum);
         } // Span drops here
 
-        assert_eq!(operation.spans(), 1);
+        assert_eq!(operation.total_iterations(), 1);
         // We can't test the exact time, but it should be greater than zero
         assert!(operation.total_processor_time() >= Duration::ZERO);
     }
@@ -246,7 +244,7 @@ mod tests {
             }
         } // Span drops here
 
-        assert_eq!(operation.spans(), 10);
+        assert_eq!(operation.total_iterations(), 10);
         assert!(operation.total_processor_time() >= Duration::ZERO);
     }
 }

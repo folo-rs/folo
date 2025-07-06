@@ -146,7 +146,7 @@ mod tests {
         }
 
         // Should extract time from PAL and record one span with zero duration
-        assert_eq!(operation.spans(), 1);
+        assert_eq!(operation.total_iterations(), 1);
         assert_eq!(operation.total_processor_time(), Duration::ZERO);
     }
 
@@ -167,7 +167,7 @@ mod tests {
         }
 
         // The span should have recorded some measurement
-        assert_eq!(operation.spans(), 1);
+        assert_eq!(operation.total_iterations(), 1);
         // The exact time will depend on the fake platform behavior
     }
 
@@ -181,7 +181,7 @@ mod tests {
             // Should record one span per iteration regardless of actual time measured
         }
 
-        assert_eq!(operation.spans(), 5);
+        assert_eq!(operation.total_iterations(), 5);
     }
 
     #[test]
@@ -196,7 +196,7 @@ mod tests {
         }
 
         // Should have recorded 10 iterations
-        assert_eq!(operation.spans(), 10);
+        assert_eq!(operation.total_iterations(), 10);
     }
 
     #[test]
@@ -215,7 +215,7 @@ mod tests {
             // Should use thread_time (50ms), not process_time (200ms)
         }
 
-        assert_eq!(operation.spans(), 1);
+        assert_eq!(operation.total_iterations(), 1);
     }
 
     #[test]
@@ -232,7 +232,7 @@ mod tests {
         }
 
         // With single iteration, the duration calculation should work
-        assert_eq!(operation.spans(), 1);
+        assert_eq!(operation.total_iterations(), 1);
         // Since fake platform starts at zero and doesn't advance, result should be zero
         assert_eq!(operation.total_processor_time(), Duration::ZERO);
     }
@@ -251,7 +251,7 @@ mod tests {
         }
 
         // Should record 10 spans
-        assert_eq!(operation.spans(), 10);
+        assert_eq!(operation.total_iterations(), 10);
         // Each span should be the divided duration (but since we're using a fake platform
         // that starts at 0 and doesn't advance, total will be 0)
         assert_eq!(operation.total_processor_time(), Duration::ZERO);

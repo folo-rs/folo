@@ -152,7 +152,7 @@ mod tests {
         }
 
         // Verify that at least one measurement was recorded
-        assert!(operation.spans() > 0);
+        assert!(operation.total_iterations() > 0);
     }
 
     #[test]
@@ -165,7 +165,7 @@ mod tests {
         }
 
         // Should extract time from PAL and record one span with zero duration
-        assert_eq!(operation.spans(), 1);
+        assert_eq!(operation.total_iterations(), 1);
         assert_eq!(operation.total_processor_time(), Duration::ZERO);
     }
 
@@ -185,7 +185,7 @@ mod tests {
             // Should use process_time (300ms), not thread_time (100ms)
         }
 
-        assert_eq!(operation.spans(), 1);
+        assert_eq!(operation.total_iterations(), 1);
     }
 
     #[test]
@@ -198,7 +198,7 @@ mod tests {
             // Should record one span per iteration regardless of actual time measured
         }
 
-        assert_eq!(operation.spans(), 7);
+        assert_eq!(operation.total_iterations(), 7);
     }
 
     #[test]
@@ -212,6 +212,6 @@ mod tests {
         }
 
         // Should have recorded 1 + 2 + 3 = 6 total spans
-        assert_eq!(operation.spans(), 6);
+        assert_eq!(operation.total_iterations(), 6);
     }
 }

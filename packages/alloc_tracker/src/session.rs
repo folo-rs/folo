@@ -109,14 +109,14 @@ impl Session {
     /// Whether there is any recorded activity in this session.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.operations.is_empty() || self.operations.values().all(|op| op.spans() == 0)
+        self.operations.is_empty() || self.operations.values().all(|op| op.total_iterations() == 0)
     }
 }
 
 impl fmt::Display for Session {
     #[cfg_attr(test, mutants::skip)] // No API contract.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.operations.is_empty() || self.operations.values().all(|op| op.spans() == 0) {
+        if self.operations.is_empty() || self.operations.values().all(|op| op.total_iterations() == 0) {
             writeln!(f, "No allocation statistics captured.")?;
         } else {
             writeln!(f, "Allocation statistics:")?;

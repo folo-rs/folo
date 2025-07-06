@@ -33,7 +33,7 @@ use crate::thread_span::ThreadSpan;
 #[derive(Debug)]
 pub struct Operation {
     total_bytes_allocated: u64,
-    spans: u64,
+    total_iterations: u64,
 }
 
 impl Operation {
@@ -41,7 +41,7 @@ impl Operation {
     pub(crate) fn new() -> Self {
         Self {
             total_bytes_allocated: 0,
-            spans: 0,
+            total_iterations: 0,
         }
     }
 
@@ -51,7 +51,7 @@ impl Operation {
     pub(crate) fn add(&mut self, delta: u64) {
         // Never going to overflow u64, so no point doing slower checked arithmetic here.
         self.total_bytes_allocated = self.total_bytes_allocated.wrapping_add(delta);
-        self.spans = self.spans.wrapping_add(1);
+        self.total_iterations = self.total_iterations.wrapping_add(1);
     }
 
     /// Creates a span that is associated the the operation and will automatically
@@ -103,9 +103,9 @@ impl Operation {
         ThreadSpan::new(self)
     }
 
-    /// Calculates the mean bytes allocated per span.
+    /// Calculates the mean bytes allocated per iteration.
     ///
-    /// Returns 0 if no spans have been recorded.
+    /// Returns 0 if no iterations have been recorded.
     #[expect(clippy::integer_division, reason = "we accept loss of precision")]
     #[expect(
         clippy::arithmetic_side_effects,
@@ -113,20 +113,20 @@ impl Operation {
     )]
     #[must_use]
     pub fn mean(&self) -> u64 {
-        if self.spans == 0 {
+        if self.total_iterations == 0 {
             0
         } else {
-            self.total_bytes_allocated / self.spans
+            self.total_bytes_allocated / self.total_iterations
         }
     }
 
-    /// Returns the total number of spans recorded.
+    /// Returns the total number of iterations recorded.
     #[must_use]
-    pub(crate) fn spans(&self) -> u64 {
-        self.spans
+    pub(crate) fn total_iterations(&self) -> u64 {
+        self.total_iterations
     }
 
-    /// Returns the total bytes allocated across all spans.
+    /// Returns the total bytes allocated across all iterations.
     #[must_use]
     pub fn total_bytes_allocated(&self) -> u64 {
         self.total_bytes_allocated
@@ -151,7 +151,7 @@ mod tests {
     fn operation_new() {
         let operation = Operation::new();
         assert_eq!(operation.mean(), 0);
-        assert_eq!(operation.spans(), 0);
+        assert_eq!(operation.total_iterations(), 0);
         assert_eq!(operation.total_bytes_allocated(), 0);
     }
 
@@ -161,7 +161,7 @@ mod tests {
         operation.add(100);
 
         assert_eq!(operation.mean(), 100);
-        assert_eq!(operation.spans(), 1);
+        assert_eq!(operation.total_iterations(), 1);
         assert_eq!(operation.total_bytes_allocated(), 100);
     }
 
@@ -173,7 +173,7 @@ mod tests {
         operation.add(300);
 
         assert_eq!(operation.mean(), 200); // (100 + 200 + 300) / 3
-        assert_eq!(operation.spans(), 3);
+        assert_eq!(operation.total_iterations(), 3);
         assert_eq!(operation.total_bytes_allocated(), 600);
     }
 
@@ -184,7 +184,7 @@ mod tests {
         operation.add(0);
 
         assert_eq!(operation.mean(), 0);
-        assert_eq!(operation.spans(), 2);
+        assert_eq!(operation.total_iterations(), 2);
         assert_eq!(operation.total_bytes_allocated(), 0);
     }
 
@@ -199,7 +199,7 @@ mod tests {
         }
 
         assert_eq!(operation.mean(), 75);
-        assert_eq!(operation.spans(), 1);
+        assert_eq!(operation.total_iterations(), 1);
         assert_eq!(operation.total_bytes_allocated(), 75);
     }
 
@@ -218,7 +218,7 @@ mod tests {
         }
 
         assert_eq!(operation.mean(), 150); // (100 + 200) / 2
-        assert_eq!(operation.spans(), 2);
+        assert_eq!(operation.total_iterations(), 2);
         assert_eq!(operation.total_bytes_allocated(), 300);
     }
 
@@ -232,7 +232,7 @@ mod tests {
         }
 
         assert_eq!(operation.mean(), 0);
-        assert_eq!(operation.spans(), 1);
+        assert_eq!(operation.total_iterations(), 1);
         assert_eq!(operation.total_bytes_allocated(), 0);
     }
 
@@ -250,7 +250,7 @@ mod tests {
         }
 
         assert_eq!(operation.mean(), 50);
-        assert_eq!(operation.spans(), 1);
+        assert_eq!(operation.total_iterations(), 1);
         assert_eq!(operation.total_bytes_allocated(), 50);
     }
 
@@ -271,7 +271,7 @@ mod tests {
         }
 
         assert_eq!(operation.mean(), 150); // (100 + 200) / 2
-        assert_eq!(operation.spans(), 2);
+        assert_eq!(operation.total_iterations(), 2);
         assert_eq!(operation.total_bytes_allocated(), 300);
     }
 
@@ -285,7 +285,7 @@ mod tests {
         }
 
         assert_eq!(operation.mean(), 0);
-        assert_eq!(operation.spans(), 1);
+        assert_eq!(operation.total_iterations(), 1);
         assert_eq!(operation.total_bytes_allocated(), 0);
     }
 }
