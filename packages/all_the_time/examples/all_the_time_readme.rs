@@ -1,6 +1,7 @@
 //! Example that demonstrates the exact usage shown in the README.md file.
 //!
-//! This shows how to use the `all_the_time` crate for tracking processor time.
+//! This shows how to use the `all_the_time` crate for tracking processor time
+//! with multiple iterations.
 #![expect(
     clippy::arithmetic_side_effects,
     reason = "this is example code that doesn't need production-level safety"
@@ -11,22 +12,20 @@ use all_the_time::Session;
 fn main() {
     let mut session = Session::new();
 
-    // Track a single operation
+    // Track multiple iterations efficiently
     {
         let operation = session.operation("my_operation");
-        let _span = operation.iterations(1).measure_thread();
+        let iterations = 1000;
+        let _span = operation.iterations(iterations).measure_thread();
 
-        // Perform some processor-intensive work
-        let mut sum = 0;
-        for i in 0..10000 {
-            sum += i;
+        for _ in 0..iterations {
+            let mut sum = 0;
+            for j in 0..100 {
+                sum += j * j;
+            }
+            std::hint::black_box(sum);
         }
+    } // Total time measured once and divided by iteration count for mean
 
-        std::hint::black_box(sum);
-    }
-
-    // Print results
     session.print_to_stdout();
-
-    // Session automatically cleans up when dropped
 }
