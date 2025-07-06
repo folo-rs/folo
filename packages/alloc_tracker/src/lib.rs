@@ -60,21 +60,23 @@
 //!     }
 //!
 //!     // Output statistics of all operations to console
-//!     println!("{}", session);
+//!     session.print_to_stdout();
 //! }
 //! ```
 //!
-//! # Threading
+//! # Overhead
 //!
-//! The allocation tracking provides both process-wide and thread-local measurement:
-//! - [`Operation::measure_process`] tracks allocations across all threads
-//! - [`Operation::measure_thread`] tracks allocations in the current thread only
+//! In single-threaded scenarios, capturing a single measurement by calling
+//! `Operation::measure_xyz()` incurs an overhead of approximately 2 nanoseconds
+//! on an arbitrary sample machine.
+//!
+//! Memory allocator activity is likewise slightly impacted by the tracking logic, especially
+//! in multi-threaded scenarios where additional synchronization may be introduced.
 //!
 //! # Session management
 //!
-//! Only one [`Session`] can be active at a time. Attempting to create
-//! multiple sessions simultaneously will result in an error. This ensures that tracking
-//! state is properly managed and statistics are accurate.
+//! Multiple [`Session`] instances can be used concurrently as they track memory allocation
+//! independently. Each session maintains its own set of operations and statistics.
 //!
 //! # Miri compatibility
 //!

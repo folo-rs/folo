@@ -11,57 +11,15 @@
 //! - [`SpanBuilder`] - Builder for creating spans with explicit iteration counts
 //!
 //! This package is not meant for use in production, serving only as a development tool.
-//!  
-//! # Simple Usage
 //!
-//! You can track processor time like this:
+//! # Example
 //!
-//! ```
+//! ```rust
 //! use all_the_time::Session;
 //!
 //! # fn main() {
 //! let mut session = Session::new();
 //!
-//! // Track a single operation
-//! {
-//!     let operation = session.operation("my_operation");
-//!     let _span = operation.iterations(1).measure_thread();
-//!     // Perform some processor-intensive work
-//!     let mut sum = 0;
-//!     for i in 0..10000 {
-//!         sum += i;
-//!     }
-//! }
-//!
-//! // Print results
-//! session.print_to_stdout();
-//!
-//! // Session automatically cleans up when dropped
-//! # }
-//! ```
-//!
-//! # Tracking Mean Processor Time
-//!
-//! For benchmarking scenarios, where you run multiple iterations of an operation, use batched measurements:
-//!
-//! ```
-//! use all_the_time::Session;
-//!
-//! # fn main() {
-//! let mut session = Session::new();
-//!
-//! // Track mean over multiple operations (single spans)
-//! for i in 0..10 {
-//!     let string_op = session.operation("processor_intensive_work");
-//!     let _span = string_op.iterations(1).measure_thread();
-//!     // Perform some processor-intensive work
-//!     let mut sum = 0;
-//!     for j in 0..i * 1000 {
-//!         sum += j;
-//!     }
-//! }
-//!
-//! // Or track with batch measurements (multiple iterations in one span)
 //! {
 //!     let batch_op = session.operation("batch_work");
 //!     let _span = batch_op.iterations(1000).measure_thread();
@@ -72,7 +30,7 @@
 //! }
 //!
 //! // Output statistics of all operations to console
-//! println!("{}", session);
+//! session.print_to_stdout();
 //! # }
 //! ```
 //!
@@ -101,17 +59,18 @@
 //! }
 //! # }
 //! ```
-//!
-//! # Threading
-//!
-//! The processor time tracking types are primarily intended for single-threaded use cases. Processor time
-//! is tracked per thread by default. Single-threaded testing/benchmarking is recommended
-//! to ensure meaningful data.
+//! 
+//! # Overhead
+//! 
+//! Capturing a single measurement by calling `measure_xyz()` incurs an overhead of
+//! approximately 500 nanoseconds on an arbitrary sample machine. You are recommended to measure
+//! multiple consecutive iterations to minimize the impact of overhead on your benchmarks:
+//! `operation.iterations(12345).measure_xyz()`.
 //!
 //! # Session management
 //!
-//! Multiple [`Session`] instances can be used concurrently as they track processor time independently.
-//! Each session maintains its own set of operations and statistics.
+//! Multiple [`Session`] instances can be used concurrently as they track processor time
+//! independently. Each session maintains its own set of operations and statistics.
 
 mod operation;
 mod pal;

@@ -20,5 +20,9 @@ mutants = { workspace = true }
 name = "alloc_tracker_bench_example"
 harness = false
 
+[[bench]]
+name = "tracking_overhead"
+harness = false
+
 [lints]
 workspace = true

@@ -21,5 +21,9 @@ mutants = { workspace = true }
 name = "all_the_time_bench_example"
 harness = false
 
+[[bench]]
+name = "tracking_overhead"
+harness = false
+
 [lints]
 workspace = true
