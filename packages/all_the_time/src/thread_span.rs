@@ -1,5 +1,6 @@
 //! Thread-specific processor time tracking spans.
 
+use std::marker::PhantomData;
 use std::time::Duration;
 
 use crate::Operation;
@@ -46,6 +47,8 @@ pub struct ThreadSpan<'a> {
     operation: &'a mut Operation,
     start_time: Duration,
     iterations: u64,
+
+    _single_threaded: PhantomData<*const ()>,
 }
 
 impl<'a> ThreadSpan<'a> {
@@ -64,6 +67,7 @@ impl<'a> ThreadSpan<'a> {
             operation,
             start_time,
             iterations,
+            _single_threaded: PhantomData,
         }
     }
 
