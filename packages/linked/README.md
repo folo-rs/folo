@@ -1,11 +1,11 @@
 Mechanisms for creating families of linked objects that can collaborate across threads,
 with each instance only used from a single thread.
 
-The problem this crate solves is that while writing highly efficient lock-free thread-local
+The problem this package solves is that while writing highly efficient lock-free thread-local
 code can yield great performance, it comes with serious drawbacks in terms of usability and
 developer experience.
 
-This crate bridges the gap by providing patterns and mechanisms that facilitate thread-local
+This package bridges the gap by providing patterns and mechanisms that facilitate thread-local
 behavior while presenting a simple and reasonably ergonomic API to user code:
 
 * Internally, a linked object can take advantage of lock-free thread-isolated logic for **high

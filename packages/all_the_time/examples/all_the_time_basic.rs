@@ -1,8 +1,7 @@
 //! Simplified example demonstrating key `all_the_time` types working together.
 //!
-//! This example shows how to use the main types in the `all_the_time` crate:
+//! This example shows how to use the main types in the `all_the_time` package:
 //! - `Session`: Manages processor time tracking state
-//! - `Span`: Tracks processor time over a time period  
 //! - `Operation`: Calculates mean processor time across multiple spans
 //!
 //! Run with: `cargo run --example all_the_time_basic`

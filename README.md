@@ -21,7 +21,7 @@ The design tenets this project aims to satisfy are the following:
 
 This is an umbrella project that covers multiple largely independent packages:
 
-| Crate                                                                 | Description                                                                                                                                 |
+| Package                                                               | Description                                                                                                                                 |
 |-----------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------|
 | [`all_the_time`](packages/all_the_time/README.md)                     | Processor time tracking utilities for benchmarks and performance analysis                                                                   |
 | [`alloc_tracker`](packages/alloc_tracker/README.md)                   | Memory allocation tracking utilities for benchmarks and performance analysis                                                                |
@@ -39,7 +39,7 @@ This is an umbrella project that covers multiple largely independent packages:
 Some auxiliary packages are also published because the primary packages above require their
 functionality. They only indirectly contribute to the Folo mission, so are listed separately:
 
-| Crate                                           | Description                                                                                                  |
+| Package                                         | Description                                                                                                  |
 |-------------------------------------------------|--------------------------------------------------------------------------------------------------------------|
 | [`cpulist`](packages/cpulist/README.md)         | Utilities for parsing and emitting Linux cpulist strings                                                     |
 | [`folo_ffi`](packages/folo_ffi/README.md)       | Utilities for working with FFI logic; exists for internal use in Folo packages; no stable API surface        |
@@ -48,7 +48,7 @@ functionality. They only indirectly contribute to the Folo mission, so are liste
 
 There are also some development-only packages in this repo, which are not published:
 
-| Crate                                         | Description                                                                        |
+| Package                                       | Description                                                                        |
 |-----------------------------------------------|------------------------------------------------------------------------------------|
 | [`benchmark_utils`](packages/benchmark_utils) | Common benchmarking logic used across the packages in this project                 |
 | [`benchmarks`](packages/benchmarks)           | Random pile of benchmarks to explore relevant scenarios and guide Folo development |

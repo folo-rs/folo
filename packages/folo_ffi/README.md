@@ -1,5 +1,5 @@
 Utilities for working with FFI calls. This exists to serve the internal FFI needs of Folo packages.
-Accordingly, the crate has no stable API surface.
+Accordingly, the package has no stable API surface.
 
 More details in the [package documentation](https://docs.rs/folo_ffi/).
 

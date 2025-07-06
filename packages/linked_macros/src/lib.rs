@@ -3,7 +3,7 @@
 
 #![allow(
     missing_docs,
-    reason = "Private API, public API is documented in `linked` crate"
+    reason = "Private API, public API is documented in `linked` package"
 )]
 
 use proc_macro::TokenStream;

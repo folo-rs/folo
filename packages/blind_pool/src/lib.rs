@@ -1,4 +1,4 @@
-//! This crate provides [`BlindPool`], a dynamically growing pool of objects that can store
+//! This package provides [`BlindPool`], a dynamically growing pool of objects that can store
 //! objects of any type.
 //!
 //! It offers stable memory addresses and efficient typed insertion with automatic value dropping.

@@ -4,11 +4,11 @@
 //! Mechanisms for creating families of linked objects that can collaborate across threads,
 //! with each instance only used from a single thread.
 //!
-//! The problem this crate solves is that while writing highly efficient lock-free thread-local
+//! The problem this package solves is that while writing highly efficient lock-free thread-local
 //! code can yield great performance, it comes with serious drawbacks in terms of usability and
 //! developer experience.
 //!
-//! This crate bridges the gap by providing patterns and mechanisms that facilitate thread-local
+//! This package bridges the gap by providing patterns and mechanisms that facilitate thread-local
 //! behavior while presenting a simple and reasonably ergonomic API to user code:
 //!
 //! * Internally, a linked object can take advantage of lock-free thread-isolated logic for **high
@@ -20,7 +20,7 @@
 //!   and the user of a type.
 #![ doc=mermaid!( "../doc/linked.mermaid") ]
 //!
-//! The patterns and mechanisms provided by this crate are designed to make it easy to create linked
+//! The patterns and mechanisms provided by this package are designed to make it easy to create linked
 //! object families and to provide primitives that allow these object families to be used without
 //! the user code having to understand how the objects are wired up inside or keeping track of which
 //! instance is meant to be used on which thread.
@@ -49,7 +49,7 @@
 //! some types. For example, think of messaging channels - multiple receivers should be independent,
 //! even on the same thread, even if part of the same channel.
 //!
-//! The primary mechanisms this crate provides to create instances of linked objects are:
+//! The primary mechanisms this package provides to create instances of linked objects are:
 //!
 //! * [`linked::instances!` macro][1];
 //! * [`linked::Family<T>`][11]
@@ -192,7 +192,7 @@
 //! instance to share it with a different thread. This poses an obvious question: how can we then
 //! create different instances from the same family for different threads?
 //!
-//! This crate provides several mechanisms for this:
+//! This package provides several mechanisms for this:
 //!
 //! * [`linked::instances!`][1] will enrich static variables with linked object powers - you can
 //!   use a static variable to get linked instances from the same object family;
@@ -450,10 +450,10 @@
 //! There are some practical considerations that mean you often want your linked objects
 //! to be `Send` and `Sync`, just like traditional thread-safe objects are.
 //!
-//! This may be surprising - after all, the whole point of this crate is to enable thread-local
+//! This may be surprising - after all, the whole point of this package is to enable thread-local
 //! behavior, which does not require `Send` or `Sync`.
 //!
-//! The primary reason is that **many APIs in the Rust crate ecosystem require `Send` from types,
+//! The primary reason is that **many APIs in the Rust ecosystem require `Send` from types,
 //! even in scenarios where the object is only accessed from a single thread**. This is because
 //! [the language lacks the flexibility necessary to create APIs that support both `Send` and
 //! `!Send` types][12], so many API authors simply require `Send` from all types.
@@ -667,7 +667,7 @@ mod macros;
 
 /// Marks a struct as implementing the [linked object pattern][crate].
 ///
-/// See crate-level documentation for a high-level guide.
+/// See package-level documentation for a high-level guide.
 ///
 /// # Usage
 ///

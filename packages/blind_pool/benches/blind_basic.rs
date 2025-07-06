@@ -1,4 +1,4 @@
-//! Basic benchmarks for the `blind_pool` crate.
+//! Basic benchmarks for the `blind_pool` package.
 
 #![allow(
     missing_docs,

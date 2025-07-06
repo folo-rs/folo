@@ -1,5 +1,5 @@
 //! We compare typical algorithms under different execution conditions, with collaborating threads
-//! being organized in various ways supported by the `many_cpus_benchmarking` crate. Of particular
+//! being organized in various ways supported by the `many_cpus_benchmarking` package. Of particular
 //! interest are the effects of data locality (i.e. memory regions and processor caching).
 
 #![allow(

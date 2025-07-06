@@ -31,14 +31,14 @@
 //!    as the current processor (i.e. on the physical memory modules directly wired to the current
 //!    processor).
 //!
-//! # How does this crate help?
+//! # How does this package help?
 //!
-//! The `many_cpus` crate provides mechanisms to schedule threads on specific processors and in specific
+//! The `many_cpus` package provides mechanisms to schedule threads on specific processors and in specific
 //! memory regions, ensuring that work assigned to those threads remains on the same hardware and that
 //! data shared between threads is local to the same memory region, enabling you to achieve high data
 //! locality and processor cache efficiency.
 //!
-//! In addition to thread spawning, this crate enables app logic to observe what processor the current
+//! In addition to thread spawning, this package enables app logic to observe what processor the current
 //! thread is executing on and in which memory region this processor is located, even if the thread is
 //! not bound to a specific processor. This can be a building block for efficiency improvements even
 //! outside directly controlled work scheduling.
@@ -49,7 +49,7 @@
 //!
 //! # Operating system compatibility
 //!
-//! This crate is tested on the following operating systems:
+//! This package is tested on the following operating systems:
 //!
 //! * Windows 11 and newer
 //! * Windows Server 2022 and newer
@@ -162,7 +162,7 @@
 //!
 //! # Inheriting soft limits on allowed processors
 //!
-//! While the crate does not by default obey soft limits, you can opt in to these limits by
+//! While the package does not by default obey soft limits, you can opt in to these limits by
 //! inheriting the allowed processor set in the `main()` entrypoint thread:
 //!
 //! ```rust

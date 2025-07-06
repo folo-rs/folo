@@ -1,4 +1,4 @@
-//! Processor time tracking benchmarks demonstrating the `all_the_time` crate.
+//! Processor time tracking benchmarks demonstrating the `all_the_time` package.
 //!
 //! This benchmark demonstrates how to track processor time (duration per iteration)
 //! in Criterion benchmarks using the `all_the_time` utilities.

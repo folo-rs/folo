@@ -1,6 +1,6 @@
 //! Example that demonstrates the exact usage shown in the README.md file.
 //!
-//! This shows how to use the `all_the_time` crate for tracking processor time
+//! This shows how to use the `all_the_time` package for tracking processor time
 //! with multiple iterations.
 #![expect(
     clippy::arithmetic_side_effects,

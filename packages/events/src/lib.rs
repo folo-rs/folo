@@ -1,6 +1,6 @@
 //! High-performance event signaling primitives for concurrent environments.
 //!
-//! This crate provides lightweight, efficient signaling mechanisms for communicating between
+//! This package provides lightweight, efficient signaling mechanisms for communicating between
 //! different parts of an application. The API is designed to be simple to use while offering
 //! high performance in concurrent scenarios.
 //!
@@ -18,7 +18,7 @@
 //! # Design Philosophy: Explicit Event Management
 //!
 //! Unlike traditional communication primitives (such as `oneshot` channels) where the
-//! synchronization object is hidden behind dynamic allocation, this crate brings the
+//! synchronization object is hidden behind dynamic allocation, this package brings the
 //! **event** object front and center. This fundamental design decision enables several
 //! key optimizations:
 //!
@@ -36,7 +36,7 @@
 //!
 //! ## Resource Pooling
 //!
-//! The explicit event structure makes pooling natural and efficient. The crate provides
+//! The explicit event structure makes pooling natural and efficient. The package provides
 //! built-in pooling implementations ([`OnceEventPool`], [`LocalOnceEventPool`]) that
 //! automatically manage event lifecycle without any dynamic allocation overhead after
 //! the initial pool setup.

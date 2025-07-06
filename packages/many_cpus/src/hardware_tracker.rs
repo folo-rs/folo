@@ -106,7 +106,7 @@ impl HardwareTracker {
     /// Threads may be pinned to any number of processors, not just one - this only checks for
     /// the scenario where the thread is pinned to one specific processor.
     ///
-    /// This function only recognizes pinning done via the `many_cpus` crate. If you pin a thread
+    /// This function only recognizes pinning done via the `many_cpus` package. If you pin a thread
     /// using other means (e.g. `libc`), this function will not be able to detect it.
     ///
     /// # Example (basic)
@@ -172,7 +172,7 @@ impl HardwareTracker {
     /// Whether the current thread is pinned to one or more processors that are all
     /// in the same memory region.
     ///
-    /// This function only recognizes pinning done via the `many_cpus` crate. If you pin a thread
+    /// This function only recognizes pinning done via the `many_cpus` package. If you pin a thread
     /// using other means (e.g. `libc`), this function will not be able to detect it.
     ///
     /// # Example (basic)

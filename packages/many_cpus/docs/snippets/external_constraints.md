@@ -4,16 +4,16 @@ The operating system may define constraints that prohibit the application from u
 the available processors (e.g. when the app is containerized and provided limited
 hardware resources).
 
-This crate treats platform constraints as follows:
+This package treats platform constraints as follows:
 
 * Hard limits on which processors are allowed are respected - forbidden processors are mostly
-  ignored by this crate and cannot be used to spawn threads, though such processors are still
+  ignored by this package and cannot be used to spawn threads, though such processors are still
   accounted for when inspecting hardware information such as "max processor ID".
   The mechanisms for defining such limits are cgroups on Linux and job objects on Windows.
   See `examples/obey_job_affinity_limits_windows.rs` for a Windows-specific example.
 * Soft limits on which processors are allowed are ignored by default - specifying a processor
   affinity via `taskset` on Linux, `start.exe /affinity 0xff` on Windows or similar mechanisms
-  does not affect the set of processors this crate will use by default, though you can opt in to
+  does not affect the set of processors this package will use by default, though you can opt in to
   this via [`.where_available_for_current_thread()`][crate::ProcessorSetBuilder::where_available_for_current_thread].
 * Limits on processor time are considered an upper bound on the number of processors that can be
   included in a processor set. For example, if you configure a processor time limit of

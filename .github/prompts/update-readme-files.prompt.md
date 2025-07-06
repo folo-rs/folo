@@ -5,7 +5,7 @@ Ensure that the `README.md` in each published package succinctly summarizes
 the contents of the package.
 
 A `README.md` is only used for packages that are to be published (`publish = true` in `Cargo.toml`).
-Macro crates (anything with `_macros` in the name) do not need a `README.md`, as they only
+Macro packages (anything with `_macros` in the name) do not need a `README.md`, as they only
 exist to be hidden dependencies.
 
 The contents of a `README.md` file should be:

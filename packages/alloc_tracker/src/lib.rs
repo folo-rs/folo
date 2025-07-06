@@ -79,7 +79,7 @@
 //! # Miri compatibility
 //!
 //! Miri replaces the global allocator with its own logic, so you cannot execute code that uses
-//! this crate under Miri.
+//! this package under Miri.
 
 mod allocator;
 mod operation;

@@ -1,6 +1,6 @@
 //! Example that demonstrates the exact usage shown in the README.md file.
 //!
-//! This shows how to use the `alloc_tracker` crate for tracking memory allocations.
+//! This shows how to use the `alloc_tracker` package for tracking memory allocations.
 
 use alloc_tracker::{Allocator, Session};
 

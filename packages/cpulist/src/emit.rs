@@ -11,10 +11,10 @@ use crate::Item;
 ///
 /// Empty input is valid and returns an empty string.
 ///
-/// The exact emitted representation is unspecified and may change across versions of this crate.
-/// All we promise is that it is a recognizable cpulist and can be parsed by this crate.
+/// The exact emitted representation is unspecified and may change across versions of this package.
+/// All we promise is that it is a recognizable cpulist and can be parsed by this package.
 ///
-/// See [crate-level documentation][crate] for more details.
+/// See [package-level documentation][crate] for more details.
 pub fn emit<I>(items: I) -> String
 where
     I: IntoIterator,

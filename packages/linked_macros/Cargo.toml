@@ -1,6 +1,6 @@
 [package]
 name = "linked_macros"
-description = "Internal dependency of the 'linked' crate - do not reference directly"
+description = "Internal dependency of the 'linked' package - do not reference directly"
 publish = true
 version = "0.2.8"
 

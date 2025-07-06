@@ -15,7 +15,7 @@ use crate::__private::{InstanceFactory, Link};
 ///
 /// The family is a low-level primitive for creating instances of linked objects. You will need to
 /// use it directly if you are implementing custom instance management patterns. Typical usage of
-/// linked objects occurs via standard macros/wrappers provided by the crate:
+/// linked objects occurs via standard macros/wrappers provided by the package:
 ///
 /// * [`linked::instances!`][1]
 /// * [`linked::thread_local_rc!`][2]

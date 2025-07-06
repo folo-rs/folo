@@ -1,4 +1,4 @@
-//! Memory allocation tracking benchmarks demonstrating the `alloc_tracker` crate.
+//! Memory allocation tracking benchmarks demonstrating the `alloc_tracker` package.
 //!
 //! This benchmark demonstrates how to track memory allocations (bytes per iteration)
 //! in Criterion benchmarks using the `alloc_tracker` utilities.
