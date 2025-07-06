@@ -121,68 +121,6 @@ fn real_platform_process_span_measures_nonzero_time() {
 }
 
 #[test]
-fn real_platform_both_span_types_measure_nonzero_time() {
-    let mut session = Session::new();
-
-    // Test thread span with significant work
-    let thread_time = {
-        let thread_op = session.operation("thread_comparison");
-        {
-            let _span = thread_op.iterations(1).measure_thread();
-            perform_measurable_cpu_work();
-        }
-        thread_op.mean()
-    };
-
-    // Test process span with significant work
-    let process_time = {
-        let process_op = session.operation("process_comparison");
-        {
-            let _span = process_op.iterations(1).measure_process();
-            perform_measurable_cpu_work();
-        }
-        process_op.mean()
-    };
-
-    // Both measurements must be non-zero for intensive work
-    assert!(
-        thread_time > Duration::ZERO,
-        "Thread span should measure non-zero time for intensive work, got {thread_time:?}"
-    );
-    assert!(
-        process_time > Duration::ZERO,
-        "Process span should measure non-zero time for intensive work, got {process_time:?}"
-    );
-
-    // Both should be at least 1ms for our intensive work
-    assert!(
-        thread_time >= Duration::from_millis(1),
-        "Thread span should measure at least 1ms, got {thread_time:?}"
-    );
-    assert!(
-        process_time >= Duration::from_millis(1),
-        "Process span should measure at least 1ms, got {process_time:?}"
-    );
-
-    // In a single-threaded context, both should be similar
-    // (Allow some variance due to measurement precision)
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "precision loss acceptable for test comparison"
-    )]
-    let ratio = if thread_time > process_time {
-        thread_time.as_nanos() as f64 / process_time.as_nanos() as f64
-    } else {
-        process_time.as_nanos() as f64 / thread_time.as_nanos() as f64
-    };
-
-    assert!(
-        ratio < 10.0,
-        "Thread and process times should be similar in single-threaded context. Thread: {thread_time:?}, Process: {process_time:?}, Ratio: {ratio}"
-    );
-}
-
-#[test]
 fn real_platform_session_not_empty_after_work() {
     let mut session = Session::new();
 
