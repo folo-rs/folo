@@ -1,25 +1,31 @@
 //! Integration tests for `all_the_time` against the real platform.
 //!
-//! These tests use the real system processor time tracking to verify
-//! that actual work results in nonzero processor time measurements.
+//! These tests verify that significant CPU work results in measurable
+//! processor time. All tests require non-zero measurements to pass.
+
+#![cfg(not(miri))] // Miri cannot use the real operating system APIs.
 
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use all_the_time::Session;
 
-/// Performs CPU-intensive arithmetic work until at least the target duration has elapsed.
+/// Performs intensive CPU work that should be measurable as processor time.
+///
+/// This function performs enough work to ensure reliable measurement
+/// on any platform that supports processor time tracking.
 ///
 /// Returns the number of operations performed.
-fn perform_work_for_duration(target_duration: Duration) -> u64 {
+fn perform_measurable_cpu_work() -> u64 {
     let start = Instant::now();
     let mut iterations = 0_u64;
     let mut accumulator = 0_u64;
 
-    // Keep doing arithmetic work until we've used enough real time
-    while start.elapsed() < target_duration {
-        // Perform more intensive arithmetic that the optimizer can't eliminate
-        for i in 0..10000_u32 {
+    // Perform intensive work for at least 50ms of real time
+    // This should be easily measurable as processor time
+    while start.elapsed() < Duration::from_millis(50) {
+        // Intensive arithmetic that cannot be optimized away
+        for i in 0..50000_u32 {
             accumulator = accumulator
                 .wrapping_add(u64::from(i))
                 .wrapping_mul(3)
@@ -27,13 +33,13 @@ fn perform_work_for_duration(target_duration: Duration) -> u64 {
                 .wrapping_mul(11)
                 .wrapping_add(13);
 
-            // Add some more complex operations
             let temp = accumulator.wrapping_pow(2);
             accumulator = accumulator.wrapping_add(temp);
-        }
-        iterations = iterations.wrapping_add(10000);
 
-        // Use black_box to prevent the optimizer from eliminating our work
+            // Additional complex operations
+            accumulator = accumulator.rotate_left(1).wrapping_sub(i.into());
+        }
+        iterations = iterations.wrapping_add(50000);
         black_box(accumulator);
     }
 
@@ -41,149 +47,218 @@ fn perform_work_for_duration(target_duration: Duration) -> u64 {
 }
 
 #[test]
-#[cfg(not(miri))] // Miri cannot use the real operating system APIs.
 fn real_platform_thread_span_measures_nonzero_time() {
     let mut session = Session::new();
     let operation = session.operation("thread_work");
 
-    // Perform work and measure it with a thread span
+    // Perform significant CPU work and measure it with a thread span
     let iterations_performed = {
         let _span = operation.iterations(1).measure_thread();
-        perform_work_for_duration(Duration::from_millis(10)) // Increased work duration
+        perform_measurable_cpu_work()
     };
 
-    // Verify that we actually performed some work
+    // Verify that we actually performed substantial work
     assert!(
-        iterations_performed > 0,
-        "Expected to perform some iterations, but got {iterations_performed}"
+        iterations_performed > 1_000_000,
+        "Expected to perform substantial work, but only got {iterations_performed} iterations"
     );
 
-    // Verify that the span recorded some processor time
-    // Note: Thread time measurement may not be available on all platforms
-    let total_time = operation.mean(); // Since we have 1 span, mean equals total
+    // Verify that the span recorded measurable processor time
+    let total_time = operation.mean();
 
-    // On some platforms (like Windows), thread time might not be implemented
-    // So we only check that the measurement doesn't panic and returns a valid duration
+    // With 50ms+ of intensive work, we must get a non-zero measurement
     assert!(
-        total_time >= Duration::ZERO,
-        "Expected non-negative processor time, but got {total_time:?}"
+        total_time > Duration::ZERO,
+        "Expected measurable processor time for intensive work, but got {total_time:?}"
     );
 
-    // Sanity check: the time should be reasonable (not absurdly large)
+    // Sanity check: the time should be reasonable
     assert!(
-        total_time < Duration::from_secs(1),
+        total_time >= Duration::from_millis(1),
+        "Expected at least 1ms for intensive work, but got {total_time:?}"
+    );
+    assert!(
+        total_time < Duration::from_secs(5),
         "Expected reasonable processor time, but got {total_time:?}"
     );
 }
 
 #[test]
-#[cfg(not(miri))] // Miri cannot use the real operating system APIs.
 fn real_platform_process_span_measures_nonzero_time() {
     let mut session = Session::new();
     let operation = session.operation("process_work");
 
-    // Perform work and measure it with a process span
+    // Perform significant CPU work and measure it with a process span
     let iterations_performed = {
         let _span = operation.iterations(1).measure_process();
-        perform_work_for_duration(Duration::from_millis(10)) // Increased work duration
+        perform_measurable_cpu_work()
     };
 
-    // Verify that we actually performed some work
+    // Verify that we actually performed substantial work
     assert!(
-        iterations_performed > 0,
-        "Expected to perform some iterations, but got {iterations_performed}"
+        iterations_performed > 1_000_000,
+        "Expected to perform substantial work, but only got {iterations_performed} iterations"
     );
 
-    // Verify that the span recorded processor time (may be zero on some platforms)
-    let total_time = operation.mean(); // Since we have 1 span, mean equals total
+    // Verify that the span recorded measurable processor time
+    let total_time = operation.mean();
 
-    // On some platforms (like Windows), processor time measurement may not be available
-    // or may return 0ns even for actual work. We accept this platform limitation.
+    // With 50ms+ of intensive work, we must get a non-zero measurement
     assert!(
-        total_time >= Duration::ZERO,
-        "Expected non-negative processor time, but got {total_time:?}"
+        total_time > Duration::ZERO,
+        "Expected measurable processor time for intensive work, but got {total_time:?}"
     );
 
-    // Sanity check: if we got nonzero time, it should be reasonable
-    if total_time > Duration::ZERO {
-        assert!(
-            total_time < Duration::from_secs(1),
-            "Expected reasonable processor time, but got {total_time:?}"
-        );
-    }
+    // Sanity check: the time should be reasonable
+    assert!(
+        total_time >= Duration::from_millis(1),
+        "Expected at least 1ms for intensive work, but got {total_time:?}"
+    );
+    assert!(
+        total_time < Duration::from_secs(5),
+        "Expected reasonable processor time, but got {total_time:?}"
+    );
 }
 
 #[test]
-#[cfg(not(miri))] // Miri cannot use the real operating system APIs.
 fn real_platform_both_span_types_measure_nonzero_time() {
     let mut session = Session::new();
 
-    // Test thread span
+    // Test thread span with significant work
     let thread_time = {
         let thread_op = session.operation("thread_comparison");
         {
             let _span = thread_op.iterations(1).measure_thread();
-            perform_work_for_duration(Duration::from_millis(10)); // Increased work duration
+            perform_measurable_cpu_work();
         }
         thread_op.mean()
     };
 
-    // Test process span
+    // Test process span with significant work
     let process_time = {
         let process_op = session.operation("process_comparison");
         {
             let _span = process_op.iterations(1).measure_process();
-            perform_work_for_duration(Duration::from_millis(10)); // Increased work duration
+            perform_measurable_cpu_work();
         }
         process_op.mean()
     };
 
-    // Both should be non-negative (may be zero on some platforms)
+    // Both measurements must be non-zero for intensive work
     assert!(
-        thread_time >= Duration::ZERO,
-        "Thread span should measure non-negative time, got {thread_time:?}"
+        thread_time > Duration::ZERO,
+        "Thread span should measure non-zero time for intensive work, got {thread_time:?}"
     );
     assert!(
-        process_time >= Duration::ZERO,
-        "Process span should measure non-negative time, got {process_time:?}"
+        process_time > Duration::ZERO,
+        "Process span should measure non-zero time for intensive work, got {process_time:?}"
     );
 
-    // If both times are available and nonzero, compare them
-    if thread_time > Duration::ZERO && process_time > Duration::ZERO {
-        // In a single-threaded context, both should be similar
-        // (Allow some variance due to measurement precision)
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "precision loss acceptable for test comparison"
-        )]
-        let ratio = if thread_time > process_time {
-            thread_time.as_nanos() as f64 / process_time.as_nanos() as f64
-        } else {
-            process_time.as_nanos() as f64 / thread_time.as_nanos() as f64
-        };
+    // Both should be at least 1ms for our intensive work
+    assert!(
+        thread_time >= Duration::from_millis(1),
+        "Thread span should measure at least 1ms, got {thread_time:?}"
+    );
+    assert!(
+        process_time >= Duration::from_millis(1),
+        "Process span should measure at least 1ms, got {process_time:?}"
+    );
 
-        assert!(
-            ratio < 10.0,
-            "Thread and process times should be similar in single-threaded context. Thread: {thread_time:?}, Process: {process_time:?}, Ratio: {ratio}"
-        );
-    }
+    // In a single-threaded context, both should be similar
+    // (Allow some variance due to measurement precision)
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "precision loss acceptable for test comparison"
+    )]
+    let ratio = if thread_time > process_time {
+        thread_time.as_nanos() as f64 / process_time.as_nanos() as f64
+    } else {
+        process_time.as_nanos() as f64 / thread_time.as_nanos() as f64
+    };
+
+    assert!(
+        ratio < 10.0,
+        "Thread and process times should be similar in single-threaded context. Thread: {thread_time:?}, Process: {process_time:?}, Ratio: {ratio}"
+    );
 }
 
 #[test]
-#[cfg(not(miri))] // Miri cannot use the real operating system APIs.
 fn real_platform_session_not_empty_after_work() {
     let mut session = Session::new();
 
     // Session should start empty
     assert!(session.is_empty());
 
-    // Perform some measured work
-    let operation = session.operation("integration_test");
-    {
-        let _span = operation.iterations(1).measure_thread();
-        perform_work_for_duration(Duration::from_millis(10)); // Increased work duration
-    }
+    // Perform some measured intensive work
+    let measured_time = {
+        let operation = session.operation("integration_test");
+        {
+            let _span = operation.iterations(1).measure_thread();
+            perform_measurable_cpu_work();
+        }
+        operation.mean()
+    };
 
     // Session should no longer be empty
     assert!(!session.is_empty());
+
+    // And the measurement should be meaningful
+    assert!(
+        measured_time > Duration::ZERO,
+        "Expected measurable time for intensive work, got {measured_time:?}"
+    );
+}
+
+#[test]
+fn real_platform_iterations_divisor_works_correctly() {
+    let mut session = Session::new();
+
+    // Measure the same work with different iteration counts
+    let single_iteration_time = {
+        let operation = session.operation("single_iteration");
+        {
+            let _span = operation.iterations(1).measure_process();
+            perform_measurable_cpu_work();
+        }
+        operation.mean()
+    };
+
+    let multiple_iterations_time = {
+        let operation = session.operation("multiple_iterations");
+        {
+            let _span = operation.iterations(10).measure_process();
+            // Perform the same work 10 times
+            for _ in 0..10 {
+                perform_measurable_cpu_work();
+            }
+        }
+        operation.mean()
+    };
+
+    // Both measurements should be non-zero
+    assert!(
+        single_iteration_time > Duration::ZERO,
+        "Single iteration measurement should be non-zero, got {single_iteration_time:?}"
+    );
+    assert!(
+        multiple_iterations_time > Duration::ZERO,
+        "Multiple iterations measurement should be non-zero, got {multiple_iterations_time:?}"
+    );
+
+    // The multiple iterations measurement should be close to the single iteration measurement
+    // (within a reasonable factor due to measurement variance)
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "precision loss acceptable for test comparison"
+    )]
+    let ratio = if single_iteration_time > multiple_iterations_time {
+        single_iteration_time.as_nanos() as f64 / multiple_iterations_time.as_nanos() as f64
+    } else {
+        multiple_iterations_time.as_nanos() as f64 / single_iteration_time.as_nanos() as f64
+    };
+
+    assert!(
+        ratio < 3.0,
+        "Single iteration and average per iteration should be similar. Single: {single_iteration_time:?}, Average per iteration: {multiple_iterations_time:?}, Ratio: {ratio}"
+    );
 }
