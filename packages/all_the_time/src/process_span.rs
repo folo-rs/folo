@@ -94,10 +94,8 @@ impl Drop for ProcessSpan<'_> {
     fn drop(&mut self) {
         let duration = self.to_duration();
 
-        // Add the per-iteration duration, but record the number of iterations
-        for _ in 0..self.iterations {
-            self.operation.add(duration);
-        }
+        // Add the per-iteration duration for all iterations at once
+        self.operation.add_iterations(duration, self.iterations);
     }
 }
 

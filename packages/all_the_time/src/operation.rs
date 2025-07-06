@@ -58,14 +58,47 @@ impl Operation {
     /// Adds a processor time duration to the mean calculation.
     ///
     /// This method is typically called by span types when they are dropped.
+    /// Internally delegates to `add_iterations()` with a count of 1.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the duration addition or iteration count would overflow.
+    #[allow(dead_code, reason = "used in tests and delegates to add_iterations")]
     pub(crate) fn add(&mut self, duration: Duration) {
+        self.add_iterations(duration, 1);
+    }
+
+    /// Adds multiple iterations of the same duration to the mean calculation.
+    ///
+    /// This is a more efficient version of calling `add()` multiple times with the same duration.
+    /// This method is used by span types when they measure multiple iterations.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the duration multiplication or total time accumulation would overflow.
+    pub(crate) fn add_iterations(&mut self, duration: Duration, iterations: u64) {
+        // Calculate total duration by multiplying duration by iterations
+        // We use nanosecond arithmetic to avoid Duration::checked_mul limitations with u64
+        let duration_nanos = duration.as_nanos();
+        let total_nanos = duration_nanos
+            .checked_mul(u128::from(iterations))
+            .expect("duration multiplied by iterations overflows u128 - this indicates an unrealistic scenario");
+
+        let total_duration = Duration::from_nanos(
+            total_nanos
+                .try_into()
+                .expect("total duration exceeds Duration::MAX - this indicates an unrealistic scenario"),
+        );
+
         self.total_processor_time = self
             .total_processor_time
-            .checked_add(duration)
-            .expect("accumulating more time than Duration can contain is not realistic under any conditions");
+            .checked_add(total_duration)
+            .expect("accumulating total processor time overflows Duration - this indicates an unrealistic scenario");
 
-        // Never going to overflow u64, so no point doing slower checked arithmetic here.
-        self.total_iterations = self.total_iterations.wrapping_add(1);
+        self.total_iterations = self
+            .total_iterations
+            .checked_add(iterations)
+            .expect("total iterations count overflows u64 - this indicates an unrealistic scenario");
     }
 
     /// Creates a span builder with the specified iteration count.
@@ -246,5 +279,44 @@ mod tests {
 
         assert_eq!(operation.total_iterations(), 10);
         assert!(operation.total_processor_time() >= Duration::ZERO);
+    }
+
+    #[test]
+    fn add_iterations_direct_call() {
+        let mut session = create_test_session();
+        let operation = session.operation("test");
+        
+        // Test direct call to add_iterations
+        operation.add_iterations(Duration::from_millis(100), 5);
+        
+        assert_eq!(operation.total_iterations(), 5);
+        assert_eq!(operation.total_processor_time(), Duration::from_millis(500));
+        assert_eq!(operation.mean(), Duration::from_millis(100));
+    }
+
+    #[test]
+    fn add_iterations_zero_iterations() {
+        let mut session = create_test_session();
+        let operation = session.operation("test");
+        
+        // Adding zero iterations should work and do nothing
+        operation.add_iterations(Duration::from_millis(100), 0);
+        
+        assert_eq!(operation.total_iterations(), 0);
+        assert_eq!(operation.total_processor_time(), Duration::ZERO);
+        assert_eq!(operation.mean(), Duration::ZERO);
+    }
+
+    #[test]
+    fn add_iterations_zero_duration() {
+        let mut session = create_test_session();
+        let operation = session.operation("test");
+        
+        // Adding zero duration should work
+        operation.add_iterations(Duration::ZERO, 1000);
+        
+        assert_eq!(operation.total_iterations(), 1000);
+        assert_eq!(operation.total_processor_time(), Duration::ZERO);
+        assert_eq!(operation.mean(), Duration::ZERO);
     }
 }
