@@ -14,9 +14,9 @@ Think of this as an equivalent of `thread_local_rc!`, except operating on the me
 instead of the thread boundary.
 
 ```rust
-// RegionLocalExt provides required extension methods on region-local
+// `RegionLocalExt` provides required extension methods on region-local
 // static variables, such as `with_local()` and `set_local()`.
-use region_local::{region_local, RegionLocalExt};
+use region_local::{RegionLocalExt, region_local};
 
 region_local!(static FAVORITE_COLOR: String = "blue".to_string());
 

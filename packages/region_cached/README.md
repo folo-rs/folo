@@ -10,9 +10,9 @@ region, speeding up reads when the data is not already in the local processor ca
 of it as an extra level of caching between L3 processor caches and main memory.
 
 ```rust
-// RegionCachedExt provides required extension methods on region-cached
+// `RegionCachedExt` provides required extension methods on region-cached
 // static variables, such as `with_cached()` and `set_global()`.
-use region_cached::{region_cached, RegionCachedExt};
+use region_cached::{RegionCachedExt, region_cached};
 
 region_cached!(static FAVORITE_COLOR: String = "blue".to_string());
 

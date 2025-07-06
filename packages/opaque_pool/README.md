@@ -13,7 +13,7 @@ let mut pool = OpaquePool::builder().layout(layout).build();
 // SAFETY: The layout of u64 matches the pool's item layout.
 let pooled1 = unsafe { pool.insert(42_u64) };
 // SAFETY: The layout of u64 matches the pool's item layout.
-let pooled2 = unsafe { pool.insert(123_u64) };
+let _pooled2 = unsafe { pool.insert(123_u64) };
 
 // Read data back from the pooled items.
 let value1 = unsafe {

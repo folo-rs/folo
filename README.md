@@ -23,6 +23,8 @@ This is an umbrella project that covers multiple largely independent packages:
 
 | Crate                                                                 | Description                                                                                                                                 |
 |-----------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------|
+| [`all_the_time`](packages/all_the_time/README.md)                     | Processor time tracking utilities for benchmarks and performance analysis                                                                   |
+| [`alloc_tracker`](packages/alloc_tracker/README.md)                   | Memory allocation tracking utilities for benchmarks and performance analysis                                                                |
 | [`blind_pool`](packages/blind_pool/README.md)                         | A pinned object pool that can store objects of any type                                                                                     |
 | [`events`](packages/events/README.md)                                 | High-performance signaling primitives for concurrent environments                                                                           |
 | [`linked`](packages/linked/README.md) + siblings                      | Create families of linked objects that can collaborate across threads while being internally single-threaded                                |

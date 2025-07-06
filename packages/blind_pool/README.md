@@ -9,7 +9,7 @@ let mut pool = BlindPool::new();
 // Insert values of different types into the same pool.
 let pooled_u64 = pool.insert(42_u64);
 let pooled_i32 = pool.insert(-123_i32);
-let pooled_f32 = pool.insert(3.14_f32);
+let _pooled_f32 = pool.insert(2.71_f32);
 
 // Read data back from the pooled items.
 let value_u64 = unsafe {

@@ -3,7 +3,7 @@ many-processor system with multiple memory regions. This helps highlight the per
 cross-memory-region data transfers, cross-processor data transfers and multi-threaded logic.
 
 ```rust
-use many_cpus_benchmarking::{execute_runs, Payload, WorkDistribution};
+use many_cpus_benchmarking::{Payload, WorkDistribution, execute_runs};
 
 #[derive(Debug, Default)]
 struct MyBenchmark {
@@ -21,7 +21,13 @@ impl Payload for MyBenchmark {
 
     fn process(&mut self) {
         // Your benchmark logic here
-        let _sum: u32 = self.data.as_ref().unwrap().iter().map(|&x| x as u32).sum();
+        let _sum: u32 = self
+            .data
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|&x| u32::from(x))
+            .sum();
     }
 }
 

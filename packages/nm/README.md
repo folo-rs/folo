@@ -21,7 +21,7 @@ thread_local! {
 }
 
 // observe_once() observes an event with a nominal magnitude of 1
-PACKAGES_RECEIVED.with(|e| e.observe_once());
+PACKAGES_RECEIVED.with(Event::observe_once);
 
 // observe_millis() observes an event with a magnitude in milliseconds
 let send_duration = Duration::from_millis(150);
