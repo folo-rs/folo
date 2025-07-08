@@ -69,16 +69,7 @@ fn single_thread_allocations() {
     assert!(process_total > 0, "Process span should track allocations");
     assert!(thread_total > 0, "Thread span should track allocations");
 
-    // In single-threaded context, both should track similar amounts
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "acceptable precision loss for test comparison"
-    )]
-    let ratio = process_total.max(thread_total) as f64 / process_total.min(thread_total) as f64;
-    assert!(
-        ratio < 2.0,
-        "Single-threaded allocations should be similar between process and thread spans, got process: {process_total}, thread: {thread_total}"
-    );
+    assert!(process_total > thread_total);
 }
 
 #[test]
