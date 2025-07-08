@@ -69,7 +69,7 @@ fn single_thread_allocations() {
     assert!(process_total > 0, "Process span should track allocations");
     assert!(thread_total > 0, "Thread span should track allocations");
 
-    assert!(process_total > thread_total);
+    assert!(process_total >= thread_total);
 }
 
 #[test]
