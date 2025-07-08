@@ -284,6 +284,7 @@ impl<T> PinnedPool<T> {
     /// assert!(pool.capacity() >= pool.len() + 5);
     /// # pool.remove(key);
     /// ```
+    #[cfg_attr(test, mutants::skip)] // Can be mutated to infinitely growing memory use.
     pub fn reserve(&mut self, additional: usize) {
         let required_capacity = self
             .len()

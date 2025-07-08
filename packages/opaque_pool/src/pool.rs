@@ -288,6 +288,7 @@ impl OpaquePool {
     /// pool.reserve(5);
     /// assert!(pool.capacity() >= pool.len() + 5);
     /// ```
+    #[cfg_attr(test, mutants::skip)] // Can be mutated to infinitely growing memory use.
     pub fn reserve(&mut self, additional: usize) {
         let required_capacity = self
             .len()
