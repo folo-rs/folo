@@ -194,6 +194,7 @@ impl OpaquePool {
     /// assert_eq!(pool.len(), 1);
     /// ```
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Can be mutated to infinitely growing memory use and/or infinite loop.
     pub fn len(&self) -> usize {
         self.slabs.iter().map(OpaqueSlab::len).sum()
     }
@@ -288,7 +289,7 @@ impl OpaquePool {
     /// pool.reserve(5);
     /// assert!(pool.capacity() >= pool.len() + 5);
     /// ```
-    #[cfg_attr(test, mutants::skip)] // Can be mutated to infinitely growing memory use.
+    #[cfg_attr(test, mutants::skip)] // Can be mutated to infinitely growing memory use and/or infinite loop.
     pub fn reserve(&mut self, additional: usize) {
         let required_capacity = self
             .len()

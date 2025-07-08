@@ -204,6 +204,7 @@ impl<T> PinnedPool<T> {
     /// # pool.remove(key2);
     /// ```
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Can be mutated to infinitely growing memory use.
     pub fn len(&self) -> usize {
         self.slabs.iter().map(PinnedSlab::len).sum()
     }

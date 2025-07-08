@@ -125,6 +125,7 @@ impl<T, const CAPACITY: usize> PinnedSlab<T, CAPACITY> {
     }
 
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Can be mutated to infinitely growing memory use.
     pub(crate) fn len(&self) -> usize {
         self.count
     }

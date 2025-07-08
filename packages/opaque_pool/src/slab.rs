@@ -221,6 +221,7 @@ impl OpaqueSlab {
 
     /// Returns the number of reserved memory blocks in the slab.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Can be mutated to infinitely growing memory use and/or infinite loop.
     pub(crate) fn len(&self) -> usize {
         self.count
     }
