@@ -99,7 +99,7 @@ fn main() {
     let song_handle = media_pool.insert(song);
 
     println!("Added song to the media pool");
-    println!("Pool capacity: {}", media_pool.capacity());
+    println!("Song capacity: {}", media_pool.capacity_of::<Song>());
     println!();
 
     // Example 1: Use media content via trait objects.

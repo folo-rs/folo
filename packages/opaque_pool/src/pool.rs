@@ -262,6 +262,56 @@ impl OpaquePool {
         self.slabs.iter().all(OpaqueSlab::is_empty)
     }
 
+    /// Reserves capacity for at least `additional` more items to be inserted in the pool.
+    ///
+    /// The pool may reserve more space to speculatively avoid frequent reallocations.
+    /// After calling `reserve`, capacity will be greater than or equal to
+    /// `self.len() + additional`. Does nothing if capacity is already sufficient.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    ///
+    /// use opaque_pool::OpaquePool;
+    ///
+    /// let mut pool = OpaquePool::builder().layout_of::<u32>().build();
+    ///
+    /// // Reserve space for 10 more items
+    /// pool.reserve(10);
+    /// assert!(pool.capacity() >= 10);
+    ///
+    /// // SAFETY: u32 matches the layout used to create the pool.
+    /// let pooled = unsafe { pool.insert(42u32) };
+    ///
+    /// // Reserve additional space on top of existing items
+    /// pool.reserve(5);
+    /// assert!(pool.capacity() >= pool.len() + 5);
+    /// ```
+    pub fn reserve(&mut self, additional: usize) {
+        let required_capacity = self
+            .len()
+            .checked_add(additional)
+            .expect("capacity overflow: requested capacity exceeds maximum possible value");
+
+        if self.capacity() >= required_capacity {
+            return;
+        }
+
+        // Calculate how many additional slabs we need
+        let current_slabs = self.slabs.len();
+        let required_slabs = required_capacity.div_ceil(DEFAULT_SLAB_CAPACITY.get());
+        let additional_slabs = required_slabs.saturating_sub(current_slabs);
+
+        for _ in 0..additional_slabs {
+            self.slabs.push(OpaqueSlab::new(
+                self.item_layout,
+                DEFAULT_SLAB_CAPACITY,
+                self.drop_policy,
+            ));
+        }
+    }
+
     /// Shrinks the pool's memory usage by dropping unused capacity.
     ///
     /// This method reduces the pool's memory footprint by removing unused capacity
@@ -1207,6 +1257,111 @@ mod tests {
             pool.remove(item);
         }
         pool.remove(new_item);
+    }
+
+    #[test]
+    fn reserve_increases_capacity() {
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
+
+        // Initially no capacity
+        assert_eq!(pool.capacity(), 0);
+
+        // Reserve space for 10 items
+        pool.reserve(10);
+        assert!(pool.capacity() >= 10);
+
+        // Insert an item - should not need to allocate more capacity
+        let initial_capacity = pool.capacity();
+        let pooled = unsafe { pool.insert(42_u32) };
+        assert_eq!(pool.capacity(), initial_capacity);
+
+        pool.remove(pooled);
+    }
+
+    #[test]
+    fn reserve_with_existing_items() {
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
+
+        // Insert some items first
+        let pooled1 = unsafe { pool.insert(1_u32) };
+        let pooled2 = unsafe { pool.insert(2_u32) };
+        let current_len = pool.len();
+
+        // Reserve additional space
+        pool.reserve(5);
+        assert!(pool.capacity() >= current_len + 5);
+
+        // Verify existing items are still accessible
+        unsafe {
+            assert_eq!(pooled1.ptr().read(), 1);
+            assert_eq!(pooled2.ptr().read(), 2);
+        }
+
+        pool.remove(pooled1);
+        pool.remove(pooled2);
+    }
+
+    #[test]
+    fn reserve_zero_does_nothing() {
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
+        let initial_capacity = pool.capacity();
+
+        pool.reserve(0);
+        assert_eq!(pool.capacity(), initial_capacity);
+    }
+
+    #[test]
+    fn reserve_with_sufficient_capacity_does_nothing() {
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
+
+        // Reserve initial capacity
+        pool.reserve(10);
+        let capacity_after_reserve = pool.capacity();
+
+        // Try to reserve less than what we already have
+        pool.reserve(5);
+        assert_eq!(pool.capacity(), capacity_after_reserve);
+    }
+
+    #[test]
+    fn reserve_large_capacity() {
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
+
+        // Reserve capacity for multiple slabs
+        let large_count = DEFAULT_SLAB_CAPACITY.get() * 3 + 50;
+        pool.reserve(large_count);
+        assert!(pool.capacity() >= large_count);
+
+        // Verify we can actually insert that many items
+        let mut pooled_items = Vec::new();
+        for i in 0..large_count {
+            pooled_items.push(unsafe { pool.insert(i as u32) });
+        }
+
+        // Verify all items are accessible
+        for (i, pooled) in pooled_items.iter().enumerate() {
+            unsafe {
+                assert_eq!(pooled.ptr().read(), i as u32);
+            }
+        }
+
+        // Clean up
+        for pooled in pooled_items {
+            pool.remove(pooled);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "capacity overflow")]
+    fn reserve_overflow_panics() {
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
+
+        // Insert one item to make len() = 1
+        let _key = unsafe { pool.insert(42_u32) };
+
+        // Try to reserve usize::MAX more items. Since len() = 1,
+        // this will cause 1 + usize::MAX to overflow during capacity calculation
+        pool.reserve(usize::MAX);
     }
 
     #[test]

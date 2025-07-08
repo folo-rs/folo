@@ -259,6 +259,51 @@ impl<T> PinnedPool<T> {
         self.slabs.iter().all(PinnedSlab::is_empty)
     }
 
+    /// Reserves capacity for at least `additional` more items to be inserted in the pool.
+    ///
+    /// The pool may reserve more space to speculatively avoid frequent reallocations.
+    /// After calling `reserve`, capacity will be greater than or equal to
+    /// `self.len() + additional`. Does nothing if capacity is already sufficient.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pinned_pool::PinnedPool;
+    ///
+    /// let mut pool = PinnedPool::<u32>::new();
+    ///
+    /// // Reserve space for 10 more items
+    /// pool.reserve(10);
+    /// assert!(pool.capacity() >= 10);
+    ///
+    /// // Insert an item - should not need to allocate more capacity
+    /// let key = pool.insert(42);
+    ///
+    /// // Reserve additional space on top of existing items
+    /// pool.reserve(5);
+    /// assert!(pool.capacity() >= pool.len() + 5);
+    /// # pool.remove(key);
+    /// ```
+    pub fn reserve(&mut self, additional: usize) {
+        let required_capacity = self
+            .len()
+            .checked_add(additional)
+            .expect("capacity overflow: requested capacity exceeds maximum possible value");
+
+        if self.capacity() >= required_capacity {
+            return;
+        }
+
+        // Calculate how many additional slabs we need
+        let current_slabs = self.slabs.len();
+        let required_slabs = required_capacity.div_ceil(SLAB_CAPACITY);
+        let additional_slabs = required_slabs.saturating_sub(current_slabs);
+
+        for _ in 0..additional_slabs {
+            self.slabs.push(PinnedSlab::new(self.drop_policy));
+        }
+    }
+
     /// Shrinks the pool's memory usage by dropping unused capacity.
     ///
     /// This method reduces the pool's memory footprint by removing unused capacity
@@ -1369,6 +1414,107 @@ mod tests {
             pool.remove(key);
         }
         pool.remove(new_key);
+    }
+
+    #[test]
+    fn reserve_increases_capacity() {
+        let mut pool = PinnedPool::<u32>::new();
+
+        // Initially no capacity
+        assert_eq!(pool.capacity(), 0);
+
+        // Reserve space for 10 items
+        pool.reserve(10);
+        assert!(pool.capacity() >= 10);
+
+        // Insert an item - should not need to allocate more capacity
+        let initial_capacity = pool.capacity();
+        let key = pool.insert(42);
+        assert_eq!(pool.capacity(), initial_capacity);
+
+        pool.remove(key);
+    }
+
+    #[test]
+    fn reserve_with_existing_items() {
+        let mut pool = PinnedPool::<u32>::new();
+
+        // Insert some items first
+        let key1 = pool.insert(1);
+        let key2 = pool.insert(2);
+        let current_len = pool.len();
+
+        // Reserve additional space
+        pool.reserve(5);
+        assert!(pool.capacity() >= current_len + 5);
+
+        // Verify existing items are still accessible
+        assert_eq!(*pool.get(key1), 1);
+        assert_eq!(*pool.get(key2), 2);
+
+        pool.remove(key1);
+        pool.remove(key2);
+    }
+
+    #[test]
+    fn reserve_zero_does_nothing() {
+        let mut pool = PinnedPool::<u32>::new();
+        let initial_capacity = pool.capacity();
+
+        pool.reserve(0);
+        assert_eq!(pool.capacity(), initial_capacity);
+    }
+
+    #[test]
+    fn reserve_with_sufficient_capacity_does_nothing() {
+        let mut pool = PinnedPool::<u32>::new();
+
+        // Reserve initial capacity
+        pool.reserve(10);
+        let capacity_after_reserve = pool.capacity();
+
+        // Try to reserve less than what we already have
+        pool.reserve(5);
+        assert_eq!(pool.capacity(), capacity_after_reserve);
+    }
+
+    #[test]
+    fn reserve_large_capacity() {
+        let mut pool = PinnedPool::<u32>::new();
+
+        // Reserve capacity for multiple slabs
+        let large_count = SLAB_CAPACITY * 3 + 50;
+        pool.reserve(large_count);
+        assert!(pool.capacity() >= large_count);
+
+        // Verify we can actually insert that many items
+        let mut keys = Vec::new();
+        for i in 0..large_count {
+            keys.push(pool.insert(i as u32));
+        }
+
+        // Verify all items are accessible
+        for (i, &key) in keys.iter().enumerate() {
+            assert_eq!(*pool.get(key), i as u32);
+        }
+
+        // Clean up
+        for key in keys {
+            pool.remove(key);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "capacity overflow")]
+    fn reserve_overflow_panics() {
+        let mut pool = PinnedPool::<u32>::new();
+
+        // Insert one item to make len() = 1
+        let _key = pool.insert(42);
+
+        // Try to reserve usize::MAX more items. Since len() = 1,
+        // this will cause 1 + usize::MAX to overflow during capacity calculation
+        pool.reserve(usize::MAX);
     }
 
     #[test]

@@ -15,7 +15,7 @@ fn main() {
     println!();
     println!("Created empty BlindPool:");
     println!("  Length: {}", pool.len());
-    println!("  Capacity: {}", pool.capacity());
+    println!("  u32 capacity: {}", pool.capacity_of::<u32>());
 
     // Insert different types into the same pool.
     println!();
@@ -37,7 +37,8 @@ fn main() {
     println!();
     println!("Pool status after insertions:");
     println!("  Length: {}", pool.len());
-    println!("  Capacity: {}", pool.capacity());
+    println!("  u32 capacity: {}", pool.capacity_of::<u32>());
+    println!("  f64 capacity: {}", pool.capacity_of::<f64>());
 
     // Read values back from the pool using the handles.
     println!();
@@ -112,11 +113,11 @@ fn main() {
     // Demonstrate shrink_to_fit.
     println!();
     println!("Calling shrink_to_fit to release unused capacity...");
-    let capacity_before = pool.capacity();
+    let u32_capacity_before = pool.capacity_of::<u32>();
     pool.shrink_to_fit();
-    let capacity_after = pool.capacity();
-    println!("  Capacity before shrink: {capacity_before}");
-    println!("  Capacity after shrink: {capacity_after}");
+    let u32_capacity_after = pool.capacity_of::<u32>();
+    println!("  u32 capacity before shrink: {u32_capacity_before}");
+    println!("  u32 capacity after shrink: {u32_capacity_after}");
     println!();
     println!("Example completed successfully!");
 }

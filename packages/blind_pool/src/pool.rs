@@ -214,9 +214,10 @@ impl BlindPool {
         self.pools.values().all(OpaquePool::is_empty)
     }
 
-    /// Returns the total capacity of the pool.
+    /// Returns the capacity for items of type `T`.
     ///
-    /// This is the total number of items that can be stored without allocating more memory.
+    /// This is the number of items of type `T` that can be stored without allocating more memory.
+    /// If no items of type `T` have been inserted yet, returns 0.
     ///
     /// # Example
     ///
@@ -225,16 +226,57 @@ impl BlindPool {
     ///
     /// let mut pool = BlindPool::new();
     ///
-    /// // Initially no capacity is allocated.
-    /// assert_eq!(pool.capacity(), 0);
+    /// // Initially no capacity is allocated for any type.
+    /// assert_eq!(pool.capacity_of::<u32>(), 0);
+    /// assert_eq!(pool.capacity_of::<f64>(), 0);
     ///
-    /// // Inserting a value allocates capacity.
+    /// // Inserting a u32 allocates capacity for u32 but not f64.
     /// let _pooled = pool.insert(42_u32);
-    /// assert!(pool.capacity() > 0);
+    /// assert!(pool.capacity_of::<u32>() > 0);
+    /// assert_eq!(pool.capacity_of::<f64>(), 0);
     /// ```
     #[must_use]
-    pub fn capacity(&self) -> usize {
-        self.pools.values().map(OpaquePool::capacity).sum()
+    pub fn capacity_of<T>(&self) -> usize {
+        let layout = Layout::new::<T>();
+        self.pools.get(&layout).map_or(0, OpaquePool::capacity)
+    }
+
+    /// Reserves capacity for at least `additional` more items of type `T`.
+    ///
+    /// The pool may reserve more space to speculatively avoid frequent reallocations.
+    /// After calling `reserve_for`, the capacity for type `T` will be greater than or equal to
+    /// the current count of `T` items plus `additional`. Does nothing if capacity is already sufficient.
+    ///
+    /// If no items of type `T` have been inserted yet, this creates an internal pool for type `T`
+    /// and reserves the requested capacity.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::BlindPool;
+    ///
+    /// let mut pool = BlindPool::new();
+    ///
+    /// // Reserve space for 10 u32 values specifically
+    /// pool.reserve_for::<u32>(10);
+    /// assert!(pool.capacity_of::<u32>() >= 10);
+    /// assert_eq!(pool.capacity_of::<f64>(), 0); // Other types unaffected
+    ///
+    /// // Insert u32 values - should not need to allocate more capacity
+    /// let pooled = pool.insert(42_u32);
+    /// assert!(pool.capacity_of::<u32>() >= 10);
+    /// ```
+    pub fn reserve_for<T>(&mut self, additional: usize) {
+        let layout = Layout::new::<T>();
+
+        let internal_pool = self.pools.entry(layout).or_insert_with(|| {
+            OpaquePool::builder()
+                .layout_of::<T>()
+                .drop_policy(self.drop_policy)
+                .build()
+        });
+
+        internal_pool.reserve(additional);
     }
 
     /// Shrinks the capacity of the pool to fit its current size.
@@ -253,8 +295,6 @@ impl BlindPool {
     ///     pool.insert(i);
     /// }
     ///
-    /// let capacity_before = pool.capacity();
-    ///
     /// // Remove all items but keep the allocated capacity.
     /// while !pool.is_empty() {
     ///     // In a real scenario you'd keep track of handles to remove them properly.
@@ -262,9 +302,8 @@ impl BlindPool {
     ///     break;
     /// }
     ///
-    /// // Shrink to fit the current size (which is 0).
+    /// // Shrink to fit the current size.
     /// pool.shrink_to_fit();
-    /// assert!(pool.capacity() <= capacity_before);
     /// ```
     pub fn shrink_to_fit(&mut self) {
         // Remove empty internal pools.
@@ -434,7 +473,6 @@ mod tests {
 
         assert_eq!(pool.len(), 3);
         assert!(!pool.is_empty());
-        assert!(pool.capacity() >= 3);
 
         // SAFETY: The pointers are valid and contain the values we just inserted.
         let u32_val = unsafe { pooled_u32.ptr().read() };
@@ -530,6 +568,190 @@ mod tests {
 
         // Verify that empty internal pools have been removed.
         assert_eq!(pool.pools.len(), 1);
+    }
+
+    #[test]
+    fn reserve_increases_capacity() {
+        let mut pool = BlindPool::new();
+
+        // Initially no capacity
+        assert_eq!(pool.capacity_of::<u32>(), 0);
+
+        // Reserve capacity before inserting any items
+        pool.reserve_for::<u32>(10);
+        assert!(pool.capacity_of::<u32>() >= 10);
+
+        // Insert an item - should use the reserved capacity
+        let pooled = pool.insert(42_u32);
+        assert!(pool.capacity_of::<u32>() >= 10); // Should still have the reserved capacity
+
+        pool.remove(pooled);
+    }
+
+    #[test]
+    fn reserve_with_existing_items() {
+        let mut pool = BlindPool::new();
+
+        // Insert some items first
+        let pooled1 = pool.insert(1_u32);
+        let pooled2 = pool.insert(2.5_f64);
+
+        // Current state: 1 u32 item, some f64 capacity
+        let current_u32_count = 1; // We know we have 1 u32
+
+        // Reserve additional space for u32 specifically - should ensure capacity for current + additional
+        pool.reserve_for::<u32>(10);
+        assert!(pool.capacity_of::<u32>() >= current_u32_count + 10);
+
+        // f64 capacity should be unaffected by u32 reserve
+        let f64_capacity_before = pool.capacity_of::<f64>();
+        pool.reserve_for::<u32>(5); // Reserve again - if already sufficient, capacity shouldn't increase
+        let f64_capacity_after = pool.capacity_of::<f64>();
+        assert_eq!(f64_capacity_before, f64_capacity_after);
+
+        // Verify existing items are still accessible
+        // SAFETY: The pointers are valid and contain the values we just inserted.
+        unsafe {
+            assert_eq!(pooled1.ptr().read(), 1);
+        }
+        // SAFETY: The pointers are valid and contain the values we just inserted.
+        unsafe {
+            assert!((pooled2.ptr().read() - 2.5).abs() < f64::EPSILON);
+        }
+
+        pool.remove(pooled1);
+        pool.remove(pooled2);
+    }
+
+    #[test]
+    fn reserve_zero_does_nothing() {
+        let mut pool = BlindPool::new();
+
+        // Reserve zero for a type that doesn't exist yet
+        pool.reserve_for::<u32>(0);
+        assert_eq!(pool.capacity_of::<u32>(), 0);
+
+        // Insert an item and reserve zero
+        let pooled = pool.insert(42_u32);
+        let initial_capacity = pool.capacity_of::<u32>();
+        pool.reserve_for::<u32>(0);
+        assert_eq!(pool.capacity_of::<u32>(), initial_capacity);
+
+        pool.remove(pooled);
+    }
+
+    #[test]
+    fn reserve_with_sufficient_capacity_does_nothing() {
+        let mut pool = BlindPool::new();
+
+        // Reserve initial capacity for u32
+        pool.reserve_for::<u32>(10);
+        let capacity_after_reserve = pool.capacity_of::<u32>();
+        assert!(capacity_after_reserve >= 10);
+
+        // Try to reserve less than what we already have available
+        pool.reserve_for::<u32>(5);
+        assert_eq!(pool.capacity_of::<u32>(), capacity_after_reserve);
+
+        // Insert an item and reserve less than current capacity
+        let pooled = pool.insert(42_u32);
+        pool.reserve_for::<u32>(3);
+        assert_eq!(pool.capacity_of::<u32>(), capacity_after_reserve);
+
+        pool.remove(pooled);
+    }
+
+    #[test]
+    fn reserve_for_empty_pool_creates_internal_pool() {
+        let mut pool = BlindPool::new();
+
+        // Reserve for a type on empty pool - should create internal pool
+        pool.reserve_for::<u32>(10);
+        assert!(pool.capacity_of::<u32>() >= 10);
+        assert_eq!(pool.capacity_of::<f64>(), 0); // Other types unaffected
+
+        // Insert an item - should use the reserved capacity
+        let initial_capacity = pool.capacity_of::<u32>();
+        let pooled = pool.insert(42_u32);
+        assert_eq!(pool.capacity_of::<u32>(), initial_capacity);
+
+        pool.remove(pooled);
+    }
+
+    #[test]
+    fn reserve_for_different_types_independent() {
+        let mut pool = BlindPool::new();
+
+        // Reserve for different types
+        pool.reserve_for::<u32>(5);
+        pool.reserve_for::<f64>(15);
+        pool.reserve_for::<u8>(25);
+
+        // Each type should have its own capacity
+        assert!(pool.capacity_of::<u32>() >= 5);
+        assert!(pool.capacity_of::<f64>() >= 15);
+        assert!(pool.capacity_of::<u8>() >= 25);
+
+        // Insert items and verify capacities remain independent
+        let pooled_u32 = pool.insert(42_u32);
+        let pooled_f64 = pool.insert(2.71_f64); // e approximation instead of pi
+        let pooled_u8 = pool.insert(255_u8);
+
+        // Reserve more for one type - others should be unaffected
+        let f64_capacity_before = pool.capacity_of::<f64>();
+        let u8_capacity_before = pool.capacity_of::<u8>();
+
+        pool.reserve_for::<u32>(10);
+
+        assert_eq!(pool.capacity_of::<f64>(), f64_capacity_before);
+        assert_eq!(pool.capacity_of::<u8>(), u8_capacity_before);
+
+        pool.remove(pooled_u32);
+        pool.remove(pooled_f64);
+        pool.remove(pooled_u8);
+    }
+
+    #[test]
+    fn capacity_of_tracks_specific_types() {
+        let mut pool = BlindPool::new();
+
+        // Initially no capacity for any type
+        assert_eq!(pool.capacity_of::<u32>(), 0);
+        assert_eq!(pool.capacity_of::<f64>(), 0);
+        assert_eq!(pool.capacity_of::<String>(), 0);
+
+        // Insert u32 - should allocate capacity for u32 only
+        let pooled_u32 = pool.insert(42_u32);
+        assert!(pool.capacity_of::<u32>() > 0);
+        assert_eq!(pool.capacity_of::<f64>(), 0);
+        assert_eq!(pool.capacity_of::<String>(), 0);
+
+        // Insert f64 - should allocate capacity for f64 only
+        let pooled_f64 = pool.insert(2.71_f64); // e approximation
+        assert!(pool.capacity_of::<u32>() > 0);
+        assert!(pool.capacity_of::<f64>() > 0);
+        assert_eq!(pool.capacity_of::<String>(), 0);
+
+        // Types with same layout should share capacity (u32 and i32 have same layout)
+        let u32_capacity = pool.capacity_of::<u32>();
+        let i32_capacity = pool.capacity_of::<i32>();
+        assert_eq!(u32_capacity, i32_capacity);
+
+        pool.remove(pooled_u32);
+        pool.remove(pooled_f64);
+    }
+
+    #[test]
+    #[should_panic(expected = "capacity overflow")]
+    fn reserve_overflow_panics() {
+        let mut pool = BlindPool::new();
+
+        // Insert one item to make len() = 1
+        let _key = pool.insert(42_u32);
+
+        // Try to reserve usize::MAX more items for u32.
+        // This will cause overflow during capacity calculation in the internal pool
+        pool.reserve_for::<u32>(usize::MAX);
     }
 
     #[test]
