@@ -1,6 +1,7 @@
 use core::panic;
 use std::alloc::{Layout, alloc, dealloc};
 use std::any::type_name;
+use std::mem::MaybeUninit;
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::{mem, thread};
@@ -25,6 +26,10 @@ use crate::DropPolicy;
 /// * [`begin_insert().insert_mut()`][5] - returns an exclusive reference to the inserted item; you
 ///   may also obtain the index in advance from the inserter through [`index()`][7] which may be
 ///   useful if the item needs to know its own index in the collection.
+/// * [`begin_insert().insert_with()`][8] - allows the caller to initialize the item in-place using
+///   a closure that receives a `&mut MaybeUninit<T>`. Returns a shared reference to the item.
+/// * [`begin_insert().insert_with_mut()`][9] - allows the caller to initialize the item in-place
+///   using a closure that receives a `&mut MaybeUninit<T>`. Returns an exclusive reference to the item.
 ///
 /// # Out of band access
 ///
@@ -44,6 +49,8 @@ use crate::DropPolicy;
 /// [4]: PinnedSlabInserter::insert
 /// [5]: PinnedSlabInserter::insert_mut
 /// [7]: PinnedSlabInserter::index
+/// [8]: PinnedSlabInserter::insert_with
+/// [9]: PinnedSlabInserter::insert_with_mut
 #[derive(Debug)]
 pub(crate) struct PinnedSlab<T, const CAPACITY: usize> {
     first_entry_ptr: NonNull<Entry<T>>,
@@ -64,7 +71,7 @@ pub(crate) struct PinnedSlab<T, const CAPACITY: usize> {
 
 #[derive(Debug)]
 enum Entry<T> {
-    Occupied { value: T },
+    Occupied { value: MaybeUninit<T> },
 
     Vacant { next_free_index: usize },
 }
@@ -174,9 +181,14 @@ impl<T, const CAPACITY: usize> PinnedSlab<T, CAPACITY> {
     #[must_use]
     pub(crate) fn get(&self, index: usize) -> Pin<&T> {
         match self.entry(index) {
-            // SAFETY: This collection guarantees pinning. At no point do we
-            // provide non-pinned references to the items.
-            Entry::Occupied { value } => unsafe { Pin::new_unchecked(value) },
+            Entry::Occupied { value } => {
+                // SAFETY: The value is guaranteed to be initialized because we only create
+                // Occupied entries with properly initialized values.
+                let init_ref = unsafe { value.assume_init_ref() };
+                // SAFETY: This collection guarantees pinning. At no point do we
+                // provide non-pinned references to the items.
+                unsafe { Pin::new_unchecked(init_ref) }
+            }
             Entry::Vacant { .. } => panic!(
                 "get({index}) entry was vacant in slab of {}",
                 type_name::<T>()
@@ -190,9 +202,14 @@ impl<T, const CAPACITY: usize> PinnedSlab<T, CAPACITY> {
     #[must_use]
     pub(crate) fn get_mut(&mut self, index: usize) -> Pin<&mut T> {
         match self.entry_mut(index) {
-            // SAFETY: This collection guarantees pinning. At no point do we
-            // provide non-pinned references to the items.
-            Entry::Occupied { value } => unsafe { Pin::new_unchecked(value) },
+            Entry::Occupied { value } => {
+                // SAFETY: The value is guaranteed to be initialized because we only create
+                // Occupied entries with properly initialized values.
+                let init_mut = unsafe { value.assume_init_mut() };
+                // SAFETY: This collection guarantees pinning. At no point do we
+                // provide non-pinned references to the items.
+                unsafe { Pin::new_unchecked(init_mut) }
+            }
             Entry::Vacant { .. } => panic!(
                 "get_mut({index}) entry was vacant in slab of {}",
                 type_name::<T>()
@@ -250,11 +267,18 @@ impl<T, const CAPACITY: usize> PinnedSlab<T, CAPACITY> {
         {
             let entry = self.entry_mut(index);
 
-            if matches!(entry, Entry::Vacant { .. }) {
-                panic!(
+            match entry {
+                Entry::Occupied { value } => {
+                    // SAFETY: The value is guaranteed to be initialized because we only create
+                    // Occupied entries with properly initialized values.
+                    unsafe {
+                        value.assume_init_drop();
+                    }
+                }
+                Entry::Vacant { .. } => panic!(
                     "remove({index}) entry was vacant in slab of {}",
                     type_name::<T>()
-                );
+                ),
             }
 
             *entry = Entry::Vacant { next_free_index };
@@ -365,6 +389,15 @@ impl<T, const CAPACITY: usize> Drop for PinnedSlab<T, CAPACITY> {
         for index in 0..CAPACITY {
             let entry = self.entry_mut(index);
 
+            // Drop the value if it's occupied before replacing with vacant.
+            if let Entry::Occupied { value } = entry {
+                // SAFETY: The value is guaranteed to be initialized because we only create
+                // Occupied entries with properly initialized values.
+                unsafe {
+                    value.assume_init_drop();
+                }
+            }
+
             *entry = Entry::Vacant {
                 // Intentionally anomalous - we are dropping so do not expect any more usage.
                 next_free_index: usize::MAX,
@@ -423,6 +456,38 @@ impl<'s, T, const CAPACITY: usize> PinnedSlabInserter<'s, T, CAPACITY> {
     where
         's: 'v,
     {
+        // SAFETY: We properly initialize the value by writing to it.
+        unsafe {
+            self.insert_with_mut(|uninit| {
+                uninit.write(value);
+            })
+        }
+    }
+
+    /// # Safety
+    ///
+    /// The closure must properly initialize the `MaybeUninit<T>` before returning.
+    /// Failure to do so will result in undefined behavior when the value is later accessed.
+    #[allow(dead_code, reason = "not used yet but provides the non-mut variant")]
+    pub(crate) unsafe fn insert_with<'v>(self, f: impl FnOnce(&mut MaybeUninit<T>)) -> Pin<&'v T>
+    where
+        's: 'v,
+    {
+        // SAFETY: Caller guarantees that the closure properly initializes the value.
+        unsafe { self.insert_with_mut(f).into_ref() }
+    }
+
+    /// # Safety
+    ///
+    /// The closure must properly initialize the `MaybeUninit<T>` before returning.
+    /// Failure to do so will result in undefined behavior when the value is later accessed.
+    pub(crate) unsafe fn insert_with_mut<'v>(
+        self,
+        f: impl FnOnce(&mut MaybeUninit<T>),
+    ) -> Pin<&'v mut T>
+    where
+        's: 'v,
+    {
         let mut entry_ptr = self.slab.entry_ptr(self.index);
 
         // This detaches the lifetime of the slab from the lifetime of the entry for the purpose
@@ -437,7 +502,12 @@ impl<'s, T, const CAPACITY: usize> PinnedSlabInserter<'s, T, CAPACITY> {
         // the slab by design does not create/hold permanent references to its entries.
         let entry = unsafe { entry_ptr.as_mut() };
 
-        let previous_entry = mem::replace(entry, Entry::Occupied { value });
+        let previous_entry = mem::replace(
+            entry,
+            Entry::Occupied {
+                value: MaybeUninit::uninit(),
+            },
+        );
 
         self.slab.next_free_index = match previous_entry {
             Entry::Vacant { next_free_index } => next_free_index,
@@ -448,15 +518,24 @@ impl<'s, T, const CAPACITY: usize> PinnedSlabInserter<'s, T, CAPACITY> {
             ),
         };
 
-        let pinned_ref: Pin<&'v mut T> = match entry {
-            // SAFETY: Items are always pinned - that is the point of this collection.
-            Entry::Occupied { value } => unsafe { Pin::new_unchecked(value) },
+        // Initialize the value using the closure.
+        let value = match entry {
+            Entry::Occupied { value } => {
+                f(value);
+                value
+            }
             Entry::Vacant { .. } => panic!(
                 "entry {} was not occupied after we inserted into it in slab of {}",
                 self.index,
                 type_name::<T>()
             ),
         };
+
+        // SAFETY: The value is guaranteed to be initialized because the caller's closure
+        // was required to initialize it.
+        let init_mut = unsafe { value.assume_init_mut() };
+        // SAFETY: Items are always pinned - that is the point of this collection.
+        let pinned_ref: Pin<&'v mut T> = unsafe { Pin::new_unchecked(init_mut) };
 
         self.slab.count = self
             .slab
@@ -720,5 +799,123 @@ mod tests {
     #[should_panic]
     fn zero_capacity_is_panic() {
         drop(PinnedSlab::<usize, 0>::new(DropPolicy::MayDropItems));
+    }
+
+    #[test]
+    fn insert_with_mut_works() {
+        let mut slab = PinnedSlab::<u32, 3>::new(DropPolicy::MayDropItems);
+
+        let inserter = slab.begin_insert();
+        let index = inserter.index();
+
+        // SAFETY: We properly initialize the value in the closure.
+        let value_ref = unsafe {
+            inserter.insert_with_mut(|uninit| {
+                uninit.write(42);
+            })
+        };
+
+        assert_eq!(*value_ref, 42);
+        assert_eq!(*slab.get(index), 42);
+        assert_eq!(slab.len(), 1);
+    }
+
+    #[test]
+    fn insert_with_allows_complex_initialization() {
+        struct ComplexType {
+            field1: u32,
+            field2: String,
+        }
+
+        let mut slab = PinnedSlab::<ComplexType, 3>::new(DropPolicy::MayDropItems);
+
+        let inserter = slab.begin_insert();
+        let index = inserter.index();
+
+        // SAFETY: We properly initialize the value in the closure.
+        let value_ref = unsafe {
+            inserter.insert_with_mut(|uninit| {
+                uninit.write(ComplexType {
+                    field1: 123,
+                    field2: String::from("hello"),
+                });
+            })
+        };
+
+        assert_eq!(value_ref.field1, 123);
+        assert_eq!(value_ref.field2, "hello");
+
+        let retrieved = slab.get(index);
+        assert_eq!(retrieved.field1, 123);
+        assert_eq!(retrieved.field2, "hello");
+    }
+
+    #[test]
+    fn insert_with_returns_shared_ref() {
+        let mut slab = PinnedSlab::<u32, 3>::new(DropPolicy::MayDropItems);
+
+        let inserter = slab.begin_insert();
+        let index = inserter.index();
+
+        // SAFETY: We properly initialize the value in the closure.
+        let value_ref = unsafe {
+            inserter.insert_with(|uninit| {
+                uninit.write(789);
+            })
+        };
+
+        assert_eq!(*value_ref, 789);
+        assert_eq!(*slab.get(index), 789);
+        assert_eq!(slab.len(), 1);
+    }
+
+    #[test]
+    fn insert_with_partial_initialization() {
+        use std::mem::MaybeUninit;
+
+        #[allow(
+            dead_code,
+            reason = "memory field is used for demonstration but not accessed in test"
+        )]
+        struct HalfFull {
+            value: usize,
+            memory: [MaybeUninit<u8>; 16],
+        }
+
+        /// Helper function to initialize only the value field of `HalfFull`.
+        /// This separates unsafe operations into individual blocks for Clippy compliance.
+        fn initialize_half_full(uninit: &mut MaybeUninit<HalfFull>) {
+            let ptr = uninit.as_mut_ptr();
+
+            // SAFETY: ptr points to valid memory and we're dereferencing to take address of a field.
+            let value_ptr = unsafe { &raw mut (*ptr).value };
+
+            // SAFETY: value_ptr points to valid memory for a usize.
+            unsafe {
+                value_ptr.write(42);
+            }
+
+            // Note: We deliberately do NOT write to the memory field at all.
+            // It remains truly uninitialized, which is safe because MaybeUninit<T>
+            // does not require its contents to be initialized.
+        }
+
+        let mut slab = PinnedSlab::<HalfFull, 3>::new(DropPolicy::MayDropItems);
+
+        let inserter = slab.begin_insert();
+        let index = inserter.index();
+
+        // SAFETY: We properly initialize only the required fields via the closure.
+        let value_ref = unsafe {
+            inserter.insert_with(|uninit| {
+                initialize_half_full(uninit);
+            })
+        };
+
+        assert_eq!(value_ref.value, 42);
+
+        let retrieved = slab.get(index);
+        assert_eq!(retrieved.value, 42);
+        assert_eq!(slab.len(), 1);
     }
 }

@@ -1,3 +1,4 @@
+use std::mem::MaybeUninit;
 use std::pin::Pin;
 
 use num::Integer;
@@ -16,6 +17,10 @@ use crate::{DropPolicy, PinnedPoolBuilder, PinnedSlab, PinnedSlabInserter};
 /// * [`begin_insert().insert_mut()`][5] - returns an exclusive reference to the inserted item; you
 ///   may also obtain the key in advance from the inserter through [`key()`][7] which may be
 ///   useful if the item needs to know its own key in the collection.
+/// * [`begin_insert().insert_with()`][8] - allows the caller to initialize the item in-place using
+///   a closure that receives a `&mut MaybeUninit<T>`. Returns a shared reference to the item.
+/// * [`begin_insert().insert_with_mut()`][9] - allows the caller to initialize the item in-place
+///   using a closure that receives a `&mut MaybeUninit<T>`. Returns an exclusive reference to the item.
 ///
 /// The pool returns a key for each inserted item, with items on an operating being keyed by this.
 ///
@@ -43,6 +48,8 @@ use crate::{DropPolicy, PinnedPoolBuilder, PinnedSlab, PinnedSlabInserter};
 /// [5]: PinnedPoolInserter::insert_mut
 /// [6]: Self::shrink_to_fit
 /// [7]: PinnedPoolInserter::key
+/// [8]: PinnedPoolInserter::insert_with
+/// [9]: PinnedPoolInserter::insert_with_mut
 #[derive(Debug)]
 pub struct PinnedPool<T> {
     /// The slabs that provide the storage of the pool.
@@ -749,6 +756,91 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
         's: 'v,
     {
         self.slab_inserter.insert_mut(value)
+    }
+
+    /// Inserts an item using in-place initialization and returns a pinned reference to it.
+    ///
+    /// This allows the caller to initialize the item in-place using a closure that receives
+    /// a `&mut MaybeUninit<T>`. This can be more efficient than constructing the value
+    /// separately and then moving it into the pool, especially for large or complex types.
+    ///
+    /// # Safety
+    ///
+    /// The closure must initialize the `MaybeUninit<T>` before returning.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::mem::MaybeUninit;
+    /// use pinned_pool::PinnedPool;
+    ///
+    /// let mut pool = PinnedPool::<String>::new();
+    /// let inserter = pool.begin_insert();
+    /// let key = inserter.key();
+    ///
+    /// // SAFETY: We properly initialize the value in the closure.
+    /// let item = unsafe {
+    ///     inserter.insert_with(|uninit| {
+    ///         uninit.write(String::from("Hello, World!"));
+    ///     })
+    /// };
+    ///
+    /// assert_eq!(&*item, "Hello, World!");
+    ///
+    /// // The item can also be accessed later via the key
+    /// let same_item = pool.get(key);
+    /// assert_eq!(&*same_item, "Hello, World!");
+    /// # pool.remove(key);
+    /// ```
+    pub unsafe fn insert_with<'v>(self, f: impl FnOnce(&mut MaybeUninit<T>)) -> Pin<&'v T>
+    where
+        's: 'v,
+    {
+        // SAFETY: Caller guarantees that the closure properly initializes the value.
+        unsafe { self.slab_inserter.insert_with(f) }
+    }
+
+    /// Inserts an item using in-place initialization and returns a pinned exclusive reference to it.
+    ///
+    /// This allows the caller to initialize the item in-place using a closure that receives
+    /// a `&mut MaybeUninit<T>`. This can be more efficient than constructing the value
+    /// separately and then moving it into the pool, especially for large or complex types.
+    ///
+    /// # Safety
+    ///
+    /// The closure must initialize the `MaybeUninit<T>` before returning.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::mem::MaybeUninit;
+    /// use pinned_pool::PinnedPool;
+    ///
+    /// let mut pool = PinnedPool::<String>::new();
+    /// let inserter = pool.begin_insert();
+    /// let key = inserter.key();
+    ///
+    /// // SAFETY: We properly initialize the value in the closure.
+    /// let mut item = unsafe {
+    ///     inserter.insert_with_mut(|uninit| {
+    ///         uninit.write(String::from("Hello"));
+    ///     })
+    /// };
+    ///
+    /// // Modify the item in-place
+    /// item.as_mut().get_mut().push_str(", World!");
+    ///
+    /// // Verify the modification
+    /// let item = pool.get(key);
+    /// assert_eq!(&*item, "Hello, World!");
+    /// # pool.remove(key);
+    /// ```
+    pub unsafe fn insert_with_mut<'v>(self, f: impl FnOnce(&mut MaybeUninit<T>)) -> Pin<&'v mut T>
+    where
+        's: 'v,
+    {
+        // SAFETY: Caller guarantees that the closure properly initializes the value.
+        unsafe { self.slab_inserter.insert_with_mut(f) }
     }
 
     /// The key of the item that will be inserted by this inserter.
@@ -1609,5 +1701,76 @@ mod tests {
         }
 
         pool.remove(item_key);
+    }
+
+    #[test]
+    fn insert_with_partial_initialization() {
+        use std::mem::MaybeUninit;
+
+        struct HalfFull {
+            value: usize,
+            memory: [MaybeUninit<u8>; 16],
+        }
+
+        // Helper function to initialize only the value field, demonstrating partial initialization.
+        fn initialize_half_full(uninit: &mut MaybeUninit<HalfFull>) {
+            let ptr = uninit.as_mut_ptr();
+
+            // SAFETY: We are accessing fields of uninitialized memory to get raw pointers.
+            let value_ptr = unsafe { &raw mut (*ptr).value };
+
+            // SAFETY: `value_ptr` points to valid uninitialized memory for type usize.
+            unsafe {
+                value_ptr.write(42);
+            }
+
+            // SAFETY: We are accessing fields of uninitialized memory to get raw pointers.
+            let memory_ptr = unsafe { &raw mut (*ptr).memory };
+
+            // SAFETY: `memory_ptr` points to valid uninitialized memory for the array type.
+            unsafe {
+                memory_ptr.write([MaybeUninit::uninit(); 16]);
+            }
+        }
+
+        let mut pool = PinnedPool::<HalfFull>::new();
+
+        let inserter = pool.begin_insert();
+        let key = inserter.key();
+
+        // SAFETY: We properly initialize only the required fields via our helper function.
+        let value_ref = unsafe { inserter.insert_with(initialize_half_full) };
+
+        assert_eq!(value_ref.value, 42);
+
+        let retrieved = pool.get(key);
+        assert_eq!(retrieved.value, 42);
+        assert_eq!(pool.len(), 1);
+
+        pool.remove(key);
+    }
+
+    #[test]
+    fn insert_with_mut_works() {
+        let mut pool = PinnedPool::<String>::new();
+
+        let inserter = pool.begin_insert();
+        let key = inserter.key();
+
+        // SAFETY: We properly initialize the value in the closure.
+        let mut value_ref = unsafe {
+            inserter.insert_with_mut(|uninit| {
+                uninit.write(String::from("Hello"));
+            })
+        };
+
+        // Modify the value immediately
+        value_ref.as_mut().get_mut().push_str(", World!");
+
+        assert_eq!(&*value_ref, "Hello, World!");
+        assert_eq!(&*pool.get(key), "Hello, World!");
+        assert_eq!(pool.len(), 1);
+
+        pool.remove(key);
     }
 }
