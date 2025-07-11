@@ -419,6 +419,10 @@ impl Histogram {
 ///
 /// Histograms may be smaller than this, as well, because one character will never represent
 /// less than one event (so if the max value is 3, the histogram render will be 3 characters wide).
+///
+/// Due to aliasing effects (have to assign at least 1 item per character), the width may even
+/// be greater than this for histograms with very small bucket values. We are not after perfect
+/// rendering here, just a close enough approximation that is easy to read.
 const HISTOGRAM_BAR_WIDTH_CHARS: u64 = 50;
 
 impl Display for Histogram {
@@ -532,8 +536,8 @@ impl HistogramScale {
         )]
         let histogram_bar_width = count / self.count_per_char;
 
-        // Sanity check.
-        assert!(histogram_bar_width <= HISTOGRAM_BAR_WIDTH_CHARS);
+        // Due to aliasing we can occasionally exceed HISTOGRAM_BAR_WIDTH_CHARS.
+        // This is fine - we are not looking for perfect rendering, just close enough.
 
         for _ in 0..histogram_bar_width {
             f.write_char('∎')?;
@@ -863,6 +867,35 @@ mod tests {
 
         histogram_scale.write_bar(3, &mut output).unwrap();
         assert_eq!(output, "∎∎∎");
+    }
+
+    #[test]
+    fn histogram_scale_just_over() {
+        // All the buckets values just a tiny bit over the desired width.
+        let histogram = Histogram {
+            magnitudes: &[1, 2, 3],
+            counts: Box::new([
+                HISTOGRAM_BAR_WIDTH_CHARS + 1,
+                HISTOGRAM_BAR_WIDTH_CHARS + 1,
+                HISTOGRAM_BAR_WIDTH_CHARS + 1,
+            ]),
+            plus_infinity_bucket_count: 0,
+        };
+
+        let histogram_scale = HistogramScale::new(&histogram);
+
+        let mut output = String::new();
+
+        histogram_scale
+            .write_bar(HISTOGRAM_BAR_WIDTH_CHARS + 1, &mut output)
+            .unwrap();
+        // We expect ∎ repeated HISTOGRAM_BAR_WIDTH_CHARS + 1 times.
+        assert_eq!(
+            output,
+            "∎".repeat(
+                usize::try_from(HISTOGRAM_BAR_WIDTH_CHARS + 1).expect("safe range, tiny value")
+            )
+        );
     }
 
     #[test]
