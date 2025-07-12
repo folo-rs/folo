@@ -469,3 +469,7 @@ If the two are out of sync, use the `readme.rs` as the authoritative source and 
 
 It is fine to disable Clippy rules in the `readme.rs` file, as it is not production code and
 often needs to take shortcuts to be short and simple.
+
+# Memory allocation is the root of all evil
+
+Avoid algorithms that allocate memory at runtime when an allocation-free alternative is available.

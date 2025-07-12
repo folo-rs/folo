@@ -3,6 +3,7 @@ use std::num::NonZero;
 use std::{cmp, iter};
 
 use foldhash::{HashMap, HashMapExt};
+use new_zealand::nz;
 
 use crate::{EventName, GLOBAL_REGISTRY, Magnitude, ObservationBagSnapshot, Observations};
 
@@ -425,6 +426,19 @@ impl Histogram {
 /// rendering here, just a close enough approximation that is easy to read.
 const HISTOGRAM_BAR_WIDTH_CHARS: u64 = 50;
 
+/// Pre-allocated string of histogram bar characters to avoid allocation during rendering.
+/// We make this longer than the typical bar width to handle cases where aliasing causes
+/// the bar to exceed the target width.
+const HISTOGRAM_BAR_CHARS: &str =
+    "∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎";
+
+const HISTOGRAM_BAR_CHARS_LEN_BYTES: NonZero<usize> =
+    NonZero::new(HISTOGRAM_BAR_CHARS.len()).unwrap();
+
+/// Number of bytes per histogram bar character.
+/// The '∎' character is U+25A0 which encodes to 3 bytes in UTF-8.
+const BYTES_PER_HISTOGRAM_BAR_CHAR: NonZero<usize> = nz!(3);
+
 impl Display for Histogram {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let buckets = self.buckets().collect::<Vec<_>>();
@@ -502,7 +516,7 @@ impl Display for Histogram {
 struct HistogramScale {
     /// The number of events that each character in the histogram bar represents.
     /// One character is rendered for each `count_per_char` events (rounded down).
-    count_per_char: u64,
+    count_per_char: NonZero<u64>,
 }
 
 impl HistogramScale {
@@ -518,29 +532,49 @@ impl HistogramScale {
         // will give the ground truth even if the rendering is not perfect.
         #[expect(
             clippy::integer_division,
-            reason = "we accept the loss of precision here - the bar might not always reach 100% of desired width"
+            reason = "we accept the loss of precision here - the bar might not always reach 100% of desired width or even overshoot it"
         )]
-        let count_per_char = cmp::max(max_count / HISTOGRAM_BAR_WIDTH_CHARS, 1);
+        let count_per_char = NonZero::new(cmp::max(max_count / HISTOGRAM_BAR_WIDTH_CHARS, 1))
+            .expect("guarded by max()");
 
         Self { count_per_char }
     }
 
     fn write_bar(&self, count: u64, f: &mut impl Write) -> fmt::Result {
-        #[expect(
-            clippy::arithmetic_side_effects,
-            reason = "guarded by count_per_char being max'ed to at least 1 above"
-        )]
-        #[expect(
-            clippy::integer_division,
-            reason = "intentional loss of precision due to rounding down"
-        )]
-        let histogram_bar_width = count / self.count_per_char;
+        let histogram_bar_width = count
+            .checked_div(self.count_per_char.get())
+            .expect("division by zero impossible - divisor is NonZero");
 
-        // Due to aliasing we can occasionally exceed HISTOGRAM_BAR_WIDTH_CHARS.
+        // Note: due to aliasing we can occasionally exceed HISTOGRAM_BAR_WIDTH_CHARS.
         // This is fine - we are not looking for perfect rendering, just close enough.
 
-        for _ in 0..histogram_bar_width {
-            f.write_char('∎')?;
+        let bar_width = usize::try_from(histogram_bar_width).expect("safe range");
+
+        let chars_in_constant = HISTOGRAM_BAR_CHARS_LEN_BYTES
+            .get()
+            .checked_div(BYTES_PER_HISTOGRAM_BAR_CHAR.get())
+            .expect("NonZero - cannot be zero");
+
+        let mut remaining = bar_width;
+
+        while remaining > 0 {
+            let chunk_size =
+                NonZero::new(remaining.min(chars_in_constant)).expect("guarded by loop condition");
+
+            // Calculate byte length directly: each ∎ character is BYTES_PER_HISTOGRAM_BAR_CHAR bytes in UTF-8.
+            let byte_end = chunk_size
+                .checked_mul(BYTES_PER_HISTOGRAM_BAR_CHAR)
+                .expect("we are seeking into a small constant value, overflow impossible");
+
+            #[expect(
+                clippy::string_slice,
+                reason = "safe slicing - ∎ characters have known UTF-8 encoding"
+            )]
+            f.write_str(&HISTOGRAM_BAR_CHARS[..byte_end.get()])?;
+
+            remaining = remaining
+                .checked_sub(chunk_size.get())
+                .expect("guarded by min() above");
         }
 
         Ok(())
@@ -921,7 +955,7 @@ mod tests {
         output.clear();
 
         histogram_scale
-            .write_bar(histogram_scale.count_per_char, &mut output)
+            .write_bar(histogram_scale.count_per_char.get(), &mut output)
             .unwrap();
         assert_eq!(output, "∎");
         output.clear();
@@ -961,13 +995,13 @@ mod tests {
         output.clear();
 
         histogram_scale
-            .write_bar(histogram_scale.count_per_char - 1, &mut output)
+            .write_bar(histogram_scale.count_per_char.get() - 1, &mut output)
             .unwrap();
         assert_eq!(output, "");
         output.clear();
 
         histogram_scale
-            .write_bar(histogram_scale.count_per_char, &mut output)
+            .write_bar(histogram_scale.count_per_char.get(), &mut output)
             .unwrap();
         assert_eq!(output, "∎");
         output.clear();
@@ -981,5 +1015,16 @@ mod tests {
                 usize::try_from(HISTOGRAM_BAR_WIDTH_CHARS).expect("safe range, tiny value") - 1
             )
         );
+    }
+
+    #[test]
+    fn histogram_char_byte_count_is_correct() {
+        // Verify our assumption that ∎ is BYTES_PER_HISTOGRAM_BAR_CHAR bytes in UTF-8.
+        assert_eq!("∎".len(), BYTES_PER_HISTOGRAM_BAR_CHAR.get());
+
+        // Verify that our constant string has the expected byte length.
+        let expected_chars = HISTOGRAM_BAR_CHARS.chars().count();
+        let expected_bytes = expected_chars * BYTES_PER_HISTOGRAM_BAR_CHAR.get();
+        assert_eq!(HISTOGRAM_BAR_CHARS.len(), expected_bytes);
     }
 }
