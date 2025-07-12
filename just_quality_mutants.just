@@ -69,10 +69,11 @@ mutants:
         $args += "1"
     } else {
         $args += "--jobs"
-        $args += "4"
+        $args += "8"
     }
 
     # We must use Invoke-Expression to preserve the quotes around the wildcarded arguments on Linux.
     $expanded_args = [String]::join(" ", $args)
-    Invoke-Expression "cargo mutants {{ target_package }} --profile=mutants --no-times --caught --unviable $expanded_args"
+    # TODO: Move these to mutants.toml.
+    Invoke-Expression "cargo mutants {{ target_package }} --profile=mutants --baseline=skip --timeout 30 --no-shuffle --caught --unviable --all-features $expanded_args -- --cargo-arg=--locked"
     exit $LASTEXITCODE

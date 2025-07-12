@@ -16,9 +16,10 @@ rust-version = "1.86"
 debug = "line-tables-only"
 
 [profile.mutants]
-inherits = "dev"
+inherits = "test"
 # Speed up the build.
 debug = "none"
+incremental = false
 
 [workspace.dependencies]
 # The packages we publish.
