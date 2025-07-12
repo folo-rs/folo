@@ -13,6 +13,10 @@ mutants:
         "'" + $s + "'"
     }
 
+    # Note: while cargo-mutants does theoretically support specifying these via config file, it
+    # does not support merging that static set of entries with the dynamic set of entries we
+    # determine based on the platform. So we have to specify them all here.
+    # https://github.com/sourcefrog/cargo-mutants/issues/527
     $args = @(
         "-e"
         # Parts of this package require Criterion to work and other parts are currently not tested
@@ -58,8 +62,6 @@ mutants:
         $args += "linux"
     }
 
-    # We deliberately do not use nextest here because it cannot run doctests.
-
     # Multi-job mutation on Linux does not appear to work well - it seems to cause some interference
     # between the jobs. Perhaps due to our CARGO_TARGET_DIR being shared between jobs? One job is
     # executing tests from the wrong job because they are overwriting each other? Simple fix is
@@ -74,6 +76,16 @@ mutants:
 
     # We must use Invoke-Expression to preserve the quotes around the wildcarded arguments on Linux.
     $expanded_args = [String]::join(" ", $args)
-    # TODO: Move these to mutants.toml.
-    Invoke-Expression "cargo mutants {{ target_package }} --profile=mutants --baseline=skip --timeout 30 --no-shuffle --caught --unviable --all-features $expanded_args -- --cargo-arg=--locked"
+
+    # --baseline=skip - We assume that regular tests have already been executed
+    #     and are not failing, for mutation speedup.
+    # --no-shuffle - We do not care about shuffling, that is something rarely useful.
+    # --caught --unviable - We want to see a list of all the mutations tried, as it helps us
+    #     understand what is covered by mutation testing and how successfully.
+    # --timeout - as we skip the baseline tests, we need to manually define a timeout.
+    #     This needs to be long enough to run a full package test suite (for all jobs in parallel)
+    #     but short enough to call a timeout and timeout and avoid things going on forever.
+    #     This should only be reached if a mutation causes a serious issue (and may need to be
+    #     skipped).
+    Invoke-Expression "cargo mutants {{ target_package }} --baseline=skip --timeout=60 --no-shuffle --caught --unviable $expanded_args"
     exit $LASTEXITCODE

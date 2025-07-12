@@ -1,0 +1,17 @@
+# No reason to skip anything - full feature coverage, please.
+all_features = true
+
+# We have mutation-optimized settings that speed up the builds a lot.
+profile = "mutants"
+
+additional_cargo_args = [
+    # avoid spending time on Cargo package manager activity during mutation testing - we use the packages in the lockfile.
+    "--locked"
+]
+
+# Only run unit tests and integration tests, not doctests because doctests are slow (even after
+# the recent speedups - they are slow when they fail, and they will fail a lot under mutation, so
+# are not really worth using in mutation testing). Likewise, we do not specify benchmarks here
+# because they can have nontrivial overhead due to benchmark harness setup and are rarely doing
+# something that is not already covered by unit tests or integration tests.
+additional_cargo_test_args = [ "--tests" ]
