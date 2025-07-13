@@ -772,6 +772,7 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
     ///
     /// ```rust
     /// use std::mem::MaybeUninit;
+    ///
     /// use pinned_pool::PinnedPool;
     ///
     /// let mut pool = PinnedPool::<String>::new();
@@ -814,6 +815,7 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
     ///
     /// ```rust
     /// use std::mem::MaybeUninit;
+    ///
     /// use pinned_pool::PinnedPool;
     ///
     /// let mut pool = PinnedPool::<String>::new();

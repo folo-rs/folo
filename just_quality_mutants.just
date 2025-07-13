@@ -77,6 +77,10 @@ mutants:
     # We must use Invoke-Expression to preserve the quotes around the wildcarded arguments on Linux.
     $expanded_args = [String]::join(" ", $args)
 
+    # Set environment variable to disable watchdog during mutation testing.
+    # This allows mutations that cause infinite loops to hang as expected.
+    $env:MUTATION_TESTING = "1"
+
     # --baseline=skip - We assume that regular tests have already been executed
     #     and are not failing, for mutation speedup.
     # --no-shuffle - We do not care about shuffling, that is something rarely useful.

@@ -16,9 +16,13 @@ pub use windows::*;
 /// takes longer than 10 seconds to complete, the process will be terminated
 /// to prevent CI/build systems from hanging.
 ///
+/// When the `MUTATION_TESTING` environment variable is set to "1", the watchdog
+/// is disabled and the test function is executed directly. This allows mutation
+/// testing to properly detect hanging mutations.
+///
 /// # Panics
 ///
-/// Panics if the test times out after 10 seconds.
+/// Panics if the test times out after 10 seconds (when not in mutation testing mode).
 ///
 /// # Example
 ///
@@ -35,6 +39,12 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
+    // Check if we are running under mutation testing.
+    if std::env::var("MUTATION_TESTING").as_deref() == Ok("1") {
+        // Under mutation testing, disable the watchdog to allow hanging mutations.
+        return test_fn();
+    }
+
     let (tx, rx) = mpsc::channel();
 
     // Run the test in a separate thread

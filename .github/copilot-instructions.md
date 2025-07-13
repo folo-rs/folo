@@ -106,6 +106,8 @@ Comments are regular sentences and END WITH A PERIOD or other punctuation.
 
 Do not forget proper language in tests, doctests and examples.
 
+Do not use contractions, that is not professional English. Use "do not" instead of "don't", etc.
+
 # Use of unwrap() and expect()
 
 Use `unwrap()` in test code and only in test code. Do not use `expect()` in test code.
