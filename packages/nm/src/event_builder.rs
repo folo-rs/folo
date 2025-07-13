@@ -338,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn push_build_registers_with_pusher() {
+    fn pusher_build_registers_with_pusher() {
         let pusher = MetricsPusher::new();
 
         // It does not matter whether we drop it - events are eternal,
@@ -351,6 +351,22 @@ mod tests {
         );
 
         assert_eq!(pusher.event_count(), 1);
+    }
+
+    thread_local!(static LOCAL_PUSHER: MetricsPusher = MetricsPusher::new());
+
+    #[test]
+    fn pusher_local_build_registers_with_pusher() {
+        // It does not matter whether we drop it - events are eternal,
+        // dropping just means we can no longer observe occurrences of this event.
+        drop(
+            Event::builder()
+                .name("push_build_registers_with_pusher")
+                .pusher_local(&LOCAL_PUSHER)
+                .build(),
+        );
+
+        assert_eq!(LOCAL_PUSHER.with(MetricsPusher::event_count), 1);
     }
 
     #[test]
