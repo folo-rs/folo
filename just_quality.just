@@ -31,7 +31,7 @@ format-check:
 
 [group('quality')]
 hack:
-    cargo hack check --feature-powerset
+    cargo hack check --feature-powerset --locked
 
 [group('quality')]
 machete:

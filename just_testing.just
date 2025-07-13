@@ -8,34 +8,34 @@ bench TARGET="":
         $target_selector += "{{ TARGET }}"
     }
 
-    cargo bench {{ target_package }} --all-features $target_selector
+    cargo bench {{ target_package }} --all-features $target_selector --locked
 
 [group('testing')]
 miri FILTER="":
-    cargo +nightly miri nextest run {{ target_package }} --no-fail-fast --all-features {{ FILTER }}
+    cargo +nightly miri nextest run {{ target_package }} --no-fail-fast --all-features {{ FILTER }} --locked
 
 [group('testing')]
 [script]
 miri-example EXAMPLE:
     if ("{{ package }}" -eq "") {
-        cargo +nightly miri run --all-features --example {{ EXAMPLE }}
+        cargo +nightly miri run --all-features --example {{ EXAMPLE }} --locked
     } else {
-        cargo +nightly miri run -p {{ package }} --all-features --example {{ EXAMPLE }}
+        cargo +nightly miri run -p {{ package }} --all-features --example {{ EXAMPLE }} --locked
     }
 
 [group('testing')]
 test FILTER="":
-    cargo nextest run {{ target_package }} --all-features {{ FILTER }}
+    cargo nextest run {{ target_package }} --all-features {{ FILTER }} --locked
 
 # We run benches separately because they are slow in Nextest multi-process mode,
 # probably due to the Gnuplot integration that spawns an external process.
 [group('testing')]
 test-benches FILTER="":
-    cargo test --benches --all-features {{ FILTER }}
+    cargo test --benches --all-features {{ FILTER }} --locked
 
 [group('testing')]
 test-docs FILTER="":
-    cargo test {{ target_package }} --all-features --doc {{ FILTER }}
+    cargo test {{ target_package }} --all-features --doc {{ FILTER }} --locked
 
 # Run all stand-alone example binaries to ensure they complete without panicking.
 # Each example has a 30-second timeout to handle examples that run indefinitely.
@@ -92,7 +92,7 @@ run-examples:
                 $job = Start-Job -ScriptBlock {
                     param($pkg, $example_name)
                     $env:IS_TESTING = "1"
-                    & cargo run --package $pkg --example $example_name 2>&1
+                    & cargo run --package $pkg --example $example_name --locked 2>&1
                     return $LASTEXITCODE
                 } -ArgumentList $pkg, $example_name
                 
@@ -135,7 +135,7 @@ run-examples:
                 $job = Start-Job -ScriptBlock {
                     param($pkg, $example_name)
                     $env:IS_TESTING = "1"
-                    & cargo run --package $pkg --example $example_name 2>&1
+                    & cargo run --package $pkg --example $example_name --all-features --locked 2>&1
                     return $LASTEXITCODE
                 } -ArgumentList $pkg, $example_name
                 
