@@ -66,10 +66,6 @@ validate-local:
     just package={{ package }} docs
     just package={{ package }} miri
     just package={{ package }} run-examples
-    just package={{ package }} clippy release
-    just package={{ package }} check release
-    just package={{ package }} build release
-    just package={{ package }} hack
 
 # Validation of extra factors that take potentially too long to run in regular validation.
 [group('quality')]
@@ -83,25 +79,9 @@ validate-extra-linux:
 # Validation of extra factors that take potentially too long to run in regular validation.
 # Performs validation on the current platform, whatever that may be.
 [group('quality')]
-validate-extra-local: mutants
-
-# Quick validation suitable for AI iteration, which skips some lengthy checks.
-# We assume this is executed on Windows, and will also perform the full validation on Linux.
-[group('quality')]
-validate-quick: validate-quick-local validate-quick-linux
-
-# Performs the part of the `validate-quick` recipe that must run on Linux, when commanded from Windows.
-[group('quality')]
-validate-quick-linux:
-    wsl -e bash -l -c "just package={{ package }} validate-quick-local"
-
-# Quick validation suitable for AI iteration, which skips some lengthy checks.
-# Performs validation on the current platform, whatever that may be.
-[group('quality')]
-validate-quick-local:
-    just package={{ package }} format-check
-    just package={{ package }} check dev
-    just package={{ package }} clippy dev
-    just package={{ package }} test
-    just package={{ package }} test-docs
-    just package={{ package }} docs
+validate-extra-local:
+    just package={{ package }} mutants
+    just package={{ package }} clippy release
+    just package={{ package }} check release
+    just package={{ package }} build release
+    just package={{ package }} hack
