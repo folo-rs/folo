@@ -318,7 +318,6 @@ where
         ))
     }
 
-    #[cfg_attr(test, mutants::skip)] // Critical primitive - causes test timeouts if tampered.
     pub(crate) fn set(&self, result: T) {
         let mut waker: Option<Waker> = None;
 
@@ -355,7 +354,6 @@ where
     }
 
     // We are intended to be polled via Future::poll, so we have an equivalent signature here.
-    #[cfg_attr(test, mutants::skip)] // Critical for code execution to occur in async contexts.
     pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         let mut state = self.state.lock().expect(ERR_POISONED_LOCK);
 
@@ -578,7 +576,6 @@ where
     /// let (sender, _receiver) = event.bind_by_arc();
     /// sender.send(42);
     /// ```
-    #[cfg_attr(test, mutants::skip)] // Can cause infinite loops - resource management is very sensitive to this.
     pub fn send(self, value: T) {
         self.event_ref.set(value);
     }

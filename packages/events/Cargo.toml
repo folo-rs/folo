@@ -21,7 +21,6 @@ pinned_pool = { workspace = true }
 benchmark_utils = { workspace = true }
 criterion = { workspace = true }
 many_cpus_benchmarking = { workspace = true }
-mutants = { workspace = true }
 new_zealand = { workspace = true }
 oneshot = { workspace = true }
 static_assertions = { workspace = true }

@@ -322,7 +322,6 @@ impl<T> LocalOnceEvent<T> {
         ))
     }
 
-    #[cfg_attr(test, mutants::skip)] // Critical primitive - causes test timeouts if tampered.
     pub(crate) fn set(&self, result: T) {
         // SAFETY: See comments on field.
         let state = unsafe { &mut *self.state.get() };
@@ -354,7 +353,6 @@ impl<T> LocalOnceEvent<T> {
     /// # Panics
     ///
     /// Panics if the result has already been consumed.
-    #[cfg_attr(test, mutants::skip)] // Critical primitive - causes test timeouts if tampered.
     pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         // SAFETY: See comments on field.
         let state = unsafe { &mut *self.state.get() };
@@ -389,7 +387,6 @@ impl<T> LocalOnceEvent<T> {
         }
     }
 
-    #[cfg_attr(test, mutants::skip)] // Critical primitive - causes test timeouts if tampered.
     fn sender_dropped(&self) {
         // SAFETY: See comments on field.
         let state = unsafe { &mut *self.state.get() };
@@ -537,7 +534,6 @@ where
     /// let (sender, _receiver) = event.bind_by_rc();
     /// sender.send(42);
     /// ```
-    #[cfg_attr(test, mutants::skip)] // Can cause infinite loops - resource management is very sensitive to this.
     pub fn send(self, value: T) {
         self.event_ref.set(value);
     }
