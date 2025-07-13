@@ -55,7 +55,6 @@ validate-linux:
 # Performs validation on the current platform, whatever that may be.
 [group('quality')]
 validate-local:
-    cargo generate-lockfile
     just package={{ package }} machete
     just package={{ package }} format-check
     just package={{ package }} check dev
