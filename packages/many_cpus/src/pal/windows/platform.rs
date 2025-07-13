@@ -606,6 +606,7 @@ impl BuildTargetPlatform {
     /// Gets the efficiency classes of all processors on the system, ordered by processor ID.
     /// This also returns data for offline processors.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Mutating this can lead to non-deterministic looping as mutations can violate memory safety. We could define a safer iterator abstraction but it hardly seems worth it.
     fn get_processor_memory_regions(&self) -> Box<[MemoryRegionId]> {
         // TODO: Verify that this returns correct data for offline processors.
         let memory_region_relationships_raw =
