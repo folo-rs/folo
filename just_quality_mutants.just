@@ -67,20 +67,34 @@ mutants:
         $args += "linux"
     }
 
-    # Multi-job mutation on Linux does not appear to work well - it seems to cause some interference
-    # between the jobs. Perhaps due to our CARGO_TARGET_DIR being shared between jobs? One job is
-    # executing tests from the wrong job because they are overwriting each other? Simple fix is
-    # to just use 1 job on Linux, which is good enough for now.
-    if ($IsLinux) {
-        $args += "--jobs"
-        $args += "1"
-    } else {
-        $args += "--jobs"
-        $args += "8"
-    }
+    # Heuristically, 4 processors per job seems to work out well to achieve high efficiency.
+    $args += "--jobs"
+    $args += [Math]::Max([Environment]::ProcessorCount / 4, 1)
 
     # We must use Invoke-Expression to preserve the quotes around the wildcarded arguments on Linux.
     $expanded_args = [String]::join(" ", $args)
+
+    # If the user has overridden `CARGO_TARGET_DIR`, we need to un-override it here because it is
+    # critical that different mutations be emitted into different target directories, otherwise
+    # the mutation test jobs will conflict with each other, running each others' binaries.
+    if ($env:CARGO_TARGET_DIR) {
+        $env:CARGO_TARGET_DIR = $null
+
+        # If the user set a custom `CARGO_TARGET_DIR` they probably did it because there is a more
+        # performant storage path available than the default, in which case they will also want to
+        # specify `MUTANTS_TEMP` to direct mutation testing to the more performant storage.
+        if (!$env:MUTANTS_TEMP) {
+            Write-Warning "Consider setting a value for the MUTANTS_TEMP environment variable, as you have set CARGO_TARGET_DIR to a custom value. CARGO_TARGET_DIR is ignored during mutation testing."
+        }
+    }
+
+    # If the user has specified a custom `MUTANTS_TEMP` directory, we need to set it here.
+    # This is useful for performance, as it allows mutation testing to use a faster storage path
+    # than the default (e.g. because real-time antivirus is not scanning it).
+    if ($env:MUTANTS_TEMP) {
+        # TMP is the variable used by cargo-mutants to determine where to put the files.
+        $env:TMP = $env:MUTANTS_TEMP
+    }
 
     # Set environment variable to disable watchdog during mutation testing.
     # This allows mutations that cause infinite loops to hang as expected.
