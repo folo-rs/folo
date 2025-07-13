@@ -323,7 +323,6 @@ impl From<NonEmpty<Processor>> for ProcessorSet {
 }
 
 impl Display for ProcessorSet {
-    #[cfg_attr(test, mutants::skip)] // We have no API contract to test here.
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let list = cpulist::emit(self.processors.iter().map(Processor::id));

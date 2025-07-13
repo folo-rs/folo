@@ -18,13 +18,13 @@ mutants:
     # determine based on the platform. So we have to specify them all here.
     # https://github.com/sourcefrog/cargo-mutants/issues/527
     $args = @(
-        "-e"
         # Parts of this package require Criterion to work and other parts are currently not tested
         # as there is no public way to simulate a system topology for `many_cpus`.
+        "-e"
         "many_cpus_benchmarking",
 
-        "-e"
         # Macros are tested via the impl package, mutations in the middle layer might not be detected.
+        "-e"
         "linked_macros"
 
         # We do not test facades, as they are just trivial code that forwards calls to real impls.
@@ -33,24 +33,26 @@ mutants:
         "-e"
         "facade"
 
-        "-e"
         # We have limited coverage of platform bindings because it can be difficult to set up the
         # right scenarios for each, given they are platform-dependent. Instead, we test higher
         # level code using a mock platform.
+        "-e"
         "bindings"
 
-        "-e"
         # This is just a different type of bindings, skipped for same reason as `bindings` above.
+        "-e"
         (Escape-Wildcards "packages/many_cpus/src/pal/linux/filesystem/**")
 
-        "-e"
         # This package is literally full of synchronization primitives, so 95% of mutations will
         # just cause tests to time out and never complete - pointless to try mutate this stuff.
+        "-e"
         "events"
         
+        # All this is code only used in tests/benchmarks - we do not test this code itself.
         "-e"
-        # All this is code only used in tests - we do not test this code itself.
         (Escape-Wildcards "packages/testing/**")
+        "-e"
+        (Escape-Wildcards "packages/benchmarks/**")
     )
 
     if ($IsLinux) {

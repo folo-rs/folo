@@ -118,7 +118,6 @@ impl Session {
 }
 
 impl fmt::Display for Session {
-    #[cfg_attr(test, mutants::skip)] // No API contract.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.operations.is_empty()
             || self

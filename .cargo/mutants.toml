@@ -15,3 +15,11 @@ additional_cargo_args = [
 # because they can have nontrivial overhead due to benchmark harness setup and are rarely doing
 # something that is not already covered by unit tests or integration tests.
 additional_cargo_test_args = [ "--tests" ]
+
+exclude_re = [
+    # We typically do not have any API contract for what we expose as human-readable output.
+    "impl Debug",
+    "impl fmt::Debug",
+    "impl Display",
+    "impl fmt::Display",
+]

@@ -79,7 +79,6 @@ pub struct Family<T> {
 }
 
 impl<T> Debug for Family<T> {
-    #[cfg_attr(test, mutants::skip)] // We have no API contract for this.
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field(

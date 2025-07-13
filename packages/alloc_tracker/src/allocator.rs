@@ -35,7 +35,6 @@ pub struct Allocator<A: GlobalAlloc> {
 }
 
 impl<A: GlobalAlloc> fmt::Debug for Allocator<A> {
-    #[cfg_attr(test, mutants::skip)] // No API contract to test.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Allocator")
             .field("inner", &"<allocator>")

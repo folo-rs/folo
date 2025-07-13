@@ -134,7 +134,6 @@ impl Operation {
 }
 
 impl fmt::Display for Operation {
-    #[cfg_attr(test, mutants::skip)] // No API contract.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} bytes (mean)", self.mean())
     }
