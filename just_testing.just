@@ -101,12 +101,17 @@ run-examples:
                 if ($completed) {
                     $result = Receive-Job -Job $job
                     $exit_code = $result[-1]  # Last item should be the exit code
+                    $output = $result[0..($result.Length-2)] -join "`n"  # All output except exit code
                     
                     if ($exit_code -eq 0) {
                         Write-Host "✓ Example '$example_name' in package '$pkg' completed successfully" -ForegroundColor Green
                         $success_count++
                     } else {
                         Write-Host "✗ Example '$example_name' in package '$pkg' failed with exit code $exit_code" -ForegroundColor Red
+                        if ($output.Trim() -ne "") {
+                            Write-Host "Output:" -ForegroundColor Yellow
+                            Write-Host $output -ForegroundColor DarkYellow
+                        }
                         $failures += "$pkg::$example_name (exit code $exit_code)"
                     }
                 } else {
@@ -144,12 +149,17 @@ run-examples:
                 if ($completed) {
                     $result = Receive-Job -Job $job
                     $exit_code = $result[-1]  # Last item should be the exit code
+                    $output = $result[0..($result.Length-2)] -join "`n"  # All output except exit code
                     
                     if ($exit_code -eq 0) {
                         Write-Host "✓ Example '$example_name' in package '$pkg' completed successfully" -ForegroundColor Green
                         $success_count++
                     } else {
                         Write-Host "✗ Example '$example_name' in package '$pkg' failed with exit code $exit_code" -ForegroundColor Red
+                        if ($output.Trim() -ne "") {
+                            Write-Host "Output:" -ForegroundColor Yellow
+                            Write-Host $output -ForegroundColor DarkYellow
+                        }
                         $failures += "$pkg::$example_name (exit code $exit_code)"
                     }
                 } else {
