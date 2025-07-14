@@ -26,6 +26,7 @@ use crate::allocator::THREAD_BYTES_ALLOCATED;
 /// } // Thread allocation is automatically tracked and recorded here
 /// ```
 #[derive(Debug)]
+#[must_use = "Measurements are taken between creation and drop"]
 pub struct ThreadSpan<'a> {
     operation: &'a mut Operation,
     start_bytes: u64,

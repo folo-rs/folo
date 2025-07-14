@@ -43,6 +43,7 @@ use crate::pal::Platform;
 /// } // Processor time is measured once and divided by 1000
 /// ```
 #[derive(Debug)]
+#[must_use = "Measurements are taken between creation and drop"]
 pub struct ThreadSpan<'a> {
     operation: &'a mut Operation,
     start_time: Duration,
@@ -57,7 +58,6 @@ impl<'a> ThreadSpan<'a> {
     /// # Panics
     ///
     /// Panics if `iterations` is zero.
-    #[must_use]
     pub(crate) fn new(operation: &'a mut Operation, iterations: u64) -> Self {
         assert!(iterations != 0, "Iterations cannot be zero");
 

@@ -72,7 +72,6 @@ impl<'a> SpanBuilder<'a> {
     ///     }
     /// } // Thread processor time is tracked
     /// ```
-    #[must_use]
     pub fn measure_thread(self) -> ThreadSpan<'a> {
         ThreadSpan::new(self.operation, self.iterations)
     }
@@ -99,7 +98,6 @@ impl<'a> SpanBuilder<'a> {
     ///     }
     /// } // Total process processor time is tracked
     /// ```
-    #[must_use]
     pub fn measure_process(self) -> ProcessSpan<'a> {
         ProcessSpan::new(self.operation, self.iterations)
     }

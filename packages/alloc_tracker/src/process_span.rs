@@ -26,6 +26,7 @@ use crate::allocator::TOTAL_BYTES_ALLOCATED;
 /// } // Memory delta is automatically tracked and recorded here
 /// ```
 #[derive(Debug)]
+#[must_use = "Measurements are taken between creation and drop"]
 pub struct ProcessSpan<'a> {
     operation: &'a mut Operation,
     start_bytes: u64,
