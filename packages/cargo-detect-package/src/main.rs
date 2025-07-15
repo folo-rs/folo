@@ -191,17 +191,20 @@ enum DetectedPackage {
 
 /// Detects which Cargo package the given file belongs to.
 fn detect_package(file_path: &Path) -> Result<DetectedPackage, Box<dyn std::error::Error>> {
-    // Try to canonicalize the path, but if it fails (e.g., file doesn't exist),
-    // fall back to workspace mode
-    let Ok(absolute_path) = file_path.canonicalize() else {
-        // Path doesn't exist or can't be resolved, use workspace mode
-        return Ok(DetectedPackage::Workspace);
-    };
+    // Canonicalize the path - it must exist
+    let absolute_path = file_path.canonicalize().map_err(|error| {
+        format!(
+            "File path '{}' does not exist or cannot be accessed: {error}",
+            file_path.display()
+        )
+    })?;
 
-    let Ok(workspace_root) = find_workspace_root(&absolute_path) else {
-        // Can't find workspace root, use workspace mode
-        return Ok(DetectedPackage::Workspace);
-    };
+    let workspace_root = find_workspace_root(&absolute_path).map_err(|error| {
+        format!(
+            "Cannot find workspace root for '{}': {error}",
+            file_path.display()
+        )
+    })?;
 
     // Start from the file's directory and walk up to find the nearest Cargo.toml
     let mut current_dir = if absolute_path.is_file() {
@@ -238,7 +241,10 @@ fn find_workspace_root(start_path: &Path) -> Result<PathBuf, Box<dyn std::error:
             let contents = std::fs::read_to_string(&cargo_toml)?;
             let value: Value = contents.parse()?;
             if value.get("workspace").is_some() {
-                return Ok(current_dir.to_path_buf());
+                // Return canonicalized path for consistent comparison
+                return Ok(current_dir
+                    .canonicalize()
+                    .unwrap_or_else(|_| current_dir.to_path_buf()));
             }
         }
 
@@ -341,65 +347,27 @@ fn execute_with_env_var(
 fn validate_workspace_context(target_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let current_dir = std::env::current_dir()?;
 
-    // Try to find workspace root from the current directory
+    // Find workspace root from the current directory
     let current_workspace_root = find_workspace_root(&current_dir).map_err(|original_error| {
         format!("Current directory is not within a Cargo workspace: {original_error}")
     })?;
 
-    // Try to resolve the target path - if it fails, we'll still validate against current workspace
-    let target_workspace_root = if let Ok(absolute_target_path) = target_path.canonicalize() {
-        // Target path exists, find its workspace root
+    // Canonicalize the target path - it must exist
+    let absolute_target_path = target_path.canonicalize().map_err(|error| {
+        format!(
+            "Target path '{}' does not exist or cannot be accessed: {error}",
+            target_path.display()
+        )
+    })?;
+
+    // Find workspace root for the target path
+    let target_workspace_root =
         find_workspace_root(&absolute_target_path).map_err(|original_error| {
             format!("Target path is not within a Cargo workspace: {original_error}")
-        })?
-    } else {
-        // Target path doesn't exist, but it might be within the current workspace
-        let potential_target = if target_path.is_absolute() {
-            target_path.to_path_buf()
-        } else {
-            // Try to resolve it relative to current directory
-            current_dir.join(target_path)
-        };
-
-        // Manually resolve .. components since canonicalize() won't work for non-existent paths
-        let normalized_potential = normalize_path(&potential_target);
-
-        // For non-existent files, we can use the normalized path directly if it has no .. components
-        // If it has .. components, we need to resolve them manually
-        let resolved_target = if normalized_potential.to_string_lossy().contains("..") {
-            resolve_path_components(&normalized_potential)
-        } else {
-            normalized_potential
-        };
-
-        // Walk up from the potential target directory to see if we can find the same workspace
-        let target_dir = if resolved_target.extension().is_some() {
-            // It's a file, use parent directory
-            resolved_target.parent().unwrap_or(&current_dir)
-        } else {
-            // It's a directory path
-            &resolved_target
-        };
-
-        // Normalize both paths for proper comparison
-        let normalized_target_dir = normalize_path(target_dir);
-        let normalized_workspace_root = normalize_path(&current_workspace_root);
-
-        // Check if this path, when resolved, would be within the current workspace
-        if normalized_target_dir.starts_with(&normalized_workspace_root) {
-            current_workspace_root.clone()
-        } else {
-            return Err(format!(
-                "Target path '{}' is not within the current workspace at '{}'",
-                target_path.display(),
-                current_workspace_root.display()
-            )
-            .into());
-        }
-    };
+        })?;
 
     // Verify both paths are in the same workspace
-    // Normalize paths to handle Windows UNC path differences (\\?\)
+    // Normalize paths to handle Windows path representation differences
     let current_workspace_normalized = normalize_path(&current_workspace_root);
     let target_workspace_normalized = normalize_path(&target_workspace_root);
 
@@ -415,53 +383,19 @@ fn validate_workspace_context(target_path: &Path) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
-/// Resolves path components including .. and . manually for paths that may not exist.
-/// This is needed because `canonicalize()` only works on existing paths.
-fn resolve_path_components(path: &Path) -> PathBuf {
-    let mut result = PathBuf::new();
-    let mut has_prefix = false;
-
-    for component in path.components() {
-        match component {
-            std::path::Component::Normal(name) => {
-                result.push(name);
-            }
-            std::path::Component::ParentDir => {
-                // Remove the last component if possible
-                result.pop();
-            }
-            std::path::Component::CurDir => {
-                // Skip current directory references
-            }
-            std::path::Component::RootDir => {
-                // On Windows with a prefix, RootDir is handled by the prefix
-                // On Unix-like systems, this is the root "/"
-                if !has_prefix {
-                    result = PathBuf::from("/");
-                }
-            }
-            std::path::Component::Prefix(prefix) => {
-                // On Windows, preserve the prefix (e.g., C:) by starting fresh
-                result = PathBuf::from(prefix.as_os_str());
-                has_prefix = true;
-            }
-        }
-    }
-
-    result
-}
-
-/// Normalizes a path by removing Windows UNC prefixes and converting to a consistent format.
-/// This helps with path comparisons on Windows where `canonicalize()` may return UNC paths.
+/// Normalizes a path by using OS canonicalization and stripping Windows UNC prefixes.
+/// This helps with path comparisons on Windows where paths may have different representations.
 fn normalize_path(path: &Path) -> PathBuf {
-    // On Windows, canonicalize() may return UNC paths (\\?\) which can cause comparison issues
-    // Strip the UNC prefix if present
-    if let Some(path_str) = path.to_str() {
+    // Canonicalize the path (paths are expected to exist)
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
+    // Strip Windows UNC prefix if present after canonicalization
+    if let Some(path_str) = canonical.to_str() {
         if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
             return PathBuf::from(stripped);
         }
     }
-    path.to_path_buf()
+    canonical
 }
 
 #[cfg(all(test, not(miri)))]
@@ -573,8 +507,12 @@ version = "0.1.0"
 
     #[test]
     fn detect_package_nonexistent_file() {
-        let result = detect_package(Path::new("nonexistent/file.rs")).unwrap();
-        assert_eq!(result, DetectedPackage::Workspace);
+        let result = detect_package(Path::new("nonexistent/file.rs"));
+        assert!(
+            result.is_err(),
+            "Should return error for non-existent files"
+        );
+        assert!(result.unwrap_err().to_string().contains("does not exist"));
     }
 
     #[test]
@@ -686,11 +624,12 @@ version = "0.1.0"
         // Test that relative paths going outside the workspace are rejected
         let result = validate_workspace_context(Path::new("../../../outside_workspace/file.rs"));
         assert!(result.is_err(), "Expected error but validation succeeded!");
+        // The error could be about the file not existing or being outside workspace
+        let error_msg = result.unwrap_err().to_string();
         assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("is not within the current workspace")
+            error_msg.contains("does not exist")
+                || error_msg.contains("is not within the current workspace"),
+            "Expected appropriate error message, got: {error_msg}"
         );
     }
 }

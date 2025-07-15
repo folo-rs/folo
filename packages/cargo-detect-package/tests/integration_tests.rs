@@ -338,8 +338,7 @@ fn nonexistent_file_fallback() {
     let workspace_root = workspace.path();
     let test_cmd = get_test_command();
 
-    // Test that non-existent files fall back to workspace scope
-    // Use an absolute path instead of relative to avoid workspace validation issues
+    // Test that non-existent files now return an error instead of falling back to workspace scope
     let nonexistent_file = workspace_root.join("package_a/src/nonexistent.rs");
     let mut args = vec![
         "--path",
@@ -352,9 +351,15 @@ fn nonexistent_file_fallback() {
     let output = run_tool(workspace_root, &args).expect("Failed to run tool");
 
     assert!(
-        output.status.success(),
-        "Tool should handle non-existent files: {}",
+        !output.status.success(),
+        "Tool should reject non-existent files: {}",
         String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("does not exist"),
+        "Should have error about non-existent file: {stderr}"
     );
 }
 
