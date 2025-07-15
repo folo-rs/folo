@@ -391,6 +391,7 @@ dependencies = [
  "benchmark_utils",
  "criterion",
  "futures",
+ "many_cpus",
  "many_cpus_benchmarking",
  "new_zealand",
  "oneshot",

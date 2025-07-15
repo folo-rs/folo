@@ -1,7 +1,5 @@
 {
     "words": [
-        "Symcrypt",
-        "Uninit",
         "affinitization",
         "affinitized",
         "affinitizing",
@@ -19,7 +17,10 @@
         "nextest",
         "nonoverlapping",
         "pointee",
+        "Symcrypt",
         "taskset",
+        "threadpool",
+        "Uninit",
         "withf"
-    ],
+    ]
 }
