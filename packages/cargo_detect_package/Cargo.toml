@@ -13,6 +13,7 @@ rust-version.workspace = true
 
 [dependencies]
 argh = { workspace = true, features = ["help"] }
+toml = "0.8"
 
 [dev-dependencies]
 tempfile = "3.15"

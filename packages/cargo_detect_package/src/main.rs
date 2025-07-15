@@ -97,6 +97,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use argh::FromArgs;
+use toml::Value;
 
 /// A Cargo tool to detect the package that a file belongs to, passing the package name to a subcommand.
 #[derive(FromArgs)]
@@ -201,7 +202,8 @@ fn find_workspace_root(start_path: &Path) -> Result<PathBuf, Box<dyn std::error:
         if cargo_toml.exists() {
             // Check if this is a workspace root
             let contents = std::fs::read_to_string(&cargo_toml)?;
-            if contents.contains("[workspace]") {
+            let value: Value = contents.parse()?;
+            if value.get("workspace").is_some() {
                 return Ok(current_dir.to_path_buf());
             }
         }
@@ -220,14 +222,13 @@ fn extract_package_name(
     cargo_toml_path: &Path,
 ) -> Result<DetectedPackage, Box<dyn std::error::Error>> {
     let contents = std::fs::read_to_string(cargo_toml_path)?;
+    let value: Value = contents.parse()?;
 
-    // Simple TOML parsing to extract package name
-    for line in contents.lines() {
-        let line = line.trim();
-        if let Some(name) = parse_name_line(line, "name = \"", '"') {
-            return Ok(DetectedPackage::Package(name));
-        } else if let Some(name) = parse_name_line(line, "name = '", '\'') {
-            return Ok(DetectedPackage::Package(name));
+    if let Some(package_table) = value.get("package") {
+        if let Some(name) = package_table.get("name") {
+            if let Some(name_str) = name.as_str() {
+                return Ok(DetectedPackage::Package(name_str.to_string()));
+            }
         }
     }
 
@@ -236,17 +237,6 @@ fn extract_package_name(
         cargo_toml_path.display()
     )
     .into())
-}
-
-/// Helper function to parse a name line with given prefix and suffix.
-fn parse_name_line(line: &str, prefix: &str, suffix: char) -> Option<String> {
-    if line.starts_with(prefix) && line.ends_with(suffix) {
-        let start = prefix.len();
-        let end = line.len().checked_sub(1)?;
-        line.get(start..end).map(ToString::to_string)
-    } else {
-        None
-    }
 }
 
 /// Executes the subcommand with cargo arguments (-p or --workspace).
@@ -360,6 +350,35 @@ version = "0.1.0"
     }
 
     #[test]
+    fn extract_package_name_with_comments_and_complex_toml() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cargo_toml = temp_dir.path().join("Cargo.toml");
+
+        fs::write(
+            &cargo_toml,
+            r#"
+# This is a comment
+[package]
+# Package name
+name = "complex-package"
+version = "0.1.0"
+authors = ["Test Author <test@example.com>"]
+description = "A test package with complex TOML"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+"#,
+        )
+        .unwrap();
+
+        let result = extract_package_name(&cargo_toml).unwrap();
+        assert_eq!(
+            result,
+            DetectedPackage::Package("complex-package".to_string())
+        );
+    }
+
+    #[test]
     fn extract_package_name_missing() {
         let temp_dir = tempfile::tempdir().unwrap();
         let cargo_toml = temp_dir.path().join("Cargo.toml");
@@ -388,30 +407,6 @@ version = "0.1.0"
             DetectedPackage::Package("test".to_string()),
             DetectedPackage::Workspace
         );
-    }
-
-    #[test]
-    fn parse_name_line_double_quotes() {
-        let result = parse_name_line(r#"name = "test-package""#, "name = \"", '"');
-        assert_eq!(result, Some("test-package".to_string()));
-    }
-
-    #[test]
-    fn parse_name_line_single_quotes() {
-        let result = parse_name_line("name = 'test-package'", "name = '", '\'');
-        assert_eq!(result, Some("test-package".to_string()));
-    }
-
-    #[test]
-    fn parse_name_line_no_match() {
-        let result = parse_name_line("version = \"0.1.0\"", "name = \"", '"');
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn parse_name_line_incomplete() {
-        let result = parse_name_line("name = \"test", "name = \"", '"');
-        assert_eq!(result, None);
     }
 
     #[test]
