@@ -642,17 +642,39 @@ version = "0.1.0"
         )
         .unwrap();
 
-        // Try to target a file in the real workspace while running from fake workspace
+        // Create another fake workspace to simulate cross-workspace access
+        let other_workspace = temp_dir.path().join("other_workspace");
+        fs::create_dir_all(&other_workspace).unwrap();
+        fs::write(
+            other_workspace.join("Cargo.toml"),
+            r#"
+[workspace]
+members = ["other_package"]
+"#,
+        )
+        .unwrap();
+
+        // Create a package in the other workspace
+        let other_package = other_workspace.join("other_package");
+        fs::create_dir_all(other_package.join("src")).unwrap();
+        fs::write(
+            other_package.join("Cargo.toml"),
+            r#"
+[package]
+name = "other_package"
+version = "0.1.0"
+"#,
+        )
+        .unwrap();
+        fs::write(other_package.join("src").join("lib.rs"), "// test file").unwrap();
+
+        // Try to target a file in the other workspace while running from fake workspace
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&fake_workspace).unwrap();
 
         // This should fail because we're in different workspaces
-        let real_workspace_file = original_dir
-            .join("packages")
-            .join("events")
-            .join("src")
-            .join("lib.rs");
-        let result = validate_workspace_context(&real_workspace_file);
+        let other_workspace_file = other_package.join("src").join("lib.rs");
+        let result = validate_workspace_context(&other_workspace_file);
         assert!(result.is_err());
 
         // Restore original directory
