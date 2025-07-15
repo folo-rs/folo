@@ -36,18 +36,14 @@ fn run_tool(working_dir: &Path, args: &[&str]) -> Result<std::process::Output, s
 
     // Convert UNC paths back to regular Windows paths to avoid Command issues
     let binary_str = normalized_binary_path.to_string_lossy();
-    let clean_binary_path = if let Some(stripped) = binary_str.strip_prefix(r"\\?\") {
-        stripped.to_string()
-    } else {
-        binary_str.to_string()
-    };
+    let clean_binary_path = binary_str
+        .strip_prefix(r"\\?\")
+        .map_or_else(|| binary_str.to_string(), ToString::to_string);
 
     let working_str = working_dir.to_string_lossy();
-    let clean_working_dir = if let Some(stripped) = working_str.strip_prefix(r"\\?\") {
-        Path::new(stripped)
-    } else {
-        working_dir
-    };
+    let clean_working_dir = working_str
+        .strip_prefix(r"\\?\")
+        .map_or(working_dir, Path::new);
 
     Command::new(&clean_binary_path)
         .args(args)
