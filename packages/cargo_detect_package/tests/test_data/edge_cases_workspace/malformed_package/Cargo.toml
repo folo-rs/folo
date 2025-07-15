@@ -1,0 +1,5 @@
+# This is intentionally malformed TOML for testing
+[package
+name = "malformed_package"
+version = 0.1.0  # Missing quotes
+edition = "2021"

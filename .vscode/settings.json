@@ -7,5 +7,10 @@
     "rust-analyzer.rustfmt.extraArgs": ["+nightly", "--config-path", "${workspaceFolder}/unstable-rustfmt.toml"],
     // Makes rust-analyzer and Cargo commands use separate target directories,
     // so they can be executed concurrently.
-    "rust-analyzer.cargo.targetDir": true
+    "rust-analyzer.cargo.targetDir": true,
+    // Treat all files in test_data directories as plain text to avoid extension processing
+    // on intentionally invalid files used for testing
+    "files.associations": {
+        "**/test_data/**": "plaintext"
+    }
 }

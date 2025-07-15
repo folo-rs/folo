@@ -1,0 +1,3 @@
+[workspace]
+members = ["isolated_package"]
+resolver = "2"
