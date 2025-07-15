@@ -464,7 +464,7 @@ fn normalize_path(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 mod tests {
     use std::fs;
 

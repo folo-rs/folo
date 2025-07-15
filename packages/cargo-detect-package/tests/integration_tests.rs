@@ -3,6 +3,8 @@
 //! These tests use pre-built test workspace structures in the `test_data/` directory
 //! to verify the tool's behavior in realistic scenarios.
 
+#![cfg(not(miri))]
+
 use std::path::Path;
 use std::process::Command;
 
