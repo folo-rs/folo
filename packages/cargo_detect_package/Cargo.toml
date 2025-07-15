@@ -1,4 +1,5 @@
 [package]
+# Cargo has its own logic for naming and expects dashes. Okay.
 name = "cargo-detect-package"
 description = "A Cargo tool to detect the package that a file belongs to, passing the package name to a subcommand"
 publish = false
