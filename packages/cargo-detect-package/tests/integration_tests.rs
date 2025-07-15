@@ -1,15 +1,13 @@
 //! Integration tests for cargo-detect-package tool.
 //!
-//! These tests use pre-built test workspace structures in the `test_data/` directory
+//! These tests generate temporary workspace structures on the fly
 //! to verify the tool's behavior in realistic scenarios.
 
 #![cfg(not(miri))]
 
+use std::fs;
 use std::path::Path;
 use std::process::Command;
-
-/// Path to the test data directory.
-const TEST_DATA_DIR: &str = "tests/test_data";
 
 /// Path to the cargo-detect-package binary.
 fn get_binary_path() -> String {
@@ -62,17 +60,174 @@ fn get_test_command() -> Vec<&'static str> {
     }
 }
 
-/// Helper to get the absolute path to a test data workspace.
-fn test_workspace_path(workspace_name: &str) -> std::path::PathBuf {
-    let test_data_path = Path::new(TEST_DATA_DIR).join(workspace_name);
+/// Creates a simple test workspace with two packages.
+fn create_simple_workspace() -> tempfile::TempDir {
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
+    let workspace_root = temp_dir.path();
 
-    // Try to canonicalize, but fall back to the original path if that fails
-    test_data_path.canonicalize().unwrap_or(test_data_path)
+    // Create workspace Cargo.toml
+    fs::write(
+        workspace_root.join("Cargo.toml"),
+        r#"[workspace]
+members = ["package_a", "package_b"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+"#,
+    )
+    .expect("Failed to write workspace Cargo.toml");
+
+    // Create package_a
+    let package_a = workspace_root.join("package_a");
+    fs::create_dir_all(package_a.join("src")).expect("Failed to create package_a/src");
+    fs::write(
+        package_a.join("Cargo.toml"),
+        r#"[package]
+name = "package_a"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+"#,
+    )
+    .expect("Failed to write package_a Cargo.toml");
+
+    fs::write(package_a.join("src/lib.rs"), "// package_a lib\n")
+        .expect("Failed to write package_a lib.rs");
+    fs::write(package_a.join("src/main.rs"), "// package_a main\n")
+        .expect("Failed to write package_a main.rs");
+    fs::write(package_a.join("src/utils.rs"), "// package_a utils\n")
+        .expect("Failed to write package_a utils.rs");
+
+    // Create package_b
+    let package_b = workspace_root.join("package_b");
+    fs::create_dir_all(package_b.join("src")).expect("Failed to create package_b/src");
+    fs::write(
+        package_b.join("Cargo.toml"),
+        r#"[package]
+name = "package_b"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+package_a = { path = "../package_a" }
+"#,
+    )
+    .expect("Failed to write package_b Cargo.toml");
+
+    fs::write(package_b.join("src/lib.rs"), "// package_b lib\n")
+        .expect("Failed to write package_b lib.rs");
+
+    // Create root files
+    fs::write(workspace_root.join("README.md"), "# Test Workspace\n")
+        .expect("Failed to write README.md");
+    fs::write(workspace_root.join("root_file.rs"), "// root file\n")
+        .expect("Failed to write root_file.rs");
+
+    temp_dir
+}
+
+/// Creates a separate workspace for cross-workspace testing.
+fn create_separate_workspace() -> tempfile::TempDir {
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
+    let workspace_root = temp_dir.path();
+
+    // Create workspace Cargo.toml
+    fs::write(
+        workspace_root.join("Cargo.toml"),
+        r#"[workspace]
+members = ["isolated_package"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+"#,
+    )
+    .expect("Failed to write workspace Cargo.toml");
+
+    // Create isolated_package
+    let isolated_package = workspace_root.join("isolated_package");
+    fs::create_dir_all(isolated_package.join("src"))
+        .expect("Failed to create isolated_package/src");
+    fs::write(
+        isolated_package.join("Cargo.toml"),
+        r#"[package]
+name = "isolated_package"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+"#,
+    )
+    .expect("Failed to write isolated_package Cargo.toml");
+
+    fs::write(isolated_package.join("src/lib.rs"), "// isolated package\n")
+        .expect("Failed to write isolated_package lib.rs");
+
+    temp_dir
+}
+
+/// Creates a workspace with edge cases (malformed packages).
+fn create_edge_cases_workspace() -> tempfile::TempDir {
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
+    let workspace_root = temp_dir.path();
+
+    // Create workspace Cargo.toml
+    fs::write(
+        workspace_root.join("Cargo.toml"),
+        r#"[workspace]
+members = ["valid_package", "malformed_package"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+"#,
+    )
+    .expect("Failed to write workspace Cargo.toml");
+
+    // Create valid_package
+    let valid_package = workspace_root.join("valid_package");
+    fs::create_dir_all(valid_package.join("src")).expect("Failed to create valid_package/src");
+    fs::write(
+        valid_package.join("Cargo.toml"),
+        r#"[package]
+name = "valid_package"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+"#,
+    )
+    .expect("Failed to write valid_package Cargo.toml");
+
+    fs::write(valid_package.join("src/lib.rs"), "// valid package\n")
+        .expect("Failed to write valid_package lib.rs");
+
+    // Create malformed_package (intentionally malformed TOML)
+    let malformed_package = workspace_root.join("malformed_package");
+    fs::create_dir_all(&malformed_package).expect("Failed to create malformed_package");
+    fs::write(
+        malformed_package.join("Cargo.toml"),
+        r#"# This is intentionally malformed TOML for testing
+[package
+name = "malformed_package"
+version = 0.1.0  # Missing quotes
+edition = "2021"
+"#,
+    )
+    .expect("Failed to write malformed_package Cargo.toml");
+
+    temp_dir
 }
 
 #[test]
 fn package_detection_in_simple_workspace() {
-    let workspace = test_workspace_path("simple_workspace");
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
     let test_cmd = get_test_command();
 
     // Test detecting package_a from its lib.rs
@@ -84,7 +239,7 @@ fn package_detection_in_simple_workspace() {
     ];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(&workspace, &args).expect("Failed to run tool");
+    let output = run_tool(workspace_root, &args).expect("Failed to run tool");
 
     assert!(
         output.status.success(),
@@ -103,14 +258,15 @@ fn package_detection_in_simple_workspace() {
 
 #[test]
 fn package_detection_package_a_utils() {
-    let workspace = test_workspace_path("simple_workspace");
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
     let test_cmd = get_test_command();
 
     // Test detecting package from a submodule file
     let mut args = vec!["--path", "package_a/src/utils.rs", "--via-env", "PKG"];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(&workspace, &args).expect("Failed to run tool");
+    let output = run_tool(workspace_root, &args).expect("Failed to run tool");
 
     assert!(
         output.status.success(),
@@ -121,14 +277,15 @@ fn package_detection_package_a_utils() {
 
 #[test]
 fn package_detection_package_b() {
-    let workspace = test_workspace_path("simple_workspace");
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
     let test_cmd = get_test_command();
 
     // Test detecting package_b
     let mut args = vec!["--path", "package_b/src/lib.rs", "--via-env", "PKG"];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(&workspace, &args).expect("Failed to run tool");
+    let output = run_tool(workspace_root, &args).expect("Failed to run tool");
 
     assert!(
         output.status.success(),
@@ -139,14 +296,15 @@ fn package_detection_package_b() {
 
 #[test]
 fn workspace_root_file_fallback() {
-    let workspace = test_workspace_path("simple_workspace");
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
     let test_cmd = get_test_command();
 
     // Test that root-level files fall back to workspace scope
     let mut args = vec!["--path", "root_file.rs", "--via-env", "PKG"];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(&workspace, &args).expect("Failed to run tool");
+    let output = run_tool(workspace_root, &args).expect("Failed to run tool");
 
     assert!(
         output.status.success(),
@@ -157,14 +315,15 @@ fn workspace_root_file_fallback() {
 
 #[test]
 fn readme_fallback() {
-    let workspace = test_workspace_path("simple_workspace");
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
     let test_cmd = get_test_command();
 
     // Test that README.md falls back to workspace scope
     let mut args = vec!["--path", "README.md", "--via-env", "PKG"];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(&workspace, &args).expect("Failed to run tool");
+    let output = run_tool(workspace_root, &args).expect("Failed to run tool");
 
     assert!(
         output.status.success(),
@@ -175,12 +334,13 @@ fn readme_fallback() {
 
 #[test]
 fn nonexistent_file_fallback() {
-    let workspace = test_workspace_path("simple_workspace");
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
     let test_cmd = get_test_command();
 
     // Test that non-existent files fall back to workspace scope
     // Use an absolute path instead of relative to avoid workspace validation issues
-    let nonexistent_file = workspace.join("package_a/src/nonexistent.rs");
+    let nonexistent_file = workspace_root.join("package_a/src/nonexistent.rs");
     let mut args = vec![
         "--path",
         nonexistent_file.to_str().unwrap(),
@@ -189,7 +349,7 @@ fn nonexistent_file_fallback() {
     ];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(&workspace, &args).expect("Failed to run tool");
+    let output = run_tool(workspace_root, &args).expect("Failed to run tool");
 
     assert!(
         output.status.success(),
@@ -200,16 +360,18 @@ fn nonexistent_file_fallback() {
 
 #[test]
 fn cross_workspace_rejection() {
-    let workspace1 = test_workspace_path("simple_workspace");
-    let workspace2 = test_workspace_path("separate_workspace");
+    let workspace1 = create_simple_workspace();
+    let workspace1_root = workspace1.path();
+    let workspace2 = create_separate_workspace();
+    let workspace2_root = workspace2.path();
     let test_cmd = get_test_command();
 
     // Try to target a file in separate_workspace while running from simple_workspace
-    let target_file = workspace2.join("isolated_package/src/lib.rs");
+    let target_file = workspace2_root.join("isolated_package/src/lib.rs");
     let mut args = vec!["--path", target_file.to_str().unwrap(), "--via-env", "PKG"];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(&workspace1, &args).expect("Failed to run tool");
+    let output = run_tool(workspace1_root, &args).expect("Failed to run tool");
 
     assert!(
         !output.status.success(),
@@ -225,7 +387,8 @@ fn cross_workspace_rejection() {
 
 #[test]
 fn outside_workspace_rejection() {
-    let workspace = test_workspace_path("simple_workspace");
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
     let test_cmd = get_test_command();
 
     // Try to target a file outside any workspace (like /etc/passwd or C:\Windows\System32\notepad.exe)
@@ -238,7 +401,7 @@ fn outside_workspace_rejection() {
     let mut args = vec!["--path", outside_file, "--via-env", "PKG"];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(&workspace, &args).expect("Failed to run tool");
+    let output = run_tool(workspace_root, &args).expect("Failed to run tool");
 
     assert!(
         !output.status.success(),
@@ -254,14 +417,15 @@ fn outside_workspace_rejection() {
 
 #[test]
 fn relative_path_escape_rejection() {
-    let workspace = test_workspace_path("simple_workspace");
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
     let test_cmd = get_test_command();
 
     // Try to escape the workspace using relative paths
     let mut args = vec!["--path", "../../../outside_file.rs", "--via-env", "PKG"];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(&workspace, &args).expect("Failed to run tool");
+    let output = run_tool(workspace_root, &args).expect("Failed to run tool");
 
     assert!(
         !output.status.success(),
@@ -277,14 +441,15 @@ fn relative_path_escape_rejection() {
 
 #[test]
 fn malformed_package_handling() {
-    let workspace = test_workspace_path("edge_cases_workspace");
+    let workspace = create_edge_cases_workspace();
+    let workspace_root = workspace.path();
     let test_cmd = get_test_command();
 
     // Test that valid package still works even with malformed package in same workspace
     let mut args = vec!["--path", "valid_package/src/lib.rs", "--via-env", "PKG"];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(&workspace, &args).expect("Failed to run tool");
+    let output = run_tool(workspace_root, &args).expect("Failed to run tool");
 
     assert!(
         output.status.success(),
@@ -295,12 +460,13 @@ fn malformed_package_handling() {
 
 #[test]
 fn cargo_integration_mode() {
-    let workspace = test_workspace_path("simple_workspace");
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
 
     // Test the default cargo integration mode (no --via-env)
     // We'll use 'cargo check --message-format=json' to avoid actually building
     let output = run_tool(
-        &workspace,
+        workspace_root,
         &[
             "--path",
             "package_a/src/lib.rs",
@@ -324,11 +490,12 @@ fn cargo_integration_mode() {
 
 #[test]
 fn workspace_scope_cargo_integration() {
-    let workspace = test_workspace_path("simple_workspace");
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
 
     // Test workspace scope with cargo integration
     let output = run_tool(
-        &workspace,
+        workspace_root,
         &[
             "--path",
             "README.md",

@@ -1,3 +1,0 @@
-# This workspace has intentional issues for testing edge cases
-[workspace]
-members = ["valid_package", "malformed_package"]

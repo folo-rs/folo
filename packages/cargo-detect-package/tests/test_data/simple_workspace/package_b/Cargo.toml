@@ -1,7 +1,0 @@
-[package]
-name = "package_b"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-package_a = { path = "../package_a" }
