@@ -1,4 +1,97 @@
 //! A Cargo tool to detect the package that a file belongs to, passing the package name to a subcommand.
+//!
+//! This tool automatically detects which Cargo package a given file belongs to within a workspace,
+//! and then executes a subcommand with the appropriate package scope. It supports two operating modes:
+//! cargo integration mode (default) and environment variable mode.
+//!
+//! # Usage
+//!
+//! ```text
+//! cargo-detect-package --path <PATH> [--via-env <ENV_VAR>] <SUBCOMMAND>...
+//! ```
+//!
+//! ## Arguments
+//!
+//! - `--path <PATH>`: Path to the file for which to detect the package
+//! - `--via-env <ENV_VAR>`: Optional. Pass the package name via environment variable instead of cargo arguments
+//! - `<SUBCOMMAND>...`: The command to execute with the detected package information
+//!
+//! # Operating Modes
+//!
+//! ## Cargo Integration Mode (Default)
+//!
+//! In this mode, the tool automatically adds the appropriate cargo package arguments to the subcommand:
+//! - If a specific package is detected: adds `-p <package_name>`
+//! - If no package is detected (workspace scope): adds `--workspace`
+//!
+//! ### Examples
+//!
+//! ```bash
+//! # Build the package containing src/lib.rs
+//! cargo-detect-package --path packages/events/src/lib.rs build
+//! # Executes: cargo build -p events
+//!
+//! # Test the package containing a specific test file
+//! cargo-detect-package --path packages/many_cpus/tests/integration.rs test
+//! # Executes: cargo test -p many_cpus
+//!
+//! # Check a file in the workspace root (falls back to workspace)
+//! cargo-detect-package --path README.md check
+//! # Executes: cargo check --workspace
+//!
+//! # Run clippy with additional arguments
+//! cargo-detect-package --path packages/events/src/lib.rs clippy -- -D warnings
+//! # Executes: cargo clippy -p events -- -D warnings
+//! ```
+//!
+//! ## Environment Variable Mode
+//!
+//! In this mode, the tool sets an environment variable with the detected package name
+//! and executes a non-cargo command. This is useful for integration with build tools
+//! like `just`, `make`, or custom scripts.
+//!
+//! ### Examples
+//!
+//! ```bash
+//! # Use with just command runner
+//! cargo-detect-package --path packages/events/src/lib.rs --via-env package just build
+//! # Executes: just build (with package=events environment variable)
+//!
+//! # Use with custom script
+//! cargo-detect-package --path packages/many_cpus/src/lib.rs --via-env PKG_NAME ./build.sh
+//! # Executes: ./build.sh (with PKG_NAME=many_cpus environment variable)
+//!
+//! # Workspace scope with environment variable
+//! cargo-detect-package --path nonexistent.rs --via-env package just test
+//! # Executes: just test (no environment variable set, allowing just to handle workspace scope)
+//! ```
+//!
+//! # Package Detection Logic
+//!
+//! The tool uses the following logic to detect packages:
+//!
+//! 1. **Path Resolution**: Attempts to canonicalize the input path
+//!    - If the path cannot be resolved (file doesn't exist), falls back to workspace scope
+//!
+//! 2. **Workspace Root Discovery**: Walks up the directory tree to find the workspace root
+//!    - Looks for a `Cargo.toml` file containing a `[workspace]` section
+//!    - If no workspace root is found, falls back to workspace scope
+//!
+//! 3. **Package Detection**: Starting from the file's directory, walks up toward the workspace root
+//!    - Looks for the nearest `Cargo.toml` file that is not the workspace root
+//!    - Extracts the package name from the `[package]` section
+//!    - If no package-level `Cargo.toml` is found, uses workspace scope
+//!
+//! # Fallback Behavior
+//!
+//! The tool gracefully handles various edge cases by falling back to workspace scope:
+//! - Non-existent files or directories
+//! - Files outside the workspace
+//! - Files in the workspace root that don't belong to any specific package
+//! - Invalid or missing workspace configuration
+//!
+//! This ensures that the tool never fails due to ambiguous package detection and always
+//! provides a reasonable default behavior.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -23,11 +116,6 @@ struct Args {
 
 fn main() -> ExitCode {
     let args: Args = argh::from_env();
-
-    if args.subcommand.is_empty() {
-        eprintln!("Error: No subcommand provided");
-        return ExitCode::FAILURE;
-    }
 
     let detected_package = match detect_package(&args.path) {
         Ok(package) => package,
