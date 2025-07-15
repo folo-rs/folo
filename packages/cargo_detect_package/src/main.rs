@@ -116,7 +116,34 @@ struct Args {
 }
 
 fn main() -> ExitCode {
-    let args: Args = argh::from_env();
+    // When called via `cargo detect-package`, the first argument will be "detect-package"
+    // which we need to skip. We handle this by manually parsing the args.
+    let mut env_args: Vec<String> = std::env::args().collect();
+    
+    // If the first argument after the program name is "detect-package", remove it
+    if env_args.get(1).is_some_and(|arg| arg == "detect-package") {
+        env_args.remove(1);
+    }
+    
+    // Convert to &str for argh
+    let str_args: Vec<&str> = env_args.iter().map(String::as_str).collect();
+    
+    let Some(program_name) = str_args.first() else {
+        eprintln!("Failed to get program name");
+        return ExitCode::FAILURE;
+    };
+    
+    let args: Args = match Args::from_args(&[program_name], str_args.get(1..).unwrap_or(&[])) {
+        Ok(args) => args,
+        Err(early_exit) => {
+            println!("{}", early_exit.output);
+            return if early_exit.output.contains("help") {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            };
+        }
+    };
 
     let detected_package = match detect_package(&args.path) {
         Ok(package) => package,
