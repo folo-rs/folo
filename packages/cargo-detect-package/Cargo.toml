@@ -1,0 +1,20 @@
+[package]
+name = "cargo-detect-package"
+description = "A Cargo tool to detect the package that a file belongs to, passing the package name to a subcommand"
+publish = false
+version = "0.1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+argh = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.15"
+
+[lints]
+workspace = true
