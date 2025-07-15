@@ -82,16 +82,17 @@
 //!    - Extracts the package name from the `[package]` section
 //!    - If no package-level `Cargo.toml` is found, uses workspace scope
 //!
+//! # Workspace Validation
+//!
+//! The tool requires that both the current directory and target path are within the same Cargo workspace.
+//! Cross-workspace operations are rejected with an error.
 //! # Fallback Behavior
 //!
-//! The tool gracefully handles various edge cases by falling back to workspace scope:
+//! The tool gracefully handles edge cases by falling back to workspace scope:
 //! - Non-existent files or directories
-//! - Files outside the workspace
+//! - Files outside the workspace  
 //! - Files in the workspace root that don't belong to any specific package
-//! - Invalid or missing workspace configuration
-//!
-//! This ensures that the tool never fails due to ambiguous package detection and always
-//! provides a reasonable default behavior.
+//! - Invalid or missing package configuration
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -144,6 +145,12 @@ fn main() -> ExitCode {
             };
         }
     };
+
+    // Validate that we're running from within the same workspace as the target path
+    if let Err(e) = validate_workspace_context(&args.path) {
+        eprintln!("Error: {e}");
+        return ExitCode::FAILURE;
+    }
 
     let detected_package = match detect_package(&args.path) {
         Ok(package) => package,
@@ -329,6 +336,126 @@ fn execute_with_env_var(
     cmd.status()
 }
 
+/// Validates that the current working directory and target path are within the same Cargo workspace.
+/// This ensures the tool is only used when both locations are in the same workspace context.
+fn validate_workspace_context(target_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let current_dir = std::env::current_dir()?;
+    
+    // Try to find workspace root from the current directory
+    let current_workspace_root = find_workspace_root(&current_dir)
+        .map_err(|original_error| {
+            format!("Current directory is not within a Cargo workspace: {original_error}")
+        })?;
+    
+    // Try to resolve the target path - if it fails, we'll still validate against current workspace
+    let target_workspace_root = if let Ok(absolute_target_path) = target_path.canonicalize() {
+        // Target path exists, find its workspace root
+        find_workspace_root(&absolute_target_path)
+            .map_err(|original_error| {
+                format!("Target path is not within a Cargo workspace: {original_error}")
+            })?
+    } else {
+        // Target path doesn't exist, but it might be a relative path within the current workspace
+        // Try to resolve it relative to current directory and check if it would be in the same workspace
+        let potential_target = current_dir.join(target_path);
+        
+        // Manually resolve .. components since canonicalize() won't work for non-existent paths
+        let resolved_target = resolve_path_components(&potential_target);
+        
+        // Walk up from the potential target directory to see if we can find the same workspace
+        let target_dir = if resolved_target.extension().is_some() {
+            // It's a file, use parent directory
+            resolved_target.parent().unwrap_or(&current_dir)
+        } else {
+            // It's a directory path
+            &resolved_target
+        };
+        
+        // Check if this path, when resolved, would be within the current workspace
+        if target_dir.starts_with(&current_workspace_root) {
+            current_workspace_root.clone()
+        } else {
+            return Err(format!(
+                "Target path '{}' is not within the current workspace at '{}'",
+                target_path.display(),
+                current_workspace_root.display()
+            ).into());
+        }
+    };
+    
+    // Verify both paths are in the same workspace
+    // Normalize paths to handle Windows UNC path differences (\\?\)
+    let current_workspace_normalized = normalize_path(&current_workspace_root);
+    let target_workspace_normalized = normalize_path(&target_workspace_root);
+    
+    if current_workspace_normalized != target_workspace_normalized {
+        return Err(format!(
+            "Current directory workspace ('{}') differs from target path workspace ('{}')",
+            current_workspace_normalized.display(),
+            target_workspace_normalized.display()
+        ).into());
+    }
+    
+    Ok(())
+}
+
+/// Resolves path components including .. and . manually for paths that may not exist.
+/// This is needed because `canonicalize()` only works on existing paths.
+fn resolve_path_components(path: &Path) -> PathBuf {
+    let mut components = Vec::new();
+    
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(name) => {
+                components.push(name);
+            }
+            std::path::Component::ParentDir => {
+                // Remove the last component if possible
+                components.pop();
+            }
+            std::path::Component::CurDir => {
+                // Skip current directory references
+            }
+            std::path::Component::RootDir => {
+                // Clear components and add root
+                components.clear();
+                components.push(std::ffi::OsStr::new(""));
+            }
+            std::path::Component::Prefix(prefix) => {
+                // On Windows, preserve the prefix (e.g., C:)
+                components.clear();
+                components.push(prefix.as_os_str());
+            }
+        }
+    }
+    
+    // Reconstruct the path
+    let mut result = PathBuf::new();
+    for component in components {
+        if component.is_empty() {
+            // This represents the root directory
+            result.push(std::path::MAIN_SEPARATOR_STR);
+        } else {
+            result.push(component);
+        }
+    }
+    
+    result
+}
+
+/// Normalizes a path by removing Windows UNC prefixes and converting to a consistent format.
+/// This helps with path comparisons on Windows where `canonicalize()` may return UNC paths.
+fn normalize_path(path: &Path) -> PathBuf {
+    // On Windows, canonicalize() may return UNC paths (\\?\) which can cause comparison issues
+    // Strip the UNC prefix if present
+    if let Some(path_str) = path.to_str() {
+        if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
+            return PathBuf::from(stripped);
+        }
+    }
+    path.to_path_buf()
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -440,5 +567,90 @@ version = "0.1.0"
     fn detect_package_nonexistent_file() {
         let result = detect_package(Path::new("nonexistent/file.rs")).unwrap();
         assert_eq!(result, DetectedPackage::Workspace);
+    }
+
+    #[test]
+    fn validate_workspace_context_from_workspace() {
+        // This test assumes we're running from within the workspace
+        // Since this is a package in the workspace, it should succeed
+        let current_file = Path::new("src/main.rs");
+        validate_workspace_context(current_file).expect("Should be running from within workspace");
+    }
+
+    #[test] 
+    fn validate_workspace_context_from_temp_dir() {
+        // Save current directory
+        let original_dir = std::env::current_dir().unwrap();
+        
+        // Create a temporary directory that's not a workspace
+        let temp_dir = tempfile::tempdir().unwrap();
+        
+        // Change to the temp directory
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+        
+        // Validation should fail when targeting a file that doesn't exist
+        let target_path = Path::new("nonexistent.rs");
+        let result = validate_workspace_context(target_path);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Current directory is not within a Cargo workspace"));
+        
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[test]
+    fn validate_workspace_context_different_workspaces() {
+        // This test verifies that the tool rejects when current dir and target are in different workspaces
+        // We'll simulate this by creating a fake workspace structure
+        let temp_dir = tempfile::tempdir().unwrap();
+        
+        // Create a fake workspace in temp dir
+        let fake_workspace = temp_dir.path().join("fake_workspace");
+        fs::create_dir_all(&fake_workspace).unwrap();
+        fs::write(
+            fake_workspace.join("Cargo.toml"),
+            r#"
+[workspace]
+members = ["package1"]
+"#,
+        ).unwrap();
+        
+        // Create a package in the fake workspace
+        let fake_package = fake_workspace.join("package1");
+        fs::create_dir_all(&fake_package).unwrap();
+        fs::write(
+            fake_package.join("Cargo.toml"),
+            r#"
+[package]
+name = "fake_package"
+version = "0.1.0"
+"#,
+        ).unwrap();
+        
+        // Try to target a file in the real workspace while running from fake workspace
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&fake_workspace).unwrap();
+        
+        // This should fail because we're in different workspaces
+        let real_workspace_file = original_dir.join("packages").join("events").join("src").join("lib.rs");
+        let result = validate_workspace_context(&real_workspace_file);
+        assert!(result.is_err());
+        
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[test]
+    fn validate_workspace_context_relative_path_outside() {
+        // Test that relative paths going outside the workspace are rejected
+        let result = validate_workspace_context(Path::new("../../../outside_workspace/file.rs"));
+        assert!(result.is_err(), "Expected error but validation succeeded!");
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("is not within the current workspace"));
     }
 }
