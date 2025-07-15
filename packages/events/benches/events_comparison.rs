@@ -55,7 +55,7 @@ fn entrypoint(c: &mut Criterion) {
 
 fn once_event_arc(b: &mut Bencher<'_>) {
     b.iter_custom(|iters| {
-        let mut events = Vec::with_capacity(iters as usize);
+        let mut events = Vec::with_capacity(usize::try_from(iters).unwrap());
 
         for _ in 0..iters {
             events.push(Arc::new(OnceEvent::<Payload>::new()));
@@ -97,7 +97,7 @@ fn once_event_arc(b: &mut Bencher<'_>) {
 
 fn once_event_ptr(b: &mut Bencher<'_>) {
     b.iter_custom(|iters| {
-        let mut events = Vec::with_capacity(iters as usize);
+        let mut events = Vec::with_capacity(usize::try_from(iters).unwrap());
 
         for _ in 0..iters {
             events.push(Box::pin(OnceEvent::<Payload>::new()));
@@ -145,8 +145,8 @@ fn once_event_ptr(b: &mut Bencher<'_>) {
 
 fn oneshot_channel(b: &mut Bencher<'_>) {
     b.iter_custom(|iters| {
-        let mut senders = Vec::with_capacity(iters as usize);
-        let mut receivers = Vec::with_capacity(iters as usize);
+        let mut senders = Vec::with_capacity(usize::try_from(iters).unwrap());
+        let mut receivers = Vec::with_capacity(usize::try_from(iters).unwrap());
 
         for _ in 0..iters {
             let (sender, receiver) = oneshot::channel();
@@ -156,6 +156,9 @@ fn oneshot_channel(b: &mut Bencher<'_>) {
 
         let senders = Arc::new(Mutex::new(senders));
         let receivers = Arc::new(Mutex::new(receivers));
+
+        // TODO: This is a bit janky... prepare() should be per iteration, otherwise we are
+        // spending energy popping stuff from the shared list etc.
 
         bench_on_threadpool_ab(
             &TWO_THREADS,
@@ -184,8 +187,8 @@ fn oneshot_channel(b: &mut Bencher<'_>) {
 
 fn futures_oneshot_channel(b: &mut Bencher<'_>) {
     b.iter_custom(|iters| {
-        let mut senders = Vec::with_capacity(iters as usize);
-        let mut receivers = Vec::with_capacity(iters as usize);
+        let mut senders = Vec::with_capacity(usize::try_from(iters).unwrap());
+        let mut receivers = Vec::with_capacity(usize::try_from(iters).unwrap());
 
         for _ in 0..iters {
             #[expect(clippy::absolute_paths, reason = "being explicit")]
@@ -196,6 +199,9 @@ fn futures_oneshot_channel(b: &mut Bencher<'_>) {
 
         let senders = Arc::new(Mutex::new(senders));
         let receivers = Arc::new(Mutex::new(receivers));
+
+        // TODO: This is a bit janky... prepare() should be per iteration, otherwise we are
+        // spending energy popping stuff from the shared list etc.
 
         bench_on_threadpool_ab(
             &TWO_THREADS,
