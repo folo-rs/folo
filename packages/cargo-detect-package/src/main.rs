@@ -7,7 +7,7 @@
 //! # Usage
 //!
 //! ```text
-//! cargo-detect-package --path <PATH> [--via-env <ENV_VAR>] <SUBCOMMAND>...
+//! cargo detect-package --path <PATH> [--via-env <ENV_VAR>] <SUBCOMMAND>...
 //! ```
 //!
 //! ## Arguments
@@ -28,19 +28,19 @@
 //!
 //! ```bash
 //! # Build the package containing src/lib.rs
-//! cargo-detect-package --path packages/events/src/lib.rs build
+//! cargo detect-package --path packages/events/src/lib.rs build
 //! # Executes: cargo build -p events
 //!
 //! # Test the package containing a specific test file
-//! cargo-detect-package --path packages/many_cpus/tests/integration.rs test
+//! cargo detect-package --path packages/many_cpus/tests/integration.rs test
 //! # Executes: cargo test -p many_cpus
 //!
 //! # Check a file in the workspace root (falls back to workspace)
-//! cargo-detect-package --path README.md check
+//! cargo detect-package --path README.md check
 //! # Executes: cargo check --workspace
 //!
 //! # Run clippy with additional arguments
-//! cargo-detect-package --path packages/events/src/lib.rs clippy -- -D warnings
+//! cargo detect-package --path packages/events/src/lib.rs clippy -- -D warnings
 //! # Executes: cargo clippy -p events -- -D warnings
 //! ```
 //!
@@ -54,15 +54,15 @@
 //!
 //! ```bash
 //! # Use with just command runner
-//! cargo-detect-package --path packages/events/src/lib.rs --via-env package just build
+//! cargo detect-package --path packages/events/src/lib.rs --via-env package just build
 //! # Executes: just build (with package=events environment variable)
 //!
 //! # Use with custom script
-//! cargo-detect-package --path packages/many_cpus/src/lib.rs --via-env PKG_NAME ./build.sh
+//! cargo detect-package --path packages/many_cpus/src/lib.rs --via-env PKG_NAME ./build.sh
 //! # Executes: ./build.sh (with PKG_NAME=many_cpus environment variable)
 //!
 //! # Workspace scope with environment variable
-//! cargo-detect-package --path nonexistent.rs --via-env package just test
+//! cargo detect-package --path nonexistent.rs --via-env package just test
 //! # Executes: just test (no environment variable set, allowing just to handle workspace scope)
 //! ```
 //!

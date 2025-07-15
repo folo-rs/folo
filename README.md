@@ -39,12 +39,13 @@ This is an umbrella project that covers multiple largely independent packages:
 Some auxiliary packages are also published because the primary packages above require their
 functionality. They only indirectly contribute to the Folo mission, so are listed separately:
 
-| Package                                         | Description                                                                                                  |
-|-------------------------------------------------|--------------------------------------------------------------------------------------------------------------|
-| [`cpulist`](packages/cpulist/README.md)         | Utilities for parsing and emitting Linux cpulist strings                                                     |
-| [`folo_ffi`](packages/folo_ffi/README.md)       | Utilities for working with FFI logic; exists for internal use in Folo packages; no stable API surface        |
-| [`folo_utils`](packages/folo_utils/README.md)   | Utilities for internal use in Folo packages; exists for internal use in Folo packages; no stable API surface |
-| [`new_zealand`](packages/new_zealand/README.md) | Utilities for working with non-zero integers                                                                 |
+| Package                                                           | Description                                                                                                  |
+|-------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------|
+| [`cargo-detect-package`](packages/cargo-detect-package/README.md) | Cargo subcommand to detect which package is used based on a provided path                                    |
+| [`cpulist`](packages/cpulist/README.md)                           | Utilities for parsing and emitting Linux cpulist strings                                                     |
+| [`folo_ffi`](packages/folo_ffi/README.md)                         | Utilities for working with FFI logic; exists for internal use in Folo packages; no stable API surface        |
+| [`folo_utils`](packages/folo_utils/README.md)                     | Utilities for internal use in Folo packages; exists for internal use in Folo packages; no stable API surface |
+| [`new_zealand`](packages/new_zealand/README.md)                   | Utilities for working with non-zero integers                                                                 |
 
 There are also some development-only packages in this repo, which are not published:
 
