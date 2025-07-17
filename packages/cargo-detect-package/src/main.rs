@@ -7,13 +7,14 @@
 //! # Usage
 //!
 //! ```text
-//! cargo detect-package --path <PATH> [--via-env <ENV_VAR>] <SUBCOMMAND>...
+//! cargo detect-package --path <PATH> [--via-env <ENV_VAR>] [--outside-package <ACTION>] <SUBCOMMAND>...
 //! ```
 //!
 //! ## Arguments
 //!
 //! - `--path <PATH>`: Path to the file for which to detect the package
 //! - `--via-env <ENV_VAR>`: Optional. Pass the package name via environment variable instead of cargo arguments
+//! - `--outside-package <ACTION>`: Optional. Action to take when path is not in any package (workspace, ignore, error). Defaults to workspace.
 //! - `<SUBCOMMAND>...`: The command to execute with the detected package information
 //!
 //! # Operating Modes
@@ -29,19 +30,33 @@
 //! ```bash
 //! # Build the package containing src/lib.rs
 //! cargo detect-package --path packages/events/src/lib.rs build
+//! # Prints: Detected package: events
 //! # Executes: cargo build -p events
 //!
 //! # Test the package containing a specific test file
 //! cargo detect-package --path packages/many_cpus/tests/integration.rs test
+//! # Prints: Detected package: many_cpus
 //! # Executes: cargo test -p many_cpus
 //!
-//! # Check a file in the workspace root (falls back to workspace)
+//! # Check a file in the workspace root (falls back to workspace by default)
 //! cargo detect-package --path README.md check
+//! # Prints: Path is not in any package, using workspace scope
 //! # Executes: cargo check --workspace
+//!
+//! # Error when a file is not in any package
+//! cargo detect-package --path README.md --outside-package error check
+//! # Prints: Error: Path is not in any package
+//! # Exits with code 1, does not execute subcommand
+//!
+//! # Ignore when a file is not in any package
+//! cargo detect-package --path README.md --outside-package ignore check
+//! # Prints: Path is not in any package, ignoring as requested
+//! # Exits with code 0, does not execute subcommand
 //!
 //! # Run clippy with additional arguments
 //! cargo detect-package --path packages/events/src/lib.rs clippy -- -D warnings
-//! # Executes: cargo clippy -p events -- -D warnings
+//! # Prints: Detected package: events
+//! # Executes: cargo clippy -- -D warnings -p events
 //! ```
 //!
 //! ## Environment Variable Mode
@@ -55,15 +70,23 @@
 //! ```bash
 //! # Use with just command runner
 //! cargo detect-package --path packages/events/src/lib.rs --via-env package just build
+//! # Prints: Detected package: events
 //! # Executes: just build (with package=events environment variable)
 //!
 //! # Use with custom script
 //! cargo detect-package --path packages/many_cpus/src/lib.rs --via-env PKG_NAME ./build.sh
+//! # Prints: Detected package: many_cpus
 //! # Executes: ./build.sh (with PKG_NAME=many_cpus environment variable)
 //!
-//! # Workspace scope with environment variable
-//! cargo detect-package --path nonexistent.rs --via-env package just test
+//! # Workspace scope with environment variable (default behavior)
+//! cargo detect-package --path README.md --via-env package just test
+//! # Prints: Path is not in any package, using workspace scope
 //! # Executes: just test (no environment variable set, allowing just to handle workspace scope)
+//!
+//! # Error when not in package with environment variable mode
+//! cargo detect-package --path README.md --via-env package --outside-package error just test
+//! # Prints: Error: Path is not in any package
+//! # Exits with code 1, does not execute subcommand
 //! ```
 //!
 //! # Package Detection Logic
@@ -88,7 +111,13 @@
 //! Cross-workspace operations are rejected with an error.
 //! # Fallback Behavior
 //!
-//! The tool gracefully handles edge cases by falling back to workspace scope:
+//! The tool's behavior when a file is not within any package is configurable via the `--outside-package` flag:
+//!
+//! - `workspace` (default): Falls back to workspace scope and executes the subcommand with `--workspace` flag or no environment variable
+//! - `ignore`: Does not execute the subcommand and exits with success (code 0)
+//! - `error`: Does not execute the subcommand and exits with failure (code 1)
+//!
+//! Common scenarios that trigger outside-package behavior:
 //! - Non-existent files or directories
 //! - Files outside the workspace  
 //! - Files in the workspace root that don't belong to any specific package
@@ -100,6 +129,32 @@ use std::process::{Command, ExitCode};
 use argh::FromArgs;
 use toml::Value;
 
+/// Action to take when a path is not within any package.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum OutsidePackageAction {
+    /// Use the entire workspace.
+    Workspace,
+    /// Ignore and do not run the subcommand, exit with success.
+    Ignore,
+    /// Error and do not run the subcommand, exit with failure.
+    Error,
+}
+
+impl std::str::FromStr for OutsidePackageAction {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "workspace" => Ok(Self::Workspace),
+            "ignore" => Ok(Self::Ignore),
+            "error" => Ok(Self::Error),
+            _ => Err(format!(
+                "Invalid outside-package action: '{s}'. Valid options are: workspace, ignore, error"
+            )),
+        }
+    }
+}
+
 /// A Cargo tool to detect the package that a file belongs to, passing the package name to a subcommand.
 #[derive(FromArgs)]
 struct Args {
@@ -110,6 +165,10 @@ struct Args {
     /// pass the detected package as an environment variable instead of as a cargo argument
     #[argh(option)]
     via_env: Option<String>,
+
+    /// action to take when path is not in any package (workspace, ignore, error)
+    #[argh(option)]
+    outside_package: Option<OutsidePackageAction>,
 
     /// the subcommand to execute
     #[argh(positional, greedy)]
@@ -152,6 +211,10 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    let outside_package_action = args
+        .outside_package
+        .unwrap_or(OutsidePackageAction::Workspace);
+
     let detected_package = match detect_package(&args.path) {
         Ok(package) => package,
         Err(e) => {
@@ -159,6 +222,37 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    // Handle outside package actions
+    match (&detected_package, &outside_package_action) {
+        (DetectedPackage::Workspace, OutsidePackageAction::Ignore) => {
+            println!("Path is not in any package, ignoring as requested");
+            return ExitCode::SUCCESS;
+        }
+        (DetectedPackage::Workspace, OutsidePackageAction::Error) => {
+            eprintln!("Error: Path is not in any package");
+            return ExitCode::FAILURE;
+        }
+        (DetectedPackage::Package(name), _) => {
+            println!("Detected package: {name}");
+        }
+        (DetectedPackage::Workspace, OutsidePackageAction::Workspace) => {
+            println!("Path is not in any package, using workspace scope");
+        }
+    }
+
+    // Only execute the subcommand if we're not ignoring or erroring out
+    let should_execute = !matches!(
+        (&detected_package, &outside_package_action),
+        (
+            DetectedPackage::Workspace,
+            OutsidePackageAction::Ignore | OutsidePackageAction::Error
+        )
+    );
+
+    if !should_execute {
+        return ExitCode::SUCCESS;
+    }
 
     let exit_status = match args.via_env {
         Some(env_var) => execute_with_env_var(&env_var, &detected_package, &args.subcommand),
@@ -284,27 +378,50 @@ fn execute_with_cargo_args(
     detected_package: &DetectedPackage,
     subcommand: &[String],
 ) -> Result<std::process::ExitStatus, std::io::Error> {
-    let Some(first_arg) = subcommand.first() else {
+    if subcommand.is_empty() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "No subcommand provided",
         ));
-    };
-
-    let mut cmd = Command::new("cargo");
-    cmd.arg(first_arg);
-
-    match detected_package {
-        DetectedPackage::Package(package_name) => {
-            cmd.arg("-p").arg(package_name);
-        }
-        DetectedPackage::Workspace => {
-            cmd.arg("--workspace");
-        }
     }
 
-    if let Some(remaining_args) = subcommand.get(1..) {
-        cmd.args(remaining_args);
+    let mut cmd = Command::new("cargo");
+
+    // Find the position of "--" separator if it exists
+    let separator_pos = subcommand.iter().position(|arg| arg == "--");
+
+    match separator_pos {
+        Some(pos) => {
+            // Add subcommand arguments before "--"
+            cmd.args(&subcommand[..pos]);
+            
+            // Add package selection arguments before "--"
+            match detected_package {
+                DetectedPackage::Package(package_name) => {
+                    cmd.arg("-p").arg(package_name);
+                }
+                DetectedPackage::Workspace => {
+                    cmd.arg("--workspace");
+                }
+            }
+            
+            // Add "--" and arguments after it
+            cmd.args(&subcommand[pos..]);
+        }
+        None => {
+            // No "--" separator, add subcommand first then package flags
+            cmd.args(subcommand);
+            
+            // Add package selection arguments after the subcommand
+            match detected_package {
+                DetectedPackage::Package(package_name) => {
+                    cmd.arg("-p").arg(package_name);
+                }
+                DetectedPackage::Workspace => {
+                    cmd.arg("--workspace");
+                }
+            }
+        }
     }
 
     cmd.status()
@@ -646,5 +763,73 @@ version = "0.1.0"
                 || error_msg.contains("is not within the current workspace"),
             "Expected appropriate error message, got: {error_msg}"
         );
+    }
+
+    #[test]
+    fn outside_package_action_parsing() {
+        assert_eq!(
+            "workspace".parse::<OutsidePackageAction>().unwrap(),
+            OutsidePackageAction::Workspace
+        );
+        assert_eq!(
+            "Workspace".parse::<OutsidePackageAction>().unwrap(),
+            OutsidePackageAction::Workspace
+        );
+        assert_eq!(
+            "WORKSPACE".parse::<OutsidePackageAction>().unwrap(),
+            OutsidePackageAction::Workspace
+        );
+
+        assert_eq!(
+            "ignore".parse::<OutsidePackageAction>().unwrap(),
+            OutsidePackageAction::Ignore
+        );
+        assert_eq!(
+            "Ignore".parse::<OutsidePackageAction>().unwrap(),
+            OutsidePackageAction::Ignore
+        );
+
+        assert_eq!(
+            "error".parse::<OutsidePackageAction>().unwrap(),
+            OutsidePackageAction::Error
+        );
+        assert_eq!(
+            "Error".parse::<OutsidePackageAction>().unwrap(),
+            OutsidePackageAction::Error
+        );
+
+        let result = "invalid".parse::<OutsidePackageAction>();
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Invalid outside-package action")
+        );
+    }
+
+    #[test]
+    fn execute_with_cargo_args_handles_separator() {
+        // Test that we properly handle the "--" separator in clippy commands
+        
+        // Test without "--" separator (should place package flags after subcommand)
+        let subcommand = vec!["check".to_string(), "--all".to_string()];
+        let separator_pos = subcommand.iter().position(|arg| arg == "--");
+        assert_eq!(separator_pos, None);
+        
+        // Test with "--" separator (should place package flags before "--")
+        let subcommand_with_separator = vec![
+            "clippy".to_string(),
+            "--all-features".to_string(),
+            "--".to_string(),
+            "-D".to_string(),
+            "warnings".to_string(),
+        ];
+        let separator_pos = subcommand_with_separator.iter().position(|arg| arg == "--");
+        assert_eq!(separator_pos, Some(2));
+        
+        // Test edge case with "--" as first argument
+        let subcommand_edge_case = vec!["clippy".to_string(), "--".to_string(), "--help".to_string()];
+        let separator_pos = subcommand_edge_case.iter().position(|arg| arg == "--");
+        assert_eq!(separator_pos, Some(1));
     }
 }
