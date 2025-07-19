@@ -8,9 +8,6 @@ use nonempty::NonEmpty;
 use crate::pal::{Platform, PlatformFacade};
 use crate::{HardwareTrackerClient, HardwareTrackerClientFacade, Processor, ProcessorSetBuilder};
 
-// https://github.com/cloudhead/nonempty/issues/68
-extern crate alloc;
-
 /// Lazy-initialized default set that stays around forever once selected and does not get updated
 /// even if constraints are updated over time. Exposed via `ProcessorSet::default()`.
 static DEFAULT_PROCESSORS: LazyLock<ProcessorSet> = LazyLock::new(|| {

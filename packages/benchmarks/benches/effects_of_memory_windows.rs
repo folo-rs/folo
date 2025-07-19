@@ -38,9 +38,6 @@ mod windows {
         GetProcessHeap, HEAP_FLAGS, HEAP_NO_SERIALIZE, HeapAlloc, HeapCreate, HeapDestroy, HeapFree,
     };
 
-    // https://github.com/cloudhead/nonempty/issues/68
-    extern crate alloc;
-
     pub(crate) fn entrypoint(c: &mut Criterion) {
         execute_runs::<AllocDefaultHeap, 1000>(c, WorkDistribution::all());
         execute_runs::<AllocPerThreadHeap, 1000>(c, WorkDistribution::all());

@@ -19,9 +19,6 @@ use frozen_collections::{FzHashMap, FzScalarMap, MapQuery};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use many_cpus_benchmarking::{Payload, WorkDistribution, execute_runs};
 
-// https://github.com/cloudhead/nonempty/issues/68
-extern crate alloc;
-
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 

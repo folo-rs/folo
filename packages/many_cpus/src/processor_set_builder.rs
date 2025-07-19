@@ -964,9 +964,6 @@ mod tests {
     use super::*;
     use crate::pal::{FakeProcessor, MockPlatform, ProcessorFacade};
 
-    // https://github.com/cloudhead/nonempty/issues/68
-    extern crate alloc;
-
     #[test]
     fn smoke_test() {
         let pal_processors = nonempty![

@@ -425,9 +425,6 @@ mod tests {
     use crate::pal::{FakeProcessor, MockPlatform, ProcessorFacade};
     use crate::{EfficiencyClass, ProcessorSet};
 
-    // https://github.com/cloudhead/nonempty/issues/68
-    extern crate alloc;
-
     #[test]
     fn single_threaded_type() {
         assert_not_impl_any!(HardwareTracker: Send, Sync);

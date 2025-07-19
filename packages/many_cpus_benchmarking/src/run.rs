@@ -18,9 +18,6 @@ use rand::seq::SliceRandom;
 
 use crate::{Payload, WorkDistribution};
 
-// https://github.com/cloudhead/nonempty/issues/68
-extern crate alloc;
-
 /// Executes a number of benchmark runs for a specific payload type, using the specified work
 /// distribution modes.
 ///
