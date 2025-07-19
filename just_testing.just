@@ -34,8 +34,29 @@ test-benches FILTER="":
     cargo test --benches --all-features {{ FILTER }} --locked
 
 [group('testing')]
+[script]
 test-docs FILTER="":
-    cargo test {{ target_package }} --all-features --doc {{ FILTER }} --locked
+    # Extract package name from target_package variable
+    $target_package_var = "{{ target_package }}"
+    
+    if ($target_package_var -eq " --workspace") {
+        # Workspace-wide doctests - run normally
+        cargo test --all-features --doc {{ FILTER }} --locked
+    } else {
+        # Single package - check if it's a library crate
+        $package_name = $target_package_var -replace "^ -p ", ""
+        $lib_path = "packages/$package_name/src/lib.rs"
+        
+        if (Test-Path $lib_path) {
+            # Library crate - run doctests
+            cargo test {{ target_package }} --all-features --doc {{ FILTER }} --locked
+        } else {
+            # Binary-only crate - skip doctests because Cargo expects library targets for doctests.
+            # Binary crates (with only main.rs) cannot contain doctests, so running `cargo test --doc`
+            # on them results in an error rather than gracefully running zero tests.
+            Write-Host "Skipping doctests for binary-only package: $package_name"
+        }
+    }
 
 # Run all stand-alone example binaries to ensure they complete without panicking.
 # Each example has a 30-second timeout to handle examples that run indefinitely.
