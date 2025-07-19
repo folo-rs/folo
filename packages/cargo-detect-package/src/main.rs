@@ -473,8 +473,23 @@ fn validate_workspace_context(target_path: &Path) -> Result<(), Box<dyn std::err
         format!("Current directory is not within a Cargo workspace: {original_error}")
     })?;
 
-    // Canonicalize the target path - it must exist
-    let absolute_target_path = target_path.canonicalize().map_err(|error| {
+    // Resolve the target path - try to make it absolute
+    let resolved_target_path = if target_path.is_absolute() {
+        target_path.to_path_buf()
+    } else {
+        // For relative paths, try relative to current directory first
+        let relative_to_current = current_dir.join(target_path);
+        if relative_to_current.exists() {
+            relative_to_current
+        } else {
+            // If that doesn't exist, try relative to workspace root
+            // This handles cases where the tool is run from a different directory
+            current_workspace_root.join(target_path)
+        }
+    };
+
+    // Canonicalize the resolved target path - it must exist
+    let absolute_target_path = resolved_target_path.canonicalize().map_err(|error| {
         format!(
             "Target path '{}' does not exist or cannot be accessed: {error}",
             target_path.display()
