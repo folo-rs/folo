@@ -1,0 +1,11 @@
+[package]
+name = "debug_toml"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+toml = { workspace = true, features = ["parse", "serde"] }
+
+[[bin]]
+name = "debug_toml"
+path = "debug_toml.rs"

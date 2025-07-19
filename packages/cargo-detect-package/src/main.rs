@@ -333,7 +333,7 @@ fn find_workspace_root(start_path: &Path) -> Result<PathBuf, Box<dyn std::error:
         if cargo_toml.exists() {
             // Check if this is a workspace root
             let contents = std::fs::read_to_string(&cargo_toml)?;
-            let value: Value = contents.parse()?;
+            let value: Value = toml::from_str(&contents)?;
             if value.get("workspace").is_some() {
                 // Return canonicalized path for consistent comparison
                 return Ok(current_dir
@@ -356,7 +356,7 @@ fn extract_package_name(
     cargo_toml_path: &Path,
 ) -> Result<DetectedPackage, Box<dyn std::error::Error>> {
     let contents = std::fs::read_to_string(cargo_toml_path)?;
-    let value: Value = contents.parse()?;
+    let value: Value = toml::from_str(&contents)?;
 
     if let Some(package_table) = value.get("package") {
         if let Some(name) = package_table.get("name") {
@@ -393,8 +393,10 @@ fn execute_with_cargo_args(
     match separator_pos {
         Some(pos) => {
             // Add subcommand arguments before "--"
-            cmd.args(&subcommand[..pos]);
-            
+            if let Some(before_sep) = subcommand.get(..pos) {
+                cmd.args(before_sep);
+            }
+
             // Add package selection arguments before "--"
             match detected_package {
                 DetectedPackage::Package(package_name) => {
@@ -404,14 +406,16 @@ fn execute_with_cargo_args(
                     cmd.arg("--workspace");
                 }
             }
-            
+
             // Add "--" and arguments after it
-            cmd.args(&subcommand[pos..]);
+            if let Some(after_sep) = subcommand.get(pos..) {
+                cmd.args(after_sep);
+            }
         }
         None => {
             // No "--" separator, add subcommand first then package flags
             cmd.args(subcommand);
-            
+
             // Add package selection arguments after the subcommand
             match detected_package {
                 DetectedPackage::Package(package_name) => {
@@ -810,14 +814,14 @@ version = "0.1.0"
     #[test]
     fn execute_with_cargo_args_handles_separator() {
         // Test that we properly handle the "--" separator in clippy commands
-        
+
         // Test without "--" separator (should place package flags after subcommand)
-        let subcommand = vec!["check".to_string(), "--all".to_string()];
+        let subcommand = ["check".to_string(), "--all".to_string()];
         let separator_pos = subcommand.iter().position(|arg| arg == "--");
         assert_eq!(separator_pos, None);
-        
+
         // Test with "--" separator (should place package flags before "--")
-        let subcommand_with_separator = vec![
+        let subcommand_with_separator = [
             "clippy".to_string(),
             "--all-features".to_string(),
             "--".to_string(),
@@ -826,9 +830,9 @@ version = "0.1.0"
         ];
         let separator_pos = subcommand_with_separator.iter().position(|arg| arg == "--");
         assert_eq!(separator_pos, Some(2));
-        
+
         // Test edge case with "--" as first argument
-        let subcommand_edge_case = vec!["clippy".to_string(), "--".to_string(), "--help".to_string()];
+        let subcommand_edge_case = ["clippy".to_string(), "--".to_string(), "--help".to_string()];
         let separator_pos = subcommand_edge_case.iter().position(|arg| arg == "--");
         assert_eq!(separator_pos, Some(1));
     }
