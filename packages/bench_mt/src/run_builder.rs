@@ -1,3 +1,12 @@
+#![allow(
+    clippy::ignored_unit_patterns,
+    reason = "builder pattern uses intentional unit patterns for no-op defaults"
+)]
+#![allow(
+    clippy::type_complexity,
+    reason = "builder pattern uses complex function types for flexibility"
+)]
+
 use std::num::NonZero;
 use std::sync::Arc;
 
@@ -93,18 +102,37 @@ where
 
 /// Informs a benchmark run callback which thread group it is currently executing for,
 /// out of how many total.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GroupInfo {
     /// The index of the current thread group, starting from 0.
-    pub index: usize,
+    index: usize,
 
     /// The total number of thread groups in the run.
-    pub count: NonZero<usize>,
+    count: NonZero<usize>,
+}
+
+impl GroupInfo {
+    /// Creates a new `GroupInfo` with the specified index and total count.
+    pub(crate) fn new(index: usize, count: NonZero<usize>) -> Self {
+        Self { index, count }
+    }
+
+    /// Returns the index of the current thread group, starting from 0.
+    #[must_use]
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Returns the total number of thread groups in the run.
+    #[must_use]
+    pub fn count(&self) -> NonZero<usize> {
+        self.count
+    }
 }
 
 impl RunBuilderBasic {
     pub(crate) fn new() -> Self {
-        RunBuilderBasic { groups: nz!(1) }
+        Self { groups: nz!(1) }
     }
 
     /// Divides the threads used for benchmarking into `n` equal groups. Defaults to 1 group.
