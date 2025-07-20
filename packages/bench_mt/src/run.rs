@@ -165,6 +165,7 @@ pub struct RunStats {
 impl RunStats {
     /// Returns the mean duration of the run.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Real timing logic in tests is not desirable.
     pub fn mean_duration(&self) -> Duration {
         self.mean_duration
     }

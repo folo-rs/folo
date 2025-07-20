@@ -93,6 +93,7 @@ enum Command {
     Shutdown,
 }
 
+#[cfg_attr(test, mutants::skip)] // Impractical to test that things do not happen when worker function is missing.
 fn worker_entrypoint(rx: &mpsc::Receiver<Command>) {
     while let Command::Execute(f) = rx.recv().unwrap() {
         f();

@@ -485,3 +485,15 @@ justifying why it is correct to exclude them).
 
 Naturally, if it is possible to redesign a test so it does not rely on the operating system, that
 is even better. However, this is not always possible.
+
+# Mutation testing coverage and skipping mutations
+
+It is acceptable to skip mutations if they are impractical to test. Some justifiable reasons are:
+
+* Detecting the mutation requires real timing logic to be used. We intentionally do not permit any
+  timing-dependent code in our test cases.
+* Detecting the mutation requires detecting that a thing is not happening. This can sometimes be
+  impossible relying on timeouts (which would violate the above expectation).
+
+To skip a mutation, use the `#[cfg_attr(test, mutants::skip)]` style and leave a comment to justify
+why we are skipping it.
