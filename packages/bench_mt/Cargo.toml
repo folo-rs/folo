@@ -1,0 +1,24 @@
+[package]
+name = "bench_mt"
+description = "Mechanisms for multithreaded benchmarking, designed for integration with Criterion or a similar benchmark framework"
+publish = false
+version = "0.1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+derive_more = { workspace = true, features = ["debug"] }
+many_cpus = { workspace = true }
+new_zealand = { workspace = true }
+num = { workspace = true }
+oneshot = { workspace = true }
+
+[dev-dependencies]
+mutants = { workspace = true }
+
+[lints]
+workspace = true

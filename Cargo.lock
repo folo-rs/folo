@@ -160,6 +160,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bench_mt"
+version = "0.1.0"
+dependencies = [
+ "derive_more",
+ "many_cpus",
+ "mutants",
+ "new_zealand",
+ "num",
+ "oneshot",
+]
+
+[[package]]
 name = "benchmark_utils"
 version = "0.0.1-never"
 dependencies = [

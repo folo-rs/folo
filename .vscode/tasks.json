@@ -87,6 +87,7 @@
                 "alloc_tracker",
                 "benchmark_utils",
                 "benchmarks",
+                "bench_mt",
                 "cargo-detect-package",
                 "cpulist",
                 "events",
