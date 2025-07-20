@@ -1,3 +1,8 @@
+//! Intermediate types for building a [`Run`].
+//! 
+//! These generally do not need to be named or directly referenced in user code - they only exist
+//! as intermediate steps in a call chain.
+
 #![allow(
     clippy::ignored_unit_patterns,
     reason = "builder pattern uses intentional unit patterns for no-op defaults"
@@ -12,7 +17,7 @@ use std::sync::Arc;
 
 use new_zealand::nz;
 
-use crate::Run;
+use crate::{GroupInfo, Run};
 
 /// The first stage of preparing a benchmark run, with all type parameters unknown.
 #[derive(Debug)]
@@ -98,36 +103,6 @@ where
 
     #[debug(ignore)]
     pub(crate) iter_fn: Arc<dyn Fn(IterState) -> CleanupState + Send + Sync>,
-}
-
-/// Informs a benchmark run callback which thread group it is currently executing for,
-/// out of how many total.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GroupInfo {
-    /// The index of the current thread group, starting from 0.
-    index: usize,
-
-    /// The total number of thread groups in the run.
-    count: NonZero<usize>,
-}
-
-impl GroupInfo {
-    /// Creates a new `GroupInfo` with the specified index and total count.
-    pub(crate) fn new(index: usize, count: NonZero<usize>) -> Self {
-        Self { index, count }
-    }
-
-    /// Returns the index of the current thread group, starting from 0.
-    #[must_use]
-    pub fn index(&self) -> usize {
-        self.index
-    }
-
-    /// Returns the total number of thread groups in the run.
-    #[must_use]
-    pub fn count(&self) -> NonZero<usize> {
-        self.count
-    }
 }
 
 impl RunBuilderBasic {

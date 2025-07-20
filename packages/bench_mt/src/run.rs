@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 
 use num::Integer;
 
-use crate::{GroupInfo, RunBuilderBasic, RunBuilderFinal, ThreadPool};
+use crate::{ThreadPool, GroupInfo};
+use crate::builder::{RunBuilderBasic, RunBuilderFinal};
 
 /// A benchmark run will execute a specific number of multithreaded iterations on a [`ThreadPool`].
 ///
