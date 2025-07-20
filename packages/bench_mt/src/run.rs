@@ -1,3 +1,4 @@
+use std::hint::black_box;
 use std::iter;
 use std::num::NonZero;
 use std::sync::{Arc, Barrier, Mutex};
@@ -5,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use num::Integer;
 
-use crate::{ThreadPool, GroupInfo};
 use crate::builder::{RunBuilderBasic, RunBuilderFinal};
+use crate::{GroupInfo, ThreadPool};
 
 /// A benchmark run will execute a specific number of multithreaded iterations on a [`ThreadPool`].
 ///
@@ -115,7 +116,7 @@ impl<ThreadState, IterState, MeasureWrapperState, CleanupState>
                 let start_time = Instant::now();
 
                 for iter_state in iter_state {
-                    cleanup_state.push(iter_fn(iter_state));
+                    cleanup_state.push(black_box(iter_fn(black_box(iter_state))));
                 }
 
                 let elapsed = start_time.elapsed();
@@ -474,13 +475,10 @@ mod tests {
         assert_eq!(events[1], "cleanup");
     }
 
-    fn test_call_counts(
-        pool: &ThreadPool,
-        groups: NonZero<usize>,
-    ) {
+    fn test_call_counts(pool: &ThreadPool, groups: NonZero<usize>) {
         const ITERATIONS: u64 = 3;
         let expected_threads = pool.thread_count().get();
-        
+
         let thread_prepare_count = Arc::new(AtomicU64::new(0));
         let iter_prepare_count = Arc::new(AtomicU64::new(0));
         let wrapper_begin_count = Arc::new(AtomicU64::new(0));
@@ -524,9 +522,7 @@ mod tests {
             .build()
             .execute_on(pool, ITERATIONS);
 
-        let expected_total_iterations = ITERATIONS
-            .checked_mul(expected_threads as u64)
-            .unwrap();
+        let expected_total_iterations = ITERATIONS.checked_mul(expected_threads as u64).unwrap();
 
         assert_eq!(
             thread_prepare_count.load(atomic::Ordering::Relaxed),
