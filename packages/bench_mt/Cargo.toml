@@ -18,7 +18,12 @@ num = { workspace = true }
 oneshot = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 mutants = { workspace = true }
+
+[[bench]]
+name = "bench_mt_overhead"
+harness = false
 
 [lints]
 workspace = true
