@@ -269,7 +269,7 @@ mod tests {
             .execute_on(pool, 1);
 
         let mut seen = group_info_seen.lock().unwrap();
-        seen.sort_by_key(|info| info.index());
+        seen.sort_by_key(GroupInfo::index);
 
         assert_eq!(seen.len(), 2);
         assert_eq!(seen[0].index(), 0);
@@ -302,7 +302,7 @@ mod tests {
             .execute_on(pool, 1);
 
         let mut seen = group_info_seen.lock().unwrap();
-        seen.sort_by_key(|info| info.index());
+        seen.sort_by_key(GroupInfo::index);
 
         assert_eq!(seen.len(), 4);
         // Two threads should be in group 0.
@@ -341,7 +341,7 @@ mod tests {
             .execute_on(pool, 1);
 
         let mut seen = group_info_seen.lock().unwrap();
-        seen.sort_by_key(|info| info.index());
+        seen.sort_by_key(GroupInfo::index);
 
         assert_eq!(seen.len(), 3);
         assert_eq!(seen[0].index(), 0);

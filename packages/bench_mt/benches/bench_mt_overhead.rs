@@ -1,6 +1,6 @@
-//! Benchmark demonstrating bench_mt overhead with empty iter_fn.
+//! Benchmark demonstrating `bench_mt` overhead with empty `iter_fn`.
 //!
-//! This benchmark measures the overhead of the bench_mt framework by using an empty iter_fn
+//! This benchmark measures the overhead of the `bench_mt` framework by using an empty `iter_fn`
 //! that does nothing. The purpose is to demonstrate that there is no surprising overhead
 //! from the framework itself when benchmarking trivial operations.
 
@@ -28,7 +28,7 @@ fn bench_mt_overhead(c: &mut Criterion) {
                 .iter_fn(|()| {
                     // Empty iter_fn - does absolutely nothing.
                     // We use black_box to prevent the compiler from optimizing this away.
-                    black_box(())
+                    black_box(());
                 })
                 .build();
 
