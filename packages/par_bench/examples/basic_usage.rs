@@ -1,7 +1,7 @@
 //! Basic usage example demonstrating the performance difference between single-threaded
 //! and multi-threaded atomic operations.
 //!
-//! This example showcases how to use `bench_mt` to measure the relative performance of
+//! This example showcases how to use `par_bench` to measure the relative performance of
 //! incrementing an atomic integer on 1 thread versus all available threads.
 
 #![allow(
@@ -13,14 +13,14 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use bench_mt::{Run, ThreadPool};
+use par_bench::{Run, ThreadPool};
 use many_cpus::ProcessorSet;
 use new_zealand::nz;
 
 const ITERATIONS: u64 = 10_000;
 
 fn main() {
-    println!("Bench_mt Basic Usage Example");
+    println!("par_bench Basic Usage Example");
     println!("============================");
     println!();
     println!("This example demonstrates the performance difference between");

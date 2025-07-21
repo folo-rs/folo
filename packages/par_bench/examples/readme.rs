@@ -16,7 +16,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use bench_mt::{Run, ThreadPool};
+use par_bench::{Run, ThreadPool};
 
 fn main() {
     println!("README example verification");

@@ -1,4 +1,4 @@
-# bench_mt
+# par_bench
 
 Mechanisms for multithreaded benchmarking, designed for integration with Criterion or a similar benchmark framework.
 
@@ -19,7 +19,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use bench_mt::{Run, ThreadPool};
+use par_bench::{Run, ThreadPool};
 
 // Create a thread pool.
 let pool = ThreadPool::default();
@@ -48,11 +48,11 @@ let duration = stats.mean_duration();
 
 ## Integration with Criterion
 
-bench_mt is designed to work seamlessly with Criterion:
+par_bench is designed to work seamlessly with Criterion:
 
 ```rust
 use criterion::{Criterion, criterion_group, criterion_main};
-use bench_mt::{Run, ThreadPool};
+use par_bench::{Run, ThreadPool};
 
 fn my_benchmark(c: &mut Criterion) {
     let thread_pool = ThreadPool::default();

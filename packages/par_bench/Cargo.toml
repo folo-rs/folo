@@ -1,5 +1,5 @@
 [package]
-name = "bench_mt"
+name = "par_bench"
 description = "Mechanisms for multithreaded benchmarking, designed for integration with Criterion or a similar benchmark framework"
 publish = false
 version = "0.1.0"
@@ -22,7 +22,7 @@ criterion = { workspace = true }
 mutants = { workspace = true }
 
 [[bench]]
-name = "bench_mt_overhead"
+name = "par_bench_overhead"
 harness = false
 
 [lints]

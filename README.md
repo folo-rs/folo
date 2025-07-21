@@ -32,9 +32,10 @@ This is an umbrella project that covers multiple largely independent packages:
 | [`many_cpus_benchmarking`](packages/many_cpus_benchmarking/README.md) | Criterion benchmark harness to easily compare different processor configurations                                                            |
 | [`nm`](packages/nm/README.md)                                         | Collect metrics about observed events with minimal collection overhead even in highly multithreaded applications running on 100+ processors |
 | [`opaque_pool`](packages/opaque_pool/README.md)                       | A pinned object pool that contains any type of object as long as it has a compatible memory layout                                          |
+| [`par_bench`](packages/par_bench/README.md)                           | Mechanisms for multithreaded benchmarking, designed for integration with Criterion or a similar benchmark framework                         |
 | [`pinned_pool`](packages/pinned_pool/README.md)                       | An object pool that guarantees pinning of its items                                                                                         |
 | [`region_cached`](packages/region_cached/README.md)                   | Add a layer of cache between L3 and main memory                                                                                             |
-| [`region_local`](packages/region_local/README.md)                     | Isolate variable storage per memory region, similar to `thread_local_rc!`                                                                   |
+| [`region_local`](packages/region_local/README.md)                     | Isolate variable storage per memory region, similar to `thread_local!`                                                                      |
 
 Some auxiliary packages are also published because the primary packages above require their
 functionality. They only indirectly contribute to the Folo mission, so are listed separately:
