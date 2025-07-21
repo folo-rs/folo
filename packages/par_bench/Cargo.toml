@@ -25,5 +25,9 @@ mutants = { workspace = true }
 name = "par_bench_overhead"
 harness = false
 
+[[bench]]
+name = "par_bench_basic"
+harness = false
+
 [lints]
 workspace = true

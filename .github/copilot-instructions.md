@@ -117,6 +117,9 @@ will never fail. That is, we do not use `expect()` as an assertion, we use it to
 code paths. The message inside `expect()` should explain why we can be certain that code path is
 unreachable - it is not an error message saying what went wrong!
 
+State clearly in the `assert()` message why the expectation is guaranteed to hold. Do not use words
+like "should" - if it only "should" hold, then you have failed to establish a guarantee!
+
 Using `assert!()` or other panic-inducing macros in non-test code is fine as long as it is documented
 in API documentation (in a `# Panics` section).
 
@@ -284,6 +287,8 @@ being benchmarked, to avoid unrealistic eager optimizations due to output values
 
 Benchmarks that are meant to be compared to each other must be in the same benchmark function
 and in the same benchmark group.
+
+Do not forget to register benchmarks in `Cargo.toml`.
 
 # YAML formatting
 
@@ -497,3 +502,9 @@ It is acceptable to skip mutations if they are impractical to test. Some justifi
 
 To skip a mutation, use the `#[cfg_attr(test, mutants::skip)]` style and leave a comment to justify
 why we are skipping it.
+
+# Adjust patterns, fix entire classes of problems
+
+If you are asked to do a thing to one instance of a problem in a file, check for other instances.
+You must solve the entire class of problems at once, not expect each instance to be pointed
+out to you in instructions.
