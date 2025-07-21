@@ -160,19 +160,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "par_bench"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "derive_more",
- "many_cpus",
- "mutants",
- "new_zealand",
- "num",
- "oneshot",
-]
-
-[[package]]
 name = "benchmark_utils"
 version = "0.0.1-never"
 dependencies = [
@@ -1108,6 +1095,19 @@ dependencies = [
  "criterion",
  "mutants",
  "new_zealand",
+]
+
+[[package]]
+name = "par_bench"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "derive_more",
+ "many_cpus",
+ "mutants",
+ "new_zealand",
+ "num",
+ "oneshot",
 ]
 
 [[package]]
