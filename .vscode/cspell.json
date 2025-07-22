@@ -1,27 +1,12 @@
 {
-    "words": [
-        "affinitization",
-        "affinitized",
-        "affinitizing",
-        "cpulist",
-        "cpus",
-        "Dataless",
-        "foldhash",
-        "Folo",
-        "freelist",
-        "heapless",
-        "JOBOBJECT",
-        "metas",
-        "miri",
-        "nanos",
-        "nextest",
-        "nonoverlapping",
-        "oneshot",
-        "pointee",
-        "Symcrypt",
-        "taskset",
-        "threadpool",
-        "Uninit",
-        "withf"
-    ]
+    "dictionaries": [
+        "folo"
+    ],
+    "dictionaryDefinitions": [
+        {
+            "name": "folo",
+            "path": "dictionary.txt",
+            "addWords": true
+        }
+    ],
 }
