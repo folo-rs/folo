@@ -16,6 +16,7 @@
         "nanos",
         "nextest",
         "nonoverlapping",
+        "oneshot",
         "pointee",
         "Symcrypt",
         "taskset",

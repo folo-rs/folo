@@ -1,4 +1,5 @@
-use std::iter::repeat_with;
+use std::iter::{self};
+use std::mem;
 use std::num::NonZero;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
@@ -22,8 +23,9 @@ impl ThreadPool {
     /// Creates a thread pool with one thread per processor in the provided processor set.
     #[must_use]
     pub fn new(processors: &ProcessorSet) -> Self {
-        let (txs, rxs): (Vec<_>, Vec<_>) =
-            repeat_with(mpsc::channel).take(processors.len()).unzip();
+        let (txs, rxs): (Vec<_>, Vec<_>) = iter::repeat_with(mpsc::channel)
+            .take(processors.len())
+            .unzip();
 
         let rxs = Arc::new(Mutex::new(rxs));
 
@@ -45,21 +47,71 @@ impl ThreadPool {
         }
     }
 
-    /// Enqueues a task to be executed on all threads in the pool.
-    ///
-    /// Will not wait for the task to complete - getting back any result
-    /// is up to the caller to organize via side-channels.
-    #[cfg_attr(test, mutants::skip)] // If work does not get enqueued, deadlocks are very easy.
-    pub(crate) fn enqueue_task(&self, f: impl FnOnce() + Clone + Send + 'static) {
-        for tx in &self.command_txs {
-            tx.send(Command::Execute(Box::new(f.clone()))).unwrap();
-        }
-    }
-
     /// Numbers of threads in the pool.
     #[must_use]
     pub fn thread_count(&self) -> NonZero<usize> {
         self.thread_count
+    }
+
+    /// Executes a task on all threads in the pool, waiting for all threads to complete
+    /// and returning a collection of results.
+    #[cfg_attr(test, mutants::skip)] // If work does not get enqueued, deadlocks are very easy.
+    pub(crate) fn execute_task<'f, F, R>(&self, f: F) -> Box<[R]>
+    where
+        F: FnOnce() -> R + Clone + Send + 'f,
+        R: Send + 'static,
+    {
+        let mut results = Vec::with_capacity(self.thread_count.get());
+
+        let (mut result_txs, result_rxs): (Vec<_>, Vec<_>) =
+            iter::repeat_with(oneshot::channel::<R>)
+                .take(self.thread_count.get())
+                .unzip();
+
+        for tx in &self.command_txs {
+            // Since we guarantee that we wait for all the work to complete, the `F` does not actually
+            // have to be 'static - the type system just requires that because Rust has no
+            // compiler-enforced way to guarantee we wait for the work to complete.
+            //
+            // Therefore, we pretend it is 'static here. From the caller's point of view, they still
+            // see everything with "their" lifetimes, this 'static is purely to badger Rust into
+            // doing what we want.
+            let f: Box<dyn FnOnce() -> R + Send + 'f> = Box::new(f.clone());
+
+            // SAFETY: This is valid because functionally it is still 'f because we wait for the
+            // callback to complete before returning from this function, so anything borrowed must
+            // still be borrowed, and the callee still things they are operating under 'f lifetime.
+            let f = unsafe {
+                // Wololo.
+                mem::transmute::<
+                    Box<dyn FnOnce() -> R + Send + 'f>,
+                    Box<dyn FnOnce() -> R + Send + 'static>,
+                >(f)
+            };
+
+            tx.send(Command::Execute(Box::new({
+                let result_tx = result_txs
+                    .pop()
+                    .expect("type invariant - one command_tx per thread");
+
+                move || {
+                    let result = f();
+                    result_tx.send(result).expect(
+                        "receiver must still exist - this is mandatory for scoped lifetime logic",
+                    );
+                }
+            })))
+            .expect("worker thread must still exist - thread pool cannot operate without workers");
+        }
+
+        for rx in result_rxs {
+            results.push(
+                rx.recv()
+                    .expect("worker thread failed to send result - did it panic?"),
+            );
+        }
+
+        results.into_boxed_slice()
     }
 }
 
@@ -120,15 +172,12 @@ mod tests {
 
         let counter = Arc::new(AtomicUsize::new(0));
 
-        pool.enqueue_task({
+        pool.execute_task({
             let counter = Arc::clone(&counter);
             move || {
                 counter.fetch_add(1, atomic::Ordering::SeqCst);
             }
         });
-
-        // Waits for all threads to complete their work.
-        drop(pool);
 
         assert_eq!(
             counter.load(atomic::Ordering::SeqCst),
@@ -147,15 +196,12 @@ mod tests {
 
         let counter = Arc::new(AtomicUsize::new(0));
 
-        pool.enqueue_task({
+        pool.execute_task({
             let counter = Arc::clone(&counter);
             move || {
                 counter.fetch_add(1, atomic::Ordering::SeqCst);
             }
         });
-
-        // Waits for all threads to complete their work.
-        drop(pool);
 
         assert_eq!(
             counter.load(atomic::Ordering::SeqCst),

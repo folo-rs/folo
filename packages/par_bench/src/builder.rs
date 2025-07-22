@@ -36,7 +36,7 @@ where
     groups: NonZero<usize>,
 
     #[debug(ignore)]
-    prepare_thread_fn: Arc<dyn Fn(&GroupInfo) -> ThreadState + Send + Sync>,
+    prepare_thread_fn: Arc<dyn Fn(&GroupInfo) -> ThreadState + Send + Sync + 'static>,
 }
 
 /// The third stage of preparing a benchmark run, with the iteration state type parameter known.
@@ -45,14 +45,13 @@ where
 pub struct RunBuilderWithIterState<ThreadState, IterState>
 where
     ThreadState: 'static,
-    IterState: 'static,
 {
     groups: NonZero<usize>,
 
     #[debug(ignore)]
-    prepare_thread_fn: Arc<dyn Fn(&GroupInfo) -> ThreadState + Send + Sync>,
+    prepare_thread_fn: Arc<dyn Fn(&GroupInfo) -> ThreadState + Send + Sync + 'static>,
     #[debug(ignore)]
-    prepare_iter_fn: Arc<dyn Fn(&GroupInfo, &ThreadState) -> IterState + Send + Sync>,
+    prepare_iter_fn: Arc<dyn Fn(&GroupInfo, &ThreadState) -> IterState + Send + Sync + 'static>,
 }
 
 /// The fourth stage of preparing a benchmark run, with the wrapper state type parameter known.
@@ -61,20 +60,19 @@ where
 pub struct RunBuilderWithWrapperState<ThreadState, IterState, MeasureWrapperState>
 where
     ThreadState: 'static,
-    IterState: 'static,
-    MeasureWrapperState: 'static,
 {
     groups: NonZero<usize>,
 
     #[debug(ignore)]
-    prepare_thread_fn: Arc<dyn Fn(&GroupInfo) -> ThreadState + Send + Sync>,
+    prepare_thread_fn: Arc<dyn Fn(&GroupInfo) -> ThreadState + Send + Sync + 'static>,
     #[debug(ignore)]
-    prepare_iter_fn: Arc<dyn Fn(&GroupInfo, &ThreadState) -> IterState + Send + Sync>,
+    prepare_iter_fn: Arc<dyn Fn(&GroupInfo, &ThreadState) -> IterState + Send + Sync + 'static>,
 
     #[debug(ignore)]
-    measure_wrapper_begin_fn: Arc<dyn Fn(&GroupInfo) -> MeasureWrapperState + Send + Sync>,
+    measure_wrapper_begin_fn:
+        Arc<dyn Fn(&GroupInfo, &ThreadState) -> MeasureWrapperState + Send + Sync + 'static>,
     #[debug(ignore)]
-    measure_wrapper_end_fn: Arc<dyn Fn(MeasureWrapperState) + Send + Sync>,
+    measure_wrapper_end_fn: Arc<dyn Fn(MeasureWrapperState) + Send + Sync + 'static>,
 }
 
 /// The final state of preparing a benchmark run, with all type parameters known.
@@ -83,25 +81,23 @@ where
 pub struct RunBuilderFinal<ThreadState, IterState, MeasureWrapperState, CleanupState>
 where
     ThreadState: 'static,
-    IterState: 'static,
-    MeasureWrapperState: 'static,
-    CleanupState: 'static,
 {
     pub(crate) groups: NonZero<usize>,
 
     #[debug(ignore)]
-    pub(crate) prepare_thread_fn: Arc<dyn Fn(&GroupInfo) -> ThreadState + Send + Sync>,
+    pub(crate) prepare_thread_fn: Arc<dyn Fn(&GroupInfo) -> ThreadState + Send + Sync + 'static>,
     #[debug(ignore)]
-    pub(crate) prepare_iter_fn: Arc<dyn Fn(&GroupInfo, &ThreadState) -> IterState + Send + Sync>,
+    pub(crate) prepare_iter_fn:
+        Arc<dyn Fn(&GroupInfo, &ThreadState) -> IterState + Send + Sync + 'static>,
 
     #[debug(ignore)]
     pub(crate) measure_wrapper_begin_fn:
-        Arc<dyn Fn(&GroupInfo) -> MeasureWrapperState + Send + Sync>,
+        Arc<dyn Fn(&GroupInfo, &ThreadState) -> MeasureWrapperState + Send + Sync + 'static>,
     #[debug(ignore)]
-    pub(crate) measure_wrapper_end_fn: Arc<dyn Fn(MeasureWrapperState) + Send + Sync>,
+    pub(crate) measure_wrapper_end_fn: Arc<dyn Fn(MeasureWrapperState) + Send + Sync + 'static>,
 
     #[debug(ignore)]
-    pub(crate) iter_fn: Arc<dyn Fn(IterState) -> CleanupState + Send + Sync>,
+    pub(crate) iter_fn: Arc<dyn Fn(IterState) -> CleanupState + Send + Sync + 'static>,
 }
 
 impl RunBuilderBasic {
@@ -168,7 +164,7 @@ impl RunBuilderBasic {
         f_end: FEnd,
     ) -> RunBuilderWithWrapperState<(), (), MeasureWrapperState>
     where
-        FBegin: Fn(&GroupInfo) -> MeasureWrapperState + Send + Sync + 'static,
+        FBegin: Fn(&GroupInfo, &()) -> MeasureWrapperState + Send + Sync + 'static,
         FEnd: Fn(MeasureWrapperState) + Send + Sync + 'static,
     {
         RunBuilderWithWrapperState {
@@ -199,7 +195,7 @@ impl RunBuilderBasic {
             groups: self.groups,
             prepare_thread_fn: Arc::new(|_| ()),
             prepare_iter_fn: Arc::new(|_, _| ()),
-            measure_wrapper_begin_fn: Arc::new(|_| ()),
+            measure_wrapper_begin_fn: Arc::new(|_, _| ()),
             measure_wrapper_end_fn: Arc::new(|_| ()),
             iter_fn: Arc::new(f),
         }
@@ -255,7 +251,7 @@ where
         f_end: FEnd,
     ) -> RunBuilderWithWrapperState<ThreadState, (), MeasureWrapperState>
     where
-        FBegin: Fn(&GroupInfo) -> MeasureWrapperState + Send + Sync + 'static,
+        FBegin: Fn(&GroupInfo, &ThreadState) -> MeasureWrapperState + Send + Sync + 'static,
         FEnd: Fn(MeasureWrapperState) + Send + Sync + 'static,
     {
         RunBuilderWithWrapperState {
@@ -288,7 +284,7 @@ where
             groups: self.groups,
             prepare_thread_fn: self.prepare_thread_fn,
             prepare_iter_fn: Arc::new(|_, _| ()),
-            measure_wrapper_begin_fn: Arc::new(|_| ()),
+            measure_wrapper_begin_fn: Arc::new(|_, _| ()),
             measure_wrapper_end_fn: Arc::new(|_| ()),
             iter_fn: Arc::new(f),
         }
@@ -298,7 +294,6 @@ where
 impl<ThreadState, IterState> RunBuilderWithIterState<ThreadState, IterState>
 where
     ThreadState: 'static,
-    IterState: 'static,
 {
     /// Divides the threads used for benchmarking into `n` equal groups. Defaults to 1 group.
     ///
@@ -323,7 +318,7 @@ where
         f_end: FEnd,
     ) -> RunBuilderWithWrapperState<ThreadState, IterState, MeasureWrapperState>
     where
-        FBegin: Fn(&GroupInfo) -> MeasureWrapperState + Send + Sync + 'static,
+        FBegin: Fn(&GroupInfo, &ThreadState) -> MeasureWrapperState + Send + Sync + 'static,
         FEnd: Fn(MeasureWrapperState) + Send + Sync + 'static,
     {
         RunBuilderWithWrapperState {
@@ -356,7 +351,7 @@ where
             groups: self.groups,
             prepare_thread_fn: self.prepare_thread_fn,
             prepare_iter_fn: self.prepare_iter_fn,
-            measure_wrapper_begin_fn: Arc::new(|_| ()),
+            measure_wrapper_begin_fn: Arc::new(|_, _| ()),
             measure_wrapper_end_fn: Arc::new(|_| ()),
             iter_fn: Arc::new(f),
         }
@@ -367,8 +362,6 @@ impl<ThreadState, IterState, MeasureWrapperState>
     RunBuilderWithWrapperState<ThreadState, IterState, MeasureWrapperState>
 where
     ThreadState: 'static,
-    IterState: 'static,
-    MeasureWrapperState: 'static,
 {
     /// Divides the threads used for benchmarking into `n` equal groups. Defaults to 1 group.
     ///
@@ -411,9 +404,6 @@ impl<ThreadState, IterState, MeasureWrapperState, CleanupState>
     RunBuilderFinal<ThreadState, IterState, MeasureWrapperState, CleanupState>
 where
     ThreadState: 'static,
-    IterState: 'static,
-    MeasureWrapperState: 'static,
-    CleanupState: 'static,
 {
     /// Completes the preparation of a benchmark run and returns a [`Run`] instance that can be
     /// used to execute the run on a specific thread pool.

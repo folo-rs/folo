@@ -18,9 +18,6 @@ use crate::{GroupInfo, ThreadPool};
 pub struct Run<ThreadState = (), IterState = (), MeasureWrapperState = (), CleanupState = ()>
 where
     ThreadState: 'static,
-    IterState: 'static,
-    MeasureWrapperState: 'static,
-    CleanupState: 'static,
 {
     // This type is just a wrapper around the final builder type, for better UX.
     inner: RunBuilderFinal<ThreadState, IterState, MeasureWrapperState, CleanupState>,
@@ -72,14 +69,6 @@ impl<ThreadState, IterState, MeasureWrapperState, CleanupState>
         // All threads will wait on this before starting, so they start together.
         let start = Arc::new(Barrier::new(pool.thread_count().get()));
 
-        let (result_txs, result_rxs): (Vec<_>, Vec<_>) =
-            iter::repeat_with(oneshot::channel::<Duration>)
-                .take(pool.thread_count().get())
-                .unzip();
-
-        // Every thread takes one and reports its result back via this.
-        let result_txs = Arc::new(Mutex::new(result_txs));
-
         // Break the callbacks out of `self` so we do not send `self` to the pool.
         let prepare_thread_fn = self.inner.prepare_thread_fn;
         let prepare_iter_fn = self.inner.prepare_iter_fn;
@@ -87,14 +76,12 @@ impl<ThreadState, IterState, MeasureWrapperState, CleanupState>
         let measure_wrapper_begin_fn = self.inner.measure_wrapper_begin_fn;
         let measure_wrapper_end_fn = self.inner.measure_wrapper_end_fn;
 
-        pool.enqueue_task({
+        let results = pool.execute_task({
             let start = Arc::clone(&start);
             let group_indexes = Arc::clone(&group_indexes);
-            let result_txs = Arc::clone(&result_txs);
 
             move || {
                 let group_index = group_indexes.lock().unwrap().pop().unwrap();
-                let result_tx = result_txs.lock().unwrap().pop().unwrap();
 
                 let group_info = GroupInfo::new(group_index, group_count);
 
@@ -111,7 +98,7 @@ impl<ThreadState, IterState, MeasureWrapperState, CleanupState>
 
                 start.wait();
 
-                let measure_state = measure_wrapper_begin_fn(&group_info);
+                let measure_state = measure_wrapper_begin_fn(&group_info, &thread_state);
 
                 let start_time = Instant::now();
 
@@ -126,14 +113,13 @@ impl<ThreadState, IterState, MeasureWrapperState, CleanupState>
                 drop(cleanup_state);
                 drop(thread_state);
 
-                result_tx.send(elapsed).unwrap();
+                elapsed
             }
         });
 
         let mut total_elapsed_nanos: u128 = 0;
 
-        for rx in result_rxs {
-            let elapsed = rx.recv().unwrap();
+        for elapsed in results {
             total_elapsed_nanos = total_elapsed_nanos.saturating_add(elapsed.as_nanos());
         }
 
@@ -409,7 +395,7 @@ mod tests {
             .measure_wrapper_fns(
                 {
                     let events = Arc::clone(&events);
-                    move |_| {
+                    move |_, _| {
                         events.lock().unwrap().push("begin".to_string());
                         "wrapper_state".to_string()
                     }
@@ -442,7 +428,7 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
 
         _ = Run::builder()
-            .measure_wrapper_fns(|_| "wrapper_state".to_string(), {
+            .measure_wrapper_fns(|_, _| "wrapper_state".to_string(), {
                 let events = Arc::clone(&events);
                 move |_| {
                     events.lock().unwrap().push("wrapper_end".to_string());
@@ -502,7 +488,7 @@ mod tests {
             .measure_wrapper_fns(
                 {
                     let wrapper_begin_count = Arc::clone(&wrapper_begin_count);
-                    move |_| {
+                    move |_, _| {
                         wrapper_begin_count.fetch_add(1, atomic::Ordering::Relaxed);
                     }
                 },
