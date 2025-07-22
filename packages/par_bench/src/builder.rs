@@ -57,9 +57,10 @@ where
 /// The fourth stage of preparing a benchmark run, with the wrapper state type parameter known.
 #[derive(derive_more::Debug)]
 #[must_use]
-pub struct RunBuilderWithWrapperState<ThreadState, IterState, MeasureWrapperState>
+pub struct RunBuilderWithWrapperState<ThreadState, IterState, MeasureWrapperState, MeasureOutput>
 where
     ThreadState: 'static,
+    MeasureOutput: Send + 'static,
 {
     groups: NonZero<usize>,
 
@@ -72,15 +73,17 @@ where
     measure_wrapper_begin_fn:
         Arc<dyn Fn(&GroupInfo, &ThreadState) -> MeasureWrapperState + Send + Sync + 'static>,
     #[debug(ignore)]
-    measure_wrapper_end_fn: Arc<dyn Fn(MeasureWrapperState) + Send + Sync + 'static>,
+    measure_wrapper_end_fn:
+        Arc<dyn Fn(MeasureWrapperState) -> MeasureOutput + Send + Sync + 'static>,
 }
 
 /// The final state of preparing a benchmark run, with all type parameters known.
 #[derive(derive_more::Debug)]
 #[must_use]
-pub struct RunBuilderFinal<ThreadState, IterState, MeasureWrapperState, CleanupState>
+pub struct RunBuilderFinal<ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>
 where
     ThreadState: 'static,
+    MeasureOutput: Send + 'static,
 {
     pub(crate) groups: NonZero<usize>,
 
@@ -94,7 +97,8 @@ where
     pub(crate) measure_wrapper_begin_fn:
         Arc<dyn Fn(&GroupInfo, &ThreadState) -> MeasureWrapperState + Send + Sync + 'static>,
     #[debug(ignore)]
-    pub(crate) measure_wrapper_end_fn: Arc<dyn Fn(MeasureWrapperState) + Send + Sync + 'static>,
+    pub(crate) measure_wrapper_end_fn:
+        Arc<dyn Fn(MeasureWrapperState) -> MeasureOutput + Send + Sync + 'static>,
 
     #[debug(ignore)]
     pub(crate) iter_fn: Arc<dyn Fn(IterState) -> CleanupState + Send + Sync + 'static>,
@@ -158,14 +162,15 @@ impl RunBuilderBasic {
     ///
     /// If you wish to specify a thread or iteration preparation function to provide state for each
     /// iteration, do it before calling this method.
-    pub fn measure_wrapper_fns<FBegin, FEnd, MeasureWrapperState>(
+    pub fn measure_wrapper_fns<FBegin, FEnd, MeasureWrapperState, MeasureOutput>(
         self,
         f_begin: FBegin,
         f_end: FEnd,
-    ) -> RunBuilderWithWrapperState<(), (), MeasureWrapperState>
+    ) -> RunBuilderWithWrapperState<(), (), MeasureWrapperState, MeasureOutput>
     where
         FBegin: Fn(&GroupInfo, &()) -> MeasureWrapperState + Send + Sync + 'static,
-        FEnd: Fn(MeasureWrapperState) + Send + Sync + 'static,
+        FEnd: Fn(MeasureWrapperState) -> MeasureOutput + Send + Sync + 'static,
+        MeasureOutput: Send + 'static,
     {
         RunBuilderWithWrapperState {
             groups: self.groups,
@@ -187,7 +192,7 @@ impl RunBuilderBasic {
     /// If you wish to specify a thread or iteration preparation function to provide state for each
     /// thread or iteration, or a specify a measurement wrapper function, do all of these before
     /// calling this method.
-    pub fn iter_fn<F, CleanupState>(self, f: F) -> RunBuilderFinal<(), (), (), CleanupState>
+    pub fn iter_fn<F, CleanupState>(self, f: F) -> RunBuilderFinal<(), (), (), (), CleanupState>
     where
         F: Fn(()) -> CleanupState + Send + Sync + 'static,
     {
@@ -245,14 +250,15 @@ where
     ///
     /// If you wish to specify an iteration preparation function to provide state for each
     /// iteration, do it before calling this method.
-    pub fn measure_wrapper_fns<FBegin, FEnd, MeasureWrapperState>(
+    pub fn measure_wrapper_fns<FBegin, FEnd, MeasureWrapperState, MeasureOutput>(
         self,
         f_begin: FBegin,
         f_end: FEnd,
-    ) -> RunBuilderWithWrapperState<ThreadState, (), MeasureWrapperState>
+    ) -> RunBuilderWithWrapperState<ThreadState, (), MeasureWrapperState, MeasureOutput>
     where
         FBegin: Fn(&GroupInfo, &ThreadState) -> MeasureWrapperState + Send + Sync + 'static,
-        FEnd: Fn(MeasureWrapperState) + Send + Sync + 'static,
+        FEnd: Fn(MeasureWrapperState) -> MeasureOutput + Send + Sync + 'static,
+        MeasureOutput: Send + 'static,
     {
         RunBuilderWithWrapperState {
             groups: self.groups,
@@ -276,7 +282,7 @@ where
     pub fn iter_fn<F, CleanupState>(
         self,
         f: F,
-    ) -> RunBuilderFinal<ThreadState, (), (), CleanupState>
+    ) -> RunBuilderFinal<ThreadState, (), (), (), CleanupState>
     where
         F: Fn(()) -> CleanupState + Send + Sync + 'static,
     {
@@ -312,14 +318,15 @@ where
     /// The `f_begin` callback is called before the first iteration of each thread, and the
     /// `f_end` callback is called after the last iteration of each thread. Any return value
     /// from the former is passed to the latter.
-    pub fn measure_wrapper_fns<FBegin, FEnd, MeasureWrapperState>(
+    pub fn measure_wrapper_fns<FBegin, FEnd, MeasureWrapperState, MeasureOutput>(
         self,
         f_begin: FBegin,
         f_end: FEnd,
-    ) -> RunBuilderWithWrapperState<ThreadState, IterState, MeasureWrapperState>
+    ) -> RunBuilderWithWrapperState<ThreadState, IterState, MeasureWrapperState, MeasureOutput>
     where
         FBegin: Fn(&GroupInfo, &ThreadState) -> MeasureWrapperState + Send + Sync + 'static,
-        FEnd: Fn(MeasureWrapperState) + Send + Sync + 'static,
+        FEnd: Fn(MeasureWrapperState) -> MeasureOutput + Send + Sync + 'static,
+        MeasureOutput: Send + 'static,
     {
         RunBuilderWithWrapperState {
             groups: self.groups,
@@ -343,7 +350,7 @@ where
     pub fn iter_fn<F, CleanupState>(
         self,
         f: F,
-    ) -> RunBuilderFinal<ThreadState, IterState, (), CleanupState>
+    ) -> RunBuilderFinal<ThreadState, IterState, (), (), CleanupState>
     where
         F: Fn(IterState) -> CleanupState + Send + Sync + 'static,
     {
@@ -358,10 +365,11 @@ where
     }
 }
 
-impl<ThreadState, IterState, MeasureWrapperState>
-    RunBuilderWithWrapperState<ThreadState, IterState, MeasureWrapperState>
+impl<ThreadState, IterState, MeasureWrapperState, MeasureOutput>
+    RunBuilderWithWrapperState<ThreadState, IterState, MeasureWrapperState, MeasureOutput>
 where
     ThreadState: 'static,
+    MeasureOutput: Send + 'static,
 {
     /// Divides the threads used for benchmarking into `n` equal groups. Defaults to 1 group.
     ///
@@ -385,7 +393,7 @@ where
     pub fn iter_fn<F, CleanupState>(
         self,
         f: F,
-    ) -> RunBuilderFinal<ThreadState, IterState, MeasureWrapperState, CleanupState>
+    ) -> RunBuilderFinal<ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>
     where
         F: Fn(IterState) -> CleanupState + Send + Sync + 'static,
     {
@@ -400,18 +408,21 @@ where
     }
 }
 
-impl<ThreadState, IterState, MeasureWrapperState, CleanupState>
-    RunBuilderFinal<ThreadState, IterState, MeasureWrapperState, CleanupState>
+impl<ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>
+    RunBuilderFinal<ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>
 where
     ThreadState: 'static,
+    MeasureOutput: Send + 'static,
 {
     /// Completes the preparation of a benchmark run and returns a [`Run`] instance that can be
     /// used to execute the run on a specific thread pool.
-    pub fn build(self) -> Run<ThreadState, IterState, MeasureWrapperState, CleanupState> {
+    pub fn build(
+        self,
+    ) -> Run<ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState> {
         // If we need to, we can do some validation here in the future. Right now,
         // we have no need for this - everything is guarded via the type system.
 
-        Run::<ThreadState, IterState, MeasureWrapperState, CleanupState>::new(self)
+        Run::<ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>::new(self)
     }
 }
 

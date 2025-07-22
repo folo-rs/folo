@@ -1,8 +1,7 @@
-use std::iter::{self};
-use std::mem;
 use std::num::NonZero;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
+use std::{iter, mem};
 
 use many_cpus::ProcessorSet;
 

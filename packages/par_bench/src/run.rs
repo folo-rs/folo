@@ -15,12 +15,19 @@ use crate::{GroupInfo, ThreadPool};
 /// then call `Run::execute_on()` to execute it on a specific thread pool.
 #[must_use]
 #[derive(Debug)]
-pub struct Run<ThreadState = (), IterState = (), MeasureWrapperState = (), CleanupState = ()>
-where
+pub struct Run<
+    ThreadState = (),
+    IterState = (),
+    MeasureWrapperState = (),
+    MeasureOutput = (),
+    CleanupState = (),
+> where
     ThreadState: 'static,
+    MeasureOutput: Send + 'static,
 {
     // This type is just a wrapper around the final builder type, for better UX.
-    inner: RunBuilderFinal<ThreadState, IterState, MeasureWrapperState, CleanupState>,
+    inner:
+        RunBuilderFinal<ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>,
 }
 
 impl Run {
@@ -30,11 +37,19 @@ impl Run {
     }
 }
 
-impl<ThreadState, IterState, MeasureWrapperState, CleanupState>
-    Run<ThreadState, IterState, MeasureWrapperState, CleanupState>
+impl<ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>
+    Run<ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>
+where
+    MeasureOutput: Send + 'static,
 {
     pub(crate) fn new(
-        inner: RunBuilderFinal<ThreadState, IterState, MeasureWrapperState, CleanupState>,
+        inner: RunBuilderFinal<
+            ThreadState,
+            IterState,
+            MeasureWrapperState,
+            MeasureOutput,
+            CleanupState,
+        >,
     ) -> Self {
         Self { inner }
     }
@@ -45,7 +60,7 @@ impl<ThreadState, IterState, MeasureWrapperState, CleanupState>
     ///
     /// Panics if the thread pool's processor count is not divisible by the number of groups
     /// specified in the benchmark run builder.
-    pub fn execute_on(self, pool: &ThreadPool, iterations: u64) -> RunStats {
+    pub fn execute_on(self, pool: &ThreadPool, iterations: u64) -> RunSummary<MeasureOutput> {
         let (threads_per_group, remainder) =
             pool.thread_count().get().div_rem(&self.inner.groups.get());
 
@@ -108,23 +123,26 @@ impl<ThreadState, IterState, MeasureWrapperState, CleanupState>
 
                 let elapsed = start_time.elapsed();
 
-                measure_wrapper_end_fn(measure_state);
+                let measure_output = measure_wrapper_end_fn(measure_state);
 
                 drop(cleanup_state);
                 drop(thread_state);
 
-                elapsed
+                (elapsed, measure_output)
             }
         });
 
         let mut total_elapsed_nanos: u128 = 0;
+        let mut measure_outputs = Vec::with_capacity(pool.thread_count().get());
 
-        for elapsed in results {
+        for (elapsed, measure_output) in results {
             total_elapsed_nanos = total_elapsed_nanos.saturating_add(elapsed.as_nanos());
+            measure_outputs.push(measure_output);
         }
 
-        RunStats {
+        RunSummary {
             mean_duration: calculate_mean_duration(pool.thread_count(), total_elapsed_nanos),
+            measure_output: measure_outputs.into_boxed_slice(),
         }
     }
 }
@@ -146,16 +164,25 @@ fn calculate_mean_duration(thread_count: NonZero<usize>, total_elapsed_nanos: u1
 /// into a benchmark framework.
 #[derive(Debug)]
 #[must_use = "the benchmarking framework will typically need this information for its results"]
-pub struct RunStats {
+pub struct RunSummary<MeasureOutput> {
     mean_duration: Duration,
+
+    measure_output: Box<[MeasureOutput]>,
 }
 
-impl RunStats {
+impl<MeasureOutput> RunSummary<MeasureOutput> {
     /// Returns the mean duration of the run.
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Real timing logic in tests is not desirable.
     pub fn mean_duration(&self) -> Duration {
         self.mean_duration
+    }
+
+    /// Returns the output of the measurement wrapper used for the run.
+    ///
+    /// This will iterate over one measurement output per thread that was involved in the run.
+    pub fn measure_outputs(&self) -> impl Iterator<Item = &MeasureOutput> {
+        self.measure_output.iter()
     }
 }
 
@@ -199,7 +226,7 @@ mod tests {
     fn single_iteration_minimal() {
         let iteration_count = Arc::new(AtomicU64::new(0));
 
-        _ = Run::builder()
+        let _result = Run::builder()
             .iter_fn({
                 let iteration_count = Arc::clone(&iteration_count);
 
@@ -217,7 +244,7 @@ mod tests {
     fn multiple_iterations_minimal() {
         let iteration_count = Arc::new(AtomicU64::new(0));
 
-        _ = Run::builder()
+        let _result = Run::builder()
             .iter_fn({
                 let iteration_count = Arc::clone(&iteration_count);
 
@@ -242,7 +269,7 @@ mod tests {
 
         let group_info_seen = Arc::new(Mutex::new(Vec::new()));
 
-        _ = Run::builder()
+        let _result = Run::builder()
             .groups(nz!(2))
             .prepare_thread_fn({
                 let group_info_seen = Arc::clone(&group_info_seen);
@@ -275,7 +302,7 @@ mod tests {
 
         let group_info_seen = Arc::new(Mutex::new(Vec::new()));
 
-        _ = Run::builder()
+        let _result = Run::builder()
             .groups(nz!(2))
             .prepare_thread_fn({
                 let group_info_seen = Arc::clone(&group_info_seen);
@@ -314,7 +341,7 @@ mod tests {
 
         let group_info_seen = Arc::new(Mutex::new(Vec::new()));
 
-        _ = Run::builder()
+        let _result = Run::builder()
             .groups(nz!(3))
             .prepare_thread_fn({
                 let group_info_seen = Arc::clone(&group_info_seen);
@@ -346,7 +373,7 @@ mod tests {
             panic!("Skip test if not enough processors by panicking");
         };
 
-        _ = Run::builder()
+        let _result = Run::builder()
             .groups(nz!(3))
             .iter_fn(|()| ())
             .build()
@@ -356,7 +383,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn one_processor_two_groups_panics() {
-        _ = Run::builder()
+        let _result = Run::builder()
             .groups(nz!(2))
             .iter_fn(|()| ())
             .build()
@@ -367,7 +394,7 @@ mod tests {
     fn state_flow_from_thread_to_iteration_to_cleanup() {
         let cleanup_states = Arc::new(Mutex::new(Vec::new()));
 
-        _ = Run::builder()
+        let _result = Run::builder()
             .prepare_thread_fn(|_| "thread_state".to_string())
             .prepare_iter_fn(|_, thread_state| format!("{thread_state}_iter"))
             .iter_fn({
@@ -391,7 +418,7 @@ mod tests {
     fn measurement_wrapper_called_before_and_after_timed_execution() {
         let events = Arc::new(Mutex::new(Vec::new()));
 
-        _ = Run::builder()
+        let _result = Run::builder()
             .measure_wrapper_fns(
                 {
                     let events = Arc::clone(&events);
@@ -427,7 +454,7 @@ mod tests {
     fn cleanup_executed_after_measurement_wrapper_end() {
         let events = Arc::new(Mutex::new(Vec::new()));
 
-        _ = Run::builder()
+        let _result = Run::builder()
             .measure_wrapper_fns(|_, _| "wrapper_state".to_string(), {
                 let events = Arc::clone(&events);
                 move |_| {
@@ -471,7 +498,7 @@ mod tests {
         let wrapper_end_count = Arc::new(AtomicU64::new(0));
         let iter_count = Arc::new(AtomicU64::new(0));
 
-        _ = Run::builder()
+        let _result = Run::builder()
             .groups(groups)
             .prepare_thread_fn({
                 let thread_prepare_count = Arc::clone(&thread_prepare_count);
