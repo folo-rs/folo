@@ -1,5 +1,5 @@
 //! Basic benchmarks demonstrating the performance difference between single-threaded
-//! and multi-threaded atomic operations using par_bench.
+//! and multi-threaded atomic operations using `par_bench`.
 
 #![allow(
     missing_docs,
