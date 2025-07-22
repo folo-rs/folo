@@ -1,5 +1,5 @@
 //! Intermediate types for building a [`Run`].
-//! 
+//!
 //! These generally do not need to be named or directly referenced in user code - they only exist
 //! as intermediate steps in a call chain.
 
@@ -52,7 +52,7 @@ where
     #[debug(ignore)]
     prepare_thread_fn: Arc<dyn Fn(&GroupInfo) -> ThreadState + Send + Sync>,
     #[debug(ignore)]
-    prepare_iter_fn: Arc<dyn Fn(&GroupInfo, &mut ThreadState) -> IterState + Send + Sync>,
+    prepare_iter_fn: Arc<dyn Fn(&GroupInfo, &ThreadState) -> IterState + Send + Sync>,
 }
 
 /// The fourth stage of preparing a benchmark run, with the wrapper state type parameter known.
@@ -69,7 +69,7 @@ where
     #[debug(ignore)]
     prepare_thread_fn: Arc<dyn Fn(&GroupInfo) -> ThreadState + Send + Sync>,
     #[debug(ignore)]
-    prepare_iter_fn: Arc<dyn Fn(&GroupInfo, &mut ThreadState) -> IterState + Send + Sync>,
+    prepare_iter_fn: Arc<dyn Fn(&GroupInfo, &ThreadState) -> IterState + Send + Sync>,
 
     #[debug(ignore)]
     measure_wrapper_begin_fn: Arc<dyn Fn(&GroupInfo) -> MeasureWrapperState + Send + Sync>,
@@ -92,8 +92,7 @@ where
     #[debug(ignore)]
     pub(crate) prepare_thread_fn: Arc<dyn Fn(&GroupInfo) -> ThreadState + Send + Sync>,
     #[debug(ignore)]
-    pub(crate) prepare_iter_fn:
-        Arc<dyn Fn(&GroupInfo, &mut ThreadState) -> IterState + Send + Sync>,
+    pub(crate) prepare_iter_fn: Arc<dyn Fn(&GroupInfo, &ThreadState) -> IterState + Send + Sync>,
 
     #[debug(ignore)]
     pub(crate) measure_wrapper_begin_fn:
@@ -145,7 +144,7 @@ impl RunBuilderBasic {
     /// thread or iteration, do both before calling this method.
     pub fn prepare_iter_fn<F, IterState>(self, f: F) -> RunBuilderWithIterState<(), IterState>
     where
-        F: Fn(&GroupInfo, &mut ()) -> IterState + Send + Sync + 'static,
+        F: Fn(&GroupInfo, &()) -> IterState + Send + Sync + 'static,
     {
         RunBuilderWithIterState {
             groups: self.groups,
@@ -232,7 +231,7 @@ where
         f: F,
     ) -> RunBuilderWithIterState<ThreadState, IterState>
     where
-        F: Fn(&GroupInfo, &mut ThreadState) -> IterState + Send + Sync + 'static,
+        F: Fn(&GroupInfo, &ThreadState) -> IterState + Send + Sync + 'static,
     {
         RunBuilderWithIterState {
             groups: self.groups,

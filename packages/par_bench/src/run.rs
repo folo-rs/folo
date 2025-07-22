@@ -98,13 +98,13 @@ impl<ThreadState, IterState, MeasureWrapperState, CleanupState>
 
                 let group_info = GroupInfo::new(group_index, group_count);
 
-                let mut thread_state = prepare_thread_fn(&group_info);
+                let thread_state = prepare_thread_fn(&group_info);
 
                 let iterations_usize = usize::try_from(iterations)
                     .expect("iteration count that exceeds virtual memory size is impossible to execute as state would not fit in memory");
 
                 let iter_state = iter::repeat_with(|| {
-                    prepare_iter_fn(&group_info, &mut thread_state)
+                    prepare_iter_fn(&group_info, &thread_state)
                 }).take(iterations_usize).collect::<Vec<_>>();
 
                 let mut cleanup_state = Vec::with_capacity(iterations_usize);
