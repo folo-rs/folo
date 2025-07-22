@@ -418,11 +418,11 @@ mod tests {
     fn measurement_wrapper_called_before_and_after_timed_execution() {
         let events = Arc::new(Mutex::new(Vec::new()));
 
-        let _result = Run::builder()
+        let result = Run::builder()
             .measure_wrapper_fns(
                 {
                     let events = Arc::clone(&events);
-                    move |_, _| {
+                    move |_, ()| {
                         events.lock().unwrap().push("begin".to_string());
                         "wrapper_state".to_string()
                     }
@@ -431,6 +431,7 @@ mod tests {
                     let events = Arc::clone(&events);
                     move |wrapper_state| {
                         events.lock().unwrap().push(format!("end_{wrapper_state}"));
+                        format!("output_{wrapper_state}")
                     }
                 },
             )
@@ -448,6 +449,36 @@ mod tests {
         assert_eq!(events[0], "begin");
         assert_eq!(events[1], "iteration");
         assert_eq!(events[2], "end_wrapper_state");
+
+        // Verify that the measure output is correctly captured and available.
+        let outputs: Vec<_> = result.measure_outputs().collect();
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0], "output_wrapper_state");
+    }
+
+    #[test]
+    fn measure_output_threaded_through_logic() {
+        let Some(pool) = TWO_THREADS.as_ref() else {
+            println!("Skipping test measure_output_threaded_through_logic: not enough processors");
+            return; // Skip test if not enough processors.
+        };
+
+        let result = Run::builder()
+            .groups(nz!(2))
+            .measure_wrapper_fns(
+                |group_info, ()| format!("group_{}", group_info.index()),
+                |state| format!("{state}_output"),
+            )
+            .iter_fn(|()| ())
+            .build()
+            .execute_on(pool, 1);
+
+        let mut outputs: Vec<_> = result.measure_outputs().collect();
+        outputs.sort();
+
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0], "group_0_output");
+        assert_eq!(outputs[1], "group_1_output");
     }
 
     #[test]
@@ -455,7 +486,7 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
 
         let _result = Run::builder()
-            .measure_wrapper_fns(|_, _| "wrapper_state".to_string(), {
+            .measure_wrapper_fns(|_, ()| "wrapper_state".to_string(), {
                 let events = Arc::clone(&events);
                 move |_| {
                     events.lock().unwrap().push("wrapper_end".to_string());
@@ -515,7 +546,7 @@ mod tests {
             .measure_wrapper_fns(
                 {
                     let wrapper_begin_count = Arc::clone(&wrapper_begin_count);
-                    move |_, _| {
+                    move |_, ()| {
                         wrapper_begin_count.fetch_add(1, atomic::Ordering::Relaxed);
                     }
                 },
