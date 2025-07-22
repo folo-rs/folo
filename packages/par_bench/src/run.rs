@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use num::Integer;
 
 use crate::builder::{RunBuilderBasic, RunBuilderFinal};
-use crate::{GroupInfo, ThreadPool};
+use crate::{RunMeta, ThreadPool};
 
 /// A benchmark run will execute a specific number of multithreaded iterations on a [`ThreadPool`].
 ///
@@ -98,22 +98,22 @@ where
             move || {
                 let group_index = group_indexes.lock().unwrap().pop().unwrap();
 
-                let group_info = GroupInfo::new(group_index, group_count);
+                let meta = RunMeta::new(group_index, group_count, iterations);
 
-                let thread_state = prepare_thread_fn(&group_info);
+                let thread_state = prepare_thread_fn(&meta);
 
                 let iterations_usize = usize::try_from(iterations)
                     .expect("iteration count that exceeds virtual memory size is impossible to execute as state would not fit in memory");
 
                 let iter_state = iter::repeat_with(|| {
-                    prepare_iter_fn(&group_info, &thread_state)
+                    prepare_iter_fn(&meta, &thread_state)
                 }).take(iterations_usize).collect::<Vec<_>>();
 
                 let mut cleanup_state = Vec::with_capacity(iterations_usize);
 
                 start.wait();
 
-                let measure_state = measure_wrapper_begin_fn(&group_info, &thread_state);
+                let measure_state = measure_wrapper_begin_fn(&meta, &thread_state);
 
                 let start_time = Instant::now();
 
@@ -282,13 +282,13 @@ mod tests {
             .execute_on(pool, 1);
 
         let mut seen = group_info_seen.lock().unwrap();
-        seen.sort_by_key(GroupInfo::index);
+        seen.sort_by_key(RunMeta::group_index);
 
         assert_eq!(seen.len(), 2);
-        assert_eq!(seen[0].index(), 0);
-        assert_eq!(seen[0].count().get(), 2);
-        assert_eq!(seen[1].index(), 1);
-        assert_eq!(seen[1].count().get(), 2);
+        assert_eq!(seen[0].group_index(), 0);
+        assert_eq!(seen[0].group_count().get(), 2);
+        assert_eq!(seen[1].group_index(), 1);
+        assert_eq!(seen[1].group_count().get(), 2);
     }
 
     #[test]
@@ -315,19 +315,19 @@ mod tests {
             .execute_on(pool, 1);
 
         let mut seen = group_info_seen.lock().unwrap();
-        seen.sort_by_key(GroupInfo::index);
+        seen.sort_by_key(RunMeta::group_index);
 
         assert_eq!(seen.len(), 4);
         // Two threads should be in group 0.
-        assert_eq!(seen[0].index(), 0);
-        assert_eq!(seen[0].count().get(), 2);
-        assert_eq!(seen[1].index(), 0);
-        assert_eq!(seen[1].count().get(), 2);
+        assert_eq!(seen[0].group_index(), 0);
+        assert_eq!(seen[0].group_count().get(), 2);
+        assert_eq!(seen[1].group_index(), 0);
+        assert_eq!(seen[1].group_count().get(), 2);
         // Two threads should be in group 1.
-        assert_eq!(seen[2].index(), 1);
-        assert_eq!(seen[2].count().get(), 2);
-        assert_eq!(seen[3].index(), 1);
-        assert_eq!(seen[3].count().get(), 2);
+        assert_eq!(seen[2].group_index(), 1);
+        assert_eq!(seen[2].group_count().get(), 2);
+        assert_eq!(seen[3].group_index(), 1);
+        assert_eq!(seen[3].group_count().get(), 2);
     }
 
     #[test]
@@ -354,15 +354,15 @@ mod tests {
             .execute_on(pool, 1);
 
         let mut seen = group_info_seen.lock().unwrap();
-        seen.sort_by_key(GroupInfo::index);
+        seen.sort_by_key(RunMeta::group_index);
 
         assert_eq!(seen.len(), 3);
-        assert_eq!(seen[0].index(), 0);
-        assert_eq!(seen[0].count().get(), 3);
-        assert_eq!(seen[1].index(), 1);
-        assert_eq!(seen[1].count().get(), 3);
-        assert_eq!(seen[2].index(), 2);
-        assert_eq!(seen[2].count().get(), 3);
+        assert_eq!(seen[0].group_index(), 0);
+        assert_eq!(seen[0].group_count().get(), 3);
+        assert_eq!(seen[1].group_index(), 1);
+        assert_eq!(seen[1].group_count().get(), 3);
+        assert_eq!(seen[2].group_index(), 2);
+        assert_eq!(seen[2].group_count().get(), 3);
     }
 
     #[test]
@@ -466,7 +466,7 @@ mod tests {
         let result = Run::builder()
             .groups(nz!(2))
             .measure_wrapper_fns(
-                |group_info, ()| format!("group_{}", group_info.index()),
+                |group_info, ()| format!("group_{}", group_info.group_index()),
                 |state| format!("{state}_output"),
             )
             .iter_fn(|()| ())
