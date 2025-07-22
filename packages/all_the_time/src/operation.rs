@@ -169,7 +169,6 @@ impl Operation {
 
     /// Returns the total processor time across all spans.
     #[must_use]
-    #[cfg(test)]
     pub(crate) fn total_processor_time(&self) -> Duration {
         self.total_processor_time
     }

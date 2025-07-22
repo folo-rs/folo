@@ -11,8 +11,8 @@
 
 use std::hint::black_box;
 
-use par_bench::{Run, ThreadPool};
 use criterion::{Criterion, criterion_group, criterion_main};
+use par_bench::{Run, ThreadPool};
 
 criterion_group!(benches, par_bench_overhead);
 criterion_main!(benches);

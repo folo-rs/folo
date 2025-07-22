@@ -1,0 +1,351 @@
+//! Processor time tracking reports.
+
+use std::collections::HashMap;
+use std::fmt;
+use std::time::Duration;
+
+/// Thread-safe processor time tracking report.
+///
+/// A `Report` contains the captured processor time statistics from a [`Session`](crate::Session)
+/// and can be safely sent to other threads for processing. Unlike the single-threaded `Session`,
+/// reports can be merged together and processed independently.
+///
+/// # Examples
+///
+/// ```
+/// use all_the_time::Session;
+///
+/// # fn main() {
+/// let mut session = Session::new();
+/// let operation = session.operation("test_work");
+/// let _span = operation.iterations(100).measure_thread();
+/// for _ in 0..100 {
+///     std::hint::black_box(42 * 2);
+/// }
+///
+/// let report = session.to_report();
+/// report.print_to_stdout();
+/// # }
+/// ```
+///
+/// # Merging reports
+///
+/// ```
+/// use std::thread;
+///
+/// use all_the_time::{Report, Session};
+///
+/// # fn main() {
+/// // Create two separate sessions
+/// let mut session1 = Session::new();
+/// let mut session2 = Session::new();
+///
+/// // Record some work in each
+/// let op1 = session1.operation("work");
+/// let _span1 = op1.iterations(1).measure_thread();
+/// std::hint::black_box(42);
+///
+/// let op2 = session2.operation("work");
+/// let _span2 = op2.iterations(1).measure_thread();
+/// std::hint::black_box(42);
+///
+/// // Convert to reports and merge
+/// let report1 = session1.to_report();
+/// let report2 = session2.to_report();
+/// let merged = Report::merge(&report1, &report2);
+///
+/// merged.print_to_stdout();
+/// # }
+/// ```
+#[derive(Clone, Debug)]
+pub struct Report {
+    operations: HashMap<String, ReportOperation>,
+}
+
+/// Processor time statistics for a single operation in a report.
+#[derive(Clone, Debug)]
+struct ReportOperation {
+    total_processor_time: Duration,
+    total_iterations: u64,
+}
+
+impl Report {
+    /// Creates an empty report.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        Self {
+            operations: HashMap::new(),
+        }
+    }
+
+    /// Creates a report from operation data.
+    #[must_use]
+    pub(crate) fn from_operations(operations: &HashMap<String, crate::Operation>) -> Self {
+        let report_operations = operations
+            .iter()
+            .map(|(name, op)| {
+                (
+                    name.clone(),
+                    ReportOperation {
+                        total_processor_time: op.total_processor_time(),
+                        total_iterations: op.total_iterations(),
+                    },
+                )
+            })
+            .collect();
+
+        Self {
+            operations: report_operations,
+        }
+    }
+
+    /// Merges two reports into a new report.
+    ///
+    /// The resulting report contains the combined statistics from both input reports.
+    /// Operations with the same name have their statistics combined as if all spans
+    /// had been recorded through a single session.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use all_the_time::{Report, Session};
+    ///
+    /// # fn main() {
+    /// let mut session1 = Session::new();
+    /// let mut session2 = Session::new();
+    ///
+    /// // Both sessions record the same operation name
+    /// let op1 = session1.operation("common_work");
+    /// let _span1 = op1.iterations(5).measure_thread();
+    /// for _ in 0..5 {
+    ///     std::hint::black_box(42);
+    /// }
+    ///
+    /// let op2 = session2.operation("common_work");
+    /// let _span2 = op2.iterations(3).measure_thread();
+    /// for _ in 0..3 {
+    ///     std::hint::black_box(42);
+    /// }
+    ///
+    /// let report1 = session1.to_report();
+    /// let report2 = session2.to_report();
+    ///
+    /// // Merged report shows combined statistics (8 total iterations)
+    /// let merged = Report::merge(&report1, &report2);
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn merge(a: &Self, b: &Self) -> Self {
+        let mut merged_operations = a.operations.clone();
+
+        for (name, b_op) in &b.operations {
+            merged_operations
+                .entry(name.clone())
+                .and_modify(|a_op| {
+                    a_op.total_processor_time = a_op
+                        .total_processor_time
+                        .checked_add(b_op.total_processor_time)
+                        .expect("merging processor times overflows Duration - this indicates an unrealistic scenario");
+
+                    a_op.total_iterations = a_op
+                        .total_iterations
+                        .checked_add(b_op.total_iterations)
+                        .expect("merging iteration counts overflows u64 - this indicates an unrealistic scenario");
+                })
+                .or_insert_with(|| b_op.clone());
+        }
+
+        Self {
+            operations: merged_operations,
+        }
+    }
+
+    /// Prints the processor time statistics to stdout.
+    ///
+    /// Prints nothing if no operations were captured. This may indicate that the session
+    /// was part of a "list available benchmarks" probe run instead of some real activity,
+    /// in which case printing anything might violate the output protocol the tool is speaking.
+    #[cfg_attr(test, mutants::skip)] // Too difficult to test stdout output reliably - manually tested.
+    pub fn print_to_stdout(&self) {
+        if self.is_empty() {
+            return;
+        }
+        println!("{self}");
+    }
+
+    /// Whether there is any recorded activity in this report.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.operations.is_empty() || self.operations.values().all(|op| op.total_iterations == 0)
+    }
+}
+
+impl ReportOperation {
+    /// Calculates the mean processor time per iteration.
+    #[must_use]
+    fn mean(&self) -> Duration {
+        if self.total_iterations == 0 {
+            Duration::ZERO
+        } else {
+            Duration::from_nanos(
+                self.total_processor_time
+                    .as_nanos()
+                    .checked_div(u128::from(self.total_iterations))
+                    .expect("guarded by if condition")
+                    .try_into()
+                    .expect("all realistic values fit in u64"),
+            )
+        }
+    }
+}
+
+impl fmt::Display for ReportOperation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?} (mean)", self.mean())
+    }
+}
+
+impl fmt::Display for Report {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.operations.is_empty() || self.operations.values().all(|op| op.total_iterations == 0)
+        {
+            writeln!(f, "No processor time statistics captured.")?;
+        } else {
+            writeln!(f, "Processor time statistics:")?;
+            // Sort operations by name for consistent output
+            let mut sorted_ops: Vec<_> = self.operations.iter().collect();
+            sorted_ops.sort_by_key(|(name, _)| *name);
+            for (name, operation) in sorted_ops {
+                writeln!(f, "  {name}: {operation}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Session;
+
+    fn create_test_session() -> Session {
+        use crate::pal::{FakePlatform, PlatformFacade};
+        let fake_platform = FakePlatform::new();
+        let platform_facade = PlatformFacade::fake(fake_platform);
+        Session::with_platform(platform_facade)
+    }
+
+    #[test]
+    fn new_report_is_empty() {
+        let report = Report::new();
+        assert!(report.is_empty());
+    }
+
+    #[test]
+    fn report_from_empty_session_is_empty() {
+        let session = create_test_session();
+        let report = session.to_report();
+        assert!(report.is_empty());
+    }
+
+    #[test]
+    fn report_from_session_with_operations_is_not_empty() {
+        let mut session = create_test_session();
+        {
+            let operation = session.operation("test");
+            let _span = operation.iterations(1).measure_thread();
+        } // Span drops here, releasing the mutable borrow
+
+        let report = session.to_report();
+        assert!(!report.is_empty());
+    }
+
+    #[test]
+    fn merge_empty_reports() {
+        let report1 = Report::new();
+        let report2 = Report::new();
+        let merged = Report::merge(&report1, &report2);
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn merge_empty_with_non_empty() {
+        let mut session = create_test_session();
+        {
+            let operation = session.operation("test");
+            let _span = operation.iterations(1).measure_thread();
+        } // Span drops here
+
+        let report1 = Report::new();
+        let report2 = session.to_report();
+
+        let merged1 = Report::merge(&report1, &report2);
+        let merged2 = Report::merge(&report2, &report1);
+
+        assert!(!merged1.is_empty());
+        assert!(!merged2.is_empty());
+    }
+
+    #[test]
+    fn merge_different_operations() {
+        let mut session1 = create_test_session();
+        let mut session2 = create_test_session();
+
+        {
+            let op1 = session1.operation("test1");
+            let _span1 = op1.iterations(1).measure_thread();
+        } // Span drops here
+
+        {
+            let op2 = session2.operation("test2");
+            let _span2 = op2.iterations(1).measure_thread();
+        } // Span drops here
+
+        let report1 = session1.to_report();
+        let report2 = session2.to_report();
+        let merged = Report::merge(&report1, &report2);
+
+        assert_eq!(merged.operations.len(), 2);
+        assert!(merged.operations.contains_key("test1"));
+        assert!(merged.operations.contains_key("test2"));
+    }
+
+    #[test]
+    fn merge_same_operations() {
+        let mut session1 = create_test_session();
+        let mut session2 = create_test_session();
+
+        {
+            let op1 = session1.operation("test");
+            let _span1 = op1.iterations(5).measure_thread();
+        } // Span drops here
+
+        {
+            let op2 = session2.operation("test");
+            let _span2 = op2.iterations(3).measure_thread();
+        } // Span drops here
+
+        let report1 = session1.to_report();
+        let report2 = session2.to_report();
+        let merged = Report::merge(&report1, &report2);
+
+        assert_eq!(merged.operations.len(), 1);
+        let merged_op = merged.operations.get("test").unwrap();
+        assert_eq!(merged_op.total_iterations, 8); // 5 + 3
+    }
+
+    #[test]
+    fn report_clone() {
+        let mut session = create_test_session();
+        {
+            let operation = session.operation("test");
+            let _span = operation.iterations(1).measure_thread();
+        } // Span drops here
+
+        let report1 = session.to_report();
+        let report2 = report1.clone();
+
+        assert_eq!(report1.operations.len(), report2.operations.len());
+    }
+}

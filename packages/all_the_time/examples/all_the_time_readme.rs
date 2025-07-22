@@ -4,6 +4,7 @@
 //! with multiple iterations.
 #![expect(
     clippy::arithmetic_side_effects,
+    clippy::unseparated_literal_suffix,
     reason = "this is example code that doesn't need production-level safety"
 )]
 
@@ -15,13 +16,18 @@ fn main() {
     // Track multiple iterations efficiently
     {
         let operation = session.operation("my_operation");
-        let iterations = 1000;
+        let iterations = 10;
         let _span = operation.iterations(iterations).measure_thread();
 
-        for _ in 0..iterations {
-            let mut sum = 0;
-            for j in 0..100 {
-                sum += j * j;
+        for i in 0u64..iterations {
+            // More processor-intensive work to get measurable CPU time
+            let mut sum = 0u64;
+            for j in 0u64..50000 {
+                for k in 0u64..10 {
+                    sum += (j * k * i) % 1000;
+                    // Add some more computation to make it heavier
+                    sum = sum.wrapping_mul(1103515245).wrapping_add(12345);
+                }
             }
             std::hint::black_box(sum);
         }

@@ -3,13 +3,17 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::Operation;
+use crate::{Operation, Report};
 
 /// Manages allocation tracking session state and contains operations.
 ///
 /// This type ensures that allocation tracking is properly enabled and disabled,
 /// and prevents multiple concurrent tracking sessions which would interfere with
 /// each other. It also serves as a container for tracking operations.
+///
+/// While `Session` is single-threaded, reports from sessions can be converted to
+/// thread-safe [`Report`](crate::Report) instances using [`to_report()`](Self::to_report)
+/// and sent to other threads for processing.
 ///
 /// # Examples
 ///
@@ -92,18 +96,43 @@ impl Session {
             .or_insert_with(Operation::new)
     }
 
+    /// Creates a thread-safe report from this session.
+    ///
+    /// The report contains a snapshot of all memory allocation statistics captured by this session.
+    /// Unlike the single-threaded `Session`, reports can be safely sent to other threads for
+    /// processing and can be merged with other reports.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use alloc_tracker::{Allocator, Session};
+    ///
+    /// #[global_allocator]
+    /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+    ///
+    /// let mut session = Session::new();
+    /// let operation = session.operation("test_work");
+    /// let _span = operation.measure_process();
+    /// let _data = vec![1, 2, 3]; // This allocates memory
+    ///
+    /// let report = session.to_report();
+    /// // Report can now be sent to another thread
+    /// report.print_to_stdout();
+    /// ```
+    #[must_use]
+    pub fn to_report(&self) -> Report {
+        Report::from_operations(&self.operations)
+    }
+
     /// Prints the allocation statistics of all operations to stdout.
     ///
+    /// This is a convenience method equivalent to `self.to_report().print_to_stdout()`.
     /// Prints nothing if no spans were captured. This may indicate that the session
     /// was part of a "list available benchmarks" probe run instead of some real activity,
     /// in which case printing anything might violate the output protocol the tool is speaking.
     #[cfg_attr(test, mutants::skip)] // Too difficult to test stdout output reliably - manually tested.
     pub fn print_to_stdout(&self) {
-        if self.is_empty() {
-            return;
-        }
-
-        println!("{self}");
+        self.to_report().print_to_stdout();
     }
 
     /// Whether there is any recorded activity in this session.

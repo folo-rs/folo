@@ -5,6 +5,7 @@
 //!
 //! The core functionality includes:
 //! - [`Session`] - Configures processor time tracking and provides access to tracking data
+//! - [`Report`] - Thread-safe processor time statistics that can be merged and processed independently
 //! - [`ThreadSpan`] - Tracks thread processor time over a time period
 //! - [`ProcessSpan`] - Tracks process processor time over a time period
 //! - [`Operation`] - Calculates mean processor time per operation
@@ -71,16 +72,43 @@
 //!
 //! Multiple [`Session`] instances can be used concurrently as they track processor time
 //! independently. Each session maintains its own set of operations and statistics.
+//!
+//! While [`Session`] itself is single-threaded, reports from sessions can be converted to
+//! thread-safe [`Report`] instances and sent to other threads for processing:
+//!
+//! ```
+//! use std::thread;
+//!
+//! use all_the_time::{Report, Session};
+//!
+//! # fn main() {
+//! let mut session = Session::new();
+//! let operation = session.operation("work");
+//! let _span = operation.iterations(1).measure_thread();
+//! // Some work happens here
+//!
+//! let report = session.to_report();
+//!
+//! // Report can be sent to another thread
+//! thread::spawn(move || {
+//!     report.print_to_stdout();
+//! })
+//! .join()
+//! .unwrap();
+//! # }
+//! ```
 
 mod operation;
 mod pal;
 mod process_span;
+mod report;
 mod session;
 mod span_builder;
 mod thread_span;
 
 pub use operation::Operation;
 pub use process_span::ProcessSpan;
+pub use report::Report;
 pub use session::Session;
 pub use span_builder::SpanBuilder;
 pub use thread_span::ThreadSpan;

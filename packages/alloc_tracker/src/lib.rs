@@ -6,6 +6,7 @@
 //! The core functionality includes:
 //! - [`Allocator`] - A Rust memory allocator wrapper that enables allocation tracking
 //! - [`Session`] - Configures allocation tracking and provides access to tracking data
+//! - [`Report`] - Thread-safe memory allocation statistics that can be merged and processed independently
 //! - [`ProcessSpan`] - Tracks process-wide memory allocation changes over a time period
 //! - [`ThreadSpan`] - Tracks thread-local memory allocation changes over a time period
 //! - [`Operation`] - Calculates mean memory allocation per operation
@@ -78,6 +79,34 @@
 //! Multiple [`Session`] instances can be used concurrently as they track memory allocation
 //! independently. Each session maintains its own set of operations and statistics.
 //!
+//! While [`Session`] itself is single-threaded, reports from sessions can be converted to
+//! thread-safe [`Report`] instances and sent to other threads for processing:
+//!
+//! ```
+//! use std::thread;
+//!
+//! use alloc_tracker::{Allocator, Report, Session};
+//!
+//! #[global_allocator]
+//! static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+//!
+//! # fn main() {
+//! let mut session = Session::new();
+//! let operation = session.operation("work");
+//! let _span = operation.measure_process();
+//! let _data = vec![1, 2, 3]; // Some allocation work
+//!
+//! let report = session.to_report();
+//!
+//! // Report can be sent to another thread
+//! thread::spawn(move || {
+//!     report.print_to_stdout();
+//! })
+//! .join()
+//! .unwrap();
+//! # }
+//! ```
+//!
 //! # Miri compatibility
 //!
 //! Miri replaces the global allocator with its own logic, so you cannot execute code that uses
@@ -86,11 +115,13 @@
 mod allocator;
 mod operation;
 mod process_span;
+mod report;
 mod session;
 mod thread_span;
 
 pub use allocator::*;
 pub use operation::*;
 pub use process_span::ProcessSpan;
+pub use report::Report;
 pub use session::*;
 pub use thread_span::ThreadSpan;
