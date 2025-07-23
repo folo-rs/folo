@@ -1,6 +1,8 @@
 //! Mean allocation tracking.
 
+use std::cell::Cell;
 use std::fmt;
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use crate::constants::ERR_POISONED_LOCK;
@@ -52,6 +54,7 @@ impl std::error::Error for AddIterationsError {}
 #[derive(Debug)]
 pub struct Operation {
     metrics: Arc<Mutex<OperationMetrics>>,
+    _not_sync: PhantomData<Cell<()>>,
 }
 
 impl Operation {
@@ -59,6 +62,7 @@ impl Operation {
     pub(crate) fn new(_name: String, operation_data: Arc<Mutex<OperationMetrics>>) -> Self {
         Self {
             metrics: operation_data,
+            _not_sync: PhantomData,
         }
     }
 
@@ -442,5 +446,6 @@ mod tests {
 
     // Static assertions for thread safety
     static_assertions::assert_impl_all!(Operation: Send);
-    // Operation doesn't need to be Sync, only Send for thread mobility
+    static_assertions::assert_not_impl_any!(Operation: Sync);
+    // Operation is Send but !Sync due to PhantomData<Cell<()>>
 }

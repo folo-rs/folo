@@ -1,7 +1,9 @@
 //! Session management for allocation tracking.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use crate::constants::ERR_POISONED_LOCK;
@@ -51,6 +53,7 @@ pub(crate) struct OperationMetrics {
 #[derive(Debug)]
 pub struct Session {
     operations: Arc<Mutex<HashMap<String, Arc<Mutex<OperationMetrics>>>>>,
+    _not_sync: PhantomData<Cell<()>>,
 }
 
 impl Session {
@@ -76,6 +79,7 @@ impl Session {
     pub fn new() -> Self {
         Self {
             operations: Arc::new(Mutex::new(HashMap::new())),
+            _not_sync: PhantomData,
         }
     }
 
@@ -196,5 +200,6 @@ mod tests {
 
     // Static assertions for thread safety
     static_assertions::assert_impl_all!(Session: Send);
-    // Session doesn't need to be Sync, only Send for thread mobility
+    static_assertions::assert_not_impl_any!(Session: Sync);
+    // Session is Send but !Sync due to PhantomData<Cell<()>>
 }

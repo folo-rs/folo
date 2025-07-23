@@ -1,6 +1,8 @@
 //! Session management for processor time tracking.
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -51,6 +53,7 @@ pub(crate) struct OperationMetrics {
 pub struct Session {
     operations: Arc<Mutex<HashMap<String, Arc<Mutex<OperationMetrics>>>>>,
     platform: PlatformFacade,
+    _not_sync: PhantomData<Cell<()>>,
 }
 
 impl Session {
@@ -74,6 +77,7 @@ impl Session {
         Self {
             operations: Arc::new(Mutex::new(HashMap::new())),
             platform: PlatformFacade::real(),
+            _not_sync: PhantomData,
         }
     }
 
@@ -86,6 +90,7 @@ impl Session {
         Self {
             operations: Arc::new(Mutex::new(HashMap::new())),
             platform,
+            _not_sync: PhantomData,
         }
     }
 
@@ -309,5 +314,6 @@ mod tests {
 
     // Static assertions for thread safety
     static_assertions::assert_impl_all!(Session: Send);
-    // Session doesn't need to be Sync, only Send for thread mobility
+    static_assertions::assert_not_impl_any!(Session: Sync);
+    // Session is Send but !Sync due to PhantomData<Cell<()>>
 }

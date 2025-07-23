@@ -1,5 +1,7 @@
-//! Process-wide processor time tracking spans.
+//! Process-wide processor time tracking span.
 
+use std::cell::Cell;
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -8,6 +10,8 @@ use crate::Operation;
 use crate::pal::{Platform, PlatformFacade};
 use crate::session::OperationMetrics;
 
+/// Use this to track processor times for code that runs on any thread.
+///
 /// A span of code for which we track process processor time between creation and drop.
 ///
 /// Measures processor time consumed by the entire process (all threads).
@@ -52,6 +56,7 @@ pub struct ProcessSpan {
     platform: PlatformFacade,
     start_time: Duration,
     iterations: u64,
+    _not_sync: PhantomData<Cell<()>>,
 }
 
 impl ProcessSpan {
@@ -71,6 +76,7 @@ impl ProcessSpan {
             platform,
             start_time,
             iterations,
+            _not_sync: PhantomData,
         }
     }
 
@@ -239,5 +245,6 @@ mod tests {
 
     // Static assertions for thread safety
     static_assertions::assert_impl_all!(super::ProcessSpan: Send);
-    // ProcessSpan doesn't need to be Sync, only Send for thread mobility
+    static_assertions::assert_not_impl_any!(super::ProcessSpan: Sync);
+    // ProcessSpan is Send but !Sync due to PhantomData<Cell<()>>
 }

@@ -1,5 +1,7 @@
 //! Process-wide allocation tracking span.
 
+use std::cell::Cell;
+use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
@@ -34,6 +36,7 @@ pub struct ProcessSpan {
     metrics: Arc<Mutex<OperationMetrics>>,
     start_bytes: u64,
     iterations: u64,
+    _not_sync: PhantomData<Cell<()>>,
 }
 
 impl ProcessSpan {
@@ -46,6 +49,7 @@ impl ProcessSpan {
             metrics: operation.metrics(),
             start_bytes,
             iterations,
+            _not_sync: PhantomData,
         }
     }
 
@@ -97,5 +101,6 @@ mod tests {
 
     // Static assertions for thread safety
     static_assertions::assert_impl_all!(ProcessSpan: Send);
-    // ProcessSpan doesn't need to be Sync, only Send for thread mobility
+    static_assertions::assert_not_impl_any!(ProcessSpan: Sync);
+    // ProcessSpan is Send but !Sync due to PhantomData<Cell<()>>
 }

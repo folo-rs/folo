@@ -115,6 +115,6 @@ mod tests {
     use super::*;
 
     // Static assertions for thread safety
-    static_assertions::assert_impl_all!(SpanBuilder<'_>: Send);
-    // SpanBuilder doesn't need to be Sync, only Send for thread mobility
+    static_assertions::assert_not_impl_any!(SpanBuilder<'_>: Send, Sync);
+    // SpanBuilder is !Send + !Sync due to referencing Operation which contains PhantomData<Cell<()>>
 }
