@@ -261,21 +261,21 @@ mod tests {
         };
         let pool = ThreadPool::new(processors);
 
-        let group_info_seen = Arc::new(Mutex::new(Vec::new()));
+        let run_meta_seen = Arc::new(Mutex::new(Vec::new()));
 
         let _result = Run::builder()
             .groups(nz!(2))
             .prepare_thread_fn({
-                let group_info_seen = Arc::clone(&group_info_seen);
-                move |group_info| {
-                    group_info_seen.lock().unwrap().push(*group_info);
+                let run_meta_seen = Arc::clone(&run_meta_seen);
+                move |run_meta| {
+                    run_meta_seen.lock().unwrap().push(*run_meta);
                 }
             })
             .iter_fn(|()| ())
             .build()
             .execute_on(&pool, 1);
 
-        let mut seen = group_info_seen.lock().unwrap();
+        let mut seen = run_meta_seen.lock().unwrap();
         seen.sort_by_key(RunMeta::group_index);
 
         assert_eq!(seen.len(), 2);
@@ -295,21 +295,21 @@ mod tests {
         };
         let pool = ThreadPool::new(processors);
 
-        let group_info_seen = Arc::new(Mutex::new(Vec::new()));
+        let run_meta_seen = Arc::new(Mutex::new(Vec::new()));
 
         let _result = Run::builder()
             .groups(nz!(2))
             .prepare_thread_fn({
-                let group_info_seen = Arc::clone(&group_info_seen);
-                move |group_info| {
-                    group_info_seen.lock().unwrap().push(*group_info);
+                let run_meta_seen = Arc::clone(&run_meta_seen);
+                move |run_meta| {
+                    run_meta_seen.lock().unwrap().push(*run_meta);
                 }
             })
             .iter_fn(|()| ())
             .build()
             .execute_on(&pool, 1);
 
-        let mut seen = group_info_seen.lock().unwrap();
+        let mut seen = run_meta_seen.lock().unwrap();
         seen.sort_by_key(RunMeta::group_index);
 
         assert_eq!(seen.len(), 4);
@@ -335,21 +335,21 @@ mod tests {
         };
         let pool = ThreadPool::new(processors);
 
-        let group_info_seen = Arc::new(Mutex::new(Vec::new()));
+        let run_meta_seen = Arc::new(Mutex::new(Vec::new()));
 
         let _result = Run::builder()
             .groups(nz!(3))
             .prepare_thread_fn({
-                let group_info_seen = Arc::clone(&group_info_seen);
-                move |group_info| {
-                    group_info_seen.lock().unwrap().push(*group_info);
+                let run_meta_seen = Arc::clone(&run_meta_seen);
+                move |run_meta| {
+                    run_meta_seen.lock().unwrap().push(*run_meta);
                 }
             })
             .iter_fn(|()| ())
             .build()
             .execute_on(&pool, 1);
 
-        let mut seen = group_info_seen.lock().unwrap();
+        let mut seen = run_meta_seen.lock().unwrap();
         seen.sort_by_key(RunMeta::group_index);
 
         assert_eq!(seen.len(), 3);
@@ -468,7 +468,7 @@ mod tests {
         let result = Run::builder()
             .groups(nz!(2))
             .measure_wrapper_fns(
-                |group_info, ()| format!("group_{}", group_info.group_index()),
+                |run_meta, ()| format!("group_{}", run_meta.group_index()),
                 |state| format!("{state}_output"),
             )
             .iter_fn(|()| ())

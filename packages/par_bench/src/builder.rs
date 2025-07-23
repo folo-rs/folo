@@ -112,7 +112,7 @@ impl RunBuilderBasic {
     /// Divides the threads used for benchmarking into `n` equal groups. Defaults to 1 group.
     ///
     /// The callbacks will be informed of which group they are executing for, and the total number
-    /// of groups, via a [`GroupInfo`] parameter.
+    /// of groups, via a [`RunMeta`] parameter.
     ///
     /// Attempting to execute a run of a thread pool that is not evenly divisible by `n` will
     /// result in a panic.
@@ -214,7 +214,7 @@ where
     /// Divides the threads used for benchmarking into `n` equal groups. Defaults to 1 group.
     ///
     /// The callbacks will be informed of which group they are executing for, and the total number
-    /// of groups, via a [`GroupInfo`] parameter.
+    /// of groups, via a [`RunMeta`] parameter.
     ///
     /// Attempting to execute a run of a thread pool that is not evenly divisible by `n` will
     /// result in a panic.
@@ -304,7 +304,7 @@ where
     /// Divides the threads used for benchmarking into `n` equal groups. Defaults to 1 group.
     ///
     /// The callbacks will be informed of which group they are executing for, and the total number
-    /// of groups, via a [`GroupInfo`] parameter.
+    /// of groups, via a [`RunMeta`] parameter.
     ///
     /// Attempting to execute a run of a thread pool that is not evenly divisible by `n` will
     /// result in a panic.
@@ -374,7 +374,7 @@ where
     /// Divides the threads used for benchmarking into `n` equal groups. Defaults to 1 group.
     ///
     /// The callbacks will be informed of which group they are executing for, and the total number
-    /// of groups, via a [`GroupInfo`] parameter.
+    /// of groups, via a [`RunMeta`] parameter.
     ///
     /// Attempting to execute a run of a thread pool that is not evenly divisible by `n` will
     /// result in a panic.

@@ -50,9 +50,9 @@ fn measure_atomic_increments(pool: &ThreadPool, iterations: u64) -> Duration {
     let run = Run::builder()
         .prepare_thread_fn({
             let counter = Arc::clone(&counter);
-            move |_group_info| Arc::clone(&counter)
+            move |_run_meta| Arc::clone(&counter)
         })
-        .prepare_iter_fn(|_group_info, counter| Arc::clone(counter))
+        .prepare_iter_fn(|_run_meta, counter| Arc::clone(counter))
         .iter_fn(|counter: Arc<AtomicU64>| {
             // Increment the atomic counter and use black_box to prevent optimization.
             black_box(counter.fetch_add(1, Ordering::Relaxed));
