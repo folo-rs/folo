@@ -64,7 +64,7 @@ pub struct Report {
 
 /// Processor time statistics for a single operation in a report.
 #[derive(Clone, Debug)]
-struct ReportOperation {
+pub struct ReportOperation {
     total_processor_time: Duration,
     total_iterations: u64,
 }
@@ -181,12 +181,60 @@ impl Report {
     pub fn is_empty(&self) -> bool {
         self.operations.is_empty() || self.operations.values().all(|op| op.total_iterations == 0)
     }
+
+    /// Returns an iterator over the operation names and their statistics.
+    ///
+    /// This allows programmatic access to the same data that would be printed by
+    /// [`print_to_stdout()`](Self::print_to_stdout).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use all_the_time::Session;
+    ///
+    /// # fn main() {
+    /// let session = Session::new();
+    /// let operation = session.operation("test_work");
+    /// let _span = operation.iterations(100).measure_thread();
+    /// for _ in 0..100 {
+    ///     std::hint::black_box(42 * 2);
+    /// }
+    ///
+    /// let report = session.to_report();
+    /// for (name, op) in report.operations() {
+    ///     println!(
+    ///         "Operation '{}' had {} iterations",
+    ///         name,
+    ///         op.total_iterations()
+    ///     );
+    ///     println!("Mean time per iteration: {:?}", op.mean());
+    ///     println!("Total time: {:?}", op.total_processor_time());
+    /// }
+    /// # }
+    /// ```
+    pub fn operations(&self) -> impl Iterator<Item = (&str, &ReportOperation)> {
+        self.operations.iter().map(|(name, op)| (name.as_str(), op))
+    }
 }
 
 impl ReportOperation {
+    /// Returns the total processor time across all iterations for this operation.
+    #[must_use]
+    pub fn total_processor_time(&self) -> Duration {
+        self.total_processor_time
+    }
+
+    /// Returns the total number of iterations recorded for this operation.
+    #[must_use]
+    pub fn total_iterations(&self) -> u64 {
+        self.total_iterations
+    }
+
     /// Calculates the mean processor time per iteration.
     #[must_use]
-    fn mean(&self) -> Duration {
+    pub fn mean(&self) -> Duration {
         if self.total_iterations == 0 {
             Duration::ZERO
         } else {

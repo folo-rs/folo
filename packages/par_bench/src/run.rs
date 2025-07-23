@@ -28,9 +28,10 @@ use crate::{RunMeta, ThreadPool};
 ///
 /// Basic usage with atomic counter:
 /// ```
-/// use par_bench::{Run, ThreadPool};
 /// use std::sync::Arc;
 /// use std::sync::atomic::{AtomicU64, Ordering};
+///
+/// use par_bench::{Run, ThreadPool};
 ///
 /// # fn main() {
 /// let pool = ThreadPool::default();
@@ -54,17 +55,15 @@ use crate::{RunMeta, ThreadPool};
 ///
 /// With measurement wrapper for custom metrics:
 /// ```
-/// use par_bench::{Run, ThreadPool};
 /// use std::time::Instant;
+///
+/// use par_bench::{Run, ThreadPool};
 ///
 /// # fn main() {
 /// let pool = ThreadPool::default();
 ///
 /// let run = Run::builder()
-///     .measure_wrapper_fns(
-///         |_meta, _state| Instant::now(),
-///         |start| start.elapsed(),
-///     )
+///     .measure_wrapper_fns(|_meta, _state| Instant::now(), |start| start.elapsed())
 ///     .iter_fn(|_| {
 ///         // Simulate some work
 ///         std::hint::black_box((0..100).sum::<i32>());
@@ -265,8 +264,9 @@ fn calculate_mean_duration(thread_count: NonZero<usize>, total_elapsed_nanos: u1
 /// # Examples
 ///
 /// ```
-/// use par_bench::{Run, ThreadPool};
 /// use std::time::Duration;
+///
+/// use par_bench::{Run, ThreadPool};
 ///
 /// # fn main() {
 /// let pool = ThreadPool::default();
@@ -338,9 +338,10 @@ impl<MeasureOutput> RunSummary<MeasureOutput> {
     /// # Examples
     ///
     /// ```
-    /// use par_bench::{Run, ThreadPool};
     /// use std::sync::Arc;
     /// use std::sync::atomic::{AtomicU64, Ordering};
+    ///
+    /// use par_bench::{Run, ThreadPool};
     ///
     /// # fn main() {
     /// let pool = ThreadPool::default();

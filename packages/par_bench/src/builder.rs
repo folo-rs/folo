@@ -25,9 +25,7 @@
 //! ```
 //! use par_bench::Run;
 //!
-//! let run = Run::builder()
-//!     .iter_fn(|_| { /* benchmark work */ })
-//!     .build();
+//! let run = Run::builder().iter_fn(|_| { /* benchmark work */ }).build();
 //! ```
 //!
 //! With thread preparation:
@@ -45,8 +43,8 @@
 //!
 //! Full configuration:
 //! ```
-//! use par_bench::Run;
 //! use new_zealand::nz;
+//! use par_bench::Run;
 //!
 //! let run = Run::builder()
 //!     .groups(nz!(2))

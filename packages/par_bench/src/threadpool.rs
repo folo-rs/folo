@@ -14,9 +14,9 @@ use many_cpus::ProcessorSet;
 /// # Examples
 ///
 /// ```
-/// use par_bench::ThreadPool;
 /// use many_cpus::ProcessorSet;
 /// use new_zealand::nz;
+/// use par_bench::ThreadPool;
 ///
 /// // Create a thread pool using the default processor set
 /// let pool = ThreadPool::default();
@@ -48,9 +48,9 @@ impl ThreadPool {
     /// # Examples
     ///
     /// ```
-    /// use par_bench::ThreadPool;
     /// use many_cpus::ProcessorSet;
     /// use new_zealand::nz;
+    /// use par_bench::ThreadPool;
     ///
     /// // Create pool with specific processors
     /// if let Some(processors) = ProcessorSet::builder().take(nz!(4)) {

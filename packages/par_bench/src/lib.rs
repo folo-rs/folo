@@ -74,8 +74,8 @@
 //! use std::sync::Arc;
 //! use std::sync::atomic::{AtomicU64, Ordering};
 //!
-//! use par_bench::{Run, ThreadPool};
 //! use new_zealand::nz;
+//! use par_bench::{Run, ThreadPool};
 //!
 //! # fn main() {
 //! # if let Some(processors) = many_cpus::ProcessorSet::builder().take(nz!(4)) {
@@ -103,11 +103,11 @@
 //!             "reader" => {
 //!                 // Reader work
 //!                 counter.fetch_add(1, Ordering::Relaxed);
-//!             },
+//!             }
 //!             "writer" => {
-//!                 // Writer work  
+//!                 // Writer work
 //!                 counter.fetch_add(10, Ordering::Relaxed);
-//!             },
+//!             }
 //!             _ => unreachable!(),
 //!         }
 //!     })

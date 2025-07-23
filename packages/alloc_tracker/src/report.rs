@@ -71,7 +71,7 @@ pub struct Report {
 
 /// Memory allocation statistics for a single operation in a report.
 #[derive(Clone, Debug)]
-struct ReportOperation {
+pub struct ReportOperation {
     total_bytes_allocated: u64,
     total_iterations: u64,
 }
@@ -191,9 +191,58 @@ impl Report {
     pub fn is_empty(&self) -> bool {
         self.operations.is_empty() || self.operations.values().all(|op| op.total_iterations == 0)
     }
+
+    /// Returns an iterator over the operation names and their statistics.
+    ///
+    /// This allows programmatic access to the same data that would be printed by
+    /// [`print_to_stdout()`](Self::print_to_stdout).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use alloc_tracker::{Allocator, Session};
+    ///
+    /// #[global_allocator]
+    /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+    ///
+    /// # fn main() {
+    /// let session = Session::new();
+    /// {
+    ///     let operation = session.operation("test_work");
+    ///     let _span = operation.iterations(1).measure_process();
+    ///     let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
+    /// }
+    ///
+    /// let report = session.to_report();
+    /// for (name, op) in report.operations() {
+    ///     println!(
+    ///         "Operation '{}' had {} iterations",
+    ///         name,
+    ///         op.total_iterations()
+    ///     );
+    ///     println!("Mean bytes per iteration: {}", op.mean());
+    ///     println!("Total bytes: {}", op.total_bytes_allocated());
+    /// }
+    /// # }
+    /// ```
+    pub fn operations(&self) -> impl Iterator<Item = (&str, &ReportOperation)> {
+        self.operations.iter().map(|(name, op)| (name.as_str(), op))
+    }
 }
 
 impl ReportOperation {
+    /// Returns the total bytes allocated across all iterations for this operation.
+    #[must_use]
+    pub fn total_bytes_allocated(&self) -> u64 {
+        self.total_bytes_allocated
+    }
+
+    /// Returns the total number of iterations recorded for this operation.
+    #[must_use]
+    pub fn total_iterations(&self) -> u64 {
+        self.total_iterations
+    }
+
     /// Calculates the mean bytes allocated per iteration.
     #[expect(clippy::integer_division, reason = "we accept loss of precision")]
     #[expect(
@@ -201,7 +250,7 @@ impl ReportOperation {
         reason = "division by zero excluded via if-else"
     )]
     #[must_use]
-    fn mean(&self) -> u64 {
+    pub fn mean(&self) -> u64 {
         if self.total_iterations == 0 {
             0
         } else {
