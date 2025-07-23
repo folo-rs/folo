@@ -40,8 +40,6 @@ use crate::session::OperationMetrics;
 /// ```
 #[derive(Debug)]
 pub struct Operation {
-    #[allow(dead_code, reason = "kept for debugging and potential future use")]
-    name: String,
     metrics: Rc<RefCell<OperationMetrics>>,
     platform: PlatformFacade,
 }
@@ -50,12 +48,11 @@ impl Operation {
     /// Creates a new mean processor time calculator with the given name.
     #[must_use]
     pub(crate) fn new(
-        name: String,
+        _name: String,
         operation_data: Rc<RefCell<OperationMetrics>>,
         platform: PlatformFacade,
     ) -> Self {
         Self {
-            name,
             metrics: operation_data,
             platform,
         }
@@ -71,13 +68,6 @@ impl Operation {
     #[must_use]
     pub(crate) fn metrics(&self) -> Rc<RefCell<OperationMetrics>> {
         Rc::clone(&self.metrics)
-    }
-
-    /// Returns the operation name for use by spans.
-    #[must_use]
-    #[allow(dead_code, reason = "kept for debugging and potential future use")]
-    pub(crate) fn name(&self) -> &str {
-        &self.name
     }
 
     /// Adds a processor time duration to the mean calculation.

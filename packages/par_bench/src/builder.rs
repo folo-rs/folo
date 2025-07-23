@@ -36,7 +36,7 @@
 //!
 //! let run = Run::builder()
 //!     .prepare_thread_fn(|_meta| "thread_state")
-//!     .iter_fn(|_unit: ()| { 
+//!     .iter_fn(|_unit: ()| {
 //!         // Thread state is used internally
 //!         std::hint::black_box(42);
 //!     })
@@ -56,7 +56,7 @@
 //!         |_meta, _state| std::time::Instant::now(),
 //!         |start| start.elapsed(),
 //!     )
-//!     .iter_fn(|iter_state: String| { 
+//!     .iter_fn(|iter_state: String| {
 //!         // Use the per-iteration string state
 //!         std::hint::black_box(iter_state.len());
 //!     })

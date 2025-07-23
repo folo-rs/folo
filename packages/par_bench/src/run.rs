@@ -99,7 +99,7 @@ pub struct Run<
 impl Run {
     /// Returns a new run builder that can be used to prepare a benchmark run.
     ///
-    /// The builder uses a fluent API with enforced ordering to configure the different callback 
+    /// The builder uses a fluent API with enforced ordering to configure the different callback
     /// functions that will be executed during the benchmark run. The type system ensures that
     /// methods are called in the correct order and that all required configuration is provided.
     ///
@@ -418,8 +418,15 @@ mod tests {
         let processors = ProcessorSet::builder().take(nz!(1)).unwrap();
         let pool = ThreadPool::new(&processors);
         let iteration_count = Arc::new(AtomicU64::new(0));
+        let run_meta_seen = Arc::new(Mutex::new(None));
 
         let _result = Run::builder()
+            .prepare_thread_fn({
+                let run_meta_seen = Arc::clone(&run_meta_seen);
+                move |run_meta| {
+                    *run_meta_seen.lock().unwrap() = Some(*run_meta);
+                }
+            })
             .iter_fn({
                 let iteration_count = Arc::clone(&iteration_count);
 
@@ -431,6 +438,12 @@ mod tests {
             .execute_on(&pool, 9999);
 
         assert_eq!(iteration_count.load(atomic::Ordering::Relaxed), 9999);
+
+        // Verify RunMeta contains the correct iteration count
+        let meta = run_meta_seen.lock().unwrap().unwrap();
+        assert_eq!(meta.iterations(), 9999);
+        assert_eq!(meta.group_index(), 0);
+        assert_eq!(meta.group_count().get(), 1);
     }
 
     #[test]
@@ -463,8 +476,10 @@ mod tests {
         assert_eq!(seen.len(), 2);
         assert_eq!(seen[0].group_index(), 0);
         assert_eq!(seen[0].group_count().get(), 2);
+        assert_eq!(seen[0].iterations(), 1);
         assert_eq!(seen[1].group_index(), 1);
         assert_eq!(seen[1].group_count().get(), 2);
+        assert_eq!(seen[1].iterations(), 1);
     }
 
     #[test]
@@ -498,13 +513,17 @@ mod tests {
         // Two threads should be in group 0.
         assert_eq!(seen[0].group_index(), 0);
         assert_eq!(seen[0].group_count().get(), 2);
+        assert_eq!(seen[0].iterations(), 1);
         assert_eq!(seen[1].group_index(), 0);
         assert_eq!(seen[1].group_count().get(), 2);
+        assert_eq!(seen[1].iterations(), 1);
         // Two threads should be in group 1.
         assert_eq!(seen[2].group_index(), 1);
         assert_eq!(seen[2].group_count().get(), 2);
+        assert_eq!(seen[2].iterations(), 1);
         assert_eq!(seen[3].group_index(), 1);
         assert_eq!(seen[3].group_count().get(), 2);
+        assert_eq!(seen[3].iterations(), 1);
     }
 
     #[test]
@@ -537,10 +556,13 @@ mod tests {
         assert_eq!(seen.len(), 3);
         assert_eq!(seen[0].group_index(), 0);
         assert_eq!(seen[0].group_count().get(), 3);
+        assert_eq!(seen[0].iterations(), 1);
         assert_eq!(seen[1].group_index(), 1);
         assert_eq!(seen[1].group_count().get(), 3);
+        assert_eq!(seen[1].iterations(), 1);
         assert_eq!(seen[2].group_index(), 2);
         assert_eq!(seen[2].group_count().get(), 3);
+        assert_eq!(seen[2].iterations(), 1);
     }
 
     #[test]

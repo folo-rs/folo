@@ -51,25 +51,15 @@ impl std::error::Error for AddIterationsError {}
 /// ```
 #[derive(Debug)]
 pub struct Operation {
-    #[allow(dead_code, reason = "kept for debugging and potential future use")]
-    name: String,
     metrics: Rc<RefCell<OperationMetrics>>,
 }
 
 impl Operation {
     #[must_use]
-    pub(crate) fn new(name: String, operation_data: Rc<RefCell<OperationMetrics>>) -> Self {
+    pub(crate) fn new(_name: String, operation_data: Rc<RefCell<OperationMetrics>>) -> Self {
         Self {
-            name,
             metrics: operation_data,
         }
-    }
-
-    /// Returns the operation name for use by spans.
-    #[must_use]
-    #[allow(dead_code, reason = "kept for debugging and potential future use")]
-    pub(crate) fn name(&self) -> &str {
-        &self.name
     }
 
     /// Returns a clone of the operation metrics for use by spans.

@@ -172,6 +172,7 @@ impl Default for ThreadPool {
 }
 
 impl Drop for ThreadPool {
+    #[cfg_attr(test, mutants::skip)] // Impractical to test that stuff stops happening.
     fn drop(&mut self) {
         if thread::panicking() {
             // If the thread is panicking, we are probably in a dirty state and shutting down
