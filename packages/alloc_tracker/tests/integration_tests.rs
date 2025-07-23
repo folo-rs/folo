@@ -180,3 +180,80 @@ fn mixed_span_types_in_multithreaded_context() {
     let total = mixed_op.total_bytes_allocated();
     assert!(total > 0);
 }
+
+#[test]
+fn report_is_empty_matches_session_is_empty() {
+    let session = Session::new();
+
+    // Test 1: Both empty initially
+    let report = session.to_report();
+    assert_eq!(session.is_empty(), report.is_empty());
+    assert!(session.is_empty());
+    assert!(report.is_empty());
+
+    // Test 2: Create operation without spans - both should still be empty
+    let _operation = session.operation("test");
+    let report = session.to_report();
+    assert_eq!(session.is_empty(), report.is_empty());
+    assert!(session.is_empty());
+    assert!(report.is_empty());
+
+    // Test 3: Add spans - both should be non-empty
+    {
+        let operation = session.operation("test_with_spans");
+        let _span = operation.iterations(1).measure_process();
+        // No actual allocation needed for span to exist
+    } // Operation is dropped here, merging data to session
+
+    let report = session.to_report();
+    assert_eq!(session.is_empty(), report.is_empty());
+    assert!(!session.is_empty());
+    assert!(!report.is_empty());
+}
+
+#[test]
+fn report_mean_with_known_allocations() {
+    const NUM_ITERATIONS: u64 = 5;
+
+    let session = Session::new();
+
+    {
+        let operation = session.operation("known_allocation");
+        for _ in 0..NUM_ITERATIONS {
+            let _span = operation.iterations(1).measure_thread();
+            // Allocate a single Box<u64> - predictable size allocation
+            let boxed_value = Box::new(42_u64);
+            black_box(boxed_value); // Ensure allocation is not optimized away, but Box is dropped
+        }
+    } // Operation is dropped here, merging data to session
+
+    let report = session.to_report();
+    let operations: Vec<_> = report.operations().collect();
+    assert_eq!(operations.len(), 1);
+
+    let (_name, op) = operations.first().unwrap();
+    assert_eq!(op.total_iterations(), NUM_ITERATIONS);
+
+    // Check that we have tracked some allocations
+    let total_bytes = op.total_bytes_allocated();
+    assert!(total_bytes > 0);
+
+    // With Box<u64>, we expect at least 8 bytes per allocation (size of u64)
+    // but allocators may add overhead, so we just verify basic sanity
+    assert!(total_bytes >= NUM_ITERATIONS * 8);
+
+    // The mean should be greater than 0
+    let mean_bytes = op.mean();
+    assert!(mean_bytes > 0);
+
+    // Basic sanity check: mean should be total / iterations (integer division is intentional)
+    #[allow(
+        clippy::integer_division,
+        reason = "Integer division is intended for mean calculation"
+    )]
+    let expected_mean = total_bytes / NUM_ITERATIONS;
+    assert_eq!(mean_bytes, expected_mean);
+
+    // Verify mean calculation makes sense - should be at least 8 bytes per allocation
+    assert!(mean_bytes >= 8);
+}

@@ -398,4 +398,49 @@ mod tests {
 
         assert_eq!(report1.operations.len(), report2.operations.len());
     }
+
+    #[test]
+    fn report_mean_with_fake_platform() {
+        use crate::pal::{FakePlatform, PlatformFacade};
+
+        // Create fake platform that we can modify during the test
+        let fake_platform = FakePlatform::new();
+        let platform_facade = PlatformFacade::fake(fake_platform.clone());
+        let session = Session::with_platform(platform_facade);
+
+        // First operation: start at 10ms, end at 50ms = 40ms duration
+        fake_platform.set_thread_time(Duration::from_millis(10));
+        {
+            let operation = session.operation("test_operation");
+            let _span = operation.iterations(4).measure_thread();
+            // Progress time during the operation to demonstrate time passing
+            fake_platform.set_thread_time(Duration::from_millis(50));
+        } // Operation is dropped here, recording 40ms total for 4 iterations
+
+        // Second operation: start at 50ms, end at 90ms = 40ms duration
+        {
+            let operation = session.operation("test_operation");
+            let _span = operation.iterations(2).measure_thread();
+            // Progress time during this operation too
+            fake_platform.set_thread_time(Duration::from_millis(90));
+        } // Operation is dropped here, recording another 40ms total for 2 iterations
+
+        let report = session.to_report();
+        let operations: Vec<_> = report.operations().collect();
+        assert_eq!(operations.len(), 1);
+
+        let (_name, op) = operations.first().unwrap();
+
+        // Verify the operation recorded meaningful durations
+        // The same operation name means they merge:
+        // First operation: 40ms total / 4 iterations
+        // Second operation: 40ms total / 2 iterations
+        // Combined: (40ms + 40ms) total / (4 + 2) iterations = 80ms / 6 = ~13.33ms mean
+        let expected_mean = Duration::from_nanos(13_333_333); // 80ms / 6 iterations
+        assert_eq!(op.mean(), expected_mean);
+
+        // Verify total duration and iteration count
+        assert_eq!(op.total_processor_time(), Duration::from_millis(80));
+        assert_eq!(op.total_iterations(), 6);
+    }
 }

@@ -140,7 +140,7 @@ mod tests {
     }
 
     fn create_test_session_with_time(thread_time: Duration) -> Session {
-        let mut fake_platform = FakePlatform::new();
+        let fake_platform = FakePlatform::new();
         fake_platform.set_thread_time(thread_time);
         let platform_facade = PlatformFacade::fake(fake_platform);
         Session::with_platform(platform_facade)
@@ -228,7 +228,7 @@ mod tests {
     #[test]
     fn uses_thread_time_from_pal() {
         // Verify that ThreadSpan specifically calls thread_time() from the PAL
-        let mut fake_platform = FakePlatform::new();
+        let fake_platform = FakePlatform::new();
         fake_platform.set_thread_time(Duration::from_millis(50));
         fake_platform.set_process_time(Duration::from_millis(200)); // Different from thread time
 
@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn iterations_divisor_logic() {
         // Test the core division logic more directly by setting up time advancement
-        let mut fake_platform = FakePlatform::new();
+        let fake_platform = FakePlatform::new();
         // Start with zero time
         fake_platform.set_thread_time(Duration::ZERO);
 

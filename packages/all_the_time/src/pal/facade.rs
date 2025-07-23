@@ -70,7 +70,7 @@ mod tests {
 
     #[test]
     fn delegates_thread_time() {
-        let mut fake_platform = FakePlatform::new();
+        let fake_platform = FakePlatform::new();
         fake_platform.set_thread_time(Duration::from_millis(300));
         let facade = PlatformFacade::fake(fake_platform);
 
@@ -81,7 +81,7 @@ mod tests {
 
     #[test]
     fn delegates_process_time() {
-        let mut fake_platform = FakePlatform::new();
+        let fake_platform = FakePlatform::new();
         fake_platform.set_process_time(Duration::from_millis(400));
         let facade = PlatformFacade::fake(fake_platform);
 

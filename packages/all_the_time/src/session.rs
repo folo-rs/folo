@@ -275,4 +275,33 @@ mod tests {
 
         assert!(!session.is_empty());
     }
+
+    #[test]
+    fn report_is_empty_matches_session_is_empty() {
+        let session = create_test_session();
+
+        // Test 1: Both empty initially
+        let report = session.to_report();
+        assert_eq!(session.is_empty(), report.is_empty());
+        assert!(session.is_empty());
+        assert!(report.is_empty());
+
+        // Test 2: Create operation without spans - both should still be empty
+        let _operation = session.operation("test");
+        let report = session.to_report();
+        assert_eq!(session.is_empty(), report.is_empty());
+        assert!(session.is_empty());
+        assert!(report.is_empty());
+
+        // Test 3: Add spans - both should be non-empty
+        {
+            let operation = session.operation("test_with_spans");
+            let _span = operation.iterations(1).measure_thread();
+        } // Operation is dropped here, merging data to session
+
+        let report = session.to_report();
+        assert_eq!(session.is_empty(), report.is_empty());
+        assert!(!session.is_empty());
+        assert!(!report.is_empty());
+    }
 }

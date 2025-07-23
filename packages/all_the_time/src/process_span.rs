@@ -137,7 +137,7 @@ mod tests {
     }
 
     fn create_test_session_with_time(process_time: Duration) -> Session {
-        let mut fake_platform = FakePlatform::new();
+        let fake_platform = FakePlatform::new();
         fake_platform.set_process_time(process_time);
         let platform_facade = PlatformFacade::fake(fake_platform);
         Session::with_platform(platform_facade)
@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn uses_process_time_from_pal() {
         // Verify that ProcessSpan specifically calls process_time() from the PAL
-        let mut fake_platform = FakePlatform::new();
+        let fake_platform = FakePlatform::new();
         fake_platform.set_process_time(Duration::from_millis(300));
         fake_platform.set_thread_time(Duration::from_millis(100)); // Different from process time
 
