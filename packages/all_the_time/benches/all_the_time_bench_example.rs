@@ -19,7 +19,7 @@ use all_the_time::Session;
 use criterion::{Criterion, criterion_group, criterion_main};
 
 fn entrypoint(c: &mut Criterion) {
-    let mut cpu_time = Session::new();
+    let cpu_time = Session::new();
     let mut group = c.benchmark_group("all_the_time");
 
     let cell = Cell::new(1234);

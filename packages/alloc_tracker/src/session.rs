@@ -1,9 +1,18 @@
 //! Session management for allocation tracking.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
+use std::rc::Rc;
 
 use crate::{Operation, Report};
+
+/// Metrics tracked for each operation in the session.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct OperationMetrics {
+    pub(crate) total_bytes_allocated: u64,
+    pub(crate) total_iterations: u64,
+}
 
 /// Manages allocation tracking session state and contains operations.
 ///
@@ -23,8 +32,8 @@ use crate::{Operation, Report};
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
-/// let mut session = Session::new();
-/// let mut string_op = session.operation("do_stuff_with_strings");
+/// let session = Session::new();
+/// let string_op = session.operation("do_stuff_with_strings");
 ///
 /// {
 ///     let _span = string_op.iterations(3).measure_process();
@@ -41,7 +50,7 @@ use crate::{Operation, Report};
 /// ```
 #[derive(Debug)]
 pub struct Session {
-    operations: HashMap<String, Operation>,
+    operations: Rc<RefCell<HashMap<String, Rc<RefCell<OperationMetrics>>>>>,
 }
 
 impl Session {
@@ -55,7 +64,7 @@ impl Session {
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
-    /// let mut session = Session::new();
+    /// let session = Session::new();
     /// // Allocation tracking is now enabled
     /// // Session will disable tracking when dropped
     /// ```
@@ -66,7 +75,7 @@ impl Session {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            operations: HashMap::new(),
+            operations: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
@@ -84,8 +93,8 @@ impl Session {
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
-    /// let mut session = Session::new();
-    /// let mut string_op = session.operation("string_operations");
+    /// let session = Session::new();
+    /// let string_op = session.operation("string_operations");
     ///
     /// {
     ///     let _span = string_op.iterations(3).measure_process();
@@ -94,10 +103,20 @@ impl Session {
     ///     }
     /// }
     /// ```
-    pub fn operation(&mut self, name: impl Into<String>) -> &mut Operation {
-        self.operations
-            .entry(name.into())
-            .or_insert_with(Operation::new)
+    pub fn operation(&self, name: impl Into<String>) -> Operation {
+        let name = name.into();
+
+        // Ensure the operation exists in the shared data
+        let operation_data = {
+            let mut operations = self.operations.borrow_mut();
+            Rc::clone(
+                operations
+                    .entry(name.clone())
+                    .or_insert_with(|| Rc::new(RefCell::new(OperationMetrics::default()))),
+            )
+        };
+
+        Operation::new(name, operation_data)
     }
 
     /// Creates a thread-safe report from this session.
@@ -114,7 +133,7 @@ impl Session {
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
-    /// let mut session = Session::new();
+    /// let session = Session::new();
     /// let operation = session.operation("test_work");
     /// {
     ///     let _span = operation.iterations(1).measure_process();
@@ -127,7 +146,12 @@ impl Session {
     /// ```
     #[must_use]
     pub fn to_report(&self) -> Report {
-        Report::from_operations(&self.operations)
+        let operations = self.operations.borrow();
+        let operation_data: HashMap<String, OperationMetrics> = operations
+            .iter()
+            .map(|(name, data_ref)| (name.clone(), (*data_ref.borrow()).clone()))
+            .collect();
+        Report::from_operation_data(&operation_data)
     }
 
     /// Prints the allocation statistics of all operations to stdout.
@@ -144,35 +168,17 @@ impl Session {
     /// Whether there is any recorded activity in this session.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.operations.is_empty()
-            || self
-                .operations
+        let operations = self.operations.borrow();
+        operations.is_empty()
+            || operations
                 .values()
-                .all(|op| op.total_iterations() == 0)
+                .all(|op| op.borrow().total_iterations == 0)
     }
 }
 
 impl fmt::Display for Session {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.operations.is_empty()
-            || self
-                .operations
-                .values()
-                .all(|op| op.total_iterations() == 0)
-        {
-            writeln!(f, "No allocation statistics captured.")?;
-        } else {
-            writeln!(f, "Allocation statistics:")?;
-
-            // Sort operations by name for consistent output
-            let mut sorted_ops: Vec<_> = self.operations.iter().collect();
-            sorted_ops.sort_by_key(|(name, _)| *name);
-
-            for (name, operation) in sorted_ops {
-                writeln!(f, "  {name}: {operation}")?;
-            }
-        }
-
-        Ok(())
+        // Delegate to Report's Display implementation for consistency
+        write!(f, "{}", self.to_report())
     }
 }

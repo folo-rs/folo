@@ -48,7 +48,7 @@ fn perform_measurable_cpu_work() -> u64 {
 
 #[test]
 fn real_platform_thread_span_measures_nonzero_time() {
-    let mut session = Session::new();
+    let session = Session::new();
     let operation = session.operation("thread_work");
 
     // Perform significant CPU work and measure it with a thread span
@@ -85,7 +85,7 @@ fn real_platform_thread_span_measures_nonzero_time() {
 
 #[test]
 fn real_platform_process_span_measures_nonzero_time() {
-    let mut session = Session::new();
+    let session = Session::new();
     let operation = session.operation("process_work");
 
     // Perform significant CPU work and measure it with a process span
@@ -122,7 +122,7 @@ fn real_platform_process_span_measures_nonzero_time() {
 
 #[test]
 fn real_platform_session_not_empty_after_work() {
-    let mut session = Session::new();
+    let session = Session::new();
 
     // Session should start empty
     assert!(session.is_empty());

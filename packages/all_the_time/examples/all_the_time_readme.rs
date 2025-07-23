@@ -11,7 +11,7 @@
 use all_the_time::Session;
 
 fn main() {
-    let mut session = Session::new();
+    let session = Session::new();
 
     // Track multiple iterations efficiently
     {

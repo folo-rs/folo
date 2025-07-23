@@ -33,7 +33,7 @@ fn entrypoint(c: &mut Criterion) {
 
     // alloc_tracker overhead measurements
     {
-        let mut alloc_session = Session::new();
+        let alloc_session = Session::new();
 
         let process_op = alloc_session.operation("empty_process_span");
         group.bench_function("process_span_empty", |b| {

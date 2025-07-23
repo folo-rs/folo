@@ -1,9 +1,20 @@
 //! Session management for processor time tracking.
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
+use std::rc::Rc;
+use std::time::Duration;
 
 use crate::pal::PlatformFacade;
 use crate::{Operation, Report};
+
+/// Metrics tracked for each operation in the session.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct OperationMetrics {
+    pub(crate) total_processor_time: Duration,
+    pub(crate) total_iterations: u64,
+}
+
 /// Manages processor time tracking session state and contains operations.
 ///
 /// This type serves as a container for tracking operations and provides
@@ -18,8 +29,8 @@ use crate::{Operation, Report};
 /// ```
 /// use all_the_time::Session;
 ///
-/// let mut session = Session::new();
-/// let mut processor_op = session.operation("processor_intensive_work");
+/// let session = Session::new();
+/// let processor_op = session.operation("processor_intensive_work");
 ///
 /// for _ in 0..3 {
 ///     let _span = processor_op.iterations(1).measure_thread();
@@ -38,7 +49,7 @@ use crate::{Operation, Report};
 /// ```
 #[derive(Debug)]
 pub struct Session {
-    operations: HashMap<String, Operation>,
+    operations: Rc<RefCell<HashMap<String, Rc<RefCell<OperationMetrics>>>>>,
     platform: PlatformFacade,
 }
 impl Session {
@@ -49,8 +60,8 @@ impl Session {
     /// ```
     /// use all_the_time::Session;
     ///
-    /// let mut session = Session::new();
-    /// // Processor time tracking is now enabled
+    /// let session = Session::new();
+    /// // Processor time tracking is enabled
     /// // Session will disable tracking when dropped
     /// ```
     #[expect(
@@ -60,7 +71,7 @@ impl Session {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            operations: HashMap::new(),
+            operations: Rc::new(RefCell::new(HashMap::new())),
             platform: PlatformFacade::real(),
         }
     }
@@ -72,7 +83,7 @@ impl Session {
     #[cfg(test)]
     pub(crate) fn with_platform(platform: PlatformFacade) -> Self {
         Self {
-            operations: HashMap::new(),
+            operations: Rc::new(RefCell::new(HashMap::new())),
             platform,
         }
     }
@@ -88,8 +99,8 @@ impl Session {
     /// ```
     /// use all_the_time::Session;
     ///
-    /// let mut session = Session::new();
-    /// let mut processor_op = session.operation("processor_operations");
+    /// let session = Session::new();
+    /// let processor_op = session.operation("processor_operations");
     ///
     /// for _ in 0..3 {
     ///     let _span = processor_op.iterations(1).measure_thread();
@@ -100,37 +111,51 @@ impl Session {
     ///     }
     /// }
     /// ```
-    pub fn operation(&mut self, name: impl Into<String>) -> &mut Operation {
+    pub fn operation(&self, name: impl Into<String>) -> Operation {
         let name = name.into();
-        // Get or create the operation
-        self.operations
-            .entry(name)
-            .or_insert_with(|| Operation::new(self.platform.clone()))
+
+        // Get or create operation data
+        let operation_data = {
+            let mut operations = self.operations.borrow_mut();
+            Rc::clone(
+                operations
+                    .entry(name.clone())
+                    .or_insert_with(|| Rc::new(RefCell::new(OperationMetrics::default()))),
+            )
+        };
+
+        Operation::new(name, operation_data, self.platform.clone())
     }
 
     /// Creates a thread-safe report from this session.
     ///
     /// The report contains a snapshot of all processor time statistics captured by this session.
-    /// Unlike the single-threaded `Session`, reports can be safely sent to other threads for
-    /// processing and can be merged with other reports.
+    /// Reports can be safely sent to other threads for processing and can be merged with other reports.
     ///
     /// # Examples
     ///
     /// ```
     /// use all_the_time::Session;
     ///
-    /// let mut session = Session::new();
+    /// let session = Session::new();
     /// let operation = session.operation("test_work");
     /// let _span = operation.iterations(1).measure_thread();
     /// // Work happens here
     ///
     /// let report = session.to_report();
-    /// // Report can now be sent to another thread
+    /// // Report can be sent to another thread
     /// report.print_to_stdout();
     /// ```
     #[must_use]
     pub fn to_report(&self) -> Report {
-        Report::from_operations(&self.operations)
+        // Convert Rc<RefCell<OperationMetrics>> back to plain OperationMetrics for the report
+        let operations_snapshot: HashMap<String, OperationMetrics> = self
+            .operations
+            .borrow()
+            .iter()
+            .map(|(name, data_ref)| (name.clone(), data_ref.borrow().clone()))
+            .collect();
+        Report::from_operation_data(&operations_snapshot)
     }
 
     /// Prints the processor time statistics of all operations to stdout.
@@ -147,33 +172,18 @@ impl Session {
     /// Whether there is any recorded activity in this session.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.operations.is_empty()
-            || self
-                .operations
+        let operations = self.operations.borrow();
+        operations.is_empty()
+            || operations
                 .values()
-                .all(|op| op.total_iterations() == 0)
+                .all(|data| data.borrow().total_iterations == 0)
     }
 }
 
 impl fmt::Display for Session {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.operations.is_empty()
-            || self
-                .operations
-                .values()
-                .all(|op| op.total_iterations() == 0)
-        {
-            writeln!(f, "No processor time statistics captured.")?;
-        } else {
-            writeln!(f, "Processor time statistics:")?;
-            // Sort operations by name for consistent output
-            let mut sorted_ops: Vec<_> = self.operations.iter().collect();
-            sorted_ops.sort_by_key(|(name, _)| *name);
-            for (name, operation) in sorted_ops {
-                writeln!(f, "  {name}: {operation}")?;
-            }
-        }
-        Ok(())
+        // Delegate to Report's Display implementation for consistency
+        write!(f, "{}", self.to_report())
     }
 }
 
@@ -196,7 +206,7 @@ mod tests {
 
     #[test]
     fn is_empty_returns_true_for_operations_with_no_spans() {
-        let mut session = create_test_session();
+        let session = create_test_session();
 
         // Create operations but don't record any spans
         let _operation1 = session.operation("test1");
@@ -207,30 +217,35 @@ mod tests {
 
     #[test]
     fn is_empty_returns_false_for_operations_with_spans() {
-        let mut session = create_test_session();
-        let operation = session.operation("test");
+        let session = create_test_session();
 
-        // Record a span
         {
-            let _span = operation.iterations(1).measure_thread();
-        }
+            let operation = session.operation("test");
+
+            // Record a span
+            {
+                let _span = operation.iterations(1).measure_thread();
+            }
+        } // operation is dropped here, merging data to session
 
         assert!(!session.is_empty());
     }
 
     #[test]
     fn is_empty_mixed_operations_some_with_spans() {
-        let mut session = create_test_session();
+        let session = create_test_session();
 
         // Create some operations without spans
         let _operation1 = session.operation("no_spans1");
         let _operation2 = session.operation("no_spans2");
 
         // Create an operation with spans
-        let operation_with_spans = session.operation("with_spans");
         {
-            let _span = operation_with_spans.iterations(1).measure_process();
-        }
+            let operation_with_spans = session.operation("with_spans");
+            {
+                let _span = operation_with_spans.iterations(1).measure_process();
+            }
+        } // operation_with_spans is dropped here, merging data to session
 
         // Session should not be empty because at least one operation has spans
         assert!(!session.is_empty());
@@ -238,7 +253,7 @@ mod tests {
 
     #[test]
     fn is_empty_multiple_operations_all_empty() {
-        let mut session = create_test_session();
+        let session = create_test_session();
 
         // Create multiple operations but don't record spans
         for i in 0..5 {
@@ -250,7 +265,7 @@ mod tests {
 
     #[test]
     fn is_empty_multiple_operations_all_with_spans() {
-        let mut session = create_test_session();
+        let session = create_test_session();
 
         // Create multiple operations with spans
         for i in 0..3 {

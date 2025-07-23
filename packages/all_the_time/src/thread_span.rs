@@ -1,10 +1,13 @@
 //! Thread-specific processor time tracking spans.
 
+use std::cell::RefCell;
 use std::marker::PhantomData;
+use std::rc::Rc;
 use std::time::Duration;
 
 use crate::Operation;
-use crate::pal::Platform;
+use crate::pal::{Platform, PlatformFacade};
+use crate::session::OperationMetrics;
 /// A tracked span of code that tracks thread processor time between creation and drop.
 ///
 /// This span tracks processor time consumed by the current thread only.
@@ -14,7 +17,7 @@ use crate::pal::Platform;
 /// ```
 /// use all_the_time::Session;
 ///
-/// let mut session = Session::new();
+/// let session = Session::new();
 /// let operation = session.operation("test");
 /// {
 ///     let _span = operation.iterations(1).measure_thread();
@@ -31,7 +34,7 @@ use crate::pal::Platform;
 /// ```
 /// use all_the_time::Session;
 ///
-/// let mut session = Session::new();
+/// let session = Session::new();
 /// let operation = session.operation("test");
 /// {
 ///     let _span = operation.iterations(1000).measure_thread();
@@ -44,27 +47,30 @@ use crate::pal::Platform;
 /// ```
 #[derive(Debug)]
 #[must_use = "Measurements are taken between creation and drop"]
-pub struct ThreadSpan<'a> {
-    operation: &'a mut Operation,
+pub struct ThreadSpan {
+    metrics: Rc<RefCell<OperationMetrics>>,
+    platform: PlatformFacade,
     start_time: Duration,
     iterations: u64,
 
     _single_threaded: PhantomData<*const ()>,
 }
 
-impl<'a> ThreadSpan<'a> {
+impl ThreadSpan {
     /// Creates a new thread span for the given operation and iteration count.
     ///
     /// # Panics
     ///
     /// Panics if `iterations` is zero.
-    pub(crate) fn new(operation: &'a mut Operation, iterations: u64) -> Self {
+    pub(crate) fn new(operation: &Operation, iterations: u64) -> Self {
         assert!(iterations != 0, "Iterations cannot be zero");
 
-        let start_time = operation.platform().thread_time();
+        let platform = operation.platform().clone();
+        let start_time = platform.thread_time();
 
         Self {
-            operation,
+            metrics: operation.metrics(),
+            platform,
             start_time,
             iterations,
             _single_threaded: PhantomData,
@@ -75,7 +81,7 @@ impl<'a> ThreadSpan<'a> {
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // The != 1 fork is broadly applicable, so mutations fail. Intentional.
     fn to_duration(&self) -> Duration {
-        let current_time = self.operation.platform().thread_time();
+        let current_time = self.platform.thread_time();
         let total_duration = current_time.saturating_sub(self.start_time);
 
         if self.iterations > 1 {
@@ -93,12 +99,30 @@ impl<'a> ThreadSpan<'a> {
     }
 }
 
-impl Drop for ThreadSpan<'_> {
+impl Drop for ThreadSpan {
     fn drop(&mut self) {
         let duration = self.to_duration();
 
-        // Add the per-iteration duration for all iterations at once
-        self.operation.add_iterations(duration, self.iterations);
+        // Calculate total duration by multiplying duration by iterations
+        let total_duration_nanos = duration.as_nanos()
+            .checked_mul(u128::from(self.iterations))
+            .expect("duration multiplied by iterations overflows u128 - this indicates an unrealistic scenario");
+
+        let total_duration = Duration::from_nanos(
+            total_duration_nanos
+                .try_into()
+                .expect("total duration exceeds maximum Duration value - this indicates an unrealistic scenario"),
+        );
+
+        // Add directly to operation data
+        let mut data = self.metrics.borrow_mut();
+        data.total_processor_time = data.total_processor_time.checked_add(total_duration).expect(
+            "processor time accumulation overflows Duration - this indicates an unrealistic scenario",
+        );
+
+        data.total_iterations = data.total_iterations.checked_add(self.iterations).expect(
+            "total iterations count overflows u64 - this indicates an unrealistic scenario",
+        );
     }
 }
 
@@ -124,7 +148,7 @@ mod tests {
 
     #[test]
     fn creates_span_with_iterations() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
         let span = operation.iterations(5).measure_thread();
         assert_eq!(span.iterations, 5);
@@ -133,14 +157,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "Iterations cannot be zero")]
     fn panics_on_zero_iterations() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
         let _span = operation.iterations(0).measure_thread();
     }
 
     #[test]
     fn extracts_time_from_pal() {
-        let mut session = create_test_session_with_time(Duration::ZERO);
+        let session = create_test_session_with_time(Duration::ZERO);
         let operation = session.operation("test");
 
         {
@@ -154,7 +178,7 @@ mod tests {
 
     #[test]
     fn calculates_time_delta() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
 
         // We need to simulate time advancement by accessing the platform directly
@@ -175,7 +199,7 @@ mod tests {
 
     #[test]
     fn records_one_span_per_iteration() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
 
         {
@@ -188,7 +212,7 @@ mod tests {
 
     #[test]
     fn calculates_per_iteration_duration() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
 
         // Create a span and test the duration calculation logic
@@ -209,7 +233,7 @@ mod tests {
         fake_platform.set_process_time(Duration::from_millis(200)); // Different from thread time
 
         let platform_facade = PlatformFacade::fake(fake_platform);
-        let mut session = Session::with_platform(platform_facade);
+        let session = Session::with_platform(platform_facade);
         let operation = session.operation("test");
 
         {
@@ -225,7 +249,7 @@ mod tests {
         // Test case for single iteration (no division)
         // Since we can't modify fake platform after creation, we'll test
         // the behavior with a zero-time scenario
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
 
         {
@@ -242,7 +266,7 @@ mod tests {
     #[test]
     fn correctly_divides_by_iterations_count_multiple() {
         // Test division for multiple iterations
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
 
         // Simulate a time measurement where we start at 0ms and end at 1000ms
@@ -329,7 +353,7 @@ mod tests {
         fake_platform.set_thread_time(Duration::ZERO);
 
         let platform_facade = PlatformFacade::fake(fake_platform);
-        let mut session = Session::with_platform(platform_facade);
+        let session = Session::with_platform(platform_facade);
         let operation = session.operation("test");
 
         // Create span that should divide by iterations

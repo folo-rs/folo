@@ -19,7 +19,7 @@
 //! use all_the_time::Session;
 //!
 //! # fn main() {
-//! let mut session = Session::new();
+//! let session = Session::new();
 //!
 //! {
 //!     let batch_op = session.operation("batch_work");
@@ -43,7 +43,7 @@
 //! use all_the_time::Session;
 //!
 //! # fn main() {
-//! let mut session = Session::new();
+//! let session = Session::new();
 //!
 //! // Track thread processor time
 //! {
@@ -82,7 +82,7 @@
 //! use all_the_time::{Report, Session};
 //!
 //! # fn main() {
-//! let mut session = Session::new();
+//! let session = Session::new();
 //! let operation = session.operation("work");
 //! let _span = operation.iterations(1).measure_thread();
 //! // Some work happens here

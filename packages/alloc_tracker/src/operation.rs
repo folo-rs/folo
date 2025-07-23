@@ -1,13 +1,33 @@
 //! Mean memory allocation tracking.
 
+use std::cell::RefCell;
 use std::fmt;
+use std::rc::Rc;
 
 use crate::SpanBuilder;
+use crate::session::OperationMetrics;
 
-/// Calculates mean memory allocation per operation across multiple iterations.
+/// Error returned when iteration count exceeds supported limits.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct AddIterationsError;
+
+impl fmt::Display for AddIterationsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "iteration count overflow")
+    }
+}
+
+impl std::error::Error for AddIterationsError {}
+
+/// A measurement handle for tracking mean memory allocation per operation across multiple iterations.
 ///
 /// This utility is particularly useful for benchmarking scenarios where you want
-/// to understand the mean memory footprint of repeated operations.
+/// to understand the mean memory footprint of repeated operations. Operations
+/// share data with their parent session via reference counting, and data is
+/// merged when the operation is dropped.
+///
+/// Multiple operations with the same name can be created concurrently.
 ///
 /// # Examples
 ///
@@ -17,7 +37,7 @@ use crate::SpanBuilder;
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
-/// let mut session = Session::new();
+/// let session = Session::new();
 /// let mean_calc = session.operation("string_allocations");
 ///
 /// // Simulate multiple operations
@@ -31,17 +51,31 @@ use crate::SpanBuilder;
 /// ```
 #[derive(Debug)]
 pub struct Operation {
-    total_bytes_allocated: u64,
-    total_iterations: u64,
+    #[allow(dead_code, reason = "kept for debugging and potential future use")]
+    name: String,
+    metrics: Rc<RefCell<OperationMetrics>>,
 }
 
 impl Operation {
     #[must_use]
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(name: String, operation_data: Rc<RefCell<OperationMetrics>>) -> Self {
         Self {
-            total_bytes_allocated: 0,
-            total_iterations: 0,
+            name,
+            metrics: operation_data,
         }
+    }
+
+    /// Returns the operation name for use by spans.
+    #[must_use]
+    #[allow(dead_code, reason = "kept for debugging and potential future use")]
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns a clone of the operation metrics for use by spans.
+    #[must_use]
+    pub(crate) fn metrics(&self) -> Rc<RefCell<OperationMetrics>> {
+        Rc::clone(&self.metrics)
     }
 
     /// Adds a memory delta value to the mean calculation.
@@ -49,7 +83,7 @@ impl Operation {
     /// This method is called by [`ProcessSpan`] or [`ThreadSpan`] when it is dropped.
     /// Internally delegates to `add_iterations()` with a count of 1.
     #[cfg(test)]
-    pub(crate) fn add(&mut self, delta: u64) {
+    pub(crate) fn add(&self, delta: u64) {
         self.add_iterations(delta, 1);
     }
 
@@ -57,15 +91,22 @@ impl Operation {
     ///
     /// This is a more efficient version of calling `add()` multiple times with the same delta.
     /// This method is used by span types when they measure multiple iterations.
-    pub(crate) fn add_iterations(&mut self, delta: u64, iterations: u64) {
-        // Calculate total bytes by multiplying delta by iterations
+    #[cfg(test)]
+    pub(crate) fn add_iterations(&self, delta: u64, iterations: u64) {
         let total_bytes = delta
             .checked_mul(iterations)
-            .expect("allocation delta multiplied by iterations overflows u64 - this indicates an unrealistic scenario");
+            .expect("bytes * iterations overflows u64 - this indicates an unrealistic scenario");
 
-        // Never going to overflow u64, so no point doing slower checked arithmetic here.
-        self.total_bytes_allocated = self.total_bytes_allocated.wrapping_add(total_bytes);
-        self.total_iterations = self.total_iterations.wrapping_add(iterations);
+        let mut data = self.metrics.borrow_mut();
+
+        data.total_bytes_allocated = data
+            .total_bytes_allocated
+            .checked_add(total_bytes)
+            .expect("total bytes allocated overflows u64 - this indicates an unrealistic scenario");
+
+        data.total_iterations = data.total_iterations.checked_add(iterations).expect(
+            "total iterations count overflows u64 - this indicates an unrealistic scenario",
+        );
     }
 
     /// Creates a span builder with the specified iteration count.
@@ -82,7 +123,7 @@ impl Operation {
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
-    /// let mut session = Session::new();
+    /// let session = Session::new();
     /// let operation = session.operation("single_op");
     /// {
     ///     let _span = operation.iterations(1).measure_thread();
@@ -98,7 +139,7 @@ impl Operation {
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
-    /// let mut session = Session::new();
+    /// let session = Session::new();
     /// let operation = session.operation("batch_ops");
     /// {
     ///     let iterations = 10000;
@@ -110,7 +151,7 @@ impl Operation {
     /// } // Total allocation is measured once and divided by 10000
     /// ```
     #[must_use]
-    pub fn iterations(&mut self, iterations: u64) -> SpanBuilder<'_> {
+    pub fn iterations(&self, iterations: u64) -> SpanBuilder<'_> {
         SpanBuilder::new(self, iterations)
     }
 
@@ -124,23 +165,28 @@ impl Operation {
     )]
     #[must_use]
     pub fn mean(&self) -> u64 {
-        if self.total_iterations == 0 {
+        let data = self.metrics.borrow();
+        if data.total_iterations == 0 {
             0
         } else {
-            self.total_bytes_allocated / self.total_iterations
+            data.total_bytes_allocated / data.total_iterations
         }
     }
 
     /// Returns the total number of iterations recorded.
     #[must_use]
-    pub(crate) fn total_iterations(&self) -> u64 {
-        self.total_iterations
+    #[allow(dead_code, reason = "Used in tests")]
+    #[cfg(test)]
+    fn total_iterations(&self) -> u64 {
+        let data = self.metrics.borrow();
+        data.total_iterations
     }
 
     /// Returns the total bytes allocated across all iterations.
     #[must_use]
     pub fn total_bytes_allocated(&self) -> u64 {
-        self.total_bytes_allocated
+        let data = self.metrics.borrow();
+        data.total_bytes_allocated
     }
 }
 
@@ -155,11 +201,17 @@ mod tests {
     use std::sync::atomic;
 
     use super::*;
+    use crate::Session;
     use crate::allocator::{THREAD_BYTES_ALLOCATED, TOTAL_BYTES_ALLOCATED};
+
+    fn create_test_operation() -> Operation {
+        let session = Session::new();
+        session.operation("test")
+    }
 
     #[test]
     fn operation_new() {
-        let operation = Operation::new();
+        let operation = create_test_operation();
         assert_eq!(operation.mean(), 0);
         assert_eq!(operation.total_iterations(), 0);
         assert_eq!(operation.total_bytes_allocated(), 0);
@@ -167,7 +219,7 @@ mod tests {
 
     #[test]
     fn operation_add_single() {
-        let mut operation = Operation::new();
+        let operation = create_test_operation();
         operation.add(100);
 
         assert_eq!(operation.mean(), 100);
@@ -177,7 +229,7 @@ mod tests {
 
     #[test]
     fn operation_add_multiple() {
-        let mut operation = Operation::new();
+        let operation = create_test_operation();
         operation.add(100);
         operation.add(200);
         operation.add(300);
@@ -189,7 +241,7 @@ mod tests {
 
     #[test]
     fn operation_add_zero() {
-        let mut operation = Operation::new();
+        let operation = create_test_operation();
         operation.add(0);
         operation.add(0);
 
@@ -200,7 +252,7 @@ mod tests {
 
     #[test]
     fn operation_span_drop() {
-        let mut operation = Operation::new();
+        let operation = create_test_operation();
 
         {
             let _span = operation.iterations(1).measure_process();
@@ -215,7 +267,7 @@ mod tests {
 
     #[test]
     fn operation_multiple_spans() {
-        let mut operation = Operation::new();
+        let operation = create_test_operation();
 
         {
             let _span = operation.iterations(1).measure_process();
@@ -234,7 +286,7 @@ mod tests {
 
     #[test]
     fn operation_process_span_no_allocation() {
-        let mut operation = Operation::new();
+        let operation = create_test_operation();
 
         {
             let _span = operation.iterations(1).measure_process();
@@ -248,7 +300,7 @@ mod tests {
 
     #[test]
     fn operation_thread_span_drop() {
-        let mut operation = Operation::new();
+        let operation = create_test_operation();
 
         {
             let _span = operation.iterations(1).measure_thread();
@@ -266,7 +318,7 @@ mod tests {
 
     #[test]
     fn operation_mixed_spans() {
-        let mut operation = Operation::new();
+        let operation = create_test_operation();
 
         {
             let _span = operation.iterations(1).measure_thread();
@@ -287,7 +339,7 @@ mod tests {
 
     #[test]
     fn operation_thread_span_no_allocation() {
-        let mut operation = Operation::new();
+        let operation = create_test_operation();
 
         {
             let _span = operation.iterations(1).measure_thread();
@@ -301,7 +353,7 @@ mod tests {
 
     #[test]
     fn add_iterations_direct_call() {
-        let mut operation = Operation::new();
+        let operation = create_test_operation();
 
         // Test direct call to add_iterations
         operation.add_iterations(100, 5);
@@ -313,7 +365,7 @@ mod tests {
 
     #[test]
     fn add_iterations_zero_iterations() {
-        let mut operation = Operation::new();
+        let operation = create_test_operation();
 
         // Adding zero iterations should work and do nothing
         operation.add_iterations(100, 0);
@@ -325,7 +377,7 @@ mod tests {
 
     #[test]
     fn add_iterations_zero_allocation() {
-        let mut operation = Operation::new();
+        let operation = create_test_operation();
 
         // Adding zero allocation should work
         operation.add_iterations(0, 1000);
@@ -337,7 +389,7 @@ mod tests {
 
     #[test]
     fn operation_batch_iterations() {
-        let mut operation = Operation::new();
+        let operation = create_test_operation();
 
         {
             let _span = operation.iterations(10).measure_process();
@@ -348,5 +400,50 @@ mod tests {
         assert_eq!(operation.total_iterations(), 10);
         assert_eq!(operation.total_bytes_allocated(), 1000);
         assert_eq!(operation.mean(), 100); // 1000 / 10
+    }
+
+    #[test]
+    fn operation_drop_merges_data() {
+        let session = Session::new();
+
+        // Create and use operation
+        {
+            let operation = session.operation("test");
+            operation.add_iterations(100, 5);
+            // operation is dropped here, merging data into session
+        }
+
+        // Check that session contains the data
+        let report = session.to_report();
+        assert!(!report.is_empty());
+
+        // Verify the session shows the data was merged
+        let session_display = format!("{session}");
+        println!("Actual session display: '{session_display}'");
+        assert!(session_display.contains("100 bytes (mean)")); // 500 bytes / 5 iterations = 100
+    }
+
+    #[test]
+    fn multiple_operations_concurrent() {
+        let session = Session::new();
+
+        let op1 = session.operation("test");
+        let op2 = session.operation("test");
+
+        op1.add_iterations(100, 2); // 200 bytes, 2 iterations
+        op2.add_iterations(200, 3); // 600 bytes, 3 iterations
+
+        // Both operations share the same data immediately since they have the same name
+        // Total: 800 bytes, 5 iterations = 160 bytes mean
+        assert_eq!(op1.mean(), 160);
+        assert_eq!(op2.mean(), 160);
+
+        // Drop operations
+        drop(op1);
+        drop(op2);
+
+        // Session should show merged results: 800 bytes, 5 iterations = 160 bytes mean
+        let session_display = format!("{session}");
+        assert!(session_display.contains("160 bytes (mean)"));
     }
 }

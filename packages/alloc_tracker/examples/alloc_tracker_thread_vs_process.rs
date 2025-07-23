@@ -54,27 +54,29 @@ fn multithreaded_allocations() {
 }
 
 fn main() {
-    println!("=== Allocation Tracking Span Types Example ===\n");
+    println!(
+        "=== Thread vs Process Allocation Tracking ===
+"
+    );
 
-    let mut session = Session::new();
+    let session = Session::new();
 
-    // Example 1: Using measure_thread() - only measures current thread's allocations
-    // Even though multithreaded_allocations() spawns multiple threads, measure_thread()
-    // only captures the memory allocated by the main thread
+    // Track thread-local allocations
     {
+        println!("🧵 Tracking thread-local allocations (3 iterations)");
         let thread_op = session.operation("thread_span_multithreaded");
         let _span = thread_op.iterations(3).measure_thread();
-        for _ in 0..3 {
+        for _i in 0..3 {
             multithreaded_allocations();
         }
     }
 
-    // Example 2: Using measure_process() - measures entire process allocations
-    // This captures memory allocations from all threads spawned by multithreaded_allocations()
+    // Track process-wide allocations
     {
+        println!("🌐 Tracking process-wide allocations (3 iterations)");
         let process_op = session.operation("process_span_multithreaded");
         let _span = process_op.iterations(3).measure_process();
-        for _ in 0..3 {
+        for _i in 0..3 {
             multithreaded_allocations();
         }
     }

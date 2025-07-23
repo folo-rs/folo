@@ -7,8 +7,8 @@ use std::time::Duration;
 /// Thread-safe processor time tracking report.
 ///
 /// A `Report` contains the captured processor time statistics from a [`Session`](crate::Session)
-/// and can be safely sent to other threads for processing. Unlike the single-threaded `Session`,
-/// reports can be merged together and processed independently.
+/// and can be safely sent to other threads for processing. Reports can be merged together
+/// and processed independently.
 ///
 /// # Examples
 ///
@@ -16,7 +16,7 @@ use std::time::Duration;
 /// use all_the_time::Session;
 ///
 /// # fn main() {
-/// let mut session = Session::new();
+/// let session = Session::new();
 /// let operation = session.operation("test_work");
 /// let _span = operation.iterations(100).measure_thread();
 /// for _ in 0..100 {
@@ -37,8 +37,8 @@ use std::time::Duration;
 ///
 /// # fn main() {
 /// // Create two separate sessions
-/// let mut session1 = Session::new();
-/// let mut session2 = Session::new();
+/// let session1 = Session::new();
+/// let session2 = Session::new();
 ///
 /// // Record some work in each
 /// let op1 = session1.operation("work");
@@ -79,17 +79,19 @@ impl Report {
         }
     }
 
-    /// Creates a report from operation data.
+    /// Creates a report from shared operation data.
     #[must_use]
-    pub(crate) fn from_operations(operations: &HashMap<String, crate::Operation>) -> Self {
-        let report_operations = operations
+    pub(crate) fn from_operation_data(
+        operation_data: &HashMap<String, crate::session::OperationMetrics>,
+    ) -> Self {
+        let report_operations = operation_data
             .iter()
-            .map(|(name, op)| {
+            .map(|(name, data)| {
                 (
                     name.clone(),
                     ReportOperation {
-                        total_processor_time: op.total_processor_time(),
-                        total_iterations: op.total_iterations(),
+                        total_processor_time: data.total_processor_time,
+                        total_iterations: data.total_iterations,
                     },
                 )
             })
@@ -112,8 +114,8 @@ impl Report {
     /// use all_the_time::{Report, Session};
     ///
     /// # fn main() {
-    /// let mut session1 = Session::new();
-    /// let mut session2 = Session::new();
+    /// let session1 = Session::new();
+    /// let session2 = Session::new();
     ///
     /// // Both sessions record the same operation name
     /// let op1 = session1.operation("common_work");
@@ -251,7 +253,7 @@ mod tests {
 
     #[test]
     fn report_from_session_with_operations_is_not_empty() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         {
             let operation = session.operation("test");
             let _span = operation.iterations(1).measure_thread();
@@ -271,7 +273,7 @@ mod tests {
 
     #[test]
     fn merge_empty_with_non_empty() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         {
             let operation = session.operation("test");
             let _span = operation.iterations(1).measure_thread();
@@ -289,8 +291,8 @@ mod tests {
 
     #[test]
     fn merge_different_operations() {
-        let mut session1 = create_test_session();
-        let mut session2 = create_test_session();
+        let session1 = create_test_session();
+        let session2 = create_test_session();
 
         {
             let op1 = session1.operation("test1");
@@ -313,8 +315,8 @@ mod tests {
 
     #[test]
     fn merge_same_operations() {
-        let mut session1 = create_test_session();
-        let mut session2 = create_test_session();
+        let session1 = create_test_session();
+        let session2 = create_test_session();
 
         {
             let op1 = session1.operation("test");
@@ -337,7 +339,7 @@ mod tests {
 
     #[test]
     fn report_clone() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         {
             let operation = session.operation("test");
             let _span = operation.iterations(1).measure_thread();

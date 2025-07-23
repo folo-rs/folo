@@ -22,7 +22,7 @@ fn main() {
     println!("=== Processor Time Tracking Example ===\n");
 
     // Create a tracking session - this enables processor time monitoring.
-    let mut session = Session::new();
+    let session = Session::new();
     println!("✓ Created tracking session\n");
 
     // Track string formatting - do more work to get measurable processor time.

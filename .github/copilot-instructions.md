@@ -511,3 +511,13 @@ why we are skipping it.
 If you are asked to do a thing to one instance of a problem in a file, check for other instances.
 You must solve the entire class of problems at once, not expect each instance to be pointed
 out to you in instructions.
+
+# Documentation is about today, not about yesterday
+
+Both inline and API documentation must describe the current facts, not history from previous
+designs or iterations. Do not make comparisons with mechanisms that no longer exist in the API.
+
+# Test-only code requires cfg(test)
+
+If there are functions that are only used in tests, mark them (and their `use` statements)
+with `#[cfg(test)]`. Do not just suppress "dead code" warnings.

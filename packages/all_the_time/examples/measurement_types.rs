@@ -54,7 +54,7 @@ fn multithreaded_work() {
 fn main() {
     println!("=== Processor Time Measurement Types Example ===\n");
 
-    let mut session = Session::new();
+    let session = Session::new();
 
     // Example 1: Using measure_thread() - only measures current thread's processor time.
     // Even though multithreaded_work() spawns multiple threads, measure_thread()

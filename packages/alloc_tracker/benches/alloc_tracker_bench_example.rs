@@ -17,7 +17,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 fn entrypoint(c: &mut Criterion) {
-    let mut allocs = Session::new();
+    let allocs = Session::new();
 
     let mut group = c.benchmark_group("alloc_tracker");
 

@@ -15,20 +15,21 @@ static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 #[test]
 fn no_span_is_empty_session() {
-    let mut session = Session::new();
+    let session = Session::new();
 
-    _ = session.operation("test_no_span");
+    let _op = session.operation("test_no_span");
 
     assert!(session.is_empty());
 }
 
 #[test]
 fn span_with_no_allocation_is_not_empty_session() {
-    let mut session = Session::new();
+    let session = Session::new();
 
-    let op = session.operation("test_no_allocation");
-
-    drop(op.iterations(1).measure_process());
+    {
+        let op = session.operation("test_no_allocation");
+        drop(op.iterations(1).measure_process());
+    } // op is dropped here, merging data to session
 
     assert!(
         !session.is_empty(),
@@ -41,7 +42,7 @@ fn single_thread_allocations() {
     const BYTES_PER_ITERATION: usize = 100;
     const TEST_ITERATIONS: usize = 5;
 
-    let mut session = Session::new();
+    let session = Session::new();
 
     // Test process span in single-threaded context
     let process_total = {
@@ -79,7 +80,7 @@ fn multithreaded_allocations_show_span_differences() {
     const MAIN_THREAD_ALLOCATIONS: u32 = 10;
     const TEST_ITERATIONS: usize = 3;
 
-    let mut session = Session::new();
+    let session = Session::new();
 
     // Helper function to spawn worker threads that allocate memory
     let spawn_workers = || {
@@ -146,7 +147,7 @@ fn multithreaded_allocations_show_span_differences() {
 fn mixed_span_types_in_multithreaded_context() {
     const ITERATIONS: usize = 3;
 
-    let mut session = Session::new();
+    let session = Session::new();
     let mixed_op = session.operation("mixed_multithreaded");
 
     for iteration in 1..=ITERATIONS {

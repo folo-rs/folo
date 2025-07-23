@@ -9,7 +9,7 @@ static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 #[expect(clippy::useless_vec, reason = "example needs to show allocation")]
 fn main() {
-    let mut session = Session::new();
+    let session = Session::new();
 
     // Track a single operation
     {

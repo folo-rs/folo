@@ -6,8 +6,8 @@ use std::fmt;
 /// Thread-safe memory allocation tracking report.
 ///
 /// A `Report` contains the captured memory allocation statistics from a [`Session`](crate::Session)
-/// and can be safely sent to other threads for processing. Unlike the single-threaded `Session`,
-/// reports can be merged together and processed independently.
+/// and can be safely sent to other threads for processing. Reports can be merged together
+/// and processed independently.
 ///
 /// # Examples
 ///
@@ -18,7 +18,7 @@ use std::fmt;
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
 /// # fn main() {
-/// let mut session = Session::new();
+/// let session = Session::new();
 /// {
 ///     let operation = session.operation("test_work");
 ///     let _span = operation.iterations(1).measure_process();
@@ -40,8 +40,8 @@ use std::fmt;
 ///
 /// # fn main() {
 /// // Create two separate sessions
-/// let mut session1 = Session::new();
-/// let mut session2 = Session::new();
+/// let session1 = Session::new();
+/// let session2 = Session::new();
 ///
 /// // Record some work in each
 /// {
@@ -86,17 +86,19 @@ impl Report {
         }
     }
 
-    /// Creates a report from operation data.
+    /// Creates a report from shared operation data.
     #[must_use]
-    pub(crate) fn from_operations(operations: &HashMap<String, crate::Operation>) -> Self {
-        let report_operations = operations
+    pub(crate) fn from_operation_data(
+        operation_data: &HashMap<String, crate::session::OperationMetrics>,
+    ) -> Self {
+        let report_operations = operation_data
             .iter()
-            .map(|(name, op)| {
+            .map(|(name, op_data)| {
                 (
                     name.clone(),
                     ReportOperation {
-                        total_bytes_allocated: op.total_bytes_allocated(),
-                        total_iterations: op.total_iterations(),
+                        total_bytes_allocated: op_data.total_bytes_allocated,
+                        total_iterations: op_data.total_iterations,
                     },
                 )
             })
@@ -122,8 +124,8 @@ impl Report {
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
     /// # fn main() {
-    /// let mut session1 = Session::new();
-    /// let mut session2 = Session::new();
+    /// let session1 = Session::new();
+    /// let session2 = Session::new();
     ///
     /// // Both sessions record the same operation name
     /// {
@@ -257,7 +259,7 @@ mod tests {
 
     #[test]
     fn report_from_session_with_operations_is_not_empty() {
-        let mut session = Session::new();
+        let session = Session::new();
         {
             let operation = session.operation("test");
             let _span = operation.iterations(1).measure_process();
@@ -279,7 +281,7 @@ mod tests {
 
     #[test]
     fn merge_empty_with_non_empty() {
-        let mut session = Session::new();
+        let session = Session::new();
         {
             let operation = session.operation("test");
             let _span = operation.iterations(1).measure_process();
@@ -298,8 +300,8 @@ mod tests {
 
     #[test]
     fn merge_different_operations() {
-        let mut session1 = Session::new();
-        let mut session2 = Session::new();
+        let session1 = Session::new();
+        let session2 = Session::new();
 
         {
             let op1 = session1.operation("test1");
@@ -324,8 +326,8 @@ mod tests {
 
     #[test]
     fn merge_same_operations() {
-        let mut session1 = Session::new();
-        let mut session2 = Session::new();
+        let session1 = Session::new();
+        let session2 = Session::new();
 
         {
             let op1 = session1.operation("test");
@@ -351,7 +353,7 @@ mod tests {
 
     #[test]
     fn report_clone() {
-        let mut session = Session::new();
+        let session = Session::new();
         {
             let operation = session.operation("test");
             let _span = operation.iterations(1).measure_process();

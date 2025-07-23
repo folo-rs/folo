@@ -12,7 +12,7 @@ fn main() {
     println!("=== processor time Batching Overhead Demonstration ===");
     println!();
 
-    let mut session = Session::new();
+    let session = Session::new();
 
     // Test: Many individual measurements (high overhead)
     println!("Testing unbatched measurements (1000 individual spans)...");

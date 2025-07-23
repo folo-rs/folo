@@ -11,7 +11,7 @@ use crate::{Operation, ProcessSpan, ThreadSpan};
 /// ```
 /// use all_the_time::Session;
 ///
-/// let mut session = Session::new();
+/// let session = Session::new();
 /// let operation = session.operation("test");
 ///
 /// // Single iteration - explicit
@@ -30,7 +30,7 @@ use crate::{Operation, ProcessSpan, ThreadSpan};
 /// ```
 #[derive(Debug)]
 pub struct SpanBuilder<'a> {
-    operation: &'a mut Operation,
+    operation: &'a Operation,
     iterations: u64,
 }
 
@@ -41,7 +41,7 @@ impl<'a> SpanBuilder<'a> {
     ///
     /// Panics if `iterations` is zero.
     #[must_use]
-    pub(crate) fn new(operation: &'a mut Operation, iterations: u64) -> Self {
+    pub(crate) fn new(operation: &'a Operation, iterations: u64) -> Self {
         assert!(iterations != 0, "Iterations cannot be zero");
 
         Self {
@@ -50,7 +50,7 @@ impl<'a> SpanBuilder<'a> {
         }
     }
 
-    /// Creates a span that tracks thread processor time from now until it is dropped.
+    /// Creates a span that tracks thread processor time from creation until it is dropped.
     ///
     /// This method tracks processor time consumed by the current thread only.
     /// Use this when you want to measure processor time for single-threaded operations
@@ -61,7 +61,7 @@ impl<'a> SpanBuilder<'a> {
     /// ```
     /// use all_the_time::Session;
     ///
-    /// let mut session = Session::new();
+    /// let session = Session::new();
     /// let operation = session.operation("thread_work");
     /// {
     ///     let _span = operation.iterations(1).measure_thread();
@@ -72,11 +72,11 @@ impl<'a> SpanBuilder<'a> {
     ///     }
     /// } // Thread processor time is tracked
     /// ```
-    pub fn measure_thread(self) -> ThreadSpan<'a> {
+    pub fn measure_thread(self) -> ThreadSpan {
         ThreadSpan::new(self.operation, self.iterations)
     }
 
-    /// Creates a span that tracks process processor time from now until it is dropped.
+    /// Creates a span that tracks process processor time from creation until it is dropped.
     ///
     /// This method tracks processor time consumed by the entire process (all threads).
     /// Use this when you want to measure total processor time including multi-threaded
@@ -87,7 +87,7 @@ impl<'a> SpanBuilder<'a> {
     /// ```
     /// use all_the_time::Session;
     ///
-    /// let mut session = Session::new();
+    /// let session = Session::new();
     /// let operation = session.operation("process_work");
     /// {
     ///     let _span = operation.iterations(1).measure_process();
@@ -98,7 +98,7 @@ impl<'a> SpanBuilder<'a> {
     ///     }
     /// } // Total process processor time is tracked
     /// ```
-    pub fn measure_process(self) -> ProcessSpan<'a> {
+    pub fn measure_process(self) -> ProcessSpan {
         ProcessSpan::new(self.operation, self.iterations)
     }
 }

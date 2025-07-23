@@ -1,9 +1,12 @@
 //! Thread-local allocation tracking span.
 
+use std::cell::RefCell;
 use std::marker::PhantomData;
+use std::rc::Rc;
 
 use crate::Operation;
 use crate::allocator::THREAD_BYTES_ALLOCATED;
+use crate::session::OperationMetrics;
 
 /// A tracked span of code that tracks allocations on this thread between creation and drop.
 ///
@@ -17,7 +20,7 @@ use crate::allocator::THREAD_BYTES_ALLOCATED;
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
-/// let mut session = Session::new();
+/// let session = Session::new();
 /// let mean_calc = session.operation("test");
 /// {
 ///     let _span = mean_calc.iterations(1).measure_thread();
@@ -27,22 +30,22 @@ use crate::allocator::THREAD_BYTES_ALLOCATED;
 /// ```
 #[derive(Debug)]
 #[must_use = "Measurements are taken between creation and drop"]
-pub struct ThreadSpan<'a> {
-    operation: &'a mut Operation,
+pub struct ThreadSpan {
+    metrics: Rc<RefCell<OperationMetrics>>,
     start_bytes: u64,
     iterations: u64,
 
     _single_threaded: PhantomData<*const ()>,
 }
 
-impl<'a> ThreadSpan<'a> {
-    pub(crate) fn new(operation: &'a mut Operation, iterations: u64) -> Self {
+impl ThreadSpan {
+    pub(crate) fn new(operation: &Operation, iterations: u64) -> Self {
         assert!(iterations != 0);
 
         let start_bytes = THREAD_BYTES_ALLOCATED.with(std::cell::Cell::get);
 
         Self {
-            operation,
+            metrics: operation.metrics(),
             start_bytes,
             iterations,
             _single_threaded: PhantomData,
@@ -69,11 +72,23 @@ impl<'a> ThreadSpan<'a> {
     }
 }
 
-impl Drop for ThreadSpan<'_> {
+impl Drop for ThreadSpan {
     fn drop(&mut self) {
         let delta = self.to_delta();
 
-        // Add the per-iteration delta for all iterations at once
-        self.operation.add_iterations(delta, self.iterations);
+        let total_bytes = delta
+            .checked_mul(self.iterations)
+            .expect("bytes * iterations overflows u64 - this indicates an unrealistic scenario");
+
+        let mut data = self.metrics.borrow_mut();
+
+        data.total_bytes_allocated = data
+            .total_bytes_allocated
+            .checked_add(total_bytes)
+            .expect("total bytes allocated overflows u64 - this indicates an unrealistic scenario");
+
+        data.total_iterations = data.total_iterations.checked_add(self.iterations).expect(
+            "total iterations count overflows u64 - this indicates an unrealistic scenario",
+        );
     }
 }

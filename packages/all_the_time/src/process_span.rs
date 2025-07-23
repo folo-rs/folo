@@ -1,9 +1,12 @@
 //! Process-wide processor time tracking spans.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use crate::Operation;
-use crate::pal::Platform;
+use crate::pal::{Platform, PlatformFacade};
+use crate::session::OperationMetrics;
 
 /// A span of code for which we track process processor time between creation and drop.
 ///
@@ -14,7 +17,7 @@ use crate::pal::Platform;
 /// ```
 /// use all_the_time::Session;
 ///
-/// let mut session = Session::new();
+/// let session = Session::new();
 /// let operation = session.operation("test");
 /// {
 ///     let _span = operation.iterations(1).measure_process();
@@ -31,7 +34,7 @@ use crate::pal::Platform;
 /// ```
 /// use all_the_time::Session;
 ///
-/// let mut session = Session::new();
+/// let session = Session::new();
 /// let operation = session.operation("benchmark");
 /// {
 ///     let _span = operation.iterations(1000).measure_process();
@@ -44,25 +47,28 @@ use crate::pal::Platform;
 /// ```
 #[derive(Debug)]
 #[must_use = "Measurements are taken between creation and drop"]
-pub struct ProcessSpan<'a> {
-    operation: &'a mut Operation,
+pub struct ProcessSpan {
+    metrics: Rc<RefCell<OperationMetrics>>,
+    platform: PlatformFacade,
     start_time: Duration,
     iterations: u64,
 }
 
-impl<'a> ProcessSpan<'a> {
+impl ProcessSpan {
     /// Creates a new process span for the given operation and iteration count.
     ///
     /// # Panics
     ///
     /// Panics if `iterations` is zero.
-    pub(crate) fn new(operation: &'a mut Operation, iterations: u64) -> Self {
+    pub(crate) fn new(operation: &Operation, iterations: u64) -> Self {
         assert!(iterations != 0, "Iterations cannot be zero");
 
-        let start_time = operation.platform().process_time();
+        let platform = operation.platform().clone();
+        let start_time = platform.process_time();
 
         Self {
-            operation,
+            metrics: operation.metrics(),
+            platform,
             start_time,
             iterations,
         }
@@ -72,7 +78,7 @@ impl<'a> ProcessSpan<'a> {
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // The != 1 fork is broadly applicable, so mutations fail. Intentional.
     fn to_duration(&self) -> Duration {
-        let current_time = self.operation.platform().process_time();
+        let current_time = self.platform.process_time();
         let total_duration = current_time.saturating_sub(self.start_time);
 
         if self.iterations > 1 {
@@ -90,12 +96,30 @@ impl<'a> ProcessSpan<'a> {
     }
 }
 
-impl Drop for ProcessSpan<'_> {
+impl Drop for ProcessSpan {
     fn drop(&mut self) {
         let duration = self.to_duration();
 
-        // Add the per-iteration duration for all iterations at once
-        self.operation.add_iterations(duration, self.iterations);
+        // Calculate total duration by multiplying duration by iterations
+        let total_duration_nanos = duration.as_nanos()
+            .checked_mul(u128::from(self.iterations))
+            .expect("duration multiplied by iterations overflows u128 - this indicates an unrealistic scenario");
+
+        let total_duration = Duration::from_nanos(
+            total_duration_nanos
+                .try_into()
+                .expect("total duration exceeds maximum Duration value - this indicates an unrealistic scenario"),
+        );
+
+        // Add directly to operation data
+        let mut data = self.metrics.borrow_mut();
+        data.total_processor_time = data.total_processor_time.checked_add(total_duration).expect(
+            "processor time accumulation overflows Duration - this indicates an unrealistic scenario",
+        );
+
+        data.total_iterations = data.total_iterations.checked_add(self.iterations).expect(
+            "total iterations count overflows u64 - this indicates an unrealistic scenario",
+        );
     }
 }
 
@@ -121,7 +145,7 @@ mod tests {
 
     #[test]
     fn creates_span_with_iterations() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
         let span = operation.iterations(5).measure_process();
         assert_eq!(span.iterations, 5);
@@ -130,14 +154,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "Iterations cannot be zero")]
     fn panics_on_zero_iterations() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
         let _span = operation.iterations(0).measure_process();
     }
 
     #[test]
     fn records_cpu_time_measurements() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
         {
             let _span = operation.iterations(1).measure_process();
@@ -155,7 +179,7 @@ mod tests {
 
     #[test]
     fn extracts_time_from_pal() {
-        let mut session = create_test_session_with_time(Duration::ZERO);
+        let session = create_test_session_with_time(Duration::ZERO);
         let operation = session.operation("test");
 
         {
@@ -175,7 +199,7 @@ mod tests {
         fake_platform.set_thread_time(Duration::from_millis(100)); // Different from process time
 
         let platform_facade = PlatformFacade::fake(fake_platform);
-        let mut session = Session::with_platform(platform_facade);
+        let session = Session::with_platform(platform_facade);
         let operation = session.operation("test");
 
         {
@@ -188,7 +212,7 @@ mod tests {
 
     #[test]
     fn records_one_span_per_iteration() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
 
         {
@@ -201,7 +225,7 @@ mod tests {
 
     #[test]
     fn accumulates_multiple_spans() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
 
         // Create multiple spans to test duration accumulation

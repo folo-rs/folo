@@ -1,9 +1,12 @@
 //! Process-wide allocation tracking span.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::atomic;
 
 use crate::Operation;
 use crate::allocator::TOTAL_BYTES_ALLOCATED;
+use crate::session::OperationMetrics;
 
 /// A tracked span of code that tracks process-wide allocations between creation and drop.
 ///
@@ -17,7 +20,7 @@ use crate::allocator::TOTAL_BYTES_ALLOCATED;
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
-/// let mut session = Session::new();
+/// let session = Session::new();
 /// let mean_calc = session.operation("test");
 /// {
 ///     let _span = mean_calc.iterations(1).measure_process();
@@ -27,20 +30,20 @@ use crate::allocator::TOTAL_BYTES_ALLOCATED;
 /// ```
 #[derive(Debug)]
 #[must_use = "Measurements are taken between creation and drop"]
-pub struct ProcessSpan<'a> {
-    operation: &'a mut Operation,
+pub struct ProcessSpan {
+    metrics: Rc<RefCell<OperationMetrics>>,
     start_bytes: u64,
     iterations: u64,
 }
 
-impl<'a> ProcessSpan<'a> {
-    pub(crate) fn new(operation: &'a mut Operation, iterations: u64) -> Self {
+impl ProcessSpan {
+    pub(crate) fn new(operation: &Operation, iterations: u64) -> Self {
         assert!(iterations != 0);
 
         let start_bytes = TOTAL_BYTES_ALLOCATED.load(atomic::Ordering::Relaxed);
 
         Self {
-            operation,
+            metrics: operation.metrics(),
             start_bytes,
             iterations,
         }
@@ -66,11 +69,23 @@ impl<'a> ProcessSpan<'a> {
     }
 }
 
-impl Drop for ProcessSpan<'_> {
+impl Drop for ProcessSpan {
     fn drop(&mut self) {
         let delta = self.to_delta();
 
-        // Add the per-iteration delta for all iterations at once
-        self.operation.add_iterations(delta, self.iterations);
+        let total_bytes = delta
+            .checked_mul(self.iterations)
+            .expect("bytes * iterations overflows u64 - this indicates an unrealistic scenario");
+
+        let mut data = self.metrics.borrow_mut();
+
+        data.total_bytes_allocated = data
+            .total_bytes_allocated
+            .checked_add(total_bytes)
+            .expect("total bytes allocated overflows u64 - this indicates an unrealistic scenario");
+
+        data.total_iterations = data.total_iterations.checked_add(self.iterations).expect(
+            "total iterations count overflows u64 - this indicates an unrealistic scenario",
+        );
     }
 }

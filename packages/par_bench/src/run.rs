@@ -211,8 +211,6 @@ mod tests {
 
     use super::*;
 
-
-
     #[test]
     fn single_iteration_minimal() {
         let processors = ProcessorSet::builder().take(nz!(1)).unwrap();

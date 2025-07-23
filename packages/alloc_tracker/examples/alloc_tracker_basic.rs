@@ -14,7 +14,7 @@ fn main() {
     println!("=== Allocation Tracking Example ===\n");
 
     // Create a tracking session - this enables allocation monitoring
-    let mut session = Session::new();
+    let session = Session::new();
     println!("✓ Created tracking session\n");
 
     // Track string formatting - batch operation for efficiency

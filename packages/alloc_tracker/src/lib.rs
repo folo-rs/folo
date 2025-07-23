@@ -25,7 +25,7 @@
 //! static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 //!
 //! fn main() {
-//!     let mut session = Session::new();
+//!     let session = Session::new();
 //!
 //!     // Track a single operation
 //!     {
@@ -52,11 +52,11 @@
 //! static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 //!
 //! fn main() {
-//!     let mut session = Session::new();
+//!     let session = Session::new();
 //!
 //!     // Track mean over multiple operations (batched for efficiency)
 //!     {
-//!         let string_op = session.operation("string_allocations");
+//!         let mut string_op = session.operation("string_allocations");
 //!         let _span = string_op.iterations(10).measure_process();
 //!         for i in 0..10 {
 //!             let _data = format!("String number {}", i); // This allocates memory
@@ -94,7 +94,7 @@
 //! static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 //!
 //! # fn main() {
-//! let mut session = Session::new();
+//! let session = Session::new();
 //! {
 //!     let operation = session.operation("work");
 //!     let _span = operation.iterations(1).measure_process();

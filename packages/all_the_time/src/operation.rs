@@ -1,31 +1,38 @@
 //! Mean processor time tracking.
 
+use std::cell::RefCell;
 use std::fmt;
+use std::rc::Rc;
 use std::time::Duration;
 
 use crate::SpanBuilder;
 use crate::pal::PlatformFacade;
+use crate::session::OperationMetrics;
 /// Calculates mean processor time per operation across multiple iterations.
 ///
 /// This utility is particularly useful for benchmarking scenarios where you want
 /// to understand the mean processor time footprint of repeated operations.
+///
+/// Operations share data directly with the session - data is merged when spans are dropped.
 ///
 /// # Examples
 ///
 /// ```
 /// use all_the_time::Session;
 ///
-/// let mut session = Session::new();
+/// let session = Session::new();
 /// let operation = session.operation("processor_intensive_work");
 ///
 /// // Simulate multiple operations - note explicit iteration count
 /// for i in 0..5 {
-///     let _span = operation.iterations(1).measure_thread();
-///     // Perform some processor-intensive work
-///     let mut sum = 0;
-///     for j in 0..i * 1000 {
-///         sum += j;
-///     }
+///     {
+///         let _span = operation.iterations(1).measure_thread();
+///         // Perform some processor-intensive work
+///         let mut sum = 0;
+///         for j in 0..i * 1000 {
+///             sum += j;
+///         }
+///     } // Span is dropped here, ensuring measurement is recorded
 /// }
 ///
 /// let mean_duration = operation.mean();
@@ -33,18 +40,23 @@ use crate::pal::PlatformFacade;
 /// ```
 #[derive(Debug)]
 pub struct Operation {
-    total_processor_time: Duration,
-    total_iterations: u64,
+    #[allow(dead_code, reason = "kept for debugging and potential future use")]
+    name: String,
+    metrics: Rc<RefCell<OperationMetrics>>,
     platform: PlatformFacade,
 }
 
 impl Operation {
     /// Creates a new mean processor time calculator with the given name.
     #[must_use]
-    pub(crate) fn new(platform: PlatformFacade) -> Self {
+    pub(crate) fn new(
+        name: String,
+        operation_data: Rc<RefCell<OperationMetrics>>,
+        platform: PlatformFacade,
+    ) -> Self {
         Self {
-            total_processor_time: Duration::ZERO,
-            total_iterations: 0,
+            name,
+            metrics: operation_data,
             platform,
         }
     }
@@ -55,6 +67,19 @@ impl Operation {
         &self.platform
     }
 
+    /// Returns a clone of the operation metrics for use by spans.
+    #[must_use]
+    pub(crate) fn metrics(&self) -> Rc<RefCell<OperationMetrics>> {
+        Rc::clone(&self.metrics)
+    }
+
+    /// Returns the operation name for use by spans.
+    #[must_use]
+    #[allow(dead_code, reason = "kept for debugging and potential future use")]
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
     /// Adds a processor time duration to the mean calculation.
     ///
     /// This method is typically called by span types when they are dropped.
@@ -63,8 +88,8 @@ impl Operation {
     /// # Panics
     ///
     /// Panics if the duration addition or iteration count would overflow.
-    #[allow(dead_code, reason = "used in tests and delegates to add_iterations")]
-    pub(crate) fn add(&mut self, duration: Duration) {
+    #[cfg(test)]
+    pub(crate) fn add(&self, duration: Duration) {
         self.add_iterations(duration, 1);
     }
 
@@ -76,24 +101,26 @@ impl Operation {
     /// # Panics
     ///
     /// Panics if the duration multiplication or total time accumulation would overflow.
-    pub(crate) fn add_iterations(&mut self, duration: Duration, iterations: u64) {
+    #[cfg(test)]
+    pub(crate) fn add_iterations(&self, duration: Duration, iterations: u64) {
         // Calculate total duration by multiplying duration by iterations
-        // We use nanosecond arithmetic to avoid Duration::checked_mul limitations with u64
-        let duration_nanos = duration.as_nanos();
-        let total_nanos = duration_nanos
+        let total_duration_nanos = duration.as_nanos()
             .checked_mul(u128::from(iterations))
             .expect("duration multiplied by iterations overflows u128 - this indicates an unrealistic scenario");
 
-        let total_duration = Duration::from_nanos(total_nanos.try_into().expect(
-            "total duration exceeds Duration::MAX - this indicates an unrealistic scenario",
-        ));
+        let total_duration = Duration::from_nanos(
+            total_duration_nanos
+                .try_into()
+                .expect("total duration exceeds maximum Duration value - this indicates an unrealistic scenario"),
+        );
 
-        self.total_processor_time = self
-            .total_processor_time
-            .checked_add(total_duration)
-            .expect("accumulating total processor time overflows Duration - this indicates an unrealistic scenario");
+        // Add directly to operation data
+        let mut data = self.metrics.borrow_mut();
+        data.total_processor_time = data.total_processor_time.checked_add(total_duration).expect(
+            "processor time accumulation overflows Duration - this indicates an unrealistic scenario",
+        );
 
-        self.total_iterations = self.total_iterations.checked_add(iterations).expect(
+        data.total_iterations = data.total_iterations.checked_add(iterations).expect(
             "total iterations count overflows u64 - this indicates an unrealistic scenario",
         );
     }
@@ -109,7 +136,7 @@ impl Operation {
     /// ```
     /// use all_the_time::Session;
     ///
-    /// let mut session = Session::new();
+    /// let session = Session::new();
     /// let operation = session.operation("single_op");
     /// {
     ///     let _span = operation.iterations(1).measure_thread();
@@ -125,7 +152,7 @@ impl Operation {
     /// ```
     /// use all_the_time::Session;
     ///
-    /// let mut session = Session::new();
+    /// let session = Session::new();
     /// let operation = session.operation("batch_ops");
     /// {
     ///     let iterations = 10000;
@@ -137,7 +164,7 @@ impl Operation {
     /// } // Total time is measured once and divided by 10000
     /// ```
     #[must_use]
-    pub fn iterations(&mut self, iterations: u64) -> SpanBuilder<'_> {
+    pub fn iterations(&self, iterations: u64) -> SpanBuilder<'_> {
         SpanBuilder::new(self, iterations)
     }
 
@@ -146,14 +173,15 @@ impl Operation {
     /// Returns zero duration if no spans have been recorded.
     #[must_use]
     pub fn mean(&self) -> Duration {
-        if self.total_iterations == 0 {
+        let data = self.metrics.borrow();
+        if data.total_iterations == 0 {
             Duration::ZERO
         } else {
             // Use div_ceil for proper division, falling back to manual calculation if needed
             Duration::from_nanos(
-                self.total_processor_time
+                data.total_processor_time
                     .as_nanos()
-                    .checked_div(u128::from(self.total_iterations))
+                    .checked_div(u128::from(data.total_iterations))
                     .expect("guarded by if condition")
                     .try_into()
                     .expect("all realistic values fit in u64"),
@@ -163,14 +191,18 @@ impl Operation {
 
     /// Returns the total number of spans recorded.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn total_iterations(&self) -> u64 {
-        self.total_iterations
+        let data = self.metrics.borrow();
+        data.total_iterations
     }
 
     /// Returns the total processor time across all spans.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn total_processor_time(&self) -> Duration {
-        self.total_processor_time
+        let data = self.metrics.borrow();
+        data.total_processor_time
     }
 }
 
@@ -197,7 +229,7 @@ mod tests {
 
     #[test]
     fn starts_with_zero_values() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
         assert_eq!(operation.mean(), Duration::ZERO);
         assert_eq!(operation.total_iterations(), 0);
@@ -206,7 +238,7 @@ mod tests {
 
     #[test]
     fn tracks_single_duration() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
         operation.add(Duration::from_millis(100));
         assert_eq!(operation.mean(), Duration::from_millis(100));
@@ -216,7 +248,7 @@ mod tests {
 
     #[test]
     fn calculates_mean_of_multiple_durations() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
         operation.add(Duration::from_millis(100));
         operation.add(Duration::from_millis(200));
@@ -228,7 +260,7 @@ mod tests {
 
     #[test]
     fn handles_zero_durations() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
         operation.add(Duration::ZERO);
         operation.add(Duration::ZERO);
@@ -239,7 +271,7 @@ mod tests {
 
     #[test]
     fn integrates_with_span_api() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
         {
             let _span = operation.iterations(1).measure_thread();
@@ -252,13 +284,13 @@ mod tests {
         } // Span drops here
 
         assert_eq!(operation.total_iterations(), 1);
-        // We can't test the exact time, but it should be greater than zero
+        // We can not test the exact time, but it should be greater than zero
         assert!(operation.total_processor_time() >= Duration::ZERO);
     }
 
     #[test]
     fn handles_batch_iterations() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
         {
             let _span = operation.iterations(10).measure_thread();
@@ -278,7 +310,7 @@ mod tests {
 
     #[test]
     fn add_iterations_direct_call() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
 
         // Test direct call to add_iterations
@@ -291,7 +323,7 @@ mod tests {
 
     #[test]
     fn add_iterations_zero_iterations() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
 
         // Adding zero iterations should work and do nothing
@@ -304,7 +336,7 @@ mod tests {
 
     #[test]
     fn add_iterations_zero_duration() {
-        let mut session = create_test_session();
+        let session = create_test_session();
         let operation = session.operation("test");
 
         // Adding zero duration should work

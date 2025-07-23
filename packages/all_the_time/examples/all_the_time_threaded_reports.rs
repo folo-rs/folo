@@ -59,7 +59,7 @@ fn main() {
 fn worker_thread(thread_name: &str) -> Report {
     println!("🧵 {thread_name} starting work...");
 
-    let mut session = Session::new();
+    let session = Session::new();
 
     // Each thread does some "common work" that will be merged
     // Using measure_thread() to track per-thread CPU time (avoids double-counting in multithreaded scenarios)

@@ -30,7 +30,7 @@ fn entrypoint(c: &mut Criterion) {
 
     // all_the_time overhead measurements
     {
-        let mut time_session = Session::new();
+        let time_session = Session::new();
 
         let thread_op = time_session.operation("empty_thread_span");
         group.bench_function("thread_span_empty", |b| {

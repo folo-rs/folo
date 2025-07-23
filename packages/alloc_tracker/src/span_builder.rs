@@ -16,7 +16,7 @@ use crate::{Operation, ProcessSpan, ThreadSpan};
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
-/// let mut session = Session::new();
+/// let session = Session::new();
 /// let operation = session.operation("test");
 ///
 /// // Single iteration - explicit
@@ -37,7 +37,7 @@ use crate::{Operation, ProcessSpan, ThreadSpan};
 /// ```
 #[derive(Debug)]
 pub struct SpanBuilder<'a> {
-    operation: &'a mut Operation,
+    operation: &'a Operation,
     iterations: u64,
 }
 
@@ -48,7 +48,7 @@ impl<'a> SpanBuilder<'a> {
     ///
     /// Panics if `iterations` is zero.
     #[must_use]
-    pub(crate) fn new(operation: &'a mut Operation, iterations: u64) -> Self {
+    pub(crate) fn new(operation: &'a Operation, iterations: u64) -> Self {
         assert!(iterations != 0);
 
         Self {
@@ -57,7 +57,7 @@ impl<'a> SpanBuilder<'a> {
         }
     }
 
-    /// Creates a span that tracks thread allocations from now until it is dropped.
+    /// Creates a span that tracks thread allocations from creation until it is dropped.
     ///
     /// This method tracks allocations made by the current thread only.
     /// Use this when you want to measure allocations for single-threaded operations
@@ -71,7 +71,7 @@ impl<'a> SpanBuilder<'a> {
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
-    /// let mut session = Session::new();
+    /// let session = Session::new();
     /// let operation = session.operation("thread_work");
     /// {
     ///     let _span = operation.iterations(1).measure_thread();
@@ -79,11 +79,11 @@ impl<'a> SpanBuilder<'a> {
     ///     let _data = vec![1, 2, 3, 4, 5];
     /// } // Thread allocations are tracked
     /// ```
-    pub fn measure_thread(self) -> ThreadSpan<'a> {
+    pub fn measure_thread(self) -> ThreadSpan {
         ThreadSpan::new(self.operation, self.iterations)
     }
 
-    /// Creates a span that tracks process allocations from now until it is dropped.
+    /// Creates a span that tracks process allocations from creation until it is dropped.
     ///
     /// This method tracks allocations made by the entire process (all threads).
     /// Use this when you want to measure total allocations including multi-threaded
@@ -97,7 +97,7 @@ impl<'a> SpanBuilder<'a> {
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
-    /// let mut session = Session::new();
+    /// let session = Session::new();
     /// let operation = session.operation("process_work");
     /// {
     ///     let _span = operation.iterations(1).measure_process();
@@ -105,7 +105,7 @@ impl<'a> SpanBuilder<'a> {
     ///     let _data = vec![1, 2, 3, 4, 5];
     /// } // Total process allocations are tracked
     /// ```
-    pub fn measure_process(self) -> ProcessSpan<'a> {
+    pub fn measure_process(self) -> ProcessSpan {
         ProcessSpan::new(self.operation, self.iterations)
     }
 }
