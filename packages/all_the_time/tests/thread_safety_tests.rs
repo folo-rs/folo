@@ -3,6 +3,8 @@
 //! These tests verify that the public API types can be safely moved
 //! between threads and that thread-safety changes work correctly.
 
+#![cfg(not(miri))] // The real platform functionality cannot be accessed under Miri.
+
 use std::thread;
 
 use all_the_time::{Report, Session};
