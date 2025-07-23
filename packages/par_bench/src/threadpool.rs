@@ -8,6 +8,27 @@ use many_cpus::ProcessorSet;
 /// Simple thread pool to allow benchmarks to run on pre-warmed threads instead of creating new
 /// threads for every batch of iterations. Thread reuse reduces benchmark harness overhead.
 ///
+/// Threads in the pool are bound to specific processors according to the provided processor set,
+/// ensuring consistent processor affinity across benchmark runs.
+///
+/// # Examples
+///
+/// ```
+/// use par_bench::ThreadPool;
+/// use many_cpus::ProcessorSet;
+/// use new_zealand::nz;
+///
+/// // Create a thread pool using the default processor set
+/// let pool = ThreadPool::default();
+/// println!("Default pool has {} threads", pool.thread_count());
+///
+/// // Create a thread pool with a specific processor set
+/// if let Some(processors) = ProcessorSet::builder().take(nz!(2)) {
+///     let pool = ThreadPool::new(&processors);
+///     assert_eq!(pool.thread_count().get(), 2);
+/// }
+/// ```
+///
 /// # Lifecycle
 ///
 /// Dropping the pool will wait for all threads to finish executing their tasks.
@@ -20,6 +41,23 @@ pub struct ThreadPool {
 
 impl ThreadPool {
     /// Creates a thread pool with one thread per processor in the provided processor set.
+    ///
+    /// Each thread will be bound to its corresponding processor, ensuring consistent
+    /// processor affinity for benchmark execution.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use par_bench::ThreadPool;
+    /// use many_cpus::ProcessorSet;
+    /// use new_zealand::nz;
+    ///
+    /// // Create pool with specific processors
+    /// if let Some(processors) = ProcessorSet::builder().take(nz!(4)) {
+    ///     let pool = ThreadPool::new(&processors);
+    ///     assert_eq!(pool.thread_count().get(), 4);
+    /// }
+    /// ```
     #[must_use]
     pub fn new(processors: &ProcessorSet) -> Self {
         let (txs, rxs): (Vec<_>, Vec<_>) = iter::repeat_with(mpsc::channel)
@@ -46,7 +84,19 @@ impl ThreadPool {
         }
     }
 
-    /// Numbers of threads in the pool.
+    /// Returns the number of threads in the pool.
+    ///
+    /// This is always equal to the number of processors in the processor set
+    /// used to create the pool.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use par_bench::ThreadPool;
+    ///
+    /// let pool = ThreadPool::default();
+    /// println!("Pool has {} worker threads", pool.thread_count());
+    /// ```
     #[must_use]
     pub fn thread_count(&self) -> NonZero<usize> {
         self.thread_count

@@ -11,8 +11,74 @@ use crate::{RunMeta, ThreadPool};
 
 /// A benchmark run will execute a specific number of multithreaded iterations on a [`ThreadPool`].
 ///
-/// Use `Run::builder()` to prepare a run and configure the callbacks to use during the run,
-/// then call `Run::execute_on()` to execute it on a specific thread pool.
+/// A `Run` is configured using the builder pattern through [`Run::builder()`] to set up
+/// callbacks for different phases of benchmark execution. The run separates preparation
+/// (unmeasured) from execution (measured) phases, allowing precise control over timing.
+///
+/// # Execution Phases
+///
+/// 1. **Thread Preparation**: Each thread executes the thread preparation callback once
+/// 2. **Iteration Preparation**: Each thread prepares state for every iteration (unmeasured)  
+/// 3. **Measurement Begin**: Measurement wrapper begin callback is called per thread
+/// 4. **Iteration Execution**: All iterations are executed (measured)
+/// 5. **Measurement End**: Measurement wrapper end callback is called per thread
+/// 6. **Cleanup**: All cleanup state is dropped (unmeasured)
+///
+/// # Examples
+///
+/// Basic usage with atomic counter:
+/// ```
+/// use par_bench::{Run, ThreadPool};
+/// use std::sync::Arc;
+/// use std::sync::atomic::{AtomicU64, Ordering};
+///
+/// # fn main() {
+/// let pool = ThreadPool::default();
+/// let counter = Arc::new(AtomicU64::new(0));
+///
+/// let run = Run::builder()
+///     .prepare_thread_fn({
+///         let counter = Arc::clone(&counter);
+///         move |_meta| Arc::clone(&counter)
+///     })
+///     .prepare_iter_fn(|_meta, counter| Arc::clone(counter))
+///     .iter_fn(|counter: Arc<AtomicU64>| {
+///         counter.fetch_add(1, Ordering::Relaxed);
+///     })
+///     .build();
+///
+/// let results = run.execute_on(&pool, 1000);
+/// println!("Executed in: {:?}", results.mean_duration());
+/// # }
+/// ```
+///
+/// With measurement wrapper for custom metrics:
+/// ```
+/// use par_bench::{Run, ThreadPool};
+/// use std::time::Instant;
+///
+/// # fn main() {
+/// let pool = ThreadPool::default();
+///
+/// let run = Run::builder()
+///     .measure_wrapper_fns(
+///         |_meta, _state| Instant::now(),
+///         |start| start.elapsed(),
+///     )
+///     .iter_fn(|_| {
+///         // Simulate some work
+///         std::hint::black_box((0..100).sum::<i32>());
+///     })
+///     .build();
+///
+/// let results = run.execute_on(&pool, 1000);
+///
+/// // Access per-thread measurement data
+/// for elapsed in results.measure_outputs() {
+///     println!("Thread execution time: {:?}", elapsed);
+/// }
+/// # }
+/// ```
 #[must_use]
 #[derive(Debug)]
 pub struct Run<
@@ -32,6 +98,35 @@ pub struct Run<
 
 impl Run {
     /// Returns a new run builder that can be used to prepare a benchmark run.
+    ///
+    /// The builder uses a fluent API with enforced ordering to configure the different callback 
+    /// functions that will be executed during the benchmark run. The type system ensures that
+    /// methods are called in the correct order and that all required configuration is provided.
+    ///
+    /// # Builder Order
+    ///
+    /// 1. Start with `Run::builder()`
+    /// 2. Optionally configure thread groups with [`groups()`](crate::builder::RunBuilderBasic::groups)
+    /// 3. Optionally set thread preparation with [`prepare_thread_fn()`](crate::builder::RunBuilderBasic::prepare_thread_fn)
+    /// 4. Optionally set iteration preparation with [`prepare_iter_fn()`](crate::builder::RunBuilderWithThreadState::prepare_iter_fn)
+    /// 5. Optionally set measurement wrappers with [`measure_wrapper_fns()`](crate::builder::RunBuilderWithIterState::measure_wrapper_fns)
+    /// 6. **Required**: Set the benchmark function with [`iter_fn()`](crate::builder::RunBuilderWithWrapperState::iter_fn)
+    /// 7. **Required**: Complete configuration with [`build()`](crate::builder::RunBuilderFinal::build)
+    ///
+    /// See the [`builder`](crate::builder) module documentation for detailed examples.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use par_bench::Run;
+    ///
+    /// let run = Run::builder()
+    ///     .iter_fn(|_| {
+    ///         // Benchmark work goes here
+    ///         std::hint::black_box(42 * 42);
+    ///     })
+    ///     .build();
+    /// ```
     pub fn builder() -> RunBuilderBasic {
         RunBuilderBasic::new()
     }
@@ -162,6 +257,41 @@ fn calculate_mean_duration(thread_count: NonZero<usize>, total_elapsed_nanos: u1
 
 /// The result of executing a benchmark run, carrying data suitable for ingestion
 /// into a benchmark framework.
+///
+/// Contains timing information and any measurement data collected during the run.
+/// The timing represents the mean duration across all threads, while measurement
+/// outputs contain one entry per thread that participated in the run.
+///
+/// # Examples
+///
+/// ```
+/// use par_bench::{Run, ThreadPool};
+/// use std::time::Duration;
+///
+/// # fn main() {
+/// let pool = ThreadPool::default();
+/// let run = Run::builder()
+///     .measure_wrapper_fns(
+///         |_meta, _state| std::time::Instant::now(),
+///         |start_time| start_time.elapsed(),
+///     )
+///     .iter_fn(|_| {
+///         // Some work to measure
+///         std::hint::black_box(42 * 42);
+///     })
+///     .build();
+///
+/// let results = run.execute_on(&pool, 1000);
+///
+/// // Get timing information
+/// println!("Mean duration: {:?}", results.mean_duration());
+///
+/// // Process measurement outputs (one per thread)
+/// for (i, elapsed) in results.measure_outputs().enumerate() {
+///     println!("Thread {}: {:?}", i, elapsed);
+/// }
+/// # }
+/// ```
 #[derive(Debug)]
 #[must_use = "the benchmarking framework will typically need this information for its results"]
 pub struct RunSummary<MeasureOutput> {
@@ -172,6 +302,27 @@ pub struct RunSummary<MeasureOutput> {
 
 impl<MeasureOutput> RunSummary<MeasureOutput> {
     /// Returns the mean duration of the run.
+    ///
+    /// This represents the average execution time across all threads that
+    /// participated in the benchmark run. The duration covers only the
+    /// measured portion of the run (between measurement wrapper begin/end calls).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use par_bench::{Run, ThreadPool};
+    ///
+    /// # fn main() {
+    /// let pool = ThreadPool::default();
+    /// let run = Run::builder()
+    ///     .iter_fn(|_| std::hint::black_box(42 + 42))
+    ///     .build();
+    ///
+    /// let results = run.execute_on(&pool, 1000);
+    /// let duration = results.mean_duration();
+    /// println!("Average time per iteration: {:?}", duration);
+    /// # }
+    /// ```
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Real timing logic in tests is not desirable.
     pub fn mean_duration(&self) -> Duration {
@@ -181,6 +332,37 @@ impl<MeasureOutput> RunSummary<MeasureOutput> {
     /// Returns the output of the measurement wrapper used for the run.
     ///
     /// This will iterate over one measurement output per thread that was involved in the run.
+    /// The outputs are produced by the measurement wrapper end callback and can contain
+    /// any thread-specific measurement data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use par_bench::{Run, ThreadPool};
+    /// use std::sync::Arc;
+    /// use std::sync::atomic::{AtomicU64, Ordering};
+    ///
+    /// # fn main() {
+    /// let pool = ThreadPool::default();
+    /// let run = Run::builder()
+    ///     .prepare_iter_fn(|_meta, _state| Arc::new(AtomicU64::new(0)))
+    ///     .measure_wrapper_fns(
+    ///         |_meta, _state| (), // Start measurement
+    ///         |_state| 42u64,     // Return some measurement
+    ///     )
+    ///     .iter_fn(|counter: Arc<AtomicU64>| {
+    ///         counter.fetch_add(1, Ordering::Relaxed);
+    ///     })
+    ///     .build();
+    ///
+    /// let results = run.execute_on(&pool, 1000);
+    ///
+    /// // Each thread's measurement output
+    /// for (thread_id, count) in results.measure_outputs().enumerate() {
+    ///     println!("Thread {} measurement: {}", thread_id, count);
+    /// }
+    /// # }
+    /// ```
     pub fn measure_outputs(&self) -> impl Iterator<Item = &MeasureOutput> {
         self.measure_output.iter()
     }

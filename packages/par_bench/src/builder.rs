@@ -2,6 +2,66 @@
 //!
 //! These generally do not need to be named or directly referenced in user code - they only exist
 //! as intermediate steps in a call chain.
+//!
+//! # Builder Order Requirements
+//!
+//! The builder API enforces a specific order of method calls through the type system. This ensures
+//! that all required configuration is provided and prevents invalid configurations:
+//!
+//! 1. **Start**: [`Run::builder()`] returns [`RunBuilderBasic`]
+//! 2. **Optional**: Call [`groups()`](RunBuilderBasic::groups) to set thread groups
+//! 3. **Thread State**: Call [`prepare_thread_fn()`](RunBuilderBasic::prepare_thread_fn) to configure per-thread state
+//! 4. **Iteration State**: Call [`prepare_iter_fn()`](RunBuilderWithThreadState::prepare_iter_fn) to configure per-iteration state  
+//! 5. **Measurement**: Call [`measure_wrapper_fns()`](RunBuilderWithIterState::measure_wrapper_fns) to configure measurement
+//! 6. **Required**: Call [`iter_fn()`](RunBuilderWithWrapperState::iter_fn) to set the benchmark function
+//! 7. **Finish**: Call [`build()`](RunBuilderFinal::build) to create the [`Run`]
+//!
+//! Each step is optional except for `iter_fn()` and `build()`. However, if you skip a step
+//! you cannot go back to it afterwards.
+//!
+//! # Examples
+//!
+//! Minimal usage (only required steps):
+//! ```
+//! use par_bench::Run;
+//!
+//! let run = Run::builder()
+//!     .iter_fn(|_| { /* benchmark work */ })
+//!     .build();
+//! ```
+//!
+//! With thread preparation:
+//! ```
+//! use par_bench::Run;
+//!
+//! let run = Run::builder()
+//!     .prepare_thread_fn(|_meta| "thread_state")
+//!     .iter_fn(|_unit: ()| { 
+//!         // Thread state is used internally
+//!         std::hint::black_box(42);
+//!     })
+//!     .build();
+//! ```
+//!
+//! Full configuration:
+//! ```
+//! use par_bench::Run;
+//! use new_zealand::nz;
+//!
+//! let run = Run::builder()
+//!     .groups(nz!(2))
+//!     .prepare_thread_fn(|_meta| "thread_state")
+//!     .prepare_iter_fn(|_meta, state| state.to_string())
+//!     .measure_wrapper_fns(
+//!         |_meta, _state| std::time::Instant::now(),
+//!         |start| start.elapsed(),
+//!     )
+//!     .iter_fn(|iter_state: String| { 
+//!         // Use the per-iteration string state
+//!         std::hint::black_box(iter_state.len());
+//!     })
+//!     .build();
+//! ```
 
 #![allow(
     clippy::ignored_unit_patterns,
@@ -124,6 +184,23 @@ impl RunBuilderBasic {
     ///
     /// The thread-scoped state is later passed by `&mut` exclusive reference to the
     /// "prepare iteration" callback when preparing each iteration.
+    ///
+    /// **Builder Order**: This method can only be called on [`RunBuilderBasic`]. After calling this,
+    /// you must use methods from [`RunBuilderWithThreadState`] for subsequent configuration.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use par_bench::Run;
+    ///
+    /// let run = Run::builder()
+    ///     .prepare_thread_fn(|_meta| "thread_state")
+    ///     .iter_fn(|_unit: ()| {
+    ///         // Thread state is used internally; iter_fn gets unit type by default
+    ///         std::hint::black_box(42);
+    ///     })
+    ///     .build();
+    /// ```
     pub fn prepare_thread_fn<F, ThreadState>(self, f: F) -> RunBuilderWithThreadState<ThreadState>
     where
         F: Fn(&RunMeta) -> ThreadState + Send + Sync + 'static,
@@ -136,9 +213,28 @@ impl RunBuilderBasic {
 
     /// Sets the callback used to prepare iteration-scoped state for each benchmark iteration.
     ///
+    /// Sets the callback used to prepare iteration-scoped state for each benchmark iteration.
+    ///
     /// This callback receives a `&mut` exclusive reference to the thread-scoped state.
     ///
     /// Every iteration is prepared before any iteration is executed.
+    ///
+    /// **Builder Order**: This method can only be called on a [`RunBuilderBasic`] (no thread state).
+    /// After calling this, you must use methods from [`RunBuilderWithIterState`] for subsequent configuration.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use par_bench::Run;
+    ///
+    /// let run = Run::builder()
+    ///     .prepare_iter_fn(|_meta, _unit_state| vec![1, 2, 3])
+    ///     .iter_fn(|iter_vec: Vec<i32>| {
+    ///         // Use the per-iteration vector
+    ///         std::hint::black_box(iter_vec.len());
+    ///     })
+    ///     .build();
+    /// ```
     ///
     /// If you wish to specify a thread preparation function to provide state for each
     /// thread or iteration, do both before calling this method.
@@ -227,6 +323,24 @@ where
     /// This callback receives a `&mut` exclusive reference to the thread-scoped state.
     ///
     /// Every iteration is prepared before any iteration is executed.
+    ///
+    /// **Builder Order**: This method can only be called after [`prepare_thread_fn()`](RunBuilderBasic::prepare_thread_fn).
+    /// After calling this, you must use methods from [`RunBuilderWithIterState`] for subsequent configuration.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use par_bench::Run;
+    ///
+    /// let run = Run::builder()
+    ///     .prepare_thread_fn(|_meta| vec![1, 2, 3])
+    ///     .prepare_iter_fn(|_meta, vec| vec.clone())
+    ///     .iter_fn(|iter_vec: Vec<i32>| {
+    ///         // Use the per-iteration vector
+    ///         std::hint::black_box(iter_vec.len());
+    ///     })
+    ///     .build();
+    /// ```
     pub fn prepare_iter_fn<F, IterState>(
         self,
         f: F,
@@ -274,8 +388,28 @@ where
     /// This callback may return a value to drop after the measured part of the benchmark
     /// run (to exclude any cleanup logic from measurement).
     ///
-    /// This must be the last step in preparing a benchmark run. After this,
-    /// you can only call `build()` on the builder.
+    /// **Builder Order**: This is the final required step in preparing a benchmark run. After this,
+    /// you can only call [`build()`](RunBuilderFinal::build) on the builder.
+    ///
+    /// Must be called after:
+    /// 1. [`prepare_thread_fn()`](RunBuilderBasic::prepare_thread_fn) (optional but recommended)
+    /// 2. Any optional measure wrapper configuration
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use par_bench::Run;
+    ///
+    /// let run = Run::builder()
+    ///     .prepare_thread_fn(|_meta| vec![1, 2, 3])
+    ///     .iter_fn(|_unit_state| {
+    ///         // Execute the benchmark iteration
+    ///         std::hint::black_box(42);
+    ///         // Return value to drop after measurement
+    ///         "cleanup_data".to_string()
+    ///     })
+    ///     .build();
+    /// ```
     ///
     /// If you wish to specify an iteration preparation function to provide state for each
     /// iteration, do it before calling this method.
@@ -416,6 +550,31 @@ where
 {
     /// Completes the preparation of a benchmark run and returns a [`Run`] instance that can be
     /// used to execute the run on a specific thread pool.
+    ///
+    /// **Builder Order**: This is the final step that can only be called after [`iter_fn()`] has been configured.
+    /// The returned [`Run`] is ready for execution via [`Run::execute_on()`](crate::Run::execute_on).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use par_bench::Run;
+    ///
+    /// let run = Run::builder()
+    ///     .prepare_thread_fn(|_meta| vec![1, 2, 3])
+    ///     .iter_fn(|_unit_state| {
+    ///         std::hint::black_box(42);
+    ///     })
+    ///     .build(); // Final step - creates executable Run
+    ///
+    /// // Run is now ready for execution
+    /// # use par_bench::ThreadPool;
+    /// # use many_cpus::ProcessorSet;
+    /// # use new_zealand::nz;
+    /// # if let Some(processors) = ProcessorSet::builder().take(nz!(1)) {
+    /// #     let pool = ThreadPool::new(&processors);
+    /// #     let _result = run.execute_on(&pool, 100);
+    /// # }
+    /// ```
     pub fn build(
         self,
     ) -> Run<ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState> {
