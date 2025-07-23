@@ -1101,6 +1101,8 @@ dependencies = [
 name = "par_bench"
 version = "0.1.0"
 dependencies = [
+ "all_the_time",
+ "alloc_tracker",
  "criterion",
  "derive_more",
  "many_cpus",
