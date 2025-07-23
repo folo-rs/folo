@@ -1,10 +1,10 @@
 //! Session management for allocation tracking.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
+use crate::constants::ERR_POISONED_LOCK;
 use crate::{Operation, Report};
 
 /// Metrics tracked for each operation in the session.
@@ -50,7 +50,7 @@ pub(crate) struct OperationMetrics {
 /// ```
 #[derive(Debug)]
 pub struct Session {
-    operations: Rc<RefCell<HashMap<String, Rc<RefCell<OperationMetrics>>>>>,
+    operations: Arc<Mutex<HashMap<String, Arc<Mutex<OperationMetrics>>>>>,
 }
 
 impl Session {
@@ -75,7 +75,7 @@ impl Session {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            operations: Rc::new(RefCell::new(HashMap::new())),
+            operations: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -108,11 +108,12 @@ impl Session {
 
         // Ensure the operation exists in the shared data
         let operation_data = {
-            let mut operations = self.operations.borrow_mut();
-            Rc::clone(
+            let mut operations = self.operations.lock()
+                .expect(ERR_POISONED_LOCK);
+            Arc::clone(
                 operations
                     .entry(name.clone())
-                    .or_insert_with(|| Rc::new(RefCell::new(OperationMetrics::default()))),
+                    .or_insert_with(|| Arc::new(Mutex::new(OperationMetrics::default()))),
             )
         };
 
@@ -146,10 +147,13 @@ impl Session {
     /// ```
     #[must_use]
     pub fn to_report(&self) -> Report {
-        let operations = self.operations.borrow();
+        let operations = self.operations.lock()
+            .expect(ERR_POISONED_LOCK);
         let operation_data: HashMap<String, OperationMetrics> = operations
             .iter()
-            .map(|(name, data_ref)| (name.clone(), (*data_ref.borrow()).clone()))
+            .map(|(name, data_ref)| (name.clone(), data_ref.lock()
+                .expect(ERR_POISONED_LOCK)
+                .clone()))
             .collect();
         Report::from_operation_data(&operation_data)
     }
@@ -168,11 +172,14 @@ impl Session {
     /// Whether there is any recorded activity in this session.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        let operations = self.operations.borrow();
+        let operations = self.operations.lock()
+            .expect(ERR_POISONED_LOCK);
         operations.is_empty()
             || operations
                 .values()
-                .all(|op| op.borrow().total_iterations == 0)
+                .all(|op| op.lock()
+                    .expect(ERR_POISONED_LOCK)
+                    .total_iterations == 0)
     }
 }
 
@@ -181,4 +188,13 @@ impl fmt::Display for Session {
         // Delegate to Report's Display implementation for consistency
         write!(f, "{}", self.to_report())
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Static assertions for thread safety
+    static_assertions::assert_impl_all!(Session: Send);
+    // Session doesn't need to be Sync, only Send for thread mobility
 }

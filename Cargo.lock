@@ -33,6 +33,7 @@ dependencies = [
  "cpu-time",
  "criterion",
  "mutants",
+ "static_assertions",
 ]
 
 [[package]]
@@ -41,6 +42,7 @@ version = "0.2.3"
 dependencies = [
  "criterion",
  "mutants",
+ "static_assertions",
 ]
 
 [[package]]

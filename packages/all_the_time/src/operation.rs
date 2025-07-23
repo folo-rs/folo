@@ -1,13 +1,14 @@
 //! Mean processor time tracking.
 
-use std::cell::RefCell;
 use std::fmt;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::constants::ERR_POISONED_LOCK;
 use crate::SpanBuilder;
 use crate::pal::PlatformFacade;
 use crate::session::OperationMetrics;
+
 /// Calculates mean processor time per operation across multiple iterations.
 ///
 /// This utility is particularly useful for benchmarking scenarios where you want
@@ -40,7 +41,7 @@ use crate::session::OperationMetrics;
 /// ```
 #[derive(Debug)]
 pub struct Operation {
-    metrics: Rc<RefCell<OperationMetrics>>,
+    metrics: Arc<Mutex<OperationMetrics>>,
     platform: PlatformFacade,
 }
 
@@ -49,7 +50,7 @@ impl Operation {
     #[must_use]
     pub(crate) fn new(
         _name: String,
-        operation_data: Rc<RefCell<OperationMetrics>>,
+        operation_data: Arc<Mutex<OperationMetrics>>,
         platform: PlatformFacade,
     ) -> Self {
         Self {
@@ -66,8 +67,8 @@ impl Operation {
 
     /// Returns a clone of the operation metrics for use by spans.
     #[must_use]
-    pub(crate) fn metrics(&self) -> Rc<RefCell<OperationMetrics>> {
-        Rc::clone(&self.metrics)
+    pub(crate) fn metrics(&self) -> Arc<Mutex<OperationMetrics>> {
+        Arc::clone(&self.metrics)
     }
 
     /// Adds a processor time duration to the mean calculation.
@@ -105,7 +106,7 @@ impl Operation {
         );
 
         // Add directly to operation data
-        let mut data = self.metrics.borrow_mut();
+        let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.total_processor_time = data.total_processor_time.checked_add(total_duration).expect(
             "processor time accumulation overflows Duration - this indicates an unrealistic scenario",
         );
@@ -163,7 +164,7 @@ impl Operation {
     /// Returns zero duration if no spans have been recorded.
     #[must_use]
     pub fn mean(&self) -> Duration {
-        let data = self.metrics.borrow();
+        let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         if data.total_iterations == 0 {
             Duration::ZERO
         } else {
@@ -183,7 +184,7 @@ impl Operation {
     #[must_use]
     #[cfg(test)]
     pub(crate) fn total_iterations(&self) -> u64 {
-        let data = self.metrics.borrow();
+        let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.total_iterations
     }
 
@@ -191,7 +192,7 @@ impl Operation {
     #[must_use]
     #[cfg(test)]
     pub(crate) fn total_processor_time(&self) -> Duration {
-        let data = self.metrics.borrow();
+        let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.total_processor_time
     }
 }
@@ -336,4 +337,8 @@ mod tests {
         assert_eq!(operation.total_processor_time(), Duration::ZERO);
         assert_eq!(operation.mean(), Duration::ZERO);
     }
+
+    // Static assertions for thread safety
+    static_assertions::assert_impl_all!(Operation: Send);
+    // Operation doesn't need to be Sync, only Send for thread mobility
 }

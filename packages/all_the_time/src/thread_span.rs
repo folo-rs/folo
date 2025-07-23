@@ -1,10 +1,10 @@
 //! Thread-specific processor time tracking spans.
 
-use std::cell::RefCell;
 use std::marker::PhantomData;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::constants::ERR_POISONED_LOCK;
 use crate::Operation;
 use crate::pal::{Platform, PlatformFacade};
 use crate::session::OperationMetrics;
@@ -48,7 +48,7 @@ use crate::session::OperationMetrics;
 #[derive(Debug)]
 #[must_use = "Measurements are taken between creation and drop"]
 pub struct ThreadSpan {
-    metrics: Rc<RefCell<OperationMetrics>>,
+    metrics: Arc<Mutex<OperationMetrics>>,
     platform: PlatformFacade,
     start_time: Duration,
     iterations: u64,
@@ -115,7 +115,7 @@ impl Drop for ThreadSpan {
         );
 
         // Add directly to operation data
-        let mut data = self.metrics.borrow_mut();
+        let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.total_processor_time = data.total_processor_time.checked_add(total_duration).expect(
             "processor time accumulation overflows Duration - this indicates an unrealistic scenario",
         );
@@ -378,4 +378,9 @@ mod tests {
         assert_eq!(expected_per_iteration, Duration::from_nanos(200));
         drop(span);
     }
+
+    // Static assertions for thread safety
+    // ThreadSpan should NOT be Send or Sync due to PhantomData<*const ()>
+    static_assertions::assert_not_impl_all!(super::ThreadSpan: Send);
+    static_assertions::assert_not_impl_all!(super::ThreadSpan: Sync);
 }

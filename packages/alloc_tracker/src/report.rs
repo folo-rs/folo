@@ -414,4 +414,8 @@ mod tests {
 
         assert_eq!(report1.operations.len(), report2.operations.len());
     }
+
+    // Static assertions for thread safety
+    static_assertions::assert_impl_all!(Report: Send, Sync);
+    static_assertions::assert_impl_all!(ReportOperation: Send, Sync);
 }

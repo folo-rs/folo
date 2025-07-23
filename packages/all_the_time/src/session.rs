@@ -1,10 +1,10 @@
 //! Session management for processor time tracking.
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::constants::ERR_POISONED_LOCK;
 use crate::pal::PlatformFacade;
 use crate::{Operation, Report};
 
@@ -49,9 +49,10 @@ pub(crate) struct OperationMetrics {
 /// ```
 #[derive(Debug)]
 pub struct Session {
-    operations: Rc<RefCell<HashMap<String, Rc<RefCell<OperationMetrics>>>>>,
+    operations: Arc<Mutex<HashMap<String, Arc<Mutex<OperationMetrics>>>>>,
     platform: PlatformFacade,
 }
+
 impl Session {
     /// Creates a new processor time tracking session.
     ///
@@ -71,7 +72,7 @@ impl Session {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            operations: Rc::new(RefCell::new(HashMap::new())),
+            operations: Arc::new(Mutex::new(HashMap::new())),
             platform: PlatformFacade::real(),
         }
     }
@@ -83,7 +84,7 @@ impl Session {
     #[cfg(test)]
     pub(crate) fn with_platform(platform: PlatformFacade) -> Self {
         Self {
-            operations: Rc::new(RefCell::new(HashMap::new())),
+            operations: Arc::new(Mutex::new(HashMap::new())),
             platform,
         }
     }
@@ -116,11 +117,11 @@ impl Session {
 
         // Get or create operation data
         let operation_data = {
-            let mut operations = self.operations.borrow_mut();
-            Rc::clone(
+            let mut operations = self.operations.lock().expect(ERR_POISONED_LOCK);
+            Arc::clone(
                 operations
                     .entry(name.clone())
-                    .or_insert_with(|| Rc::new(RefCell::new(OperationMetrics::default()))),
+                    .or_insert_with(|| Arc::new(Mutex::new(OperationMetrics::default()))),
             )
         };
 
@@ -148,12 +149,13 @@ impl Session {
     /// ```
     #[must_use]
     pub fn to_report(&self) -> Report {
-        // Convert Rc<RefCell<OperationMetrics>> back to plain OperationMetrics for the report
+        // Convert Arc<Mutex<OperationMetrics>> back to plain OperationMetrics for the report
         let operations_snapshot: HashMap<String, OperationMetrics> = self
             .operations
-            .borrow()
+            .lock()
+            .expect(ERR_POISONED_LOCK)
             .iter()
-            .map(|(name, data_ref)| (name.clone(), data_ref.borrow().clone()))
+            .map(|(name, data_ref)| (name.clone(), data_ref.lock().expect(ERR_POISONED_LOCK).clone()))
             .collect();
         Report::from_operation_data(&operations_snapshot)
     }
@@ -172,11 +174,11 @@ impl Session {
     /// Whether there is any recorded activity in this session.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        let operations = self.operations.borrow();
+        let operations = self.operations.lock().expect(ERR_POISONED_LOCK);
         operations.is_empty()
             || operations
                 .values()
-                .all(|data| data.borrow().total_iterations == 0)
+                .all(|data| data.lock().expect(ERR_POISONED_LOCK).total_iterations == 0)
     }
 }
 
@@ -304,4 +306,8 @@ mod tests {
         assert!(!session.is_empty());
         assert!(!report.is_empty());
     }
+
+    // Static assertions for thread safety
+    static_assertions::assert_impl_all!(Session: Send);
+    // Session doesn't need to be Sync, only Send for thread mobility
 }

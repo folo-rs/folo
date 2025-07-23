@@ -443,4 +443,8 @@ mod tests {
         assert_eq!(op.total_processor_time(), Duration::from_millis(80));
         assert_eq!(op.total_iterations(), 6);
     }
+
+    // Static assertions for thread safety
+    static_assertions::assert_impl_all!(Report: Send, Sync);
+    static_assertions::assert_impl_all!(ReportOperation: Send, Sync);
 }

@@ -118,6 +118,7 @@
 //! this package under Miri.
 
 mod allocator;
+mod constants;
 mod operation;
 mod process_span;
 mod report;

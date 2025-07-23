@@ -98,6 +98,7 @@
 //! # }
 //! ```
 
+mod constants;
 mod operation;
 mod pal;
 mod process_span;

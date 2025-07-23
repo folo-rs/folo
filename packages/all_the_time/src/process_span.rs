@@ -1,9 +1,9 @@
 //! Process-wide processor time tracking spans.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::constants::ERR_POISONED_LOCK;
 use crate::Operation;
 use crate::pal::{Platform, PlatformFacade};
 use crate::session::OperationMetrics;
@@ -48,7 +48,7 @@ use crate::session::OperationMetrics;
 #[derive(Debug)]
 #[must_use = "Measurements are taken between creation and drop"]
 pub struct ProcessSpan {
-    metrics: Rc<RefCell<OperationMetrics>>,
+    metrics: Arc<Mutex<OperationMetrics>>,
     platform: PlatformFacade,
     start_time: Duration,
     iterations: u64,
@@ -112,7 +112,7 @@ impl Drop for ProcessSpan {
         );
 
         // Add directly to operation data
-        let mut data = self.metrics.borrow_mut();
+        let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.total_processor_time = data.total_processor_time.checked_add(total_duration).expect(
             "processor time accumulation overflows Duration - this indicates an unrealistic scenario",
         );
@@ -236,4 +236,8 @@ mod tests {
         // Should have recorded 1 + 2 + 3 = 6 total spans
         assert_eq!(operation.total_iterations(), 6);
     }
+
+    // Static assertions for thread safety
+    static_assertions::assert_impl_all!(super::ProcessSpan: Send);
+    // ProcessSpan doesn't need to be Sync, only Send for thread mobility
 }

@@ -1,9 +1,9 @@
 //! Process-wide allocation tracking span.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::atomic;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 
+use crate::constants::ERR_POISONED_LOCK;
 use crate::Operation;
 use crate::allocator::TOTAL_BYTES_ALLOCATED;
 use crate::session::OperationMetrics;
@@ -31,7 +31,7 @@ use crate::session::OperationMetrics;
 #[derive(Debug)]
 #[must_use = "Measurements are taken between creation and drop"]
 pub struct ProcessSpan {
-    metrics: Rc<RefCell<OperationMetrics>>,
+    metrics: Arc<Mutex<OperationMetrics>>,
     start_bytes: u64,
     iterations: u64,
 }
@@ -40,7 +40,7 @@ impl ProcessSpan {
     pub(crate) fn new(operation: &Operation, iterations: u64) -> Self {
         assert!(iterations != 0);
 
-        let start_bytes = TOTAL_BYTES_ALLOCATED.load(atomic::Ordering::Relaxed);
+        let start_bytes = TOTAL_BYTES_ALLOCATED.load(Ordering::Relaxed);
 
         Self {
             metrics: operation.metrics(),
@@ -53,7 +53,7 @@ impl ProcessSpan {
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // The != 1 fork is broadly applicable, so mutations fail. Intentional.
     fn to_delta(&self) -> u64 {
-        let current_bytes = TOTAL_BYTES_ALLOCATED.load(atomic::Ordering::Relaxed);
+        let current_bytes = TOTAL_BYTES_ALLOCATED.load(Ordering::Relaxed);
         let total_delta = current_bytes
             .checked_sub(self.start_bytes)
             .expect("total bytes allocated could not possibly decrease");
@@ -77,7 +77,8 @@ impl Drop for ProcessSpan {
             .checked_mul(self.iterations)
             .expect("bytes * iterations overflows u64 - this indicates an unrealistic scenario");
 
-        let mut data = self.metrics.borrow_mut();
+        let mut data = self.metrics.lock()
+            .expect(ERR_POISONED_LOCK);
 
         data.total_bytes_allocated = data
             .total_bytes_allocated
@@ -88,4 +89,13 @@ impl Drop for ProcessSpan {
             "total iterations count overflows u64 - this indicates an unrealistic scenario",
         );
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Static assertions for thread safety
+    static_assertions::assert_impl_all!(ProcessSpan: Send);
+    // ProcessSpan doesn't need to be Sync, only Send for thread mobility
 }

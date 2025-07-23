@@ -1,9 +1,9 @@
 //! Thread-local allocation tracking span.
 
-use std::cell::RefCell;
 use std::marker::PhantomData;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
+use crate::constants::ERR_POISONED_LOCK;
 use crate::Operation;
 use crate::allocator::THREAD_BYTES_ALLOCATED;
 use crate::session::OperationMetrics;
@@ -31,7 +31,7 @@ use crate::session::OperationMetrics;
 #[derive(Debug)]
 #[must_use = "Measurements are taken between creation and drop"]
 pub struct ThreadSpan {
-    metrics: Rc<RefCell<OperationMetrics>>,
+    metrics: Arc<Mutex<OperationMetrics>>,
     start_bytes: u64,
     iterations: u64,
 
@@ -80,7 +80,8 @@ impl Drop for ThreadSpan {
             .checked_mul(self.iterations)
             .expect("bytes * iterations overflows u64 - this indicates an unrealistic scenario");
 
-        let mut data = self.metrics.borrow_mut();
+        let mut data = self.metrics.lock()
+            .expect(ERR_POISONED_LOCK);
 
         data.total_bytes_allocated = data
             .total_bytes_allocated
@@ -91,4 +92,14 @@ impl Drop for ThreadSpan {
             "total iterations count overflows u64 - this indicates an unrealistic scenario",
         );
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Static assertions for thread safety
+    // ThreadSpan should NOT be Send or Sync due to PhantomData<*const ()>
+    static_assertions::assert_not_impl_all!(ThreadSpan: Send);
+    static_assertions::assert_not_impl_all!(ThreadSpan: Sync);
 }

@@ -1,9 +1,9 @@
-//! Mean memory allocation tracking.
+//! Mean allocation tracking.
 
-use std::cell::RefCell;
 use std::fmt;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
+use crate::constants::ERR_POISONED_LOCK;
 use crate::SpanBuilder;
 use crate::session::OperationMetrics;
 
@@ -51,12 +51,12 @@ impl std::error::Error for AddIterationsError {}
 /// ```
 #[derive(Debug)]
 pub struct Operation {
-    metrics: Rc<RefCell<OperationMetrics>>,
+    metrics: Arc<Mutex<OperationMetrics>>,
 }
 
 impl Operation {
     #[must_use]
-    pub(crate) fn new(_name: String, operation_data: Rc<RefCell<OperationMetrics>>) -> Self {
+    pub(crate) fn new(_name: String, operation_data: Arc<Mutex<OperationMetrics>>) -> Self {
         Self {
             metrics: operation_data,
         }
@@ -64,8 +64,8 @@ impl Operation {
 
     /// Returns a clone of the operation metrics for use by spans.
     #[must_use]
-    pub(crate) fn metrics(&self) -> Rc<RefCell<OperationMetrics>> {
-        Rc::clone(&self.metrics)
+    pub(crate) fn metrics(&self) -> Arc<Mutex<OperationMetrics>> {
+        Arc::clone(&self.metrics)
     }
 
     /// Adds a memory delta value to the mean calculation.
@@ -87,7 +87,7 @@ impl Operation {
             .checked_mul(iterations)
             .expect("bytes * iterations overflows u64 - this indicates an unrealistic scenario");
 
-        let mut data = self.metrics.borrow_mut();
+        let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
 
         data.total_bytes_allocated = data
             .total_bytes_allocated
@@ -155,7 +155,8 @@ impl Operation {
     )]
     #[must_use]
     pub fn mean(&self) -> u64 {
-        let data = self.metrics.borrow();
+        let data = self.metrics.lock()
+            .expect(ERR_POISONED_LOCK);
         if data.total_iterations == 0 {
             0
         } else {
@@ -168,14 +169,16 @@ impl Operation {
     #[allow(dead_code, reason = "Used in tests")]
     #[cfg(test)]
     fn total_iterations(&self) -> u64 {
-        let data = self.metrics.borrow();
+        let data = self.metrics.lock()
+            .expect(ERR_POISONED_LOCK);
         data.total_iterations
     }
 
     /// Returns the total bytes allocated across all iterations.
     #[must_use]
     pub fn total_bytes_allocated(&self) -> u64 {
-        let data = self.metrics.borrow();
+        let data = self.metrics.lock()
+            .expect("ERR_POISONED_LOCK");
         data.total_bytes_allocated
     }
 }
@@ -436,4 +439,8 @@ mod tests {
         let session_display = format!("{session}");
         assert!(session_display.contains("160 bytes (mean)"));
     }
+
+    // Static assertions for thread safety
+    static_assertions::assert_impl_all!(Operation: Send);
+    // Operation doesn't need to be Sync, only Send for thread mobility
 }

@@ -102,3 +102,12 @@ impl<'a> SpanBuilder<'a> {
         ProcessSpan::new(self.operation, self.iterations)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Static assertions for thread safety
+    static_assertions::assert_impl_all!(SpanBuilder<'_>: Send);
+    // SpanBuilder doesn't need to be Sync, only Send for thread mobility
+}

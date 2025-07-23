@@ -119,3 +119,11 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Allocator<A> {
         unsafe { self.inner.realloc(ptr, layout, new_size) }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Static assertions for thread safety
+    static_assertions::assert_impl_all!(Allocator<std::alloc::System>: Send, Sync);
+}
