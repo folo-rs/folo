@@ -3,9 +3,9 @@
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
-use crate::constants::ERR_POISONED_LOCK;
 use crate::Operation;
 use crate::allocator::THREAD_BYTES_ALLOCATED;
+use crate::constants::ERR_POISONED_LOCK;
 use crate::session::OperationMetrics;
 
 /// A tracked span of code that tracks allocations on this thread between creation and drop.
@@ -80,8 +80,7 @@ impl Drop for ThreadSpan {
             .checked_mul(self.iterations)
             .expect("bytes * iterations overflows u64 - this indicates an unrealistic scenario");
 
-        let mut data = self.metrics.lock()
-            .expect(ERR_POISONED_LOCK);
+        let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
 
         data.total_bytes_allocated = data
             .total_bytes_allocated

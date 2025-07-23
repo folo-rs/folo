@@ -3,8 +3,9 @@
 //! These tests verify that the public API types can be safely moved
 //! between threads and that thread-safety changes work correctly.
 
-use alloc_tracker::{Allocator, Report, Session};
 use std::thread;
+
+use alloc_tracker::{Allocator, Report, Session};
 
 // Fake a global allocator for these tests
 thread_local! {

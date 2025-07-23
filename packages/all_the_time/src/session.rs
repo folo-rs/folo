@@ -160,7 +160,12 @@ impl Session {
             .lock()
             .expect(ERR_POISONED_LOCK)
             .iter()
-            .map(|(name, data_ref)| (name.clone(), data_ref.lock().expect(ERR_POISONED_LOCK).clone()))
+            .map(|(name, data_ref)| {
+                (
+                    name.clone(),
+                    data_ref.lock().expect(ERR_POISONED_LOCK).clone(),
+                )
+            })
             .collect();
         Report::from_operation_data(&operations_snapshot)
     }

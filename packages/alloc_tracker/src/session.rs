@@ -112,8 +112,7 @@ impl Session {
 
         // Ensure the operation exists in the shared data
         let operation_data = {
-            let mut operations = self.operations.lock()
-                .expect(ERR_POISONED_LOCK);
+            let mut operations = self.operations.lock().expect(ERR_POISONED_LOCK);
             Arc::clone(
                 operations
                     .entry(name.clone())
@@ -151,13 +150,15 @@ impl Session {
     /// ```
     #[must_use]
     pub fn to_report(&self) -> Report {
-        let operations = self.operations.lock()
-            .expect(ERR_POISONED_LOCK);
+        let operations = self.operations.lock().expect(ERR_POISONED_LOCK);
         let operation_data: HashMap<String, OperationMetrics> = operations
             .iter()
-            .map(|(name, data_ref)| (name.clone(), data_ref.lock()
-                .expect(ERR_POISONED_LOCK)
-                .clone()))
+            .map(|(name, data_ref)| {
+                (
+                    name.clone(),
+                    data_ref.lock().expect(ERR_POISONED_LOCK).clone(),
+                )
+            })
             .collect();
         Report::from_operation_data(&operation_data)
     }
@@ -176,14 +177,11 @@ impl Session {
     /// Whether there is any recorded activity in this session.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        let operations = self.operations.lock()
-            .expect(ERR_POISONED_LOCK);
+        let operations = self.operations.lock().expect(ERR_POISONED_LOCK);
         operations.is_empty()
             || operations
                 .values()
-                .all(|op| op.lock()
-                    .expect(ERR_POISONED_LOCK)
-                    .total_iterations == 0)
+                .all(|op| op.lock().expect(ERR_POISONED_LOCK).total_iterations == 0)
     }
 }
 

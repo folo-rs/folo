@@ -3,8 +3,9 @@
 //! These tests verify that the public API types can be safely moved
 //! between threads and that thread-safety changes work correctly.
 
-use all_the_time::{Report, Session};
 use std::thread;
+
+use all_the_time::{Report, Session};
 
 #[test]
 fn session_can_be_moved_between_threads() {

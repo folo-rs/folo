@@ -5,8 +5,8 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
-use crate::constants::ERR_POISONED_LOCK;
 use crate::SpanBuilder;
+use crate::constants::ERR_POISONED_LOCK;
 use crate::session::OperationMetrics;
 
 /// Error returned when iteration count exceeds supported limits.
@@ -159,8 +159,7 @@ impl Operation {
     )]
     #[must_use]
     pub fn mean(&self) -> u64 {
-        let data = self.metrics.lock()
-            .expect(ERR_POISONED_LOCK);
+        let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         if data.total_iterations == 0 {
             0
         } else {
@@ -173,16 +172,14 @@ impl Operation {
     #[allow(dead_code, reason = "Used in tests")]
     #[cfg(test)]
     fn total_iterations(&self) -> u64 {
-        let data = self.metrics.lock()
-            .expect(ERR_POISONED_LOCK);
+        let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.total_iterations
     }
 
     /// Returns the total bytes allocated across all iterations.
     #[must_use]
     pub fn total_bytes_allocated(&self) -> u64 {
-        let data = self.metrics.lock()
-            .expect("ERR_POISONED_LOCK");
+        let data = self.metrics.lock().expect("ERR_POISONED_LOCK");
         data.total_bytes_allocated
     }
 }
