@@ -31,7 +31,7 @@ test FILTER="":
 # probably due to the Gnuplot integration that spawns an external process.
 [group('testing')]
 test-benches FILTER="":
-    cargo test --benches --all-features {{ FILTER }} --locked
+    cargo test {{ target_package }} --benches --all-features {{ FILTER }} --locked
 
 [group('testing')]
 [script]

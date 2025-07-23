@@ -63,8 +63,8 @@ fn main() {
     // only captures the memory allocated by the main thread
     {
         let thread_op = session.operation("thread_span_multithreaded");
+        let _span = thread_op.iterations(3).measure_thread();
         for _ in 0..3 {
-            let _span = thread_op.measure_thread();
             multithreaded_allocations();
         }
     }
@@ -73,8 +73,8 @@ fn main() {
     // This captures memory allocations from all threads spawned by multithreaded_allocations()
     {
         let process_op = session.operation("process_span_multithreaded");
+        let _span = process_op.iterations(3).measure_process();
         for _ in 0..3 {
-            let _span = process_op.measure_process();
             multithreaded_allocations();
         }
     }

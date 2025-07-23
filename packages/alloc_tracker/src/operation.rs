@@ -2,8 +2,7 @@
 
 use std::fmt;
 
-use crate::process_span::ProcessSpan;
-use crate::thread_span::ThreadSpan;
+use crate::SpanBuilder;
 
 /// Calculates mean memory allocation per operation across multiple iterations.
 ///
@@ -23,7 +22,7 @@ use crate::thread_span::ThreadSpan;
 ///
 /// // Simulate multiple operations
 /// for i in 0..5 {
-///     let _span = mean_calc.measure_process();
+///     let _span = mean_calc.iterations(1).measure_process();
 ///     let _data = vec![0; i + 1]; // Allocate different amounts
 /// }
 ///
@@ -48,59 +47,71 @@ impl Operation {
     /// Adds a memory delta value to the mean calculation.
     ///
     /// This method is called by [`ProcessSpan`] or [`ThreadSpan`] when it is dropped.
+    /// Internally delegates to `add_iterations()` with a count of 1.
+    #[cfg(test)]
     pub(crate) fn add(&mut self, delta: u64) {
+        self.add_iterations(delta, 1);
+    }
+
+    /// Adds multiple iterations of the same allocation to the mean calculation.
+    ///
+    /// This is a more efficient version of calling `add()` multiple times with the same delta.
+    /// This method is used by span types when they measure multiple iterations.
+    pub(crate) fn add_iterations(&mut self, delta: u64, iterations: u64) {
+        // Calculate total bytes by multiplying delta by iterations
+        let total_bytes = delta
+            .checked_mul(iterations)
+            .expect("allocation delta multiplied by iterations overflows u64 - this indicates an unrealistic scenario");
+
         // Never going to overflow u64, so no point doing slower checked arithmetic here.
-        self.total_bytes_allocated = self.total_bytes_allocated.wrapping_add(delta);
-        self.total_iterations = self.total_iterations.wrapping_add(1);
+        self.total_bytes_allocated = self.total_bytes_allocated.wrapping_add(total_bytes);
+        self.total_iterations = self.total_iterations.wrapping_add(iterations);
     }
 
-    /// Creates a span that is associated the the operation and will automatically
-    /// track allocations from now until it is dropped.
+    /// Creates a span builder with the specified iteration count.
     ///
-    /// This method collects process-wide allocation data during the span.
+    /// This method requires an explicit iteration count, making the measurement
+    /// semantics consistent with the `all_the_time` API. The iteration count cannot be zero.
     ///
     /// # Examples
     ///
+    /// For single operations:
     /// ```
-    /// use alloc_tracker::{Allocator, Operation, Session};
+    /// use alloc_tracker::{Allocator, Session};
     ///
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
     /// let mut session = Session::new();
-    /// let mean_calc = session.operation("test");
+    /// let operation = session.operation("single_op");
     /// {
-    ///     let _span = mean_calc.measure_process();
-    ///     let _data = vec![1, 2, 3]; // This allocation will be tracked
-    /// } // Span is dropped here, allocation is added to mean calculation
-    /// ```
-    pub fn measure_process(&mut self) -> ProcessSpan<'_> {
-        ProcessSpan::new(self)
-    }
-
-    /// Creates a span that tracks allocations on this thread from now until it is dropped.
-    ///
-    /// This method tracks allocations made by the current thread only.
-    /// Use this when you want to measure per-thread allocation patterns
-    /// in multi-threaded scenarios.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use alloc_tracker::{Allocator, Operation, Session};
-    ///
-    /// #[global_allocator]
-    /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
-    ///
-    /// let mut session = Session::new();
-    /// let mean_calc = session.operation("thread_work");
-    /// {
-    ///     let _span = mean_calc.measure_thread();
-    ///     let _data = vec![1, 2, 3]; // This allocation will be tracked for this thread
+    ///     let _span = operation.iterations(1).measure_thread();
+    ///     // Perform a single operation
+    ///     let _data = vec![1, 2, 3];
     /// }
     /// ```
-    pub fn measure_thread(&mut self) -> ThreadSpan<'_> {
-        ThreadSpan::new(self)
+    ///
+    /// For batch operations (consistent measurement):
+    /// ```
+    /// use alloc_tracker::{Allocator, Session};
+    ///
+    /// #[global_allocator]
+    /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+    ///
+    /// let mut session = Session::new();
+    /// let operation = session.operation("batch_ops");
+    /// {
+    ///     let iterations = 10000;
+    ///     let _span = operation.iterations(iterations).measure_thread();
+    ///     for _ in 0..10000 {
+    ///         // Fast operation
+    ///         let _data = vec![42];
+    ///     }
+    /// } // Total allocation is measured once and divided by 10000
+    /// ```
+    #[must_use]
+    pub fn iterations(&mut self, iterations: u64) -> SpanBuilder<'_> {
+        SpanBuilder::new(self, iterations)
     }
 
     /// Calculates the mean bytes allocated per iteration.
@@ -192,7 +203,7 @@ mod tests {
         let mut operation = Operation::new();
 
         {
-            let _span = operation.measure_process();
+            let _span = operation.iterations(1).measure_process();
             // Simulate allocation
             TOTAL_BYTES_ALLOCATED.fetch_add(75, atomic::Ordering::Relaxed);
         }
@@ -207,12 +218,12 @@ mod tests {
         let mut operation = Operation::new();
 
         {
-            let _span = operation.measure_process();
+            let _span = operation.iterations(1).measure_process();
             TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
         }
 
         {
-            let _span = operation.measure_process();
+            let _span = operation.iterations(1).measure_process();
             TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
         }
 
@@ -226,7 +237,7 @@ mod tests {
         let mut operation = Operation::new();
 
         {
-            let _span = operation.measure_process();
+            let _span = operation.iterations(1).measure_process();
             // No allocation
         }
 
@@ -240,7 +251,7 @@ mod tests {
         let mut operation = Operation::new();
 
         {
-            let _span = operation.measure_thread();
+            let _span = operation.iterations(1).measure_thread();
 
             // Simulate thread-local allocation
             THREAD_BYTES_ALLOCATED.with(|counter| {
@@ -258,14 +269,14 @@ mod tests {
         let mut operation = Operation::new();
 
         {
-            let _span = operation.measure_thread();
+            let _span = operation.iterations(1).measure_thread();
             THREAD_BYTES_ALLOCATED.with(|counter| {
                 counter.set(counter.get() + 100);
             });
         }
 
         {
-            let _span = operation.measure_process();
+            let _span = operation.iterations(1).measure_process();
             TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
         }
 
@@ -279,12 +290,63 @@ mod tests {
         let mut operation = Operation::new();
 
         {
-            let _span = operation.measure_thread();
+            let _span = operation.iterations(1).measure_thread();
             // No allocation
         }
 
         assert_eq!(operation.mean(), 0);
         assert_eq!(operation.total_iterations(), 1);
         assert_eq!(operation.total_bytes_allocated(), 0);
+    }
+
+    #[test]
+    fn add_iterations_direct_call() {
+        let mut operation = Operation::new();
+
+        // Test direct call to add_iterations
+        operation.add_iterations(100, 5);
+
+        assert_eq!(operation.total_iterations(), 5);
+        assert_eq!(operation.total_bytes_allocated(), 500);
+        assert_eq!(operation.mean(), 100);
+    }
+
+    #[test]
+    fn add_iterations_zero_iterations() {
+        let mut operation = Operation::new();
+
+        // Adding zero iterations should work and do nothing
+        operation.add_iterations(100, 0);
+
+        assert_eq!(operation.total_iterations(), 0);
+        assert_eq!(operation.total_bytes_allocated(), 0);
+        assert_eq!(operation.mean(), 0);
+    }
+
+    #[test]
+    fn add_iterations_zero_allocation() {
+        let mut operation = Operation::new();
+
+        // Adding zero allocation should work
+        operation.add_iterations(0, 1000);
+
+        assert_eq!(operation.total_iterations(), 1000);
+        assert_eq!(operation.total_bytes_allocated(), 0);
+        assert_eq!(operation.mean(), 0);
+    }
+
+    #[test]
+    fn operation_batch_iterations() {
+        let mut operation = Operation::new();
+
+        {
+            let _span = operation.iterations(10).measure_process();
+            // Simulate a 1000 byte allocation that should be divided by 10 iterations
+            TOTAL_BYTES_ALLOCATED.fetch_add(1000, atomic::Ordering::Relaxed);
+        }
+
+        assert_eq!(operation.total_iterations(), 10);
+        assert_eq!(operation.total_bytes_allocated(), 1000);
+        assert_eq!(operation.mean(), 100); // 1000 / 10
     }
 }

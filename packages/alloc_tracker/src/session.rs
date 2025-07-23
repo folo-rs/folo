@@ -26,9 +26,11 @@ use crate::{Operation, Report};
 /// let mut session = Session::new();
 /// let mut string_op = session.operation("do_stuff_with_strings");
 ///
-/// for _ in 0..3 {
-///     let _span = string_op.measure_process();
-///     let _data = String::from("example string allocation");
+/// {
+///     let _span = string_op.iterations(3).measure_process();
+///     for _ in 0..3 {
+///         let _data = String::from("example string allocation");
+///     }
 /// }
 ///
 /// // Output statistics of all operations to console.
@@ -85,9 +87,11 @@ impl Session {
     /// let mut session = Session::new();
     /// let mut string_op = session.operation("string_operations");
     ///
-    /// for _ in 0..3 {
-    ///     let _span = string_op.measure_process();
-    ///     let _s = String::from("test"); // This allocation will be tracked
+    /// {
+    ///     let _span = string_op.iterations(3).measure_process();
+    ///     for _ in 0..3 {
+    ///         let _s = String::from("test"); // This allocation will be tracked
+    ///     }
     /// }
     /// ```
     pub fn operation(&mut self, name: impl Into<String>) -> &mut Operation {
@@ -112,8 +116,10 @@ impl Session {
     ///
     /// let mut session = Session::new();
     /// let operation = session.operation("test_work");
-    /// let _span = operation.measure_process();
-    /// let _data = vec![1, 2, 3]; // This allocates memory
+    /// {
+    ///     let _span = operation.iterations(1).measure_process();
+    ///     let _data = vec![1, 2, 3]; // This allocates memory
+    /// }
     ///
     /// let report = session.to_report();
     /// // Report can now be sent to another thread

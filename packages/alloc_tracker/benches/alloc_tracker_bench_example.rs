@@ -24,7 +24,7 @@ fn entrypoint(c: &mut Criterion) {
     let string_op = allocs.operation("string_formatting");
     group.bench_function("string_formatting", |b| {
         b.iter(|| {
-            let _span = string_op.measure_process();
+            let _span = string_op.iterations(1).measure_process();
 
             let part1 = black_box("Hello, ");
             let part2 = black_box("world!");
@@ -36,7 +36,7 @@ fn entrypoint(c: &mut Criterion) {
     let vector_op = allocs.operation("vector_creation");
     group.bench_function("vector_creation", |b| {
         b.iter(|| {
-            let _span = vector_op.measure_process();
+            let _span = vector_op.iterations(1).measure_process();
 
             let data = (1..=100).collect::<Vec<_>>();
             black_box(data);

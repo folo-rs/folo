@@ -10,6 +10,7 @@
 //! - [`ProcessSpan`] - Tracks process-wide memory allocation changes over a time period
 //! - [`ThreadSpan`] - Tracks thread-local memory allocation changes over a time period
 //! - [`Operation`] - Calculates mean memory allocation per operation
+//! - [`SpanBuilder`] - Builder for creating allocation tracking spans with explicit iteration counts
 //!
 //! This package is not meant for use in production, serving only as a development tool.
 //!  
@@ -29,7 +30,7 @@
 //!     // Track a single operation
 //!     {
 //!         let operation = session.operation("my_operation");
-//!         let _span = operation.measure_process();
+//!         let _span = operation.iterations(1).measure_process();
 //!         let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
 //!     }
 //!
@@ -53,11 +54,13 @@
 //! fn main() {
 //!     let mut session = Session::new();
 //!
-//!     // Track mean over multiple operations
-//!     for i in 0..10 {
+//!     // Track mean over multiple operations (batched for efficiency)
+//!     {
 //!         let string_op = session.operation("string_allocations");
-//!         let _span = string_op.measure_process();
-//!         let _data = format!("String number {}", i); // This allocates memory
+//!         let _span = string_op.iterations(10).measure_process();
+//!         for i in 0..10 {
+//!             let _data = format!("String number {}", i); // This allocates memory
+//!         }
 //!     }
 //!
 //!     // Output statistics of all operations to console
@@ -68,7 +71,7 @@
 //! # Overhead
 //!
 //! In single-threaded scenarios, capturing a single measurement by calling
-//! `Operation::measure_xyz()` incurs an overhead of approximately 2 nanoseconds
+//! `Operation::iterations(1).measure_xyz()` incurs an overhead of approximately 2 nanoseconds
 //! on an arbitrary sample machine.
 //!
 //! Memory allocator activity is likewise slightly impacted by the tracking logic, especially
@@ -92,9 +95,11 @@
 //!
 //! # fn main() {
 //! let mut session = Session::new();
-//! let operation = session.operation("work");
-//! let _span = operation.measure_process();
-//! let _data = vec![1, 2, 3]; // Some allocation work
+//! {
+//!     let operation = session.operation("work");
+//!     let _span = operation.iterations(1).measure_process();
+//!     let _data = vec![1, 2, 3]; // Some allocation work
+//! }
 //!
 //! let report = session.to_report();
 //!
@@ -117,6 +122,7 @@ mod operation;
 mod process_span;
 mod report;
 mod session;
+mod span_builder;
 mod thread_span;
 
 pub use allocator::*;
@@ -124,4 +130,5 @@ pub use operation::*;
 pub use process_span::ProcessSpan;
 pub use report::Report;
 pub use session::*;
+pub use span_builder::SpanBuilder;
 pub use thread_span::ThreadSpan;

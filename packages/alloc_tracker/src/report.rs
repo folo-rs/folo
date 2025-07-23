@@ -19,9 +19,11 @@ use std::fmt;
 ///
 /// # fn main() {
 /// let mut session = Session::new();
-/// let operation = session.operation("test_work");
-/// let _span = operation.measure_process();
-/// let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
+/// {
+///     let operation = session.operation("test_work");
+///     let _span = operation.iterations(1).measure_process();
+///     let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
+/// }
 ///
 /// let report = session.to_report();
 /// report.print_to_stdout();
@@ -44,13 +46,13 @@ use std::fmt;
 /// // Record some work in each
 /// {
 ///     let op1 = session1.operation("work");
-///     let _span1 = op1.measure_process();
+///     let _span1 = op1.iterations(1).measure_process();
 ///     let _data1 = vec![1, 2, 3]; // This allocates memory
 /// }
 ///
 /// {
 ///     let op2 = session2.operation("work");
-///     let _span2 = op2.measure_process();
+///     let _span2 = op2.iterations(1).measure_process();
 ///     let _data2 = vec![4, 5, 6, 7]; // This allocates more memory
 /// }
 ///
@@ -126,13 +128,13 @@ impl Report {
     /// // Both sessions record the same operation name
     /// {
     ///     let op1 = session1.operation("common_work");
-    ///     let _span1 = op1.measure_process();
+    ///     let _span1 = op1.iterations(1).measure_process();
     ///     let _data1 = vec![1, 2, 3]; // 3 elements
     /// }
     ///
     /// {
     ///     let op2 = session2.operation("common_work");
-    ///     let _span2 = op2.measure_process();
+    ///     let _span2 = op2.iterations(1).measure_process();
     ///     let _data2 = vec![4, 5]; // 2 elements
     /// }
     ///
@@ -258,7 +260,7 @@ mod tests {
         let mut session = Session::new();
         {
             let operation = session.operation("test");
-            let _span = operation.measure_process();
+            let _span = operation.iterations(1).measure_process();
             // Simulate allocation
             TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
         } // Span drops here, releasing the mutable borrow
@@ -280,7 +282,7 @@ mod tests {
         let mut session = Session::new();
         {
             let operation = session.operation("test");
-            let _span = operation.measure_process();
+            let _span = operation.iterations(1).measure_process();
             TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
         } // Span drops here
 
@@ -301,13 +303,13 @@ mod tests {
 
         {
             let op1 = session1.operation("test1");
-            let _span1 = op1.measure_process();
+            let _span1 = op1.iterations(1).measure_process();
             TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
         } // Span drops here
 
         {
             let op2 = session2.operation("test2");
-            let _span2 = op2.measure_process();
+            let _span2 = op2.iterations(1).measure_process();
             TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
         } // Span drops here
 
@@ -327,13 +329,13 @@ mod tests {
 
         {
             let op1 = session1.operation("test");
-            let _span1 = op1.measure_process();
+            let _span1 = op1.iterations(1).measure_process();
             TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
         } // Span drops here
 
         {
             let op2 = session2.operation("test");
-            let _span2 = op2.measure_process();
+            let _span2 = op2.iterations(1).measure_process();
             TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
         } // Span drops here
 
@@ -352,7 +354,7 @@ mod tests {
         let mut session = Session::new();
         {
             let operation = session.operation("test");
-            let _span = operation.measure_process();
+            let _span = operation.iterations(1).measure_process();
             TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
         } // Span drops here
 

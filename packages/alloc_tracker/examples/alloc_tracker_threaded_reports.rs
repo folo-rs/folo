@@ -62,10 +62,9 @@ fn worker_thread(thread_name: &str) -> Report {
     {
         let common_op = session.operation("common_work");
 
-        // Do 3 iterations of common work
+        // Do 3 iterations of common work in a batch
+        let _span = common_op.iterations(3).measure_thread();
         for i in 0..3 {
-            let _span = common_op.measure_thread();
-
             // Allocate strings of different sizes
             let data = format!("{thread_name} iteration {i}: ");
             let mut strings = Vec::new();
@@ -82,10 +81,9 @@ fn worker_thread(thread_name: &str) -> Report {
     {
         let unique_op = session.operation(&unique_work_name);
 
-        // Do 2 iterations of unique work
+        // Do 2 iterations of unique work in a batch
+        let _span = unique_op.iterations(2).measure_thread();
         for i in 0_u32..2 {
-            let _span = unique_op.measure_thread();
-
             // Different allocation patterns per thread
             if thread_name == "Thread-1" {
                 // Thread 1 allocates vectors
