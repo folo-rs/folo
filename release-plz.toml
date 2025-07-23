@@ -37,3 +37,9 @@ changelog_update = false
 # All the `linked*` packages are published under the same version, as they are
 # all the "logically same" package, just separated for cargotechnical reasons.
 version_group = "linked"
+
+[[package]]
+name = "cargo-detect-package"
+
+# Blocked by https://github.com/release-plz/release-plz/issues/2317
+release = false
