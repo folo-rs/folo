@@ -3,6 +3,8 @@ description: Setup development environment for Folo project
 
 runs:
   using: composite
+  env:
+    DEBIAN_FRONTEND: noninteractive
   steps:
     - name: Install system dependencies (Linux)
       if: runner.os == 'Linux'
@@ -19,7 +21,7 @@ runs:
       run: |
         # Download and install PowerShell 7
         wget -q "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"
-        sudo dpkg -i packages-microsoft-prod.deb
+        sudo dpkg -i --force-confnew packages-microsoft-prod.deb
         sudo apt update
         sudo apt install -y powershell
         # Verify PowerShell installation
