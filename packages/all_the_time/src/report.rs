@@ -57,7 +57,7 @@ use std::time::Duration;
 /// merged.print_to_stdout();
 /// # }
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Report {
     operations: HashMap<String, ReportOperation>,
 }
