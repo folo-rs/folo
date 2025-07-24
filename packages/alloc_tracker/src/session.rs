@@ -140,7 +140,7 @@ impl Session {
     /// let session = Session::new();
     /// let operation = session.operation("test_work");
     /// {
-    ///     let _span = operation.measure_process().iterations(1);
+    ///     let _span = operation.measure_process();
     ///     let _data = vec![1, 2, 3]; // This allocates memory
     /// }
     ///

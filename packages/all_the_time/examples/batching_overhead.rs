@@ -21,7 +21,7 @@ fn main() {
     let unbatched_op = session.operation("unbatched_measurements");
 
     for _ in 0..1000 {
-        let _span = unbatched_op.measure_thread().iterations(1);
+        let _span = unbatched_op.measure_thread();
         // Simple operation
         black_box(42_u64.wrapping_mul(73));
     }

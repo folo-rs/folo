@@ -10,12 +10,12 @@ use alloc_tracker::{Allocator, Session};
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 fn main() {
-    let mut session = Session::new();
+    let session = Session::new();
 
     // Track a single operation
     {
         let operation = session.operation("my_operation");
-        let _span = operation.iterations(1).measure_process();
+        let _span = operation.measure_process();
         let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
     }
 

@@ -7,18 +7,21 @@ enabling analysis of processor usage patterns in benchmarks and performance test
 use all_the_time::Session;
 
 fn main() {
-    let mut session = Session::new();
+    let session = Session::new();
 
     // Track multiple iterations efficiently
     {
         let operation = session.operation("my_operation");
-        let iterations = 1000;
-        let _span = operation.iterations(iterations).measure_thread();
+        let iterations = 10;
+        let _span = operation.measure_thread().iterations(iterations);
         
-        for _ in 0..iterations {
+        for i in 0..iterations {
             let mut sum = 0;
-            for j in 0..100 {
-                sum += j * j;
+            for j in 0..50000 {
+                for k in 0..10 {
+                    sum += (j * k * i) % 1000;
+                    sum = sum.wrapping_mul(1103515245).wrapping_add(12345);
+                }
             }
             std::hint::black_box(sum);
         }

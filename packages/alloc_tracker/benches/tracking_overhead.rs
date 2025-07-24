@@ -38,7 +38,7 @@ fn entrypoint(c: &mut Criterion) {
         let process_op = alloc_session.operation("empty_process_span");
         group.bench_function("process_span_empty", |b| {
             b.iter(|| {
-                let _span = process_op.measure_process().iterations(1);
+                let _span = process_op.measure_process();
                 // Empty span - measures only the overhead of span creation/destruction
                 black_box(());
             });
@@ -47,7 +47,7 @@ fn entrypoint(c: &mut Criterion) {
         let thread_op = alloc_session.operation("empty_thread_span");
         group.bench_function("thread_span_empty", |b| {
             b.iter(|| {
-                let _span = thread_op.measure_thread().iterations(1);
+                let _span = thread_op.measure_thread();
                 // Empty span - measures only the overhead of span creation/destruction
                 black_box(());
             });

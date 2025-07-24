@@ -42,11 +42,11 @@ use std::time::Duration;
 ///
 /// // Record some work in each
 /// let op1 = session1.operation("work");
-/// let _span1 = op1.measure_thread().iterations(1);
+/// let _span1 = op1.measure_thread();
 /// std::hint::black_box(42);
 ///
 /// let op2 = session2.operation("work");
-/// let _span2 = op2.measure_thread().iterations(1);
+/// let _span2 = op2.measure_thread();
 /// std::hint::black_box(42);
 ///
 /// // Convert to reports and merge
@@ -304,7 +304,7 @@ mod tests {
         let session = create_test_session();
         {
             let operation = session.operation("test");
-            let _span = operation.measure_thread().iterations(1);
+            let _span = operation.measure_thread();
         } // Span drops here, releasing the mutable borrow
 
         let report = session.to_report();
@@ -324,7 +324,7 @@ mod tests {
         let session = create_test_session();
         {
             let operation = session.operation("test");
-            let _span = operation.measure_thread().iterations(1);
+            let _span = operation.measure_thread();
         } // Span drops here
 
         let report1 = Report::new();
@@ -344,12 +344,12 @@ mod tests {
 
         {
             let op1 = session1.operation("test1");
-            let _span1 = op1.measure_thread().iterations(1);
+            let _span1 = op1.measure_thread();
         } // Span drops here
 
         {
             let op2 = session2.operation("test2");
-            let _span2 = op2.measure_thread().iterations(1);
+            let _span2 = op2.measure_thread();
         } // Span drops here
 
         let report1 = session1.to_report();
@@ -390,7 +390,7 @@ mod tests {
         let session = create_test_session();
         {
             let operation = session.operation("test");
-            let _span = operation.measure_thread().iterations(1);
+            let _span = operation.measure_thread();
         } // Span drops here
 
         let report1 = session.to_report();

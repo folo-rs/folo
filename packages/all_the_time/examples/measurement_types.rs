@@ -63,7 +63,7 @@ fn main() {
         let thread_op = session.operation("thread_span_multithreaded");
 
         for _ in 0..3 {
-            let _span = thread_op.measure_thread().iterations(1);
+            let _span = thread_op.measure_thread();
             multithreaded_work();
         }
     }
@@ -74,7 +74,7 @@ fn main() {
         let process_op = session.operation("process_span_multithreaded");
 
         for _ in 0..3 {
-            let _span = process_op.measure_process().iterations(1);
+            let _span = process_op.measure_process();
             multithreaded_work();
         }
     }
