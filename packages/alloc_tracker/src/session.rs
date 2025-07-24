@@ -38,7 +38,7 @@ pub(crate) struct OperationMetrics {
 /// let string_op = session.operation("do_stuff_with_strings");
 ///
 /// {
-///     let _span = string_op.iterations(3).measure_process();
+///     let _span = string_op.measure_process().iterations(3);
 ///     for _ in 0..3 {
 ///         let _data = String::from("example string allocation");
 ///     }
@@ -101,7 +101,7 @@ impl Session {
     /// let string_op = session.operation("string_operations");
     ///
     /// {
-    ///     let _span = string_op.iterations(3).measure_process();
+    ///     let _span = string_op.measure_process().iterations(3);
     ///     for _ in 0..3 {
     ///         let _s = String::from("test"); // This allocation will be tracked
     ///     }
@@ -140,7 +140,7 @@ impl Session {
     /// let session = Session::new();
     /// let operation = session.operation("test_work");
     /// {
-    ///     let _span = operation.iterations(1).measure_process();
+    ///     let _span = operation.measure_process().iterations(1);
     ///     let _data = vec![1, 2, 3]; // This allocates memory
     /// }
     ///

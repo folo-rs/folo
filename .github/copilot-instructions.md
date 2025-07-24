@@ -521,3 +521,8 @@ designs or iterations. Do not make comparisons with mechanisms that no longer ex
 
 If there are functions that are only used in tests, mark them (and their `use` statements)
 with `#[cfg(test)]`. Do not just suppress "dead code" warnings.
+
+# There are many files in the workspace
+
+Avoid running large "process all files" commands directly in the workspace root. Use at least
+one level of subdirectory.

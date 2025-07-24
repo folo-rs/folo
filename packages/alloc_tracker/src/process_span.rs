@@ -25,7 +25,7 @@ use crate::session::OperationMetrics;
 /// let session = Session::new();
 /// let mean_calc = session.operation("test");
 /// {
-///     let _span = mean_calc.iterations(1).measure_process();
+///     let _span = mean_calc.measure_process();
 ///     // Perform some operation that allocates memory
 ///     let _data = String::from("Hello, world!");
 /// } // Memory delta is automatically tracked and recorded here
@@ -51,6 +51,39 @@ impl ProcessSpan {
             iterations,
             _not_sync: PhantomData,
         }
+    }
+
+    /// Sets the number of iterations for this span.
+    ///
+    /// This allows you to specify how many iterations this span represents,
+    /// which is used to calculate the mean allocation per iteration when the span is dropped.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use alloc_tracker::{Allocator, Session};
+    ///
+    /// #[global_allocator]
+    /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+    ///
+    /// let session = Session::new();
+    /// let operation = session.operation("batch_work");
+    /// {
+    ///     let _span = operation.measure_process().iterations(1000);
+    ///     for _ in 0..1000 {
+    ///         // Perform the same operation 1000 times
+    ///         let _data = vec![42];
+    ///     }
+    /// } // Total allocation is measured once and divided by 1000
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `iterations` is zero.
+    pub fn iterations(mut self, iterations: u64) -> Self {
+        assert!(iterations != 0, "Iterations cannot be zero");
+        self.iterations = iterations;
+        self
     }
 
     /// Calculates the allocation delta since this span was created.

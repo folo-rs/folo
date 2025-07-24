@@ -19,7 +19,7 @@ fn session_can_be_moved_between_threads() {
     // Move session to another thread
     let handle = thread::spawn(move || {
         let operation = session.operation("cross_thread_work");
-        let _span = operation.iterations(1).measure_process();
+        let _span = operation.measure_process();
 
         // Simulate some allocation work
         // Note: In actual usage, this would allocate through the global allocator
@@ -41,7 +41,7 @@ fn operation_can_be_moved_between_threads() {
 
     // Move operation to another thread
     let handle = thread::spawn(move || {
-        let _span = operation.iterations(1).measure_thread();
+        let _span = operation.measure_thread();
 
         // Simulate some work (without actual allocations in test)
 

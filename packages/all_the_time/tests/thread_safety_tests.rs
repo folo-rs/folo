@@ -16,7 +16,7 @@ fn session_can_be_moved_between_threads() {
     // Move session to another thread
     let handle = thread::spawn(move || {
         let operation = session.operation("cross_thread_work");
-        let _span = operation.iterations(1).measure_thread();
+        let _span = operation.measure_thread().iterations(1);
 
         // Do some work
         let mut sum = 0;
@@ -41,7 +41,7 @@ fn operation_can_be_moved_between_threads() {
 
     // Move operation to another thread
     let handle = thread::spawn(move || {
-        let _span = operation.iterations(1).measure_process();
+        let _span = operation.measure_process().iterations(1);
 
         // Do some work
         let mut sum = 0;
@@ -62,7 +62,7 @@ fn report_can_be_shared_across_threads() {
     let session = Session::new();
     {
         let operation = session.operation("shared_work");
-        let _span = operation.iterations(1).measure_thread();
+        let _span = operation.measure_thread().iterations(1);
 
         // Do some work
         let mut sum = 0;
@@ -92,7 +92,7 @@ fn reports_can_be_merged_across_threads() {
     // Create reports in different threads
     let handle1 = thread::spawn(move || {
         let operation = session1.operation("thread1_work");
-        let _span = operation.iterations(1).measure_thread();
+        let _span = operation.measure_thread().iterations(1);
 
         let mut sum = 0;
         for i in 0..500 {
@@ -105,7 +105,7 @@ fn reports_can_be_merged_across_threads() {
 
     let handle2 = thread::spawn(move || {
         let operation = session2.operation("thread2_work");
-        let _span = operation.iterations(1).measure_process();
+        let _span = operation.measure_process().iterations(1);
 
         let mut sum = 0;
         for i in 0..500 {

@@ -65,7 +65,7 @@ fn main() {
     {
         println!("🧵 Tracking thread-local allocations (3 iterations)");
         let thread_op = session.operation("thread_span_multithreaded");
-        let _span = thread_op.iterations(3).measure_thread();
+        let _span = thread_op.measure_thread().iterations(3);
         for _i in 0..3 {
             multithreaded_allocations();
         }
@@ -75,7 +75,7 @@ fn main() {
     {
         println!("🌐 Tracking process-wide allocations (3 iterations)");
         let process_op = session.operation("process_span_multithreaded");
-        let _span = process_op.iterations(3).measure_process();
+        let _span = process_op.measure_process().iterations(3);
         for _i in 0..3 {
             multithreaded_allocations();
         }

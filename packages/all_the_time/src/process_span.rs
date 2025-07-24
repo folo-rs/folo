@@ -24,7 +24,7 @@ use crate::session::OperationMetrics;
 /// let session = Session::new();
 /// let operation = session.operation("test");
 /// {
-///     let _span = operation.iterations(1).measure_process();
+///     let _span = operation.measure_process();
 ///     // Perform some processor-intensive operation
 ///     let mut sum = 0;
 ///     for i in 0..1000 {
@@ -41,7 +41,7 @@ use crate::session::OperationMetrics;
 /// let session = Session::new();
 /// let operation = session.operation("benchmark");
 /// {
-///     let _span = operation.iterations(1000).measure_process();
+///     let _span = operation.measure_process().iterations(1000);
 ///     for i in 0..1000 {
 ///         // Perform the operation being benchmarked
 ///         let mut sum = 0;
@@ -78,6 +78,55 @@ impl ProcessSpan {
             iterations,
             _not_sync: PhantomData,
         }
+    }
+
+    /// Sets the number of iterations for this span.
+    ///
+    /// This allows you to specify how many iterations this span represents,
+    /// which is used to calculate the mean duration per iteration when the span is dropped.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use all_the_time::Session;
+    ///
+    /// let session = Session::new();
+    /// let operation = session.operation("batch_work");
+    /// {
+    ///     let _span = operation.measure_process().iterations(1000);
+    ///     for _ in 0..1000 {
+    ///         // Perform the same operation 1000 times
+    ///         std::hint::black_box(42 * 2);
+    ///     }
+    /// } // Total time is measured once and divided by 1000
+    /// ```
+    ///
+    /// You can also call it after some work has been done:
+    /// ```
+    /// use all_the_time::Session;
+    ///
+    /// let session = Session::new();
+    /// let operation = session.operation("dynamic_work");
+    /// {
+    ///     let span = operation.measure_process();
+    ///     // Perform work and determine iteration count dynamically
+    ///     let mut iterations = 0;
+    ///     for i in 0..100 {
+    ///         // Do some work
+    ///         std::hint::black_box(i * 2);
+    ///         iterations += 1;
+    ///     }
+    ///     span.iterations(iterations);
+    /// } // Time is divided by the final iteration count
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `iterations` is zero.
+    pub fn iterations(mut self, iterations: u64) -> Self {
+        assert!(iterations != 0, "Iterations cannot be zero");
+        self.iterations = iterations;
+        self
     }
 
     /// Calculates the process processor time delta since this span was created.
@@ -153,7 +202,7 @@ mod tests {
     fn creates_span_with_iterations() {
         let session = create_test_session();
         let operation = session.operation("test");
-        let span = operation.iterations(5).measure_process();
+        let span = operation.measure_process().iterations(5);
         assert_eq!(span.iterations, 5);
     }
 
@@ -162,7 +211,7 @@ mod tests {
     fn panics_on_zero_iterations() {
         let session = create_test_session();
         let operation = session.operation("test");
-        let _span = operation.iterations(0).measure_process();
+        let _span = operation.measure_process().iterations(0);
     }
 
     #[test]
@@ -170,7 +219,7 @@ mod tests {
         let session = create_test_session();
         let operation = session.operation("test");
         {
-            let _span = operation.iterations(1).measure_process();
+            let _span = operation.measure_process();
             // Perform some work
             let mut sum = 0;
             for i in 0..1000 {
@@ -189,7 +238,7 @@ mod tests {
         let operation = session.operation("test");
 
         {
-            let _span = operation.iterations(1).measure_process();
+            let _span = operation.measure_process();
         }
 
         // Should extract time from PAL and record one span with zero duration
@@ -209,7 +258,7 @@ mod tests {
         let operation = session.operation("test");
 
         {
-            let _span = operation.iterations(1).measure_process();
+            let _span = operation.measure_process();
             // Should use process_time (300ms), not thread_time (100ms)
         }
 
@@ -222,7 +271,7 @@ mod tests {
         let operation = session.operation("test");
 
         {
-            let _span = operation.iterations(7).measure_process();
+            let _span = operation.measure_process().iterations(7);
             // Should record one span per iteration regardless of actual time measured
         }
 
@@ -236,7 +285,7 @@ mod tests {
 
         // Create multiple spans to test duration accumulation
         for i in 1..=3 {
-            let _span = operation.iterations(i).measure_process();
+            let _span = operation.measure_process().iterations(i);
         }
 
         // Should have recorded 1 + 2 + 3 = 6 total spans

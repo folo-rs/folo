@@ -101,7 +101,7 @@ fn run_benchmark_with_tracking(pool: &ThreadPool) -> par_bench::RunSummary<Measu
     let run = Run::builder()
         .measure_wrapper_fns(
             // Wrapper begin function: creates tracking sessions and spans before the timed execution.
-            |_run_meta, _thread_state| {
+            |run_meta, _thread_state| {
                 let alloc_session = AllocSession::new();
                 let time_session = TimeSession::new();
 
@@ -109,8 +109,12 @@ fn run_benchmark_with_tracking(pool: &ThreadPool) -> par_bench::RunSummary<Measu
                 let alloc_operation = alloc_session.operation("benchmark_work");
                 let time_operation = time_session.operation("benchmark_work");
 
-                let alloc_span = alloc_operation.iterations(ITERATIONS).measure_thread();
-                let time_span = time_operation.iterations(ITERATIONS).measure_thread();
+                let alloc_span = alloc_operation
+                    .measure_thread()
+                    .iterations(run_meta.iterations());
+                let time_span = time_operation
+                    .measure_thread()
+                    .iterations(run_meta.iterations());
 
                 TrackingState {
                     alloc_session,

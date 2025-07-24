@@ -35,7 +35,7 @@ fn entrypoint(c: &mut Criterion) {
         let thread_op = time_session.operation("empty_thread_span");
         group.bench_function("thread_span_empty", |b| {
             b.iter(|| {
-                let _span = thread_op.iterations(1).measure_thread();
+                let _span = thread_op.measure_thread().iterations(1);
                 // Empty span - measures only the overhead of span creation/destruction
                 black_box(());
             });
@@ -44,7 +44,7 @@ fn entrypoint(c: &mut Criterion) {
         let process_op = time_session.operation("empty_process_span");
         group.bench_function("process_span_empty", |b| {
             b.iter(|| {
-                let _span = process_op.iterations(1).measure_process();
+                let _span = process_op.measure_process().iterations(1);
                 // Empty span - measures only the overhead of span creation/destruction
                 black_box(());
             });
@@ -54,7 +54,7 @@ fn entrypoint(c: &mut Criterion) {
         let batch_op_10 = time_session.operation("empty_batch_span_10");
         group.bench_function("batch_span_empty_10_iterations", |b| {
             b.iter(|| {
-                let _span = batch_op_10.iterations(10).measure_thread();
+                let _span = batch_op_10.measure_thread().iterations(10);
                 // Empty span with 10 iterations - measures overhead amortized over 10 iterations
                 black_box(());
             });
@@ -63,7 +63,7 @@ fn entrypoint(c: &mut Criterion) {
         let batch_op_100 = time_session.operation("empty_batch_span_100");
         group.bench_function("batch_span_empty_100_iterations", |b| {
             b.iter(|| {
-                let _span = batch_op_100.iterations(100).measure_thread();
+                let _span = batch_op_100.measure_thread().iterations(100);
                 // Empty span with 100 iterations - measures overhead amortized over 100 iterations
                 black_box(());
             });
@@ -72,7 +72,7 @@ fn entrypoint(c: &mut Criterion) {
         let batch_op_1000 = time_session.operation("empty_batch_span_1000");
         group.bench_function("batch_span_empty_1000_iterations", |b| {
             b.iter(|| {
-                let _span = batch_op_1000.iterations(1000).measure_thread();
+                let _span = batch_op_1000.measure_thread().iterations(1000);
                 // Empty span with 1000 iterations - measures overhead amortized over 1000 iterations
                 black_box(());
             });

@@ -66,7 +66,7 @@ fn worker_thread(thread_name: &str) -> Report {
     {
         let common_op = session.operation("common_work");
         let iterations = 10;
-        let _span = common_op.iterations(iterations).measure_thread();
+        let _span = common_op.measure_thread().iterations(iterations);
 
         for i in 0..iterations {
             // Processor-intensive string work - do more work to get measurable CPU time
@@ -90,7 +90,7 @@ fn worker_thread(thread_name: &str) -> Report {
     {
         let unique_op = session.operation(&unique_work_name);
         let iterations = 10;
-        let _span = unique_op.iterations(iterations).measure_thread();
+        let _span = unique_op.measure_thread().iterations(iterations);
 
         for i in 0..iterations {
             // Different computational work per thread - more CPU intensive

@@ -12,7 +12,7 @@ fn alloc_tracker_report_api() {
 
     {
         let op = session.operation("test_alloc");
-        let _span = op.iterations(3).measure_process();
+        let _span = op.measure_process().iterations(3);
         // Perform actual allocations
         for _ in 0..3 {
             let _data = [1_u8; 100].to_vec(); // Each allocation creates a Vec

@@ -20,7 +20,7 @@ use crate::session::OperationMetrics;
 /// let session = Session::new();
 /// let operation = session.operation("test");
 /// {
-///     let _span = operation.iterations(1).measure_thread();
+///     let _span = operation.measure_thread();
 ///     // Perform some processor-intensive operation
 ///     let mut sum = 0;
 ///     for i in 0..1000 {
@@ -37,7 +37,7 @@ use crate::session::OperationMetrics;
 /// let session = Session::new();
 /// let operation = session.operation("test");
 /// {
-///     let _span = operation.iterations(1000).measure_thread();
+///     let _span = operation.measure_thread().iterations(1000);
 ///     for i in 0..1000 {
 ///         // Perform the operation being benchmarked
 ///         let mut sum = 0;
@@ -75,6 +75,55 @@ impl ThreadSpan {
             iterations,
             _single_threaded: PhantomData,
         }
+    }
+
+    /// Sets the number of iterations for this span.
+    ///
+    /// This allows you to specify how many iterations this span represents,
+    /// which is used to calculate the mean duration per iteration when the span is dropped.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use all_the_time::Session;
+    ///
+    /// let session = Session::new();
+    /// let operation = session.operation("batch_work");
+    /// {
+    ///     let _span = operation.measure_thread().iterations(1000);
+    ///     for _ in 0..1000 {
+    ///         // Perform the same operation 1000 times
+    ///         std::hint::black_box(42 * 2);
+    ///     }
+    /// } // Total time is measured once and divided by 1000
+    /// ```
+    ///
+    /// You can also call it after some work has been done:
+    /// ```
+    /// use all_the_time::Session;
+    ///
+    /// let session = Session::new();
+    /// let operation = session.operation("dynamic_work");
+    /// {
+    ///     let span = operation.measure_thread();
+    ///     // Perform work and determine iteration count dynamically
+    ///     let mut iterations = 0;
+    ///     for i in 0..100 {
+    ///         // Do some work
+    ///         std::hint::black_box(i * 2);
+    ///         iterations += 1;
+    ///     }
+    ///     span.iterations(iterations);
+    /// } // Time is divided by the final iteration count
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `iterations` is zero.
+    pub fn iterations(mut self, iterations: u64) -> Self {
+        assert!(iterations != 0, "Iterations cannot be zero");
+        self.iterations = iterations;
+        self
     }
 
     /// Calculates the thread processor time delta since this span was created.
@@ -150,7 +199,7 @@ mod tests {
     fn creates_span_with_iterations() {
         let session = create_test_session();
         let operation = session.operation("test");
-        let span = operation.iterations(5).measure_thread();
+        let span = operation.measure_thread().iterations(5);
         assert_eq!(span.iterations, 5);
     }
 
@@ -159,7 +208,7 @@ mod tests {
     fn panics_on_zero_iterations() {
         let session = create_test_session();
         let operation = session.operation("test");
-        let _span = operation.iterations(0).measure_thread();
+        let _span = operation.measure_thread().iterations(0);
     }
 
     #[test]
@@ -168,7 +217,7 @@ mod tests {
         let operation = session.operation("test");
 
         {
-            let _span = operation.iterations(1).measure_thread();
+            let _span = operation.measure_thread();
         }
 
         // Should extract time from PAL and record one span with zero duration
@@ -184,7 +233,7 @@ mod tests {
         // We need to simulate time advancement by accessing the platform directly
         // and changing the time between span creation and drop
         {
-            let span = operation.iterations(1).measure_thread();
+            let span = operation.measure_thread();
 
             // Manually advance the fake platform time
             // We need to get mutable access to the fake platform
@@ -203,7 +252,7 @@ mod tests {
         let operation = session.operation("test");
 
         {
-            let _span = operation.iterations(5).measure_thread();
+            let _span = operation.measure_thread().iterations(5);
             // Should record one span per iteration regardless of actual time measured
         }
 
@@ -217,7 +266,7 @@ mod tests {
 
         // Create a span and test the duration calculation logic
         {
-            let _span = operation.iterations(10).measure_thread();
+            let _span = operation.measure_thread().iterations(10);
             // The span will calculate duration when dropped
         }
 
@@ -237,7 +286,7 @@ mod tests {
         let operation = session.operation("test");
 
         {
-            let _span = operation.iterations(1).measure_thread();
+            let _span = operation.measure_thread();
             // Should use thread_time (50ms), not process_time (200ms)
         }
 
@@ -253,7 +302,7 @@ mod tests {
         let operation = session.operation("test");
 
         {
-            let _span = operation.iterations(1).measure_thread();
+            let _span = operation.measure_thread();
             // With fake platform, both start and end times are zero
         }
 
@@ -272,7 +321,7 @@ mod tests {
         // Simulate a time measurement where we start at 0ms and end at 1000ms
         // with 10 iterations, so each should be 100ms
         {
-            let _span = operation.iterations(10).measure_thread();
+            let _span = operation.measure_thread().iterations(10);
             // The span will divide total time by iterations when dropped
         }
 
@@ -357,7 +406,7 @@ mod tests {
         let operation = session.operation("test");
 
         // Create span that should divide by iterations
-        let span = operation.iterations(5).measure_thread();
+        let span = operation.measure_thread().iterations(5);
 
         // Since our fake platform doesn't automatically advance time,
         // and we can't modify it after creation, let's test with

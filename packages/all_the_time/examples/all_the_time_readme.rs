@@ -17,7 +17,7 @@ fn main() {
     {
         let operation = session.operation("my_operation");
         let iterations = 10;
-        let _span = operation.iterations(iterations).measure_thread();
+        let _span = operation.measure_thread().iterations(iterations);
 
         for i in 0u64..iterations {
             // More processor-intensive work to get measurable CPU time

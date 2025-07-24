@@ -29,7 +29,7 @@ fn main() {
     {
         let string_op = session.operation("string_formatting");
         {
-            let _span = string_op.iterations(10).measure_thread();
+            let _span = string_op.measure_thread().iterations(10);
             for i in 0..10 {
                 let mut result = String::new();
                 for j in 0..5000 {
@@ -50,7 +50,7 @@ fn main() {
     {
         let hashmap_op = session.operation("hashmap_creation");
         {
-            let _span = hashmap_op.iterations(10).measure_thread();
+            let _span = hashmap_op.measure_thread().iterations(10);
             for i in 0..10 {
                 let mut map = HashMap::new();
                 for j in 0..1000 {
@@ -70,7 +70,7 @@ fn main() {
     {
         let computation_op = session.operation("computation");
         {
-            let _span = computation_op.iterations(10).measure_thread();
+            let _span = computation_op.measure_thread().iterations(10);
             for i in 0..10 {
                 let mut sum = 0u64;
                 // More processor-intensive computation with nested loops.

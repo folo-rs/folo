@@ -14,7 +14,7 @@ fn main() {
     // Track a single operation
     {
         let operation = session.operation("my_operation");
-        let _span = operation.iterations(1).measure_process();
+        let _span = operation.measure_process().iterations(1);
         let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
     }
 

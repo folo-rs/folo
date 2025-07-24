@@ -9,7 +9,6 @@
 //! - [`ThreadSpan`] - Tracks thread processor time over a time period
 //! - [`ProcessSpan`] - Tracks process processor time over a time period
 //! - [`Operation`] - Calculates mean processor time per operation
-//! - [`SpanBuilder`] - Builder for creating spans with explicit iteration counts
 //!
 //! This package is not meant for use in production, serving only as a development tool.
 //!
@@ -23,7 +22,7 @@
 //!
 //! {
 //!     let batch_op = session.operation("batch_work");
-//!     let _span = batch_op.iterations(1000).measure_thread();
+//!     let _span = batch_op.measure_thread().iterations(1000);
 //!     for _ in 0..1000 {
 //!         // Fast operation - measured once and divided by 1000
 //!         std::hint::black_box(42 * 2);
@@ -48,14 +47,14 @@
 //! // Track thread processor time
 //! {
 //!     let op = session.operation("thread_work");
-//!     let _span = op.iterations(1).measure_thread();
+//!     let _span = op.measure_thread();
 //!     // Work done here is measured for the current thread only
 //! }
 //!
 //! // Track process processor time (all threads)
 //! {
 //!     let op = session.operation("process_work");
-//!     let _span = op.iterations(1).measure_process();
+//!     let _span = op.measure_process();
 //!     // Work done here is measured for the entire process
 //! }
 //! # }
@@ -66,7 +65,7 @@
 //! Capturing a single measurement by calling `measure_xyz()` incurs an overhead of
 //! approximately 500 nanoseconds on an arbitrary sample machine. You are recommended to measure
 //! multiple consecutive iterations to minimize the impact of overhead on your benchmarks:
-//! `operation.iterations(12345).measure_xyz()`.
+//! `operation.measure_xyz().iterations(12345)`.
 //!
 //! # Session management
 //!
@@ -84,7 +83,7 @@
 //! # fn main() {
 //! let session = Session::new();
 //! let operation = session.operation("work");
-//! let _span = operation.iterations(1).measure_thread();
+//! let _span = operation.measure_thread();
 //! // Some work happens here
 //!
 //! let report = session.to_report();
@@ -104,12 +103,10 @@ mod pal;
 mod process_span;
 mod report;
 mod session;
-mod span_builder;
 mod thread_span;
 
 pub use operation::Operation;
 pub use process_span::ProcessSpan;
 pub use report::{Report, ReportOperation};
 pub use session::Session;
-pub use span_builder::SpanBuilder;
 pub use thread_span::ThreadSpan;

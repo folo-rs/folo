@@ -53,7 +53,7 @@ fn real_platform_thread_span_measures_nonzero_time() {
 
     // Perform significant CPU work and measure it with a thread span
     let iterations_performed = {
-        let _span = operation.iterations(1).measure_thread();
+        let _span = operation.measure_thread().iterations(1);
         perform_measurable_cpu_work()
     };
 
@@ -90,7 +90,7 @@ fn real_platform_process_span_measures_nonzero_time() {
 
     // Perform significant CPU work and measure it with a process span
     let iterations_performed = {
-        let _span = operation.iterations(1).measure_process();
+        let _span = operation.measure_process().iterations(1);
         perform_measurable_cpu_work()
     };
 
@@ -131,7 +131,7 @@ fn real_platform_session_not_empty_after_work() {
     let measured_time = {
         let operation = session.operation("integration_test");
         {
-            let _span = operation.iterations(1).measure_thread();
+            let _span = operation.measure_thread().iterations(1);
             perform_measurable_cpu_work();
         }
         operation.mean()

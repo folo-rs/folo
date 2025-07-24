@@ -21,7 +21,7 @@ fn main() {
     let unbatched_op = session.operation("unbatched_measurements");
 
     for _ in 0..1000 {
-        let _span = unbatched_op.iterations(1).measure_thread();
+        let _span = unbatched_op.measure_thread().iterations(1);
         // Simple operation
         black_box(42_u64.wrapping_mul(73));
     }
@@ -35,7 +35,7 @@ fn main() {
     let batched_op = session.operation("batched_measurements");
 
     {
-        let _span = batched_op.iterations(1000).measure_thread();
+        let _span = batched_op.measure_thread().iterations(1000);
         for _ in 0..1000 {
             // Same simple operation
             black_box(42_u64.wrapping_mul(73));
@@ -48,7 +48,7 @@ fn main() {
     let substantial_op = session.operation("substantial_work");
 
     {
-        let _span = substantial_op.iterations(5).measure_thread();
+        let _span = substantial_op.measure_thread().iterations(5);
         for _ in 0..5 {
             let mut sum = 0_u64;
             for i in 0..50000_u64 {

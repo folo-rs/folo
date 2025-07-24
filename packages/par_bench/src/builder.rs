@@ -549,7 +549,7 @@ where
     /// Completes the preparation of a benchmark run and returns a [`Run`] instance that can be
     /// used to execute the run on a specific thread pool.
     ///
-    /// **Builder Order**: This is the final step that can only be called after [`iter_fn()`] has been configured.
+    /// **Builder Order**: This is the final step that can only be called after [`Self::iter_fn()`] has been configured.
     /// The returned [`Run`] is ready for execution via [`Run::execute_on()`](crate::Run::execute_on).
     ///
     /// # Examples

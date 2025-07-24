@@ -28,7 +28,7 @@ fn span_with_no_allocation_is_not_empty_session() {
 
     {
         let op = session.operation("test_no_allocation");
-        drop(op.iterations(1).measure_process());
+        drop(op.measure_process());
     } // op is dropped here, merging data to session
 
     assert!(
@@ -48,7 +48,7 @@ fn single_thread_allocations() {
     let process_total = {
         let process_op = session.operation("process_single_thread");
         for i in 1..=TEST_ITERATIONS {
-            let _span = process_op.iterations(1).measure_process();
+            let _span = process_op.measure_process();
             let _data = vec![0_u8; i * BYTES_PER_ITERATION];
             black_box(&_data);
         }
@@ -59,7 +59,7 @@ fn single_thread_allocations() {
     let thread_total = {
         let thread_op = session.operation("thread_single_thread");
         for i in 1..=TEST_ITERATIONS {
-            let _span = thread_op.iterations(1).measure_thread();
+            let _span = thread_op.measure_thread();
             let _data = vec![0_u8; i * BYTES_PER_ITERATION];
             black_box(&_data);
         }
@@ -116,7 +116,7 @@ fn multithreaded_allocations_show_span_differences() {
     let process_total = {
         let process_op = session.operation("process_multithreaded");
         for _ in 0..TEST_ITERATIONS {
-            let _span = process_op.iterations(1).measure_process();
+            let _span = process_op.measure_process();
             spawn_workers();
         }
         process_op.total_bytes_allocated()
@@ -126,7 +126,7 @@ fn multithreaded_allocations_show_span_differences() {
     let thread_total = {
         let thread_op = session.operation("thread_multithreaded");
         for _ in 0..TEST_ITERATIONS {
-            let _span = thread_op.iterations(1).measure_thread();
+            let _span = thread_op.measure_thread();
             spawn_workers();
         }
         thread_op.total_bytes_allocated()
@@ -153,7 +153,7 @@ fn mixed_span_types_in_multithreaded_context() {
     for iteration in 1..=ITERATIONS {
         // Alternate between process and thread spans
         if iteration % 2 == 0 {
-            let _span = mixed_op.iterations(1).measure_process();
+            let _span = mixed_op.measure_process();
             // Spawn a thread that allocates memory
             let handle = thread::spawn(|| {
                 let data = vec![0_u8; 500];
@@ -164,7 +164,7 @@ fn mixed_span_types_in_multithreaded_context() {
             black_box(data);
             handle.join().expect("thread should complete successfully");
         } else {
-            let _span = mixed_op.iterations(1).measure_thread();
+            let _span = mixed_op.measure_thread();
             // Spawn a thread that allocates memory (won't be captured by thread span)
             let handle = thread::spawn(|| {
                 let data = vec![0_u8; 500];
@@ -201,7 +201,7 @@ fn report_is_empty_matches_session_is_empty() {
     // Test 3: Add spans - both should be non-empty
     {
         let operation = session.operation("test_with_spans");
-        let _span = operation.iterations(1).measure_process();
+        let _span = operation.measure_process();
         // No actual allocation needed for span to exist
     } // Operation is dropped here, merging data to session
 
@@ -220,7 +220,7 @@ fn report_mean_with_known_allocations() {
     {
         let operation = session.operation("known_allocation");
         for _ in 0..NUM_ITERATIONS {
-            let _span = operation.iterations(1).measure_thread();
+            let _span = operation.measure_thread();
             // Allocate a single Box<u64> - predictable size allocation
             let boxed_value = Box::new(42_u64);
             black_box(boxed_value); // Ensure allocation is not optimized away, but Box is dropped

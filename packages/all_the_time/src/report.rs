@@ -18,7 +18,7 @@ use std::time::Duration;
 /// # fn main() {
 /// let session = Session::new();
 /// let operation = session.operation("test_work");
-/// let _span = operation.iterations(100).measure_thread();
+/// let _span = operation.measure_thread().iterations(100);
 /// for _ in 0..100 {
 ///     std::hint::black_box(42 * 2);
 /// }
@@ -42,11 +42,11 @@ use std::time::Duration;
 ///
 /// // Record some work in each
 /// let op1 = session1.operation("work");
-/// let _span1 = op1.iterations(1).measure_thread();
+/// let _span1 = op1.measure_thread().iterations(1);
 /// std::hint::black_box(42);
 ///
 /// let op2 = session2.operation("work");
-/// let _span2 = op2.iterations(1).measure_thread();
+/// let _span2 = op2.measure_thread().iterations(1);
 /// std::hint::black_box(42);
 ///
 /// // Convert to reports and merge
@@ -119,13 +119,13 @@ impl Report {
     ///
     /// // Both sessions record the same operation name
     /// let op1 = session1.operation("common_work");
-    /// let _span1 = op1.iterations(5).measure_thread();
+    /// let _span1 = op1.measure_thread().iterations(5);
     /// for _ in 0..5 {
     ///     std::hint::black_box(42);
     /// }
     ///
     /// let op2 = session2.operation("common_work");
-    /// let _span2 = op2.iterations(3).measure_thread();
+    /// let _span2 = op2.measure_thread().iterations(3);
     /// for _ in 0..3 {
     ///     std::hint::black_box(42);
     /// }
@@ -197,7 +197,7 @@ impl Report {
     /// # fn main() {
     /// let session = Session::new();
     /// let operation = session.operation("test_work");
-    /// let _span = operation.iterations(100).measure_thread();
+    /// let _span = operation.measure_thread().iterations(100);
     /// for _ in 0..100 {
     ///     std::hint::black_box(42 * 2);
     /// }
@@ -304,7 +304,7 @@ mod tests {
         let session = create_test_session();
         {
             let operation = session.operation("test");
-            let _span = operation.iterations(1).measure_thread();
+            let _span = operation.measure_thread().iterations(1);
         } // Span drops here, releasing the mutable borrow
 
         let report = session.to_report();
@@ -324,7 +324,7 @@ mod tests {
         let session = create_test_session();
         {
             let operation = session.operation("test");
-            let _span = operation.iterations(1).measure_thread();
+            let _span = operation.measure_thread().iterations(1);
         } // Span drops here
 
         let report1 = Report::new();
@@ -344,12 +344,12 @@ mod tests {
 
         {
             let op1 = session1.operation("test1");
-            let _span1 = op1.iterations(1).measure_thread();
+            let _span1 = op1.measure_thread().iterations(1);
         } // Span drops here
 
         {
             let op2 = session2.operation("test2");
-            let _span2 = op2.iterations(1).measure_thread();
+            let _span2 = op2.measure_thread().iterations(1);
         } // Span drops here
 
         let report1 = session1.to_report();
@@ -368,12 +368,12 @@ mod tests {
 
         {
             let op1 = session1.operation("test");
-            let _span1 = op1.iterations(5).measure_thread();
+            let _span1 = op1.measure_thread().iterations(5);
         } // Span drops here
 
         {
             let op2 = session2.operation("test");
-            let _span2 = op2.iterations(3).measure_thread();
+            let _span2 = op2.measure_thread().iterations(3);
         } // Span drops here
 
         let report1 = session1.to_report();
@@ -390,7 +390,7 @@ mod tests {
         let session = create_test_session();
         {
             let operation = session.operation("test");
-            let _span = operation.iterations(1).measure_thread();
+            let _span = operation.measure_thread().iterations(1);
         } // Span drops here
 
         let report1 = session.to_report();
@@ -412,7 +412,7 @@ mod tests {
         fake_platform.set_thread_time(Duration::from_millis(10));
         {
             let operation = session.operation("test_operation");
-            let _span = operation.iterations(4).measure_thread();
+            let _span = operation.measure_thread().iterations(4);
             // Progress time during the operation to demonstrate time passing
             fake_platform.set_thread_time(Duration::from_millis(50));
         } // Operation is dropped here, recording 40ms total for 4 iterations
@@ -420,7 +420,7 @@ mod tests {
         // Second operation: start at 50ms, end at 90ms = 40ms duration
         {
             let operation = session.operation("test_operation");
-            let _span = operation.iterations(2).measure_thread();
+            let _span = operation.measure_thread().iterations(2);
             // Progress time during this operation too
             fake_platform.set_thread_time(Duration::from_millis(90));
         } // Operation is dropped here, recording another 40ms total for 2 iterations

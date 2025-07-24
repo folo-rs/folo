@@ -11,7 +11,7 @@ fn all_the_time_report_api() {
 
     {
         let op = session.operation("test_work");
-        let _span = op.iterations(10).measure_thread();
+        let _span = op.measure_thread().iterations(10);
         // Do more work to ensure measurable processor time
         for _ in 0..10 {
             let mut sum = 0;

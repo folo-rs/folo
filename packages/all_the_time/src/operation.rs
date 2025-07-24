@@ -6,10 +6,10 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::SpanBuilder;
 use crate::constants::ERR_POISONED_LOCK;
 use crate::pal::PlatformFacade;
 use crate::session::OperationMetrics;
+use crate::{ProcessSpan, ThreadSpan};
 
 /// Calculates mean processor time per operation across multiple iterations.
 ///
@@ -29,7 +29,7 @@ use crate::session::OperationMetrics;
 /// // Simulate multiple operations - note explicit iteration count
 /// for i in 0..5 {
 ///     {
-///         let _span = operation.iterations(1).measure_thread();
+///         let _span = operation.measure_thread();
 ///         // Perform some processor-intensive work
 ///         let mut sum = 0;
 ///         for j in 0..i * 1000 {
@@ -120,27 +120,29 @@ impl Operation {
         );
     }
 
-    /// Creates a span builder with the specified iteration count.
+    /// Creates a span that tracks thread processor time from creation until it is dropped.
     ///
-    /// This method requires an explicit iteration count, making the measurement
-    /// overhead visible in the API. The iteration count cannot be zero.
+    /// This method tracks processor time consumed by the current thread only.
+    /// Use this when you want to measure processor time for single-threaded operations
+    /// or when you want to track per-thread processor usage.
+    ///
+    /// The span defaults to 1 iteration but can be changed using the `iterations()` method.
     ///
     /// # Examples
     ///
-    /// For single operations:
     /// ```
     /// use all_the_time::Session;
     ///
     /// let session = Session::new();
-    /// let operation = session.operation("single_op");
+    /// let operation = session.operation("thread_work");
     /// {
-    ///     let _span = operation.iterations(1).measure_thread();
-    ///     // Perform a single operation
+    ///     let _span = operation.measure_thread();
+    ///     // Perform some processor-intensive work in this thread
     ///     let mut sum = 0;
     ///     for i in 0..1000 {
     ///         sum += i;
     ///     }
-    /// }
+    /// } // Thread processor time is tracked for 1 iteration
     /// ```
     ///
     /// For batch operations (reduces measurement overhead):
@@ -150,17 +152,57 @@ impl Operation {
     /// let session = Session::new();
     /// let operation = session.operation("batch_ops");
     /// {
-    ///     let iterations = 10000;
-    ///     let _span = operation.iterations(iterations).measure_thread();
+    ///     let _span = operation.measure_thread().iterations(10000);
     ///     for _ in 0..10000 {
     ///         // Fast operation that would be dominated by measurement overhead
     ///         std::hint::black_box(42 * 2);
     ///     }
     /// } // Total time is measured once and divided by 10000
     /// ```
-    #[must_use]
-    pub fn iterations(&self, iterations: u64) -> SpanBuilder<'_> {
-        SpanBuilder::new(self, iterations)
+    pub fn measure_thread(&self) -> ThreadSpan {
+        ThreadSpan::new(self, 1)
+    }
+
+    /// Creates a span that tracks process processor time from creation until it is dropped.
+    ///
+    /// This method tracks processor time consumed by the entire process (all threads).
+    /// Use this when you want to measure total processor time including multi-threaded
+    /// operations or when you want to track overall process processor usage.
+    ///
+    /// The span defaults to 1 iteration but can be changed using the `iterations()` method.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use all_the_time::Session;
+    ///
+    /// let session = Session::new();
+    /// let operation = session.operation("process_work");
+    /// {
+    ///     let _span = operation.measure_process();
+    ///     // Perform some processor-intensive work that might spawn threads
+    ///     let mut sum = 0;
+    ///     for i in 0..1000 {
+    ///         sum += i;
+    ///     }
+    /// } // Total process processor time is tracked for 1 iteration
+    /// ```
+    ///
+    /// For batch operations:
+    /// ```
+    /// use all_the_time::Session;
+    ///
+    /// let session = Session::new();
+    /// let operation = session.operation("batch_work");
+    /// {
+    ///     let _span = operation.measure_process().iterations(1000);
+    ///     for _ in 0..1000 {
+    ///         // Perform the same operation 1000 times
+    ///     }
+    /// } // Total time is measured once and divided by 1000
+    /// ```
+    pub fn measure_process(&self) -> ProcessSpan {
+        ProcessSpan::new(self, 1)
     }
 
     /// Calculates the mean processor time per span.
@@ -269,7 +311,7 @@ mod tests {
         let session = create_test_session();
         let operation = session.operation("test");
         {
-            let _span = operation.iterations(1).measure_thread();
+            let _span = operation.measure_thread();
             // Perform some CPU work
             let mut sum = 0;
             for i in 0..1000 {
@@ -288,7 +330,7 @@ mod tests {
         let session = create_test_session();
         let operation = session.operation("test");
         {
-            let _span = operation.iterations(10).measure_thread();
+            let _span = operation.measure_thread().iterations(10);
             // Perform some CPU work in a batch
             for i in 0..10 {
                 let mut sum = 0;
