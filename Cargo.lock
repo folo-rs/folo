@@ -28,7 +28,7 @@ dependencies = [
 
 [[package]]
 name = "all_the_time"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "cpu-time",
  "criterion",
@@ -38,7 +38,7 @@ dependencies = [
 
 [[package]]
 name = "alloc_tracker"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "criterion",
  "mutants",
@@ -815,7 +815,7 @@ checksum = "1171693293099992e19cddea4e8b849964e9846f4acee11b3948bcc337be8776"
 
 [[package]]
 name = "linked"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "benchmark_utils",
  "criterion",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros"
-version = "0.2.11"
+version = "0.2.12"
 dependencies = [
  "linked_macros_impl",
  "proc-macro2",
@@ -838,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros_impl"
-version = "0.2.11"
+version = "0.2.12"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1346,7 +1346,7 @@ checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
 
 [[package]]
 name = "region_cached"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1366,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "arc-swap",
  "axum",
