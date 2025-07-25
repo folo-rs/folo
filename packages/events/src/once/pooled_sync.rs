@@ -275,6 +275,57 @@ where
         )
     }
 
+    /// Returns the number of events currently in the pool.
+    ///
+    /// This represents the count of events that are currently allocated in the pool,
+    /// including those that are currently bound to sender/receiver endpoints.
+    /// Events are removed from the pool only when both endpoints are dropped.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use events::OnceEventPool;
+    ///
+    /// let pool = OnceEventPool::<i32>::new();
+    /// assert_eq!(pool.len(), 0);
+    ///
+    /// let (sender, receiver) = pool.bind_by_ref();
+    /// assert_eq!(pool.len(), 1); // Event is in pool while endpoints exist
+    ///
+    /// drop(sender);
+    /// drop(receiver);
+    /// assert_eq!(pool.len(), 0); // Event cleaned up after both endpoints dropped
+    /// ```
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.pool.lock().expect(ERR_POISONED_LOCK).len()
+    }
+
+    /// Returns whether the pool is empty.
+    ///
+    /// This is equivalent to `pool.len() == 0` but may be more efficient.
+    /// An empty pool may still have reserved capacity.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use events::OnceEventPool;
+    ///
+    /// let pool = OnceEventPool::<i32>::new();
+    /// assert!(pool.is_empty());
+    ///
+    /// let (sender, receiver) = pool.bind_by_ref();
+    /// assert!(!pool.is_empty()); // Pool has event while endpoints exist
+    ///
+    /// drop(sender);
+    /// drop(receiver);
+    /// assert!(pool.is_empty()); // Pool empty after both endpoints dropped
+    /// ```
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.pool.lock().expect(ERR_POISONED_LOCK).is_empty()
+    }
+
     /// Shrinks the capacity of the pool to reduce memory usage.
     ///
     /// This method attempts to release unused memory by reducing the pool's capacity.
@@ -622,11 +673,24 @@ mod tests {
     fn event_pool_by_ref() {
         with_watchdog(|| {
             let pool = OnceEventPool::<i32>::new();
+
+            // Pool starts empty
+            assert_eq!(pool.len(), 0);
+            assert!(pool.is_empty());
+
             let (sender, receiver) = pool.bind_by_ref();
+
+            // Pool should have 1 event while endpoints are bound
+            assert_eq!(pool.len(), 1);
+            assert!(!pool.is_empty());
 
             sender.send(42);
             let value = futures::executor::block_on(receiver).unwrap();
             assert_eq!(value, 42);
+
+            // After endpoints are dropped, pool should be empty
+            assert_eq!(pool.len(), 0);
+            assert!(pool.is_empty());
         });
     }
 
@@ -668,11 +732,24 @@ mod tests {
     fn event_pool_by_arc() {
         with_watchdog(|| {
             let pool = Arc::new(OnceEventPool::<i32>::new());
+
+            // Pool starts empty
+            assert_eq!(pool.len(), 0);
+            assert!(pool.is_empty());
+
             let (sender, receiver) = pool.bind_by_arc();
+
+            // Pool should have 1 event while endpoints are bound
+            assert_eq!(pool.len(), 1);
+            assert!(!pool.is_empty());
 
             sender.send(42);
             let value = futures::executor::block_on(receiver).unwrap();
             assert_eq!(value, 42);
+
+            // After endpoints are dropped, pool should be empty
+            assert_eq!(pool.len(), 0);
+            assert!(pool.is_empty());
         });
     }
 
@@ -681,13 +758,24 @@ mod tests {
         with_watchdog(|| {
             let pool = Box::pin(OnceEventPool::<i32>::new());
 
+            // Pool starts empty
+            assert_eq!(pool.len(), 0);
+            assert!(pool.is_empty());
+
             // SAFETY: We ensure the pool outlives the sender and receiver
             let (sender, receiver) = unsafe { pool.as_ref().bind_by_ptr() };
+
+            // Pool should have 1 event while endpoints are bound
+            assert_eq!(pool.len(), 1);
+            assert!(!pool.is_empty());
 
             sender.send(42);
             let value = futures::executor::block_on(receiver).unwrap();
             assert_eq!(value, 42);
-            // sender and receiver are dropped here, before pool
+
+            // After endpoints are dropped, pool should be empty
+            assert_eq!(pool.len(), 0);
+            assert!(pool.is_empty());
         });
     }
 
@@ -992,7 +1080,8 @@ mod tests {
             drop(pool.bind_by_ref());
         }
 
-        assert_eq!(pool.pool.lock().unwrap().len(), 0);
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
 
         // Shrink the pool to fit
         pool.shrink_to_fit();
@@ -1010,7 +1099,39 @@ mod tests {
 
         drop(pool.bind_by_ref());
 
-        assert_eq!(pool.pool.lock().unwrap().len(), 0);
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn pool_len_and_is_empty_methods() {
+        let pool = OnceEventPool::<u32>::new();
+
+        // Initially empty
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+
+        // Create first event
+        let (sender1, receiver1) = pool.bind_by_ref();
+        assert_eq!(pool.len(), 1);
+        assert!(!pool.is_empty());
+
+        // Create second event while first is still bound
+        let (sender2, receiver2) = pool.bind_by_ref();
+        assert_eq!(pool.len(), 2);
+        assert!(!pool.is_empty());
+
+        // Drop first event endpoints
+        drop(sender1);
+        drop(receiver1);
+        assert_eq!(pool.len(), 1);
+        assert!(!pool.is_empty());
+
+        // Drop second event endpoints
+        drop(sender2);
+        drop(receiver2);
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
     }
 
     #[test]
