@@ -194,7 +194,7 @@ checksum = "1b8e56985ec62d17e9c1001dc89c88ecd7dc08e47eba5ec7c29c7b5eeecde967"
 
 [[package]]
 name = "blind_pool"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "criterion",
  "foldhash",
@@ -436,7 +436,7 @@ dependencies = [
 
 [[package]]
 name = "events"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "benchmark_utils",
  "criterion",
@@ -815,7 +815,7 @@ checksum = "1171693293099992e19cddea4e8b849964e9846f4acee11b3948bcc337be8776"
 
 [[package]]
 name = "linked"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "benchmark_utils",
  "criterion",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "linked_macros_impl",
  "proc-macro2",
@@ -838,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros_impl"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1092,7 +1092,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "opaque_pool"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "criterion",
  "mutants",
@@ -1346,7 +1346,7 @@ checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
 
 [[package]]
 name = "region_cached"
-version = "0.1.27"
+version = "0.1.28"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1366,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "0.1.27"
+version = "0.1.28"
 dependencies = [
  "arc-swap",
  "axum",
