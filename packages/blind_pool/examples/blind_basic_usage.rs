@@ -1,4 +1,4 @@
-//! Example demonstrating the usage of `BlindPool` for storing different types.
+//! Example demonstrating the usage of `BlindPool` for storing different types with copyable handles.
 
 use std::f32::consts::PI;
 use std::f64::consts::E;
@@ -40,29 +40,51 @@ fn main() {
     println!("  u32 capacity: {}", pool.capacity_of::<u32>());
     println!("  f64 capacity: {}", pool.capacity_of::<f64>());
 
+    // Demonstrate that handles act like super-powered pointers - they can be copied freely.
+    println!();
+    println!("Demonstrating copyable handles...");
+    let handle_u32_copy = handle_u32;
+    #[expect(
+        clippy::clone_on_copy,
+        reason = "demonstrating that Clone is available"
+    )]
+    let handle_f64_clone = handle_f64.clone();
+
+    println!("  Created copies of u32 and f64 handles");
+
     // Read values back from the pool using the handles.
     println!();
     println!("Reading values back from the pool:");
 
     // SAFETY: All pointers are valid and contain the values we just inserted.
-    let val_u32 = unsafe { handle_u32.ptr().read() };
+    let val_u32_original = unsafe { handle_u32.ptr().read() };
+    // SAFETY: All pointers are valid and contain the values we just inserted.
+    let val_u32_copy = unsafe { handle_u32_copy.ptr().read() };
     // SAFETY: All pointers are valid and contain the values we just inserted.
     let val_u64 = unsafe { handle_u64.ptr().read() };
     // SAFETY: All pointers are valid and contain the values we just inserted.
     let val_f32 = unsafe { handle_f32.ptr().read() };
     // SAFETY: All pointers are valid and contain the values we just inserted.
-    let val_f64 = unsafe { handle_f64.ptr().read() };
+    let val_f64_original = unsafe { handle_f64.ptr().read() };
+    // SAFETY: All pointers are valid and contain the values we just inserted.
+    let val_f64_clone = unsafe { handle_f64_clone.ptr().read() };
     // SAFETY: All pointers are valid and contain the values we just inserted.
     let val_bool = unsafe { handle_bool.ptr().read() };
     // SAFETY: All pointers are valid and contain the values we just inserted.
     let val_char = unsafe { handle_char.ptr().read() };
 
-    println!("  u32 value: {val_u32}");
+    println!("  u32 value (original): {val_u32_original}");
+    println!("  u32 value (copy): {val_u32_copy}");
     println!("  u64 value: {val_u64}");
     println!("  f32 value: {val_f32}");
-    println!("  f64 value: {val_f64}");
+    println!("  f64 value (original): {val_f64_original}");
+    println!("  f64 value (clone): {val_f64_clone}");
     println!("  bool value: {val_bool}");
     println!("  char value: '{val_char}'");
+
+    // All copies should refer to the same values.
+    assert_eq!(val_u32_original, val_u32_copy);
+    assert!((val_f64_original - val_f64_clone).abs() < f64::EPSILON);
 
     // Demonstrate type erasure.
     println!();

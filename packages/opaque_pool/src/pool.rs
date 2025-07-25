@@ -18,8 +18,9 @@ fn generate_pool_id() -> u64 {
 /// A pinned object pool of unbounded size that accepts objects of different types as long
 /// as they match a specific memory layout.
 ///
-/// The pool returns a [`Pooled<T>`] for each inserted value, which acts as both
-/// the key and provides direct access to the inserted item via a pointer.
+/// The pool returns a [`Pooled<T>`] for each inserted value, which acts as a super-powered
+/// pointer that can be copied and cloned freely. Each handle provides direct access to the
+/// inserted item via a pointer.
 ///
 /// # Out of band access
 ///
@@ -582,9 +583,14 @@ impl OpaquePool {
 
 /// The result of inserting a value of type `T` into a [`OpaquePool`].
 ///
-/// Acts as both the handle and the key - the user may return this to the pool to remove
-/// the value from the pool and drop it. Depending on the pool's [drop policy][DropPolicy],
-/// the pool may panic if it is dropped while still containing items.
+/// Acts as a super-powered pointer that can be copied and cloned freely. The handle serves
+/// both as the key and provides direct access to the stored value. You can return this to
+/// the pool to remove the value from the pool and drop it. Depending on the pool's
+/// [drop policy][DropPolicy], the pool may panic if it is dropped while still containing items.
+///
+/// Being `Copy` and `Clone`, this type behaves like a regular pointer - you can duplicate
+/// handles freely without affecting the underlying stored value. Multiple copies of the same
+/// handle all refer to the same stored value.
 ///
 /// The generic parameter `T` provides type-safe access to the stored value through
 /// [`ptr()`](Pooled::ptr). If you need to erase the type information, use
@@ -603,14 +609,23 @@ impl OpaquePool {
 /// // SAFETY: i64 matches the layout used to create the pool.
 /// let pooled = unsafe { pool.insert(-123i64) };
 ///
-/// // Read from the memory pointer.
-/// let value = unsafe { pooled.ptr().read() };
-/// assert_eq!(value, -123);
+/// // The handle acts like a super-powered pointer - it can be copied freely.
+/// let pooled_copy = pooled;
+/// let pooled_clone = pooled.clone();
 ///
-/// // To remove and drop an item, the handle is returned to the pool.
+/// // All copies refer to the same stored value.
+/// // SAFETY: All pointers are valid and point to the same value.
+/// let value1 = unsafe { pooled.ptr().read() };
+/// let value2 = unsafe { pooled_copy.ptr().read() };
+/// let value3 = unsafe { pooled_clone.ptr().read() };
+/// assert_eq!(value1, -123);
+/// assert_eq!(value2, -123);
+/// assert_eq!(value3, -123);
+///
+/// // To remove and drop an item, any handle can be returned to the pool.
 /// pool.remove(pooled);
 /// ```
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Pooled<T> {
     /// Ensures this handle can only be returned to the pool it came from.
     pool_id: u64,

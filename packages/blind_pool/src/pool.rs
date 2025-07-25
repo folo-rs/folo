@@ -9,8 +9,9 @@ use crate::BlindPoolBuilder;
 
 /// A pinned object pool of unbounded size that accepts objects of any type.
 ///
-/// The pool returns a [`Pooled<T>`] for each inserted value, which acts as both
-/// the key and provides direct access to the inserted item via a pointer.
+/// The pool returns a [`Pooled<T>`] for each inserted value, which acts as a super-powered
+/// pointer that can be copied and cloned freely. Each handle provides direct access to the
+/// inserted item via a pointer.
 ///
 /// # Out of band access
 ///
@@ -338,7 +339,12 @@ impl Drop for BlindPool {
 
 /// A handle representing an item stored in a [`BlindPool`].
 ///
-/// This provides access to the stored item and can be used to remove the item from the pool.
+/// Acts as a super-powered pointer that can be copied and cloned freely. This provides
+/// access to the stored item and can be used to remove the item from the pool.
+///
+/// Being `Copy` and `Clone`, this type behaves like a regular pointer - you can duplicate
+/// handles freely without affecting the underlying stored value. Multiple copies of the same
+/// handle all refer to the same stored value.
 ///
 /// # Example
 ///
@@ -349,15 +355,23 @@ impl Drop for BlindPool {
 ///
 /// let pooled = pool.insert(42_u64);
 ///
-/// // Access the value via the pointer.
-/// // SAFETY: The pointer is valid and contains the value we just inserted.
-/// let value = unsafe { pooled.ptr().read() };
-/// assert_eq!(value, 42);
+/// // The handle acts like a super-powered pointer - it can be copied freely.
+/// let pooled_copy = pooled;
+/// let pooled_clone = pooled.clone();
 ///
-/// // Remove the item from the pool.
+/// // All copies refer to the same stored value.
+/// // SAFETY: All pointers are valid and point to the same value.
+/// let value1 = unsafe { pooled.ptr().read() };
+/// let value2 = unsafe { pooled_copy.ptr().read() };
+/// let value3 = unsafe { pooled_clone.ptr().read() };
+/// assert_eq!(value1, 42);
+/// assert_eq!(value2, 42);
+/// assert_eq!(value3, 42);
+///
+/// // To remove the item from the pool, any handle can be used.
 /// pool.remove(pooled);
 /// ```
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Pooled<T> {
     /// The memory layout of the stored item. This is used to identify which internal
     /// pool the item belongs to.

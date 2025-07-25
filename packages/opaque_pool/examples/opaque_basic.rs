@@ -1,7 +1,7 @@
 //! Basic usage example for `OpaquePool`.
 //!
 //! This example demonstrates how to use `OpaquePool` to manage type-erased memory
-//! with dynamic capacity growth.
+//! with dynamic capacity growth, including the copyable nature of pool handles.
 
 use opaque_pool::OpaquePool;
 
@@ -21,17 +21,37 @@ fn main() {
 
     println!("Inserted 3 items");
 
-    // Read values back through the handles.
+    // Demonstrate that handles act like super-powered pointers - they can be copied freely.
+    let pooled1_copy = pooled1;
+    #[expect(
+        clippy::clone_on_copy,
+        reason = "demonstrating that Clone is available"
+    )]
+    let pooled1_clone = pooled1.clone();
+
+    println!("Created copies of the first handle");
+
+    // Read values back through the handles - all copies refer to the same stored value.
     // SAFETY: The pointers are valid and the memory contains the values we just inserted.
-    let value1 = unsafe { pooled1.ptr().cast::<u32>().read() };
+    let value1_original = unsafe { pooled1.ptr().cast::<u32>().read() };
+    // SAFETY: The pointers are valid and the memory contains the values we just inserted.
+    let value1_copy = unsafe { pooled1_copy.ptr().cast::<u32>().read() };
+    // SAFETY: The pointers are valid and the memory contains the values we just inserted.
+    let value1_clone = unsafe { pooled1_clone.ptr().cast::<u32>().read() };
     // SAFETY: The pointers are valid and the memory contains the values we just inserted.
     let value2 = unsafe { pooled2.ptr().cast::<u32>().read() };
     // SAFETY: The pointers are valid and the memory contains the values we just inserted.
     let value3 = unsafe { pooled3.ptr().cast::<u32>().read() };
 
-    println!("Value 1: {value1:#x}");
+    println!("Value 1 (original): {value1_original:#x}");
+    println!("Value 1 (copy): {value1_copy:#x}");
+    println!("Value 1 (clone): {value1_clone:#x}");
     println!("Value 2: {value2:#x}");
     println!("Value 3: {value3:#x}");
+
+    // All copies should refer to the same value.
+    assert_eq!(value1_original, value1_copy);
+    assert_eq!(value1_original, value1_clone);
 
     println!(
         "Pool now has {} items with capacity {}",
@@ -39,7 +59,7 @@ fn main() {
         pool.capacity()
     );
 
-    // Remove one item.
+    // Remove one item using any of the handles.
     pool.remove(pooled2);
     println!("Removed item");
 
@@ -76,8 +96,8 @@ fn main() {
         pool.remove(pooled);
     }
 
-    // Also clean up the first and third items we still have.
-    pool.remove(pooled1);
+    // Also clean up the first and third items we still have (using any of the copies).
+    pool.remove(pooled1); // Could also use pooled1_copy or pooled1_clone
     pool.remove(pooled3);
 
     println!("All items cleaned up successfully!");
