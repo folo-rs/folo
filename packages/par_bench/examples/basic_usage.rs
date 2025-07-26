@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use many_cpus::ProcessorSet;
 use new_zealand::nz;
-use par_bench::{ConfiguredRun, ThreadPool};
+use par_bench::{Run, ThreadPool};
 
 const ITERATIONS: u64 = 10_000;
 
@@ -78,7 +78,7 @@ fn measure_atomic_increments(pool: &ThreadPool) -> std::time::Duration {
     // Shared atomic counter that all threads will increment.
     let counter = Arc::new(AtomicU64::new(0));
 
-    let run = ConfiguredRun::builder()
+    let run = Run::new()
         .prepare_thread_fn({
             let counter = Arc::clone(&counter);
             move |_run_meta| Arc::clone(&counter)
@@ -87,8 +87,7 @@ fn measure_atomic_increments(pool: &ThreadPool) -> std::time::Duration {
         .iter_fn(|counter: Arc<AtomicU64>| {
             // Increment the atomic counter and use black_box to prevent optimization.
             black_box(counter.fetch_add(1, Ordering::Relaxed));
-        })
-        .build();
+        });
 
     let stats = run.execute_on(pool, ITERATIONS);
 

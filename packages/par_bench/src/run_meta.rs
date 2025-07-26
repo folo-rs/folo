@@ -17,7 +17,7 @@ use std::num::NonZero;
 /// # if let Some(processors) = many_cpus::ProcessorSet::builder().take(nz!(4)) {
 /// let pool = ThreadPool::new(&processors);
 ///
-/// let run = Run::builder()
+/// let run = Run::new()
 ///     .groups(nz!(2)) // 2 groups of 2 threads each
 ///     .prepare_thread_fn(|run_meta| {
 ///         println!("Thread in group {} of {}",
@@ -39,8 +39,7 @@ use std::num::NonZero;
 ///             "writer_thread" => { /* writer work */ },
 ///             _ => unreachable!(),
 ///         }
-///     })
-///     .build();
+///     });
 ///
 /// let _results = run.execute_on(&pool, 100);
 /// # }

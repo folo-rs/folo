@@ -14,7 +14,7 @@ use std::hint::black_box;
 
 use all_the_time::{Report as TimeReport, Session as TimeSession};
 use alloc_tracker::{Allocator, Report as AllocReport, Session as AllocSession};
-use par_bench::{ConfiguredRun, ThreadPool};
+use par_bench::{Run, ThreadPool};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
@@ -98,7 +98,7 @@ fn main() {
 
 /// Runs a benchmark with tracking enabled using measure wrapper callbacks.
 fn run_benchmark_with_tracking(pool: &ThreadPool) -> par_bench::RunSummary<MeasurementOutput> {
-    let run = ConfiguredRun::builder()
+    let run = Run::new()
         .measure_wrapper_fns(
             // Wrapper begin function: creates tracking sessions and spans before the timed execution.
             |run_meta, _thread_state| {
@@ -142,8 +142,7 @@ fn run_benchmark_with_tracking(pool: &ThreadPool) -> par_bench::RunSummary<Measu
         .iter_fn(|()| {
             // Simulate some memory-intensive and processor-intensive work.
             simulate_benchmark_work();
-        })
-        .build();
+        });
 
     run.execute_on(pool, ITERATIONS)
 }

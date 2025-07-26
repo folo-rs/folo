@@ -50,7 +50,7 @@
 //! // Shared counter for all threads to increment
 //! let counter = Arc::new(AtomicU64::new(0));
 //!
-//! let run = Run::builder()
+//! let run = Run::new()
 //!     .prepare_thread_fn({
 //!         let counter = Arc::clone(&counter);
 //!         move |_run_meta| Arc::clone(&counter)
@@ -59,8 +59,7 @@
 //!     .iter_fn(|counter: Arc<AtomicU64>| {
 //!         // This is the measured work
 //!         counter.fetch_add(1, Ordering::Relaxed);
-//!     })
-//!     .build();
+//!     });
 //!
 //! // Execute 1000 iterations across all threads
 //! let results = run.execute_on(&pool, 1000);
@@ -84,7 +83,7 @@
 //! let reader_count = Arc::new(AtomicU64::new(0));
 //! let writer_count = Arc::new(AtomicU64::new(0));
 //!
-//! let run = Run::builder()
+//! let run = Run::new()
 //!     .groups(nz!(2)) // Divide 4 threads into 2 groups of 2 threads each
 //!     .prepare_thread_fn({
 //!         let reader_count = Arc::clone(&reader_count);
@@ -110,8 +109,7 @@
 //!             }
 //!             _ => unreachable!(),
 //!         }
-//!     })
-//!     .build();
+//!     });
 //!
 //! let results = run.execute_on(&pool, 100);
 //! println!("Results: {:?}", results.mean_duration());

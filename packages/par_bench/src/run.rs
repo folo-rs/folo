@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use crate::configure::RunInitial;
 
 /// A benchmark run will execute a specific number of multithreaded iterations on every
-/// thread of a [`ThreadPool`].
+/// thread of a [`crate::ThreadPool`].
 ///
 /// A `Run` must first be configured, after which it can be executed. The run logic separates
 /// preparation (unmeasured) from execution (measured) phases.
@@ -30,7 +30,7 @@ use crate::configure::RunInitial;
 /// let pool = ThreadPool::default();
 /// let counter = Arc::new(AtomicU64::new(0));
 ///
-/// let run = Run::builder()
+/// let run = Run::new()
 ///     .prepare_thread_fn({
 ///         let counter = Arc::clone(&counter);
 ///         move |_meta| Arc::clone(&counter)
@@ -38,8 +38,7 @@ use crate::configure::RunInitial;
 ///     .prepare_iter_fn(|_meta, counter| Arc::clone(counter))
 ///     .iter_fn(|counter: Arc<AtomicU64>| {
 ///         counter.fetch_add(1, Ordering::Relaxed);
-///     })
-///     .build();
+///     });
 ///
 /// let results = run.execute_on(&pool, 1000);
 /// println!("Executed in: {:?}", results.mean_duration());
@@ -55,13 +54,12 @@ use crate::configure::RunInitial;
 /// # fn main() {
 /// let pool = ThreadPool::default();
 ///
-/// let run = Run::builder()
+/// let run = Run::new()
 ///     .measure_wrapper_fns(|_meta, _state| Instant::now(), |start| start.elapsed())
 ///     .iter_fn(|_| {
 ///         // Simulate some work
 ///         std::hint::black_box((0..100).sum::<i32>());
-///     })
-///     .build();
+///     });
 ///
 /// let results = run.execute_on(&pool, 1000);
 ///
@@ -86,13 +84,13 @@ impl Run {
     /// # Order of operations
     ///
     /// 1. Start with `Run::new()`, which gives you an object you can use to configure the run.
-    /// 2. Optionally configure thread groups with [`groups()`](crate::RunBasic::groups)
-    /// 3. Optionally set thread preparation with [`prepare_thread_fn()`](crate::RunBasic::prepare_thread_fn)
-    /// 4. Optionally set iteration preparation with [`prepare_iter_fn()`](crate::RunWithThreadState::prepare_iter_fn)
-    /// 5. Optionally set measurement wrappers with [`measure_wrapper_fns()`](crate::RunWithIterState::measure_wrapper_fns)
-    /// 6. **Required**: Set the benchmark function with [`iter_fn()`](crate::RunWithWrapperState::iter_fn)
-    /// 7. **Required**: Execute the run with either [`execute_on()`][crate::RunFinal::execute_on]
-    ///    or [`execute_criterion_on()`][crate::RunFinal::execute_criterion_on].
+    /// 2. Optionally configure thread groups with [`groups()`](crate::configure::RunInitial::groups)
+    /// 3. Optionally set thread preparation with [`prepare_thread_fn()`](crate::configure::RunInitial::prepare_thread_fn)
+    /// 4. Optionally set iteration preparation with [`prepare_iter_fn()`](crate::configure::RunWithThreadState::prepare_iter_fn)
+    /// 5. Optionally set measurement wrappers with [`measure_wrapper_fns()`](crate::configure::RunWithIterState::measure_wrapper_fns)
+    /// 6. **Required**: Set the benchmark function with [`iter_fn()`](crate::configure::RunWithWrapperState::iter_fn)
+    /// 7. **Required**: Execute the run with either [`execute_on()`][crate::ConfiguredRun::execute_on]
+    ///    or [`execute_criterion_on()`][crate::ConfiguredRun::execute_criterion_on].
     ///
     /// You can skip optional steps but cannot go back in the sequence.
     ///
@@ -101,12 +99,10 @@ impl Run {
     /// ```
     /// use par_bench::Run;
     ///
-    /// let run = Run::builder()
-    ///     .iter_fn(|_| {
-    ///         // Benchmark work goes here
-    ///         std::hint::black_box(42 * 42);
-    ///     })
-    ///     .build();
+    /// let run = Run::new().iter_fn(|_| {
+    ///     // Benchmark work goes here
+    ///     std::hint::black_box(42 * 42);
+    /// });
     /// ```
     #[expect(
         clippy::new_ret_no_self,

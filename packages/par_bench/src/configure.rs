@@ -1,5 +1,5 @@
 //! Intermediate stages of configuring a benchmark run.
-//! 
+//!
 //! You generally do not need to reference these types, they are just parts of a call chain.
 
 #![allow(
@@ -96,13 +96,12 @@ impl RunInitial {
     /// ```
     /// use par_bench::Run;
     ///
-    /// let run = Run::builder()
+    /// let run = Run::new()
     ///     .prepare_thread_fn(|_meta| "thread_state")
     ///     .iter_fn(|_unit: ()| {
     ///         // Thread state is used internally; iter_fn gets unit type by default
     ///         std::hint::black_box(42);
-    ///     })
-    ///     .build();
+    ///     });
     /// ```
     pub fn prepare_thread_fn<'a, F, ThreadState>(self, f: F) -> RunWithThreadState<'a, ThreadState>
     where
@@ -130,13 +129,12 @@ impl RunInitial {
     /// ```
     /// use par_bench::Run;
     ///
-    /// let run = Run::builder()
+    /// let run = Run::new()
     ///     .prepare_iter_fn(|_meta, _unit_state| vec![1, 2, 3])
     ///     .iter_fn(|iter_vec: Vec<i32>| {
     ///         // Use the per-iteration vector
     ///         std::hint::black_box(iter_vec.len());
-    ///     })
-    ///     .build();
+    ///     });
     /// ```
     ///
     /// If you wish to specify a thread preparation function to provide state for each
@@ -191,7 +189,10 @@ impl RunInitial {
     /// If you wish to specify a thread or iteration preparation function to provide state for each
     /// thread or iteration, or a specify a measurement wrapper function, do all of these before
     /// calling this method.
-    pub fn iter_fn<'a, F, CleanupState>(self, f: F) -> ConfiguredRun<'a, (), (), (), (), CleanupState>
+    pub fn iter_fn<'a, F, CleanupState>(
+        self,
+        f: F,
+    ) -> ConfiguredRun<'a, (), (), (), (), CleanupState>
     where
         F: Fn(()) -> CleanupState + Send + Sync + 'a,
     {
@@ -232,14 +233,13 @@ impl<'a, ThreadState> RunWithThreadState<'a, ThreadState> {
     /// ```
     /// use par_bench::Run;
     ///
-    /// let run = Run::builder()
+    /// let run = Run::new()
     ///     .prepare_thread_fn(|_meta| vec![1, 2, 3])
     ///     .prepare_iter_fn(|_meta, vec| vec.clone())
     ///     .iter_fn(|iter_vec: Vec<i32>| {
     ///         // Use the per-iteration vector
     ///         std::hint::black_box(iter_vec.len());
-    ///     })
-    ///     .build();
+    ///     });
     /// ```
     pub fn prepare_iter_fn<F, IterState>(self, f: F) -> RunWithIterState<'a, ThreadState, IterState>
     where
@@ -286,7 +286,7 @@ impl<'a, ThreadState> RunWithThreadState<'a, ThreadState> {
     /// run (to exclude any cleanup logic from measurement).
     ///
     /// **Builder Order**: This is the final required step in preparing a benchmark run. After this,
-    /// you can only call [`build()`](RunFinal::build) on the builder.
+    /// you can call [`execute_on()`](crate::ConfiguredRun::execute_on) to run the benchmark.
     ///
     /// Must be called after:
     /// 1. [`prepare_thread_fn()`](RunInitial::prepare_thread_fn) (optional but recommended)
@@ -297,15 +297,14 @@ impl<'a, ThreadState> RunWithThreadState<'a, ThreadState> {
     /// ```
     /// use par_bench::Run;
     ///
-    /// let run = Run::builder()
+    /// let run = Run::new()
     ///     .prepare_thread_fn(|_meta| vec![1, 2, 3])
     ///     .iter_fn(|_unit_state| {
     ///         // Execute the benchmark iteration
     ///         std::hint::black_box(42);
     ///         // Return value to drop after measurement
     ///         "cleanup_data".to_string()
-    ///     })
-    ///     .build();
+    ///     });
     /// ```
     ///
     /// If you wish to specify an iteration preparation function to provide state for each

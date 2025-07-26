@@ -254,8 +254,7 @@ impl<MeasureOutput> RunSummary<MeasureOutput> {
     ///     )
     ///     .iter_fn(|counter: Arc<AtomicU64>| {
     ///         counter.fetch_add(1, Ordering::Relaxed);
-    ///     })
-    ///     .build();
+    ///     });
     ///
     /// let results = run.execute_on(&pool, 1000);
     ///

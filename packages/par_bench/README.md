@@ -15,7 +15,7 @@ let pool = ThreadPool::default();
 // Shared atomic counter that all threads will increment.
 let counter = Arc::new(AtomicU64::new(0));
 
-let run = Run::builder()
+let run = Run::new()
     .prepare_thread_fn({
         let counter = Arc::clone(&counter);
         move |_run_meta| Arc::clone(&counter)
@@ -24,8 +24,7 @@ let run = Run::builder()
     .iter_fn(|counter: Arc<AtomicU64>| {
         // Increment the atomic counter and use black_box to prevent optimization.
         black_box(counter.fetch_add(1, Ordering::Relaxed));
-    })
-    .build();
+    });
 
 // Execute 10,000 iterations across all threads.
 let stats = run.execute_on(&pool, 10_000);
