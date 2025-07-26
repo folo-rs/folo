@@ -145,6 +145,7 @@ impl ThreadPool {
 
                 move || {
                     let result = f();
+
                     result_tx.send(result).expect(
                         "receiver must still exist - this is mandatory for scoped lifetime logic",
                     );

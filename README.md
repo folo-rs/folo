@@ -52,7 +52,6 @@ There are also some development-only packages in this repo, which are not publis
 
 | Package                                       | Description                                                                        |
 |-----------------------------------------------|------------------------------------------------------------------------------------|
-| [`benchmark_utils`](packages/benchmark_utils) | Common benchmarking logic used across the packages in this project                 |
 | [`benchmarks`](packages/benchmarks)           | Random pile of benchmarks to explore relevant scenarios and guide Folo development |
 | [`testing`](packages/testing)                 | Private helpers for testing and examples in Folo packages                          |
 

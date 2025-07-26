@@ -9,9 +9,11 @@ use std::hint::black_box;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, LazyLock};
 
-use benchmark_utils::{ThreadPool, bench_on_threadpool};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use linked::InstancePerThread;
+use many_cpus::ProcessorSet;
+use new_zealand::nz;
+use par_bench::{Run, ThreadPool};
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
@@ -37,6 +39,15 @@ impl TestSubject {
     }
 }
 
+static ONE_PROCESSOR: LazyLock<ProcessorSet> =
+    LazyLock::new(|| ProcessorSet::builder().take(nz!(1)).unwrap());
+static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> =
+    LazyLock::new(|| ProcessorSet::builder().take(nz!(2)));
+
+static ONE_THREAD: LazyLock<ThreadPool> = LazyLock::new(|| ThreadPool::new(&ONE_PROCESSOR));
+static TWO_THREADS: LazyLock<Option<ThreadPool>> =
+    LazyLock::new(|| TWO_PROCESSORS.as_ref().map(ThreadPool::new));
+
 fn entrypoint(c: &mut Criterion) {
     local(c);
     local_ref(c);
@@ -45,24 +56,29 @@ fn entrypoint(c: &mut Criterion) {
 }
 
 fn local(c: &mut Criterion) {
-    let mut g = c.benchmark_group("instance_per_thread::InstancePerThread");
+    let mut g = c.benchmark_group("instance_per_thread::create");
 
     g.bench_function("new", |b| {
-        b.iter_batched(
-            || (),
-            |()| black_box(InstancePerThread::new(TestSubject::new())),
-            BatchSize::SmallInput,
-        );
+        b.iter_custom(|iters| {
+            Run::builder()
+                .prepare_iter_fn(|_, _| TestSubject::new())
+                .iter_fn(|test_subject| InstancePerThread::new(test_subject))
+                .build()
+                .execute_on(&ONE_THREAD, iters)
+                .mean_duration()
+        });
     });
 
     let per_thread = InstancePerThread::new(TestSubject::new());
 
     g.bench_function("clone", |b| {
-        b.iter_batched(
-            || (),
-            |()| black_box(per_thread.clone()),
-            BatchSize::SmallInput,
-        );
+        b.iter_custom(|iters| {
+            Run::builder()
+                .iter_fn(|()| per_thread.clone())
+                .build()
+                .execute_on(&ONE_THREAD, iters)
+                .mean_duration()
+        });
     });
 
     g.finish();
@@ -74,23 +90,33 @@ fn local_ref(c: &mut Criterion) {
     let per_thread = InstancePerThread::new(TestSubject::new());
 
     g.bench_function("new_single", |b| {
-        b.iter_batched(
-            || (),
-            |()| black_box(per_thread.acquire()),
-            BatchSize::SmallInput,
-        );
+        b.iter_custom(|iters| {
+            Run::builder()
+                .iter_fn(|()| per_thread.acquire())
+                .build()
+                .execute_on(&ONE_THREAD, iters)
+                .mean_duration()
+        });
     });
+
+    // build() is really pointless.
+    // maybe instead of Run::build() it should be Run::new()
+    // Run::new()
+    //     .iter_fn(|()| per_thread.acquire())
+    //     .criterion_execute_on(&ONE_THREAD, &mut g, "name");
 
     {
         // We keep one InstancePerThread here so the ones we create in iterations are not the only ones.
         let _first = per_thread.acquire();
 
         g.bench_function("new_not_single", |b| {
-            b.iter_batched(
-                || (),
-                |()| black_box(per_thread.acquire()),
-                BatchSize::SmallInput,
-            );
+            b.iter_custom(|iters| {
+                Run::builder()
+                    .iter_fn(|()| per_thread.acquire())
+                    .build()
+                    .execute_on(&ONE_THREAD, iters)
+                    .mean_duration()
+            });
         });
     }
 
@@ -98,8 +124,12 @@ fn local_ref(c: &mut Criterion) {
         // This is the one we clone.
         let first = per_thread.acquire();
 
-        g.bench_function("clone", |b| {
-            b.iter_batched(|| (), |()| black_box(first.clone()), BatchSize::SmallInput);
+        b.iter_custom(|iters| {
+            Run::builder()
+                .iter_fn(|()| first.clone())
+                .build()
+                .execute_on(&ONE_THREAD, iters)
+                .mean_duration()
         });
     }
 

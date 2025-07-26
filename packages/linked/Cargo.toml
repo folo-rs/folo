@@ -20,10 +20,11 @@ paste = { workspace = true }
 simple-mermaid = { workspace = true }
 
 [dev-dependencies]
-benchmark_utils = { workspace = true }
 criterion = { workspace = true }
 many_cpus = { workspace = true }
 mutants = { workspace = true }
+new_zealand = { workspace = true }
+par_bench = { workspace = true }
 seq-macro = { workspace = true }
 
 [[bench]]

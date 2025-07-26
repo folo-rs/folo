@@ -81,21 +81,27 @@ use crate::{RunMeta, ThreadPool};
 #[must_use]
 #[derive(Debug)]
 pub struct Run<
+    'a,
     ThreadState = (),
     IterState = (),
     MeasureWrapperState = (),
     MeasureOutput = (),
     CleanupState = (),
 > where
-    ThreadState: 'static,
     MeasureOutput: Send + 'static,
 {
     // This type is just a wrapper around the final builder type, for better UX.
-    inner:
-        RunBuilderFinal<ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>,
+    inner: RunBuilderFinal<
+        'a,
+        ThreadState,
+        IterState,
+        MeasureWrapperState,
+        MeasureOutput,
+        CleanupState,
+    >,
 }
 
-impl Run {
+impl Run<'_> {
     /// Returns a new run builder that can be used to prepare a benchmark run.
     ///
     /// The builder uses a fluent API with enforced ordering to configure the different callback
@@ -131,13 +137,14 @@ impl Run {
     }
 }
 
-impl<ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>
-    Run<ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>
+impl<'a, ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>
+    Run<'a, ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>
 where
     MeasureOutput: Send + 'static,
 {
     pub(crate) fn new(
         inner: RunBuilderFinal<
+            'a,
             ThreadState,
             IterState,
             MeasureWrapperState,
@@ -179,11 +186,11 @@ where
         let start = Arc::new(Barrier::new(pool.thread_count().get()));
 
         // Break the callbacks out of `self` so we do not send `self` to the pool.
-        let prepare_thread_fn = self.inner.prepare_thread_fn;
-        let prepare_iter_fn = self.inner.prepare_iter_fn;
-        let iter_fn = self.inner.iter_fn;
-        let measure_wrapper_begin_fn = self.inner.measure_wrapper_begin_fn;
-        let measure_wrapper_end_fn = self.inner.measure_wrapper_end_fn;
+        let prepare_thread_fn = &*self.inner.prepare_thread_fn;
+        let prepare_iter_fn = &*self.inner.prepare_iter_fn;
+        let iter_fn = &*self.inner.iter_fn;
+        let measure_wrapper_begin_fn = &*self.inner.measure_wrapper_begin_fn;
+        let measure_wrapper_end_fn = &*self.inner.measure_wrapper_end_fn;
 
         let results = pool.execute_task({
             let start = Arc::clone(&start);

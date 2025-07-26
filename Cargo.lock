@@ -438,13 +438,13 @@ dependencies = [
 name = "events"
 version = "0.1.8"
 dependencies = [
- "benchmark_utils",
  "criterion",
  "futures",
  "many_cpus",
  "many_cpus_benchmarking",
  "new_zealand",
  "oneshot",
+ "par_bench",
  "pinned_pool",
  "static_assertions",
  "testing",
@@ -817,12 +817,13 @@ checksum = "1171693293099992e19cddea4e8b849964e9846f4acee11b3948bcc337be8776"
 name = "linked"
 version = "0.2.15"
 dependencies = [
- "benchmark_utils",
  "criterion",
  "hash_hasher",
  "linked_macros",
  "many_cpus",
  "mutants",
+ "new_zealand",
+ "par_bench",
  "paste",
  "seq-macro",
  "simple-mermaid",

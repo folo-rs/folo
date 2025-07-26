@@ -18,12 +18,12 @@ futures = { workspace = true }
 pinned_pool = { workspace = true }
 
 [dev-dependencies]
-benchmark_utils = { workspace = true }
 criterion = { workspace = true }
 many_cpus = { workspace = true }
 many_cpus_benchmarking = { workspace = true }
 new_zealand = { workspace = true }
 oneshot = { workspace = true }
+par_bench = { workspace = true }
 static_assertions = { workspace = true }
 testing = { workspace = true }
 
