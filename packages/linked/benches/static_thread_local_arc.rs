@@ -11,7 +11,7 @@ use std::sync::{Arc, LazyLock};
 use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus::ProcessorSet;
 use new_zealand::nz;
-use par_bench::{Run, ThreadPool};
+use par_bench::{ConfiguredRun, ThreadPool};
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
@@ -53,7 +53,7 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("with", |b| {
         b.iter_custom(|iters| {
-            Run::builder()
+            ConfiguredRun::builder()
                 .iter_fn(|()| TARGET.with(|val| Arc::weak_count(&val.shared_state)))
                 .build()
                 .execute_on(&ONE_THREAD, iters)
@@ -63,7 +63,7 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("to_arc", |b| {
         b.iter_custom(|iters| {
-            Run::builder()
+            ConfiguredRun::builder()
                 .iter_fn(|()| Arc::weak_count(&TARGET.to_arc().shared_state))
                 .build()
                 .execute_on(&ONE_THREAD, iters)
@@ -74,7 +74,7 @@ fn entrypoint(c: &mut Criterion) {
     // For comparison, we also include a thread_local! LazyCell.
     g.bench_function("vs_std_thread_local", |b| {
         b.iter_custom(|iters| {
-            Run::builder()
+            ConfiguredRun::builder()
                 .iter_fn(|()| {
                     TEST_SUBJECT_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state))
                 })
@@ -87,7 +87,7 @@ fn entrypoint(c: &mut Criterion) {
     // For comparison, we also include a global LazyLock.
     g.bench_function("vs_static_lazy_lock", |b| {
         b.iter_custom(|iters| {
-            Run::builder()
+            ConfiguredRun::builder()
                 .iter_fn(|()| Arc::weak_count(&TEST_SUBJECT_GLOBAL.shared_state))
                 .build()
                 .execute_on(&ONE_THREAD, iters)
@@ -102,7 +102,7 @@ fn entrypoint(c: &mut Criterion) {
 
         g.bench_function("with", |b| {
             b.iter_custom(|iters| {
-                Run::builder()
+                ConfiguredRun::builder()
                     .iter_fn(|()| TARGET.with(|val| Arc::weak_count(&val.shared_state)))
                     .build()
                     .execute_on(two_threads, iters)
@@ -112,7 +112,7 @@ fn entrypoint(c: &mut Criterion) {
 
         g.bench_function("to_arc", |b| {
             b.iter_custom(|iters| {
-                Run::builder()
+                ConfiguredRun::builder()
                     .iter_fn(|()| Arc::weak_count(&TARGET.to_arc().shared_state))
                     .build()
                     .execute_on(two_threads, iters)
@@ -123,7 +123,7 @@ fn entrypoint(c: &mut Criterion) {
         // For comparison, we also include a thread_local_arc! LazyCell.
         g.bench_function("vs_std_thread_local", |b| {
             b.iter_custom(|iters| {
-                Run::builder()
+                ConfiguredRun::builder()
                     .iter_fn(|()| {
                         TEST_SUBJECT_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state))
                     })
@@ -136,7 +136,7 @@ fn entrypoint(c: &mut Criterion) {
         // For comparison, we also include a global LazyLock.
         g.bench_function("vs_static_lazy_lock", |b| {
             b.iter_custom(|iters| {
-                Run::builder()
+                ConfiguredRun::builder()
                     .iter_fn(|()| Arc::weak_count(&TEST_SUBJECT_GLOBAL.shared_state))
                     .build()
                     .execute_on(two_threads, iters)

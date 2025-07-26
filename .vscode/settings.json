@@ -4,9 +4,17 @@
     "rust-analyzer.cargo.cfgs": [
         "debug_assertions"
     ],
-    "rust-analyzer.rustfmt.extraArgs": ["+nightly", "--config-path", "${workspaceFolder}/unstable-rustfmt.toml"],
+    
+    "rust-analyzer.rustfmt.extraArgs": [
+        "+nightly",
+        "--config-path",
+        "${workspaceFolder}/unstable-rustfmt.toml"
+    ],
+    
     // Makes rust-analyzer and Cargo commands use separate target directories,
     // so they can be executed concurrently.
     "rust-analyzer.cargo.targetDir": true,
-    "rust-analyzer.check.command": "clippy"
+
+    "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.cargo.features": "all"
 }

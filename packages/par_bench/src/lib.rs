@@ -120,13 +120,16 @@
 //! ```
 
 mod run;
+mod run_final;
+mod run_final_criterion;
 mod run_meta;
 mod threadpool;
 
 // This is in a separate module because 99% of the time the user never needs to name
 // these types, so it makes sense to de-emphasize them in the API documentation.
-pub mod builder;
+pub mod configure;
 
 pub use run::*;
+pub use run_final::*;
 pub use run_meta::*;
 pub use threadpool::*;

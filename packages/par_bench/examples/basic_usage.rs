@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use many_cpus::ProcessorSet;
 use new_zealand::nz;
-use par_bench::{Run, ThreadPool};
+use par_bench::{ConfiguredRun, ThreadPool};
 
 const ITERATIONS: u64 = 10_000;
 
@@ -78,7 +78,7 @@ fn measure_atomic_increments(pool: &ThreadPool) -> std::time::Duration {
     // Shared atomic counter that all threads will increment.
     let counter = Arc::new(AtomicU64::new(0));
 
-    let run = Run::builder()
+    let run = ConfiguredRun::builder()
         .prepare_thread_fn({
             let counter = Arc::clone(&counter);
             move |_run_meta| Arc::clone(&counter)

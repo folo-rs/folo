@@ -12,7 +12,7 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use par_bench::{Run, ThreadPool};
+use par_bench::{ConfiguredRun, ThreadPool};
 
 criterion_group!(benches, par_bench_overhead);
 criterion_main!(benches);
@@ -24,7 +24,7 @@ fn par_bench_overhead(c: &mut Criterion) {
         b.iter_custom(|iters| {
             // A new benchmark run is constructed for every call into this callback,
             // as per the standard mechanism for using par_bench with Criterion.
-            let run = Run::builder()
+            let run = ConfiguredRun::builder()
                 .iter_fn(|()| {
                     // Empty iter_fn - does absolutely nothing.
                     // We use black_box to prevent the compiler from optimizing this away.

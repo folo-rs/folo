@@ -12,7 +12,7 @@ use std::sync::{Arc, LazyLock};
 use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus::ProcessorSet;
 use new_zealand::nz;
-use par_bench::{Run, ThreadPool};
+use par_bench::{ConfiguredRun, ThreadPool};
 use seq_macro::seq;
 
 criterion_group!(benches, entrypoint);
@@ -55,7 +55,7 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("one-threaded", |b| {
         b.iter_custom(|iters| {
-            Run::builder()
+            ConfiguredRun::builder()
                 .iter_fn(|()| Arc::weak_count(&TARGET.get().shared_state))
                 .build()
                 .execute_on(&ONE_THREAD, iters)
@@ -66,7 +66,7 @@ fn entrypoint(c: &mut Criterion) {
     if let Some(two_threads) = &*TWO_THREADS {
         g.bench_function("two-threaded", |b| {
             b.iter_custom(|iters| {
-                Run::builder()
+                ConfiguredRun::builder()
                     .iter_fn(|()| Arc::weak_count(&TARGET.get().shared_state))
                     .build()
                     .execute_on(two_threads, iters)
@@ -81,7 +81,7 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("one-threaded", |b| {
         b.iter_custom(|iters| {
-            Run::builder()
+            ConfiguredRun::builder()
                 // We have to clean up the worker thread before/after the run.
                 .prepare_thread_fn(|_| LinkedVariableClearGuard::default())
                 .iter_fn(|()| {
@@ -98,7 +98,7 @@ fn entrypoint(c: &mut Criterion) {
     if let Some(two_threads) = &*TWO_THREADS {
         g.bench_function("two-threaded", |b| {
             b.iter_custom(|iters| {
-                Run::builder()
+                ConfiguredRun::builder()
                     // We have to clean up the worker thread before/after the run.
                     .prepare_thread_fn(|_| LinkedVariableClearGuard::default())
                     .iter_fn(|()| {

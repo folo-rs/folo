@@ -14,7 +14,7 @@ use std::time::Duration;
 use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus::ProcessorSet;
 use new_zealand::nz;
-use par_bench::{Run, ThreadPool};
+use par_bench::{ConfiguredRun, ThreadPool};
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
@@ -47,7 +47,7 @@ fn measure_atomic_increments(pool: &ThreadPool, iterations: u64) -> Duration {
     // Shared atomic counter that all threads will increment.
     let counter = Arc::new(AtomicU64::new(0));
 
-    let run = Run::builder()
+    let run = ConfiguredRun::builder()
         .prepare_thread_fn({
             let counter = Arc::clone(&counter);
             move |_run_meta| Arc::clone(&counter)

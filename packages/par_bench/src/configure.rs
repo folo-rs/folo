@@ -1,65 +1,6 @@
-//! Intermediate types for building a [`Run`].
-//!
-//! These generally do not need to be named or directly referenced in user code - they only exist
-//! as intermediate steps in a call chain.
-//!
-//! # Builder Order Requirements
-//!
-//! The builder API enforces a specific order of method calls through the type system. This ensures
-//! that all required configuration is provided and prevents invalid configurations:
-//!
-//! 1. **Start**: [`Run::builder()`] returns [`RunBuilderBasic`]
-//! 2. **Optional**: Call [`groups()`](RunBuilderBasic::groups) to set thread groups
-//! 3. **Thread State**: Call [`prepare_thread_fn()`](RunBuilderBasic::prepare_thread_fn) to configure per-thread state
-//! 4. **Iteration State**: Call [`prepare_iter_fn()`](RunBuilderWithThreadState::prepare_iter_fn) to configure per-iteration state  
-//! 5. **Measurement**: Call [`measure_wrapper_fns()`](RunBuilderWithIterState::measure_wrapper_fns) to configure measurement
-//! 6. **Required**: Call [`iter_fn()`](RunBuilderWithWrapperState::iter_fn) to set the benchmark function
-//! 7. **Finish**: Call [`build()`](RunBuilderFinal::build) to create the [`Run`]
-//!
-//! Each step is optional except for `iter_fn()` and `build()`. However, if you skip a step
-//! you cannot go back to it afterwards.
-//!
-//! # Examples
-//!
-//! Minimal usage (only required steps):
-//! ```
-//! use par_bench::Run;
-//!
-//! let run = Run::builder().iter_fn(|_| { /* benchmark work */ }).build();
-//! ```
-//!
-//! With thread preparation:
-//! ```
-//! use par_bench::Run;
-//!
-//! let run = Run::builder()
-//!     .prepare_thread_fn(|_meta| "thread_state")
-//!     .iter_fn(|_unit: ()| {
-//!         // Thread state is used internally
-//!         std::hint::black_box(42);
-//!     })
-//!     .build();
-//! ```
-//!
-//! Full configuration:
-//! ```
-//! use new_zealand::nz;
-//! use par_bench::Run;
-//!
-//! let run = Run::builder()
-//!     .groups(nz!(2))
-//!     .prepare_thread_fn(|_meta| "thread_state")
-//!     .prepare_iter_fn(|_meta, state| state.to_string())
-//!     .measure_wrapper_fns(
-//!         |_meta, _state| std::time::Instant::now(),
-//!         |start| start.elapsed(),
-//!     )
-//!     .iter_fn(|iter_state: String| {
-//!         // Use the per-iteration string state
-//!         std::hint::black_box(iter_state.len());
-//!     })
-//!     .build();
-//! ```
+//! Intermediate stages of configuring a benchmark run.
+//! 
+//! You generally do not need to reference these types, they are just parts of a call chain.
 
 #![allow(
     clippy::ignored_unit_patterns,
@@ -74,29 +15,29 @@ use std::num::NonZero;
 
 use new_zealand::nz;
 
-use crate::{Run, RunMeta};
+use crate::{ConfiguredRun, RunMeta};
 
-/// The first stage of preparing a benchmark run, with all type parameters unknown.
+/// The first stage of configuring a benchmark run, with all type parameters unknown.
 #[derive(Debug)]
 #[must_use]
-pub struct RunBuilderBasic {
+pub struct RunInitial {
     groups: NonZero<usize>,
 }
 
-/// The second stage of preparing a benchmark run, with the thread state type parameter known.
+/// The second stage of configuring a benchmark run, with the thread state type parameter known.
 #[derive(derive_more::Debug)]
 #[must_use]
-pub struct RunBuilderWithThreadState<'a, ThreadState> {
+pub struct RunWithThreadState<'a, ThreadState> {
     groups: NonZero<usize>,
 
     #[debug(ignore)]
     prepare_thread_fn: Box<dyn Fn(&RunMeta) -> ThreadState + Send + Sync + 'a>,
 }
 
-/// The third stage of preparing a benchmark run, with the iteration state type parameter known.
+/// The third stage of configuring a benchmark run, with the iteration state type parameter known.
 #[derive(derive_more::Debug)]
 #[must_use]
-pub struct RunBuilderWithIterState<'a, ThreadState, IterState> {
+pub struct RunWithIterState<'a, ThreadState, IterState> {
     groups: NonZero<usize>,
 
     #[debug(ignore)]
@@ -105,16 +46,11 @@ pub struct RunBuilderWithIterState<'a, ThreadState, IterState> {
     prepare_iter_fn: Box<dyn Fn(&RunMeta, &ThreadState) -> IterState + Send + Sync + 'a>,
 }
 
-/// The fourth stage of preparing a benchmark run, with the wrapper state type parameter known.
+/// The fourth stage of configuring a benchmark run, with the wrapper state type parameter known.
 #[derive(derive_more::Debug)]
 #[must_use]
-pub struct RunBuilderWithWrapperState<
-    'a,
-    ThreadState,
-    IterState,
-    MeasureWrapperState,
-    MeasureOutput,
-> where
+pub struct RunWithWrapperState<'a, ThreadState, IterState, MeasureWrapperState, MeasureOutput>
+where
     MeasureOutput: Send + 'static,
 {
     groups: NonZero<usize>,
@@ -131,38 +67,7 @@ pub struct RunBuilderWithWrapperState<
     measure_wrapper_end_fn: Box<dyn Fn(MeasureWrapperState) -> MeasureOutput + Send + Sync + 'a>,
 }
 
-/// The final state of preparing a benchmark run, with all type parameters known.
-#[derive(derive_more::Debug)]
-#[must_use]
-pub struct RunBuilderFinal<
-    'a,
-    ThreadState,
-    IterState,
-    MeasureWrapperState,
-    MeasureOutput,
-    CleanupState,
-> where
-    MeasureOutput: Send + 'static,
-{
-    pub(crate) groups: NonZero<usize>,
-
-    #[debug(ignore)]
-    pub(crate) prepare_thread_fn: Box<dyn Fn(&RunMeta) -> ThreadState + Send + Sync + 'a>,
-    #[debug(ignore)]
-    pub(crate) prepare_iter_fn: Box<dyn Fn(&RunMeta, &ThreadState) -> IterState + Send + Sync + 'a>,
-
-    #[debug(ignore)]
-    pub(crate) measure_wrapper_begin_fn:
-        Box<dyn Fn(&RunMeta, &ThreadState) -> MeasureWrapperState + Send + Sync + 'a>,
-    #[debug(ignore)]
-    pub(crate) measure_wrapper_end_fn:
-        Box<dyn Fn(MeasureWrapperState) -> MeasureOutput + Send + Sync + 'a>,
-
-    #[debug(ignore)]
-    pub(crate) iter_fn: Box<dyn Fn(IterState) -> CleanupState + Send + Sync + 'a>,
-}
-
-impl RunBuilderBasic {
+impl RunInitial {
     pub(crate) fn new() -> Self {
         Self { groups: nz!(1) }
     }
@@ -183,8 +88,8 @@ impl RunBuilderBasic {
     /// The thread-scoped state is later passed by shared reference to the
     /// "prepare iteration" callback when preparing each iteration.
     ///
-    /// **Builder Order**: This method can only be called on [`RunBuilderBasic`]. After calling this,
-    /// you must use methods from [`RunBuilderWithThreadState`] for subsequent configuration.
+    /// **Builder Order**: This method can only be called on [`RunInitial`]. After calling this,
+    /// you must use methods from [`RunWithThreadState`] for subsequent configuration.
     ///
     /// # Examples
     ///
@@ -199,14 +104,11 @@ impl RunBuilderBasic {
     ///     })
     ///     .build();
     /// ```
-    pub fn prepare_thread_fn<'a, F, ThreadState>(
-        self,
-        f: F,
-    ) -> RunBuilderWithThreadState<'a, ThreadState>
+    pub fn prepare_thread_fn<'a, F, ThreadState>(self, f: F) -> RunWithThreadState<'a, ThreadState>
     where
         F: Fn(&RunMeta) -> ThreadState + Send + Sync + 'a,
     {
-        RunBuilderWithThreadState {
+        RunWithThreadState {
             groups: self.groups,
             prepare_thread_fn: Box::new(f),
         }
@@ -220,8 +122,8 @@ impl RunBuilderBasic {
     ///
     /// Every iteration is prepared before any iteration is executed.
     ///
-    /// **Builder Order**: This method can only be called on a [`RunBuilderBasic`] (no thread state).
-    /// After calling this, you must use methods from [`RunBuilderWithIterState`] for subsequent configuration.
+    /// **Builder Order**: This method can only be called on a [`RunInitial`] (no thread state).
+    /// After calling this, you must use methods from [`RunWithIterState`] for subsequent configuration.
     ///
     /// # Examples
     ///
@@ -239,14 +141,11 @@ impl RunBuilderBasic {
     ///
     /// If you wish to specify a thread preparation function to provide state for each
     /// thread or iteration, do both before calling this method.
-    pub fn prepare_iter_fn<'a, F, IterState>(
-        self,
-        f: F,
-    ) -> RunBuilderWithIterState<'a, (), IterState>
+    pub fn prepare_iter_fn<'a, F, IterState>(self, f: F) -> RunWithIterState<'a, (), IterState>
     where
         F: Fn(&RunMeta, &()) -> IterState + Send + Sync + 'a,
     {
-        RunBuilderWithIterState {
+        RunWithIterState {
             groups: self.groups,
             prepare_thread_fn: Box::new(|_| ()),
             prepare_iter_fn: Box::new(f),
@@ -266,13 +165,13 @@ impl RunBuilderBasic {
         self,
         f_begin: FBegin,
         f_end: FEnd,
-    ) -> RunBuilderWithWrapperState<'a, (), (), MeasureWrapperState, MeasureOutput>
+    ) -> RunWithWrapperState<'a, (), (), MeasureWrapperState, MeasureOutput>
     where
         FBegin: Fn(&RunMeta, &()) -> MeasureWrapperState + Send + Sync + 'a,
         FEnd: Fn(MeasureWrapperState) -> MeasureOutput + Send + Sync + 'a,
         MeasureOutput: Send + 'static,
     {
-        RunBuilderWithWrapperState {
+        RunWithWrapperState {
             groups: self.groups,
             prepare_thread_fn: Box::new(|_| ()),
             prepare_iter_fn: Box::new(|_, _| ()),
@@ -287,19 +186,16 @@ impl RunBuilderBasic {
     /// run (to exclude any cleanup logic from measurement).
     ///
     /// This must be the last step in preparing a benchmark run. After this,
-    /// you can only call `build()` on the builder.
+    /// the only action permitted is to execute the run.
     ///
     /// If you wish to specify a thread or iteration preparation function to provide state for each
     /// thread or iteration, or a specify a measurement wrapper function, do all of these before
     /// calling this method.
-    pub fn iter_fn<'a, F, CleanupState>(
-        self,
-        f: F,
-    ) -> RunBuilderFinal<'a, (), (), (), (), CleanupState>
+    pub fn iter_fn<'a, F, CleanupState>(self, f: F) -> ConfiguredRun<'a, (), (), (), (), CleanupState>
     where
         F: Fn(()) -> CleanupState + Send + Sync + 'a,
     {
-        RunBuilderFinal {
+        ConfiguredRun {
             groups: self.groups,
             prepare_thread_fn: Box::new(|_| ()),
             prepare_iter_fn: Box::new(|_, _| ()),
@@ -310,7 +206,7 @@ impl RunBuilderBasic {
     }
 }
 
-impl<'a, ThreadState> RunBuilderWithThreadState<'a, ThreadState> {
+impl<'a, ThreadState> RunWithThreadState<'a, ThreadState> {
     /// Divides the threads used for benchmarking into `n` equal groups. Defaults to 1 group.
     ///
     /// The callbacks will be informed of which group they are executing for, and the total number
@@ -328,8 +224,8 @@ impl<'a, ThreadState> RunBuilderWithThreadState<'a, ThreadState> {
     ///
     /// Every iteration is prepared before any iteration is executed.
     ///
-    /// **Builder Order**: This method can only be called after [`prepare_thread_fn()`](RunBuilderBasic::prepare_thread_fn).
-    /// After calling this, you must use methods from [`RunBuilderWithIterState`] for subsequent configuration.
+    /// **Builder Order**: This method can only be called after [`prepare_thread_fn()`](RunInitial::prepare_thread_fn).
+    /// After calling this, you must use methods from [`RunWithIterState`] for subsequent configuration.
     ///
     /// # Examples
     ///
@@ -345,14 +241,11 @@ impl<'a, ThreadState> RunBuilderWithThreadState<'a, ThreadState> {
     ///     })
     ///     .build();
     /// ```
-    pub fn prepare_iter_fn<F, IterState>(
-        self,
-        f: F,
-    ) -> RunBuilderWithIterState<'a, ThreadState, IterState>
+    pub fn prepare_iter_fn<F, IterState>(self, f: F) -> RunWithIterState<'a, ThreadState, IterState>
     where
         F: Fn(&RunMeta, &ThreadState) -> IterState + Send + Sync + 'a,
     {
-        RunBuilderWithIterState {
+        RunWithIterState {
             groups: self.groups,
             prepare_thread_fn: self.prepare_thread_fn,
             prepare_iter_fn: Box::new(f),
@@ -372,13 +265,13 @@ impl<'a, ThreadState> RunBuilderWithThreadState<'a, ThreadState> {
         self,
         f_begin: FBegin,
         f_end: FEnd,
-    ) -> RunBuilderWithWrapperState<'a, ThreadState, (), MeasureWrapperState, MeasureOutput>
+    ) -> RunWithWrapperState<'a, ThreadState, (), MeasureWrapperState, MeasureOutput>
     where
         FBegin: Fn(&RunMeta, &ThreadState) -> MeasureWrapperState + Send + Sync + 'a,
         FEnd: Fn(MeasureWrapperState) -> MeasureOutput + Send + Sync + 'a,
         MeasureOutput: Send + 'static,
     {
-        RunBuilderWithWrapperState {
+        RunWithWrapperState {
             groups: self.groups,
             prepare_thread_fn: self.prepare_thread_fn,
             prepare_iter_fn: Box::new(|_, _| ()),
@@ -393,10 +286,10 @@ impl<'a, ThreadState> RunBuilderWithThreadState<'a, ThreadState> {
     /// run (to exclude any cleanup logic from measurement).
     ///
     /// **Builder Order**: This is the final required step in preparing a benchmark run. After this,
-    /// you can only call [`build()`](RunBuilderFinal::build) on the builder.
+    /// you can only call [`build()`](RunFinal::build) on the builder.
     ///
     /// Must be called after:
-    /// 1. [`prepare_thread_fn()`](RunBuilderBasic::prepare_thread_fn) (optional but recommended)
+    /// 1. [`prepare_thread_fn()`](RunInitial::prepare_thread_fn) (optional but recommended)
     /// 2. Any optional measure wrapper configuration
     ///
     /// # Examples
@@ -420,11 +313,11 @@ impl<'a, ThreadState> RunBuilderWithThreadState<'a, ThreadState> {
     pub fn iter_fn<F, CleanupState>(
         self,
         f: F,
-    ) -> RunBuilderFinal<'a, ThreadState, (), (), (), CleanupState>
+    ) -> ConfiguredRun<'a, ThreadState, (), (), (), CleanupState>
     where
         F: Fn(()) -> CleanupState + Send + Sync + 'a,
     {
-        RunBuilderFinal {
+        ConfiguredRun {
             groups: self.groups,
             prepare_thread_fn: self.prepare_thread_fn,
             prepare_iter_fn: Box::new(|_, _| ()),
@@ -435,7 +328,7 @@ impl<'a, ThreadState> RunBuilderWithThreadState<'a, ThreadState> {
     }
 }
 
-impl<'a, ThreadState, IterState> RunBuilderWithIterState<'a, ThreadState, IterState> {
+impl<'a, ThreadState, IterState> RunWithIterState<'a, ThreadState, IterState> {
     /// Divides the threads used for benchmarking into `n` equal groups. Defaults to 1 group.
     ///
     /// The callbacks will be informed of which group they are executing for, and the total number
@@ -457,13 +350,13 @@ impl<'a, ThreadState, IterState> RunBuilderWithIterState<'a, ThreadState, IterSt
         self,
         f_begin: FBegin,
         f_end: FEnd,
-    ) -> RunBuilderWithWrapperState<'a, ThreadState, IterState, MeasureWrapperState, MeasureOutput>
+    ) -> RunWithWrapperState<'a, ThreadState, IterState, MeasureWrapperState, MeasureOutput>
     where
         FBegin: Fn(&RunMeta, &ThreadState) -> MeasureWrapperState + Send + Sync + 'a,
         FEnd: Fn(MeasureWrapperState) -> MeasureOutput + Send + Sync + 'a,
         MeasureOutput: Send + 'static,
     {
-        RunBuilderWithWrapperState {
+        RunWithWrapperState {
             groups: self.groups,
             prepare_thread_fn: self.prepare_thread_fn,
             prepare_iter_fn: self.prepare_iter_fn,
@@ -479,17 +372,17 @@ impl<'a, ThreadState, IterState> RunBuilderWithIterState<'a, ThreadState, IterSt
     /// from measurement).
     ///
     /// This must be the last step in preparing a benchmark run. After this,
-    /// you can only call `build()` on the builder.
+    /// the only action permitted is to execute the run.
     ///
     /// If you wish to specify a thread wrapper function pair, do it before calling this method.
     pub fn iter_fn<F, CleanupState>(
         self,
         f: F,
-    ) -> RunBuilderFinal<'a, ThreadState, IterState, (), (), CleanupState>
+    ) -> ConfiguredRun<'a, ThreadState, IterState, (), (), CleanupState>
     where
         F: Fn(IterState) -> CleanupState + Send + Sync + 'a,
     {
-        RunBuilderFinal {
+        ConfiguredRun {
             groups: self.groups,
             prepare_thread_fn: self.prepare_thread_fn,
             prepare_iter_fn: self.prepare_iter_fn,
@@ -501,7 +394,7 @@ impl<'a, ThreadState, IterState> RunBuilderWithIterState<'a, ThreadState, IterSt
 }
 
 impl<'a, ThreadState, IterState, MeasureWrapperState, MeasureOutput>
-    RunBuilderWithWrapperState<'a, ThreadState, IterState, MeasureWrapperState, MeasureOutput>
+    RunWithWrapperState<'a, ThreadState, IterState, MeasureWrapperState, MeasureOutput>
 where
     MeasureOutput: Send,
 {
@@ -523,15 +416,15 @@ where
     /// from measurement).
     ///
     /// This must be the last step in preparing a benchmark run. After this,
-    /// you can only call `build()` on the builder.
+    /// the only action permitted is to execute the run.
     pub fn iter_fn<F, CleanupState>(
         self,
         f: F,
-    ) -> RunBuilderFinal<'a, ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>
+    ) -> ConfiguredRun<'a, ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>
     where
         F: Fn(IterState) -> CleanupState + Send + Sync + 'a,
     {
-        RunBuilderFinal {
+        ConfiguredRun {
             groups: self.groups,
             prepare_thread_fn: self.prepare_thread_fn,
             prepare_iter_fn: self.prepare_iter_fn,
@@ -539,62 +432,5 @@ where
             measure_wrapper_end_fn: self.measure_wrapper_end_fn,
             iter_fn: Box::new(f),
         }
-    }
-}
-
-impl<'a, ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>
-    RunBuilderFinal<'a, ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>
-where
-    MeasureOutput: Send,
-{
-    /// Completes the preparation of a benchmark run and returns a [`Run`] instance that can be
-    /// used to execute the run on a specific thread pool.
-    ///
-    /// **Builder Order**: This is the final step that can only be called after [`Self::iter_fn()`] has been configured.
-    /// The returned [`Run`] is ready for execution via [`Run::execute_on()`](crate::Run::execute_on).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use par_bench::Run;
-    ///
-    /// let run = Run::builder()
-    ///     .prepare_thread_fn(|_meta| vec![1, 2, 3])
-    ///     .iter_fn(|_unit_state| {
-    ///         std::hint::black_box(42);
-    ///     })
-    ///     .build(); // Final step - creates executable Run
-    ///
-    /// // Run is now ready for execution
-    /// # use par_bench::ThreadPool;
-    /// # use many_cpus::ProcessorSet;
-    /// # use new_zealand::nz;
-    /// # if let Some(processors) = ProcessorSet::builder().take(nz!(1)) {
-    /// #     let pool = ThreadPool::new(&processors);
-    /// #     let _result = run.execute_on(&pool, 100);
-    /// # }
-    /// ```
-    pub fn build(
-        self,
-    ) -> Run<'a, ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState> {
-        // If we need to, we can do some validation here in the future. Right now,
-        // we have no need for this - everything is guarded via the type system.
-
-        Run::<'a, ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>::new(
-            self,
-        )
-    }
-}
-
-// In this file, we have unit tests for ensuring that the different stages are callable
-// in the correct manner. However, we do not have tests here that validate the correctness
-// of the run execution itself, as that is done in the `run` module.
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn minimal_does_not_panic() {
-        drop(Run::builder().iter_fn(|()| ()).build());
     }
 }

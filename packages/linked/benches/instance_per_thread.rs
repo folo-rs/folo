@@ -13,7 +13,7 @@ use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use linked::InstancePerThread;
 use many_cpus::ProcessorSet;
 use new_zealand::nz;
-use par_bench::{Run, ThreadPool};
+use par_bench::{ConfiguredRun, ThreadPool};
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
@@ -60,7 +60,7 @@ fn local(c: &mut Criterion) {
 
     g.bench_function("new", |b| {
         b.iter_custom(|iters| {
-            Run::builder()
+            ConfiguredRun::builder()
                 .prepare_iter_fn(|_, _| TestSubject::new())
                 .iter_fn(|test_subject| InstancePerThread::new(test_subject))
                 .build()
@@ -73,7 +73,7 @@ fn local(c: &mut Criterion) {
 
     g.bench_function("clone", |b| {
         b.iter_custom(|iters| {
-            Run::builder()
+            ConfiguredRun::builder()
                 .iter_fn(|()| per_thread.clone())
                 .build()
                 .execute_on(&ONE_THREAD, iters)
@@ -91,7 +91,7 @@ fn local_ref(c: &mut Criterion) {
 
     g.bench_function("new_single", |b| {
         b.iter_custom(|iters| {
-            Run::builder()
+            ConfiguredRun::builder()
                 .iter_fn(|()| per_thread.acquire())
                 .build()
                 .execute_on(&ONE_THREAD, iters)
@@ -111,7 +111,7 @@ fn local_ref(c: &mut Criterion) {
 
         g.bench_function("new_not_single", |b| {
             b.iter_custom(|iters| {
-                Run::builder()
+                ConfiguredRun::builder()
                     .iter_fn(|()| per_thread.acquire())
                     .build()
                     .execute_on(&ONE_THREAD, iters)
@@ -125,7 +125,7 @@ fn local_ref(c: &mut Criterion) {
         let first = per_thread.acquire();
 
         b.iter_custom(|iters| {
-            Run::builder()
+            ConfiguredRun::builder()
                 .iter_fn(|()| first.clone())
                 .build()
                 .execute_on(&ONE_THREAD, iters)

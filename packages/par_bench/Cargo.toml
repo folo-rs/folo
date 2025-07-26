@@ -10,7 +10,12 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+criterion = ["dep:criterion"]
+
 [dependencies]
+criterion = { workspace = true, optional = true }
 derive_more = { workspace = true, features = ["debug"] }
 many_cpus = { workspace = true }
 new_zealand = { workspace = true }

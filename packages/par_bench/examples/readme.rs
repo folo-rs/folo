@@ -13,7 +13,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use par_bench::{Run, ThreadPool};
+use par_bench::{ConfiguredRun, ThreadPool};
 
 fn main() {
     println!("README example verification");
@@ -34,7 +34,7 @@ fn basic_usage_example() {
     // Shared atomic counter that all threads will increment.
     let counter = Arc::new(AtomicU64::new(0));
 
-    let run = Run::builder()
+    let run = ConfiguredRun::builder()
         .prepare_thread_fn({
             let counter = Arc::clone(&counter);
             move |_run_meta| Arc::clone(&counter)
