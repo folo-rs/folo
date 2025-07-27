@@ -41,7 +41,7 @@ fn measure_atomic_increments(pool: &mut ThreadPool, iterations: u64) -> Duration
     let counter = AtomicU64::new(0);
 
     let stats = Run::new()
-        .iter_fn(|(), &()| counter.fetch_add(1, Ordering::Relaxed))
+        .iter(|_| counter.fetch_add(1, Ordering::Relaxed))
         .execute_on(pool, iterations);
 
     // Verify that we performed the expected number of increments.

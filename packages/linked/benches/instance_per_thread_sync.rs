@@ -54,14 +54,14 @@ fn local(c: &mut Criterion) {
     let mut g = c.benchmark_group("instance_per_thread_sync::create");
 
     Run::new()
-        .prepare_iter_fn(|_, &()| TestSubject::new())
-        .iter_fn(|test_subject, &()| InstancePerThreadSync::new(test_subject))
+        .prepare_iter(|_| TestSubject::new())
+        .iter(|mut args| InstancePerThreadSync::new(args.take_iter_state()))
         .execute_criterion_on(&mut one_thread, &mut g, "new");
 
     let per_thread = InstancePerThreadSync::new(TestSubject::new());
 
     Run::new()
-        .iter_fn(|(), &()| per_thread.clone())
+        .iter(|_| per_thread.clone())
         .execute_criterion_on(&mut one_thread, &mut g, "clone");
 
     g.finish();
@@ -75,7 +75,7 @@ fn local_ref(c: &mut Criterion) {
     let per_thread = InstancePerThreadSync::new(TestSubject::new());
 
     Run::new()
-        .iter_fn(|(), &()| per_thread.acquire())
+        .iter(|_| per_thread.acquire())
         .execute_criterion_on(&mut one_thread, &mut g, "new_single");
 
     {
@@ -83,14 +83,14 @@ fn local_ref(c: &mut Criterion) {
         let _first = per_thread.acquire();
 
         Run::new()
-            .iter_fn(|(), &()| per_thread.acquire())
+            .iter(|_| per_thread.acquire())
             .execute_criterion_on(&mut one_thread, &mut g, "new_not_single");
     }
 
     {
         Run::new()
-            .prepare_thread_fn(|_| per_thread.acquire())
-            .iter_fn(|(), first| first.clone())
+            .prepare_thread(|_| per_thread.acquire())
+            .iter(|args| args.thread_state().clone())
             .execute_criterion_on(&mut one_thread, &mut g, "clone");
     }
 
@@ -106,21 +106,21 @@ fn local_ref_multithreaded(c: &mut Criterion) {
         let per_thread = InstancePerThreadSync::new(TestSubject::new());
 
         Run::new()
-            .iter_fn(|(), &()| per_thread.acquire())
+            .iter(|_| per_thread.acquire())
             .execute_criterion_on(two_threads, &mut g, "new_single");
 
         Run::new()
-            .prepare_thread_fn(|_| {
+            .prepare_thread(|_| {
                 // We just keep the first instance around during the benchmark, so any additional
                 // `acquire` calls operate in a non-clean state with an already existing instance.
                 per_thread.acquire()
             })
-            .iter_fn(|(), _| per_thread.acquire())
+            .iter(|_| per_thread.acquire())
             .execute_criterion_on(two_threads, &mut g, "new_not_single");
 
         Run::new()
-            .prepare_thread_fn(|_| per_thread.acquire())
-            .iter_fn(|(), first| first.clone())
+            .prepare_thread(|_| per_thread.acquire())
+            .iter(|args| args.thread_state().clone())
             .execute_criterion_on(two_threads, &mut g, "clone");
 
         g.finish();
@@ -136,27 +136,25 @@ fn local_ref_access(c: &mut Criterion) {
     let per_thread = InstancePerThreadSync::new(TestSubject::new());
 
     Run::new()
-        .prepare_thread_fn(|_| per_thread.acquire())
-        .iter_fn(|(), local| Arc::weak_count(&local.shared_state))
+        .prepare_thread(|_| per_thread.acquire())
+        .iter(|args| Arc::weak_count(&args.thread_state().shared_state))
         .execute_criterion_on(&mut one_thread, &mut g, "deref");
 
     // For comparison, we also include a thread_local! LazyCell.
     Run::new()
-        .iter_fn(|(), &()| {
-            TEST_SUBJECT_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state))
-        })
+        .iter(|_| TEST_SUBJECT_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state)))
         .execute_criterion_on(&mut one_thread, &mut g, "vs_std_thread_local");
 
     // For comparison, we also include a global LazyLock.
     Run::new()
-        .iter_fn(|(), &()| Arc::weak_count(&TEST_SUBJECT_GLOBAL.shared_state))
+        .iter(|_| Arc::weak_count(&TEST_SUBJECT_GLOBAL.shared_state))
         .execute_criterion_on(&mut one_thread, &mut g, "vs_static_lazy_lock");
 
     if let Some(ref mut two_threads) = two_threads {
         // For comparison, also the LazyLock in multithreaded mode, as all the other
         // ones are thread-local and have no MT overhead but this may have overhead.
         Run::new()
-            .iter_fn(|(), &()| Arc::weak_count(&TEST_SUBJECT_GLOBAL.shared_state))
+            .iter(|_| Arc::weak_count(&TEST_SUBJECT_GLOBAL.shared_state))
             .execute_criterion_on(two_threads, &mut g, "vs_static_lazy_lock_mt");
     }
 

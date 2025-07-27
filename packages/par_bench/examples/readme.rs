@@ -42,10 +42,10 @@ fn basic_usage_example() {
     // Shared atomic counter that all threads will increment.
     let counter = AtomicU64::new(0);
 
-    let run = Run::new().iter_fn(|(), &()| counter.fetch_add(1, Ordering::Relaxed));
-
     // Execute 10,000 iterations across all threads.
-    let stats = run.execute_on(&mut two_threads, 10_000);
+    let stats = Run::new()
+        .iter(|_| counter.fetch_add(1, Ordering::Relaxed))
+        .execute_on(&mut two_threads, 10_000);
 
     // Get the mean duration for benchmark reporting.
     let duration = stats.mean_duration();

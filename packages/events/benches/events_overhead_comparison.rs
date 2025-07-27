@@ -32,21 +32,21 @@ fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("events_overhead_comparison");
 
     Run::new()
-        .iter_fn(|(), &()| {
+        .iter(|_| {
             let event = LocalOnceEvent::<Payload>::new();
             drop(event.bind_by_ref());
         })
         .execute_criterion_on(&mut one_thread, &mut group, "local_once_event_ref");
 
     Run::new()
-        .iter_fn(|(), &()| {
+        .iter(|_| {
             let event = Rc::new(LocalOnceEvent::<Payload>::new());
             drop(event.bind_by_rc());
         })
         .execute_criterion_on(&mut one_thread, &mut group, "local_once_event_rc");
 
     Run::new()
-        .iter_fn(|(), &()| {
+        .iter(|_| {
             let event = pin!(LocalOnceEvent::<Payload>::new());
             // SAFETY: We are immediately dropping the sender/receiver, so `event` outlives them.
             unsafe {
@@ -56,21 +56,21 @@ fn entrypoint(c: &mut Criterion) {
         .execute_criterion_on(&mut one_thread, &mut group, "local_once_event_ptr");
 
     Run::new()
-        .iter_fn(|(), &()| {
+        .iter(|_| {
             let event = OnceEvent::<Payload>::new();
             drop(event.bind_by_ref());
         })
         .execute_criterion_on(&mut one_thread, &mut group, "once_event_ref");
 
     Run::new()
-        .iter_fn(|(), &()| {
+        .iter(|_| {
             let event = Arc::new(OnceEvent::<Payload>::new());
             drop(event.bind_by_arc());
         })
         .execute_criterion_on(&mut one_thread, &mut group, "once_event_arc");
 
     Run::new()
-        .iter_fn(|(), &()| {
+        .iter(|_| {
             let event = Box::pin(OnceEvent::<Payload>::new());
             // SAFETY: We are immediately dropping the sender/receiver, so `event` outlives them.
             unsafe {
@@ -80,55 +80,55 @@ fn entrypoint(c: &mut Criterion) {
         .execute_criterion_on(&mut one_thread, &mut group, "once_event_ptr");
 
     Run::new()
-        .prepare_thread_fn(|_| LocalOnceEventPool::<Payload>::new())
-        .iter_fn(|(), pool| {
-            drop(pool.bind_by_ref());
+        .prepare_thread(|_| LocalOnceEventPool::<Payload>::new())
+        .iter(|args| {
+            drop(args.thread_state().bind_by_ref());
         })
         .execute_criterion_on(&mut one_thread, &mut group, "pooled_local_once_event_ref");
 
     Run::new()
-        .prepare_thread_fn(|_| Rc::new(LocalOnceEventPool::<Payload>::new()))
-        .iter_fn(|(), pool| {
-            drop(pool.bind_by_rc());
+        .prepare_thread(|_| Rc::new(LocalOnceEventPool::<Payload>::new()))
+        .iter(|args| {
+            drop(args.thread_state().bind_by_rc());
         })
         .execute_criterion_on(&mut one_thread, &mut group, "pooled_local_once_event_rc");
 
     Run::new()
-        .prepare_thread_fn(|_| Box::pin(LocalOnceEventPool::<Payload>::new()))
-        .iter_fn(|(), pool| {
+        .prepare_thread(|_| Box::pin(LocalOnceEventPool::<Payload>::new()))
+        .iter(|args| {
             // SAFETY: We are immediately dropping the sender/receiver, so the pool outlives them.
             unsafe {
-                drop(pool.as_ref().bind_by_ptr());
+                drop(args.thread_state().as_ref().bind_by_ptr());
             }
         })
         .execute_criterion_on(&mut one_thread, &mut group, "pooled_local_once_event_ptr");
 
     Run::new()
-        .prepare_thread_fn(|_| OnceEventPool::<Payload>::new())
-        .iter_fn(|(), pool| {
-            drop(pool.bind_by_ref());
+        .prepare_thread(|_| OnceEventPool::<Payload>::new())
+        .iter(|args| {
+            drop(args.thread_state().bind_by_ref());
         })
         .execute_criterion_on(&mut one_thread, &mut group, "pooled_once_event_ref");
 
     Run::new()
-        .prepare_thread_fn(|_| Arc::new(OnceEventPool::<Payload>::new()))
-        .iter_fn(|(), pool| {
-            drop(pool.bind_by_arc());
+        .prepare_thread(|_| Arc::new(OnceEventPool::<Payload>::new()))
+        .iter(|args| {
+            drop(args.thread_state().bind_by_arc());
         })
         .execute_criterion_on(&mut one_thread, &mut group, "pooled_once_event_arc");
 
     Run::new()
-        .prepare_thread_fn(|_| Box::pin(OnceEventPool::<Payload>::new()))
-        .iter_fn(|(), pool| {
+        .prepare_thread(|_| Box::pin(OnceEventPool::<Payload>::new()))
+        .iter(|args| {
             // SAFETY: We are immediately dropping the sender/receiver, so the pool outlives them.
             unsafe {
-                drop(pool.as_ref().bind_by_ptr());
+                drop(args.thread_state().as_ref().bind_by_ptr());
             }
         })
         .execute_criterion_on(&mut one_thread, &mut group, "pooled_once_event_ptr");
 
     Run::new()
-        .iter_fn(|(), &()| {
+        .iter(|_| {
             let (sender, receiver) = oneshot::channel::<Payload>();
             drop(sender);
             drop(receiver);
@@ -137,7 +137,7 @@ fn entrypoint(c: &mut Criterion) {
 
     #[expect(clippy::absolute_paths, reason = "being explicit")]
     Run::new()
-        .iter_fn(|(), &()| {
+        .iter(|_| {
             let (sender, receiver) = futures::channel::oneshot::channel::<Payload>();
             drop(sender);
             drop(receiver);

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use num::Integer;
 
-use crate::{RunMeta, ThreadPool};
+use crate::{RunMeta, ThreadPool, args};
 
 /// A fully configured benchmark run, ready to be executed.
 #[derive(derive_more::Debug)]
@@ -29,19 +29,26 @@ pub struct ConfiguredRun<
     pub(crate) groups: NonZero<usize>,
 
     #[debug(ignore)]
-    pub(crate) prepare_thread_fn: Box<dyn Fn(&RunMeta) -> ThreadState + Send + Sync + 'a>,
+    pub(crate) prepare_thread_fn:
+        Box<dyn Fn(args::PrepareThread<'_>) -> ThreadState + Send + Sync + 'a>,
     #[debug(ignore)]
-    pub(crate) prepare_iter_fn: Box<dyn Fn(&RunMeta, &ThreadState) -> IterState + Send + Sync + 'a>,
+    pub(crate) prepare_iter_fn:
+        Box<dyn Fn(args::PrepareIter<'_, ThreadState>) -> IterState + Send + Sync + 'a>,
 
     #[debug(ignore)]
-    pub(crate) measure_wrapper_begin_fn:
-        Box<dyn Fn(&RunMeta, &ThreadState) -> MeasureWrapperState + Send + Sync + 'a>,
+    pub(crate) measure_wrapper_begin_fn: Box<
+        dyn Fn(args::MeasureWrapperBegin<'_, ThreadState>) -> MeasureWrapperState
+            + Send
+            + Sync
+            + 'a,
+    >,
     #[debug(ignore)]
     pub(crate) measure_wrapper_end_fn:
         Box<dyn Fn(MeasureWrapperState) -> MeasureOutput + Send + Sync + 'a>,
 
     #[debug(ignore)]
-    pub(crate) iter_fn: Box<dyn Fn(IterState, &ThreadState) -> CleanupState + Send + Sync + 'a>,
+    pub(crate) iter_fn:
+        Box<dyn Fn(args::Iter<'_, ThreadState, IterState>) -> CleanupState + Send + Sync + 'a>,
 }
 
 impl<ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>
@@ -98,25 +105,25 @@ where
 
                 let meta = RunMeta::new(group_index, group_count, iterations);
 
-                let thread_state = prepare_thread_fn(&meta);
+                let thread_state = prepare_thread_fn(args::PrepareThread::new(&meta));
 
                 let iterations_usize = usize::try_from(iterations)
                     .expect("iteration count that exceeds virtual memory size is impossible to execute as state would not fit in memory");
 
                 let iter_state = iter::repeat_with(|| {
-                    prepare_iter_fn(&meta, &thread_state)
+                    prepare_iter_fn(args::PrepareIter::new(&meta, &thread_state))
                 }).take(iterations_usize).collect::<Vec<_>>();
 
                 let mut cleanup_state = Vec::with_capacity(iterations_usize);
 
                 start.wait();
 
-                let measure_state = measure_wrapper_begin_fn(&meta, &thread_state);
+                let measure_state = measure_wrapper_begin_fn(args::MeasureWrapperBegin::new(&meta, &thread_state));
 
                 let start_time = Instant::now();
 
                 for iter_state in iter_state {
-                    cleanup_state.push(black_box(iter_fn(black_box(iter_state), &thread_state)));
+                    cleanup_state.push(black_box(iter_fn(args::Iter::new(&meta, &thread_state, black_box(iter_state)))));
                 }
 
                 let elapsed = start_time.elapsed();
@@ -302,10 +309,10 @@ mod tests {
         let iteration_count = Arc::new(AtomicU64::new(0));
 
         let _result = Run::new()
-            .iter_fn({
+            .iter({
                 let iteration_count = Arc::clone(&iteration_count);
 
-                move |(), &()| {
+                move |_| {
                     iteration_count.fetch_add(1, atomic::Ordering::Relaxed);
                 }
             })
@@ -322,16 +329,16 @@ mod tests {
         let run_meta_seen = Arc::new(Mutex::new(None));
 
         let _result = Run::new()
-            .prepare_thread_fn({
+            .prepare_thread({
                 let run_meta_seen = Arc::clone(&run_meta_seen);
-                move |run_meta| {
-                    *run_meta_seen.lock().unwrap() = Some(*run_meta);
+                move |args| {
+                    *run_meta_seen.lock().unwrap() = Some(*args.meta());
                 }
             })
-            .iter_fn({
+            .iter({
                 let iteration_count = Arc::clone(&iteration_count);
 
-                move |(), &()| {
+                move |_| {
                     iteration_count.fetch_add(1, atomic::Ordering::Relaxed);
                 }
             })
@@ -360,13 +367,13 @@ mod tests {
 
         let _result = Run::new()
             .groups(nz!(2))
-            .prepare_thread_fn({
+            .prepare_thread({
                 let run_meta_seen = Arc::clone(&run_meta_seen);
-                move |run_meta| {
-                    run_meta_seen.lock().unwrap().push(*run_meta);
+                move |args| {
+                    run_meta_seen.lock().unwrap().push(*args.meta());
                 }
             })
-            .iter_fn(|(), &()| ())
+            .iter(|_| ())
             .execute_on(&mut pool, 1);
 
         let mut seen = run_meta_seen.lock().unwrap();
@@ -395,13 +402,13 @@ mod tests {
 
         let _result = Run::new()
             .groups(nz!(2))
-            .prepare_thread_fn({
+            .prepare_thread({
                 let run_meta_seen = Arc::clone(&run_meta_seen);
-                move |run_meta| {
-                    run_meta_seen.lock().unwrap().push(*run_meta);
+                move |args| {
+                    run_meta_seen.lock().unwrap().push(*args.meta());
                 }
             })
-            .iter_fn(|(), &()| ())
+            .iter(|_| ())
             .execute_on(&mut pool, 1);
 
         let mut seen = run_meta_seen.lock().unwrap();
@@ -438,13 +445,13 @@ mod tests {
 
         let _result = Run::new()
             .groups(nz!(3))
-            .prepare_thread_fn({
+            .prepare_thread({
                 let run_meta_seen = Arc::clone(&run_meta_seen);
-                move |run_meta| {
-                    run_meta_seen.lock().unwrap().push(*run_meta);
+                move |args| {
+                    run_meta_seen.lock().unwrap().push(*args.meta());
                 }
             })
-            .iter_fn(|(), &()| ())
+            .iter(|_| ())
             .execute_on(&mut pool, 1);
 
         let mut seen = run_meta_seen.lock().unwrap();
@@ -473,7 +480,7 @@ mod tests {
 
         let _result = Run::new()
             .groups(nz!(3))
-            .iter_fn(|(), &()| ())
+            .iter(|_| ())
             .execute_on(&mut pool, 1);
     }
 
@@ -484,7 +491,7 @@ mod tests {
 
         let _result = Run::new()
             .groups(nz!(2))
-            .iter_fn(|(), &()| ())
+            .iter(|_| ())
             .execute_on(&mut pool, 1);
     }
 
@@ -494,12 +501,13 @@ mod tests {
         let cleanup_states = Arc::new(Mutex::new(Vec::new()));
 
         let _result = Run::new()
-            .prepare_thread_fn(|_| "thread_state".to_string())
-            .prepare_iter_fn(|_, thread_state| format!("{thread_state}_iter"))
-            .iter_fn({
+            .prepare_thread(|_| "thread_state".to_string())
+            .prepare_iter(|args| format!("{}_iter", args.thread_state()))
+            .iter({
                 let cleanup_states = Arc::clone(&cleanup_states);
-                move |iter_state, thread_state| {
-                    let cleanup_state = format!("{iter_state}_{thread_state}_cleanup");
+                move |args| {
+                    let cleanup_state =
+                        format!("{}_{}_cleanup", args.iter_state(), args.thread_state());
                     cleanup_states.lock().unwrap().push(cleanup_state.clone());
                     cleanup_state
                 }
@@ -518,10 +526,10 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
 
         let result = Run::new()
-            .measure_wrapper_fns(
+            .measure_wrapper(
                 {
                     let events = Arc::clone(&events);
-                    move |_, ()| {
+                    move |_| {
                         events.lock().unwrap().push("begin".to_string());
                         "wrapper_state".to_string()
                     }
@@ -534,9 +542,9 @@ mod tests {
                     }
                 },
             )
-            .iter_fn({
+            .iter({
                 let events = Arc::clone(&events);
-                move |(), &()| {
+                move |_| {
                     events.lock().unwrap().push("iteration".to_string());
                 }
             })
@@ -564,11 +572,11 @@ mod tests {
 
         let result = Run::new()
             .groups(nz!(2))
-            .measure_wrapper_fns(
-                |run_meta, ()| format!("group_{}", run_meta.group_index()),
+            .measure_wrapper(
+                |args| format!("group_{}", args.meta().group_index()),
                 |state| format!("{state}_output"),
             )
-            .iter_fn(|(), &()| ())
+            .iter(|_| ())
             .execute_on(&mut pool, 1);
 
         let mut outputs: Vec<_> = result.measure_outputs().collect();
@@ -585,15 +593,15 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
 
         let _result = Run::new()
-            .measure_wrapper_fns(|_, ()| "wrapper_state".to_string(), {
+            .measure_wrapper(|_| "wrapper_state".to_string(), {
                 let events = Arc::clone(&events);
                 move |_| {
                     events.lock().unwrap().push("wrapper_end".to_string());
                 }
             })
-            .iter_fn({
+            .iter({
                 let events = Arc::clone(&events);
-                move |(), &()| {
+                move |_| {
                     struct CleanupTracker {
                         events: Arc<Mutex<Vec<String>>>,
                     }
@@ -629,22 +637,22 @@ mod tests {
 
         let _result = Run::new()
             .groups(groups)
-            .prepare_thread_fn({
+            .prepare_thread({
                 let thread_prepare_count = Arc::clone(&thread_prepare_count);
                 move |_| {
                     thread_prepare_count.fetch_add(1, atomic::Ordering::Relaxed);
                 }
             })
-            .prepare_iter_fn({
+            .prepare_iter({
                 let iter_prepare_count = Arc::clone(&iter_prepare_count);
-                move |_, ()| {
+                move |_| {
                     iter_prepare_count.fetch_add(1, atomic::Ordering::Relaxed);
                 }
             })
-            .measure_wrapper_fns(
+            .measure_wrapper(
                 {
                     let wrapper_begin_count = Arc::clone(&wrapper_begin_count);
-                    move |_, ()| {
+                    move |_| {
                         wrapper_begin_count.fetch_add(1, atomic::Ordering::Relaxed);
                     }
                 },
@@ -655,9 +663,9 @@ mod tests {
                     }
                 },
             )
-            .iter_fn({
+            .iter({
                 let iter_count = Arc::clone(&iter_count);
-                move |(), &()| {
+                move |_| {
                     iter_count.fetch_add(1, atomic::Ordering::Relaxed);
                 }
             })

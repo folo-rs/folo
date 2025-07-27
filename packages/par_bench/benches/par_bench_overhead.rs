@@ -26,7 +26,7 @@ fn par_bench_overhead(c: &mut Criterion) {
     // A new benchmark run is constructed for every call into this callback,
     // as per the standard mechanism for using par_bench with Criterion.
     Run::new()
-        .iter_fn(|(), &()| {
+        .iter(|_| {
             // Empty iter_fn - does absolutely nothing.
             // We use black_box to try prevent the compiler from optimizing this away.
             black_box(());

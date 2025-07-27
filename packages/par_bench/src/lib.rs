@@ -123,8 +123,9 @@ mod run_configured_criterion;
 mod run_meta;
 mod threadpool;
 
-// This is in a separate module because 99% of the time the user never needs to name
+// These are in a separate module because 99% of the time the user never needs to name
 // these types, so it makes sense to de-emphasize them in the API documentation.
+pub mod args;
 pub mod configure;
 
 pub use run::*;

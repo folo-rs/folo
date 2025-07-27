@@ -49,23 +49,23 @@ fn entrypoint(c: &mut Criterion) {
     let mut g = c.benchmark_group("thread_local_arc::access_one_threaded");
 
     Run::new()
-        .iter_fn(|(), &()| TARGET.with(|val| Arc::weak_count(&val.shared_state)))
+        .iter(|_| TARGET.with(|val| Arc::weak_count(&val.shared_state)))
         .execute_criterion_on(&mut one_thread, &mut g, "with");
 
     Run::new()
-        .iter_fn(|(), &()| Arc::weak_count(&TARGET.to_arc().shared_state))
+        .iter(|_| Arc::weak_count(&TARGET.to_arc().shared_state))
         .execute_criterion_on(&mut one_thread, &mut g, "to_arc");
 
     // For comparison, we also include a thread_local! LazyCell.
     Run::new()
-        .iter_fn(|(), &()| {
+        .iter(|_| {
             TEST_SUBJECT_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state))
         })
         .execute_criterion_on(&mut one_thread, &mut g, "vs_std_thread_local");
 
     // For comparison, we also include a global LazyLock.
     Run::new()
-        .iter_fn(|(), &()| Arc::weak_count(&TEST_SUBJECT_GLOBAL.shared_state))
+        .iter(|_| Arc::weak_count(&TEST_SUBJECT_GLOBAL.shared_state))
         .execute_criterion_on(&mut one_thread, &mut g, "vs_static_lazy_lock");
 
     g.finish();
@@ -74,23 +74,23 @@ fn entrypoint(c: &mut Criterion) {
         let mut g = c.benchmark_group("thread_local_arc::access_two_threaded");
 
         Run::new()
-            .iter_fn(|(), &()| TARGET.with(|val| Arc::weak_count(&val.shared_state)))
+            .iter(|_| TARGET.with(|val| Arc::weak_count(&val.shared_state)))
             .execute_criterion_on(two_threads, &mut g, "with");
 
         Run::new()
-            .iter_fn(|(), &()| Arc::weak_count(&TARGET.to_arc().shared_state))
+            .iter(|_| Arc::weak_count(&TARGET.to_arc().shared_state))
             .execute_criterion_on(two_threads, &mut g, "to_arc");
 
         // For comparison, we also include a thread_local! LazyCell.
         Run::new()
-            .iter_fn(|(), &()| {
+            .iter(|_| {
                 TEST_SUBJECT_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state))
             })
             .execute_criterion_on(two_threads, &mut g, "vs_std_thread_local");
 
         // For comparison, we also include a global LazyLock.
         Run::new()
-            .iter_fn(|(), &()| Arc::weak_count(&TEST_SUBJECT_GLOBAL.shared_state))
+            .iter(|_| Arc::weak_count(&TEST_SUBJECT_GLOBAL.shared_state))
             .execute_criterion_on(two_threads, &mut g, "vs_static_lazy_lock");
 
         g.finish();

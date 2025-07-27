@@ -33,6 +33,6 @@ fn atomic_increments(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallT
     let counter = AtomicU64::new(0);
 
     Run::new()
-        .iter_fn(|(), &()| counter.fetch_add(1, Ordering::Relaxed))
+        .iter(|_| counter.fetch_add(1, Ordering::Relaxed))
         .execute_criterion_on(pool, group, name);
 }

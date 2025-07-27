@@ -100,9 +100,9 @@ fn main() {
 /// Runs a benchmark with tracking enabled using measure wrapper callbacks.
 fn run_benchmark_with_tracking(pool: &mut ThreadPool) -> par_bench::RunSummary<MeasurementOutput> {
     let run = Run::new()
-        .measure_wrapper_fns(
+        .measure_wrapper(
             // Wrapper begin function: creates tracking sessions and spans before the timed execution.
-            |run_meta, _thread_state| {
+            |args| {
                 let alloc_session = AllocSession::new();
                 let time_session = TimeSession::new();
 
@@ -112,10 +112,10 @@ fn run_benchmark_with_tracking(pool: &mut ThreadPool) -> par_bench::RunSummary<M
 
                 let alloc_span = alloc_operation
                     .measure_thread()
-                    .iterations(run_meta.iterations());
+                    .iterations(args.meta().iterations());
                 let time_span = time_operation
                     .measure_thread()
-                    .iterations(run_meta.iterations());
+                    .iterations(args.meta().iterations());
 
                 TrackingState {
                     alloc_session,
@@ -140,7 +140,7 @@ fn run_benchmark_with_tracking(pool: &mut ThreadPool) -> par_bench::RunSummary<M
                 }
             },
         )
-        .iter_fn(|(), &()| {
+        .iter(|_| {
             // Simulate some memory-intensive and processor-intensive work.
             simulate_benchmark_work();
         });

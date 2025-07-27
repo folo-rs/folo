@@ -93,14 +93,16 @@ fn once_event_arc_mt(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallT
             Run::new()
                 // Group 0 sends, group 1 receives.
                 .groups(nz!(2))
-                .prepare_iter_fn(|meta, &()| {
-                    if meta.group_index() == 0 {
+                .prepare_iter(|args| {
+                    if args.meta().group_index() == 0 {
                         (Some(senders.lock().unwrap().pop().unwrap()), None)
                     } else {
                         (None, Some(receivers.lock().unwrap().pop().unwrap()))
                     }
                 })
-                .iter_fn(|(sender, receiver), &()| {
+                .iter(|mut args| {
+                    let (sender, receiver) = args.take_iter_state();
+
                     if let Some(sender) = sender {
                         sender.send(42);
                     } else if let Some(receiver) = receiver {
@@ -137,14 +139,16 @@ fn once_event_ptr_mt(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallT
             Run::new()
                 // Group 0 sends, group 1 receives.
                 .groups(nz!(2))
-                .prepare_iter_fn(|meta, &()| {
-                    if meta.group_index() == 0 {
+                .prepare_iter(|args| {
+                    if args.meta().group_index() == 0 {
                         (Some(senders.lock().unwrap().pop().unwrap()), None)
                     } else {
                         (None, Some(receivers.lock().unwrap().pop().unwrap()))
                     }
                 })
-                .iter_fn(|(sender, receiver), &()| {
+                .iter(|mut args| {
+                    let (sender, receiver) = args.take_iter_state();
+
                     if let Some(sender) = sender {
                         sender.send(42);
                     } else if let Some(receiver) = receiver {
@@ -175,14 +179,16 @@ fn oneshot_channel_mt(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, Wall
             Run::new()
                 // Group 0 sends, group 1 receives.
                 .groups(nz!(2))
-                .prepare_iter_fn(|meta, &()| {
-                    if meta.group_index() == 0 {
+                .prepare_iter(|args| {
+                    if args.meta().group_index() == 0 {
                         (Some(senders.lock().unwrap().pop().unwrap()), None)
                     } else {
                         (None, Some(receivers.lock().unwrap().pop().unwrap()))
                     }
                 })
-                .iter_fn(|(sender, receiver), &()| {
+                .iter(|mut args| {
+                    let (sender, receiver) = args.take_iter_state();
+
                     if let Some(sender) = sender {
                         drop(sender.send(42));
                     } else if let Some(receiver) = receiver {
@@ -214,14 +220,16 @@ fn futures_oneshot_channel_mt(pool: &mut ThreadPool, group: &mut BenchmarkGroup<
             Run::new()
                 // Group 0 sends, group 1 receives.
                 .groups(nz!(2))
-                .prepare_iter_fn(|meta, &()| {
-                    if meta.group_index() == 0 {
+                .prepare_iter(|args| {
+                    if args.meta().group_index() == 0 {
                         (Some(senders.lock().unwrap().pop().unwrap()), None)
                     } else {
                         (None, Some(receivers.lock().unwrap().pop().unwrap()))
                     }
                 })
-                .iter_fn(|(sender, receiver), &()| {
+                .iter(|mut args| {
+                    let (sender, receiver) = args.take_iter_state();
+
                     if let Some(sender) = sender {
                         _ = sender.send(42);
                     } else if let Some(receiver) = receiver {
@@ -236,7 +244,7 @@ fn futures_oneshot_channel_mt(pool: &mut ThreadPool, group: &mut BenchmarkGroup<
 
 fn local_once_event_ref_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
     Run::new()
-        .iter_fn(|(), &()| {
+        .iter(|_| {
             // This binding mode is really awkward to use but that's the deal with Rust references.
             let event = LocalOnceEvent::<Payload>::new();
             let (sender, receiver) = event.bind_by_ref();
@@ -249,11 +257,13 @@ fn local_once_event_ref_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_,
 
 fn local_once_event_rc_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
     Run::new()
-        .prepare_iter_fn(|_, &()| {
+        .prepare_iter(|_| {
             let event = Rc::new(LocalOnceEvent::<Payload>::new());
             event.bind_by_rc()
         })
-        .iter_fn(|(sender, receiver), &()| {
+        .iter(|mut args| {
+            let (sender, receiver) = args.take_iter_state();
+
             sender.send(42);
             block_on(receiver).unwrap();
         })
@@ -262,7 +272,7 @@ fn local_once_event_rc_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, 
 
 fn local_once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
     Run::new()
-        .prepare_iter_fn(|_, &()| {
+        .prepare_iter(|_| {
             let event = Box::pin(LocalOnceEvent::<Payload>::new());
 
             // SAFETY: We keep the event alive for the duration of the iteration,
@@ -271,7 +281,9 @@ fn local_once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_,
 
             (event, sender, receiver)
         })
-        .iter_fn(|(event, sender, receiver), &()| {
+        .iter(|mut args| {
+            let (event, sender, receiver) = args.take_iter_state();
+
             sender.send(42);
             block_on(receiver).unwrap();
 
@@ -283,8 +295,10 @@ fn local_once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_,
 
 fn oneshot_channel_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
     Run::new()
-        .prepare_iter_fn(|_, &()| oneshot::channel())
-        .iter_fn(|(sender, receiver), &()| {
+        .prepare_iter(|_| oneshot::channel())
+        .iter(|mut args| {
+            let (sender, receiver) = args.take_iter_state();
+
             drop(sender.send(42));
             block_on(receiver).unwrap();
         })
@@ -294,8 +308,10 @@ fn oneshot_channel_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, Wall
 fn futures_oneshot_channel_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
     #[expect(clippy::absolute_paths, reason = "being explicit")]
     Run::new()
-        .prepare_iter_fn(|_, &()| futures::channel::oneshot::channel())
-        .iter_fn(|(sender, receiver), &()| {
+        .prepare_iter(|_| futures::channel::oneshot::channel())
+        .iter(|mut args| {
+            let (sender, receiver) = args.take_iter_state();
+
             _ = sender.send(42);
             block_on(receiver).unwrap();
         })

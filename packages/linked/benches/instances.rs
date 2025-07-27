@@ -51,12 +51,12 @@ fn entrypoint(c: &mut Criterion) {
     let mut g = c.benchmark_group("instances::get");
 
     Run::new()
-        .iter_fn(|(), &()| Arc::weak_count(&TARGET.get().shared_state))
+        .iter(|_| Arc::weak_count(&TARGET.get().shared_state))
         .execute_criterion_on(&mut one_thread, &mut g, "one-threaded");
 
     if let Some(ref mut two_threads) = two_threads {
         Run::new()
-            .iter_fn(|(), &()| Arc::weak_count(&TARGET.get().shared_state))
+            .iter(|_| Arc::weak_count(&TARGET.get().shared_state))
             .execute_criterion_on(two_threads, &mut g, "two-threaded");
     }
 
@@ -65,8 +65,8 @@ fn entrypoint(c: &mut Criterion) {
     let mut g = c.benchmark_group("instances::get_1000");
 
     Run::new()
-        .prepare_thread_fn(|_| LinkedVariableClearGuard::default())
-        .iter_fn(|(), _| {
+        .prepare_thread(|_| LinkedVariableClearGuard::default())
+        .iter(|_| {
             seq!(N in 0..1000 {
                 black_box(Arc::weak_count(&TARGET_MANY_~N.get().shared_state));
             });
@@ -76,8 +76,8 @@ fn entrypoint(c: &mut Criterion) {
     if let Some(ref mut two_threads) = two_threads {
         Run::new()
             // We have to clean up the worker thread before/after the run.
-            .prepare_thread_fn(|_| LinkedVariableClearGuard::default())
-            .iter_fn(|(), _| {
+            .prepare_thread(|_| LinkedVariableClearGuard::default())
+            .iter(|_| {
                 seq!(N in 0..1000 {
                     black_box(Arc::weak_count(&TARGET_MANY_~N.get().shared_state));
                 });

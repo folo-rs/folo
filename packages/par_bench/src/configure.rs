@@ -10,12 +10,16 @@
     clippy::type_complexity,
     reason = "builder pattern uses complex function types for flexibility"
 )]
+#![allow(
+    clippy::iter_not_returning_iterator,
+    reason = "this is a different kind of iter(), iterators do not have a monopoly"
+)]
 
 use std::num::NonZero;
 
 use new_zealand::nz;
 
-use crate::{ConfiguredRun, RunMeta};
+use crate::{ConfiguredRun, args};
 
 /// The first stage of configuring a benchmark run, with all type parameters unknown.
 #[derive(Debug)]
@@ -31,7 +35,7 @@ pub struct RunWithThreadState<'a, ThreadState> {
     groups: NonZero<usize>,
 
     #[debug(ignore)]
-    prepare_thread_fn: Box<dyn Fn(&RunMeta) -> ThreadState + Send + Sync + 'a>,
+    prepare_thread_fn: Box<dyn Fn(args::PrepareThread<'_>) -> ThreadState + Send + Sync + 'a>,
 }
 
 /// The third stage of configuring a benchmark run, with the iteration state type parameter known.
@@ -41,9 +45,10 @@ pub struct RunWithIterState<'a, ThreadState, IterState> {
     groups: NonZero<usize>,
 
     #[debug(ignore)]
-    prepare_thread_fn: Box<dyn Fn(&RunMeta) -> ThreadState + Send + Sync + 'a>,
+    prepare_thread_fn: Box<dyn Fn(args::PrepareThread<'_>) -> ThreadState + Send + Sync + 'a>,
     #[debug(ignore)]
-    prepare_iter_fn: Box<dyn Fn(&RunMeta, &ThreadState) -> IterState + Send + Sync + 'a>,
+    prepare_iter_fn:
+        Box<dyn Fn(args::PrepareIter<'_, ThreadState>) -> IterState + Send + Sync + 'a>,
 }
 
 /// The fourth stage of configuring a benchmark run, with the wrapper state type parameter known.
@@ -56,13 +61,18 @@ where
     groups: NonZero<usize>,
 
     #[debug(ignore)]
-    prepare_thread_fn: Box<dyn Fn(&RunMeta) -> ThreadState + Send + Sync + 'a>,
+    prepare_thread_fn: Box<dyn Fn(args::PrepareThread<'_>) -> ThreadState + Send + Sync + 'a>,
     #[debug(ignore)]
-    prepare_iter_fn: Box<dyn Fn(&RunMeta, &ThreadState) -> IterState + Send + Sync + 'a>,
+    prepare_iter_fn:
+        Box<dyn Fn(args::PrepareIter<'_, ThreadState>) -> IterState + Send + Sync + 'a>,
 
     #[debug(ignore)]
-    measure_wrapper_begin_fn:
-        Box<dyn Fn(&RunMeta, &ThreadState) -> MeasureWrapperState + Send + Sync + 'a>,
+    measure_wrapper_begin_fn: Box<
+        dyn Fn(args::MeasureWrapperBegin<'_, ThreadState>) -> MeasureWrapperState
+            + Send
+            + Sync
+            + 'a,
+    >,
     #[debug(ignore)]
     measure_wrapper_end_fn: Box<dyn Fn(MeasureWrapperState) -> MeasureOutput + Send + Sync + 'a>,
 }
@@ -103,9 +113,9 @@ impl RunInitial {
     ///         std::hint::black_box(42);
     ///     });
     /// ```
-    pub fn prepare_thread_fn<'a, F, ThreadState>(self, f: F) -> RunWithThreadState<'a, ThreadState>
+    pub fn prepare_thread<'a, F, ThreadState>(self, f: F) -> RunWithThreadState<'a, ThreadState>
     where
-        F: Fn(&RunMeta) -> ThreadState + Send + Sync + 'a,
+        F: Fn(args::PrepareThread<'_>) -> ThreadState + Send + Sync + 'a,
     {
         RunWithThreadState {
             groups: self.groups,
@@ -139,9 +149,9 @@ impl RunInitial {
     ///
     /// If you wish to specify a thread preparation function to provide state for each
     /// thread or iteration, do both before calling this method.
-    pub fn prepare_iter_fn<'a, F, IterState>(self, f: F) -> RunWithIterState<'a, (), IterState>
+    pub fn prepare_iter<'a, F, IterState>(self, f: F) -> RunWithIterState<'a, (), IterState>
     where
-        F: Fn(&RunMeta, &()) -> IterState + Send + Sync + 'a,
+        F: Fn(args::PrepareIter<'_, ()>) -> IterState + Send + Sync + 'a,
     {
         RunWithIterState {
             groups: self.groups,
@@ -159,20 +169,20 @@ impl RunInitial {
     ///
     /// If you wish to specify a thread or iteration preparation function to provide state for each
     /// iteration, do it before calling this method.
-    pub fn measure_wrapper_fns<'a, FBegin, FEnd, MeasureWrapperState, MeasureOutput>(
+    pub fn measure_wrapper<'a, FBegin, FEnd, MeasureWrapperState, MeasureOutput>(
         self,
         f_begin: FBegin,
         f_end: FEnd,
     ) -> RunWithWrapperState<'a, (), (), MeasureWrapperState, MeasureOutput>
     where
-        FBegin: Fn(&RunMeta, &()) -> MeasureWrapperState + Send + Sync + 'a,
+        FBegin: Fn(args::MeasureWrapperBegin<'_, ()>) -> MeasureWrapperState + Send + Sync + 'a,
         FEnd: Fn(MeasureWrapperState) -> MeasureOutput + Send + Sync + 'a,
         MeasureOutput: Send + 'static,
     {
         RunWithWrapperState {
             groups: self.groups,
             prepare_thread_fn: Box::new(|_| ()),
-            prepare_iter_fn: Box::new(|_, _| ()),
+            prepare_iter_fn: Box::new(|_| ()),
             measure_wrapper_begin_fn: Box::new(f_begin),
             measure_wrapper_end_fn: Box::new(f_end),
         }
@@ -189,18 +199,15 @@ impl RunInitial {
     /// If you wish to specify a thread or iteration preparation function to provide state for each
     /// thread or iteration, or a specify a measurement wrapper function, do all of these before
     /// calling this method.
-    pub fn iter_fn<'a, F, CleanupState>(
-        self,
-        f: F,
-    ) -> ConfiguredRun<'a, (), (), (), (), CleanupState>
+    pub fn iter<'a, F, CleanupState>(self, f: F) -> ConfiguredRun<'a, (), (), (), (), CleanupState>
     where
-        F: Fn((), &()) -> CleanupState + Send + Sync + 'a,
+        F: Fn(args::Iter<'_, (), ()>) -> CleanupState + Send + Sync + 'a,
     {
         ConfiguredRun {
             groups: self.groups,
             prepare_thread_fn: Box::new(|_| ()),
-            prepare_iter_fn: Box::new(|_, _| ()),
-            measure_wrapper_begin_fn: Box::new(|_, _| ()),
+            prepare_iter_fn: Box::new(|_| ()),
+            measure_wrapper_begin_fn: Box::new(|_| ()),
             measure_wrapper_end_fn: Box::new(|_| ()),
             iter_fn: Box::new(f),
         }
@@ -241,9 +248,9 @@ impl<'a, ThreadState> RunWithThreadState<'a, ThreadState> {
     ///         std::hint::black_box(iter_vec.len());
     ///     });
     /// ```
-    pub fn prepare_iter_fn<F, IterState>(self, f: F) -> RunWithIterState<'a, ThreadState, IterState>
+    pub fn prepare_iter<F, IterState>(self, f: F) -> RunWithIterState<'a, ThreadState, IterState>
     where
-        F: Fn(&RunMeta, &ThreadState) -> IterState + Send + Sync + 'a,
+        F: Fn(args::PrepareIter<'_, ThreadState>) -> IterState + Send + Sync + 'a,
     {
         RunWithIterState {
             groups: self.groups,
@@ -261,20 +268,23 @@ impl<'a, ThreadState> RunWithThreadState<'a, ThreadState> {
     ///
     /// If you wish to specify an iteration preparation function to provide state for each
     /// iteration, do it before calling this method.
-    pub fn measure_wrapper_fns<FBegin, FEnd, MeasureWrapperState, MeasureOutput>(
+    pub fn measure_wrapper<FBegin, FEnd, MeasureWrapperState, MeasureOutput>(
         self,
         f_begin: FBegin,
         f_end: FEnd,
     ) -> RunWithWrapperState<'a, ThreadState, (), MeasureWrapperState, MeasureOutput>
     where
-        FBegin: Fn(&RunMeta, &ThreadState) -> MeasureWrapperState + Send + Sync + 'a,
+        FBegin: Fn(args::MeasureWrapperBegin<'_, ThreadState>) -> MeasureWrapperState
+            + Send
+            + Sync
+            + 'a,
         FEnd: Fn(MeasureWrapperState) -> MeasureOutput + Send + Sync + 'a,
         MeasureOutput: Send + 'static,
     {
         RunWithWrapperState {
             groups: self.groups,
             prepare_thread_fn: self.prepare_thread_fn,
-            prepare_iter_fn: Box::new(|_, _| ()),
+            prepare_iter_fn: Box::new(|_| ()),
             measure_wrapper_begin_fn: Box::new(f_begin),
             measure_wrapper_end_fn: Box::new(f_end),
         }
@@ -309,18 +319,18 @@ impl<'a, ThreadState> RunWithThreadState<'a, ThreadState> {
     ///
     /// If you wish to specify an iteration preparation function to provide state for each
     /// iteration, do it before calling this method.
-    pub fn iter_fn<F, CleanupState>(
+    pub fn iter<F, CleanupState>(
         self,
         f: F,
     ) -> ConfiguredRun<'a, ThreadState, (), (), (), CleanupState>
     where
-        F: Fn((), &ThreadState) -> CleanupState + Send + Sync + 'a,
+        F: Fn(args::Iter<'_, ThreadState, ()>) -> CleanupState + Send + Sync + 'a,
     {
         ConfiguredRun {
             groups: self.groups,
             prepare_thread_fn: self.prepare_thread_fn,
-            prepare_iter_fn: Box::new(|_, _| ()),
-            measure_wrapper_begin_fn: Box::new(|_, _| ()),
+            prepare_iter_fn: Box::new(|_| ()),
+            measure_wrapper_begin_fn: Box::new(|_| ()),
             measure_wrapper_end_fn: Box::new(|_| ()),
             iter_fn: Box::new(f),
         }
@@ -345,13 +355,16 @@ impl<'a, ThreadState, IterState> RunWithIterState<'a, ThreadState, IterState> {
     /// The `f_begin` callback is called before the first iteration of each thread, and the
     /// `f_end` callback is called after the last iteration of each thread. Any return value
     /// from the former is passed to the latter.
-    pub fn measure_wrapper_fns<FBegin, FEnd, MeasureWrapperState, MeasureOutput>(
+    pub fn measure_wrapper<FBegin, FEnd, MeasureWrapperState, MeasureOutput>(
         self,
         f_begin: FBegin,
         f_end: FEnd,
     ) -> RunWithWrapperState<'a, ThreadState, IterState, MeasureWrapperState, MeasureOutput>
     where
-        FBegin: Fn(&RunMeta, &ThreadState) -> MeasureWrapperState + Send + Sync + 'a,
+        FBegin: Fn(args::MeasureWrapperBegin<'_, ThreadState>) -> MeasureWrapperState
+            + Send
+            + Sync
+            + 'a,
         FEnd: Fn(MeasureWrapperState) -> MeasureOutput + Send + Sync + 'a,
         MeasureOutput: Send + 'static,
     {
@@ -374,18 +387,18 @@ impl<'a, ThreadState, IterState> RunWithIterState<'a, ThreadState, IterState> {
     /// the only action permitted is to execute the run.
     ///
     /// If you wish to specify a thread wrapper function pair, do it before calling this method.
-    pub fn iter_fn<F, CleanupState>(
+    pub fn iter<F, CleanupState>(
         self,
         f: F,
     ) -> ConfiguredRun<'a, ThreadState, IterState, (), (), CleanupState>
     where
-        F: Fn(IterState, &ThreadState) -> CleanupState + Send + Sync + 'a,
+        F: Fn(args::Iter<'_, ThreadState, IterState>) -> CleanupState + Send + Sync + 'a,
     {
         ConfiguredRun {
             groups: self.groups,
             prepare_thread_fn: self.prepare_thread_fn,
             prepare_iter_fn: self.prepare_iter_fn,
-            measure_wrapper_begin_fn: Box::new(|_, _| ()),
+            measure_wrapper_begin_fn: Box::new(|_| ()),
             measure_wrapper_end_fn: Box::new(|_| ()),
             iter_fn: Box::new(f),
         }
@@ -416,12 +429,12 @@ where
     ///
     /// This must be the last step in preparing a benchmark run. After this,
     /// the only action permitted is to execute the run.
-    pub fn iter_fn<F, CleanupState>(
+    pub fn iter<F, CleanupState>(
         self,
         f: F,
     ) -> ConfiguredRun<'a, ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>
     where
-        F: Fn(IterState, &ThreadState) -> CleanupState + Send + Sync + 'a,
+        F: Fn(args::Iter<'_, ThreadState, IterState>) -> CleanupState + Send + Sync + 'a,
     {
         ConfiguredRun {
             groups: self.groups,

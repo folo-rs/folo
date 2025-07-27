@@ -28,28 +28,30 @@ fn main() {
 
     // Create a benchmark that references local variables
     let run = Run::new()
-        .prepare_thread_fn({
+        .prepare_thread({
             // We can capture local variables directly
             let local_data = &local_data;
             let counter = &global_counter;
             move |_meta| (local_data.clone(), Arc::clone(counter))
         })
-        .prepare_iter_fn(|_meta, (data, counter)| {
+        .prepare_iter(|args| {
+            let (data, counter) = args.thread_state();
+
             // Reference the local data and counter in each iteration setup
             (data.clone(), Arc::clone(counter), multiplier)
         })
-        .iter_fn(
-            |(data, counter, mult): (Vec<i32>, Arc<AtomicU64>, i32), _| {
-                // The benchmark work that uses local references
-                let sum: i32 = data.iter().map(|x| x * mult).sum();
+        .iter(|mut args| {
+            let (data, counter, mult): (Vec<i32>, Arc<AtomicU64>, i32) = args.take_iter_state();
 
-                // Update the global counter
-                counter.fetch_add(sum as u64, Ordering::Relaxed);
+            // The benchmark work that uses local references
+            let sum: i32 = data.iter().map(|x| x * mult).sum();
 
-                // Use black_box to prevent optimization
-                black_box(sum);
-            },
-        );
+            // Update the global counter
+            counter.fetch_add(sum as u64, Ordering::Relaxed);
+
+            // Use black_box to prevent optimization
+            black_box(sum);
+        });
 
     // Execute the benchmark
     let results = run.execute_on(&mut pool, 1000);

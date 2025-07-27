@@ -69,9 +69,9 @@ fn measure_atomic_increments(pool: &mut ThreadPool) -> std::time::Duration {
     // Shared atomic counter that all threads will increment.
     let counter = AtomicU64::new(0);
 
-    let run = Run::new().iter_fn(|(), &()| counter.fetch_add(1, Ordering::Relaxed));
-
-    let stats = run.execute_on(pool, ITERATIONS);
+    let stats = Run::new()
+        .iter(|_| counter.fetch_add(1, Ordering::Relaxed))
+        .execute_on(pool, ITERATIONS);
 
     // Verify that we performed the expected number of increments.
     let expected_total = ITERATIONS
