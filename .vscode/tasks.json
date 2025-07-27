@@ -85,7 +85,6 @@
                 "",
                 "all_the_time",
                 "alloc_tracker",
-                "benchmark_utils",
                 "benchmarks",
                 "cargo-detect-package",
                 "cpulist",

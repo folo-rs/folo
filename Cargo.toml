@@ -45,7 +45,6 @@ region_local = { version = "0.1.28", path = "packages/region_local" }
 
 # Internal packages we do not publish.
 benchmarks = { path = "packages/benchmarks" }
-benchmark_utils = { path = "packages/benchmark_utils" }
 testing = { path = "packages/testing" }
 
 # The packages we consume. We only enable "std" features here, the rest in individual packages.
