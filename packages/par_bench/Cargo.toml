@@ -36,5 +36,10 @@ harness = false
 name = "par_bench_basic"
 harness = false
 
+
+[[bench]]
+name = "par_bench_manual"
+harness = false
+
 [lints]
 workspace = true

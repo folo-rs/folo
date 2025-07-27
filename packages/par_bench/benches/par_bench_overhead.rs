@@ -18,7 +18,7 @@ criterion_group!(benches, par_bench_overhead);
 criterion_main!(benches);
 
 fn par_bench_overhead(c: &mut Criterion) {
-    let thread_pool = ThreadPool::default();
+    let mut thread_pool = ThreadPool::default();
 
     c.bench_function("par_bench_overhead", |b| {
         b.iter_custom(|iters| {
@@ -30,7 +30,7 @@ fn par_bench_overhead(c: &mut Criterion) {
                 black_box(());
             });
 
-            let stats = run.execute_on(&thread_pool, iters);
+            let stats = run.execute_on(&mut thread_pool, iters);
             stats.mean_duration()
         });
     });

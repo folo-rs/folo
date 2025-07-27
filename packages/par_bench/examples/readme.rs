@@ -29,7 +29,7 @@ fn basic_usage_example() {
     println!("Running basic usage example...");
 
     // Create a thread pool.
-    let pool = ThreadPool::default();
+    let mut pool = ThreadPool::default();
 
     // Shared atomic counter that all threads will increment.
     let counter = Arc::new(AtomicU64::new(0));
@@ -46,7 +46,7 @@ fn basic_usage_example() {
         });
 
     // Execute 10,000 iterations across all threads.
-    let stats = run.execute_on(&pool, 10_000);
+    let stats = run.execute_on(&mut pool, 10_000);
 
     // Get the mean duration for benchmark reporting.
     let duration = stats.mean_duration();

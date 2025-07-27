@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use par_bench::{Run, ThreadPool};
 
 fn main() {
-    let pool = ThreadPool::default();
+    let mut pool = ThreadPool::default();
 
     // Local data that we want to reference in our benchmark
     let local_data = vec![1, 2, 3, 4, 5];
@@ -49,7 +49,7 @@ fn main() {
         });
 
     // Execute the benchmark
-    let results = run.execute_on(&pool, 1000);
+    let results = run.execute_on(&mut pool, 1000);
 
     println!("Benchmark completed!");
     println!("Mean duration: {:?}", results.mean_duration());

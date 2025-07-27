@@ -47,7 +47,7 @@ fn main() {
     println!();
 
     // Create a multi-threaded pool using available processors.
-    let multi_thread_pool = ThreadPool::default();
+    let mut multi_thread_pool = ThreadPool::default();
     println!(
         "Running {} iterations on {} threads with tracking enabled",
         ITERATIONS,
@@ -56,7 +56,7 @@ fn main() {
     println!();
 
     // Execute the benchmark with tracking enabled.
-    let results = run_benchmark_with_tracking(&multi_thread_pool);
+    let results = run_benchmark_with_tracking(&mut multi_thread_pool);
 
     // Merge all the allocation reports from different threads.
     let mut merged_alloc_report = results
@@ -97,7 +97,7 @@ fn main() {
 }
 
 /// Runs a benchmark with tracking enabled using measure wrapper callbacks.
-fn run_benchmark_with_tracking(pool: &ThreadPool) -> par_bench::RunSummary<MeasurementOutput> {
+fn run_benchmark_with_tracking(pool: &mut ThreadPool) -> par_bench::RunSummary<MeasurementOutput> {
     let run = Run::new()
         .measure_wrapper_fns(
             // Wrapper begin function: creates tracking sessions and spans before the timed execution.

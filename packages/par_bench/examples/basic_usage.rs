@@ -28,10 +28,10 @@ fn main() {
     let single_processor = ProcessorSet::builder()
         .take(nz!(1))
         .expect("at least one processor should be available");
-    let single_thread_pool = ThreadPool::new(&single_processor);
+    let mut single_thread_pool = ThreadPool::new(&single_processor);
 
     // Create a multi-threaded pool using all available processors.
-    let multi_thread_pool = ThreadPool::default();
+    let mut multi_thread_pool = ThreadPool::default();
 
     println!(
         "Running {} iterations on 1 thread vs {} threads",
@@ -41,11 +41,11 @@ fn main() {
     println!();
 
     // Test single-threaded performance.
-    let single_threaded_duration = measure_atomic_increments(&single_thread_pool);
+    let single_threaded_duration = measure_atomic_increments(&mut single_thread_pool);
     println!("Single-threaded (1 thread): {single_threaded_duration:?}");
 
     // Test multi-threaded performance.
-    let multi_threaded_duration = measure_atomic_increments(&multi_thread_pool);
+    let multi_threaded_duration = measure_atomic_increments(&mut multi_thread_pool);
     println!(
         "Multi-threaded ({} threads): {:?}",
         multi_thread_pool.thread_count(),
@@ -74,7 +74,7 @@ fn main() {
 }
 
 /// Measures the time to perform atomic increments using the given thread pool.
-fn measure_atomic_increments(pool: &ThreadPool) -> std::time::Duration {
+fn measure_atomic_increments(pool: &mut ThreadPool) -> std::time::Duration {
     // Shared atomic counter that all threads will increment.
     let counter = Arc::new(AtomicU64::new(0));
 
