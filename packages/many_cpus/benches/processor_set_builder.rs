@@ -8,95 +8,74 @@
 use std::hint::black_box;
 use std::time::Duration;
 
-use benchmark_utils::{ThreadPool, bench_on_threadpool};
 use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus::ProcessorSet;
 use new_zealand::nz;
+use par_bench::{Run, ThreadPool};
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
-    let thread_pool = ThreadPool::default();
+    let mut one_thread = ThreadPool::new(&ProcessorSet::single());
+    let mut two_threads = ProcessorSet::builder()
+        .take(nz!(2))
+        .map(|x| ThreadPool::new(&x));
 
     let mut group = c.benchmark_group("ProcessorSetBuilder");
 
     // Results from this are really unstable for whatever reason. Give it more time to stabilize.
     group.measurement_time(Duration::from_secs(30));
 
-    group.bench_function("all", |b| {
-        b.iter(|| {
+    // Single-threaded benchmarks using Run pattern for consistent overhead.
+    Run::new()
+        .iter(|_| {
             black_box(ProcessorSet::builder().take_all().unwrap());
-        });
-    });
+        })
+        .execute_criterion_on(&mut one_thread, &mut group, "all_st");
 
-    group.bench_function("one", |b| {
-        b.iter(|| {
+    Run::new()
+        .iter(|_| {
             black_box(ProcessorSet::builder().take(nz!(1)).unwrap());
-        });
-    });
+        })
+        .execute_criterion_on(&mut one_thread, &mut group, "one_st");
 
-    group.bench_function("only_evens", |b| {
-        b.iter(|| {
+    Run::new()
+        .iter(|_| {
             black_box(
                 ProcessorSet::builder()
                     .filter(|p| p.id() % 2 == 0)
                     .take_all()
                     .unwrap(),
             );
-        });
-    });
+        })
+        .execute_criterion_on(&mut one_thread, &mut group, "only_evens_st");
 
-    group.finish();
+    // Two-processor benchmarks for comparison.
+    if let Some(ref mut thread_pool) = two_threads {
+        Run::new()
+            .iter(|_| {
+                black_box(ProcessorSet::builder().take_all().unwrap());
+            })
+            .execute_criterion_on(thread_pool, &mut group, "all_mt");
 
-    let mut group = c.benchmark_group("ProcessorSetBuilder_MT");
+        Run::new()
+            .iter(|_| {
+                black_box(ProcessorSet::builder().take(nz!(1)).unwrap());
+            })
+            .execute_criterion_on(thread_pool, &mut group, "one_mt");
 
-    // Results from this are really unstable for whatever reason. Give it more time to stabilize.
-    group.measurement_time(Duration::from_secs(30));
-
-    group.bench_function("all", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &thread_pool,
-                iters,
-                || (),
-                |()| {
-                    black_box(ProcessorSet::builder().take_all().unwrap());
-                },
-            )
-        });
-    });
-
-    group.bench_function("one", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &thread_pool,
-                iters,
-                || (),
-                |()| {
-                    black_box(ProcessorSet::builder().take(nz!(1)).unwrap());
-                },
-            )
-        });
-    });
-
-    group.bench_function("only_evens", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &thread_pool,
-                iters,
-                || (),
-                |()| {
-                    black_box(
-                        ProcessorSet::builder()
-                            .filter(|p| p.id() % 2 == 0)
-                            .take_all()
-                            .unwrap(),
-                    );
-                },
-            )
-        });
-    });
+        Run::new()
+            .iter(|_| {
+                black_box(
+                    ProcessorSet::builder()
+                        .filter(|p| p.id() % 2 == 0)
+                        .take_all()
+                        .unwrap(),
+                );
+            })
+            .execute_criterion_on(thread_pool, &mut group, "only_evens_mt");
+    }
 
     group.finish();
 }

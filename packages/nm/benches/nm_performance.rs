@@ -18,7 +18,9 @@ criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
     let mut one_thread = ThreadPool::new(&ProcessorSet::single());
-    let mut two_threads = ProcessorSet::builder().take(nz!(2)).map(|x| ThreadPool::new(&x));
+    let mut two_threads = ProcessorSet::builder()
+        .take(nz!(2))
+        .map(|x| ThreadPool::new(&x));
 
     let mut group = c.benchmark_group("nm_observation");
 

@@ -58,7 +58,7 @@ impl ProcessorSet {
 
     /// Returns a [`ProcessorSet`] containing a randomly chosen single processor from among
     /// the processors of the default processor set.
-    /// 
+    ///
     /// Beware that the default processor set may contain processors with different capabilities,
     /// so this may return faster/slower processors for different calls.
     #[must_use]

@@ -107,9 +107,9 @@ impl<'a, ThreadState, IterState> Iter<'a, ThreadState, IterState> {
     }
 
     /// Returns the iteration state for the current iteration, consuming it.
-    /// 
+    ///
     /// # Panics
-    /// 
+    ///
     /// Panics if the iteration state has already been consumed.
     #[must_use]
     pub fn take_iter_state(&mut self) -> IterState {
@@ -119,9 +119,9 @@ impl<'a, ThreadState, IterState> Iter<'a, ThreadState, IterState> {
     }
 
     /// Returns a reference to the iteration state for the current iteration.
-    /// 
+    ///
     /// # Panics
-    /// 
+    ///
     /// Panics if the iteration state has already been consumed.
     #[must_use]
     pub fn iter_state(&self) -> &IterState {

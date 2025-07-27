@@ -28,14 +28,12 @@ fn entrypoint(c: &mut Criterion) {
 #[cfg(windows)]
 mod windows {
     use std::hint::black_box;
-    use std::sync::Arc;
     use std::time::Duration;
 
-    use benchmark_utils::{ThreadPool, bench_on_threadpool};
     use criterion::Criterion;
     use many_cpus::ProcessorSet;
     use many_cpus::pal::BUILD_TARGET_PLATFORM;
-    use new_zealand::nz;
+    use par_bench::{Run, ThreadPool};
     use windows::Win32::System::SystemInformation::GROUP_AFFINITY;
 
     pub(crate) fn entrypoint(c: &mut Criterion) {
@@ -76,23 +74,19 @@ mod windows {
             });
         });
 
-        group.bench_function("pin_thread_to_default_set", |b| {
-            let default_processor_set = Arc::new(ProcessorSet::default());
-            let one_processor = ProcessorSet::builder().take(nz!(1)).unwrap();
-            let one_thread = ThreadPool::new(&one_processor);
+        // The thread pool is the same, so does pinning the same thread over and over
+        // differ somehow from pinning new threads? Eeeh, maybe, maybe not - good enough.
+        let mut one_thread_for_repinning = ThreadPool::new(&ProcessorSet::single());
 
-            b.iter_custom({
-                |iters| {
-                    bench_on_threadpool(&one_thread, iters, || (), {
-                        let default_processor_set = Arc::clone(&default_processor_set);
-
-                        move |()| {
-                            default_processor_set.pin_current_thread_to();
-                        }
-                    })
-                }
-            });
-        });
+        Run::new()
+            .iter(|_| {
+                ProcessorSet::default().pin_current_thread_to();
+            })
+            .execute_criterion_on(
+                &mut one_thread_for_repinning,
+                &mut group,
+                "pin_thread_to_default_set",
+            );
 
         group.finish();
     }

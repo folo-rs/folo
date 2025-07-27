@@ -830,7 +830,6 @@ checksum = "cd945864f07fe9f5371a27ad7b52a172b4b499999f1d97574c9fa68373937e12"
 name = "many_cpus"
 version = "0.3.14"
 dependencies = [
- "benchmark_utils",
  "cpulist",
  "criterion",
  "derive_more",
@@ -844,6 +843,7 @@ dependencies = [
  "negative-impl",
  "new_zealand",
  "nonempty",
+ "par_bench",
  "rand 0.9.2",
  "scopeguard",
  "smallvec",

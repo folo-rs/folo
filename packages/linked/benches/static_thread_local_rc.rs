@@ -58,9 +58,7 @@ fn entrypoint(c: &mut Criterion) {
 
     // For comparison, we also include a thread_local! LazyCell.
     Run::new()
-        .iter(|_| {
-            TEST_SUBJECT_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state))
-        })
+        .iter(|_| TEST_SUBJECT_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state)))
         .execute_criterion_on(&mut one_thread, &mut g, "vs_std_thread_local");
 
     // For comparison, we also include a global LazyLock.
@@ -83,9 +81,7 @@ fn entrypoint(c: &mut Criterion) {
 
         // For comparison, we also include a thread_local! LazyCell.
         Run::new()
-            .iter(|_| {
-                TEST_SUBJECT_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state))
-            })
+            .iter(|_| TEST_SUBJECT_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state)))
             .execute_criterion_on(two_threads, &mut g, "vs_std_thread_local");
 
         // For comparison, we also include a global LazyLock.

@@ -39,10 +39,10 @@ windows = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
-benchmark_utils = { workspace = true }
 criterion = { workspace = true }
 mockall = { workspace = true }
 mutants = { workspace = true }
+par_bench = { workspace = true, features = ["criterion"] }
 scopeguard = { workspace = true }
 static_assertions = { workspace = true }
 testing = { workspace = true }
