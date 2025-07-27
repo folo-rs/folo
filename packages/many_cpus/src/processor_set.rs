@@ -598,4 +598,12 @@ mod tests {
         .join()
         .unwrap();
     }
+
+    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    #[test]
+    fn single_contains_exactly_one_processor() {
+        let single_processor_set = ProcessorSet::single();
+
+        assert_eq!(single_processor_set.len(), 1);
+    }
 }
