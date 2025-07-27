@@ -41,28 +41,29 @@
 //! use std::sync::Arc;
 //! use std::sync::atomic::{AtomicU64, Ordering};
 //!
+//! use many_cpus::ProcessorSet;
 //! use par_bench::{Run, ThreadPool};
 //!
 //! # fn main() {
 //! // Create a thread pool with default processor set
-//! let pool = ThreadPool::default();
+//! let mut pool = ThreadPool::new(&ProcessorSet::default());
 //!
 //! // Shared counter for all threads to increment
 //! let counter = Arc::new(AtomicU64::new(0));
 //!
 //! let run = Run::new()
-//!     .prepare_thread_fn({
+//!     .prepare_thread({
 //!         let counter = Arc::clone(&counter);
-//!         move |_run_meta| Arc::clone(&counter)
+//!         move |_| Arc::clone(&counter)
 //!     })
-//!     .prepare_iter_fn(|_run_meta, counter| Arc::clone(counter))
-//!     .iter_fn(|counter: Arc<AtomicU64>| {
+//!     .prepare_iter(|args| Arc::clone(args.thread_state()))
+//!     .iter(|mut args| {
 //!         // This is the measured work
-//!         counter.fetch_add(1, Ordering::Relaxed);
+//!         args.iter_state().fetch_add(1, Ordering::Relaxed);
 //!     });
 //!
 //! // Execute 1000 iterations across all threads
-//! let results = run.execute_on(&pool, 1000);
+//! let results = run.execute_on(&mut pool, 1000);
 //! println!("Mean duration: {:?}", results.mean_duration());
 //! # }
 //! ```
@@ -73,31 +74,33 @@
 //! use std::sync::Arc;
 //! use std::sync::atomic::{AtomicU64, Ordering};
 //!
+//! use many_cpus::ProcessorSet;
 //! use new_zealand::nz;
 //! use par_bench::{Run, ThreadPool};
 //!
 //! # fn main() {
-//! # if let Some(processors) = many_cpus::ProcessorSet::builder().take(nz!(4)) {
-//! let pool = ThreadPool::new(&processors);
+//! # if let Some(processors) = ProcessorSet::builder().take(nz!(4)) {
+//! let mut pool = ThreadPool::new(&processors);
 //!
 //! let reader_count = Arc::new(AtomicU64::new(0));
 //! let writer_count = Arc::new(AtomicU64::new(0));
 //!
 //! let run = Run::new()
 //!     .groups(nz!(2)) // Divide 4 threads into 2 groups of 2 threads each
-//!     .prepare_thread_fn({
+//!     .prepare_thread({
 //!         let reader_count = Arc::clone(&reader_count);
 //!         let writer_count = Arc::clone(&writer_count);
-//!         move |run_meta| {
-//!             if run_meta.group_index() == 0 {
+//!         move |args| {
+//!             if args.meta().group_index() == 0 {
 //!                 ("reader", Arc::clone(&reader_count))
 //!             } else {
 //!                 ("writer", Arc::clone(&writer_count))
 //!             }
 //!         }
 //!     })
-//!     .prepare_iter_fn(|_run_meta, thread_state| thread_state.clone())
-//!     .iter_fn(|(role, counter): (&str, Arc<AtomicU64>)| {
+//!     .prepare_iter(|args| args.thread_state().clone())
+//!     .iter(|mut args| {
+//!         let (role, counter) = args.take_iter_state();
 //!         match role {
 //!             "reader" => {
 //!                 // Reader work
@@ -111,7 +114,7 @@
 //!         }
 //!     });
 //!
-//! let results = run.execute_on(&pool, 100);
+//! let results = run.execute_on(&mut pool, 100);
 //! println!("Results: {:?}", results.mean_duration());
 //! # }
 //! # }

@@ -177,20 +177,21 @@ fn calculate_mean_duration(thread_count: NonZero<usize>, total_elapsed_nanos: u1
 /// ```
 /// use std::time::Duration;
 ///
+/// use many_cpus::ProcessorSet;
 /// use par_bench::{Run, ThreadPool};
 ///
 /// # fn main() {
-/// let mut pool = ThreadPool::default();
+/// let mut pool = ThreadPool::new(&ProcessorSet::default());
 /// let results = Run::new()
-///     .measure_wrapper_fns(
-///         |_meta, _state| std::time::Instant::now(),
+///     .measure_wrapper(
+///         |_| std::time::Instant::now(),
 ///         |start_time| start_time.elapsed(),
 ///     )
-///     .iter_fn(|_| {
+///     .iter(|_| {
 ///         // Some work to measure
 ///         std::hint::black_box(42 * 42);
 ///     })
-///     .execute_on(&pool, 1000);
+///     .execute_on(&mut pool, 1000);
 ///
 /// // Get timing information
 /// println!("Mean duration: {:?}", results.mean_duration());
@@ -219,13 +220,14 @@ impl<MeasureOutput> RunSummary<MeasureOutput> {
     /// # Examples
     ///
     /// ```
+    /// use many_cpus::ProcessorSet;
     /// use par_bench::{Run, ThreadPool};
     ///
     /// # fn main() {
-    /// let mut pool = ThreadPool::default();
+    /// let mut pool = ThreadPool::new(&ProcessorSet::default());
     /// let results = Run::new()
-    ///     .iter_fn(|_| std::hint::black_box(42 + 42))
-    ///     .execute_on(&pool, 1000);
+    ///     .iter(|_| std::hint::black_box(42 + 42))
+    ///     .execute_on(&mut pool, 1000);
     ///
     /// let duration = results.mean_duration();
     /// println!("Average time per iteration: {:?}", duration);
@@ -249,21 +251,23 @@ impl<MeasureOutput> RunSummary<MeasureOutput> {
     /// use std::sync::Arc;
     /// use std::sync::atomic::{AtomicU64, Ordering};
     ///
+    /// use many_cpus::ProcessorSet;
     /// use par_bench::{Run, ThreadPool};
     ///
     /// # fn main() {
-    /// let mut pool = ThreadPool::default();
+    /// let mut pool = ThreadPool::new(&ProcessorSet::default());
     /// let run = Run::new()
-    ///     .prepare_iter_fn(|_meta, _state| Arc::new(AtomicU64::new(0)))
-    ///     .measure_wrapper_fns(
-    ///         |_meta, _state| (), // Start measurement
+    ///     .prepare_iter(|_| Arc::new(AtomicU64::new(0)))
+    ///     .measure_wrapper(
+    ///         |_| (), // Start measurement
     ///         |_state| 42u64,     // Return some measurement
     ///     )
-    ///     .iter_fn(|counter: Arc<AtomicU64>| {
+    ///     .iter(|mut args| {
+    ///         let counter = args.take_iter_state();
     ///         counter.fetch_add(1, Ordering::Relaxed);
     ///     });
     ///
-    /// let results = run.execute_on(&pool, 1000);
+    /// let results = run.execute_on(&mut pool, 1000);
     ///
     /// // Each thread's measurement output
     /// for (thread_id, count) in results.measure_outputs().enumerate() {

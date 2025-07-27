@@ -10,30 +10,32 @@ use std::num::NonZero;
 /// # Examples
 ///
 /// ```
+/// use many_cpus::ProcessorSet;
 /// use par_bench::{Run, ThreadPool};
 /// use new_zealand::nz;
 ///
 /// # fn main() {
-/// # if let Some(processors) = many_cpus::ProcessorSet::builder().take(nz!(4)) {
-/// let pool = ThreadPool::new(&processors);
+/// # if let Some(processors) = ProcessorSet::builder().take(nz!(4)) {
+/// let mut pool = ThreadPool::new(&processors);
 ///
 /// let run = Run::new()
 ///     .groups(nz!(2)) // 2 groups of 2 threads each
-///     .prepare_thread_fn(|run_meta| {
+///     .prepare_thread(|args| {
 ///         println!("Thread in group {} of {}",
-///                  run_meta.group_index(),
-///                  run_meta.group_count());
-///         println!("Will execute {} iterations", run_meta.iterations());
+///                  args.meta().group_index(),
+///                  args.meta().group_count());
+///         println!("Will execute {} iterations", args.meta().iterations());
 ///         
 ///         // Return different state based on group
-///         if run_meta.group_index() == 0 {
+///         if args.meta().group_index() == 0 {
 ///             "reader_thread"
 ///         } else {
 ///             "writer_thread"
 ///         }
 ///     })
-///     .prepare_iter_fn(|_meta, thread_type| *thread_type)
-///     .iter_fn(|thread_type: &str| {
+///     .prepare_iter(|args| *args.thread_state())
+///     .iter(|mut args| {
+///         let thread_type = args.take_iter_state();
 ///         match thread_type {
 ///             "reader_thread" => { /* reader work */ },
 ///             "writer_thread" => { /* writer work */ },
@@ -41,7 +43,7 @@ use std::num::NonZero;
 ///         }
 ///     });
 ///
-/// let _results = run.execute_on(&pool, 100);
+/// let _results = run.execute_on(&mut pool, 100);
 /// # }
 /// # }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

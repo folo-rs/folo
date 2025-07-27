@@ -4,7 +4,7 @@
 
 use crate::RunMeta;
 
-/// Arguments provided to the `prepare_thread_fn` closure of a `Run`.
+/// Arguments provided to the `prepare_thread()` closure of a `Run`.
 #[derive(Debug)]
 pub struct PrepareThread<'a> {
     meta: &'a RunMeta,
@@ -22,7 +22,7 @@ impl<'a> PrepareThread<'a> {
     }
 }
 
-/// Arguments provided to the `prepare_iter_fn` closure of a `Run`.
+/// Arguments provided to the `prepare_iter()` closure of a `Run`.
 #[derive(Debug)]
 pub struct PrepareIter<'a, ThreadState> {
     meta: &'a RunMeta,
@@ -47,7 +47,7 @@ impl<'a, ThreadState> PrepareIter<'a, ThreadState> {
     }
 }
 
-/// Arguments provided to the `measure_wrapper_begin_fn` closure of a `Run`.
+/// Arguments provided to the `measure_wrapper_begin()` closure of a `Run`.
 #[derive(Debug)]
 pub struct MeasureWrapperBegin<'a, ThreadState> {
     meta: &'a RunMeta,
@@ -72,7 +72,7 @@ impl<'a, ThreadState> MeasureWrapperBegin<'a, ThreadState> {
     }
 }
 
-/// Arguments provided to the `iter_fn` closure of a `Run`.
+/// Arguments provided to the `iter()` closure of a `Run`.
 #[derive(Debug)]
 pub struct Iter<'a, ThreadState, IterState> {
     meta: &'a RunMeta,

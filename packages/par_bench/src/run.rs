@@ -24,23 +24,24 @@ use crate::configure::RunInitial;
 /// use std::sync::Arc;
 /// use std::sync::atomic::{AtomicU64, Ordering};
 ///
+/// use many_cpus::ProcessorSet;
 /// use par_bench::{Run, ThreadPool};
 ///
 /// # fn main() {
-/// let pool = ThreadPool::default();
+/// let mut pool = ThreadPool::new(&ProcessorSet::default());
 /// let counter = Arc::new(AtomicU64::new(0));
 ///
 /// let run = Run::new()
-///     .prepare_thread_fn({
+///     .prepare_thread({
 ///         let counter = Arc::clone(&counter);
-///         move |_meta| Arc::clone(&counter)
+///         move |_| Arc::clone(&counter)
 ///     })
-///     .prepare_iter_fn(|_meta, counter| Arc::clone(counter))
-///     .iter_fn(|counter: Arc<AtomicU64>| {
-///         counter.fetch_add(1, Ordering::Relaxed);
+///     .prepare_iter(|args| Arc::clone(args.thread_state()))
+///     .iter(|mut args| {
+///         args.iter_state().fetch_add(1, Ordering::Relaxed);
 ///     });
 ///
-/// let results = run.execute_on(&pool, 1000);
+/// let results = run.execute_on(&mut pool, 1000);
 /// println!("Executed in: {:?}", results.mean_duration());
 /// # }
 /// ```
@@ -49,19 +50,20 @@ use crate::configure::RunInitial;
 /// ```
 /// use std::time::Instant;
 ///
+/// use many_cpus::ProcessorSet;
 /// use par_bench::{Run, ThreadPool};
 ///
 /// # fn main() {
-/// let pool = ThreadPool::default();
+/// let mut pool = ThreadPool::new(&ProcessorSet::default());
 ///
 /// let run = Run::new()
-///     .measure_wrapper_fns(|_meta, _state| Instant::now(), |start| start.elapsed())
-///     .iter_fn(|_| {
+///     .measure_wrapper(|_| Instant::now(), |start| start.elapsed())
+///     .iter(|_| {
 ///         // Simulate some work
 ///         std::hint::black_box((0..100).sum::<i32>());
 ///     });
 ///
-/// let results = run.execute_on(&pool, 1000);
+/// let results = run.execute_on(&mut pool, 1000);
 ///
 /// // Access per-thread measurement data
 /// for elapsed in results.measure_outputs() {
@@ -85,10 +87,10 @@ impl Run {
     ///
     /// 1. Start with `Run::new()`, which gives you an object you can use to configure the run.
     /// 2. Optionally configure thread groups with [`groups()`](crate::configure::RunInitial::groups)
-    /// 3. Optionally set thread preparation with [`prepare_thread_fn()`](crate::configure::RunInitial::prepare_thread_fn)
-    /// 4. Optionally set iteration preparation with [`prepare_iter_fn()`](crate::configure::RunWithThreadState::prepare_iter_fn)
-    /// 5. Optionally set measurement wrappers with [`measure_wrapper_fns()`](crate::configure::RunWithIterState::measure_wrapper_fns)
-    /// 6. **Required**: Set the benchmark function with [`iter_fn()`](crate::configure::RunWithWrapperState::iter_fn)
+    /// 3. Optionally set thread preparation with [`prepare_thread()`](crate::configure::RunInitial::prepare_thread)
+    /// 4. Optionally set iteration preparation with [`prepare_iter()`](crate::configure::RunWithThreadState::prepare_iter)
+    /// 5. Optionally set measurement wrappers with [`measure_wrapper()`](crate::configure::RunWithIterState::measure_wrapper)
+    /// 6. **Required**: Set the benchmark function with [`iter()`](crate::configure::RunWithWrapperState::iter)
     /// 7. **Required**: Execute the run with either [`execute_on()`][crate::ConfiguredRun::execute_on]
     ///    or [`execute_criterion_on()`][crate::ConfiguredRun::execute_criterion_on].
     ///
@@ -99,7 +101,7 @@ impl Run {
     /// ```
     /// use par_bench::Run;
     ///
-    /// let run = Run::new().iter_fn(|_| {
+    /// let run = Run::new().iter(|_| {
     ///     // Benchmark work goes here
     ///     std::hint::black_box(42 * 42);
     /// });

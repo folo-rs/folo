@@ -85,7 +85,7 @@ impl RunInitial {
     /// Divides the threads used for benchmarking into `n` equal groups. Defaults to 1 group.
     ///
     /// The callbacks will be informed of which group they are executing for, and the total number
-    /// of groups, via a [`RunMeta`] parameter.
+    /// of groups, via a [`RunMeta`](crate::RunMeta) parameter.
     ///
     /// Attempting to execute a run of a thread pool that is not evenly divisible by `n` will
     /// result in a panic.
@@ -107,9 +107,9 @@ impl RunInitial {
     /// use par_bench::Run;
     ///
     /// let run = Run::new()
-    ///     .prepare_thread_fn(|_meta| "thread_state")
-    ///     .iter_fn(|_unit: ()| {
-    ///         // Thread state is used internally; iter_fn gets unit type by default
+    ///     .prepare_thread(|_| "thread_state")
+    ///     .iter(|_| {
+    ///         // Thread state is used internally; iter gets unit type by default
     ///         std::hint::black_box(42);
     ///     });
     /// ```
@@ -140,9 +140,10 @@ impl RunInitial {
     /// use par_bench::Run;
     ///
     /// let run = Run::new()
-    ///     .prepare_iter_fn(|_meta, _unit_state| vec![1, 2, 3])
-    ///     .iter_fn(|iter_vec: Vec<i32>| {
+    ///     .prepare_iter(|_| vec![1, 2, 3])
+    ///     .iter(|mut args| {
     ///         // Use the per-iteration vector
+    ///         let iter_vec = args.take_iter_state();
     ///         std::hint::black_box(iter_vec.len());
     ///     });
     /// ```
@@ -218,7 +219,7 @@ impl<'a, ThreadState> RunWithThreadState<'a, ThreadState> {
     /// Divides the threads used for benchmarking into `n` equal groups. Defaults to 1 group.
     ///
     /// The callbacks will be informed of which group they are executing for, and the total number
-    /// of groups, via a [`RunMeta`] parameter.
+    /// of groups, via a [`RunMeta`](crate::RunMeta) parameter.
     ///
     /// Attempting to execute a run of a thread pool that is not evenly divisible by `n` will
     /// result in a panic.
@@ -232,7 +233,7 @@ impl<'a, ThreadState> RunWithThreadState<'a, ThreadState> {
     ///
     /// Every iteration is prepared before any iteration is executed.
     ///
-    /// **Builder Order**: This method can only be called after [`prepare_thread_fn()`](RunInitial::prepare_thread_fn).
+    /// **Builder Order**: This method can only be called after [`prepare_thread()`](RunInitial::prepare_thread).
     /// After calling this, you must use methods from [`RunWithIterState`] for subsequent configuration.
     ///
     /// # Examples
@@ -241,10 +242,11 @@ impl<'a, ThreadState> RunWithThreadState<'a, ThreadState> {
     /// use par_bench::Run;
     ///
     /// let run = Run::new()
-    ///     .prepare_thread_fn(|_meta| vec![1, 2, 3])
-    ///     .prepare_iter_fn(|_meta, vec| vec.clone())
-    ///     .iter_fn(|iter_vec: Vec<i32>| {
+    ///     .prepare_thread(|_| vec![1, 2, 3])
+    ///     .prepare_iter(|args| args.thread_state().clone())
+    ///     .iter(|mut args| {
     ///         // Use the per-iteration vector
+    ///         let iter_vec = args.take_iter_state();
     ///         std::hint::black_box(iter_vec.len());
     ///     });
     /// ```
@@ -299,7 +301,7 @@ impl<'a, ThreadState> RunWithThreadState<'a, ThreadState> {
     /// you can call [`execute_on()`](crate::ConfiguredRun::execute_on) to run the benchmark.
     ///
     /// Must be called after:
-    /// 1. [`prepare_thread_fn()`](RunInitial::prepare_thread_fn) (optional but recommended)
+    /// 1. [`prepare_thread()`](RunInitial::prepare_thread) (optional but recommended)
     /// 2. Any optional measure wrapper configuration
     ///
     /// # Examples
@@ -308,8 +310,8 @@ impl<'a, ThreadState> RunWithThreadState<'a, ThreadState> {
     /// use par_bench::Run;
     ///
     /// let run = Run::new()
-    ///     .prepare_thread_fn(|_meta| vec![1, 2, 3])
-    ///     .iter_fn(|_unit_state| {
+    ///     .prepare_thread(|_meta| vec![1, 2, 3])
+    ///     .iter(|_unit_state| {
     ///         // Execute the benchmark iteration
     ///         std::hint::black_box(42);
     ///         // Return value to drop after measurement
@@ -341,7 +343,7 @@ impl<'a, ThreadState, IterState> RunWithIterState<'a, ThreadState, IterState> {
     /// Divides the threads used for benchmarking into `n` equal groups. Defaults to 1 group.
     ///
     /// The callbacks will be informed of which group they are executing for, and the total number
-    /// of groups, via a [`RunMeta`] parameter.
+    /// of groups, via a [`RunMeta`](crate::RunMeta) parameter.
     ///
     /// Attempting to execute a run of a thread pool that is not evenly divisible by `n` will
     /// result in a panic.
@@ -413,7 +415,7 @@ where
     /// Divides the threads used for benchmarking into `n` equal groups. Defaults to 1 group.
     ///
     /// The callbacks will be informed of which group they are executing for, and the total number
-    /// of groups, via a [`RunMeta`] parameter.
+    /// of groups, via a [`RunMeta`](crate::RunMeta) parameter.
     ///
     /// Attempting to execute a run of a thread pool that is not evenly divisible by `n` will
     /// result in a panic.

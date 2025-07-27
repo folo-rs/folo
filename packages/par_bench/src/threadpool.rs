@@ -19,7 +19,7 @@ use many_cpus::ProcessorSet;
 /// use par_bench::ThreadPool;
 ///
 /// // Create a thread pool using the default processor set
-/// let pool = ThreadPool::default();
+/// let pool = ThreadPool::new(&ProcessorSet::default());
 /// println!("Default pool has {} threads", pool.thread_count());
 ///
 /// // Create a thread pool with a specific processor set
@@ -92,9 +92,10 @@ impl ThreadPool {
     /// # Examples
     ///
     /// ```
+    /// use many_cpus::ProcessorSet;
     /// use par_bench::ThreadPool;
     ///
-    /// let pool = ThreadPool::default();
+    /// let pool = ThreadPool::new(&ProcessorSet::default());
     /// println!("Pool has {} worker threads", pool.thread_count());
     /// ```
     #[must_use]
