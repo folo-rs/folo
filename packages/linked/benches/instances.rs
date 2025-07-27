@@ -12,7 +12,7 @@ use std::sync::{Arc, LazyLock};
 use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus::ProcessorSet;
 use new_zealand::nz;
-use par_bench::{ConfiguredRun, ThreadPool};
+use par_bench::{Run, ThreadPool};
 use seq_macro::seq;
 
 criterion_group!(benches, entrypoint);
@@ -41,76 +41,48 @@ impl TestSubject {
 
 linked::instances!(static TARGET: TestSubject = TestSubject::new());
 
-static ONE_PROCESSOR: LazyLock<ProcessorSet> =
-    LazyLock::new(|| ProcessorSet::builder().take(nz!(1)).unwrap());
 static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> =
     LazyLock::new(|| ProcessorSet::builder().take(nz!(2)));
 
-static ONE_THREAD: LazyLock<ThreadPool> = LazyLock::new(|| ThreadPool::new(&ONE_PROCESSOR));
-static TWO_THREADS: LazyLock<Option<ThreadPool>> =
-    LazyLock::new(|| TWO_PROCESSORS.as_ref().map(ThreadPool::new));
-
 fn entrypoint(c: &mut Criterion) {
+    let mut one_thread = ThreadPool::new(&ProcessorSet::single());
+    let mut two_threads = TWO_PROCESSORS.as_ref().map(ThreadPool::new);
+
     let mut g = c.benchmark_group("instances::get");
 
-    g.bench_function("one-threaded", |b| {
-        b.iter_custom(|iters| {
-            ConfiguredRun::builder()
-                .iter_fn(|()| Arc::weak_count(&TARGET.get().shared_state))
-                .build()
-                .execute_on(&ONE_THREAD, iters)
-                .mean_duration()
-        });
-    });
+    Run::new()
+        .iter_fn(|(), &()| Arc::weak_count(&TARGET.get().shared_state))
+        .execute_criterion_on(&mut one_thread, &mut g, "one-threaded");
 
-    if let Some(two_threads) = &*TWO_THREADS {
-        g.bench_function("two-threaded", |b| {
-            b.iter_custom(|iters| {
-                ConfiguredRun::builder()
-                    .iter_fn(|()| Arc::weak_count(&TARGET.get().shared_state))
-                    .build()
-                    .execute_on(two_threads, iters)
-                    .mean_duration()
-            });
-        });
+    if let Some(ref mut two_threads) = two_threads {
+        Run::new()
+            .iter_fn(|(), &()| Arc::weak_count(&TARGET.get().shared_state))
+            .execute_criterion_on(two_threads, &mut g, "two-threaded");
     }
 
     g.finish();
 
     let mut g = c.benchmark_group("instances::get_1000");
 
-    g.bench_function("one-threaded", |b| {
-        b.iter_custom(|iters| {
-            ConfiguredRun::builder()
-                // We have to clean up the worker thread before/after the run.
-                .prepare_thread_fn(|_| LinkedVariableClearGuard::default())
-                .iter_fn(|()| {
-                    seq!(N in 0..1000 {
-                        black_box(Arc::weak_count(&TARGET_MANY_~N.get().shared_state));
-                    });
-                })
-                .build()
-                .execute_on(&ONE_THREAD, iters)
-                .mean_duration()
-        });
-    });
-
-    if let Some(two_threads) = &*TWO_THREADS {
-        g.bench_function("two-threaded", |b| {
-            b.iter_custom(|iters| {
-                ConfiguredRun::builder()
-                    // We have to clean up the worker thread before/after the run.
-                    .prepare_thread_fn(|_| LinkedVariableClearGuard::default())
-                    .iter_fn(|()| {
-                        seq!(N in 0..1000 {
-                            black_box(Arc::weak_count(&TARGET_MANY_~N.get().shared_state));
-                        });
-                    })
-                    .build()
-                    .execute_on(two_threads, iters)
-                    .mean_duration()
+    Run::new()
+        .prepare_thread_fn(|_| LinkedVariableClearGuard::default())
+        .iter_fn(|(), _| {
+            seq!(N in 0..1000 {
+                black_box(Arc::weak_count(&TARGET_MANY_~N.get().shared_state));
             });
-        });
+        })
+        .execute_criterion_on(&mut one_thread, &mut g, "one-threaded");
+
+    if let Some(ref mut two_threads) = two_threads {
+        Run::new()
+            // We have to clean up the worker thread before/after the run.
+            .prepare_thread_fn(|_| LinkedVariableClearGuard::default())
+            .iter_fn(|(), _| {
+                seq!(N in 0..1000 {
+                    black_box(Arc::weak_count(&TARGET_MANY_~N.get().shared_state));
+                });
+            })
+            .execute_criterion_on(two_threads, &mut g, "two-threaded");
     }
 
     g.finish();

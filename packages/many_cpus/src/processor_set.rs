@@ -3,6 +3,7 @@ use std::sync::LazyLock;
 use std::thread;
 
 use itertools::Itertools;
+use new_zealand::nz;
 use nonempty::NonEmpty;
 
 use crate::pal::{Platform, PlatformFacade};
@@ -53,6 +54,18 @@ impl ProcessorSet {
     #[inline]
     pub fn builder() -> ProcessorSetBuilder {
         ProcessorSetBuilder::default()
+    }
+
+    /// Returns a [`ProcessorSet`] containing a randomly chosen single processor from among
+    /// the processors of the default processor set.
+    /// 
+    /// Beware that the default processor set may contain processors with different capabilities,
+    /// so this may return faster/slower processors for different calls.
+    #[must_use]
+    pub fn single() -> Self {
+        Self::builder()
+            .take(nz!(1))
+            .expect("there must be at least one processor - how could this code run if not")
     }
 
     /// Returns a [`ProcessorSetBuilder`] that is narrowed down to all processors in this

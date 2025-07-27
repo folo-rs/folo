@@ -15,10 +15,11 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use many_cpus::ProcessorSet;
 use par_bench::{Run, ThreadPool};
 
 fn main() {
-    let mut pool = ThreadPool::default();
+    let mut pool = ThreadPool::new(&ProcessorSet::default());
 
     // Local data that we want to reference in our benchmark
     let local_data = vec![1, 2, 3, 4, 5];
@@ -37,16 +38,18 @@ fn main() {
             // Reference the local data and counter in each iteration setup
             (data.clone(), Arc::clone(counter), multiplier)
         })
-        .iter_fn(|(data, counter, mult): (Vec<i32>, Arc<AtomicU64>, i32)| {
-            // The benchmark work that uses local references
-            let sum: i32 = data.iter().map(|x| x * mult).sum();
+        .iter_fn(
+            |(data, counter, mult): (Vec<i32>, Arc<AtomicU64>, i32), _| {
+                // The benchmark work that uses local references
+                let sum: i32 = data.iter().map(|x| x * mult).sum();
 
-            // Update the global counter
-            counter.fetch_add(sum as u64, Ordering::Relaxed);
+                // Update the global counter
+                counter.fetch_add(sum as u64, Ordering::Relaxed);
 
-            // Use black_box to prevent optimization
-            black_box(sum);
-        });
+                // Use black_box to prevent optimization
+                black_box(sum);
+            },
+        );
 
     // Execute the benchmark
     let results = run.execute_on(&mut pool, 1000);

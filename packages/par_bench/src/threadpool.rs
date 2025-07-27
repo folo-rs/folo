@@ -173,13 +173,6 @@ impl ThreadPool {
     }
 }
 
-impl Default for ThreadPool {
-    /// Creates a thread pool with one thread per processor available to the current process.
-    fn default() -> Self {
-        Self::new(&ProcessorSet::default())
-    }
-}
-
 impl Drop for ThreadPool {
     #[cfg_attr(test, mutants::skip)] // Impractical to test that stuff stops happening.
     fn drop(&mut self) {
@@ -225,7 +218,7 @@ mod tests {
         let expected_default = ProcessorSet::default();
         let expected_thread_count = expected_default.len();
 
-        let mut pool = ThreadPool::default();
+        let mut pool = ThreadPool::new(&ProcessorSet::default());
 
         assert_eq!(pool.thread_count().get(), expected_thread_count);
 

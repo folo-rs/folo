@@ -14,6 +14,7 @@ use std::hint::black_box;
 
 use all_the_time::{Report as TimeReport, Session as TimeSession};
 use alloc_tracker::{Allocator, Report as AllocReport, Session as AllocSession};
+use many_cpus::ProcessorSet;
 use par_bench::{Run, ThreadPool};
 
 #[global_allocator]
@@ -46,8 +47,8 @@ fn main() {
     println!("during benchmark execution.");
     println!();
 
-    // Create a multi-threaded pool using available processors.
-    let mut multi_thread_pool = ThreadPool::default();
+    // Create a multi-threaded pool using all available processors.
+    let mut multi_thread_pool = ThreadPool::new(&ProcessorSet::default());
     println!(
         "Running {} iterations on {} threads with tracking enabled",
         ITERATIONS,
@@ -139,7 +140,7 @@ fn run_benchmark_with_tracking(pool: &mut ThreadPool) -> par_bench::RunSummary<M
                 }
             },
         )
-        .iter_fn(|()| {
+        .iter_fn(|(), &()| {
             // Simulate some memory-intensive and processor-intensive work.
             simulate_benchmark_work();
         });

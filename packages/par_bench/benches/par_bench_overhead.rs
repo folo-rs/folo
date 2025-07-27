@@ -12,26 +12,24 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use many_cpus::ProcessorSet;
 use par_bench::{Run, ThreadPool};
 
 criterion_group!(benches, par_bench_overhead);
 criterion_main!(benches);
 
 fn par_bench_overhead(c: &mut Criterion) {
-    let mut thread_pool = ThreadPool::default();
+    let mut thread_pool = ThreadPool::new(&ProcessorSet::default());
 
-    c.bench_function("par_bench_overhead", |b| {
-        b.iter_custom(|iters| {
-            // A new benchmark run is constructed for every call into this callback,
-            // as per the standard mechanism for using par_bench with Criterion.
-            let run = Run::new().iter_fn(|()| {
-                // Empty iter_fn - does absolutely nothing.
-                // We use black_box to prevent the compiler from optimizing this away.
-                black_box(());
-            });
+    let mut group = c.benchmark_group("overhead");
 
-            let stats = run.execute_on(&mut thread_pool, iters);
-            stats.mean_duration()
-        });
-    });
+    // A new benchmark run is constructed for every call into this callback,
+    // as per the standard mechanism for using par_bench with Criterion.
+    Run::new()
+        .iter_fn(|(), &()| {
+            // Empty iter_fn - does absolutely nothing.
+            // We use black_box to try prevent the compiler from optimizing this away.
+            black_box(());
+        })
+        .execute_criterion_on(&mut thread_pool, &mut group, "par_bench_overhead");
 }

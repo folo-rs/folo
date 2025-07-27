@@ -5,13 +5,14 @@
     reason = "No need for API documentation in benchmark code"
 )]
 
-use std::hint::black_box;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, LazyLock};
 
-use benchmark_utils::{ThreadPool, bench_on_threadpool};
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use linked::InstancePerThreadSync;
+use many_cpus::ProcessorSet;
+use new_zealand::nz;
+use par_bench::{Run, ThreadPool};
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
@@ -37,6 +38,9 @@ impl TestSubject {
     }
 }
 
+static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> =
+    LazyLock::new(|| ProcessorSet::builder().take(nz!(2)));
+
 fn entrypoint(c: &mut Criterion) {
     local(c);
     local_ref(c);
@@ -45,176 +49,116 @@ fn entrypoint(c: &mut Criterion) {
 }
 
 fn local(c: &mut Criterion) {
-    let mut g = c.benchmark_group("instance_per_thread_sync::InstancePerThreadSync");
+    let mut one_thread = ThreadPool::new(&ProcessorSet::single());
 
-    g.bench_function("new", |b| {
-        b.iter_batched(
-            || (),
-            |()| black_box(InstancePerThreadSync::new(TestSubject::new())),
-            BatchSize::SmallInput,
-        );
-    });
+    let mut g = c.benchmark_group("instance_per_thread_sync::create");
+
+    Run::new()
+        .prepare_iter_fn(|_, &()| TestSubject::new())
+        .iter_fn(|test_subject, &()| InstancePerThreadSync::new(test_subject))
+        .execute_criterion_on(&mut one_thread, &mut g, "new");
 
     let per_thread = InstancePerThreadSync::new(TestSubject::new());
 
-    g.bench_function("clone", |b| {
-        b.iter_batched(
-            || (),
-            |()| black_box(per_thread.clone()),
-            BatchSize::SmallInput,
-        );
-    });
+    Run::new()
+        .iter_fn(|(), &()| per_thread.clone())
+        .execute_criterion_on(&mut one_thread, &mut g, "clone");
 
     g.finish();
 }
 
 fn local_ref(c: &mut Criterion) {
+    let mut one_thread = ThreadPool::new(&ProcessorSet::single());
+
     let mut g = c.benchmark_group("instance_per_thread_sync::Ref");
 
     let per_thread = InstancePerThreadSync::new(TestSubject::new());
 
-    g.bench_function("new_single", |b| {
-        b.iter_batched(
-            || (),
-            |()| black_box(per_thread.acquire()),
-            BatchSize::SmallInput,
-        );
-    });
+    Run::new()
+        .iter_fn(|(), &()| per_thread.acquire())
+        .execute_criterion_on(&mut one_thread, &mut g, "new_single");
 
     {
         // We keep one InstancePerThreadSync here so the ones we create in iterations are not the only ones.
         let _first = per_thread.acquire();
 
-        g.bench_function("new_not_single", |b| {
-            b.iter_batched(
-                || (),
-                |()| black_box(per_thread.acquire()),
-                BatchSize::SmallInput,
-            );
-        });
+        Run::new()
+            .iter_fn(|(), &()| per_thread.acquire())
+            .execute_criterion_on(&mut one_thread, &mut g, "new_not_single");
     }
 
     {
-        // This is the one we clone.
-        let first = per_thread.acquire();
-
-        g.bench_function("clone", |b| {
-            b.iter_batched(|| (), |()| black_box(first.clone()), BatchSize::SmallInput);
-        });
+        Run::new()
+            .prepare_thread_fn(|_| per_thread.acquire())
+            .iter_fn(|(), first| first.clone())
+            .execute_criterion_on(&mut one_thread, &mut g, "clone");
     }
 
     g.finish();
 }
 
 fn local_ref_multithreaded(c: &mut Criterion) {
-    let thread_pool = ThreadPool::default();
+    let mut two_threads = TWO_PROCESSORS.as_ref().map(ThreadPool::new);
 
-    let mut g = c.benchmark_group("instance_per_thread_sync::Ref::multithreaded");
+    if let Some(ref mut two_threads) = two_threads {
+        let mut g = c.benchmark_group("instance_per_thread_sync::Ref::two-threaded");
 
-    let per_thread = InstancePerThreadSync::new(TestSubject::new());
+        let per_thread = InstancePerThreadSync::new(TestSubject::new());
 
-    g.bench_function("new_single", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(&thread_pool, iters, || (), {
-                let per_thread = per_thread.clone();
-                move |()| {
-                    black_box(per_thread.acquire());
-                }
+        Run::new()
+            .iter_fn(|(), &()| per_thread.acquire())
+            .execute_criterion_on(two_threads, &mut g, "new_single");
+
+        Run::new()
+            .prepare_thread_fn(|_| {
+                // We just keep the first instance around during the benchmark, so any additional
+                // `acquire` calls operate in a non-clean state with an already existing instance.
+                per_thread.acquire()
             })
-        });
-    });
+            .iter_fn(|(), _| per_thread.acquire())
+            .execute_criterion_on(two_threads, &mut g, "new_not_single");
 
-    g.bench_function("new_not_single", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &thread_pool,
-                iters,
-                {
-                    let per_thread = per_thread.clone();
-                    move || {
-                        // This is the first one, we just keep it around for all the iterations.
-                        per_thread.acquire()
-                    }
-                },
-                {
-                    let per_thread = per_thread.clone();
-                    move |_| {
-                        black_box(per_thread.acquire());
-                    }
-                },
-            )
-        });
-    });
+        Run::new()
+            .prepare_thread_fn(|_| per_thread.acquire())
+            .iter_fn(|(), first| first.clone())
+            .execute_criterion_on(two_threads, &mut g, "clone");
 
-    g.bench_function("clone", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &thread_pool,
-                iters,
-                {
-                    let per_thread = per_thread.clone();
-                    move || {
-                        // This is the first one that we clone.
-                        per_thread.acquire()
-                    }
-                },
-                {
-                    move |first| {
-                        black_box(first.clone());
-                    }
-                },
-            )
-        });
-    });
-
-    g.finish();
+        g.finish();
+    }
 }
 
 fn local_ref_access(c: &mut Criterion) {
+    let mut one_thread = ThreadPool::new(&ProcessorSet::single());
+    let mut two_threads = TWO_PROCESSORS.as_ref().map(ThreadPool::new);
+
     let mut g = c.benchmark_group("instance_per_thread_sync::Ref::access");
 
     let per_thread = InstancePerThreadSync::new(TestSubject::new());
 
-    g.bench_function("deref", |b| {
-        let local = per_thread.acquire();
+    Run::new()
+        .prepare_thread_fn(|_| per_thread.acquire())
+        .iter_fn(|(), local| Arc::weak_count(&local.shared_state))
+        .execute_criterion_on(&mut one_thread, &mut g, "deref");
 
-        b.iter(|| {
-            black_box(Arc::weak_count(&local.shared_state));
-        });
-    });
-
-    // For comparison, we also include a thread_local_rc! LazyCell.
-    g.bench_function("vs_std_thread_local", |b| {
-        b.iter(|| {
-            TEST_SUBJECT_THREAD_LOCAL.with(|local| {
-                black_box(Arc::weak_count(&local.shared_state));
-            });
-        });
-    });
+    // For comparison, we also include a thread_local! LazyCell.
+    Run::new()
+        .iter_fn(|(), &()| {
+            TEST_SUBJECT_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state))
+        })
+        .execute_criterion_on(&mut one_thread, &mut g, "vs_std_thread_local");
 
     // For comparison, we also include a global LazyLock.
-    g.bench_function("vs_static_lazy_lock", |b| {
-        b.iter(|| {
-            black_box(Arc::weak_count(&TEST_SUBJECT_GLOBAL.shared_state));
-        });
-    });
+    Run::new()
+        .iter_fn(|(), &()| Arc::weak_count(&TEST_SUBJECT_GLOBAL.shared_state))
+        .execute_criterion_on(&mut one_thread, &mut g, "vs_static_lazy_lock");
 
-    let thread_pool = ThreadPool::default();
-
-    // For comparison, also the LazyLock in multithreaded mode, as all the other
-    // ones are thread-local and have no MT overhead but this may have overhead.
-    g.bench_function("vs_static_lazy_lock_mt", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &thread_pool,
-                iters,
-                || (),
-                |()| {
-                    black_box(Arc::weak_count(&TEST_SUBJECT_GLOBAL.shared_state));
-                },
-            )
-        });
-    });
+    if let Some(ref mut two_threads) = two_threads {
+        // For comparison, also the LazyLock in multithreaded mode, as all the other
+        // ones are thread-local and have no MT overhead but this may have overhead.
+        Run::new()
+            .iter_fn(|(), &()| Arc::weak_count(&TEST_SUBJECT_GLOBAL.shared_state))
+            .execute_criterion_on(two_threads, &mut g, "vs_static_lazy_lock_mt");
+    }
 
     g.finish();
 }

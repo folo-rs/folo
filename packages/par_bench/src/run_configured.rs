@@ -41,7 +41,7 @@ pub struct ConfiguredRun<
         Box<dyn Fn(MeasureWrapperState) -> MeasureOutput + Send + Sync + 'a>,
 
     #[debug(ignore)]
-    pub(crate) iter_fn: Box<dyn Fn(IterState) -> CleanupState + Send + Sync + 'a>,
+    pub(crate) iter_fn: Box<dyn Fn(IterState, &ThreadState) -> CleanupState + Send + Sync + 'a>,
 }
 
 impl<ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>
@@ -116,7 +116,7 @@ where
                 let start_time = Instant::now();
 
                 for iter_state in iter_state {
-                    cleanup_state.push(black_box(iter_fn(black_box(iter_state))));
+                    cleanup_state.push(black_box(iter_fn(black_box(iter_state), &thread_state)));
                 }
 
                 let elapsed = start_time.elapsed();
@@ -305,7 +305,7 @@ mod tests {
             .iter_fn({
                 let iteration_count = Arc::clone(&iteration_count);
 
-                move |()| {
+                move |(), &()| {
                     iteration_count.fetch_add(1, atomic::Ordering::Relaxed);
                 }
             })
@@ -331,7 +331,7 @@ mod tests {
             .iter_fn({
                 let iteration_count = Arc::clone(&iteration_count);
 
-                move |()| {
+                move |(), &()| {
                     iteration_count.fetch_add(1, atomic::Ordering::Relaxed);
                 }
             })
@@ -366,7 +366,7 @@ mod tests {
                     run_meta_seen.lock().unwrap().push(*run_meta);
                 }
             })
-            .iter_fn(|()| ())
+            .iter_fn(|(), &()| ())
             .execute_on(&mut pool, 1);
 
         let mut seen = run_meta_seen.lock().unwrap();
@@ -401,7 +401,7 @@ mod tests {
                     run_meta_seen.lock().unwrap().push(*run_meta);
                 }
             })
-            .iter_fn(|()| ())
+            .iter_fn(|(), &()| ())
             .execute_on(&mut pool, 1);
 
         let mut seen = run_meta_seen.lock().unwrap();
@@ -444,7 +444,7 @@ mod tests {
                     run_meta_seen.lock().unwrap().push(*run_meta);
                 }
             })
-            .iter_fn(|()| ())
+            .iter_fn(|(), &()| ())
             .execute_on(&mut pool, 1);
 
         let mut seen = run_meta_seen.lock().unwrap();
@@ -473,7 +473,7 @@ mod tests {
 
         let _result = Run::new()
             .groups(nz!(3))
-            .iter_fn(|()| ())
+            .iter_fn(|(), &()| ())
             .execute_on(&mut pool, 1);
     }
 
@@ -484,7 +484,7 @@ mod tests {
 
         let _result = Run::new()
             .groups(nz!(2))
-            .iter_fn(|()| ())
+            .iter_fn(|(), &()| ())
             .execute_on(&mut pool, 1);
     }
 
@@ -498,8 +498,8 @@ mod tests {
             .prepare_iter_fn(|_, thread_state| format!("{thread_state}_iter"))
             .iter_fn({
                 let cleanup_states = Arc::clone(&cleanup_states);
-                move |iter_state| {
-                    let cleanup_state = format!("{iter_state}_cleanup");
+                move |iter_state, thread_state| {
+                    let cleanup_state = format!("{iter_state}_{thread_state}_cleanup");
                     cleanup_states.lock().unwrap().push(cleanup_state.clone());
                     cleanup_state
                 }
@@ -508,8 +508,8 @@ mod tests {
 
         let states = cleanup_states.lock().unwrap();
         assert_eq!(states.len(), 2);
-        assert_eq!(states[0], "thread_state_iter_cleanup");
-        assert_eq!(states[1], "thread_state_iter_cleanup");
+        assert_eq!(states[0], "thread_state_iter_thread_state_cleanup");
+        assert_eq!(states[1], "thread_state_iter_thread_state_cleanup");
     }
 
     #[test]
@@ -536,7 +536,7 @@ mod tests {
             )
             .iter_fn({
                 let events = Arc::clone(&events);
-                move |()| {
+                move |(), &()| {
                     events.lock().unwrap().push("iteration".to_string());
                 }
             })
@@ -568,7 +568,7 @@ mod tests {
                 |run_meta, ()| format!("group_{}", run_meta.group_index()),
                 |state| format!("{state}_output"),
             )
-            .iter_fn(|()| ())
+            .iter_fn(|(), &()| ())
             .execute_on(&mut pool, 1);
 
         let mut outputs: Vec<_> = result.measure_outputs().collect();
@@ -593,7 +593,7 @@ mod tests {
             })
             .iter_fn({
                 let events = Arc::clone(&events);
-                move |()| {
+                move |(), &()| {
                     struct CleanupTracker {
                         events: Arc<Mutex<Vec<String>>>,
                     }
@@ -657,7 +657,7 @@ mod tests {
             )
             .iter_fn({
                 let iter_count = Arc::clone(&iter_count);
-                move |()| {
+                move |(), &()| {
                     iter_count.fetch_add(1, atomic::Ordering::Relaxed);
                 }
             })

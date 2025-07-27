@@ -194,7 +194,7 @@ impl RunInitial {
         f: F,
     ) -> ConfiguredRun<'a, (), (), (), (), CleanupState>
     where
-        F: Fn(()) -> CleanupState + Send + Sync + 'a,
+        F: Fn((), &()) -> CleanupState + Send + Sync + 'a,
     {
         ConfiguredRun {
             groups: self.groups,
@@ -314,7 +314,7 @@ impl<'a, ThreadState> RunWithThreadState<'a, ThreadState> {
         f: F,
     ) -> ConfiguredRun<'a, ThreadState, (), (), (), CleanupState>
     where
-        F: Fn(()) -> CleanupState + Send + Sync + 'a,
+        F: Fn((), &ThreadState) -> CleanupState + Send + Sync + 'a,
     {
         ConfiguredRun {
             groups: self.groups,
@@ -379,7 +379,7 @@ impl<'a, ThreadState, IterState> RunWithIterState<'a, ThreadState, IterState> {
         f: F,
     ) -> ConfiguredRun<'a, ThreadState, IterState, (), (), CleanupState>
     where
-        F: Fn(IterState) -> CleanupState + Send + Sync + 'a,
+        F: Fn(IterState, &ThreadState) -> CleanupState + Send + Sync + 'a,
     {
         ConfiguredRun {
             groups: self.groups,
@@ -421,7 +421,7 @@ where
         f: F,
     ) -> ConfiguredRun<'a, ThreadState, IterState, MeasureWrapperState, MeasureOutput, CleanupState>
     where
-        F: Fn(IterState) -> CleanupState + Send + Sync + 'a,
+        F: Fn(IterState, &ThreadState) -> CleanupState + Send + Sync + 'a,
     {
         ConfiguredRun {
             groups: self.groups,

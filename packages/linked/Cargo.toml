@@ -24,7 +24,7 @@ criterion = { workspace = true }
 many_cpus = { workspace = true }
 mutants = { workspace = true }
 new_zealand = { workspace = true }
-par_bench = { workspace = true }
+par_bench = { workspace = true, features = ["criterion"] }
 seq-macro = { workspace = true }
 
 [[bench]]

@@ -23,7 +23,7 @@ many_cpus = { workspace = true }
 many_cpus_benchmarking = { workspace = true }
 new_zealand = { workspace = true }
 oneshot = { workspace = true }
-par_bench = { workspace = true }
+par_bench = { workspace = true, features = ["criterion"] }
 static_assertions = { workspace = true }
 testing = { workspace = true }
 
@@ -31,13 +31,9 @@ testing = { workspace = true }
 workspace = true
 
 [[bench]]
-name = "events_comparison"
+name = "events_send_receive_comparison"
 harness = false
 
 [[bench]]
-name = "events_performance"
-harness = false
-
-[[bench]]
-name = "events_multithreaded_performance"
+name = "events_overhead_comparison"
 harness = false

@@ -11,7 +11,7 @@ use std::sync::{Arc, LazyLock};
 use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus::ProcessorSet;
 use new_zealand::nz;
-use par_bench::{ConfiguredRun, ThreadPool};
+use par_bench::{Run, ThreadPool};
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
@@ -39,110 +39,59 @@ impl TestSubject {
 
 linked::thread_local_arc!(static TARGET: TestSubject = TestSubject::new());
 
-static ONE_PROCESSOR: LazyLock<ProcessorSet> =
-    LazyLock::new(|| ProcessorSet::builder().take(nz!(1)).unwrap());
 static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> =
     LazyLock::new(|| ProcessorSet::builder().take(nz!(2)));
 
-static ONE_THREAD: LazyLock<ThreadPool> = LazyLock::new(|| ThreadPool::new(&ONE_PROCESSOR));
-static TWO_THREADS: LazyLock<Option<ThreadPool>> =
-    LazyLock::new(|| TWO_PROCESSORS.as_ref().map(ThreadPool::new));
-
 fn entrypoint(c: &mut Criterion) {
+    let mut one_thread = ThreadPool::new(&ProcessorSet::single());
+    let mut two_threads = TWO_PROCESSORS.as_ref().map(ThreadPool::new);
+
     let mut g = c.benchmark_group("thread_local_arc::access_one_threaded");
 
-    g.bench_function("with", |b| {
-        b.iter_custom(|iters| {
-            ConfiguredRun::builder()
-                .iter_fn(|()| TARGET.with(|val| Arc::weak_count(&val.shared_state)))
-                .build()
-                .execute_on(&ONE_THREAD, iters)
-                .mean_duration()
-        });
-    });
+    Run::new()
+        .iter_fn(|(), &()| TARGET.with(|val| Arc::weak_count(&val.shared_state)))
+        .execute_criterion_on(&mut one_thread, &mut g, "with");
 
-    g.bench_function("to_arc", |b| {
-        b.iter_custom(|iters| {
-            ConfiguredRun::builder()
-                .iter_fn(|()| Arc::weak_count(&TARGET.to_arc().shared_state))
-                .build()
-                .execute_on(&ONE_THREAD, iters)
-                .mean_duration()
-        });
-    });
+    Run::new()
+        .iter_fn(|(), &()| Arc::weak_count(&TARGET.to_arc().shared_state))
+        .execute_criterion_on(&mut one_thread, &mut g, "to_arc");
 
     // For comparison, we also include a thread_local! LazyCell.
-    g.bench_function("vs_std_thread_local", |b| {
-        b.iter_custom(|iters| {
-            ConfiguredRun::builder()
-                .iter_fn(|()| {
-                    TEST_SUBJECT_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state))
-                })
-                .build()
-                .execute_on(&ONE_THREAD, iters)
-                .mean_duration()
-        });
-    });
+    Run::new()
+        .iter_fn(|(), &()| {
+            TEST_SUBJECT_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state))
+        })
+        .execute_criterion_on(&mut one_thread, &mut g, "vs_std_thread_local");
 
     // For comparison, we also include a global LazyLock.
-    g.bench_function("vs_static_lazy_lock", |b| {
-        b.iter_custom(|iters| {
-            ConfiguredRun::builder()
-                .iter_fn(|()| Arc::weak_count(&TEST_SUBJECT_GLOBAL.shared_state))
-                .build()
-                .execute_on(&ONE_THREAD, iters)
-                .mean_duration()
-        });
-    });
+    Run::new()
+        .iter_fn(|(), &()| Arc::weak_count(&TEST_SUBJECT_GLOBAL.shared_state))
+        .execute_criterion_on(&mut one_thread, &mut g, "vs_static_lazy_lock");
 
     g.finish();
 
-    if let Some(two_threads) = &*TWO_THREADS {
+    if let Some(ref mut two_threads) = two_threads {
         let mut g = c.benchmark_group("thread_local_arc::access_two_threaded");
 
-        g.bench_function("with", |b| {
-            b.iter_custom(|iters| {
-                ConfiguredRun::builder()
-                    .iter_fn(|()| TARGET.with(|val| Arc::weak_count(&val.shared_state)))
-                    .build()
-                    .execute_on(two_threads, iters)
-                    .mean_duration()
-            });
-        });
+        Run::new()
+            .iter_fn(|(), &()| TARGET.with(|val| Arc::weak_count(&val.shared_state)))
+            .execute_criterion_on(two_threads, &mut g, "with");
 
-        g.bench_function("to_arc", |b| {
-            b.iter_custom(|iters| {
-                ConfiguredRun::builder()
-                    .iter_fn(|()| Arc::weak_count(&TARGET.to_arc().shared_state))
-                    .build()
-                    .execute_on(two_threads, iters)
-                    .mean_duration()
-            });
-        });
+        Run::new()
+            .iter_fn(|(), &()| Arc::weak_count(&TARGET.to_arc().shared_state))
+            .execute_criterion_on(two_threads, &mut g, "to_arc");
 
-        // For comparison, we also include a thread_local_arc! LazyCell.
-        g.bench_function("vs_std_thread_local", |b| {
-            b.iter_custom(|iters| {
-                ConfiguredRun::builder()
-                    .iter_fn(|()| {
-                        TEST_SUBJECT_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state))
-                    })
-                    .build()
-                    .execute_on(two_threads, iters)
-                    .mean_duration()
-            });
-        });
+        // For comparison, we also include a thread_local! LazyCell.
+        Run::new()
+            .iter_fn(|(), &()| {
+                TEST_SUBJECT_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state))
+            })
+            .execute_criterion_on(two_threads, &mut g, "vs_std_thread_local");
 
         // For comparison, we also include a global LazyLock.
-        g.bench_function("vs_static_lazy_lock", |b| {
-            b.iter_custom(|iters| {
-                ConfiguredRun::builder()
-                    .iter_fn(|()| Arc::weak_count(&TEST_SUBJECT_GLOBAL.shared_state))
-                    .build()
-                    .execute_on(two_threads, iters)
-                    .mean_duration()
-            });
-        });
+        Run::new()
+            .iter_fn(|(), &()| Arc::weak_count(&TEST_SUBJECT_GLOBAL.shared_state))
+            .execute_criterion_on(two_threads, &mut g, "vs_static_lazy_lock");
 
         g.finish();
     }

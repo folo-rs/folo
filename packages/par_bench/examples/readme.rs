@@ -9,10 +9,10 @@
     reason = "Example code prioritizes clarity over micro-optimizations"
 )]
 
-use std::hint::black_box;
-use std::sync::Arc;
+use std::num::NonZero;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use many_cpus::ProcessorSet;
 use par_bench::{Run, ThreadPool};
 
 fn main() {
@@ -25,28 +25,27 @@ fn main() {
     println!("All README examples executed successfully!");
 }
 
+const PROCESSOR_COUNT: NonZero<usize> = NonZero::new(2).unwrap();
+
 fn basic_usage_example() {
     println!("Running basic usage example...");
 
-    // Create a thread pool.
-    let mut pool = ThreadPool::default();
+    let two_processors = ProcessorSet::builder().take(PROCESSOR_COUNT);
+
+    let Some(two_processors) = two_processors else {
+        println!("No multi-threading available, this example cannot run.");
+        return;
+    };
+
+    let mut two_threads = ThreadPool::new(&two_processors);
 
     // Shared atomic counter that all threads will increment.
-    let counter = Arc::new(AtomicU64::new(0));
+    let counter = AtomicU64::new(0);
 
-    let run = Run::new()
-        .prepare_thread_fn({
-            let counter = Arc::clone(&counter);
-            move |_run_meta| Arc::clone(&counter)
-        })
-        .prepare_iter_fn(|_run_meta, counter| Arc::clone(counter))
-        .iter_fn(|counter: Arc<AtomicU64>| {
-            // Increment the atomic counter and use black_box to prevent optimization.
-            black_box(counter.fetch_add(1, Ordering::Relaxed));
-        });
+    let run = Run::new().iter_fn(|(), &()| counter.fetch_add(1, Ordering::Relaxed));
 
     // Execute 10,000 iterations across all threads.
-    let stats = run.execute_on(&mut pool, 10_000);
+    let stats = run.execute_on(&mut two_threads, 10_000);
 
     // Get the mean duration for benchmark reporting.
     let duration = stats.mean_duration();
@@ -55,7 +54,7 @@ fn basic_usage_example() {
 
     // Verify the counter was incremented the expected number of times.
     let expected_total = 10_000_u64
-        .checked_mul(pool.thread_count().get() as u64)
+        .checked_mul(two_threads.thread_count().get() as u64)
         .expect("iteration count overflow");
 
     let actual_total = counter.load(Ordering::Relaxed);

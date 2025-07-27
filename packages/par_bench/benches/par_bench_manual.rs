@@ -8,13 +8,11 @@
 )]
 
 use std::hint::black_box;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus::ProcessorSet;
-use new_zealand::nz;
 use par_bench::{Run, ThreadPool};
 
 criterion_group!(benches, entrypoint);
@@ -23,18 +21,13 @@ criterion_main!(benches);
 fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("atomic_increments");
 
-    // Single-threaded benchmark.
-    let single_processor = ProcessorSet::builder().take(nz!(1)).expect(
-        "at least one processor must be available because this code is currently executing",
-    );
-    let mut single_thread_pool = ThreadPool::new(&single_processor);
+    let mut single_thread_pool = ThreadPool::new(&ProcessorSet::single());
 
     group.bench_function("single_thread", |b| {
         b.iter_custom(|iters| black_box(measure_atomic_increments(&mut single_thread_pool, iters)));
     });
 
-    // Multi-threaded benchmark.
-    let mut multi_thread_pool = ThreadPool::default();
+    let mut multi_thread_pool = ThreadPool::new(&ProcessorSet::default());
 
     group.bench_function("multi_thread", |b| {
         b.iter_custom(|iters| black_box(measure_atomic_increments(&mut multi_thread_pool, iters)));
@@ -45,21 +38,11 @@ fn entrypoint(c: &mut Criterion) {
 
 /// Measures the time to perform atomic increments using the given thread pool.
 fn measure_atomic_increments(pool: &mut ThreadPool, iterations: u64) -> Duration {
-    // Shared atomic counter that all threads will increment.
-    let counter = Arc::new(AtomicU64::new(0));
+    let counter = AtomicU64::new(0);
 
-    let run = Run::new()
-        .prepare_thread_fn({
-            let counter = Arc::clone(&counter);
-            move |_run_meta| Arc::clone(&counter)
-        })
-        .prepare_iter_fn(|_run_meta, counter| Arc::clone(counter))
-        .iter_fn(|counter: Arc<AtomicU64>| {
-            // Increment the atomic counter and use black_box to prevent optimization.
-            black_box(counter.fetch_add(1, Ordering::Relaxed));
-        });
-
-    let stats = run.execute_on(pool, iterations);
+    let stats = Run::new()
+        .iter_fn(|(), &()| counter.fetch_add(1, Ordering::Relaxed))
+        .execute_on(pool, iterations);
 
     // Verify that we performed the expected number of increments.
     let expected_total = iterations
