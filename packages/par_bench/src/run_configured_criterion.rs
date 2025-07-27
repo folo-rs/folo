@@ -20,6 +20,7 @@ where
     ///
     /// Panics if the thread pool's processor count is not divisible by the number of groups
     /// the run is configured for.
+    #[cfg_attr(test, mutants::skip)] // Manually tested due to Criterion dependency.
     pub fn execute_criterion_on(
         &self,
         pool: &mut ThreadPool,
