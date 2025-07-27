@@ -118,8 +118,8 @@
 //! ```
 
 mod run;
-mod run_final;
-mod run_final_criterion;
+mod run_configured;
+mod run_configured_criterion;
 mod run_meta;
 mod threadpool;
 
@@ -128,6 +128,6 @@ mod threadpool;
 pub mod configure;
 
 pub use run::*;
-pub use run_final::*;
+pub use run_configured::*;
 pub use run_meta::*;
 pub use threadpool::*;
