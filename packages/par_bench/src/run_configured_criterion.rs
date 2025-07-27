@@ -22,12 +22,12 @@ where
     /// the run is configured for.
     pub fn execute_criterion_on(
         &self,
-        pool: &ThreadPool,
+        pool: &mut ThreadPool,
         group: &mut BenchmarkGroup<'_, WallTime>,
         name: &str,
     ) {
-        group.bench_function(name, |b| {
-            b.iter_custom(move |iters| self.execute_on(pool, iters).mean_duration());
+        group.bench_function(name, move |b| {
+            b.iter_custom(|iters| self.execute_on(pool, iters).mean_duration());
         });
     }
 }

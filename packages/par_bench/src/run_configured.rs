@@ -59,7 +59,7 @@ where
     ///
     /// Panics if the thread pool's processor count is not divisible by the number of groups
     /// the run is configured for.
-    pub fn execute_on(&self, pool: &ThreadPool, iterations: u64) -> RunSummary<MeasureOutput> {
+    pub fn execute_on(&self, pool: &mut ThreadPool, iterations: u64) -> RunSummary<MeasureOutput> {
         let (threads_per_group, remainder) = pool.thread_count().get().div_rem(&self.groups.get());
 
         assert!(
@@ -173,7 +173,7 @@ fn calculate_mean_duration(thread_count: NonZero<usize>, total_elapsed_nanos: u1
 /// use par_bench::{Run, ThreadPool};
 ///
 /// # fn main() {
-/// let pool = ThreadPool::default();
+/// let mut pool = ThreadPool::default();
 /// let results = Run::new()
 ///     .measure_wrapper_fns(
 ///         |_meta, _state| std::time::Instant::now(),
@@ -215,7 +215,7 @@ impl<MeasureOutput> RunSummary<MeasureOutput> {
     /// use par_bench::{Run, ThreadPool};
     ///
     /// # fn main() {
-    /// let pool = ThreadPool::default();
+    /// let mut pool = ThreadPool::default();
     /// let results = Run::new()
     ///     .iter_fn(|_| std::hint::black_box(42 + 42))
     ///     .execute_on(&pool, 1000);
@@ -245,7 +245,7 @@ impl<MeasureOutput> RunSummary<MeasureOutput> {
     /// use par_bench::{Run, ThreadPool};
     ///
     /// # fn main() {
-    /// let pool = ThreadPool::default();
+    /// let mut pool = ThreadPool::default();
     /// let run = Run::new()
     ///     .prepare_iter_fn(|_meta, _state| Arc::new(AtomicU64::new(0)))
     ///     .measure_wrapper_fns(
@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn single_iteration_minimal() {
         let processors = ProcessorSet::builder().take(nz!(1)).unwrap();
-        let pool = ThreadPool::new(&processors);
+        let mut pool = ThreadPool::new(&processors);
         let iteration_count = Arc::new(AtomicU64::new(0));
 
         let _result = Run::new()
@@ -309,7 +309,7 @@ mod tests {
                     iteration_count.fetch_add(1, atomic::Ordering::Relaxed);
                 }
             })
-            .execute_on(&pool, 1);
+            .execute_on(&mut pool, 1);
 
         assert_eq!(iteration_count.load(atomic::Ordering::Relaxed), 1);
     }
@@ -317,7 +317,7 @@ mod tests {
     #[test]
     fn multiple_iterations_minimal() {
         let processors = ProcessorSet::builder().take(nz!(1)).unwrap();
-        let pool = ThreadPool::new(&processors);
+        let mut pool = ThreadPool::new(&processors);
         let iteration_count = Arc::new(AtomicU64::new(0));
         let run_meta_seen = Arc::new(Mutex::new(None));
 
@@ -335,7 +335,7 @@ mod tests {
                     iteration_count.fetch_add(1, atomic::Ordering::Relaxed);
                 }
             })
-            .execute_on(&pool, 9999);
+            .execute_on(&mut pool, 9999);
 
         assert_eq!(iteration_count.load(atomic::Ordering::Relaxed), 9999);
 
@@ -354,7 +354,7 @@ mod tests {
             );
             return; // Skip test if not enough processors.
         };
-        let pool = ThreadPool::new(processors);
+        let mut pool = ThreadPool::new(processors);
 
         let run_meta_seen = Arc::new(Mutex::new(Vec::new()));
 
@@ -367,7 +367,7 @@ mod tests {
                 }
             })
             .iter_fn(|()| ())
-            .execute_on(&pool, 1);
+            .execute_on(&mut pool, 1);
 
         let mut seen = run_meta_seen.lock().unwrap();
         seen.sort_by_key(RunMeta::group_index);
@@ -389,7 +389,7 @@ mod tests {
             );
             return; // Skip test if not enough processors.
         };
-        let pool = ThreadPool::new(processors);
+        let mut pool = ThreadPool::new(processors);
 
         let run_meta_seen = Arc::new(Mutex::new(Vec::new()));
 
@@ -402,7 +402,7 @@ mod tests {
                 }
             })
             .iter_fn(|()| ())
-            .execute_on(&pool, 1);
+            .execute_on(&mut pool, 1);
 
         let mut seen = run_meta_seen.lock().unwrap();
         seen.sort_by_key(RunMeta::group_index);
@@ -432,7 +432,7 @@ mod tests {
             );
             return; // Skip test if not enough processors.
         };
-        let pool = ThreadPool::new(processors);
+        let mut pool = ThreadPool::new(processors);
 
         let run_meta_seen = Arc::new(Mutex::new(Vec::new()));
 
@@ -445,7 +445,7 @@ mod tests {
                 }
             })
             .iter_fn(|()| ())
-            .execute_on(&pool, 1);
+            .execute_on(&mut pool, 1);
 
         let mut seen = run_meta_seen.lock().unwrap();
         seen.sort_by_key(RunMeta::group_index);
@@ -469,28 +469,28 @@ mod tests {
             println!("Skipping test four_processors_three_groups_panics: not enough processors");
             panic!("Skip test if not enough processors by panicking");
         };
-        let pool = ThreadPool::new(processors);
+        let mut pool = ThreadPool::new(processors);
 
         let _result = Run::new()
             .groups(nz!(3))
             .iter_fn(|()| ())
-            .execute_on(&pool, 1);
+            .execute_on(&mut pool, 1);
     }
 
     #[test]
     #[should_panic]
     fn one_processor_two_groups_panics() {
-        let pool = ThreadPool::new(&ONE_PROCESSOR);
+        let mut pool = ThreadPool::new(&ONE_PROCESSOR);
 
         let _result = Run::new()
             .groups(nz!(2))
             .iter_fn(|()| ())
-            .execute_on(&pool, 1);
+            .execute_on(&mut pool, 1);
     }
 
     #[test]
     fn state_flow_from_thread_to_iteration_to_cleanup() {
-        let pool = ThreadPool::new(&ONE_PROCESSOR);
+        let mut pool = ThreadPool::new(&ONE_PROCESSOR);
         let cleanup_states = Arc::new(Mutex::new(Vec::new()));
 
         let _result = Run::new()
@@ -504,7 +504,7 @@ mod tests {
                     cleanup_state
                 }
             })
-            .execute_on(&pool, 2);
+            .execute_on(&mut pool, 2);
 
         let states = cleanup_states.lock().unwrap();
         assert_eq!(states.len(), 2);
@@ -514,7 +514,7 @@ mod tests {
 
     #[test]
     fn measurement_wrapper_called_before_and_after_timed_execution() {
-        let pool = ThreadPool::new(&ONE_PROCESSOR);
+        let mut pool = ThreadPool::new(&ONE_PROCESSOR);
         let events = Arc::new(Mutex::new(Vec::new()));
 
         let result = Run::new()
@@ -540,7 +540,7 @@ mod tests {
                     events.lock().unwrap().push("iteration".to_string());
                 }
             })
-            .execute_on(&pool, 1);
+            .execute_on(&mut pool, 1);
 
         let events = events.lock().unwrap();
         assert_eq!(events.len(), 3);
@@ -560,7 +560,7 @@ mod tests {
             println!("Skipping test measure_output_threaded_through_logic: not enough processors");
             return; // Skip test if not enough processors.
         };
-        let pool = ThreadPool::new(processors);
+        let mut pool = ThreadPool::new(processors);
 
         let result = Run::new()
             .groups(nz!(2))
@@ -569,7 +569,7 @@ mod tests {
                 |state| format!("{state}_output"),
             )
             .iter_fn(|()| ())
-            .execute_on(&pool, 1);
+            .execute_on(&mut pool, 1);
 
         let mut outputs: Vec<_> = result.measure_outputs().collect();
         outputs.sort();
@@ -581,7 +581,7 @@ mod tests {
 
     #[test]
     fn cleanup_executed_after_measurement_wrapper_end() {
-        let pool = ThreadPool::new(&ONE_PROCESSOR);
+        let mut pool = ThreadPool::new(&ONE_PROCESSOR);
         let events = Arc::new(Mutex::new(Vec::new()));
 
         let _result = Run::new()
@@ -609,7 +609,7 @@ mod tests {
                     }
                 }
             })
-            .execute_on(&pool, 1);
+            .execute_on(&mut pool, 1);
 
         let events = events.lock().unwrap();
         assert_eq!(events.len(), 2);
@@ -617,7 +617,7 @@ mod tests {
         assert_eq!(events[1], "cleanup");
     }
 
-    fn test_call_counts(pool: &ThreadPool, groups: NonZero<usize>) {
+    fn test_call_counts(pool: &mut ThreadPool, groups: NonZero<usize>) {
         const ITERATIONS: u64 = 3;
         let expected_threads = pool.thread_count().get();
 
@@ -689,8 +689,8 @@ mod tests {
 
     #[test]
     fn call_counts_one_processor() {
-        let pool = ThreadPool::new(&ONE_PROCESSOR);
-        test_call_counts(&pool, nz!(1));
+        let mut pool = ThreadPool::new(&ONE_PROCESSOR);
+        test_call_counts(&mut pool, nz!(1));
     }
 
     #[test]
@@ -699,8 +699,8 @@ mod tests {
             println!("Skipping test call_counts_four_processors_one_group: not enough processors");
             return; // Skip test if not enough processors.
         };
-        let pool = ThreadPool::new(processors);
-        test_call_counts(&pool, nz!(1));
+        let mut pool = ThreadPool::new(processors);
+        test_call_counts(&mut pool, nz!(1));
     }
 
     #[test]
@@ -709,8 +709,8 @@ mod tests {
             println!("Skipping test call_counts_two_processors_two_groups: not enough processors");
             return; // Skip test if not enough processors.
         };
-        let pool = ThreadPool::new(processors);
-        test_call_counts(&pool, nz!(2));
+        let mut pool = ThreadPool::new(processors);
+        test_call_counts(&mut pool, nz!(2));
     }
 
     #[test]
@@ -719,7 +719,7 @@ mod tests {
             println!("Skipping test call_counts_four_processors_two_groups: not enough processors");
             return; // Skip test if not enough processors.
         };
-        let pool = ThreadPool::new(processors);
-        test_call_counts(&pool, nz!(2));
+        let mut pool = ThreadPool::new(processors);
+        test_call_counts(&mut pool, nz!(2));
     }
 }

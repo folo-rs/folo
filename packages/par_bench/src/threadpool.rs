@@ -105,11 +105,19 @@ impl ThreadPool {
     /// Executes a task on all threads in the pool, waiting for all threads to complete
     /// and returning a collection of results.
     #[cfg_attr(test, mutants::skip)] // If work does not get enqueued, deadlocks are very easy.
-    pub(crate) fn execute_task<'f, F, R>(&self, f: F) -> Box<[R]>
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "protects users from deadlock through concurrent usage"
+    )]
+    pub(crate) fn execute_task<'f, F, R>(&mut self, f: F) -> Box<[R]>
     where
         F: FnOnce() -> R + Clone + Send + 'f,
         R: Send + 'static,
     {
+        // This requires a `&mut` exclusive reference because two concurrent usages of the same
+        // benchmarking thread pool are essentially guaranteed to deadlock. Internally, we have
+        // no need for a `&mut` reference, this is just for caller safety.
+
         let mut results = Vec::with_capacity(self.thread_count.get());
 
         let (mut result_txs, result_rxs): (Vec<_>, Vec<_>) =
@@ -217,7 +225,7 @@ mod tests {
         let expected_default = ProcessorSet::default();
         let expected_thread_count = expected_default.len();
 
-        let pool = ThreadPool::default();
+        let mut pool = ThreadPool::default();
 
         assert_eq!(pool.thread_count().get(), expected_thread_count);
 
@@ -241,7 +249,7 @@ mod tests {
         let processor_set = ProcessorSet::builder().take(nz!(1)).unwrap();
         let expected_thread_count = processor_set.len();
 
-        let pool = ThreadPool::new(&processor_set);
+        let mut pool = ThreadPool::new(&processor_set);
 
         assert_eq!(pool.thread_count().get(), expected_thread_count);
 
