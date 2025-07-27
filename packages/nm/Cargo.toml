@@ -18,10 +18,10 @@ foldhash = { workspace = true }
 new_zealand = { workspace = true }
 
 [dev-dependencies]
-benchmark_utils = { workspace = true }
 criterion = { workspace = true }
 many_cpus = { workspace = true }
 mutants = { workspace = true }
+par_bench = { workspace = true, features = ["criterion"] }
 static_assertions = { workspace = true }
 
 [lints]

@@ -956,12 +956,12 @@ version = "0.1.6"
 name = "nm"
 version = "0.1.13"
 dependencies = [
- "benchmark_utils",
  "criterion",
  "foldhash",
  "many_cpus",
  "mutants",
  "new_zealand",
+ "par_bench",
  "static_assertions",
 ]
 

@@ -7,364 +7,188 @@
 
 use std::hint::black_box;
 
-use benchmark_utils::{ThreadPool, bench_on_every_processor, bench_on_threadpool};
 use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus::ProcessorSet;
 use new_zealand::nz;
 use nm::{Event, Magnitude, MetricsPusher, Push, Report};
+use par_bench::{Run, ThreadPool};
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
-    let one_processor = ThreadPool::new(
-        &ProcessorSet::builder()
-            .performance_processors_only()
-            .take(nz!(1))
-            .unwrap(),
-    );
+    let mut one_thread = ThreadPool::new(&ProcessorSet::single());
+    let mut two_threads = ProcessorSet::builder().take(nz!(2)).map(|x| ThreadPool::new(&x));
 
     let mut group = c.benchmark_group("nm_observation");
 
-    group.bench_function("counter_st_pull", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &one_processor,
-                iters,
-                || (),
-                |()| PULL_COUNTER.with(Event::observe_once),
-            )
-        });
-    });
+    Run::new()
+        .iter(|_| PULL_COUNTER.with(Event::observe_once))
+        .execute_criterion_on(&mut one_thread, &mut group, "counter_st_pull");
 
-    group.bench_function("counter_mt_pull", |b| {
-        b.iter_custom(|iters| {
-            bench_on_every_processor(iters, || (), |()| PULL_COUNTER.with(Event::observe_once))
-        });
-    });
+    Run::new()
+        .iter(|_| PULL_COUNTER.with(|x| x.observe(2)))
+        .execute_criterion_on(&mut one_thread, &mut group, "plain_st_pull");
 
-    group.bench_function("plain_st_pull", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &one_processor,
-                iters,
-                || (),
-                |()| PULL_COUNTER.with(|x| x.observe(2)),
-            )
-        });
-    });
+    Run::new()
+        .iter(|_| PULL_SMALL_HISTOGRAM.with(|x| x.observe(0)))
+        .execute_criterion_on(&mut one_thread, &mut group, "small_histogram_zero_st_pull");
 
-    group.bench_function("plain_mt_pull", |b| {
-        b.iter_custom(|iters| {
-            bench_on_every_processor(iters, || (), |()| PULL_COUNTER.with(|x| x.observe(2)))
-        });
-    });
+    Run::new()
+        .iter(|_| PULL_LARGE_HISTOGRAM.with(|x| x.observe(0)))
+        .execute_criterion_on(&mut one_thread, &mut group, "large_histogram_zero_st_pull");
 
-    group.bench_function("small_histogram_zero_st_pull", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &one_processor,
-                iters,
-                || (),
-                |()| PULL_SMALL_HISTOGRAM.with(|x| x.observe(0)),
-            )
-        });
-    });
+    // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
+    // through all the buckets for a matching one and finding none).
+    Run::new()
+        .iter(|_| PULL_SMALL_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)))
+        .execute_criterion_on(&mut one_thread, &mut group, "small_histogram_max_st_pull");
 
-    group.bench_function("small_histogram_zero_mt_pull", |b| {
-        b.iter_custom(|iters| {
-            bench_on_every_processor(
-                iters,
-                || (),
-                |()| PULL_SMALL_HISTOGRAM.with(|x| x.observe(0)),
-            )
-        });
-    });
+    // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
+    // through all the buckets for a matching one and finding none).
+    Run::new()
+        .iter(|_| PULL_LARGE_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)))
+        .execute_criterion_on(&mut one_thread, &mut group, "large_histogram_max_st_pull");
 
-    group.bench_function("large_histogram_zero_st_pull", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &one_processor,
-                iters,
-                || (),
-                |()| PULL_LARGE_HISTOGRAM.with(|x| x.observe(0)),
-            )
-        });
-    });
+    Run::new()
+        .iter(|_| PUSH_COUNTER.with(Event::observe_once))
+        .execute_criterion_on(&mut one_thread, &mut group, "counter_st_push");
 
-    group.bench_function("large_histogram_zero_mt_pull", |b| {
-        b.iter_custom(|iters| {
-            bench_on_every_processor(
-                iters,
-                || (),
-                |()| PULL_LARGE_HISTOGRAM.with(|x| x.observe(0)),
-            )
-        });
-    });
+    Run::new()
+        .iter(|_| PUSH_COUNTER.with(|x| x.observe(2)))
+        .execute_criterion_on(&mut one_thread, &mut group, "plain_st_push");
 
-    group.bench_function("small_histogram_max_st_pull", |b| {
+    Run::new()
+        .iter(|_| PUSH_SMALL_HISTOGRAM.with(|x| x.observe(0)))
+        .execute_criterion_on(&mut one_thread, &mut group, "small_histogram_zero_st_push");
+
+    Run::new()
+        .iter(|_| PUSH_LARGE_HISTOGRAM.with(|x| x.observe(0)))
+        .execute_criterion_on(&mut one_thread, &mut group, "large_histogram_zero_st_push");
+
+    // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
+    // through all the buckets for a matching one and finding none).
+    Run::new()
+        .iter(|_| PUSH_SMALL_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)))
+        .execute_criterion_on(&mut one_thread, &mut group, "small_histogram_max_st_push");
+
+    // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
+    // through all the buckets for a matching one and finding none).
+    Run::new()
+        .iter(|_| PUSH_LARGE_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)))
+        .execute_criterion_on(&mut one_thread, &mut group, "large_histogram_max_st_push");
+
+    // Two-processor benchmarks for nm_observation group.
+    if let Some(ref mut thread_pool) = two_threads {
+        Run::new()
+            .iter(|_| PULL_COUNTER.with(Event::observe_once))
+            .execute_criterion_on(thread_pool, &mut group, "counter_mt_pull");
+
+        Run::new()
+            .iter(|_| PULL_COUNTER.with(|x| x.observe(2)))
+            .execute_criterion_on(thread_pool, &mut group, "plain_mt_pull");
+
+        Run::new()
+            .iter(|_| PULL_SMALL_HISTOGRAM.with(|x| x.observe(0)))
+            .execute_criterion_on(thread_pool, &mut group, "small_histogram_zero_mt_pull");
+
+        Run::new()
+            .iter(|_| PULL_LARGE_HISTOGRAM.with(|x| x.observe(0)))
+            .execute_criterion_on(thread_pool, &mut group, "large_histogram_zero_mt_pull");
+
         // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
         // through all the buckets for a matching one and finding none).
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &one_processor,
-                iters,
-                || (),
-                |()| PULL_SMALL_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
-            )
-        });
-    });
+        Run::new()
+            .iter(|_| PULL_SMALL_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)))
+            .execute_criterion_on(thread_pool, &mut group, "small_histogram_max_mt_pull");
 
-    group.bench_function("small_histogram_max_mt_pull", |b| {
         // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
         // through all the buckets for a matching one and finding none).
-        b.iter_custom(|iters| {
-            bench_on_every_processor(
-                iters,
-                || (),
-                |()| PULL_SMALL_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
-            )
-        });
-    });
+        Run::new()
+            .iter(|_| PULL_LARGE_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)))
+            .execute_criterion_on(thread_pool, &mut group, "large_histogram_max_mt_pull");
 
-    group.bench_function("large_histogram_max_st_pull", |b| {
+        Run::new()
+            .iter(|_| PUSH_COUNTER.with(Event::observe_once))
+            .execute_criterion_on(thread_pool, &mut group, "counter_mt_push");
+
+        Run::new()
+            .iter(|_| PUSH_COUNTER.with(|x| x.observe(2)))
+            .execute_criterion_on(thread_pool, &mut group, "plain_mt_push");
+
+        Run::new()
+            .iter(|_| PUSH_SMALL_HISTOGRAM.with(|x| x.observe(0)))
+            .execute_criterion_on(thread_pool, &mut group, "small_histogram_zero_mt_push");
+
+        Run::new()
+            .iter(|_| PUSH_LARGE_HISTOGRAM.with(|x| x.observe(0)))
+            .execute_criterion_on(thread_pool, &mut group, "large_histogram_zero_mt_push");
+
         // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
         // through all the buckets for a matching one and finding none).
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &one_processor,
-                iters,
-                || (),
-                |()| PULL_LARGE_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
-            )
-        });
-    });
+        Run::new()
+            .iter(|_| PUSH_SMALL_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)))
+            .execute_criterion_on(thread_pool, &mut group, "small_histogram_max_mt_push");
 
-    group.bench_function("large_histogram_max_mt_pull", |b| {
         // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
         // through all the buckets for a matching one and finding none).
-        b.iter_custom(|iters| {
-            bench_on_every_processor(
-                iters,
-                || (),
-                |()| PULL_LARGE_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
-            )
-        });
-    });
-
-    group.bench_function("counter_st_push", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &one_processor,
-                iters,
-                || (),
-                |()| PUSH_COUNTER.with(Event::observe_once),
-            )
-        });
-    });
-
-    group.bench_function("counter_mt_push", |b| {
-        b.iter_custom(|iters| {
-            bench_on_every_processor(iters, || (), |()| PUSH_COUNTER.with(Event::observe_once))
-        });
-    });
-
-    group.bench_function("plain_st_push", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &one_processor,
-                iters,
-                || (),
-                |()| PUSH_COUNTER.with(|x| x.observe(2)),
-            )
-        });
-    });
-
-    group.bench_function("plain_mt_push", |b| {
-        b.iter_custom(|iters| {
-            bench_on_every_processor(iters, || (), |()| PUSH_COUNTER.with(|x| x.observe(2)))
-        });
-    });
-
-    group.bench_function("small_histogram_zero_st_push", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &one_processor,
-                iters,
-                || (),
-                |()| PUSH_SMALL_HISTOGRAM.with(|x| x.observe(0)),
-            )
-        });
-    });
-
-    group.bench_function("small_histogram_zero_mt_push", |b| {
-        b.iter_custom(|iters| {
-            bench_on_every_processor(
-                iters,
-                || (),
-                |()| PUSH_SMALL_HISTOGRAM.with(|x| x.observe(0)),
-            )
-        });
-    });
-
-    group.bench_function("large_histogram_zero_st_push", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &one_processor,
-                iters,
-                || (),
-                |()| PUSH_LARGE_HISTOGRAM.with(|x| x.observe(0)),
-            )
-        });
-    });
-
-    group.bench_function("large_histogram_zero_mt_push", |b| {
-        b.iter_custom(|iters| {
-            bench_on_every_processor(
-                iters,
-                || (),
-                |()| PUSH_LARGE_HISTOGRAM.with(|x| x.observe(0)),
-            )
-        });
-    });
-
-    group.bench_function("small_histogram_max_st_push", |b| {
-        // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
-        // through all the buckets for a matching one and finding none).
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &one_processor,
-                iters,
-                || (),
-                |()| PUSH_SMALL_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
-            )
-        });
-    });
-
-    group.bench_function("small_histogram_max_mt_push", |b| {
-        // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
-        // through all the buckets for a matching one and finding none).
-        b.iter_custom(|iters| {
-            bench_on_every_processor(
-                iters,
-                || (),
-                |()| PUSH_SMALL_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
-            )
-        });
-    });
-
-    group.bench_function("large_histogram_max_st_push", |b| {
-        // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
-        // through all the buckets for a matching one and finding none).
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &one_processor,
-                iters,
-                || (),
-                |()| PUSH_LARGE_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
-            )
-        });
-    });
-
-    group.bench_function("large_histogram_max_mt_push", |b| {
-        // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
-        // through all the buckets for a matching one and finding none).
-        b.iter_custom(|iters| {
-            bench_on_every_processor(
-                iters,
-                || (),
-                |()| PUSH_LARGE_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)),
-            )
-        });
-    });
+        Run::new()
+            .iter(|_| PUSH_LARGE_HISTOGRAM.with(|x| x.observe(Magnitude::MAX)))
+            .execute_criterion_on(thread_pool, &mut group, "large_histogram_max_mt_push");
+    }
 
     group.finish();
 
     let mut group = c.benchmark_group("nm_collection");
 
-    group.bench_function("collect_st", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &one_processor,
-                iters,
-                || (),
-                |()| drop(black_box(Report::collect())),
-            )
-        });
-    });
+    Run::new()
+        .iter(|_| drop(black_box(Report::collect())))
+        .execute_criterion_on(&mut one_thread, &mut group, "collect_st");
 
-    group.bench_function("collect_mt", |b| {
-        b.iter_custom(|iters| {
-            bench_on_every_processor(iters, || (), |()| drop(black_box(Report::collect())))
-        });
-    });
+    // Two-processor benchmarks for nm_collection group.
+    if let Some(ref mut thread_pool) = two_threads {
+        Run::new()
+            .iter(|_| drop(black_box(Report::collect())))
+            .execute_criterion_on(thread_pool, &mut group, "collect_mt");
+    }
 
     group.finish();
 
     let mut group = c.benchmark_group("nm_push");
 
-    group.bench_function("push_st", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &one_processor,
-                iters,
-                || (),
-                |()| PUSHER.with(MetricsPusher::push),
-            )
-        });
-    });
+    Run::new()
+        .iter(|_| PUSHER.with(MetricsPusher::push))
+        .execute_criterion_on(&mut one_thread, &mut group, "push_st");
 
-    group.bench_function("push_mt", |b| {
-        b.iter_custom(|iters| {
-            bench_on_every_processor(iters, || (), |()| PUSHER.with(MetricsPusher::push))
-        });
-    });
+    // Two-processor benchmarks for nm_push group.
+    if let Some(ref mut thread_pool) = two_threads {
+        Run::new()
+            .iter(|_| PUSHER.with(MetricsPusher::push))
+            .execute_criterion_on(thread_pool, &mut group, "push_mt");
+    }
 
     group.finish();
 
     let mut group = c.benchmark_group("nm_timing");
 
-    group.bench_function("timing_st_pull", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &one_processor,
-                iters,
-                || (),
-                |()| PULL_COUNTER.with(|x| x.observe_duration_millis(|| black_box(()))),
-            )
-        });
-    });
+    Run::new()
+        .iter(|_| PULL_COUNTER.with(|x| x.observe_duration_millis(|| black_box(()))))
+        .execute_criterion_on(&mut one_thread, &mut group, "timing_st_pull");
 
-    group.bench_function("timing_mt_pull", |b| {
-        b.iter_custom(|iters| {
-            bench_on_every_processor(
-                iters,
-                || (),
-                |()| PULL_COUNTER.with(|x| x.observe_duration_millis(|| black_box(()))),
-            )
-        });
-    });
+    Run::new()
+        .iter(|_| PUSH_COUNTER.with(|x| x.observe_duration_millis(|| black_box(()))))
+        .execute_criterion_on(&mut one_thread, &mut group, "timing_st_push");
 
-    group.bench_function("timing_st_push", |b| {
-        b.iter_custom(|iters| {
-            bench_on_threadpool(
-                &one_processor,
-                iters,
-                || (),
-                |()| PUSH_COUNTER.with(|x| x.observe_duration_millis(|| black_box(()))),
-            )
-        });
-    });
+    // Two-processor benchmarks for nm_timing group.
+    if let Some(ref mut thread_pool) = two_threads {
+        Run::new()
+            .iter(|_| PULL_COUNTER.with(|x| x.observe_duration_millis(|| black_box(()))))
+            .execute_criterion_on(thread_pool, &mut group, "timing_mt_pull");
 
-    group.bench_function("timing_mt_push", |b| {
-        b.iter_custom(|iters| {
-            bench_on_every_processor(
-                iters,
-                || (),
-                |()| PUSH_COUNTER.with(|x| x.observe_duration_millis(|| black_box(()))),
-            )
-        });
-    });
+        Run::new()
+            .iter(|_| PUSH_COUNTER.with(|x| x.observe_duration_millis(|| black_box(()))))
+            .execute_criterion_on(thread_pool, &mut group, "timing_mt_push");
+    }
 
     group.finish();
 }
