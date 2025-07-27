@@ -21,10 +21,10 @@ simple-mermaid = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-many_cpus = { workspace = true }
+many_cpus = { path = "../many_cpus" }
 mutants = { workspace = true }
-new_zealand = { workspace = true }
-par_bench = { workspace = true, features = ["criterion"] }
+new_zealand = { path = "../new_zealand" }
+par_bench = { path = "../par_bench", features = ["criterion"] }
 seq-macro = { workspace = true }
 
 [[bench]]

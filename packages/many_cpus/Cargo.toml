@@ -42,10 +42,10 @@ windows = { workspace = true, features = [
 criterion = { workspace = true }
 mockall = { workspace = true }
 mutants = { workspace = true }
-par_bench = { workspace = true, features = ["criterion"] }
+par_bench = { path = "../par_bench", features = ["criterion"] }
 scopeguard = { workspace = true }
 static_assertions = { workspace = true }
-testing = { workspace = true }
+testing = { path = "../testing" }
 
 [target.'cfg(windows)'.dev-dependencies]
 windows = { workspace = true, features = ["Win32_Security"] }

@@ -23,8 +23,8 @@ num = { workspace = true }
 oneshot = { workspace = true }
 
 [dev-dependencies]
-alloc_tracker = { workspace = true }
-all_the_time = { workspace = true }
+alloc_tracker = { path = "../alloc_tracker" }
+all_the_time = { path = "../all_the_time" }
 criterion = { workspace = true }
 mutants = { workspace = true }
 

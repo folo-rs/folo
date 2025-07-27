@@ -27,7 +27,7 @@ axum = { workspace = true, features = ["http1", "tokio"] }
 criterion = { workspace = true }
 mockall = { workspace = true }
 mutants = { workspace = true }
-par_bench = { workspace = true, features = ["criterion"] }
+par_bench = { path = "../par_bench", features = ["criterion"] }
 static_assertions = { workspace = true }
 tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
 

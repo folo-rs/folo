@@ -19,13 +19,13 @@ pinned_pool = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-many_cpus = { workspace = true }
-many_cpus_benchmarking = { workspace = true }
-new_zealand = { workspace = true }
+many_cpus = { path = "../many_cpus" }
+many_cpus_benchmarking = { path = "../many_cpus_benchmarking" }
+new_zealand = { path = "../new_zealand" }
 oneshot = { workspace = true }
-par_bench = { workspace = true, features = ["criterion"] }
+par_bench = { path = "../par_bench", features = ["criterion"] }
 static_assertions = { workspace = true }
-testing = { workspace = true }
+testing = { path = "../testing" }
 
 [lints]
 workspace = true
