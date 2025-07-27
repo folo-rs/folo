@@ -526,3 +526,7 @@ with `#[cfg(test)]`. Do not just suppress "dead code" warnings.
 
 Avoid running large "process all files" commands directly in the workspace root. Use at least
 one level of subdirectory.
+
+# Dev-dependencies within workspace packages must be path dependencies
+
+Do not use `version = "1.2.3"` or `workspace = true` when adding a package from the same workspace as a dev-dependency. Within the same workspace, dev-dependencies must always be `path = "../foo"` style path-references.
