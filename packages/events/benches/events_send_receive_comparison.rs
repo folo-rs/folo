@@ -87,33 +87,20 @@ fn once_event_arc_mt(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallT
             let (senders, receivers): (Vec<_>, Vec<_>) =
                 events.into_iter().map(|e| e.bind_by_arc()).unzip();
 
-            let senders = Arc::new(Mutex::new(senders));
-            let receivers = Arc::new(Mutex::new(receivers));
+            let senders = Mutex::new(senders);
+            let receivers = Mutex::new(receivers);
 
             Run::new()
                 // Group 0 sends, group 1 receives.
                 .groups(nz!(2))
-                .prepare_thread_fn(|meta| {
+                .prepare_iter_fn(|meta, &()| {
                     if meta.group_index() == 0 {
-                        (Some(Arc::clone(&senders)), None)
+                        (Some(senders.lock().unwrap().pop().unwrap()), None)
                     } else {
-                        (None, Some(Arc::clone(&receivers)))
+                        (None, Some(receivers.lock().unwrap().pop().unwrap()))
                     }
                 })
-                .prepare_iter_fn(|meta, endpoints| {
-                    if meta.group_index() == 0 {
-                        (
-                            Some(endpoints.0.as_ref().unwrap().lock().unwrap().pop().unwrap()),
-                            None,
-                        )
-                    } else {
-                        (
-                            None,
-                            Some(endpoints.1.as_ref().unwrap().lock().unwrap().pop().unwrap()),
-                        )
-                    }
-                })
-                .iter_fn(|(sender, receiver), _| {
+                .iter_fn(|(sender, receiver), &()| {
                     if let Some(sender) = sender {
                         sender.send(42);
                     } else if let Some(receiver) = receiver {
@@ -144,33 +131,20 @@ fn once_event_ptr_mt(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallT
                 })
                 .unzip();
 
-            let senders = Arc::new(Mutex::new(senders));
-            let receivers = Arc::new(Mutex::new(receivers));
+            let senders = Mutex::new(senders);
+            let receivers = Mutex::new(receivers);
 
             Run::new()
                 // Group 0 sends, group 1 receives.
                 .groups(nz!(2))
-                .prepare_thread_fn(|meta| {
+                .prepare_iter_fn(|meta, &()| {
                     if meta.group_index() == 0 {
-                        (Some(Arc::clone(&senders)), None)
+                        (Some(senders.lock().unwrap().pop().unwrap()), None)
                     } else {
-                        (None, Some(Arc::clone(&receivers)))
+                        (None, Some(receivers.lock().unwrap().pop().unwrap()))
                     }
                 })
-                .prepare_iter_fn(|meta, endpoints| {
-                    if meta.group_index() == 0 {
-                        (
-                            Some(endpoints.0.as_ref().unwrap().lock().unwrap().pop().unwrap()),
-                            None,
-                        )
-                    } else {
-                        (
-                            None,
-                            Some(endpoints.1.as_ref().unwrap().lock().unwrap().pop().unwrap()),
-                        )
-                    }
-                })
-                .iter_fn(|(sender, receiver), _| {
+                .iter_fn(|(sender, receiver), &()| {
                     if let Some(sender) = sender {
                         sender.send(42);
                     } else if let Some(receiver) = receiver {
@@ -195,33 +169,20 @@ fn oneshot_channel_mt(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, Wall
                 receivers.push(receiver);
             }
 
-            let senders = Arc::new(Mutex::new(senders));
-            let receivers = Arc::new(Mutex::new(receivers));
+            let senders = Mutex::new(senders);
+            let receivers = Mutex::new(receivers);
 
             Run::new()
                 // Group 0 sends, group 1 receives.
                 .groups(nz!(2))
-                .prepare_thread_fn(|meta| {
+                .prepare_iter_fn(|meta, &()| {
                     if meta.group_index() == 0 {
-                        (Some(Arc::clone(&senders)), None)
+                        (Some(senders.lock().unwrap().pop().unwrap()), None)
                     } else {
-                        (None, Some(Arc::clone(&receivers)))
+                        (None, Some(receivers.lock().unwrap().pop().unwrap()))
                     }
                 })
-                .prepare_iter_fn(|meta, endpoints| {
-                    if meta.group_index() == 0 {
-                        (
-                            Some(endpoints.0.as_ref().unwrap().lock().unwrap().pop().unwrap()),
-                            None,
-                        )
-                    } else {
-                        (
-                            None,
-                            Some(endpoints.1.as_ref().unwrap().lock().unwrap().pop().unwrap()),
-                        )
-                    }
-                })
-                .iter_fn(|(sender, receiver), _| {
+                .iter_fn(|(sender, receiver), &()| {
                     if let Some(sender) = sender {
                         drop(sender.send(42));
                     } else if let Some(receiver) = receiver {
@@ -247,33 +208,20 @@ fn futures_oneshot_channel_mt(pool: &mut ThreadPool, group: &mut BenchmarkGroup<
                 receivers.push(receiver);
             }
 
-            let senders = Arc::new(Mutex::new(senders));
-            let receivers = Arc::new(Mutex::new(receivers));
+            let senders = Mutex::new(senders);
+            let receivers = Mutex::new(receivers);
 
             Run::new()
                 // Group 0 sends, group 1 receives.
                 .groups(nz!(2))
-                .prepare_thread_fn(|meta| {
+                .prepare_iter_fn(|meta, &()| {
                     if meta.group_index() == 0 {
-                        (Some(Arc::clone(&senders)), None)
+                        (Some(senders.lock().unwrap().pop().unwrap()), None)
                     } else {
-                        (None, Some(Arc::clone(&receivers)))
+                        (None, Some(receivers.lock().unwrap().pop().unwrap()))
                     }
                 })
-                .prepare_iter_fn(|meta, endpoints| {
-                    if meta.group_index() == 0 {
-                        (
-                            Some(endpoints.0.as_ref().unwrap().lock().unwrap().pop().unwrap()),
-                            None,
-                        )
-                    } else {
-                        (
-                            None,
-                            Some(endpoints.1.as_ref().unwrap().lock().unwrap().pop().unwrap()),
-                        )
-                    }
-                })
-                .iter_fn(|(sender, receiver), _| {
+                .iter_fn(|(sender, receiver), &()| {
                     if let Some(sender) = sender {
                         _ = sender.send(42);
                     } else if let Some(receiver) = receiver {
