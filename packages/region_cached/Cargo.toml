@@ -24,10 +24,10 @@ simple-mermaid = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true, features = ["http1", "tokio"] }
-benchmark_utils = { workspace = true }
 criterion = { workspace = true }
 mockall = { workspace = true }
 mutants = { workspace = true }
+par_bench = { workspace = true, features = ["criterion"] }
 static_assertions = { workspace = true }
 tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
 

@@ -6,7 +6,6 @@
 )]
 
 use std::hint::black_box;
-use std::sync::LazyLock;
 use std::thread;
 
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -22,14 +21,14 @@ fn entrypoint(c: &mut Criterion) {
     let mut one_thread = ThreadPool::new(&ProcessorSet::single());
 
     // Not every system is going to have at least two processors, so only some can do this.
-    let two_threads_same_region = ProcessorSet::builder()
+    let mut two_threads_same_region = ProcessorSet::builder()
         .same_memory_region()
         .performance_processors_only()
         .take(nz!(2))
         .map(|x| ThreadPool::new(&x));
 
     // Not every system is going to have multiple memory regions, so only some can do this.
-    let two_threads_different_region = ProcessorSet::builder()
+    let mut two_threads_different_region = ProcessorSet::builder()
         .performance_processors_only()
         .different_memory_regions()
         .take(nz!(2))
@@ -97,86 +96,76 @@ fn entrypoint(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("region_local_get_set_pin");
 
-    // One thread performs "get" in a loop, another performs "set" in a loop.
-    if let Some(ref thread_pool) = two_threads {
-        group.bench_function("par_get_set", |b| {
-            region_local!(static VALUE: u32 = 99942);
-
-            b.iter_custom(|iters| {
-                bench_on_threadpool_ab(
-                    thread_pool,
-                    iters,
-                    |_| (),
-                    |worker, ()| match worker {
-                        AbWorker::A => _ = black_box(VALUE.get_local()),
-                        AbWorker::B => VALUE.set_local(black_box(566)),
-                    },
-                )
-            });
-        });
-    }
-
-    // One thread performs "with" in a loop, another performs "set" in a loop.
-    // The "with" thread is slow, also doing some "other stuff" in the callback.
-    if let Some(ref thread_pool) = two_threads {
-        group.bench_function("par_with_set_busy", |b| {
-            region_local!(static VALUE: u32 = 99942);
-
-            b.iter_custom(|iters| {
-                bench_on_threadpool_ab(
-                    thread_pool,
-                    iters,
-                    |_| (),
-                    |worker, ()| match worker {
-                        AbWorker::A => VALUE.with_local(|v| {
-                            _ = black_box(*v);
-                            thread::yield_now();
-                        }),
-                        AbWorker::B => VALUE.set_local(black_box(566)),
-                    },
-                )
-            });
-        });
-    }
-
-    if let Some(ref thread_pool) = two_memory_regions {
+    if let Some(ref mut thread_pool) = two_threads_same_region {
         // One thread performs "get" in a loop, another performs "set" in a loop.
-        group.bench_function("par_get_set_2region", |b| {
-            region_local!(static VALUE: u32 = 99942);
+        Run::new()
+            .groups(nz!(2))
+            .iter(|args| {
+                region_local!(static VALUE: u32 = 99942);
 
-            b.iter_custom(|iters| {
-                bench_on_threadpool_ab(
-                    thread_pool,
-                    iters,
-                    |_| (),
-                    |worker, ()| match worker {
-                        AbWorker::A => _ = black_box(VALUE.get_local()),
-                        AbWorker::B => VALUE.set_local(black_box(566)),
-                    },
-                )
-            });
-        });
+                if args.meta().group_index() == 0 {
+                    _ = black_box(VALUE.get_local());
+                } else {
+                    VALUE.set_local(black_box(566));
+                }
+            })
+            .execute_criterion_on(thread_pool, &mut group, "par_get_set_same_region");
 
         // One thread performs "with" in a loop, another performs "set" in a loop.
         // The "with" thread is slow, also doing some "other stuff" in the callback.
-        group.bench_function("par_with_set_busy_2region", |b| {
-            region_local!(static VALUE: u32 = 99942);
+        Run::new()
+            .groups(nz!(2))
+            .iter(|args| {
+                region_local!(static VALUE: u32 = 99942);
 
-            b.iter_custom(|iters| {
-                bench_on_threadpool_ab(
-                    thread_pool,
-                    iters,
-                    |_| (),
-                    |worker, ()| match worker {
-                        AbWorker::A => VALUE.with_local(|v| {
-                            _ = black_box(*v);
-                            thread::yield_now();
-                        }),
-                        AbWorker::B => VALUE.set_local(black_box(566)),
-                    },
-                )
-            });
-        });
+                if args.meta().group_index() == 0 {
+                    VALUE.with_local(|v| {
+                        _ = black_box(*v);
+                        thread::yield_now();
+                    });
+                } else {
+                    VALUE.set_local(black_box(566));
+                }
+            })
+            .execute_criterion_on(thread_pool, &mut group, "par_with_set_busy_same_region");
+    }
+
+    if let Some(ref mut thread_pool) = two_threads_different_region {
+        // One thread performs "get" in a loop, another performs "set" in a loop.
+        Run::new()
+            .groups(nz!(2))
+            .iter(|args| {
+                region_local!(static VALUE: u32 = 99942);
+
+                if args.meta().group_index() == 0 {
+                    _ = black_box(VALUE.get_local());
+                } else {
+                    VALUE.set_local(black_box(566));
+                }
+            })
+            .execute_criterion_on(thread_pool, &mut group, "par_get_set_different_region");
+
+        // One thread performs "with" in a loop, another performs "set" in a loop.
+        // The "with" thread is slow, also doing some "other stuff" in the callback.
+        Run::new()
+            .groups(nz!(2))
+            .iter(|args| {
+                region_local!(static VALUE: u32 = 99942);
+
+                if args.meta().group_index() == 0 {
+                    VALUE.with_local(|v| {
+                        _ = black_box(*v);
+                        thread::yield_now();
+                    });
+                } else {
+                    VALUE.set_local(black_box(566));
+                }
+            })
+            .execute_criterion_on(
+                thread_pool,
+                &mut group,
+                "par_with_set_busy_different_region",
+            );
     }
 
     group.finish();

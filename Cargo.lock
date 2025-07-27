@@ -1291,7 +1291,6 @@ version = "0.1.28"
 dependencies = [
  "arc-swap",
  "axum",
- "benchmark_utils",
  "criterion",
  "derive_more",
  "linked",
@@ -1299,6 +1298,7 @@ dependencies = [
  "mockall",
  "mutants",
  "new_zealand",
+ "par_bench",
  "rsevents",
  "simple-mermaid",
  "static_assertions",
