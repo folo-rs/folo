@@ -144,42 +144,11 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let local_mutex: Mutex<u64> = black_box(Mutex::new(EXPECTED_VALUE));
-
-    group.bench_function("local_mutex", |b| {
-        b.iter(|| {
-            assert_eq!(black_box(*local_mutex.lock().unwrap()), EXPECTED_VALUE);
-        });
-    });
-
-    let local_rwlock: RwLock<u64> = black_box(RwLock::new(EXPECTED_VALUE));
-
-    group.bench_function("local_rwlock_read", |b| {
-        b.iter(|| {
-            assert_eq!(black_box(*local_rwlock.read().unwrap()), EXPECTED_VALUE);
-        });
-    });
-
-    group.bench_function("local_rwlock_write", |b| {
-        b.iter(|| {
-            assert_eq!(black_box(*local_rwlock.write().unwrap()), EXPECTED_VALUE);
-        });
-    });
-
     // Reference counted smart pointers benchmarks
     let local_arc: Arc<u64> = black_box(Arc::new(EXPECTED_VALUE));
 
     group.bench_function("local_arc", |b| {
         b.iter(|| assert_eq!(black_box(*local_arc), EXPECTED_VALUE));
-    });
-
-    let local_arc_weak: ArcWeak<u64> = black_box(Arc::downgrade(&local_arc));
-
-    group.bench_function("local_arc_weak_upgrade", |b| {
-        b.iter(|| {
-            let strong = black_box(local_arc_weak.upgrade().unwrap());
-            assert_eq!(black_box(*strong), EXPECTED_VALUE);
-        });
     });
 
     let local_rc: Rc<u64> = black_box(Rc::new(EXPECTED_VALUE));
@@ -214,6 +183,43 @@ fn entrypoint(c: &mut Criterion) {
                 black_box(atomic.load(atomic::Ordering::Acquire)),
                 EXPECTED_VALUE
             );
+        });
+    });
+
+    group.finish();
+
+    // We put the extra slow ones in their own group just for better comparability in charts,
+    // otherwise they blow out the scale so the rest are invisible.
+    let mut group = c.benchmark_group("variable_access_slow");
+
+    let local_arc_weak: ArcWeak<u64> = black_box(Arc::downgrade(&local_arc));
+
+    group.bench_function("local_arc_weak_upgrade", |b| {
+        b.iter(|| {
+            let strong = black_box(local_arc_weak.upgrade().unwrap());
+            assert_eq!(black_box(*strong), EXPECTED_VALUE);
+        });
+    });
+
+    let local_mutex: Mutex<u64> = black_box(Mutex::new(EXPECTED_VALUE));
+
+    group.bench_function("local_mutex", |b| {
+        b.iter(|| {
+            assert_eq!(black_box(*local_mutex.lock().unwrap()), EXPECTED_VALUE);
+        });
+    });
+
+    let local_rwlock: RwLock<u64> = black_box(RwLock::new(EXPECTED_VALUE));
+
+    group.bench_function("local_rwlock_read", |b| {
+        b.iter(|| {
+            assert_eq!(black_box(*local_rwlock.read().unwrap()), EXPECTED_VALUE);
+        });
+    });
+
+    group.bench_function("local_rwlock_write", |b| {
+        b.iter(|| {
+            assert_eq!(black_box(*local_rwlock.write().unwrap()), EXPECTED_VALUE);
         });
     });
 
