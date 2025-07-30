@@ -29,3 +29,7 @@ static_assertions = { workspace = true }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "timestamp_performance"
+harness = false
