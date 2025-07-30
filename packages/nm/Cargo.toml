@@ -16,6 +16,7 @@ default = []
 [dependencies]
 foldhash = { workspace = true }
 new_zealand = { workspace = true }
+num-traits = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

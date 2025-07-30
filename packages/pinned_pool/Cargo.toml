@@ -14,7 +14,7 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
-num = { workspace = true }
+num-integer = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

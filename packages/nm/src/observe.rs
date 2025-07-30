@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use num_traits::AsPrimitive;
+
 use crate::Magnitude;
 
 /// Operations for observing the occurrences of an event.
@@ -47,7 +49,7 @@ pub trait Observe {
     /// // Record sending 1024 bytes
     /// SENT_BYTES.with(|event| event.observe(1024));
     /// ```
-    fn observe(&self, magnitude: Magnitude);
+    fn observe(&self, magnitude: impl AsPrimitive<Magnitude>);
 
     /// Observes an event with the magnitude being the indicated duration in milliseconds.
     ///

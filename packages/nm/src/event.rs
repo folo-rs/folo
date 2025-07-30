@@ -1,6 +1,8 @@
 use std::marker::PhantomData;
 use std::time::{Duration, Instant};
 
+use num_traits::AsPrimitive;
+
 use crate::{EventBuilder, Magnitude, Observe, PublishModel, Pull};
 
 /// Allows you to observe the occurrences of an event in your code.
@@ -131,7 +133,7 @@ where
 
     /// Observes an event with a specific magnitude.
     #[inline]
-    pub fn observe(&self, magnitude: Magnitude) {
+    pub fn observe(&self, magnitude: impl AsPrimitive<Magnitude>) {
         self.batch(1).observe(magnitude);
     }
 
@@ -216,8 +218,8 @@ where
 
     /// Observes a batch of events with a specific magnitude.
     #[inline]
-    pub fn observe(&self, magnitude: Magnitude) {
-        self.event.publish_model.insert(magnitude, self.count);
+    pub fn observe(&self, magnitude: impl AsPrimitive<Magnitude>) {
+        self.event.publish_model.insert(magnitude.as_(), self.count);
     }
 
     /// Observes an event with the magnitude being the indicated duration in milliseconds.
@@ -265,7 +267,7 @@ where
 
     #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
     #[inline]
-    fn observe(&self, magnitude: Magnitude) {
+    fn observe(&self, magnitude: impl AsPrimitive<Magnitude>) {
         self.observe(magnitude);
     }
 
@@ -297,7 +299,7 @@ where
 
     #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
     #[inline]
-    fn observe(&self, magnitude: Magnitude) {
+    fn observe(&self, magnitude: impl AsPrimitive<Magnitude>) {
         self.observe(magnitude);
     }
 
@@ -421,6 +423,20 @@ mod tests {
         let snapshot = event.snapshot();
         assert_eq!(snapshot.count, 8);
         assert_eq!(snapshot.sum, 129);
+    }
+
+    #[test]
+    fn event_accepts_different_numeric_types_without_casting() {
+        let event = Event::builder().name("test_event").build();
+
+        event.observe(1_u8);
+        event.observe(2_u16);
+        event.observe(3_u32);
+        event.observe(4_u64);
+        event.observe(5_usize);
+        event.observe(6.66);
+        event.observe(7_i32);
+        event.observe(8_i128);
     }
 
     #[test]

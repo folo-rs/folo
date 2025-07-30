@@ -9,7 +9,7 @@ use std::num::NonZero;
 use std::sync::{Arc, Barrier, Mutex};
 use std::time::{Duration, Instant};
 
-use num::Integer;
+use num_integer::Integer;
 
 use crate::{RunMeta, ThreadPool, args};
 

@@ -1,7 +1,7 @@
 use std::mem::MaybeUninit;
 use std::pin::Pin;
 
-use num::Integer;
+use num_integer::Integer;
 
 use crate::{DropPolicy, PinnedPoolBuilder, PinnedSlab, PinnedSlabInserter};
 

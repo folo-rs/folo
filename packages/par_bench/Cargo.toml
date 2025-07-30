@@ -19,7 +19,7 @@ criterion = { workspace = true, optional = true }
 derive_more = { workspace = true, features = ["debug"] }
 many_cpus = { workspace = true }
 new_zealand = { workspace = true }
-num = { workspace = true }
+num-integer = { workspace = true }
 oneshot = { workspace = true }
 
 [dev-dependencies]
