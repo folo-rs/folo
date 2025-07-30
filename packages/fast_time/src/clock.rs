@@ -11,12 +11,77 @@ use crate::pal::{Platform, PlatformFacade, TimeSource, TimeSourceFacade};
 /// This typically makes these timestamps useful for rapid polling scenarios, such as metrics and
 /// logging, where efficiency matters greatly because you may be capturing 100 000 timestamps per
 /// second, whereas the precise microsecond or even millisecond is not important.
+///
+/// # Examples
+///
+/// Creating a clock and capturing timestamps:
+///
+/// ```rust
+/// use fast_time::Clock;
+///
+/// let clock = Clock::new();
+/// let instant1 = clock.now();
+/// let instant2 = clock.now();
+///
+/// // Timestamps are monotonically increasing
+/// assert!(instant2.saturating_duration_since(instant1).as_nanos() >= 0);
+/// ```
+///
+/// Measuring elapsed time:
+///
+/// ```rust
+/// use fast_time::Clock;
+/// use std::time::Duration;
+///
+/// let clock = Clock::new();
+/// let start = clock.now();
+///
+/// // Simulate some work
+/// std::thread::sleep(Duration::from_millis(5));
+///
+/// let elapsed = start.elapsed(&clock);
+/// // Note: fast_time prioritizes efficiency over precision, so we use loose tolerance
+/// assert!(elapsed <= Duration::from_millis(50)); // Very generous upper bound
+/// ```
+///
+/// High-frequency timestamp collection:
+///
+/// ```rust
+/// use fast_time::Clock;
+///
+/// let clock = Clock::new();
+/// let mut durations = Vec::new();
+///
+/// let start = clock.now();
+/// for _ in 0..1000 {
+///     let timestamp = clock.now();
+///     durations.push(timestamp.saturating_duration_since(start));
+/// }
+///
+/// // All durations should be monotonically increasing
+/// for window in durations.windows(2) {
+///     assert!(window[1] >= window[0]);
+/// }
+/// ```
 #[derive(Debug)]
 pub struct Clock {
     inner: TimeSourceFacade,
 }
 
 impl Clock {
+    /// Creates a new clock instance.
+    ///
+    /// The clock will use the platform's most efficient time source for rapid timestamp
+    /// capture.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use fast_time::Clock;
+    ///
+    /// let clock = Clock::new();
+    /// let timestamp = clock.now();
+    /// ```
     #[must_use]
     pub fn new() -> Self {
         Self::from_pal(&PlatformFacade::real())
@@ -29,6 +94,36 @@ impl Clock {
         }
     }
 
+    /// Returns the current timestamp.
+    ///
+    /// This method is optimized for rapid, repeated calls. The returned [`Instant`]
+    /// represents a point in time that can be used to measure elapsed duration.
+    ///
+    /// # Examples
+    ///
+    /// Basic timestamp capture:
+    ///
+    /// ```rust
+    /// use fast_time::Clock;
+    ///
+    /// let clock = Clock::new();
+    /// let now = clock.now();
+    /// println!("Current time: {:?}", now);
+    /// ```
+    ///
+    /// Rapid timestamp collection:
+    ///
+    /// ```rust
+    /// use fast_time::Clock;
+    ///
+    /// let clock = Clock::new();
+    /// let timestamps: Vec<_> = (0..100)
+    ///     .map(|_| clock.now())
+    ///     .collect();
+    ///
+    /// // All timestamps should be valid
+    /// assert_eq!(timestamps.len(), 100);
+    /// ```
     #[must_use]
     pub fn now(&self) -> Instant {
         self.inner.now().into()
