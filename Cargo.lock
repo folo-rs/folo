@@ -419,7 +419,7 @@ dependencies = [
 
 [[package]]
 name = "events"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "criterion",
  "futures",
@@ -956,7 +956,7 @@ version = "0.1.6"
 
 [[package]]
 name = "nm"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "criterion",
  "foldhash",
@@ -1030,7 +1030,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -1082,7 +1082,7 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
 name = "pinned_pool"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "criterion",
  "mutants",
