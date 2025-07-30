@@ -152,3 +152,88 @@ impl From<Instant> for std::time::Instant {
         instant.inner
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use mockall::Sequence;
+
+    use super::*;
+    use crate::pal::{MockPlatform, MockTimeSource};
+
+    #[test]
+    fn saturating_duration_since_can_math() {
+        use std::time::Duration;
+
+        // Create synthetic test data using arbitrary durations added to a base instant
+        // Note: In real code, we would use Clock::now(), but for testing we create arbitrary instants
+        let base_instant = std::time::Instant::now();
+        let instant1 = Instant::from(base_instant);
+        let instant2 = Instant::from(base_instant + Duration::from_secs(10));
+        let instant3 = Instant::from(base_instant + Duration::from_secs(50));
+
+        // Test normal case: later instant minus earlier instant
+        let duration_1_to_2 = instant2.saturating_duration_since(instant1);
+        assert_eq!(duration_1_to_2, Duration::from_secs(10));
+
+        let duration_1_to_3 = instant3.saturating_duration_since(instant1);
+        assert_eq!(duration_1_to_3, Duration::from_secs(50));
+
+        let duration_2_to_3 = instant3.saturating_duration_since(instant2);
+        assert_eq!(duration_2_to_3, Duration::from_secs(40));
+
+        // Test saturating behavior: earlier instant minus later instant should return zero
+        let duration_reverse_1 = instant1.saturating_duration_since(instant2);
+        assert_eq!(duration_reverse_1, Duration::ZERO);
+
+        let duration_reverse_2 = instant1.saturating_duration_since(instant3);
+        assert_eq!(duration_reverse_2, Duration::ZERO);
+
+        let duration_reverse_3 = instant2.saturating_duration_since(instant3);
+        assert_eq!(duration_reverse_3, Duration::ZERO);
+
+        // Test same instant
+        let duration_same = instant1.saturating_duration_since(instant1);
+        assert_eq!(duration_same, Duration::ZERO);
+    }
+
+    #[test]
+    fn duration_since_can_math() {
+        let a = std::time::Instant::now();
+        let b = a.checked_add(Duration::from_millis(100)).unwrap();
+
+        let mut time_source = MockTimeSource::new();
+
+        let mut seq = Sequence::new();
+
+        time_source
+            .expect_now()
+            .once()
+            .in_sequence(&mut seq)
+            .return_once(move || a);
+
+        time_source
+            .expect_now()
+            .once()
+            .in_sequence(&mut seq)
+            .return_once(move || b);
+
+        let mut platform = MockPlatform::new();
+
+        platform
+            .expect_new_time_source()
+            .once()
+            .return_once(move || time_source);
+
+        let clock = Clock::from_pal(platform.into());
+
+        let instant1 = clock.now();
+        let instant2 = clock.now();
+
+        // instant1 is earlier, so this returns zero
+        let duration = instant1.saturating_duration_since(instant2);
+        assert_eq!(duration, Duration::ZERO);
+
+        let duration = instant2.saturating_duration_since(instant1);
+        assert_eq!(duration, Duration::from_millis(100));
+    }
+}

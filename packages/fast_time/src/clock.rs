@@ -85,11 +85,15 @@ impl Clock {
     /// ```
     #[must_use]
     pub fn new() -> Self {
-        Self::from_pal(&PlatformFacade::real())
+        Self::from_pal(PlatformFacade::real())
     }
 
     #[must_use]
-    pub(crate) fn from_pal(pal: &PlatformFacade) -> Self {
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "semantically correct, even if not necessary"
+    )]
+    pub(crate) fn from_pal(pal: PlatformFacade) -> Self {
         Self {
             inner: pal.new_time_source(),
         }
