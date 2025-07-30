@@ -236,4 +236,40 @@ mod tests {
         let duration = instant2.saturating_duration_since(instant1);
         assert_eq!(duration, Duration::from_millis(100));
     }
+
+    #[test]
+    fn elapsed_can_math() {
+        let a = std::time::Instant::now();
+        let b = a.checked_add(Duration::from_millis(100)).unwrap();
+
+        let mut time_source = MockTimeSource::new();
+
+        let mut seq = Sequence::new();
+
+        time_source
+            .expect_now()
+            .once()
+            .in_sequence(&mut seq)
+            .return_once(move || a);
+
+        time_source
+            .expect_now()
+            .once()
+            .in_sequence(&mut seq)
+            .return_once(move || b);
+
+        let mut platform = MockPlatform::new();
+
+        platform
+            .expect_new_time_source()
+            .once()
+            .return_once(move || time_source);
+
+        let clock = Clock::from_pal(platform.into());
+
+        let instant1 = clock.now();
+
+        let duration = instant1.elapsed(&clock);
+        assert_eq!(duration, Duration::from_millis(100));
+    }
 }
