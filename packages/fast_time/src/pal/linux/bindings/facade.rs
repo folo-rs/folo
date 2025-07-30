@@ -3,10 +3,9 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::pal::windows::BuildTargetBindings;
 #[cfg(test)]
-use crate::pal::windows::MockBindings;
-use crate::pal::windows::bindings::Bindings;
+use crate::pal::linux::MockBindings;
+use crate::pal::linux::{Bindings, BuildTargetBindings};
 
 #[derive(Clone)]
 pub(crate) enum BindingsFacade {
@@ -23,11 +22,11 @@ impl BindingsFacade {
 }
 
 impl Bindings for BindingsFacade {
-    fn get_tick_count_64(&self) -> u64 {
+    fn clock_gettime_nanos(&self) -> u128 {
         match self {
-            Self::Real(bindings) => bindings.get_tick_count_64(),
+            Self::Real(bindings) => bindings.clock_gettime_nanos(),
             #[cfg(test)]
-            Self::Mock(bindings) => bindings.get_tick_count_64(),
+            Self::Mock(bindings) => bindings.clock_gettime_nanos(),
         }
     }
 

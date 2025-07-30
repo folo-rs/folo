@@ -259,8 +259,8 @@ impl<MeasureOutput> RunSummary<MeasureOutput> {
     /// let run = Run::new()
     ///     .prepare_iter(|_| Arc::new(AtomicU64::new(0)))
     ///     .measure_wrapper(
-    ///         |_| (), // Start measurement
-    ///         |_state| 42u64,     // Return some measurement
+    ///         |_| (),         // Start measurement
+    ///         |_state| 42u64, // Return some measurement
     ///     )
     ///     .iter(|mut args| {
     ///         let counter = args.take_iter_state();

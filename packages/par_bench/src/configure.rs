@@ -106,12 +106,10 @@ impl RunInitial {
     /// ```
     /// use par_bench::Run;
     ///
-    /// let run = Run::new()
-    ///     .prepare_thread(|_| "thread_state")
-    ///     .iter(|_| {
-    ///         // Thread state is used internally; iter gets unit type by default
-    ///         std::hint::black_box(42);
-    ///     });
+    /// let run = Run::new().prepare_thread(|_| "thread_state").iter(|_| {
+    ///     // Thread state is used internally; iter gets unit type by default
+    ///     std::hint::black_box(42);
+    /// });
     /// ```
     pub fn prepare_thread<'a, F, ThreadState>(self, f: F) -> RunWithThreadState<'a, ThreadState>
     where
@@ -139,13 +137,11 @@ impl RunInitial {
     /// ```
     /// use par_bench::Run;
     ///
-    /// let run = Run::new()
-    ///     .prepare_iter(|_| vec![1, 2, 3])
-    ///     .iter(|mut args| {
-    ///         // Use the per-iteration vector
-    ///         let iter_vec = args.take_iter_state();
-    ///         std::hint::black_box(iter_vec.len());
-    ///     });
+    /// let run = Run::new().prepare_iter(|_| vec![1, 2, 3]).iter(|mut args| {
+    ///     // Use the per-iteration vector
+    ///     let iter_vec = args.take_iter_state();
+    ///     std::hint::black_box(iter_vec.len());
+    /// });
     /// ```
     ///
     /// If you wish to specify a thread preparation function to provide state for each

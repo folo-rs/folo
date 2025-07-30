@@ -15,8 +15,9 @@ use crate::Clock;
 /// Basic elapsed time measurement:
 ///
 /// ```rust
-/// use fast_time::Clock;
 /// use std::time::Duration;
+///
+/// use fast_time::Clock;
 ///
 /// let clock = Clock::new();
 /// let start = clock.now();
@@ -48,8 +49,9 @@ use crate::Clock;
 /// Converting to standard library types:
 ///
 /// ```rust
-/// use fast_time::Clock;
 /// use std::time::Instant as StdInstant;
+///
+/// use fast_time::Clock;
 ///
 /// let clock = Clock::new();
 /// let fast_instant = clock.now();
@@ -60,7 +62,7 @@ use crate::Clock;
 /// // Convert back
 /// let converted_back: fast_time::Instant = std_instant.into();
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Instant {
     inner: std::time::Instant,
 }
@@ -74,8 +76,9 @@ impl Instant {
     /// # Examples
     ///
     /// ```rust
-    /// use fast_time::Clock;
     /// use std::time::Duration;
+    ///
+    /// use fast_time::Clock;
     ///
     /// let clock = Clock::new();
     /// let start = clock.now();
@@ -101,8 +104,9 @@ impl Instant {
     /// # Examples
     ///
     /// ```rust
-    /// use fast_time::Clock;
     /// use std::time::Duration;
+    ///
+    /// use fast_time::Clock;
     ///
     /// let clock = Clock::new();
     /// let start = clock.now();
@@ -119,8 +123,9 @@ impl Instant {
     /// Saturating behavior with reversed order:
     ///
     /// ```rust
-    /// use fast_time::Clock;
     /// use std::time::Duration;
+    ///
+    /// use fast_time::Clock;
     ///
     /// let clock = Clock::new();
     /// let instant1 = clock.now();

@@ -18,11 +18,6 @@ impl PlatformFacade {
     pub(crate) fn real() -> Self {
         Self::Real(&BUILD_TARGET_PLATFORM)
     }
-
-    #[cfg(test)]
-    pub(crate) fn from_mock(mock: MockPlatform) -> Self {
-        Self::Mock(Arc::new(mock))
-    }
 }
 
 impl Platform for PlatformFacade {

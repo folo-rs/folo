@@ -30,8 +30,9 @@ use crate::pal::{Platform, PlatformFacade, TimeSource, TimeSourceFacade};
 /// Measuring elapsed time:
 ///
 /// ```rust
-/// use fast_time::Clock;
 /// use std::time::Duration;
+///
+/// use fast_time::Clock;
 ///
 /// let clock = Clock::new();
 /// let start = clock.now();
@@ -117,9 +118,7 @@ impl Clock {
     /// use fast_time::Clock;
     ///
     /// let clock = Clock::new();
-    /// let timestamps: Vec<_> = (0..100)
-    ///     .map(|_| clock.now())
-    ///     .collect();
+    /// let timestamps: Vec<_> = (0..100).map(|_| clock.now()).collect();
     ///
     /// // All timestamps should be valid
     /// assert_eq!(timestamps.len(), 100);
