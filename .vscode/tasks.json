@@ -89,6 +89,7 @@
                 "cargo-detect-package",
                 "cpulist",
                 "events",
+                "fast_time",
                 "folo_ffi",
                 "folo_utils",
                 "linked",

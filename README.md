@@ -27,6 +27,7 @@ This is an umbrella project that covers multiple largely independent packages:
 | [`alloc_tracker`](packages/alloc_tracker/README.md)                   | Memory allocation tracking utilities for benchmarks and performance analysis                                                                |
 | [`blind_pool`](packages/blind_pool/README.md)                         | A pinned object pool that can store objects of any type                                                                                     |
 | [`events`](packages/events/README.md)                                 | High-performance signaling primitives for concurrent environments                                                                           |
+| [`fast_time`](packages/fast_time/README.md)                           | An efficient low-precision timestamp source suitable for high-frequency querying                                                            |
 | [`linked`](packages/linked/README.md) + siblings                      | Create families of linked objects that can collaborate across threads while being internally single-threaded                                |
 | [`many_cpus`](packages/many_cpus/README.md)                           | Efficiently schedule work and inspect the hardware environment on many-processor systems                                                    |
 | [`many_cpus_benchmarking`](packages/many_cpus_benchmarking/README.md) | Criterion benchmark harness to easily compare different processor configurations                                                            |
@@ -50,10 +51,10 @@ functionality. They only indirectly contribute to the Folo mission, so are liste
 
 There are also some development-only packages in this repo, which are not published:
 
-| Package                                       | Description                                                                        |
-|-----------------------------------------------|------------------------------------------------------------------------------------|
-| [`benchmarks`](packages/benchmarks)           | Random pile of benchmarks to explore relevant scenarios and guide Folo development |
-| [`testing`](packages/testing)                 | Private helpers for testing and examples in Folo packages                          |
+| Package                             | Description                                                                        |
+|-------------------------------------|------------------------------------------------------------------------------------|
+| [`benchmarks`](packages/benchmarks) | Random pile of benchmarks to explore relevant scenarios and guide Folo development |
+| [`testing`](packages/testing)       | Private helpers for testing and examples in Folo packages                          |
 
 # Development environment setup
 

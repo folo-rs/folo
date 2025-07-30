@@ -443,6 +443,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast_time"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "libc",
+ "mockall",
+ "mutants",
+ "static_assertions",
+ "windows",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
