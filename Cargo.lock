@@ -184,7 +184,7 @@ checksum = "1b8e56985ec62d17e9c1001dc89c88ecd7dc08e47eba5ec7c29c7b5eeecde967"
 
 [[package]]
 name = "blind_pool"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "criterion",
  "foldhash",
@@ -419,7 +419,7 @@ dependencies = [
 
 [[package]]
 name = "events"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "criterion",
  "futures",
@@ -956,7 +956,7 @@ version = "0.1.6"
 
 [[package]]
 name = "nm"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "criterion",
  "foldhash",
@@ -1021,7 +1021,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "opaque_pool"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "criterion",
  "mutants",
@@ -1082,7 +1082,7 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
 name = "pinned_pool"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "criterion",
  "mutants",
