@@ -66,8 +66,7 @@ impl MetricsPusher {
     /// ```
     pub fn push(&self) {
         for pair in self.push_registry.borrow().iter() {
-            let local_snapshot = pair.local.snapshot();
-            pair.global.replace(&local_snapshot);
+            pair.global.copy_from(&pair.local);
         }
     }
 

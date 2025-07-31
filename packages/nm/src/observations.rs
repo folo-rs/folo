@@ -138,24 +138,24 @@ impl ObservationBagSync {
         }
     }
 
-    /// Replaces the data in the bag with the data from the given snapshot.
-    pub(crate) fn replace(&self, data: &ObservationBagSnapshot) {
+    /// Replaces the data in the bag with the data from the local observation bag.
+    pub(crate) fn copy_from(&self, data: &ObservationBag) {
         // We cannot replace with a snapshot with different bucket magnitudes.
         assert_eq!(self.bucket_magnitudes, data.bucket_magnitudes);
 
         // Extra sanity check for maximum paranoia.
         assert!(self.bucket_counts.len() == data.bucket_counts.len());
 
-        self.count.store(data.count, SYNC_BAG_ACCESS_ORDERING);
-        self.sum.store(data.sum, SYNC_BAG_ACCESS_ORDERING);
+        self.count.store(data.count.get(), SYNC_BAG_ACCESS_ORDERING);
+        self.sum.store(data.sum.get(), SYNC_BAG_ACCESS_ORDERING);
 
-        for (i, &bucket_count) in data.bucket_counts.iter().enumerate() {
+        for (i, bucket_count) in data.bucket_counts.iter().enumerate() {
             let target = self
                 .bucket_counts
                 .get(i)
                 .expect("guarded by assertion above");
 
-            target.store(bucket_count, SYNC_BAG_ACCESS_ORDERING);
+            target.store(bucket_count.get(), SYNC_BAG_ACCESS_ORDERING);
         }
     }
 }
