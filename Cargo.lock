@@ -791,7 +791,7 @@ checksum = "1171693293099992e19cddea4e8b849964e9846f4acee11b3948bcc337be8776"
 
 [[package]]
 name = "linked"
-version = "0.2.16"
+version = "0.2.17"
 dependencies = [
  "criterion",
  "hash_hasher",
@@ -807,7 +807,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros"
-version = "0.2.16"
+version = "0.2.17"
 dependencies = [
  "linked_macros_impl",
  "proc-macro2",
@@ -815,7 +815,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros_impl"
-version = "0.2.16"
+version = "0.2.17"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -956,7 +956,7 @@ version = "0.1.6"
 
 [[package]]
 name = "nm"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "criterion",
  "foldhash",
@@ -1247,7 +1247,7 @@ checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
 
 [[package]]
 name = "region_cached"
-version = "0.1.29"
+version = "0.1.30"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1267,7 +1267,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "0.1.29"
+version = "0.1.30"
 dependencies = [
  "arc-swap",
  "axum",
