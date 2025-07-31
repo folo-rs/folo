@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 #[cfg(test)]
-use crate::pal::linux::MockBindings;
-use crate::pal::linux::{Bindings, BuildTargetBindings};
+use crate::pal::unix::MockBindings;
+use crate::pal::unix::{Bindings, BuildTargetBindings};
 
 #[derive(Clone)]
 pub(crate) enum BindingsFacade {

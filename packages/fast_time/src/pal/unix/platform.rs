@@ -1,4 +1,4 @@
-use crate::pal::linux::BindingsFacade;
+use crate::pal::unix::BindingsFacade;
 use crate::pal::{Platform, TimeSourceImpl};
 
 /// Singleton instance of `BuildTargetPlatform`, used by public API types

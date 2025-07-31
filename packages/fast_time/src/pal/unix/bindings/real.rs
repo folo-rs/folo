@@ -3,7 +3,7 @@ use std::{io, mem};
 
 use libc::{CLOCK_MONOTONIC_COARSE, timespec};
 
-use crate::pal::linux::Bindings;
+use crate::pal::unix::Bindings;
 
 /// FFI bindings that target the real operating system that the build is targeting.
 ///
