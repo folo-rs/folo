@@ -19,7 +19,7 @@ use crate::pal::{Platform, PlatformFacade, TimeSource, TimeSourceFacade};
 /// ```rust
 /// use fast_time::Clock;
 ///
-/// let clock = Clock::new();
+/// let mut clock = Clock::new();
 /// let instant1 = clock.now();
 /// let instant2 = clock.now();
 ///
@@ -34,13 +34,13 @@ use crate::pal::{Platform, PlatformFacade, TimeSource, TimeSourceFacade};
 ///
 /// use fast_time::Clock;
 ///
-/// let clock = Clock::new();
+/// let mut clock = Clock::new();
 /// let start = clock.now();
 ///
 /// // Simulate some work
 /// std::thread::sleep(Duration::from_millis(5));
 ///
-/// let elapsed = start.elapsed(&clock);
+/// let elapsed = start.elapsed(&mut clock);
 /// // Note: fast_time prioritizes efficiency over precision, so we use loose tolerance
 /// assert!(elapsed <= Duration::from_millis(50)); // Very generous upper bound
 /// ```
@@ -50,7 +50,7 @@ use crate::pal::{Platform, PlatformFacade, TimeSource, TimeSourceFacade};
 /// ```rust
 /// use fast_time::Clock;
 ///
-/// let clock = Clock::new();
+/// let mut clock = Clock::new();
 /// let mut durations = Vec::new();
 ///
 /// let start = clock.now();
@@ -80,7 +80,7 @@ impl Clock {
     /// ```rust
     /// use fast_time::Clock;
     ///
-    /// let clock = Clock::new();
+    /// let mut clock = Clock::new();
     /// let timestamp = clock.now();
     /// ```
     #[must_use]
@@ -111,7 +111,7 @@ impl Clock {
     /// ```rust
     /// use fast_time::Clock;
     ///
-    /// let clock = Clock::new();
+    /// let mut clock = Clock::new();
     /// let now = clock.now();
     /// println!("Current time: {:?}", now);
     /// ```
@@ -121,7 +121,7 @@ impl Clock {
     /// ```rust
     /// use fast_time::Clock;
     ///
-    /// let clock = Clock::new();
+    /// let mut clock = Clock::new();
     /// let timestamps: Vec<_> = (0..100).map(|_| clock.now()).collect();
     ///
     /// // All timestamps should be valid

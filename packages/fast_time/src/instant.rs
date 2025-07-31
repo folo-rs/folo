@@ -19,13 +19,13 @@ use crate::Clock;
 ///
 /// use fast_time::Clock;
 ///
-/// let clock = Clock::new();
+/// let mut clock = Clock::new();
 /// let start = clock.now();
 ///
 /// // Simulate some work
 /// std::thread::sleep(Duration::from_millis(10));
 ///
-/// let elapsed = start.elapsed(&clock);
+/// let elapsed = start.elapsed(&mut clock);
 /// // Note: fast_time prioritizes efficiency over precision
 /// assert!(elapsed <= Duration::from_secs(1)); // Generous upper bound
 /// ```
@@ -35,7 +35,7 @@ use crate::Clock;
 /// ```rust
 /// use fast_time::Clock;
 ///
-/// let clock = Clock::new();
+/// let mut clock = Clock::new();
 /// let instant1 = clock.now();
 /// let instant2 = clock.now();
 ///
@@ -53,7 +53,7 @@ use crate::Clock;
 ///
 /// use fast_time::Clock;
 ///
-/// let clock = Clock::new();
+/// let mut clock = Clock::new();
 /// let fast_instant = clock.now();
 ///
 /// // Convert to std::time::Instant
@@ -80,13 +80,13 @@ impl Instant {
     ///
     /// use fast_time::Clock;
     ///
-    /// let clock = Clock::new();
+    /// let mut clock = Clock::new();
     /// let start = clock.now();
     ///
     /// // Simulate some work
     /// std::thread::sleep(Duration::from_millis(5));
     ///
-    /// let elapsed = start.elapsed(&clock);
+    /// let elapsed = start.elapsed(&mut clock);
     /// // Note: fast_time prioritizes efficiency over precision
     /// assert!(elapsed <= Duration::from_secs(1)); // Generous upper bound
     /// ```
@@ -108,7 +108,7 @@ impl Instant {
     ///
     /// use fast_time::Clock;
     ///
-    /// let clock = Clock::new();
+    /// let mut clock = Clock::new();
     /// let start = clock.now();
     ///
     /// // Simulate some work
@@ -127,7 +127,7 @@ impl Instant {
     ///
     /// use fast_time::Clock;
     ///
-    /// let clock = Clock::new();
+    /// let mut clock = Clock::new();
     /// let instant1 = clock.now();
     /// let instant2 = clock.now();
     ///

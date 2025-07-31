@@ -30,13 +30,13 @@
 //! ```rust
 //! use fast_time::Clock;
 //!
-//! let clock = Clock::new();
+//! let mut clock = Clock::new();
 //! let start = clock.now();
 //!
 //! // Do some work...
 //! std::thread::sleep(std::time::Duration::from_millis(10));
 //!
-//! let elapsed = start.elapsed(&clock);
+//! let elapsed = start.elapsed(&mut clock);
 //! println!("Operation took: {:?}", elapsed);
 //! ```
 //!
@@ -47,7 +47,7 @@
 //!
 //! use fast_time::Clock;
 //!
-//! let clock = Clock::new();
+//! let mut clock = Clock::new();
 //! let mut timestamps = Vec::new();
 //!
 //! // Collect many timestamps rapidly
