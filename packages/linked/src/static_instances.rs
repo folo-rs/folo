@@ -299,16 +299,25 @@ thread_local! {
 }
 
 /// Clears all data stored in the static variable based linked object family system
-/// from the current thread's point of view.
+/// from the global data set.
 ///
 /// This is intended for use in tests only. It is publicly exposed because it may need to be called
 /// from integration tests and benchmarks, which cannot access private functions.
 #[cfg_attr(test, mutants::skip)] // Test/bench logic, do not waste time mutating.
 #[doc(hidden)]
-pub fn __private_clear_linked_variables() {
+pub fn __private_clear_linked_variables_global() {
     let mut global_registry = GLOBAL_REGISTRY.write().expect(ERR_POISONED_LOCK);
     global_registry.clear();
+}
 
+/// Clears all data stored in the static variable based linked object family system
+/// from the current thread's data set.
+///
+/// This is intended for use in tests only. It is publicly exposed because it may need to be called
+/// from integration tests and benchmarks, which cannot access private functions.
+#[cfg_attr(test, mutants::skip)] // Test/bench logic, do not waste time mutating.
+#[doc(hidden)]
+pub fn __private_clear_linked_variables_local() {
     LOCAL_REGISTRY.with(|local_registry| {
         local_registry.borrow_mut().clear();
     });

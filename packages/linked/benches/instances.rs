@@ -64,6 +64,8 @@ fn entrypoint(c: &mut Criterion) {
 
     let mut g = c.benchmark_group("instances::get_1000");
 
+    ::linked::__private_clear_linked_variables_global();
+
     Run::new()
         .prepare_thread(|_| LinkedVariableClearGuard::default())
         .iter(|_| {
@@ -74,6 +76,8 @@ fn entrypoint(c: &mut Criterion) {
         .execute_criterion_on(&mut one_thread, &mut g, "one-threaded");
 
     if let Some(ref mut two_threads) = two_threads {
+        ::linked::__private_clear_linked_variables_global();
+
         Run::new()
             // We have to clean up the worker thread before/after the run.
             .prepare_thread(|_| LinkedVariableClearGuard::default())
@@ -106,13 +110,13 @@ struct LinkedVariableClearGuard {}
 
 impl Default for LinkedVariableClearGuard {
     fn default() -> Self {
-        ::linked::__private_clear_linked_variables();
+        ::linked::__private_clear_linked_variables_local();
         Self {}
     }
 }
 
 impl Drop for LinkedVariableClearGuard {
     fn drop(&mut self) {
-        ::linked::__private_clear_linked_variables();
+        ::linked::__private_clear_linked_variables_local();
     }
 }
