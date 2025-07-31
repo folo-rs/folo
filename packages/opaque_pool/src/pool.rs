@@ -203,7 +203,7 @@ impl OpaquePool {
     #[cfg_attr(test, mutants::skip)] // Can be mutated to infinitely growing memory use and/or infinite loop.
     pub fn len(&self) -> usize {
         debug_assert_eq!(self.length, self.slabs.iter().map(OpaqueSlab::len).sum());
-        
+
         self.length
     }
 
@@ -531,6 +531,21 @@ impl OpaquePool {
         self.update_vacant_slot_cache(coordinates.slab_index);
     }
 
+    /// Adds a new slab to the pool and returns its index.
+    #[must_use]
+    fn add_new_slab(&mut self) -> usize {
+        self.slabs.push(OpaqueSlab::new(
+            self.item_layout,
+            DEFAULT_SLAB_CAPACITY,
+            self.drop_policy,
+        ));
+
+        self.slabs
+            .len()
+            .checked_sub(1)
+            .expect("we just pushed a slab, so this cannot overflow because len >= 1")
+    }
+
     #[must_use]
     fn index_of_slab_with_vacant_slot(&mut self) -> usize {
         if let Some(index) = self.slab_with_vacant_slot_index {
@@ -539,27 +554,20 @@ impl OpaquePool {
             return index;
         }
 
+        // If the pool is full, we know we need to add a new slab without checking.
+        if self.len() == self.capacity() {
+            let index = self.add_new_slab();
+            self.set_vacant_slot_cache(index);
+            return index;
+        }
+
         // We lookup the first slab with some free space, filling the collection from the start.
-        let index = if let Some((index, _)) = self
+        let index = self
             .slabs
             .iter()
             .enumerate()
-            .find(|(_, slab)| !slab.is_full())
-        {
-            index
-        } else {
-            // All slabs are full, so we need to expand capacity.
-            self.slabs.push(OpaqueSlab::new(
-                self.item_layout,
-                DEFAULT_SLAB_CAPACITY,
-                self.drop_policy,
-            ));
-
-            self.slabs
-                .len()
-                .checked_sub(1)
-                .expect("we just pushed a slab, so this cannot overflow because len >= 1")
-        };
+            .find_map(|(index, slab)| if !slab.is_full() { Some(index) } else { None })
+            .expect("since len() != capacity(), at least one slab must have vacant slots");
 
         // We update the cache. The caller is responsible for invalidating this when needed.
         self.set_vacant_slot_cache(index);
