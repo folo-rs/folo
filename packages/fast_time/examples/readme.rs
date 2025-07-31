@@ -6,7 +6,7 @@ fn main() {
     use fast_time::Clock;
 
     // Create a clock for efficient timestamp capture
-    let clock = Clock::new();
+    let mut clock = Clock::new();
 
     // Capture timestamps rapidly
     let start = clock.now();
@@ -14,7 +14,7 @@ fn main() {
     // Simulate some work
     simulate_work();
 
-    let elapsed = start.elapsed(&clock);
+    let elapsed = start.elapsed(&mut clock);
     println!("Work completed in: {elapsed:?}");
 
     // High-frequency timestamp collection

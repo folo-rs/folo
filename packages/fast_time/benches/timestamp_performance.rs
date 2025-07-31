@@ -13,7 +13,7 @@ fn timestamp_comparison(c: &mut Criterion) {
     let mut group = c.benchmark_group("timestamp_capture");
 
     // Setup for fast_time clock
-    let clock = Clock::new();
+    let mut clock = Clock::new();
 
     // Benchmark std::time::Instant::now()
     group.bench_with_input(BenchmarkId::new("std_instant", "now"), &(), |b, ()| {

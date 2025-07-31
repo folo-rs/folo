@@ -9,5 +9,5 @@ pub(crate) trait Platform: Debug + Send + Sync + 'static {
 
 #[cfg_attr(test, mockall::automock)]
 pub(crate) trait TimeSource: Debug + Send {
-    fn now(&self) -> Instant;
+    fn now(&mut self) -> Instant;
 }

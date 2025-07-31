@@ -91,7 +91,7 @@ impl Instant {
     /// assert!(elapsed <= Duration::from_secs(1)); // Generous upper bound
     /// ```
     #[must_use]
-    pub fn elapsed(&self, clock: &Clock) -> Duration {
+    pub fn elapsed(&self, clock: &mut Clock) -> Duration {
         clock.now().saturating_duration_since(*self)
     }
 
@@ -224,7 +224,7 @@ mod tests {
             .once()
             .return_once(move || time_source);
 
-        let clock = Clock::from_pal(platform.into());
+        let mut clock = Clock::from_pal(platform.into());
 
         let instant1 = clock.now();
         let instant2 = clock.now();
@@ -265,11 +265,11 @@ mod tests {
             .once()
             .return_once(move || time_source);
 
-        let clock = Clock::from_pal(platform.into());
+        let mut clock = Clock::from_pal(platform.into());
 
         let instant1 = clock.now();
 
-        let duration = instant1.elapsed(&clock);
+        let duration = instant1.elapsed(&mut clock);
         assert_eq!(duration, Duration::from_millis(100));
     }
 }

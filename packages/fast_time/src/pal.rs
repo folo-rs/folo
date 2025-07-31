@@ -4,10 +4,10 @@ mod facade;
 pub(crate) use abstractions::*;
 pub(crate) use facade::*;
 
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "linux")]
-pub(crate) use linux::*;
+#[cfg(unix)]
+mod unix;
+#[cfg(unix)]
+pub(crate) use unix::*;
 
 #[cfg(windows)]
 mod windows;

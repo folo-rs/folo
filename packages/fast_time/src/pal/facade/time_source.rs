@@ -26,7 +26,7 @@ impl From<MockTimeSource> for TimeSourceFacade {
 }
 
 impl TimeSource for TimeSourceFacade {
-    fn now(&self) -> Instant {
+    fn now(&mut self) -> Instant {
         match self {
             Self::Real(ts) => ts.now(),
             #[cfg(test)]

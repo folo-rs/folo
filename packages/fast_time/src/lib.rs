@@ -18,14 +18,12 @@
 //! - May not reflect explicit wall clock adjustments (e.g., NTP synchronization)
 //! - Optimized for frequency over precision
 //!
-//! # Performance comparison
-//!
-//! On an arbitrary PC, this crate offers the following efficiency improvements over the default:
+//! # Hot loop performance comparison
 //!
 //! | Platform                 | `fast_time` | `std::time` |
 //! |--------------------------|-------------|-------------|
-//! | Windows                  |        3 ns |       27 ns |
-//! | Linux                    |        7 ns |       19 ns |
+//! | Windows                  |        2 ns |       25 ns |
+//! | Linux                    |        6 ns |       19 ns |
 //!
 //! # Basic Usage
 //!
@@ -69,6 +67,13 @@
 //!     total_time
 //! );
 //! ```
+//! 
+//! # Supported platforms
+//! 
+//! This crate is tested on:
+//! 
+//! * Windows 11
+//! * Ubuntu 24
 
 mod pal;
 

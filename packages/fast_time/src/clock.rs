@@ -128,7 +128,7 @@ impl Clock {
     /// assert_eq!(timestamps.len(), 100);
     /// ```
     #[must_use]
-    pub fn now(&self) -> Instant {
+    pub fn now(&mut self) -> Instant {
         self.inner.now().into()
     }
 }
@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn now_is_approximately_now() {
-        let clock = Clock::new();
+        let mut clock = Clock::new();
         let instant = clock.now();
 
         let rust_now = std::time::Instant::now();
@@ -168,13 +168,13 @@ mod tests {
 
     #[test]
     fn consecutive_instants_are_approximately_equal() {
-        let clock = Clock::new();
+        let mut clock = Clock::new();
 
         let instant1 = clock.now();
         let instant2 = clock.now();
 
-        assert!(instant1.elapsed(&clock).as_millis() < 100);
-        assert!(instant2.elapsed(&clock).as_millis() < 100);
+        assert!(instant1.elapsed(&mut clock).as_millis() < 100);
+        assert!(instant2.elapsed(&mut clock).as_millis() < 100);
 
         let elapsed = instant2.saturating_duration_since(instant1);
         assert!(elapsed.as_millis() < 100);
