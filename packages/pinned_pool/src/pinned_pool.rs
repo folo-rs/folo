@@ -1,4 +1,4 @@
-use std::mem::MaybeUninit;
+use std::mem::{MaybeUninit, size_of};
 use std::pin::Pin;
 
 use num_integer::Integer;
@@ -67,6 +67,10 @@ pub struct PinnedPool<T> {
     slab_with_vacant_slot_index: Option<usize>,
 
     drop_policy: DropPolicy,
+
+    /// Number of items currently in the pool. We track this explicitly to avoid repeatedly
+    /// summing across slabs when calculating the length.
+    length: usize,
 }
 
 /// A key that can be used to reference an item in a [`PinnedPool`].
@@ -137,6 +141,7 @@ impl<T> PinnedPool<T> {
             slabs: Vec::new(),
             drop_policy,
             slab_with_vacant_slot_index: None,
+            length: 0,
         }
     }
 
@@ -213,7 +218,9 @@ impl<T> PinnedPool<T> {
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Can be mutated to infinitely growing memory use.
     pub fn len(&self) -> usize {
-        self.slabs.iter().map(PinnedSlab::len).sum()
+        debug_assert_eq!(self.length, self.slabs.iter().map(PinnedSlab::len).sum());
+        
+        self.length
     }
 
     /// The number of items the pool can accommodate without additional resource allocation.
@@ -503,6 +510,7 @@ impl<T> PinnedPool<T> {
         PinnedPoolInserter {
             slab_inserter,
             slab_index,
+            pool_length: &mut self.length,
         }
     }
 
@@ -572,6 +580,12 @@ impl<T> PinnedPool<T> {
         };
 
         slab.remove(index.index_in_slab);
+
+        // Update our tracked length since we just removed an item.
+        self.length = self
+            .length
+            .checked_sub(1)
+            .expect("length underflow: cannot remove more items than exist in pool");
 
         // There is now a vacant slot in this slab! We may want to remember this for fast inserts.
         // We try to remember the lowest index of a slab with a vacant slot, so we
@@ -697,6 +711,7 @@ impl<T> Default for PinnedPool<T> {
 pub struct PinnedPoolInserter<'s, T> {
     slab_inserter: PinnedSlabInserter<'s, T, SLAB_CAPACITY>,
     slab_index: usize,
+    pool_length: &'s mut usize,
 }
 
 impl<'s, T> PinnedPoolInserter<'s, T> {
@@ -726,7 +741,12 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
     where
         's: 'v,
     {
-        self.slab_inserter.insert(value)
+        let result = self.slab_inserter.insert(value);
+        *self.pool_length = self
+            .pool_length
+            .checked_add(1)
+            .expect("length overflow: pool cannot contain more items than usize::MAX");
+        result
     }
 
     /// Inserts an item and returns a pinned exclusive reference to it.
@@ -755,7 +775,12 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
     where
         's: 'v,
     {
-        self.slab_inserter.insert_mut(value)
+        let result = self.slab_inserter.insert_mut(value);
+        *self.pool_length = self
+            .pool_length
+            .checked_add(1)
+            .expect("length overflow: pool cannot contain more items than usize::MAX");
+        result
     }
 
     /// Inserts an item using in-place initialization and returns a pinned reference to it.
@@ -798,7 +823,12 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
         's: 'v,
     {
         // SAFETY: Caller guarantees that the closure properly initializes the value.
-        unsafe { self.slab_inserter.insert_with(f) }
+        let result = unsafe { self.slab_inserter.insert_with(f) };
+        *self.pool_length = self
+            .pool_length
+            .checked_add(1)
+            .expect("length overflow: pool cannot contain more items than usize::MAX");
+        result
     }
 
     /// Inserts an item using in-place initialization and returns a pinned exclusive reference to it.
@@ -842,7 +872,12 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
         's: 'v,
     {
         // SAFETY: Caller guarantees that the closure properly initializes the value.
-        unsafe { self.slab_inserter.insert_with_mut(f) }
+        let result = unsafe { self.slab_inserter.insert_with_mut(f) };
+        *self.pool_length = self
+            .pool_length
+            .checked_add(1)
+            .expect("length overflow: pool cannot contain more items than usize::MAX");
+        result
     }
 
     /// The key of the item that will be inserted by this inserter.

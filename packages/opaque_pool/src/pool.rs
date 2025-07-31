@@ -84,6 +84,10 @@ pub struct OpaquePool {
 
     /// Drop policy that determines how the pool handles remaining items when dropped.
     drop_policy: DropPolicy,
+
+    /// Number of items currently in the pool. We track this explicitly to avoid repeatedly
+    /// summing across slabs when calculating the length.
+    length: usize,
 }
 
 /// Today, we assemble the pool from memory slabs, each containing a fixed number of memory blocks.
@@ -147,6 +151,7 @@ impl OpaquePool {
             slabs: Vec::new(),
             slab_with_vacant_slot_index: None,
             drop_policy,
+            length: 0,
         }
     }
 
@@ -197,7 +202,9 @@ impl OpaquePool {
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Can be mutated to infinitely growing memory use and/or infinite loop.
     pub fn len(&self) -> usize {
-        self.slabs.iter().map(OpaqueSlab::len).sum()
+        debug_assert_eq!(self.length, self.slabs.iter().map(OpaqueSlab::len).sum());
+        
+        self.length
     }
 
     /// The number of values the pool can accommodate without additional resource allocation.
@@ -444,6 +451,12 @@ impl OpaquePool {
         let pooled = unsafe { slab.insert(value) };
         let coordinates = ItemCoordinates::from_parts(slab_index, pooled.index());
 
+        // Update our tracked length since we just inserted an item.
+        self.length = self
+            .length
+            .checked_add(1)
+            .expect("length overflow: pool cannot contain more items than usize::MAX");
+
         // The pool itself does not care about the type T but for the convenience of the caller
         // we imbue the Pooled with the type information, to reduce required casting by caller.
         Pooled {
@@ -505,6 +518,12 @@ impl OpaquePool {
         // In principle, we could return the value here if `T: Unpin` but there is no need
         // for this functionality at present, so we do not implement it to reduce complexity.
         slab.remove(coordinates.index_in_slab);
+
+        // Update our tracked length since we just removed an item.
+        self.length = self
+            .length
+            .checked_sub(1)
+            .expect("length underflow: cannot remove more items than exist in pool");
 
         // There is now a vacant slot in this slab! We may want to remember this for fast insertions.
         // We try to remember the lowest index of a slab with a vacant slot, so we
