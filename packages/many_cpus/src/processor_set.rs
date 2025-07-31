@@ -332,6 +332,13 @@ impl From<NonEmpty<Processor>> for ProcessorSet {
     }
 }
 
+impl AsRef<Self> for ProcessorSet {
+    #[inline]
+    fn as_ref(&self) -> &Self {
+        self
+    }
+}
+
 impl Display for ProcessorSet {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

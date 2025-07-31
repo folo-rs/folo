@@ -27,7 +27,7 @@ criterion_main!(benches);
 type Payload = u128;
 
 fn entrypoint(c: &mut Criterion) {
-    let mut one_thread = ThreadPool::new(&ProcessorSet::single());
+    let mut one_thread = ThreadPool::new(ProcessorSet::single());
 
     let mut group = c.benchmark_group("events_overhead_comparison");
 

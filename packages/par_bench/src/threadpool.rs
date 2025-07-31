@@ -59,7 +59,9 @@ impl ThreadPool {
     /// }
     /// ```
     #[must_use]
-    pub fn new(processors: &ProcessorSet) -> Self {
+    pub fn new(processors: impl AsRef<ProcessorSet>) -> Self {
+        let processors = processors.as_ref();
+
         let (txs, rxs): (Vec<_>, Vec<_>) = iter::repeat_with(mpsc::channel)
             .take(processors.len())
             .unzip();
@@ -219,7 +221,7 @@ mod tests {
         let expected_default = ProcessorSet::default();
         let expected_thread_count = expected_default.len();
 
-        let mut pool = ThreadPool::new(&ProcessorSet::default());
+        let mut pool = ThreadPool::new(ProcessorSet::default());
 
         assert_eq!(pool.thread_count().get(), expected_thread_count);
 

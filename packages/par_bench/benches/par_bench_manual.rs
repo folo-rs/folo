@@ -21,13 +21,13 @@ criterion_main!(benches);
 fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("atomic_increments");
 
-    let mut single_thread_pool = ThreadPool::new(&ProcessorSet::single());
+    let mut single_thread_pool = ThreadPool::new(ProcessorSet::single());
 
     group.bench_function("single_thread", |b| {
         b.iter_custom(|iters| black_box(measure_atomic_increments(&mut single_thread_pool, iters)));
     });
 
-    let mut multi_thread_pool = ThreadPool::new(&ProcessorSet::default());
+    let mut multi_thread_pool = ThreadPool::new(ProcessorSet::default());
 
     group.bench_function("multi_thread", |b| {
         b.iter_custom(|iters| black_box(measure_atomic_increments(&mut multi_thread_pool, iters)));

@@ -291,9 +291,6 @@ mod tests {
     use many_cpus::ProcessorSet;
     use new_zealand::nz;
 
-    static ONE_PROCESSOR: LazyLock<ProcessorSet> =
-        LazyLock::new(|| ProcessorSet::builder().take(nz!(1)).unwrap());
-
     static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> =
         LazyLock::new(|| ProcessorSet::builder().take(nz!(2)));
 
@@ -491,7 +488,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn one_processor_two_groups_panics() {
-        let mut pool = ThreadPool::new(&ONE_PROCESSOR);
+        let mut pool = ThreadPool::new(ProcessorSet::single());
 
         let _result = Run::new()
             .groups(nz!(2))
@@ -501,7 +498,7 @@ mod tests {
 
     #[test]
     fn state_flow_from_thread_to_iteration_to_cleanup() {
-        let mut pool = ThreadPool::new(&ONE_PROCESSOR);
+        let mut pool = ThreadPool::new(ProcessorSet::single());
         let cleanup_states = Arc::new(Mutex::new(Vec::new()));
 
         let _result = Run::new()
@@ -526,7 +523,7 @@ mod tests {
 
     #[test]
     fn measurement_wrapper_called_before_and_after_timed_execution() {
-        let mut pool = ThreadPool::new(&ONE_PROCESSOR);
+        let mut pool = ThreadPool::new(ProcessorSet::single());
         let events = Arc::new(Mutex::new(Vec::new()));
 
         let result = Run::new()
@@ -593,7 +590,7 @@ mod tests {
 
     #[test]
     fn cleanup_executed_after_measurement_wrapper_end() {
-        let mut pool = ThreadPool::new(&ONE_PROCESSOR);
+        let mut pool = ThreadPool::new(ProcessorSet::single());
         let events = Arc::new(Mutex::new(Vec::new()));
 
         let _result = Run::new()
@@ -701,7 +698,7 @@ mod tests {
 
     #[test]
     fn call_counts_one_processor() {
-        let mut pool = ThreadPool::new(&ONE_PROCESSOR);
+        let mut pool = ThreadPool::new(ProcessorSet::single());
         test_call_counts(&mut pool, nz!(1));
     }
 

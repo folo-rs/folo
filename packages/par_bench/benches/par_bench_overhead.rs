@@ -19,7 +19,7 @@ criterion_group!(benches, par_bench_overhead);
 criterion_main!(benches);
 
 fn par_bench_overhead(c: &mut Criterion) {
-    let mut thread_pool = ThreadPool::new(&ProcessorSet::default());
+    let mut thread_pool = ThreadPool::new(ProcessorSet::default());
 
     let mut group = c.benchmark_group("overhead");
 

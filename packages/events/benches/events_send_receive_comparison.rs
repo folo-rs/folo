@@ -49,7 +49,7 @@ static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> =
     LazyLock::new(|| ProcessorSet::builder().take(nz!(2)));
 
 fn entrypoint(c: &mut Criterion) {
-    let mut one_thread = ThreadPool::new(&ProcessorSet::single());
+    let mut one_thread = ThreadPool::new(ProcessorSet::single());
 
     let mut group = c.benchmark_group("events_comparison_st");
 

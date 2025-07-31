@@ -48,7 +48,7 @@ fn main() {
     println!();
 
     // Create a multi-threaded pool using all available processors.
-    let mut multi_thread_pool = ThreadPool::new(&ProcessorSet::default());
+    let mut multi_thread_pool = ThreadPool::new(ProcessorSet::default());
     println!(
         "Running {} iterations on {} threads with tracking enabled",
         ITERATIONS,

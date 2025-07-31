@@ -19,7 +19,7 @@ use many_cpus::ProcessorSet;
 use par_bench::{Run, ThreadPool};
 
 fn main() {
-    let mut pool = ThreadPool::new(&ProcessorSet::default());
+    let mut pool = ThreadPool::new(ProcessorSet::default());
 
     // Local data that we want to reference in our benchmark
     let local_data = vec![1, 2, 3, 4, 5];

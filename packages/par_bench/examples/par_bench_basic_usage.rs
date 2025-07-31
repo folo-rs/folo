@@ -21,8 +21,8 @@ fn main() {
     println!("single-threaded and multi-threaded atomic operations.");
     println!();
 
-    let mut single_thread_pool = ThreadPool::new(&ProcessorSet::single());
-    let mut multi_thread_pool = ThreadPool::new(&ProcessorSet::default());
+    let mut single_thread_pool = ThreadPool::new(ProcessorSet::single());
+    let mut multi_thread_pool = ThreadPool::new(ProcessorSet::default());
 
     println!(
         "Running {} iterations on 1 thread vs {} threads",
