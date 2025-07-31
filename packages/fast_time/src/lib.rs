@@ -67,11 +67,11 @@
 //!     total_time
 //! );
 //! ```
-//! 
+//!
 //! # Supported platforms
-//! 
+//!
 //! This crate is tested on:
-//! 
+//!
 //! * Windows 11
 //! * Ubuntu 24
 
