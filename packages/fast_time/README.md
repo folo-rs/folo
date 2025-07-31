@@ -25,7 +25,7 @@ The `fast_time` crate provides a `Clock` that can efficiently capture timestamps
 use fast_time::Clock;
 
 // Create a clock for efficient timestamp capture
-let clock = Clock::new();
+let mut clock = Clock::new();
 
 // Capture timestamps rapidly
 let start = clock.now();
@@ -33,7 +33,7 @@ let start = clock.now();
 // Simulate some work
 simulate_work();
 
-let elapsed = start.elapsed(&clock);
+let elapsed = start.elapsed(&mut clock);
 println!("Work completed in: {elapsed:?}");
 
 // High-frequency timestamp collection
