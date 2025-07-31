@@ -67,6 +67,12 @@ mutants:
 
         $args += "-e"
         $args += "linux"
+
+        $args += "-e"
+        $args += (Escape-Wildcards "**/*unix.rs")
+
+        $args += "-e"
+        $args += "unix"
     }
 
     # Heuristically, 4 processors per job seems to work out well to achieve high efficiency.
