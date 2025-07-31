@@ -18,7 +18,7 @@ type TestItem = usize;
 const TEST_VALUE: TestItem = 1024;
 
 fn entrypoint(c: &mut Criterion) {
-    let mut group = c.benchmark_group("dp_fill");
+    let mut group = c.benchmark_group("op_fill");
 
     group.bench_function("empty", |b| {
         b.iter(|| {
@@ -81,7 +81,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.finish();
 
-    let mut group = c.benchmark_group("dp_read");
+    let mut group = c.benchmark_group("op_read");
 
     group.bench_function("one", |b| {
         b.iter(|| {
@@ -118,7 +118,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.finish();
 
-    let mut group = c.benchmark_group("dp_insert");
+    let mut group = c.benchmark_group("op_insert");
 
     group.bench_function("single_insert", |b| {
         b.iter(|| {
@@ -146,7 +146,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.finish();
 
-    let mut group = c.benchmark_group("dp_remove");
+    let mut group = c.benchmark_group("op_remove");
 
     group.bench_function("single_remove", |b| {
         let layout = Layout::new::<TestItem>();
