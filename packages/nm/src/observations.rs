@@ -120,10 +120,10 @@ impl ObservationBagSync {
         );
 
         // We cannot merge bags with different bucket magnitudes.
-        assert_eq!(self.bucket_magnitudes, other.bucket_magnitudes);
+        debug_assert_eq!(self.bucket_magnitudes, other.bucket_magnitudes);
 
         // Extra sanity check for maximum paranoia.
-        assert!(self.bucket_counts.len() == other.bucket_counts.len());
+        debug_assert!(self.bucket_counts.len() == other.bucket_counts.len());
 
         for (i, other_bucket_count) in other.bucket_counts.iter().enumerate() {
             let target = self
@@ -141,10 +141,10 @@ impl ObservationBagSync {
     /// Replaces the data in the bag with the data from the local observation bag.
     pub(crate) fn copy_from(&self, data: &ObservationBag) {
         // We cannot replace with a snapshot with different bucket magnitudes.
-        assert_eq!(self.bucket_magnitudes, data.bucket_magnitudes);
+        debug_assert_eq!(self.bucket_magnitudes, data.bucket_magnitudes);
 
         // Extra sanity check for maximum paranoia.
-        assert!(self.bucket_counts.len() == data.bucket_counts.len());
+        debug_assert!(self.bucket_counts.len() == data.bucket_counts.len());
 
         self.count.store(data.count.get(), SYNC_BAG_ACCESS_ORDERING);
         self.sum.store(data.sum.get(), SYNC_BAG_ACCESS_ORDERING);
