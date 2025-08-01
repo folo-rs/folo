@@ -210,6 +210,72 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
+    let allocs_op = allocs.operation("len");
+    group.bench_function("len", |b| {
+        b.iter_custom(|iters| {
+            let mut pool = BlindPool::new();
+
+            // Pre-populate pool with 10k items.
+            for _ in 0..10_000 {
+                _ = pool.insert(TEST_VALUE);
+            }
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for _ in 0..iters {
+                _ = black_box(pool.len());
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("is_empty");
+    group.bench_function("is_empty", |b| {
+        b.iter_custom(|iters| {
+            let mut pool = BlindPool::new();
+
+            // Pre-populate pool with 10k items.
+            for _ in 0..10_000 {
+                _ = pool.insert(TEST_VALUE);
+            }
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for _ in 0..iters {
+                _ = black_box(pool.is_empty());
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("capacity_of");
+    group.bench_function("capacity_of", |b| {
+        b.iter_custom(|iters| {
+            let mut pool = BlindPool::new();
+
+            // Pre-populate pool with 10k items.
+            for _ in 0..10_000 {
+                _ = pool.insert(TEST_VALUE);
+            }
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for _ in 0..iters {
+                _ = black_box(pool.capacity_of::<TestItem>());
+            }
+
+            start.elapsed()
+        });
+    });
+
     let allocs_op = allocs.operation("read_one_two_types_same_layout");
     group.bench_function("read_one_two_types_same_layout", |b| {
         b.iter_custom(|iters| {
