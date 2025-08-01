@@ -334,6 +334,7 @@ impl From<NonEmpty<Processor>> for ProcessorSet {
 
 impl AsRef<Self> for ProcessorSet {
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // Trivial.
     fn as_ref(&self) -> &Self {
         self
     }
