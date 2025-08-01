@@ -1005,10 +1005,12 @@ impl<'a, T> Iterator for PinnedPoolIterator<'a, T> {
     type Item = Pin<&'a T>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(slab_iterator) = &mut self.slab_iterator {
-            if let Some(item) = slab_iterator.next() {
-                return Some(item);
-            }
+        let Some(slab_iterator) = &mut self.slab_iterator else {
+            return None;
+        };
+
+        if let Some(item) = slab_iterator.next() {
+            return Some(item);
         }
 
         // Move to the next slab if the current one is exhausted.
@@ -1888,5 +1890,95 @@ mod tests {
         assert_eq!(pool.len(), 1);
 
         pool.remove(key);
+    }
+
+    #[test]
+    fn iter_empty_pool() {
+        let pool = PinnedPool::<u32>::new();
+        let mut iter = pool.iter();
+
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn iter_single_item() {
+        let mut pool = PinnedPool::<String>::new();
+        _ = pool.insert("hello".to_string());
+
+        let items: Vec<_> = pool.iter().collect();
+        assert_eq!(items.len(), 1);
+        assert_eq!(&*items[0], "hello");
+    }
+
+    #[test]
+    fn iter_multiple_items() {
+        let mut pool = PinnedPool::<i32>::new();
+        let _key1 = pool.insert(10);
+        let _key2 = pool.insert(20);
+        let _key3 = pool.insert(30);
+
+        let items: Vec<_> = pool.iter().map(|item| *item).collect();
+        assert_eq!(items.len(), 3);
+
+        // Items should be iterated in insertion order.
+        // We rely on white-box knowledge here to know that it inserts into the first
+        // available slot - there is no API guarantee and this may conceivably change.
+        assert!(items.contains(&10));
+        assert!(items.contains(&20));
+        assert!(items.contains(&30));
+    }
+
+    #[test]
+    fn iter_with_gaps() {
+        let mut pool = PinnedPool::<u64>::new();
+        let _key1 = pool.insert(100);
+        let key2 = pool.insert(200);
+        let _key3 = pool.insert(300);
+
+        // Remove middle item to create a gap
+        pool.remove(key2);
+
+        let items: Vec<_> = pool.iter().map(|item| *item).collect();
+        assert_eq!(items.len(), 2);
+        assert!(items.contains(&100));
+        assert!(items.contains(&300));
+        assert!(!items.contains(&200));
+    }
+
+    #[test]
+    fn iter_across_multiple_slabs() {
+        const COUNT: usize = SLAB_CAPACITY * 2;
+
+        let mut pool = PinnedPool::<usize>::new();
+
+        // Insert enough items to span multiple slabs
+        for i in 0..COUNT {
+            _ = pool.insert(i);
+        }
+
+        let items: Vec<_> = pool.iter().map(|item| *item).collect();
+        assert_eq!(items.len(), COUNT);
+
+        // Verify all items are present
+        for i in 0..COUNT {
+            assert!(items.contains(&i));
+        }
+    }
+
+    #[test]
+    fn iter_multiple_iterators() {
+        let mut slab = PinnedSlab::<u8, 3>::new(DropPolicy::MayDropItems);
+        let _idx1 = slab.insert(1);
+        let _idx2 = slab.insert(2);
+
+        // Should be able to create multiple iterators
+        let iter1 = slab.iter();
+        let iter2 = slab.iter();
+
+        let items1: Vec<_> = iter1.map(|item| *item).collect();
+        let items2: Vec<_> = iter2.map(|item| *item).collect();
+
+        assert_eq!(items1, items2);
+        assert_eq!(items1, vec![1, 2]);
     }
 }

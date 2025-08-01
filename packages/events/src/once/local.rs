@@ -805,6 +805,64 @@ mod tests {
         ));
     }
 
+    #[cfg(debug_assertions)]
+    #[test]
+    fn inspect_awaiter_no_awaiter() {
+        let event = LocalOnceEvent::<i32>::new();
+        let (_sender, _receiver) = event.bind_by_ref();
+
+        let mut called = false;
+        event.inspect_awaiter(|backtrace| {
+            called = true;
+            assert!(backtrace.is_none());
+        });
+
+        assert!(called);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn inspect_awaiter_with_awaiter() {
+        let event = LocalOnceEvent::<String>::new();
+        let (_sender, receiver) = event.bind_by_ref();
+
+        // Start polling to create an awaiter
+        let mut context = task::Context::from_waker(noop_waker_ref());
+        let mut pinned_receiver = pin!(receiver);
+
+        drop(pinned_receiver.as_mut().poll(&mut context));
+
+        let mut called = false;
+        event.inspect_awaiter(|backtrace| {
+            called = true;
+            // Should have backtrace when someone is awaiting
+            assert!(backtrace.is_some());
+        });
+
+        assert!(called);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn inspect_awaiter_after_completion() {
+        let event = LocalOnceEvent::<i32>::new();
+        let (sender, receiver) = event.bind_by_ref();
+
+        // Send value to complete the event
+        sender.send(42);
+
+        // Drop receiver to ensure no awaiter
+        _ = receiver;
+
+        let mut called = false;
+        event.inspect_awaiter(|backtrace| {
+            called = true;
+            assert!(backtrace.is_none());
+        });
+
+        assert!(called);
+    }
+
     #[test]
     fn thread_safety() {
         // Nothing is Send or Sync - everything is stuck on one thread.

@@ -579,7 +579,7 @@ impl<'s, T, const CAPACITY: usize> Iterator for PinnedSlabIterator<'s, T, CAPACI
                 .checked_add(1)
                 .expect("guarded by capacity < usize::MAX in slab ctor");
 
-            let entry = self.slab.entry(self.current_index);
+            let entry = self.slab.entry(entry_index);
 
             if let Entry::Occupied { .. } = entry {
                 return Some(self.slab.get(entry_index));
@@ -592,6 +592,12 @@ impl<'s, T, const CAPACITY: usize> Iterator for PinnedSlabIterator<'s, T, CAPACI
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::indexing_slicing,
+        clippy::cast_possible_truncation,
+        reason = "we do not need to worry about these things when writing test code"
+    )]
+
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::sync::{Arc, Mutex};
@@ -960,5 +966,90 @@ mod tests {
         let retrieved = slab.get(index);
         assert_eq!(retrieved.value, 42);
         assert_eq!(slab.len(), 1);
+    }
+
+    #[test]
+    fn iter_empty_slab() {
+        let slab = PinnedSlab::<u32, 3>::new(DropPolicy::MayDropItems);
+        let mut iter = slab.iter();
+
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn iter_single_item() {
+        let mut slab = PinnedSlab::<String, 3>::new(DropPolicy::MayDropItems);
+        let _index = slab.insert("hello".to_string());
+
+        let items: Vec<_> = slab.iter().collect();
+        assert_eq!(items.len(), 1);
+        assert_eq!(&*items[0], "hello");
+    }
+
+    #[test]
+    fn iter_multiple_items() {
+        let mut slab = PinnedSlab::<i32, 5>::new(DropPolicy::MayDropItems);
+        let _idx1 = slab.insert(10);
+        let _idx2 = slab.insert(20);
+        let _idx3 = slab.insert(30);
+
+        let items: Vec<_> = slab.iter().map(|item| *item).collect();
+        assert_eq!(items.len(), 3);
+
+        // Items should be iterated in insertion order
+        assert_eq!(items[0], 10);
+        assert_eq!(items[1], 20);
+        assert_eq!(items[2], 30);
+    }
+
+    #[test]
+    fn iter_with_gaps() {
+        let mut slab = PinnedSlab::<u64, 5>::new(DropPolicy::MayDropItems);
+        let _idx1 = slab.insert(100);
+        let idx2 = slab.insert(200);
+        let idx3 = slab.insert(300);
+        let _idx4 = slab.insert(400);
+
+        // Remove middle items to create gaps
+        slab.remove(idx2);
+        slab.remove(idx3);
+
+        let items: Vec<_> = slab.iter().map(|item| *item).collect();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0], 100);
+        assert_eq!(items[1], 400);
+    }
+
+    #[test]
+    fn iter_full_slab() {
+        let mut slab = PinnedSlab::<usize, 3>::new(DropPolicy::MayDropItems);
+        let _idx1 = slab.insert(1);
+        let _idx2 = slab.insert(2);
+        let _idx3 = slab.insert(3);
+
+        assert!(slab.is_full());
+
+        let items: Vec<_> = slab.iter().map(|item| *item).collect();
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0], 1);
+        assert_eq!(items[1], 2);
+        assert_eq!(items[2], 3);
+    }
+
+    #[test]
+    fn iter_multiple_iterators() {
+        let mut slab = PinnedSlab::<u8, 3>::new(DropPolicy::MayDropItems);
+        let _idx1 = slab.insert(1);
+        let _idx2 = slab.insert(2);
+
+        // Should be able to create multiple iterators
+        let iter1 = slab.iter();
+        let iter2 = slab.iter();
+
+        let items1: Vec<_> = iter1.map(|item| *item).collect();
+        let items2: Vec<_> = iter2.map(|item| *item).collect();
+
+        assert_eq!(items1, items2);
+        assert_eq!(items1, vec![1, 2]);
     }
 }
