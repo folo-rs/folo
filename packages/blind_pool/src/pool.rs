@@ -1,8 +1,7 @@
 use std::alloc::Layout;
-use std::collections::HashMap;
 use std::ptr::NonNull;
 
-use foldhash::fast::FixedState;
+use foldhash::{HashMap, HashMapExt};
 use opaque_pool::{DropPolicy, OpaquePool, Pooled as OpaquePooled};
 
 use crate::BlindPoolBuilder;
@@ -52,7 +51,7 @@ use crate::BlindPoolBuilder;
 pub struct BlindPool {
     /// Internal pools, one for each unique memory layout encountered.
     /// We use foldhash for better performance with small hash tables.
-    pools: HashMap<Layout, OpaquePool, FixedState>,
+    pools: HashMap<Layout, OpaquePool>,
 
     /// Drop policy that determines how the pool handles remaining items when dropped.
     drop_policy: DropPolicy,
@@ -102,7 +101,7 @@ impl BlindPool {
     #[must_use]
     pub(crate) fn new_inner(drop_policy: DropPolicy) -> Self {
         Self {
-            pools: HashMap::with_hasher(FixedState::default()),
+            pools: HashMap::new(),
             drop_policy,
         }
     }

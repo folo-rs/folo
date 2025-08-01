@@ -14,8 +14,8 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
-opaque_pool = { workspace = true }
 foldhash = { workspace = true }
+opaque_pool = { workspace = true }
 
 [dev-dependencies]
 alloc_tracker = { path = "../alloc_tracker" }
