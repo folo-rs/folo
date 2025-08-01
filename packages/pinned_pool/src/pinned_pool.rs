@@ -1967,18 +1967,19 @@ mod tests {
 
     #[test]
     fn iter_multiple_iterators() {
-        let mut slab = PinnedSlab::<u8, 3>::new(DropPolicy::MayDropItems);
-        let _idx1 = slab.insert(1);
-        let _idx2 = slab.insert(2);
+        let mut pool = PinnedPool::<u8>::new();
+        _ = pool.insert(1);
+        _ = pool.insert(2);
+        _ = pool.insert(3);
 
         // Should be able to create multiple iterators
-        let iter1 = slab.iter();
-        let iter2 = slab.iter();
+        let iter1 = pool.iter();
+        let iter2 = pool.iter();
 
         let items1: Vec<_> = iter1.map(|item| *item).collect();
         let items2: Vec<_> = iter2.map(|item| *item).collect();
 
         assert_eq!(items1, items2);
-        assert_eq!(items1, vec![1, 2]);
+        assert_eq!(items1, vec![1, 2, 3]);
     }
 }
