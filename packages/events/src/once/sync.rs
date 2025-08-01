@@ -387,7 +387,7 @@ where
         }
     }
 
-    fn sender_dropped(&self) {
+    pub(crate) fn sender_dropped(&self) {
         let mut state = self.state.lock().expect(ERR_POISONED_LOCK);
 
         match &*state {

@@ -387,7 +387,7 @@ impl<T> LocalOnceEvent<T> {
         }
     }
 
-    fn sender_dropped(&self) {
+    pub(crate) fn sender_dropped(&self) {
         // SAFETY: See comments on field.
         let state = unsafe { &mut *self.state.get() };
 

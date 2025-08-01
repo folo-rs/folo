@@ -540,6 +540,10 @@ where
         // SAFETY: See comments on field.
         let event = unsafe { self.event.expect("only possible on double drop").as_ref() };
 
+        // Signal that the sender was dropped before handling reference counting.
+        // This ensures receivers get Disconnected errors if the sender is dropped without sending.
+        event.sender_dropped();
+
         if event.dec_ref() {
             // The event is going to be destroyed, so we cannot reference it anymore.
             self.event = None;
@@ -664,6 +668,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::pin::pin;
+
+    use futures::task::noop_waker_ref;
     use static_assertions::{assert_impl_all, assert_not_impl_any};
     use testing::with_watchdog;
 
@@ -1132,6 +1139,83 @@ mod tests {
         drop(receiver2);
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn pooled_event_receiver_gets_disconnected_when_sender_dropped() {
+        with_watchdog(|| {
+            futures::executor::block_on(async {
+                let pool = OnceEventPool::<i32>::new();
+                let (sender, receiver) = pool.bind_by_ref();
+
+                // Drop the sender without sending anything
+                drop(sender);
+
+                // Receiver should get a Disconnected error
+                let result = receiver.await;
+                assert!(result.is_err());
+                assert!(matches!(result, Err(Disconnected)));
+            });
+        });
+    }
+
+    #[test]
+    fn pooled_event_by_arc_receiver_gets_disconnected_when_sender_dropped() {
+        with_watchdog(|| {
+            futures::executor::block_on(async {
+                let pool = Arc::new(OnceEventPool::<i32>::new());
+                let (sender, receiver) = pool.bind_by_arc();
+
+                // Drop the sender without sending anything
+                drop(sender);
+
+                // Receiver should get a Disconnected error
+                let result = receiver.await;
+                assert!(result.is_err());
+                assert!(matches!(result, Err(Disconnected)));
+            });
+        });
+    }
+
+    #[test]
+    fn pooled_event_by_ptr_receiver_gets_disconnected_when_sender_dropped() {
+        with_watchdog(|| {
+            futures::executor::block_on(async {
+                let pool = Box::pin(OnceEventPool::<i32>::new());
+
+                // SAFETY: We ensure the pool outlives the sender and receiver
+                let (sender, receiver) = unsafe { pool.as_ref().bind_by_ptr() };
+
+                // Drop the sender without sending anything
+                drop(sender);
+
+                // Receiver should get a Disconnected error
+                let result = receiver.await;
+                assert!(result.is_err());
+                assert!(matches!(result, Err(Disconnected)));
+            });
+        });
+    }
+
+    #[test]
+    fn pooled_sender_dropped_when_awaiting_signals_disconnected() {
+        let pool = OnceEventPool::<i32>::new();
+        let (sender, receiver) = pool.bind_by_ref();
+
+        let mut receiver = pin!(receiver);
+        let mut context = task::Context::from_waker(noop_waker_ref());
+        assert!(matches!(
+            receiver.as_mut().poll(&mut context),
+            task::Poll::Pending
+        ));
+
+        drop(sender);
+
+        let mut context = task::Context::from_waker(noop_waker_ref());
+        assert!(matches!(
+            receiver.as_mut().poll(&mut context),
+            task::Poll::Ready(Err(Disconnected))
+        ));
     }
 
     #[test]
