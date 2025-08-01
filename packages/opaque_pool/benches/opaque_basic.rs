@@ -44,14 +44,42 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let allocs_op = allocs.operation("insert_one");
-    group.bench_function("insert_one", |b| {
+    let allocs_op = allocs.operation("insert_first");
+    group.bench_function("insert_first", |b| {
         b.iter_custom(|iters| {
             let layout = Layout::new::<TestItem>();
 
             let mut pools = iter::repeat_with(|| OpaquePool::builder().layout(layout).build())
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for pool in &mut pools {
+                // SAFETY: The layout of TestItem matches the pool's layout.
+                _ = black_box(unsafe { pool.insert(black_box(TEST_VALUE)) });
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("insert_second");
+    group.bench_function("insert_second", |b| {
+        b.iter_custom(|iters| {
+            let layout = Layout::new::<TestItem>();
+
+            let mut pools = iter::repeat_with(|| OpaquePool::builder().layout(layout).build())
+                .take(usize::try_from(iters).unwrap())
+                .collect::<Vec<_>>();
+
+            // Pre-warm each pool with one item.
+            for pool in &mut pools {
+                // SAFETY: The layout of TestItem matches the pool's layout.
+                _ = unsafe { pool.insert(TEST_VALUE) };
+            }
 
             let _span = allocs_op.measure_thread().iterations(iters);
 

@@ -52,8 +52,8 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let allocs_op = allocs.operation("insert_one");
-    group.bench_function("insert_one", |b| {
+    let allocs_op = allocs.operation("insert_first");
+    group.bench_function("insert_first", |b| {
         b.iter_custom(|iters| {
             let mut pools = iter::repeat_with(BlindPool::new)
                 .take(usize::try_from(iters).unwrap())
@@ -71,8 +71,32 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let allocs_op = allocs.operation("insert_one_two_types_same_layout");
-    group.bench_function("insert_one_two_types_same_layout", |b| {
+    let allocs_op = allocs.operation("insert_second");
+    group.bench_function("insert_second", |b| {
+        b.iter_custom(|iters| {
+            let mut pools = iter::repeat_with(BlindPool::new)
+                .take(usize::try_from(iters).unwrap())
+                .collect::<Vec<_>>();
+
+            // Pre-warm each pool with one item.
+            for pool in &mut pools {
+                _ = pool.insert(TEST_VALUE);
+            }
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for pool in &mut pools {
+                _ = black_box(pool.insert(black_box(TEST_VALUE)));
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("insert_first_two_types_same_layout");
+    group.bench_function("insert_first_two_types_same_layout", |b| {
         b.iter_custom(|iters| {
             let mut pools = iter::repeat_with(BlindPool::new)
                 .take(usize::try_from(iters).unwrap())
@@ -94,12 +118,65 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let allocs_op = allocs.operation("insert_one_two_types_different_layout");
-    group.bench_function("insert_one_two_types_different_layout", |b| {
+    let allocs_op = allocs.operation("insert_second_two_types_same_layout");
+    group.bench_function("insert_second_two_types_same_layout", |b| {
         b.iter_custom(|iters| {
             let mut pools = iter::repeat_with(BlindPool::new)
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
+
+            // Pre-warm each pool with one item.
+            for pool in &mut pools {
+                _ = pool.insert(TEST_VALUE);
+            }
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for pool in &mut pools {
+                _ = black_box(pool.insert(black_box(TEST_VALUE)));
+                _ = black_box(pool.insert(black_box(AlignedU32 {
+                    value: 42,
+                    _padding: 0,
+                })));
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("insert_first_two_types_different_layout");
+    group.bench_function("insert_first_two_types_different_layout", |b| {
+        b.iter_custom(|iters| {
+            let mut pools = iter::repeat_with(BlindPool::new)
+                .take(usize::try_from(iters).unwrap())
+                .collect::<Vec<_>>();
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for pool in &mut pools {
+                _ = black_box(pool.insert(black_box(TEST_VALUE)));
+                _ = black_box(pool.insert(black_box(DIFFERENT_VALUE)));
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("insert_second_two_types_different_layout");
+    group.bench_function("insert_second_two_types_different_layout", |b| {
+        b.iter_custom(|iters| {
+            let mut pools = iter::repeat_with(BlindPool::new)
+                .take(usize::try_from(iters).unwrap())
+                .collect::<Vec<_>>();
+
+            // Pre-warm each pool with one item.
+            for pool in &mut pools {
+                _ = pool.insert(TEST_VALUE);
+            }
 
             let _span = allocs_op.measure_thread().iterations(iters);
 
