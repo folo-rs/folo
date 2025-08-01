@@ -43,7 +43,7 @@ static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> =
     LazyLock::new(|| ProcessorSet::builder().take(nz!(2)));
 
 fn entrypoint(c: &mut Criterion) {
-    let mut one_thread = ThreadPool::new(&ProcessorSet::single());
+    let mut one_thread = ThreadPool::new(ProcessorSet::single());
     let mut two_threads = TWO_PROCESSORS.as_ref().map(ThreadPool::new);
 
     let mut g = c.benchmark_group("thread_local_rc::access_one_threaded");

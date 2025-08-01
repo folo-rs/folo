@@ -17,7 +17,7 @@ criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
-    let mut one_thread = ThreadPool::new(&ProcessorSet::single());
+    let mut one_thread = ThreadPool::new(ProcessorSet::single());
     let mut two_threads = ProcessorSet::builder()
         .take(nz!(2))
         .map(|x| ThreadPool::new(&x));

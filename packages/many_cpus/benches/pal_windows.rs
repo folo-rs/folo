@@ -76,7 +76,7 @@ mod windows {
 
         // The thread pool is the same, so does pinning the same thread over and over
         // differ somehow from pinning new threads? Eeeh, maybe, maybe not - good enough.
-        let mut one_thread_for_repinning = ThreadPool::new(&ProcessorSet::single());
+        let mut one_thread_for_repinning = ThreadPool::new(ProcessorSet::single());
 
         Run::new()
             .iter(|_| {
