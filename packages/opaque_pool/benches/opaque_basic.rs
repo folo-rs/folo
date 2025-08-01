@@ -66,6 +66,62 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
+    let allocs_op = allocs.operation("read_one");
+    group.bench_function("read_one", |b| {
+        b.iter_custom(|iters| {
+            let layout = Layout::new::<TestItem>();
+
+            let mut pool = OpaquePool::builder().layout(layout).build();
+
+            // SAFETY: The layout of TestItem matches the pool's layout.
+            let pool_ticket = unsafe { pool.insert(TEST_VALUE) };
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for _ in 0..iters {
+                // SAFETY: The layout of TestItem matches the pool's layout.
+                _ = black_box(unsafe { pool_ticket.ptr().cast::<TestItem>().read() });
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("remove_one");
+    group.bench_function("remove_one", |b| {
+        b.iter_custom(|iters| {
+            let layout = Layout::new::<TestItem>();
+
+            let mut pools = iter::repeat_with(|| OpaquePool::builder().layout(layout).build())
+                .take(usize::try_from(iters).unwrap())
+                .collect::<Vec<_>>();
+
+            let pool_tickets = pools
+                .iter_mut()
+                .map(|pool| {
+                    // SAFETY: The layout of TestItem matches the pool's layout.
+                    unsafe { pool.insert(TEST_VALUE) }
+                })
+                .collect::<Vec<_>>();
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for (pool, ticket) in pools.iter_mut().zip(pool_tickets) {
+                pool.remove(ticket);
+            }
+
+            start.elapsed()
+        });
+    });
+
+    group.finish();
+
+    let mut group = c.benchmark_group("opaque_slow");
+
     let allocs_op = allocs.operation("insert_10k");
     group.bench_function("insert_10k", |b| {
         b.iter_custom(|iters| {
@@ -131,58 +187,6 @@ fn entrypoint(c: &mut Criterion) {
                         pool.remove(pooled);
                     }
                 }
-            }
-
-            start.elapsed()
-        });
-    });
-
-    let allocs_op = allocs.operation("read_one");
-    group.bench_function("read_one", |b| {
-        b.iter_custom(|iters| {
-            let layout = Layout::new::<TestItem>();
-
-            let mut pool = OpaquePool::builder().layout(layout).build();
-
-            // SAFETY: The layout of TestItem matches the pool's layout.
-            let pool_ticket = unsafe { pool.insert(TEST_VALUE) };
-
-            let _span = allocs_op.measure_thread().iterations(iters);
-
-            let start = Instant::now();
-
-            for _ in 0..iters {
-                // SAFETY: The layout of TestItem matches the pool's layout.
-                _ = black_box(unsafe { pool_ticket.ptr().cast::<TestItem>().read() });
-            }
-
-            start.elapsed()
-        });
-    });
-
-    let allocs_op = allocs.operation("remove_one");
-    group.bench_function("remove_one", |b| {
-        b.iter_custom(|iters| {
-            let layout = Layout::new::<TestItem>();
-
-            let mut pools = iter::repeat_with(|| OpaquePool::builder().layout(layout).build())
-                .take(usize::try_from(iters).unwrap())
-                .collect::<Vec<_>>();
-
-            let pool_tickets = pools
-                .iter_mut()
-                .map(|pool| {
-                    // SAFETY: The layout of TestItem matches the pool's layout.
-                    unsafe { pool.insert(TEST_VALUE) }
-                })
-                .collect::<Vec<_>>();
-
-            let _span = allocs_op.measure_thread().iterations(iters);
-
-            let start = Instant::now();
-
-            for (pool, ticket) in pools.iter_mut().zip(pool_tickets) {
-                pool.remove(ticket);
             }
 
             start.elapsed()
