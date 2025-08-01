@@ -2,7 +2,7 @@
 name = "linked"
 description = "Create families of linked objects that can collaborate across threads while being internally single-threaded"
 publish = true
-version = "0.2.17"
+version = "0.2.18"
 
 authors.workspace = true
 edition.workspace = true
