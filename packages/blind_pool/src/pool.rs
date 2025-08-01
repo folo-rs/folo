@@ -76,6 +76,7 @@ impl BlindPool {
     /// assert_eq!(value, 42);
     /// ```
     #[must_use]
+    #[inline]
     pub fn new() -> Self {
         Self::builder().build()
     }
@@ -91,6 +92,7 @@ impl BlindPool {
     ///     .drop_policy(DropPolicy::MustNotDropItems)
     ///     .build();
     /// ```
+    #[inline]
     pub fn builder() -> BlindPoolBuilder {
         BlindPoolBuilder::new()
     }
@@ -185,6 +187,7 @@ impl BlindPool {
     /// assert_eq!(pool.len(), 3);
     /// ```
     #[must_use]
+    #[inline]
     pub fn len(&self) -> usize {
         self.pools.values().map(OpaquePool::len).sum()
     }
@@ -210,6 +213,7 @@ impl BlindPool {
     /// assert!(pool.is_empty());
     /// ```
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.pools.values().all(OpaquePool::is_empty)
     }
@@ -236,6 +240,7 @@ impl BlindPool {
     /// assert_eq!(pool.capacity_of::<f64>(), 0);
     /// ```
     #[must_use]
+    #[inline]
     pub fn capacity_of<T>(&self) -> usize {
         let layout = Layout::new::<T>();
         self.pools.get(&layout).map_or(0, OpaquePool::capacity)
@@ -402,6 +407,7 @@ impl<T> Pooled<T> {
     /// assert_eq!(value, 2.5159);
     /// ```
     #[must_use]
+    #[inline]
     pub fn ptr(&self) -> NonNull<T> {
         self.pooled.ptr()
     }
@@ -436,6 +442,7 @@ impl<T> Pooled<T> {
     /// pool.remove(erased);
     /// ```
     #[must_use]
+    #[inline]
     pub fn erase(self) -> Pooled<()> {
         Pooled {
             layout: self.layout,

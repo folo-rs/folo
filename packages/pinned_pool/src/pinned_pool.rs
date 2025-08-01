@@ -171,6 +171,7 @@ impl<T> PinnedPool<T> {
     ///
     /// Panics if `T` is zero-sized.
     #[must_use]
+    #[inline]
     pub fn new() -> Self {
         Self::builder().build()
     }
@@ -191,6 +192,7 @@ impl<T> PinnedPool<T> {
     /// assert_eq!(pool.len(), 0);
     /// assert!(pool.is_empty());
     /// ```
+    #[inline]
     pub fn builder() -> PinnedPoolBuilder<T> {
         PinnedPoolBuilder::new()
     }
@@ -217,6 +219,7 @@ impl<T> PinnedPool<T> {
     /// ```
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Can be mutated to infinitely growing memory use.
+    #[inline]
     pub fn len(&self) -> usize {
         debug_assert_eq!(self.length, self.slabs.iter().map(PinnedSlab::len).sum());
 
@@ -245,6 +248,7 @@ impl<T> PinnedPool<T> {
     /// # pool.remove(key);
     /// ```
     #[must_use]
+    #[inline]
     pub fn capacity(&self) -> usize {
         self.slabs.len()
             .checked_mul(SLAB_CAPACITY)
@@ -270,6 +274,7 @@ impl<T> PinnedPool<T> {
     /// assert!(pool.is_empty());
     /// ```
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.length == 0
     }
@@ -403,6 +408,7 @@ impl<T> PinnedPool<T> {
     ///
     /// Panics if the key is not associated with an item.
     #[must_use]
+    #[inline]
     pub fn get(&self, key: Key) -> Pin<&T> {
         let coordinates = ItemCoordinates::<SLAB_CAPACITY>::from_key(key);
 
@@ -440,6 +446,7 @@ impl<T> PinnedPool<T> {
     ///
     /// Panics if the key is not associated with an item.
     #[must_use]
+    #[inline]
     pub fn get_mut(&mut self, key: Key) -> Pin<&mut T> {
         let index = ItemCoordinates::<SLAB_CAPACITY>::from_key(key);
 
@@ -540,6 +547,7 @@ impl<T> PinnedPool<T> {
     /// [`get()`]: Self::get
     /// [`get_mut()`]: Self::get_mut
     #[must_use]
+    #[inline]
     pub fn insert(&mut self, value: T) -> Key {
         let inserter = self.begin_insert();
         let key = inserter.key();
@@ -672,6 +680,7 @@ impl<T> Default for PinnedPool<T> {
     /// # Panics
     ///
     /// Panics if `T` is zero-sized.
+    #[inline]
     fn default() -> Self {
         Self::new()
     }
@@ -745,6 +754,7 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
     /// assert_eq!(&*same_item, "Hello, World!");
     /// # pool.remove(key);
     /// ```
+    #[inline]
     pub fn insert<'v>(self, value: T) -> Pin<&'v T>
     where
         's: 'v,
@@ -779,6 +789,7 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
     /// assert_eq!(&*item, "Hello, World!");
     /// # pool.remove(key);
     /// ```
+    #[inline]
     pub fn insert_mut<'v>(self, value: T) -> Pin<&'v mut T>
     where
         's: 'v,
@@ -826,6 +837,7 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
     /// assert_eq!(&*same_item, "Hello, World!");
     /// # pool.remove(key);
     /// ```
+    #[inline]
     pub unsafe fn insert_with<'v>(self, f: impl FnOnce(&mut MaybeUninit<T>)) -> Pin<&'v T>
     where
         's: 'v,
@@ -875,6 +887,7 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
     /// assert_eq!(&*item, "Hello, World!");
     /// # pool.remove(key);
     /// ```
+    #[inline]
     pub unsafe fn insert_with_mut<'v>(self, f: impl FnOnce(&mut MaybeUninit<T>)) -> Pin<&'v mut T>
     where
         's: 'v,
@@ -915,6 +928,7 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
     ///
     /// If the inserter is abandoned, the key may be used by a different item inserted later.
     #[must_use]
+    #[inline]
     pub fn key(&self) -> Key {
         ItemCoordinates::<SLAB_CAPACITY>::from_parts(self.slab_index, self.slab_inserter.index())
             .to_key()

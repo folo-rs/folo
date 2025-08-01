@@ -127,6 +127,7 @@ impl OpaquePool {
     /// // Create a pool for storing u32 values using type-based layout.
     /// let pool = OpaquePool::builder().layout_of::<u32>().build();
     /// ```
+    #[inline]
     pub fn builder() -> OpaquePoolBuilder {
         OpaquePoolBuilder::new()
     }
@@ -171,6 +172,7 @@ impl OpaquePool {
     /// assert_eq!(pool.item_layout().size(), std::mem::size_of::<u128>());
     /// ```
     #[must_use]
+    #[inline]
     pub fn item_layout(&self) -> Layout {
         self.item_layout
     }
@@ -201,6 +203,7 @@ impl OpaquePool {
     /// ```
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Can be mutated to infinitely growing memory use and/or infinite loop.
+    #[inline]
     pub fn len(&self) -> usize {
         debug_assert_eq!(self.length, self.slabs.iter().map(OpaqueSlab::len).sum());
 
@@ -234,6 +237,7 @@ impl OpaquePool {
     ///
     /// [`insert()`]: Self::insert
     #[must_use]
+    #[inline]
     pub fn capacity(&self) -> usize {
         self.slabs
             .len()
@@ -267,6 +271,7 @@ impl OpaquePool {
     /// assert!(pool.is_empty());
     /// ```
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.length == 0
     }
@@ -686,6 +691,7 @@ impl<T> Pooled<T> {
     /// assert_eq!(value, 3.14159);
     /// ```
     #[must_use]
+    #[inline]
     pub fn ptr(&self) -> NonNull<T> {
         self.ptr
     }
@@ -722,6 +728,7 @@ impl<T> Pooled<T> {
     /// pool.remove(erased);
     /// ```
     #[must_use]
+    #[inline]
     pub fn erase(self) -> Pooled<()> {
         Pooled {
             pool_id: self.pool_id,
