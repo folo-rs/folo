@@ -268,7 +268,7 @@ impl OpaquePool {
     /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.slabs.iter().all(OpaqueSlab::is_empty)
+        self.length == 0
     }
 
     /// Reserves capacity for at least `additional` more items to be inserted in the pool.

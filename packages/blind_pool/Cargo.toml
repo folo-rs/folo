@@ -28,3 +28,7 @@ workspace = true
 [[bench]]
 name = "blind_basic"
 harness = false
+
+[[bench]]
+name = "blind_many_types"
+harness = false
