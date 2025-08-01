@@ -18,6 +18,7 @@ opaque_pool = { workspace = true }
 foldhash = { workspace = true }
 
 [dev-dependencies]
+alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
 mutants = { workspace = true }
 

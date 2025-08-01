@@ -1,17 +1,22 @@
 //! Basic benchmarks for the `blind_pool` package.
-
 #![allow(
     missing_docs,
     reason = "No need for API documentation in benchmark code"
 )]
 
 use std::hint::black_box;
+use std::iter;
+use std::time::Instant;
 
+use alloc_tracker::Allocator;
 use blind_pool::BlindPool;
 use criterion::{Criterion, criterion_group, criterion_main};
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
+
+#[global_allocator]
+static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 type TestItem = usize;
 const TEST_VALUE: TestItem = 1024;
@@ -23,64 +28,341 @@ struct AlignedU32 {
     _padding: u32,
 }
 
+// Different type with different layout
+type DifferentType = u32;
+const DIFFERENT_VALUE: DifferentType = 512;
+
 fn entrypoint(c: &mut Criterion) {
-    let mut group = c.benchmark_group("bp_fill");
+    let allocs = alloc_tracker::Session::new();
 
-    group.bench_function("empty", |b| {
-        b.iter(|| {
-            drop(black_box(BlindPool::new()));
-        });
-    });
+    let mut group = c.benchmark_group("blind_basic");
 
-    group.bench_function("one", |b| {
-        b.iter(|| {
-            let mut pool = BlindPool::new();
-            let _pooled = pool.insert(TEST_VALUE);
-            pool
-        });
-    });
+    let allocs_op = allocs.operation("build_empty");
+    group.bench_function("build_empty", |b| {
+        b.iter_custom(|iters| {
+            let _span = allocs_op.measure_thread().iterations(iters);
 
-    group.bench_function("ten_thousand", |b| {
-        b.iter(|| {
-            let mut pool = BlindPool::new();
-            for _ in 0..10_000 {
-                let _pooled = pool.insert(TEST_VALUE);
+            let start = Instant::now();
+
+            for _ in 0..iters {
+                drop(black_box(BlindPool::new()));
             }
-            pool
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("insert_one");
+    group.bench_function("insert_one", |b| {
+        b.iter_custom(|iters| {
+            let mut pools = iter::repeat_with(BlindPool::new)
+                .take(usize::try_from(iters).unwrap())
+                .collect::<Vec<_>>();
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for pool in &mut pools {
+                _ = black_box(pool.insert(black_box(TEST_VALUE)));
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("insert_one_two_types_same_layout");
+    group.bench_function("insert_one_two_types_same_layout", |b| {
+        b.iter_custom(|iters| {
+            let mut pools = iter::repeat_with(BlindPool::new)
+                .take(usize::try_from(iters).unwrap())
+                .collect::<Vec<_>>();
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for pool in &mut pools {
+                _ = black_box(pool.insert(black_box(TEST_VALUE)));
+                _ = black_box(pool.insert(black_box(AlignedU32 {
+                    value: 42,
+                    _padding: 0,
+                })));
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("insert_one_two_types_different_layout");
+    group.bench_function("insert_one_two_types_different_layout", |b| {
+        b.iter_custom(|iters| {
+            let mut pools = iter::repeat_with(BlindPool::new)
+                .take(usize::try_from(iters).unwrap())
+                .collect::<Vec<_>>();
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for pool in &mut pools {
+                _ = black_box(pool.insert(black_box(TEST_VALUE)));
+                _ = black_box(pool.insert(black_box(DIFFERENT_VALUE)));
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("read_one");
+    group.bench_function("read_one", |b| {
+        b.iter_custom(|iters| {
+            let mut pool = BlindPool::new();
+            let pooled = pool.insert(TEST_VALUE);
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for _ in 0..iters {
+                // SAFETY: The pointer is valid and the memory contains the value we just inserted.
+                _ = black_box(unsafe { pooled.ptr().read() });
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("read_one_two_types_same_layout");
+    group.bench_function("read_one_two_types_same_layout", |b| {
+        b.iter_custom(|iters| {
+            let mut pool = BlindPool::new();
+            let pooled1 = pool.insert(TEST_VALUE);
+            let pooled2 = pool.insert(AlignedU32 {
+                value: 42,
+                _padding: 0,
+            });
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for _ in 0..iters {
+                // SAFETY: The pointers are valid and the memory contains the values we just inserted.
+                _ = black_box(unsafe { pooled1.ptr().read() });
+                // SAFETY: The pointers are valid and the memory contains the values we just inserted.
+                _ = black_box(unsafe { pooled2.ptr().read() });
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("read_one_two_types_different_layout");
+    group.bench_function("read_one_two_types_different_layout", |b| {
+        b.iter_custom(|iters| {
+            let mut pool = BlindPool::new();
+            let pooled1 = pool.insert(TEST_VALUE);
+            let pooled2 = pool.insert(DIFFERENT_VALUE);
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for _ in 0..iters {
+                // SAFETY: The pointers are valid and the memory contains the values we just inserted.
+                _ = black_box(unsafe { pooled1.ptr().read() });
+                // SAFETY: The pointers are valid and the memory contains the values we just inserted.
+                _ = black_box(unsafe { pooled2.ptr().read() });
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("remove_one");
+    group.bench_function("remove_one", |b| {
+        b.iter_custom(|iters| {
+            let mut pools = iter::repeat_with(BlindPool::new)
+                .take(usize::try_from(iters).unwrap())
+                .collect::<Vec<_>>();
+
+            let pooled_items = pools
+                .iter_mut()
+                .map(|pool| pool.insert(TEST_VALUE))
+                .collect::<Vec<_>>();
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for (pool, pooled) in pools.iter_mut().zip(pooled_items) {
+                pool.remove(pooled);
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("remove_one_two_types_same_layout");
+    group.bench_function("remove_one_two_types_same_layout", |b| {
+        b.iter_custom(|iters| {
+            let mut pools = iter::repeat_with(BlindPool::new)
+                .take(usize::try_from(iters).unwrap())
+                .collect::<Vec<_>>();
+
+            let pooled_pairs = pools
+                .iter_mut()
+                .map(|pool| {
+                    let pooled1 = pool.insert(TEST_VALUE);
+                    let pooled2 = pool.insert(AlignedU32 {
+                        value: 42,
+                        _padding: 0,
+                    });
+                    (pooled1, pooled2)
+                })
+                .collect::<Vec<_>>();
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for (pool, (pooled1, pooled2)) in pools.iter_mut().zip(pooled_pairs) {
+                pool.remove(pooled1);
+                pool.remove(pooled2);
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("remove_one_two_types_different_layout");
+    group.bench_function("remove_one_two_types_different_layout", |b| {
+        b.iter_custom(|iters| {
+            let mut pools = iter::repeat_with(BlindPool::new)
+                .take(usize::try_from(iters).unwrap())
+                .collect::<Vec<_>>();
+
+            let pooled_pairs = pools
+                .iter_mut()
+                .map(|pool| {
+                    let pooled1 = pool.insert(TEST_VALUE);
+                    let pooled2 = pool.insert(DIFFERENT_VALUE);
+                    (pooled1, pooled2)
+                })
+                .collect::<Vec<_>>();
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for (pool, (pooled1, pooled2)) in pools.iter_mut().zip(pooled_pairs) {
+                pool.remove(pooled1);
+                pool.remove(pooled2);
+            }
+
+            start.elapsed()
         });
     });
 
     group.finish();
 
-    let mut mixed_group = c.benchmark_group("bp_types");
+    let mut group = c.benchmark_group("blind_slow");
 
-    mixed_group.bench_function("single_type", |b| {
-        b.iter(|| {
-            let mut pool = BlindPool::new();
-            for i in 0_u64..1_000 {
-                let _pooled = pool.insert(i);
+    let allocs_op = allocs.operation("insert_10k");
+    group.bench_function("insert_10k", |b| {
+        b.iter_custom(|iters| {
+            let mut pools = iter::repeat_with(BlindPool::new)
+                .take(usize::try_from(iters).unwrap())
+                .collect::<Vec<_>>();
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for pool in &mut pools {
+                for _ in 0..10_000 {
+                    _ = black_box(pool.insert(black_box(TEST_VALUE)));
+                }
             }
-            pool
+
+            start.elapsed()
         });
     });
 
-    mixed_group.bench_function("two_types_same_layout", |b| {
-        b.iter(|| {
-            let mut pool = BlindPool::new();
-            for i in 0_u64..500 {
-                let _pooled1 = pool.insert(i);
-                #[allow(
-                    clippy::cast_possible_truncation,
-                    reason = "Intentional truncation for benchmark"
-                )]
-                let _pooled2 = pool.insert(AlignedU32 {
-                    value: i as u32,
-                    _padding: 0,
-                });
+    let allocs_op = allocs.operation("forward_10_back_5_times_1000");
+    group.bench_function("forward_10_back_5_times_1000", |b| {
+        // We add 10 items, remove the first 5 and repeat this 1000 times.
+        // This can stress the "seeking" and bookkeeping aspects of the pool.
+        b.iter_custom(|iters| {
+            let mut pools = iter::repeat_with(BlindPool::new)
+                .take(usize::try_from(iters).unwrap())
+                .collect::<Vec<_>>();
+
+            let mut to_remove = Vec::with_capacity(5);
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for pool in &mut pools {
+                for _ in 0..1000 {
+                    to_remove.clear();
+
+                    // Add the 5 that we will later remove.
+                    for _ in 0..5 {
+                        let pooled = pool.insert(black_box(TEST_VALUE));
+                        to_remove.push(pooled);
+                    }
+
+                    // Add the 5 that we will keep.
+                    for _ in 0..5 {
+                        _ = black_box(pool.insert(black_box(TEST_VALUE)));
+                    }
+
+                    // Remove the first 5.
+                    #[expect(clippy::iter_with_drain, reason = "to avoid moving the value")]
+                    for pooled in to_remove.drain(..) {
+                        pool.remove(pooled);
+                    }
+                }
             }
-            pool
+
+            start.elapsed()
         });
     });
 
-    mixed_group.finish();
+    let allocs_op = allocs.operation("remove_10k");
+    group.bench_function("remove_10k", |b| {
+        b.iter_custom(|iters| {
+            let mut pools = iter::repeat_with(BlindPool::new)
+                .take(usize::try_from(iters).unwrap())
+                .collect::<Vec<_>>();
+
+            let pooled_sets = pools
+                .iter_mut()
+                .map(|pool| {
+                    iter::repeat_with(|| pool.insert(TEST_VALUE))
+                        .take(10_000)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for (pool, pooled_set) in pools.iter_mut().zip(&pooled_sets) {
+                for pooled in pooled_set {
+                    pool.remove(*pooled);
+                }
+            }
+
+            start.elapsed()
+        });
+    });
+
+    group.finish();
+
+    allocs.print_to_stdout();
 }
