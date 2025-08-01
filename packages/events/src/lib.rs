@@ -59,6 +59,9 @@
 //! - [`LocalOnceEvent<T>`], [`LocalOnceSender<T, R>`], [`LocalOnceReceiver<T, R>`] - Single-threaded variants
 //!
 //! Each receiver type implements [`Future`], allowing you to `.await` them directly.
+//! In debug builds, if backtraces are enabled, the owner of the event/pool can use
+//! `inspect_awaiter()` or `inspect_awaiters()` to see the backtraces indicating where
+//! the `.await` was issued from.
 //!
 //! # Thread-safe Example
 //!
