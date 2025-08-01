@@ -3,6 +3,8 @@
 //! This module provides thread-safe event types that can be shared across threads
 //! and used for cross-thread communication.
 
+#[cfg(debug_assertions)]
+use std::backtrace::Backtrace;
 use std::cell::Cell;
 use std::future::Future;
 use std::marker::{PhantomData, PhantomPinned};
@@ -14,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::task::Waker;
 use std::{mem, task};
 
-use crate::{Disconnected, ERR_POISONED_LOCK, Sealed, ValueKind};
+use crate::{BacktraceType, Disconnected, ERR_POISONED_LOCK, Sealed, ValueKind, capture_backtrace};
 
 /// State of a thread-safe event.
 #[derive(Debug)]
@@ -23,7 +25,10 @@ enum EventState<T> {
     NotSet,
 
     /// No value has been set yet, but someone is waiting for it.
-    Awaiting(Waker),
+    ///
+    /// In debug builds, also includes a backtrace of the awaiter.
+    /// The backtrace will be empty if backtraces are not enabled via environment variables.
+    Awaiting(Waker, BacktraceType),
 
     /// A value has been set but nobody has yet started waiting.
     Set(ValueKind<T>),
@@ -318,6 +323,23 @@ where
         ))
     }
 
+    /// Uses the provided closure to inspect the backtrace of the current awaiter,
+    /// if there is an awaiter and if backtrace capturing is enabled.
+    ///
+    /// This method is only available in debug builds (`cfg(debug_assertions)`).
+    /// For any data to be present, `RUST_BACKTRACE=1` or `RUST_LIB_BACKTRACE=1` must be set.
+    ///
+    /// The closure receives `None` if no one is awaiting the event.
+    #[cfg(debug_assertions)]
+    pub fn inspect_awaiter(&self, f: impl FnOnce(Option<&Backtrace>)) {
+        let state = self.state.lock().expect(ERR_POISONED_LOCK);
+
+        match &*state {
+            EventState::Awaiting(_, backtrace) => f(Some(backtrace)),
+            _ => f(None),
+        }
+    }
+
     pub(crate) fn set(&self, result: T) {
         let mut waker: Option<Waker> = None;
 
@@ -328,12 +350,12 @@ where
                 EventState::NotSet => {
                     *state = EventState::Set(ValueKind::Real(result));
                 }
-                EventState::Awaiting(_) => {
+                EventState::Awaiting(_, _) => {
                     let previous_state =
                         mem::replace(&mut *state, EventState::Set(ValueKind::Real(result)));
 
                     match previous_state {
-                        EventState::Awaiting(w) => waker = Some(w),
+                        EventState::Awaiting(w, _) => waker = Some(w),
                         _ => unreachable!("we are re-matching an already matched pattern"),
                     }
                 }
@@ -346,7 +368,7 @@ where
             }
         }
 
-        // We perform the wakeup outside the lock to avoid unnecessary contention if the receiver
+        // We perform the wake-up outside the lock to avoid unnecessary contention if the receiver
         // of the result wakes up instantly and we have not released our lock yet.
         if let Some(waker) = waker {
             waker.wake();
@@ -359,13 +381,13 @@ where
 
         match &*state {
             EventState::NotSet => {
-                *state = EventState::Awaiting(waker.clone());
+                *state = EventState::Awaiting(waker.clone(), capture_backtrace());
                 None
             }
-            EventState::Awaiting(_) => {
+            EventState::Awaiting(_, _) => {
                 // This is permitted by the Future API contract, in which case only the waker
                 // from the most recent poll should be woken up when the result is available.
-                *state = EventState::Awaiting(waker.clone());
+                *state = EventState::Awaiting(waker.clone(), capture_backtrace());
                 None
             }
             EventState::Set(_) => {
@@ -394,12 +416,12 @@ where
             EventState::NotSet => {
                 *state = EventState::Set(ValueKind::Disconnected);
             }
-            EventState::Awaiting(_) => {
+            EventState::Awaiting(_, _) => {
                 let previous_state =
                     mem::replace(&mut *state, EventState::Set(ValueKind::Disconnected));
 
                 match previous_state {
-                    EventState::Awaiting(waker) => waker.wake(),
+                    EventState::Awaiting(waker, _) => waker.wake(),
                     _ => unreachable!("we are re-matching an already matched pattern"),
                 }
             }

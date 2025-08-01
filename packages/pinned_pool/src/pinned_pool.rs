@@ -3,7 +3,7 @@ use std::pin::Pin;
 
 use num_integer::Integer;
 
-use crate::{DropPolicy, PinnedPoolBuilder, PinnedSlab, PinnedSlabInserter};
+use crate::{DropPolicy, PinnedPoolBuilder, PinnedSlab, PinnedSlabInserter, PinnedSlabIterator};
 
 /// An object pool of unbounded size that guarantees pinning of its items.
 ///
@@ -601,6 +601,15 @@ impl<T> PinnedPool<T> {
         self.update_vacant_slot_cache(index.slab_index);
     }
 
+    /// Iterates through the items in the slab.
+    #[expect(
+        clippy::iter_without_into_iter,
+        reason = "items from this collection cannot be consumed"
+    )]
+    pub fn iter(&self) -> PinnedPoolIterator<'_, T> {
+        PinnedPoolIterator::new(self)
+    }
+
     /// Adds a new slab to the pool and returns its index.
     #[must_use]
     fn add_new_slab(&mut self) -> usize {
@@ -967,6 +976,54 @@ impl<const SLAB_CAPACITY: usize> ItemCoordinates<SLAB_CAPACITY> {
                 .and_then(|x| x.checked_add(self.index_in_slab))
                 .expect("key indicates an item beyond the range of virtual memory - impossible to reach this point from a valid history")
         }
+    }
+}
+
+/// Iterates through all the items in the pool.
+#[derive(Debug)]
+#[must_use]
+pub struct PinnedPoolIterator<'a, T> {
+    pool: &'a PinnedPool<T>,
+    slab_iterator: Option<PinnedSlabIterator<'a, T, SLAB_CAPACITY>>,
+
+    current_slab_index: usize,
+}
+
+impl<'a, T> PinnedPoolIterator<'a, T> {
+    fn new(pool: &'a PinnedPool<T>) -> Self {
+        let first_slab_iterator = pool.slabs.first().map(|s| s.iter());
+
+        Self {
+            pool,
+            slab_iterator: first_slab_iterator,
+            current_slab_index: 0,
+        }
+    }
+}
+
+impl<'a, T> Iterator for PinnedPoolIterator<'a, T> {
+    type Item = Pin<&'a T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(slab_iterator) = &mut self.slab_iterator {
+            if let Some(item) = slab_iterator.next() {
+                return Some(item);
+            }
+        }
+
+        // Move to the next slab if the current one is exhausted.
+        self.current_slab_index = self
+            .current_slab_index
+            .checked_add(1)
+            .expect("overflow here would mean the collection exceeds the size of virtual memory");
+
+        self.slab_iterator = self
+            .pool
+            .slabs
+            .get(self.current_slab_index)
+            .map(|slab| slab.iter());
+
+        self.next()
     }
 }
 

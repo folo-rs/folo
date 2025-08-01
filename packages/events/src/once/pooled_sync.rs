@@ -4,6 +4,8 @@
 //! using reference counting. Events are created from pools and automatically returned to the
 //! pool when both sender and receiver are dropped.
 
+#[cfg(debug_assertions)]
+use std::backtrace::Backtrace;
 use std::future::Future;
 use std::marker::PhantomPinned;
 use std::ops::Deref;
@@ -352,6 +354,27 @@ where
     pub fn shrink_to_fit(&self) {
         let mut inner_pool = self.pool.lock().expect("pool mutex should not be poisoned");
         inner_pool.shrink_to_fit();
+    }
+
+    /// Uses the provided closure to inspect the backtraces of the current awaiter of each
+    /// event in the pool that is currently being awaited by someone.
+    ///
+    /// This method is only available in debug builds (`cfg(debug_assertions)`).
+    /// For any data to be present, `RUST_BACKTRACE=1` or `RUST_LIB_BACKTRACE=1` must be set.
+    ///
+    /// The closure is called once for each event in the pool that is currently being awaited by
+    /// someone.
+    #[cfg(debug_assertions)]
+    pub fn inspect_awaiters(&self, mut f: impl FnMut(&Backtrace)) {
+        let inner_pool = self.pool.lock().expect("pool mutex should not be poisoned");
+
+        for event in inner_pool.iter() {
+            event.inspect_awaiter(|bt| {
+                if let Some(bt) = bt {
+                    f(bt);
+                }
+            });
+        }
     }
 }
 

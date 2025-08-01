@@ -293,6 +293,11 @@ impl<T, const CAPACITY: usize> PinnedSlab<T, CAPACITY> {
             .expect("we asserted above that the entry is occupied so count must be non-zero");
     }
 
+    /// Iterates through the items in the slab.
+    pub(crate) fn iter(&self) -> PinnedSlabIterator<'_, T, CAPACITY> {
+        PinnedSlabIterator::new(self)
+    }
+
     #[cfg_attr(test, mutants::skip)] // This is essentially test logic, mutation is meaningless.
     #[cfg(debug_assertions)]
     pub(crate) fn integrity_check(&self) {
@@ -544,6 +549,44 @@ impl<'s, T, const CAPACITY: usize> PinnedSlabInserter<'s, T, CAPACITY> {
             .expect("guarded by capacity < usize::MAX in slab ctor");
 
         pinned_ref
+    }
+}
+
+#[derive(Debug)]
+#[must_use]
+pub(crate) struct PinnedSlabIterator<'s, T, const CAPACITY: usize> {
+    slab: &'s PinnedSlab<T, CAPACITY>,
+    current_index: usize,
+}
+
+impl<'s, T, const CAPACITY: usize> PinnedSlabIterator<'s, T, CAPACITY> {
+    fn new(slab: &'s PinnedSlab<T, CAPACITY>) -> Self {
+        Self {
+            slab,
+            current_index: 0,
+        }
+    }
+}
+
+impl<'s, T, const CAPACITY: usize> Iterator for PinnedSlabIterator<'s, T, CAPACITY> {
+    type Item = Pin<&'s T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.current_index < CAPACITY {
+            let entry_index = self.current_index;
+            self.current_index = self
+                .current_index
+                .checked_add(1)
+                .expect("guarded by capacity < usize::MAX in slab ctor");
+
+            let entry = self.slab.entry(self.current_index);
+
+            if let Entry::Occupied { .. } = entry {
+                return Some(self.slab.get(entry_index));
+            }
+        }
+
+        None
     }
 }
 

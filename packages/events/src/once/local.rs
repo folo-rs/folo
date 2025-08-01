@@ -3,6 +3,8 @@
 //! This module provides single-threaded event types that have lower overhead
 //! but cannot be shared across threads.
 
+#[cfg(debug_assertions)]
+use std::backtrace::Backtrace;
 use std::cell::{Cell, UnsafeCell};
 use std::future::Future;
 use std::marker::{PhantomData, PhantomPinned};
@@ -13,7 +15,7 @@ use std::rc::Rc;
 use std::task::Waker;
 use std::{mem, task};
 
-use crate::{Disconnected, Sealed, ValueKind};
+use crate::{BacktraceType, Disconnected, Sealed, ValueKind, capture_backtrace};
 
 /// State of a single-threaded event.
 #[derive(Debug)]
@@ -22,7 +24,10 @@ enum EventState<T> {
     NotSet,
 
     /// No value has been set yet, but someone is waiting for it.
-    Awaiting(Waker),
+    ///
+    /// In debug builds, also includes a backtrace of the awaiter.
+    /// The backtrace will be empty if backtraces are not enabled via environment variables.
+    Awaiting(Waker, BacktraceType),
 
     /// A value has been set but nobody has yet started waiting.
     Set(ValueKind<T>),
@@ -322,6 +327,24 @@ impl<T> LocalOnceEvent<T> {
         ))
     }
 
+    /// Uses the provided closure to inspect the backtrace of the current awaiter,
+    /// if there is an awaiter and if backtrace capturing is enabled.
+    ///
+    /// This method is only available in debug builds (`cfg(debug_assertions)`).
+    /// For any data to be present, `RUST_BACKTRACE=1` or `RUST_LIB_BACKTRACE=1` must be set.
+    ///
+    /// The closure receives `None` if no one is awaiting the event.
+    #[cfg(debug_assertions)]
+    pub fn inspect_awaiter(&self, f: impl FnOnce(Option<&Backtrace>)) {
+        // SAFETY: See comments on field.
+        let state = unsafe { &mut *self.state.get() };
+
+        match &*state {
+            EventState::Awaiting(_, backtrace) => f(Some(backtrace)),
+            _ => f(None),
+        }
+    }
+
     pub(crate) fn set(&self, result: T) {
         // SAFETY: See comments on field.
         let state = unsafe { &mut *self.state.get() };
@@ -330,12 +353,12 @@ impl<T> LocalOnceEvent<T> {
             EventState::NotSet => {
                 *state = EventState::Set(ValueKind::Real(result));
             }
-            EventState::Awaiting(_) => {
+            EventState::Awaiting(_, _) => {
                 let previous_state =
                     mem::replace(&mut *state, EventState::Set(ValueKind::Real(result)));
 
                 match previous_state {
-                    EventState::Awaiting(waker) => waker.wake(),
+                    EventState::Awaiting(waker, _) => waker.wake(),
                     _ => unreachable!("we are re-matching an already matched pattern"),
                 }
             }
@@ -359,13 +382,13 @@ impl<T> LocalOnceEvent<T> {
 
         match &*state {
             EventState::NotSet => {
-                *state = EventState::Awaiting(waker.clone());
+                *state = EventState::Awaiting(waker.clone(), capture_backtrace());
                 None
             }
-            EventState::Awaiting(_) => {
+            EventState::Awaiting(_, _) => {
                 // This is permitted by the Future API contract, in which case only the waker
                 // from the most recent poll should be woken up when the result is available.
-                *state = EventState::Awaiting(waker.clone());
+                *state = EventState::Awaiting(waker.clone(), capture_backtrace());
                 None
             }
             EventState::Set(_) => {
@@ -395,12 +418,12 @@ impl<T> LocalOnceEvent<T> {
             EventState::NotSet => {
                 *state = EventState::Set(ValueKind::Disconnected);
             }
-            EventState::Awaiting(_) => {
+            EventState::Awaiting(_, _) => {
                 let previous_state =
                     mem::replace(&mut *state, EventState::Set(ValueKind::Disconnected));
 
                 match previous_state {
-                    EventState::Awaiting(waker) => waker.wake(),
+                    EventState::Awaiting(waker, _) => waker.wake(),
                     _ => unreachable!("we are re-matching an already matched pattern"),
                 }
             }
