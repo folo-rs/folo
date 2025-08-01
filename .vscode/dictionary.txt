@@ -4,6 +4,7 @@ affinitizing
 cpulist
 cpus
 Dataless
+Deque
 foldhash
 Folo
 freelist

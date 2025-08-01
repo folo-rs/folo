@@ -17,6 +17,7 @@ default = []
 new_zealand = { workspace = true }
 
 [dev-dependencies]
+alloc_tracker = { workspace = true }
 criterion = { workspace = true }
 mutants = { workspace = true }
 
