@@ -17,6 +17,7 @@ impl<'a> PrepareThread<'a> {
 
     /// Returns the `RunMeta` for the current run.
     #[must_use]
+    #[inline]
     pub fn meta(&self) -> &'a RunMeta {
         self.meta
     }
@@ -36,12 +37,14 @@ impl<'a, ThreadState> PrepareIter<'a, ThreadState> {
 
     /// Returns the `RunMeta` for the current run.
     #[must_use]
+    #[inline]
     pub fn meta(&self) -> &'a RunMeta {
         self.meta
     }
 
     /// Returns the thread state for the current thread.
     #[must_use]
+    #[inline]
     pub fn thread_state(&self) -> &'a ThreadState {
         self.thread_state
     }
@@ -61,12 +64,14 @@ impl<'a, ThreadState> MeasureWrapperBegin<'a, ThreadState> {
 
     /// Returns the `RunMeta` for the current run.
     #[must_use]
+    #[inline]
     pub fn meta(&self) -> &'a RunMeta {
         self.meta
     }
 
     /// Returns the thread state for the current thread.
     #[must_use]
+    #[inline]
     pub fn thread_state(&self) -> &'a ThreadState {
         self.thread_state
     }
@@ -96,12 +101,14 @@ impl<'a, ThreadState, IterState> Iter<'a, ThreadState, IterState> {
 
     /// Returns the `RunMeta` for the current run.
     #[must_use]
+    #[inline]
     pub fn meta(&self) -> &'a RunMeta {
         self.meta
     }
 
     /// Returns the thread state for the current thread.
     #[must_use]
+    #[inline]
     pub fn thread_state(&self) -> &'a ThreadState {
         self.thread_state
     }
@@ -112,6 +119,7 @@ impl<'a, ThreadState, IterState> Iter<'a, ThreadState, IterState> {
     ///
     /// Panics if the iteration state has already been consumed.
     #[must_use]
+    #[inline]
     pub fn take_iter_state(&mut self) -> IterState {
         self.iter_state
             .take()
@@ -124,6 +132,7 @@ impl<'a, ThreadState, IterState> Iter<'a, ThreadState, IterState> {
     ///
     /// Panics if the iteration state has already been consumed.
     #[must_use]
+    #[inline]
     pub fn iter_state(&self) -> &IterState {
         self.iter_state
             .as_ref()
