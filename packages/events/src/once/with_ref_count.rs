@@ -3,6 +3,10 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::atomic::{self, AtomicUsize};
 
+// TODO: Our ref counts are always 0, 1 or 2. Could we simplify this down to a boolean?
+// e.g. is_last_reference (starts false, becomes true after first decrement, second decrement
+// destroys object)
+
 /// Combines a value and a thread-safe reference count.
 #[derive(Debug)]
 pub(crate) struct WithRefCount<T> {
@@ -11,12 +15,12 @@ pub(crate) struct WithRefCount<T> {
 }
 
 impl<T> WithRefCount<T> {
-    /// Creates a new reference-counted wrapper with an initial reference count of 1.
+    /// Creates a new reference-counted wrapper around `T` with an `initial` number of references.
     #[must_use]
-    pub(crate) fn new(value: T) -> Self {
+    pub(crate) fn new(initial: usize, value: T) -> Self {
         Self {
             value,
-            ref_count: AtomicUsize::new(1),
+            ref_count: AtomicUsize::new(initial),
         }
     }
 
@@ -27,6 +31,7 @@ impl<T> WithRefCount<T> {
     /// Panics if the reference count would overflow.
     ///
     /// Panics if the reference count was zero (indicating resurrection).
+    #[cfg_attr(not(test), expect(dead_code, reason = "maybe useful in the future"))]
     pub(crate) fn inc_ref(&self) {
         assert_ne!(0, self.ref_count.fetch_add(1, atomic::Ordering::Acquire));
     }
@@ -60,15 +65,6 @@ impl<T> WithRefCount<T> {
     }
 }
 
-impl<T> Default for WithRefCount<T>
-where
-    T: Default,
-{
-    fn default() -> Self {
-        Self::new(T::default())
-    }
-}
-
 impl<T> Deref for WithRefCount<T> {
     type Target = T;
 
@@ -87,12 +83,12 @@ pub(crate) struct LocalWithRefCount<T> {
 }
 
 impl<T> LocalWithRefCount<T> {
-    /// Creates a new reference-counted wrapper with an initial reference count of 1.
+    /// Creates a new reference-counted wrapper around `T` with an `initial` number of references.
     #[must_use]
-    pub(crate) fn new(value: T) -> Self {
+    pub(crate) fn new(initial: usize, value: T) -> Self {
         Self {
             value,
-            ref_count: Cell::new(1),
+            ref_count: Cell::new(initial),
             _single_threaded: PhantomData,
         }
     }
@@ -104,6 +100,7 @@ impl<T> LocalWithRefCount<T> {
     /// Panics if the reference count would overflow.
     ///
     /// Panics if the reference count was zero (indicating resurrection).
+    #[cfg_attr(not(test), expect(dead_code, reason = "maybe useful in the future"))]
     pub(crate) fn inc_ref(&self) {
         let previous = self.ref_count.get();
 
@@ -138,15 +135,6 @@ impl<T> LocalWithRefCount<T> {
     }
 }
 
-impl<T> Default for LocalWithRefCount<T>
-where
-    T: Default,
-{
-    fn default() -> Self {
-        Self::new(T::default())
-    }
-}
-
 impl<T> Deref for LocalWithRefCount<T> {
     type Target = T;
 
@@ -163,7 +151,7 @@ mod tests {
 
     #[test]
     fn with_ref_count_basic() {
-        let wrapper = WithRefCount::new(42);
+        let wrapper = WithRefCount::new(1, 42);
         assert_eq!(*wrapper, 42);
         assert_eq!(wrapper.ref_count(), 1);
 
@@ -179,7 +167,7 @@ mod tests {
 
     #[test]
     fn local_with_ref_count_basic() {
-        let wrapper = LocalWithRefCount::new(42);
+        let wrapper = LocalWithRefCount::new(1, 42);
         assert_eq!(*wrapper, 42);
         assert_eq!(wrapper.ref_count(), 1);
 

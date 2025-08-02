@@ -123,10 +123,8 @@ where
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        let item = inserter.insert(WithRefCount::new(OnceEvent::new()));
-
-        // It starts with a ref count of 1 but we add one more for the other endpoint.
-        item.inc_ref();
+        // One reference by sender, one reference by receiver.
+        let item = inserter.insert(WithRefCount::new(2, OnceEvent::new()));
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -181,10 +179,8 @@ where
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        let item = inserter.insert(WithRefCount::new(OnceEvent::new()));
-
-        // It starts with a ref count of 1 but we add one more for the other endpoint.
-        item.inc_ref();
+        // One reference by sender, one reference by receiver.
+        let item = inserter.insert(WithRefCount::new(2, OnceEvent::new()));
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -248,10 +244,8 @@ where
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        let item = inserter.insert(WithRefCount::new(OnceEvent::new()));
-
-        // It starts with a ref count of 1 but we add one more for the other endpoint.
-        item.inc_ref();
+        // One reference by sender, one reference by receiver.
+        let item = inserter.insert(WithRefCount::new(2, OnceEvent::new()));
 
         let item_ptr = NonNull::from(item.get_ref());
 

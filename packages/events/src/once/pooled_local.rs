@@ -114,10 +114,8 @@ impl<T> LocalOnceEventPool<T> {
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        let item = inserter.insert(LocalWithRefCount::new(LocalOnceEvent::new()));
-
-        // It starts with a ref count of 1 but we add one more for the other endpoint.
-        item.inc_ref();
+        // One reference by sender, one reference by receiver.
+        let item = inserter.insert(LocalWithRefCount::new(2, LocalOnceEvent::new()));
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -173,10 +171,9 @@ impl<T> LocalOnceEventPool<T> {
         let mut inner_pool = self.pool.borrow_mut();
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
-        let item = inserter.insert(LocalWithRefCount::new(LocalOnceEvent::new()));
 
-        // It starts with a ref count of 1 but we add one more for the other endpoint.
-        item.inc_ref();
+        // One reference by sender, one reference by receiver.
+        let item = inserter.insert(LocalWithRefCount::new(2, LocalOnceEvent::new()));
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -247,10 +244,8 @@ impl<T> LocalOnceEventPool<T> {
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        let item = inserter.insert(LocalWithRefCount::new(LocalOnceEvent::new()));
-
-        // It starts with a ref count of 1 but we add one more for the other endpoint.
-        item.inc_ref();
+        // One reference by sender, one reference by receiver.
+        let item = inserter.insert(LocalWithRefCount::new(2, LocalOnceEvent::new()));
 
         let item_ptr = NonNull::from(item.get_ref());
 
