@@ -29,6 +29,10 @@
     reason = "No need for API documentation in benchmark code"
 )]
 
+// TODO: Make sure we destroy the events in the measured part. Even though we are more flexible
+// and could postpone that out of the hot path, the competitors do it on the hot path, so for a
+// fair comparison we should, as well.
+
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock, Mutex};
 
@@ -84,6 +88,7 @@ fn once_event_arc_mt(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallT
                 events.push(Arc::new(OnceEvent::<Payload>::new()));
             }
 
+            // Last of the sender/receiver will drop the event. This matches `oneshot` behavior.
             let (senders, receivers): (Vec<_>, Vec<_>) =
                 events.into_iter().map(|e| e.bind_by_arc()).unzip();
 
@@ -118,6 +123,9 @@ fn once_event_arc_mt(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallT
 fn once_event_ptr_mt(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
     group.bench_function("once_event_ptr", |b| {
         b.iter_custom(|iters| {
+            // We keep the events alive until the end of the run. This is not exactly fair to the
+            // competition as it means we postpone the cleanup but as the event is shared via raw
+            // pointers between sender and receiver, we cannot know when to drop it during the loop.
             let mut events = Vec::with_capacity(usize::try_from(iters).unwrap());
 
             for _ in 0..iters {
@@ -246,6 +254,8 @@ fn local_once_event_ref_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_,
     Run::new()
         .iter(|_| {
             // This binding mode is really awkward to use but that's the deal with Rust references.
+            // We pay some extra penalty here by allocating the event in the measured part, which
+            // the other scenarios do not do (but which the referencing sort of appears to require).
             let event = LocalOnceEvent::<Payload>::new();
             let (sender, receiver) = event.bind_by_ref();
 
@@ -287,8 +297,9 @@ fn local_once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_,
             sender.send(42);
             block_on(receiver).unwrap();
 
-            // Event is destroyed in cleanup stage.
-            event
+            // We are required to keep the event alive until both sender and receiver are gone.
+            // We drop it as part of the measured part to match the behavior of `oneshot`.
+            drop(event);
         })
         .execute_criterion_on(pool, group, "local_once_event_ptr");
 }
