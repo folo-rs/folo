@@ -71,7 +71,7 @@ fn entrypoint(c: &mut Criterion) {
 
     Run::new()
         .iter(|_| {
-            let event = Box::pin(OnceEvent::<Payload>::new());
+            let event = pin!(OnceEvent::<Payload>::new());
             // SAFETY: We are immediately dropping the sender/receiver, so `event` outlives them.
             unsafe {
                 drop(event.as_ref().bind_by_ptr());
