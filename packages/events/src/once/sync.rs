@@ -126,6 +126,7 @@ where
     /// let (sender, receiver) = event.bind_by_ref();
     /// ```
     #[must_use]
+    #[inline]
     pub fn bind_by_ref(&self) -> (OnceSender<RefEvent<'_, T>>, OnceReceiver<RefEvent<'_, T>>) {
         self.bind_by_ref_checked()
             .expect("OnceEvent has already been bound")
@@ -151,6 +152,7 @@ where
         reason = "caller is expected to destructure and never to use this type"
     )]
     #[must_use]
+    #[inline]
     pub fn bind_by_ref_checked(
         &self,
     ) -> Option<(OnceSender<RefEvent<'_, T>>, OnceReceiver<RefEvent<'_, T>>)> {
@@ -184,6 +186,7 @@ where
     /// let (sender, receiver) = event.bind_by_arc();
     /// ```
     #[must_use]
+    #[inline]
     pub fn bind_by_arc(self: &Arc<Self>) -> (OnceSender<ArcEvent<T>>, OnceReceiver<ArcEvent<T>>) {
         self.bind_by_arc_checked()
             .expect("OnceEvent has already been bound")
@@ -213,6 +216,7 @@ where
         clippy::type_complexity,
         reason = "caller is expected to destructure and never to use this type"
     )]
+    #[inline]
     pub fn bind_by_arc_checked(
         self: &Arc<Self>,
     ) -> Option<(OnceSender<ArcEvent<T>>, OnceReceiver<ArcEvent<T>>)> {
@@ -263,6 +267,7 @@ where
     /// # });
     /// ```
     #[must_use]
+    #[inline]
     pub unsafe fn bind_by_ptr(
         self: Pin<&Self>,
     ) -> (OnceSender<PtrEvent<T>>, OnceReceiver<PtrEvent<T>>) {
@@ -301,6 +306,7 @@ where
         clippy::type_complexity,
         reason = "caller is expected to destructure and never to use this type"
     )]
+    #[inline]
     pub unsafe fn bind_by_ptr_checked(
         self: Pin<&Self>,
     ) -> Option<(OnceSender<PtrEvent<T>>, OnceReceiver<PtrEvent<T>>)> {
@@ -599,6 +605,7 @@ where
     /// let (sender, _receiver) = event.bind_by_arc();
     /// sender.send(42);
     /// ```
+    #[inline]
     pub fn send(self, value: E::T) {
         self.event_ref.set(value);
     }
@@ -608,6 +615,7 @@ impl<E> Drop for OnceSender<E>
 where
     E: EventRef<<E as ReflectiveTSend>::T>,
 {
+    #[inline]
     fn drop(&mut self) {
         self.event_ref.sender_dropped();
     }
@@ -651,6 +659,7 @@ where
 {
     type Output = Result<E::T, Disconnected>;
 
+    #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         self.event_ref
             .poll(cx.waker())

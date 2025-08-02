@@ -120,6 +120,7 @@ impl<T> LocalOnceEvent<T> {
     /// let (sender, receiver) = event.bind_by_ref();
     /// ```
     #[must_use]
+    #[inline]
     pub fn bind_by_ref(
         &self,
     ) -> (
@@ -150,6 +151,7 @@ impl<T> LocalOnceEvent<T> {
         clippy::type_complexity,
         reason = "caller is expected to destructure and never to use this type"
     )]
+    #[inline]
     pub fn bind_by_ref_checked(
         &self,
     ) -> Option<(
@@ -186,6 +188,7 @@ impl<T> LocalOnceEvent<T> {
     /// let (sender, receiver) = event.bind_by_rc();
     /// ```
     #[must_use]
+    #[inline]
     pub fn bind_by_rc(
         self: &Rc<Self>,
     ) -> (
@@ -220,6 +223,7 @@ impl<T> LocalOnceEvent<T> {
         clippy::type_complexity,
         reason = "caller is expected to destructure and never to use this type"
     )]
+    #[inline]
     pub fn bind_by_rc_checked(
         self: &Rc<Self>,
     ) -> Option<(
@@ -270,6 +274,7 @@ impl<T> LocalOnceEvent<T> {
     /// // sender and receiver are dropped here, before event
     /// ```
     #[must_use]
+    #[inline]
     pub unsafe fn bind_by_ptr(
         self: Pin<&Self>,
     ) -> (
@@ -309,6 +314,7 @@ impl<T> LocalOnceEvent<T> {
         clippy::type_complexity,
         reason = "caller is expected to destructure and never to use this type"
     )]
+    #[inline]
     pub unsafe fn bind_by_ptr_checked(
         self: Pin<&Self>,
     ) -> Option<(
@@ -565,6 +571,7 @@ where
     /// let (sender, _receiver) = event.bind_by_rc();
     /// sender.send(42);
     /// ```
+    #[inline]
     pub fn send(self, value: E::T) {
         self.event_ref.set(value);
     }
@@ -574,6 +581,7 @@ impl<E> Drop for LocalOnceSender<E>
 where
     E: LocalEventRef<<E as ReflectiveT>::T>,
 {
+    #[inline]
     fn drop(&mut self) {
         self.event_ref.sender_dropped();
     }
@@ -610,6 +618,7 @@ where
 {
     type Output = Result<E::T, Disconnected>;
 
+    #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         self.event_ref
             .poll(cx.waker())

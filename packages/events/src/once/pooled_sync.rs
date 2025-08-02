@@ -111,6 +111,7 @@ where
     /// assert_eq!(value2, 100);
     /// # });
     /// ```
+    #[must_use]
     pub fn bind_by_ref(
         &self,
     ) -> (
@@ -171,6 +172,7 @@ where
     /// let value2 = futures::executor::block_on(receiver2).unwrap();
     /// assert_eq!(value2, 200);
     /// ```
+    #[must_use]
     pub fn bind_by_arc(
         self: &Arc<Self>,
     ) -> (PooledOnceSender<ArcPool<T>>, PooledOnceReceiver<ArcPool<T>>) {
@@ -544,6 +546,7 @@ where
     /// let value = futures::executor::block_on(receiver).unwrap();
     /// assert_eq!(value, 42);
     /// ```
+    #[inline]
     pub fn send(self, value: P::T) {
         // SAFETY: See comments on field.
         let event = unsafe {
@@ -560,6 +563,7 @@ impl<P> Drop for PooledOnceSender<P>
 where
     P: PoolRef<<P as ReflectiveTSend>::T>,
 {
+    #[inline]
     fn drop(&mut self) {
         // SAFETY: See comments on field.
         let event = unsafe { self.event.expect("only possible on double drop").as_ref() };
@@ -641,6 +645,7 @@ where
 {
     type Output = Result<P::T, Disconnected>;
 
+    #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         // SAFETY: We are not moving anything, just touching internal state.
         let this = unsafe { self.get_unchecked_mut() };
@@ -668,6 +673,7 @@ impl<P> Drop for PooledOnceReceiver<P>
 where
     P: PoolRef<<P as ReflectiveTSend>::T>,
 {
+    #[inline]
     fn drop(&mut self) {
         self.drop_inner();
     }

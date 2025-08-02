@@ -103,6 +103,7 @@ impl<T> LocalOnceEventPool<T> {
     /// let value2 = futures::executor::block_on(receiver2).unwrap();
     /// assert_eq!(value2, 100);
     /// ```
+    #[must_use]
     pub fn bind_by_ref(
         &self,
     ) -> (
@@ -162,6 +163,7 @@ impl<T> LocalOnceEventPool<T> {
     /// let value2 = futures::executor::block_on(receiver2).unwrap();
     /// assert_eq!(value2, 200);
     /// ```
+    #[must_use]
     pub fn bind_by_rc(
         self: &Rc<Self>,
     ) -> (
@@ -292,6 +294,7 @@ impl<T> LocalOnceEventPool<T> {
     /// assert_eq!(pool.len(), 0); // Event cleaned up after both endpoints dropped
     /// ```
     #[must_use]
+    #[inline]
     pub fn len(&self) -> usize {
         self.pool.borrow().len()
     }
@@ -506,6 +509,7 @@ where
     /// let value = futures::executor::block_on(receiver).unwrap();
     /// assert_eq!(value, 42);
     /// ```
+    #[inline]
     pub fn send(self, value: P::T) {
         // SAFETY: See comments on field.
         let event = unsafe {
@@ -522,6 +526,7 @@ impl<P> Drop for PooledLocalOnceSender<P>
 where
     P: LocalPoolRef<<P as ReflectiveT>::T>,
 {
+    #[inline]
     fn drop(&mut self) {
         // SAFETY: See comments on field.
         let event = unsafe { self.event.expect("only possible on double drop").as_ref() };
@@ -590,6 +595,7 @@ where
 {
     type Output = Result<P::T, Disconnected>;
 
+    #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         // SAFETY: We are not moving anything, just touching internal state.
         let this = unsafe { self.get_unchecked_mut() };
@@ -617,6 +623,7 @@ impl<P> Drop for PooledLocalOnceReceiver<P>
 where
     P: LocalPoolRef<<P as ReflectiveT>::T>,
 {
+    #[inline]
     fn drop(&mut self) {
         self.drop_inner();
     }
