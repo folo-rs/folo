@@ -221,7 +221,7 @@ where
     /// let pool = Box::pin(OnceEventPool::<i32>::new());
     ///
     /// // First usage
-    /// // SAFETY: We ensure the pool outlives the sender and receiver
+    /// // SAFETY: We ensure the pool is pinned and outlives the sender and receiver
     /// let (sender1, receiver1) = unsafe { pool.as_ref().bind_by_ptr() };
     /// sender1.send(42);
     /// let value1 = futures::executor::block_on(receiver1).unwrap();
@@ -617,13 +617,14 @@ where
             return;
         };
 
+        // Regardless of whether we were the last reference holder or not, we are no longer
+        // allowed to reference the event as we are decrementing the reference count.
+        self.event = None;
+
         // SAFETY: See comments on field.
         let event = unsafe { event.as_ref() };
 
         if event.dec_ref() {
-            // The event is going to be destroyed, so we cannot reference it anymore.
-            self.event = None;
-
             self.pool_ref
                 .pool
                 .lock()
@@ -780,7 +781,7 @@ mod tests {
             assert_eq!(pool.len(), 0);
             assert!(pool.is_empty());
 
-            // SAFETY: We ensure the pool outlives the sender and receiver
+            // SAFETY: We ensure the pool is pinned and outlives the sender and receiver
             let (sender, receiver) = unsafe { pool.as_ref().bind_by_ptr() };
 
             // Pool should have 1 event while endpoints are bound
@@ -877,14 +878,14 @@ mod tests {
         with_watchdog(|| {
             let pool = Box::pin(OnceEventPool::<i32>::new());
 
-            // SAFETY: We ensure the pool outlives the sender and receiver
+            // SAFETY: We ensure the pool is pinned and outlives the sender and receiver
             let (sender, _receiver) = unsafe { pool.as_ref().bind_by_ptr() };
 
             // Force the sender to be dropped without being consumed by send()
             drop(sender);
 
             // Create a new event to verify the pool is still functional
-            // SAFETY: We ensure the pool outlives the sender and receiver
+            // SAFETY: We ensure the pool is pinned and outlives the sender and receiver
             let (sender2, receiver2) = unsafe { pool.as_ref().bind_by_ptr() };
             sender2.send(147);
             let value = futures::executor::block_on(receiver2).unwrap();
@@ -897,14 +898,14 @@ mod tests {
         with_watchdog(|| {
             let pool = Box::pin(OnceEventPool::<i32>::new());
 
-            // SAFETY: We ensure the pool outlives the sender and receiver
+            // SAFETY: We ensure the pool is pinned and outlives the sender and receiver
             let (_sender, receiver) = unsafe { pool.as_ref().bind_by_ptr() };
 
             // Force the receiver to be dropped without being consumed by recv()
             drop(receiver);
 
             // Create a new event to verify the pool is still functional
-            // SAFETY: We ensure the pool outlives the sender and receiver
+            // SAFETY: We ensure the pool is pinned and outlives the sender and receiver
             let (sender2, receiver2) = unsafe { pool.as_ref().bind_by_ptr() };
             sender2.send(258);
             let value = futures::executor::block_on(receiver2).unwrap();
@@ -1194,7 +1195,7 @@ mod tests {
             futures::executor::block_on(async {
                 let pool = Box::pin(OnceEventPool::<i32>::new());
 
-                // SAFETY: We ensure the pool outlives the sender and receiver
+                // SAFETY: We ensure the pool is pinned and outlives the sender and receiver
                 let (sender, receiver) = unsafe { pool.as_ref().bind_by_ptr() };
 
                 // Drop the sender without sending anything

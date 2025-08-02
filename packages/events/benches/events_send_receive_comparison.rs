@@ -38,7 +38,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, Criterion, criterion_group, criterion_main};
-use events::{LocalOnceEvent, OnceEvent};
+use events::{LocalOnceEvent, LocalOnceEventPool, OnceEvent, OnceEventPool};
 use futures::executor::block_on;
 use many_cpus::ProcessorSet;
 use new_zealand::nz;
@@ -60,6 +60,9 @@ fn entrypoint(c: &mut Criterion) {
     local_once_event_ref_st(&mut one_thread, &mut group);
     local_once_event_rc_st(&mut one_thread, &mut group);
     local_once_event_ptr_st(&mut one_thread, &mut group);
+    pooled_local_once_event_ref_st(&mut one_thread, &mut group);
+    pooled_local_once_event_rc_st(&mut one_thread, &mut group);
+    pooled_local_once_event_ptr_st(&mut one_thread, &mut group);
     oneshot_channel_st(&mut one_thread, &mut group);
     futures_oneshot_channel_st(&mut one_thread, &mut group);
 
@@ -72,6 +75,9 @@ fn entrypoint(c: &mut Criterion) {
 
         once_event_arc_mt(two_threads, &mut group);
         once_event_ptr_mt(two_threads, &mut group);
+        pooled_once_event_ref_mt(two_threads, &mut group);
+        pooled_once_event_arc_mt(two_threads, &mut group);
+        pooled_once_event_ptr_mt(two_threads, &mut group);
         oneshot_channel_mt(two_threads, &mut group);
         futures_oneshot_channel_mt(two_threads, &mut group);
 
@@ -250,14 +256,142 @@ fn futures_oneshot_channel_mt(pool: &mut ThreadPool, group: &mut BenchmarkGroup<
     });
 }
 
+fn pooled_once_event_ref_mt(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+    group.bench_function("pooled_once_event_ref", |b| {
+        b.iter_custom(|iters| {
+            let event_pool = OnceEventPool::<Payload>::new();
+
+            let mut senders = Vec::with_capacity(usize::try_from(iters).unwrap());
+            let mut receivers = Vec::with_capacity(usize::try_from(iters).unwrap());
+
+            for _ in 0..iters {
+                let (sender, receiver) = event_pool.bind_by_ref();
+                senders.push(sender);
+                receivers.push(receiver);
+            }
+
+            let senders = Mutex::new(senders);
+            let receivers = Mutex::new(receivers);
+
+            Run::new()
+                // Group 0 sends, group 1 receives.
+                .groups(nz!(2))
+                .prepare_iter(|args| {
+                    if args.meta().group_index() == 0 {
+                        (Some(senders.lock().unwrap().pop().unwrap()), None)
+                    } else {
+                        (None, Some(receivers.lock().unwrap().pop().unwrap()))
+                    }
+                })
+                .iter(|mut args| {
+                    let (sender, receiver) = args.take_iter_state();
+
+                    if let Some(sender) = sender {
+                        sender.send(42);
+                    } else if let Some(receiver) = receiver {
+                        block_on(receiver).unwrap();
+                    }
+                })
+                .execute_on(pool, iters)
+                .mean_duration()
+        });
+    });
+}
+
+fn pooled_once_event_arc_mt(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+    group.bench_function("pooled_once_event_arc", |b| {
+        b.iter_custom(|iters| {
+            let event_pool = Arc::new(OnceEventPool::<Payload>::new());
+
+            let mut senders = Vec::with_capacity(usize::try_from(iters).unwrap());
+            let mut receivers = Vec::with_capacity(usize::try_from(iters).unwrap());
+
+            for _ in 0..iters {
+                let (sender, receiver) = event_pool.bind_by_arc();
+                senders.push(sender);
+                receivers.push(receiver);
+            }
+
+            let senders = Mutex::new(senders);
+            let receivers = Mutex::new(receivers);
+
+            Run::new()
+                // Group 0 sends, group 1 receives.
+                .groups(nz!(2))
+                .prepare_iter(|args| {
+                    if args.meta().group_index() == 0 {
+                        (Some(senders.lock().unwrap().pop().unwrap()), None)
+                    } else {
+                        (None, Some(receivers.lock().unwrap().pop().unwrap()))
+                    }
+                })
+                .iter(|mut args| {
+                    let (sender, receiver) = args.take_iter_state();
+
+                    if let Some(sender) = sender {
+                        sender.send(42);
+                    } else if let Some(receiver) = receiver {
+                        block_on(receiver).unwrap();
+                    }
+                })
+                .execute_on(pool, iters)
+                .mean_duration()
+        });
+    });
+}
+
+fn pooled_once_event_ptr_mt(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+    group.bench_function("pooled_once_event_ptr", |b| {
+        b.iter_custom(|iters| {
+            // We keep the pool alive until the end of the run.
+            let event_pool = Box::pin(OnceEventPool::<Payload>::new());
+
+            let mut senders = Vec::with_capacity(usize::try_from(iters).unwrap());
+            let mut receivers = Vec::with_capacity(usize::try_from(iters).unwrap());
+
+            for _ in 0..iters {
+                // SAFETY: We keep the pool alive for the duration of the benchmark,
+                // above in `event_pool`, as required.
+                let (sender, receiver) = unsafe { event_pool.as_ref().bind_by_ptr() };
+                senders.push(sender);
+                receivers.push(receiver);
+            }
+
+            let senders = Mutex::new(senders);
+            let receivers = Mutex::new(receivers);
+
+            Run::new()
+                // Group 0 sends, group 1 receives.
+                .groups(nz!(2))
+                .prepare_iter(|args| {
+                    if args.meta().group_index() == 0 {
+                        (Some(senders.lock().unwrap().pop().unwrap()), None)
+                    } else {
+                        (None, Some(receivers.lock().unwrap().pop().unwrap()))
+                    }
+                })
+                .iter(|mut args| {
+                    let (sender, receiver) = args.take_iter_state();
+
+                    if let Some(sender) = sender {
+                        sender.send(42);
+                    } else if let Some(receiver) = receiver {
+                        block_on(receiver).unwrap();
+                    }
+                })
+                .execute_on(pool, iters)
+                .mean_duration()
+        });
+    });
+}
+
 fn local_once_event_ref_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
     Run::new()
-        .iter(|_| {
-            // This binding mode is really awkward to use but that's the deal with Rust references.
-            // We pay some extra penalty here by allocating the event in the measured part, which
-            // the other scenarios do not do (but which the referencing sort of appears to require).
-            let event = LocalOnceEvent::<Payload>::new();
-            let (sender, receiver) = event.bind_by_ref();
+        .prepare_iter(|_| LocalOnceEvent::<Payload>::new())
+        .iter(|args| {
+            // We bind a bit later here than in the other benchmarks because the by-ref mode
+            // is a bit cumbersome. Good enough, just remember there is some tiny overhead.
+            let (sender, receiver) = args.iter_state().bind_by_ref();
 
             sender.send(42);
             block_on(receiver).unwrap();
@@ -327,4 +461,50 @@ fn futures_oneshot_channel_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<
             block_on(receiver).unwrap();
         })
         .execute_criterion_on(pool, group, "futures_oneshot_channel");
+}
+
+fn pooled_local_once_event_ref_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+    Run::new()
+        .prepare_thread(|_| LocalOnceEventPool::<Payload>::new())
+        .iter(|args| {
+            // We bind a bit later here than in the other benchmarks because the by-ref mode
+            // is a bit cumbersome. Good enough, just remember there is some tiny overhead.
+            let (sender, receiver) = args.thread_state().bind_by_ref();
+
+            sender.send(42);
+            block_on(receiver).unwrap();
+        })
+        .execute_criterion_on(pool, group, "pooled_local_once_event_ref");
+}
+
+fn pooled_local_once_event_rc_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+    Run::new()
+        .prepare_thread(|_| Rc::new(LocalOnceEventPool::<Payload>::new()))
+        .prepare_iter(|args| args.thread_state().bind_by_rc())
+        .iter(|mut args| {
+            let (sender, receiver) = args.take_iter_state();
+
+            sender.send(42);
+            block_on(receiver).unwrap();
+        })
+        .execute_criterion_on(pool, group, "pooled_local_once_event_rc");
+}
+
+fn pooled_local_once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+    Run::new()
+        .prepare_thread(|_| Box::pin(LocalOnceEventPool::<Payload>::new()))
+        .prepare_iter(|args| {
+            // SAFETY: We keep the pool alive for the duration of the iteration,
+            // dropping it only at the moment of cleanup of each iteration.
+            let (sender, receiver) = unsafe { args.thread_state().as_ref().bind_by_ptr() };
+
+            (sender, receiver)
+        })
+        .iter(|mut args| {
+            let (sender, receiver) = args.take_iter_state();
+
+            sender.send(42);
+            block_on(receiver).unwrap();
+        })
+        .execute_criterion_on(pool, group, "pooled_local_once_event_ptr");
 }

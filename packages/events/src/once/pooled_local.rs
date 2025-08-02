@@ -218,7 +218,7 @@ impl<T> LocalOnceEventPool<T> {
     /// let pool = Box::pin(LocalOnceEventPool::<i32>::new());
     ///
     /// // First usage
-    /// // SAFETY: We ensure the pool outlives the sender and receiver
+    /// // SAFETY: We ensure the pool is pinned and outlives the sender and receiver
     /// let (sender1, receiver1) = unsafe { pool.as_ref().bind_by_ptr() };
     /// sender1.send(42);
     /// let value1 = receiver1.await.unwrap();
@@ -699,7 +699,7 @@ mod tests {
                 assert_eq!(pool.len(), 0);
                 assert!(pool.is_empty());
 
-                // SAFETY: We ensure the pool outlives the sender and receiver
+                // SAFETY: We ensure the pool is pinned and outlives the sender and receiver
                 let (sender, receiver) = unsafe { pool.as_ref().bind_by_ptr() };
 
                 // Pool should have 1 event while endpoints are bound
@@ -892,7 +892,7 @@ mod tests {
             futures::executor::block_on(async {
                 let pool = Box::pin(LocalOnceEventPool::<i32>::new());
 
-                // SAFETY: We ensure the pool outlives the sender and receiver
+                // SAFETY: We ensure the pool is pinned and outlives the sender and receiver
                 let (sender, receiver) = unsafe { pool.as_ref().bind_by_ptr() };
 
                 // Drop the sender without sending anything

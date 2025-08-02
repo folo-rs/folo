@@ -33,7 +33,7 @@ impl<T> WithRefCount<T> {
     /// Panics if the reference count was zero (indicating resurrection).
     #[cfg_attr(not(test), expect(dead_code, reason = "maybe useful in the future"))]
     pub(crate) fn inc_ref(&self) {
-        assert_ne!(0, self.ref_count.fetch_add(1, atomic::Ordering::Acquire));
+        assert_ne!(0, self.ref_count.fetch_add(1, atomic::Ordering::Relaxed));
     }
 
     /// Decrements the reference count and returns true if this was the last reference.
@@ -44,8 +44,10 @@ impl<T> WithRefCount<T> {
     pub(crate) fn dec_ref(&self) -> bool {
         match self.ref_count.fetch_sub(1, atomic::Ordering::Relaxed) {
             1 => {
-                // We need an Acquire fence here to ensure we have observed all writes before drop.
-                // On x86 this does nothing but weaker architectures may delay writes.
+                // We have detected that we were the last reference holder, so synchronize here.
+                // We use an Acquire fence to ensure that we see all the writes from other threads
+                // before we drop the object. This does nothing on x86 but writes may be delayed
+                // on other architectures with weaker memory models.
                 atomic::fence(atomic::Ordering::Acquire);
 
                 true

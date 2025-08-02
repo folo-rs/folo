@@ -97,6 +97,7 @@ fn entrypoint(c: &mut Criterion) {
         .prepare_thread(|_| Box::pin(LocalOnceEventPool::<Payload>::new()))
         .iter(|args| {
             // SAFETY: We are immediately dropping the sender/receiver, so the pool outlives them.
+            // The pool is also pinned, as required.
             unsafe {
                 drop(args.thread_state().as_ref().bind_by_ptr());
             }
@@ -121,6 +122,7 @@ fn entrypoint(c: &mut Criterion) {
         .prepare_thread(|_| Box::pin(OnceEventPool::<Payload>::new()))
         .iter(|args| {
             // SAFETY: We are immediately dropping the sender/receiver, so the pool outlives them.
+            // The pool is also pinned, as required.
             unsafe {
                 drop(args.thread_state().as_ref().bind_by_ptr());
             }

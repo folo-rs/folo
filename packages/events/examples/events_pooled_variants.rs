@@ -58,6 +58,7 @@ fn main() {
             let pool = Box::pin(OnceEventPool::<i32>::new());
 
             // SAFETY: We ensure the pool outlives the sender and receiver
+            // The pool is also pinned, as required.
             let (sender, receiver) = unsafe { pool.as_ref().bind_by_ptr() };
 
             sender.send(BY_PTR_TEST_VALUE);

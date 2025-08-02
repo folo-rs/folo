@@ -257,7 +257,7 @@ where
     ///
     /// # block_on(async {
     /// let mut event = Box::pin(OnceEvent::<i32>::new());
-    /// // SAFETY: We ensure the event outlives the sender and receiver
+    /// // SAFETY: We ensure the event is pinned and outlives the sender and receiver
     /// let (sender, receiver) = unsafe { event.as_ref().bind_by_ptr() };
     ///
     /// sender.send(42);
@@ -811,7 +811,7 @@ mod tests {
         with_watchdog(|| {
             let event = Box::pin(OnceEvent::<String>::new());
 
-            // SAFETY: We ensure the event outlives the sender and receiver within this test
+            // SAFETY: We ensure the event is pinned and outlives the sender and receiver within this test
             let (sender, receiver) = unsafe { event.as_ref().bind_by_ptr() };
 
             sender.send("Hello from pointer".to_string());
