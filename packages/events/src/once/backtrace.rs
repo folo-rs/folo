@@ -1,4 +1,3 @@
-#[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
 #[cfg(not(debug_assertions))]
 use std::marker::PhantomData;
