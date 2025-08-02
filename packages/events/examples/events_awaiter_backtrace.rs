@@ -8,7 +8,7 @@
 
 use std::pin::pin;
 
-use events::{RefEvent, OnceEvent, OnceReceiver};
+use events::{OnceEvent, OnceReceiver, RefEvent};
 use futures::executor::block_on;
 use futures::task::{Context, noop_waker_ref};
 

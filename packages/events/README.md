@@ -4,9 +4,11 @@ This package provides lightweight, efficient signaling mechanisms for communicat
 different parts of an application. The API is designed to be simple to use while offering
 high performance in concurrent scenarios.
 
-Both single-threaded and thread-safe variants are available:
-- `OnceEvent<T>`, `OnceSender<T, R>`, `OnceReceiver<T, R>` - Thread-safe variants
-- `LocalOnceEvent<T>`, `LocalOnceSender<T, R>`, `LocalOnceReceiver<T, R>` - Single-threaded variants
+Both single-threaded and thread-safe variants are available for events and pools:
+- `OnceEvent<T>`, `OnceSender<E>`, `OnceReceiver<E>` - Thread-safe event variants
+- `LocalOnceEvent<T>`, `LocalOnceSender<E>`, `LocalOnceReceiver<E>` - Single-threaded event variants
+- `OnceEventPool<T>`, `PooledOnceSender<P>`, `PooledOnceReceiver<P>` - Thread-safe pool variants
+- `LocalOnceEventPool<T>`, `PooledLocalOnceSender<P>`, `PooledLocalOnceReceiver<P>` - Single-threaded pool variants
 
 ```rust
 use events::OnceEvent;

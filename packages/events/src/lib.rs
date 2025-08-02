@@ -44,19 +44,27 @@
 //! ## Flexible Ownership Models
 //!
 //! The separation of the event from its endpoints (sender/receiver) allows for multiple
-//! ownership patterns:
+//! ownership patterns for both individual events and event pools:
 //!
+//! Event Ownership Models
 //! - **Reference-based**: Minimal overhead when the event lifetime is managed externally
 //! - **Arc/Rc-based**: Shared ownership when needed for complex scenarios
 //! - **Pointer-based**: Direct pointer management for maximum performance
+//!
+//! Pool Ownership Models
+//! - **Reference-based**: Pool accessed via shared reference (`&OnceEventPool`, `&LocalOnceEventPool`)
+//! - **Arc/Rc-based**: Pool shared across multiple contexts (`Arc<OnceEventPool>`, `Rc<LocalOnceEventPool>`)
+//! - **Pointer-based**: Direct pointer access to pinned pools for maximum performance
 //!
 //! This flexibility allows applications to choose the ownership model that best fits
 //! their performance and safety requirements, rather than being forced into a single
 //! dynamic allocation pattern.
 //!
-//! Both single-threaded and thread-safe variants are available:
-//! - [`OnceEvent<T>`], [`OnceSender<T, R>`], [`OnceReceiver<T, R>`] - Thread-safe variants
-//! - [`LocalOnceEvent<T>`], [`LocalOnceSender<T, R>`], [`LocalOnceReceiver<T, R>`] - Single-threaded variants
+//! Both single-threaded and thread-safe variants are available for both individual events and pools:
+//! - [`OnceEvent<T>`], [`OnceSender<E>`], [`OnceReceiver<E>`] - Thread-safe event variants
+//! - [`LocalOnceEvent<T>`], [`LocalOnceSender<E>`], [`LocalOnceReceiver<E>`] - Single-threaded event variants
+//! - [`OnceEventPool<T>`], [`PooledOnceSender<P>`], [`PooledOnceReceiver<P>`] - Thread-safe pool variants
+//! - [`LocalOnceEventPool<T>`], [`PooledLocalOnceSender<P>`], [`PooledLocalOnceReceiver<P>`] - Single-threaded pool variants
 //!
 //! Each receiver type implements [`Future`], allowing you to `.await` them directly.
 //! In debug builds, if backtraces are enabled, the owner of the event/pool can use
@@ -193,6 +201,46 @@
 //! let value2 = receiver2.await.unwrap();
 //! assert_eq!(value2, 200);
 //! // Pool automatically manages event lifecycle and reuse
+//! # });
+//! ```
+//!
+//! # Pool Ownership Examples
+//!
+//! ## Arc-based Pool Sharing
+//!
+//! ```rust
+//! use std::sync::Arc;
+//!
+//! use events::OnceEventPool;
+//! # use futures::executor::block_on;
+//!
+//! # block_on(async {
+//! // Create an Arc-wrapped pool for shared ownership across threads
+//! let pool = Arc::new(OnceEventPool::<String>::new());
+//! let (sender, receiver) = pool.bind_by_arc();
+//!
+//! sender.send("Hello from Arc pool!".to_string());
+//! let message = receiver.await.unwrap();
+//! assert_eq!(message, "Hello from Arc pool!");
+//! # });
+//! ```
+//!
+//! ## Rc-based Local Pool Sharing
+//!
+//! ```rust
+//! use std::rc::Rc;
+//!
+//! use events::LocalOnceEventPool;
+//! # use futures::executor::block_on;
+//!
+//! # block_on(async {
+//! // Create an Rc-wrapped local pool for shared ownership (single-threaded)
+//! let pool = Rc::new(LocalOnceEventPool::<String>::new());
+//! let (sender, receiver) = pool.bind_by_rc();
+//!
+//! sender.send("Hello from Rc pool!".to_string());
+//! let message = receiver.await.unwrap();
+//! assert_eq!(message, "Hello from Rc pool!");
 //! # });
 //! ```
 
