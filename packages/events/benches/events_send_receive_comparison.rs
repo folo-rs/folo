@@ -60,9 +60,14 @@ fn entrypoint(c: &mut Criterion) {
     local_once_event_ref_st(&mut one_thread, &mut group);
     local_once_event_rc_st(&mut one_thread, &mut group);
     local_once_event_ptr_st(&mut one_thread, &mut group);
+    once_event_arc_st(&mut one_thread, &mut group);
+    once_event_ptr_st(&mut one_thread, &mut group);
     pooled_local_once_event_ref_st(&mut one_thread, &mut group);
     pooled_local_once_event_rc_st(&mut one_thread, &mut group);
     pooled_local_once_event_ptr_st(&mut one_thread, &mut group);
+    pooled_once_event_ref_st(&mut one_thread, &mut group);
+    pooled_once_event_arc_st(&mut one_thread, &mut group);
+    pooled_once_event_ptr_st(&mut one_thread, &mut group);
     oneshot_channel_st(&mut one_thread, &mut group);
     futures_oneshot_channel_st(&mut one_thread, &mut group);
 
@@ -438,6 +443,45 @@ fn local_once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_,
         .execute_criterion_on(pool, group, "local_once_event_ptr");
 }
 
+fn once_event_arc_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+    Run::new()
+        .prepare_iter(|_| {
+            let event = Arc::new(OnceEvent::<Payload>::new());
+            event.bind_by_arc()
+        })
+        .iter(|mut args| {
+            let (sender, receiver) = args.take_iter_state();
+
+            sender.send(42);
+            block_on(receiver).unwrap();
+        })
+        .execute_criterion_on(pool, group, "once_event_arc");
+}
+
+fn once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+    Run::new()
+        .prepare_iter(|_| {
+            let event = Box::pin(OnceEvent::<Payload>::new());
+
+            // SAFETY: We keep the event alive for the duration of the iteration,
+            // dropping it only at the moment of cleanup of each iteration.
+            let (sender, receiver) = unsafe { event.as_ref().bind_by_ptr() };
+
+            (event, sender, receiver)
+        })
+        .iter(|mut args| {
+            let (event, sender, receiver) = args.take_iter_state();
+
+            sender.send(42);
+            block_on(receiver).unwrap();
+
+            // We are required to keep the event alive until both sender and receiver are gone.
+            // We drop it as part of the measured part to match the behavior of `oneshot`.
+            drop(event);
+        })
+        .execute_criterion_on(pool, group, "once_event_ptr");
+}
+
 fn oneshot_channel_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
     Run::new()
         .prepare_iter(|_| oneshot::channel())
@@ -507,4 +551,50 @@ fn pooled_local_once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGr
             block_on(receiver).unwrap();
         })
         .execute_criterion_on(pool, group, "pooled_local_once_event_ptr");
+}
+
+fn pooled_once_event_ref_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+    Run::new()
+        .prepare_thread(|_| OnceEventPool::<Payload>::new())
+        .iter(|args| {
+            // We bind a bit later here than in the other benchmarks because the by-ref mode
+            // is a bit cumbersome. Good enough, just remember there is some tiny overhead.
+            let (sender, receiver) = args.thread_state().bind_by_ref();
+
+            sender.send(42);
+            block_on(receiver).unwrap();
+        })
+        .execute_criterion_on(pool, group, "pooled_once_event_ref");
+}
+
+fn pooled_once_event_arc_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+    Run::new()
+        .prepare_thread(|_| Arc::new(OnceEventPool::<Payload>::new()))
+        .prepare_iter(|args| args.thread_state().bind_by_arc())
+        .iter(|mut args| {
+            let (sender, receiver) = args.take_iter_state();
+
+            sender.send(42);
+            block_on(receiver).unwrap();
+        })
+        .execute_criterion_on(pool, group, "pooled_once_event_arc");
+}
+
+fn pooled_once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+    Run::new()
+        .prepare_thread(|_| Box::pin(OnceEventPool::<Payload>::new()))
+        .prepare_iter(|args| {
+            // SAFETY: We keep the pool alive for the duration of the iteration,
+            // dropping it only at the moment of cleanup of each iteration.
+            let (sender, receiver) = unsafe { args.thread_state().as_ref().bind_by_ptr() };
+
+            (sender, receiver)
+        })
+        .iter(|mut args| {
+            let (sender, receiver) = args.take_iter_state();
+
+            sender.send(42);
+            block_on(receiver).unwrap();
+        })
+        .execute_criterion_on(pool, group, "pooled_once_event_ptr");
 }
