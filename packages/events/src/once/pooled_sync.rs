@@ -114,8 +114,8 @@ where
     pub fn bind_by_ref(
         &self,
     ) -> (
-        PooledOnceSender<T, ByRefPool<'_, T>>,
-        PooledOnceReceiver<T, ByRefPool<'_, T>>,
+        PooledOnceSender<T, RefPool<'_, T>>,
+        PooledOnceReceiver<T, RefPool<'_, T>>,
     ) {
         let mut inner_pool = self.pool.lock().expect(ERR_POISONED_LOCK);
 
@@ -129,7 +129,7 @@ where
 
         let item_ptr = NonNull::from(item.get_ref());
 
-        let pool_ref = ByRefPool { pool: self };
+        let pool_ref = RefPool { pool: self };
 
         (
             PooledOnceSender {
@@ -174,8 +174,8 @@ where
     pub fn bind_by_arc(
         self: &Arc<Self>,
     ) -> (
-        PooledOnceSender<T, ByArcPool<T>>,
-        PooledOnceReceiver<T, ByArcPool<T>>,
+        PooledOnceSender<T, ArcPool<T>>,
+        PooledOnceReceiver<T, ArcPool<T>>,
     ) {
         let mut inner_pool = self.pool.lock().expect(ERR_POISONED_LOCK);
 
@@ -189,7 +189,7 @@ where
 
         let item_ptr = NonNull::from(item.get_ref());
 
-        let pool_ref = ByArcPool {
+        let pool_ref = ArcPool {
             pool: Arc::clone(self),
         };
 
@@ -244,8 +244,8 @@ where
     pub unsafe fn bind_by_ptr(
         self: Pin<&Self>,
     ) -> (
-        PooledOnceSender<T, ByPtrPool<T>>,
-        PooledOnceReceiver<T, ByPtrPool<T>>,
+        PooledOnceSender<T, PtrPool<T>>,
+        PooledOnceReceiver<T, PtrPool<T>>,
     ) {
         let mut inner_pool = self.pool.lock().expect(ERR_POISONED_LOCK);
 
@@ -259,7 +259,7 @@ where
 
         let item_ptr = NonNull::from(item.get_ref());
 
-        let pool_ref = ByPtrPool {
+        let pool_ref = PtrPool {
             pool: NonNull::from(self.get_ref()),
         };
 
@@ -401,16 +401,16 @@ where
 ///
 /// Only used in type names. Instances are created internally by [`OnceEventPool`].
 #[derive(Copy, Debug)]
-pub struct ByRefPool<'a, T>
+pub struct RefPool<'a, T>
 where
     T: Send,
 {
     pool: &'a OnceEventPool<T>,
 }
 
-impl<T> Sealed for ByRefPool<'_, T> where T: Send {}
-impl<T> PoolRef<T> for ByRefPool<'_, T> where T: Send {}
-impl<T> Deref for ByRefPool<'_, T>
+impl<T> Sealed for RefPool<'_, T> where T: Send {}
+impl<T> PoolRef<T> for RefPool<'_, T> where T: Send {}
+impl<T> Deref for RefPool<'_, T>
 where
     T: Send,
 {
@@ -420,7 +420,7 @@ where
         self.pool
     }
 }
-impl<T> Clone for ByRefPool<'_, T>
+impl<T> Clone for RefPool<'_, T>
 where
     T: Send,
 {
@@ -433,16 +433,16 @@ where
 ///
 /// Only used in type names. Instances are created internally by [`OnceEventPool`].
 #[derive(Debug)]
-pub struct ByArcPool<T>
+pub struct ArcPool<T>
 where
     T: Send,
 {
     pool: Arc<OnceEventPool<T>>,
 }
 
-impl<T> Sealed for ByArcPool<T> where T: Send {}
-impl<T> PoolRef<T> for ByArcPool<T> where T: Send {}
-impl<T> Deref for ByArcPool<T>
+impl<T> Sealed for ArcPool<T> where T: Send {}
+impl<T> PoolRef<T> for ArcPool<T> where T: Send {}
+impl<T> Deref for ArcPool<T>
 where
     T: Send,
 {
@@ -452,7 +452,7 @@ where
         &self.pool
     }
 }
-impl<T> Clone for ByArcPool<T>
+impl<T> Clone for ArcPool<T>
 where
     T: Send,
 {
@@ -467,16 +467,16 @@ where
 ///
 /// Only used in type names. Instances are created internally by [`OnceEventPool`].
 #[derive(Copy, Debug)]
-pub struct ByPtrPool<T>
+pub struct PtrPool<T>
 where
     T: Send,
 {
     pool: NonNull<OnceEventPool<T>>,
 }
 
-impl<T> Sealed for ByPtrPool<T> where T: Send {}
-impl<T> PoolRef<T> for ByPtrPool<T> where T: Send {}
-impl<T> Deref for ByPtrPool<T>
+impl<T> Sealed for PtrPool<T> where T: Send {}
+impl<T> PoolRef<T> for PtrPool<T> where T: Send {}
+impl<T> Deref for PtrPool<T>
 where
     T: Send,
 {
@@ -487,7 +487,7 @@ where
         unsafe { self.pool.as_ref() }
     }
 }
-impl<T> Clone for ByPtrPool<T>
+impl<T> Clone for PtrPool<T>
 where
     T: Send,
 {
@@ -496,7 +496,7 @@ where
     }
 }
 // SAFETY: This is only used with the thread-safe pool (the pool is Sync).
-unsafe impl<T> Send for ByPtrPool<T> where T: Send {}
+unsafe impl<T> Send for PtrPool<T> where T: Send {}
 
 /// A sender endpoint for pooled  events that holds a reference to the pool.
 ///
@@ -1334,17 +1334,17 @@ mod tests {
 
         // These are all meant to be consumed locally - they may move between threads but are
         // not shared between threads, so Sync is not expected, only Send.
-        assert_impl_all!(PooledOnceSender<u32, ByRefPool<'static, u32>>: Send);
-        assert_impl_all!(PooledOnceReceiver<u32, ByRefPool<'static, u32>>: Send);
-        assert_impl_all!(PooledOnceSender<u32, ByArcPool<u32>>: Send);
-        assert_impl_all!(PooledOnceReceiver<u32, ByArcPool<u32>>: Send);
-        assert_impl_all!(PooledOnceSender<u32, ByPtrPool<u32>>: Send);
-        assert_impl_all!(PooledOnceReceiver<u32, ByPtrPool<u32>>: Send);
-        assert_not_impl_any!(PooledOnceSender<u32, ByRefPool<'static, u32>>: Sync);
-        assert_not_impl_any!(PooledOnceReceiver<u32, ByRefPool<'static, u32>>: Sync);
-        assert_not_impl_any!(PooledOnceSender<u32, ByArcPool<u32>>: Sync);
-        assert_not_impl_any!(PooledOnceReceiver<u32, ByArcPool<u32>>: Sync);
-        assert_not_impl_any!(PooledOnceSender<u32, ByPtrPool<u32>>: Sync);
-        assert_not_impl_any!(PooledOnceReceiver<u32, ByPtrPool<u32>>: Sync);
+        assert_impl_all!(PooledOnceSender<u32, RefPool<'static, u32>>: Send);
+        assert_impl_all!(PooledOnceReceiver<u32, RefPool<'static, u32>>: Send);
+        assert_impl_all!(PooledOnceSender<u32, ArcPool<u32>>: Send);
+        assert_impl_all!(PooledOnceReceiver<u32, ArcPool<u32>>: Send);
+        assert_impl_all!(PooledOnceSender<u32, PtrPool<u32>>: Send);
+        assert_impl_all!(PooledOnceReceiver<u32, PtrPool<u32>>: Send);
+        assert_not_impl_any!(PooledOnceSender<u32, RefPool<'static, u32>>: Sync);
+        assert_not_impl_any!(PooledOnceReceiver<u32, RefPool<'static, u32>>: Sync);
+        assert_not_impl_any!(PooledOnceSender<u32, ArcPool<u32>>: Sync);
+        assert_not_impl_any!(PooledOnceReceiver<u32, ArcPool<u32>>: Sync);
+        assert_not_impl_any!(PooledOnceSender<u32, PtrPool<u32>>: Sync);
+        assert_not_impl_any!(PooledOnceReceiver<u32, PtrPool<u32>>: Sync);
     }
 }

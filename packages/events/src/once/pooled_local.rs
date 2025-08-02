@@ -106,8 +106,8 @@ impl<T> LocalOnceEventPool<T> {
     pub fn bind_by_ref(
         &self,
     ) -> (
-        PooledLocalOnceSender<T, ByRefLocalPool<'_, T>>,
-        PooledLocalOnceReceiver<T, ByRefLocalPool<'_, T>>,
+        PooledLocalOnceSender<T, RefLocalPool<'_, T>>,
+        PooledLocalOnceReceiver<T, RefLocalPool<'_, T>>,
     ) {
         let mut inner_pool = self.pool.borrow_mut();
         let inserter = inner_pool.begin_insert();
@@ -120,7 +120,7 @@ impl<T> LocalOnceEventPool<T> {
 
         let item_ptr = NonNull::from(item.get_ref());
 
-        let pool_ref = ByRefLocalPool { pool: self };
+        let pool_ref = RefLocalPool { pool: self };
 
         (
             PooledLocalOnceSender {
@@ -165,8 +165,8 @@ impl<T> LocalOnceEventPool<T> {
     pub fn bind_by_rc(
         self: &Rc<Self>,
     ) -> (
-        PooledLocalOnceSender<T, ByRcLocalPool<T>>,
-        PooledLocalOnceReceiver<T, ByRcLocalPool<T>>,
+        PooledLocalOnceSender<T, RcLocalPool<T>>,
+        PooledLocalOnceReceiver<T, RcLocalPool<T>>,
     ) {
         let mut inner_pool = self.pool.borrow_mut();
         let inserter = inner_pool.begin_insert();
@@ -178,7 +178,7 @@ impl<T> LocalOnceEventPool<T> {
 
         let item_ptr = NonNull::from(item.get_ref());
 
-        let pool_ref = ByRcLocalPool {
+        let pool_ref = RcLocalPool {
             pool: Rc::clone(self),
         };
 
@@ -238,8 +238,8 @@ impl<T> LocalOnceEventPool<T> {
     pub unsafe fn bind_by_ptr(
         self: Pin<&Self>,
     ) -> (
-        PooledLocalOnceSender<T, ByPtrLocalPool<T>>,
-        PooledLocalOnceReceiver<T, ByPtrLocalPool<T>>,
+        PooledLocalOnceSender<T, PtrLocalPool<T>>,
+        PooledLocalOnceReceiver<T, PtrLocalPool<T>>,
     ) {
         let mut inner_pool = self.pool.borrow_mut();
         let inserter = inner_pool.begin_insert();
@@ -252,7 +252,7 @@ impl<T> LocalOnceEventPool<T> {
 
         let item_ptr = NonNull::from(item.get_ref());
 
-        let pool_ref = ByPtrLocalPool {
+        let pool_ref = PtrLocalPool {
             pool: NonNull::from(self.get_ref()),
         };
 
@@ -387,20 +387,20 @@ pub trait LocalPoolRef<T>: Deref<Target = LocalOnceEventPool<T>> + Sealed {}
 ///
 /// Only used in type names. Instances are created internally by [`LocalOnceEventPool`].
 #[derive(Copy, Debug)]
-pub struct ByRefLocalPool<'a, T> {
+pub struct RefLocalPool<'a, T> {
     pool: &'a LocalOnceEventPool<T>,
 }
 
-impl<T> Sealed for ByRefLocalPool<'_, T> {}
-impl<T> LocalPoolRef<T> for ByRefLocalPool<'_, T> {}
-impl<T> Deref for ByRefLocalPool<'_, T> {
+impl<T> Sealed for RefLocalPool<'_, T> {}
+impl<T> LocalPoolRef<T> for RefLocalPool<'_, T> {}
+impl<T> Deref for RefLocalPool<'_, T> {
     type Target = LocalOnceEventPool<T>;
 
     fn deref(&self) -> &Self::Target {
         self.pool
     }
 }
-impl<T> Clone for ByRefLocalPool<'_, T> {
+impl<T> Clone for RefLocalPool<'_, T> {
     fn clone(&self) -> Self {
         Self { pool: self.pool }
     }
@@ -410,20 +410,20 @@ impl<T> Clone for ByRefLocalPool<'_, T> {
 ///
 /// Only used in type names. Instances are created internally by [`LocalOnceEventPool`].
 #[derive(Debug)]
-pub struct ByRcLocalPool<T> {
+pub struct RcLocalPool<T> {
     pool: Rc<LocalOnceEventPool<T>>,
 }
 
-impl<T> Sealed for ByRcLocalPool<T> {}
-impl<T> LocalPoolRef<T> for ByRcLocalPool<T> {}
-impl<T> Deref for ByRcLocalPool<T> {
+impl<T> Sealed for RcLocalPool<T> {}
+impl<T> LocalPoolRef<T> for RcLocalPool<T> {}
+impl<T> Deref for RcLocalPool<T> {
     type Target = LocalOnceEventPool<T>;
 
     fn deref(&self) -> &Self::Target {
         &self.pool
     }
 }
-impl<T> Clone for ByRcLocalPool<T> {
+impl<T> Clone for RcLocalPool<T> {
     fn clone(&self) -> Self {
         Self {
             pool: Rc::clone(&self.pool),
@@ -435,13 +435,13 @@ impl<T> Clone for ByRcLocalPool<T> {
 ///
 /// Only used in type names. Instances are created internally by [`LocalOnceEventPool`].
 #[derive(Copy, Debug)]
-pub struct ByPtrLocalPool<T> {
+pub struct PtrLocalPool<T> {
     pool: NonNull<LocalOnceEventPool<T>>,
 }
 
-impl<T> Sealed for ByPtrLocalPool<T> {}
-impl<T> LocalPoolRef<T> for ByPtrLocalPool<T> {}
-impl<T> Deref for ByPtrLocalPool<T> {
+impl<T> Sealed for PtrLocalPool<T> {}
+impl<T> LocalPoolRef<T> for PtrLocalPool<T> {}
+impl<T> Deref for PtrLocalPool<T> {
     type Target = LocalOnceEventPool<T>;
 
     fn deref(&self) -> &Self::Target {
@@ -449,7 +449,7 @@ impl<T> Deref for ByPtrLocalPool<T> {
         unsafe { self.pool.as_ref() }
     }
 }
-impl<T> Clone for ByPtrLocalPool<T> {
+impl<T> Clone for PtrLocalPool<T> {
     fn clone(&self) -> Self {
         Self { pool: self.pool }
     }
@@ -1006,11 +1006,11 @@ mod tests {
     fn thread_safety() {
         // Nothing is Send or Sync - everything is stuck on one thread.
         assert_not_impl_any!(LocalOnceEventPool<u32>: Send, Sync);
-        assert_not_impl_any!(PooledLocalOnceSender<u32, ByRefLocalPool<'static, u32>>: Send, Sync);
-        assert_not_impl_any!(PooledLocalOnceReceiver<u32, ByRefLocalPool<'static, u32>>: Send, Sync);
-        assert_not_impl_any!(PooledLocalOnceSender<u32, ByRcLocalPool<u32>>: Send, Sync);
-        assert_not_impl_any!(PooledLocalOnceReceiver<u32, ByRcLocalPool<u32>>: Send, Sync);
-        assert_not_impl_any!(PooledLocalOnceSender<u32, ByPtrLocalPool<u32>>: Send, Sync);
-        assert_not_impl_any!(PooledLocalOnceReceiver<u32, ByPtrLocalPool<u32>>: Send, Sync);
+        assert_not_impl_any!(PooledLocalOnceSender<u32, RefLocalPool<'static, u32>>: Send, Sync);
+        assert_not_impl_any!(PooledLocalOnceReceiver<u32, RefLocalPool<'static, u32>>: Send, Sync);
+        assert_not_impl_any!(PooledLocalOnceSender<u32, RcLocalPool<u32>>: Send, Sync);
+        assert_not_impl_any!(PooledLocalOnceReceiver<u32, RcLocalPool<u32>>: Send, Sync);
+        assert_not_impl_any!(PooledLocalOnceSender<u32, PtrLocalPool<u32>>: Send, Sync);
+        assert_not_impl_any!(PooledLocalOnceReceiver<u32, PtrLocalPool<u32>>: Send, Sync);
     }
 }

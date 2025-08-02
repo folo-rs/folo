@@ -126,8 +126,8 @@ where
     pub fn bind_by_ref(
         &self,
     ) -> (
-        OnceSender<T, ByRefEvent<'_, T>>,
-        OnceReceiver<T, ByRefEvent<'_, T>>,
+        OnceSender<T, RefEvent<'_, T>>,
+        OnceReceiver<T, RefEvent<'_, T>>,
     ) {
         self.bind_by_ref_checked()
             .expect("OnceEvent has already been bound")
@@ -156,16 +156,16 @@ where
     pub fn bind_by_ref_checked(
         &self,
     ) -> Option<(
-        OnceSender<T, ByRefEvent<'_, T>>,
-        OnceReceiver<T, ByRefEvent<'_, T>>,
+        OnceSender<T, RefEvent<'_, T>>,
+        OnceReceiver<T, RefEvent<'_, T>>,
     )> {
         if self.is_bound.swap(true, Ordering::Relaxed) {
             return None;
         }
 
         Some((
-            OnceSender::new(ByRefEvent { event: self }),
-            OnceReceiver::new(ByRefEvent { event: self }),
+            OnceSender::new(RefEvent { event: self }),
+            OnceReceiver::new(RefEvent { event: self }),
         ))
     }
 
@@ -191,7 +191,7 @@ where
     #[must_use]
     pub fn bind_by_arc(
         self: &Arc<Self>,
-    ) -> (OnceSender<T, ByArcEvent<T>>, OnceReceiver<T, ByArcEvent<T>>) {
+    ) -> (OnceSender<T, ArcEvent<T>>, OnceReceiver<T, ArcEvent<T>>) {
         self.bind_by_arc_checked()
             .expect("OnceEvent has already been bound")
     }
@@ -222,16 +222,16 @@ where
     )]
     pub fn bind_by_arc_checked(
         self: &Arc<Self>,
-    ) -> Option<(OnceSender<T, ByArcEvent<T>>, OnceReceiver<T, ByArcEvent<T>>)> {
+    ) -> Option<(OnceSender<T, ArcEvent<T>>, OnceReceiver<T, ArcEvent<T>>)> {
         if self.is_bound.swap(true, Ordering::Relaxed) {
             return None;
         }
 
         Some((
-            OnceSender::new(ByArcEvent {
+            OnceSender::new(ArcEvent {
                 event: Arc::clone(self),
             }),
-            OnceReceiver::new(ByArcEvent {
+            OnceReceiver::new(ArcEvent {
                 event: Arc::clone(self),
             }),
         ))
@@ -272,7 +272,7 @@ where
     #[must_use]
     pub unsafe fn bind_by_ptr(
         self: Pin<&Self>,
-    ) -> (OnceSender<T, ByPtrEvent<T>>, OnceReceiver<T, ByPtrEvent<T>>) {
+    ) -> (OnceSender<T, PtrEvent<T>>, OnceReceiver<T, PtrEvent<T>>) {
         // SAFETY: Caller has guaranteed event lifetime management
         unsafe { self.bind_by_ptr_checked() }.expect("OnceEvent has already been bound")
     }
@@ -310,7 +310,7 @@ where
     )]
     pub unsafe fn bind_by_ptr_checked(
         self: Pin<&Self>,
-    ) -> Option<(OnceSender<T, ByPtrEvent<T>>, OnceReceiver<T, ByPtrEvent<T>>)> {
+    ) -> Option<(OnceSender<T, PtrEvent<T>>, OnceReceiver<T, PtrEvent<T>>)> {
         if self.is_bound.swap(true, Ordering::Relaxed) {
             return None;
         }
@@ -318,8 +318,8 @@ where
         let event_ptr = NonNull::from(self.get_ref());
 
         Some((
-            OnceSender::new(ByPtrEvent { event: event_ptr }),
-            OnceReceiver::new(ByPtrEvent { event: event_ptr }),
+            OnceSender::new(PtrEvent { event: event_ptr }),
+            OnceReceiver::new(PtrEvent { event: event_ptr }),
         ))
     }
 
@@ -453,16 +453,16 @@ where
 ///
 /// Only used in type names. Instances are created internally by [`OnceEvent`].
 #[derive(Copy, Debug)]
-pub struct ByRefEvent<'a, T>
+pub struct RefEvent<'a, T>
 where
     T: Send,
 {
     event: &'a OnceEvent<T>,
 }
 
-impl<T> Sealed for ByRefEvent<'_, T> where T: Send {}
-impl<T> EventRef<T> for ByRefEvent<'_, T> where T: Send {}
-impl<T> Deref for ByRefEvent<'_, T>
+impl<T> Sealed for RefEvent<'_, T> where T: Send {}
+impl<T> EventRef<T> for RefEvent<'_, T> where T: Send {}
+impl<T> Deref for RefEvent<'_, T>
 where
     T: Send,
 {
@@ -472,7 +472,7 @@ where
         self.event
     }
 }
-impl<T> Clone for ByRefEvent<'_, T>
+impl<T> Clone for RefEvent<'_, T>
 where
     T: Send,
 {
@@ -485,16 +485,16 @@ where
 ///
 /// Only used in type names. Instances are created internally by [`OnceEvent`].
 #[derive(Debug)]
-pub struct ByArcEvent<T>
+pub struct ArcEvent<T>
 where
     T: Send,
 {
     event: Arc<OnceEvent<T>>,
 }
 
-impl<T> Sealed for ByArcEvent<T> where T: Send {}
-impl<T> EventRef<T> for ByArcEvent<T> where T: Send {}
-impl<T> Deref for ByArcEvent<T>
+impl<T> Sealed for ArcEvent<T> where T: Send {}
+impl<T> EventRef<T> for ArcEvent<T> where T: Send {}
+impl<T> Deref for ArcEvent<T>
 where
     T: Send,
 {
@@ -504,7 +504,7 @@ where
         &self.event
     }
 }
-impl<T> Clone for ByArcEvent<T>
+impl<T> Clone for ArcEvent<T>
 where
     T: Send,
 {
@@ -519,16 +519,16 @@ where
 ///
 /// Only used in type names. Instances are created internally by [`OnceEvent`].
 #[derive(Copy, Debug)]
-pub struct ByPtrEvent<T>
+pub struct PtrEvent<T>
 where
     T: Send,
 {
     event: NonNull<OnceEvent<T>>,
 }
 
-impl<T> Sealed for ByPtrEvent<T> where T: Send {}
-impl<T> EventRef<T> for ByPtrEvent<T> where T: Send {}
-impl<T> Deref for ByPtrEvent<T>
+impl<T> Sealed for PtrEvent<T> where T: Send {}
+impl<T> EventRef<T> for PtrEvent<T> where T: Send {}
+impl<T> Deref for PtrEvent<T>
 where
     T: Send,
 {
@@ -539,7 +539,7 @@ where
         unsafe { self.event.as_ref() }
     }
 }
-impl<T> Clone for ByPtrEvent<T>
+impl<T> Clone for PtrEvent<T>
 where
     T: Send,
 {
@@ -548,7 +548,7 @@ where
     }
 }
 // SAFETY: This is only used with the thread-safe event (the event is Sync).
-unsafe impl<T> Send for ByPtrEvent<T> where T: Send {}
+unsafe impl<T> Send for PtrEvent<T> where T: Send {}
 
 /// A sender that can send a value through a single-threaded event using Rc ownership.
 ///
@@ -935,17 +935,17 @@ mod tests {
 
         // These are all meant to be consumed ly - they may move between threads but are
         // not shared between threads, so Sync is not expected, only Send.
-        assert_impl_all!(OnceSender<u32, ByRefEvent<'static, u32>>: Send);
-        assert_impl_all!(OnceReceiver<u32, ByRefEvent<'static, u32>>: Send);
-        assert_impl_all!(OnceSender<u32, ByArcEvent<u32>>: Send);
-        assert_impl_all!(OnceReceiver<u32, ByArcEvent<u32>>: Send);
-        assert_impl_all!(OnceSender<u32, ByPtrEvent<u32>>: Send);
-        assert_impl_all!(OnceReceiver<u32, ByPtrEvent<u32>>: Send);
-        assert_not_impl_any!(OnceSender<u32, ByRefEvent<'static, u32>>: Sync);
-        assert_not_impl_any!(OnceReceiver<u32, ByRefEvent<'static, u32>>: Sync);
-        assert_not_impl_any!(OnceSender<u32, ByArcEvent<u32>>: Sync);
-        assert_not_impl_any!(OnceReceiver<u32, ByArcEvent<u32>>: Sync);
-        assert_not_impl_any!(OnceSender<u32, ByPtrEvent<u32>>: Sync);
-        assert_not_impl_any!(OnceReceiver<u32, ByPtrEvent<u32>>: Sync);
+        assert_impl_all!(OnceSender<u32, RefEvent<'static, u32>>: Send);
+        assert_impl_all!(OnceReceiver<u32, RefEvent<'static, u32>>: Send);
+        assert_impl_all!(OnceSender<u32, ArcEvent<u32>>: Send);
+        assert_impl_all!(OnceReceiver<u32, ArcEvent<u32>>: Send);
+        assert_impl_all!(OnceSender<u32, PtrEvent<u32>>: Send);
+        assert_impl_all!(OnceReceiver<u32, PtrEvent<u32>>: Send);
+        assert_not_impl_any!(OnceSender<u32, RefEvent<'static, u32>>: Sync);
+        assert_not_impl_any!(OnceReceiver<u32, RefEvent<'static, u32>>: Sync);
+        assert_not_impl_any!(OnceSender<u32, ArcEvent<u32>>: Sync);
+        assert_not_impl_any!(OnceReceiver<u32, ArcEvent<u32>>: Sync);
+        assert_not_impl_any!(OnceSender<u32, PtrEvent<u32>>: Sync);
+        assert_not_impl_any!(OnceReceiver<u32, PtrEvent<u32>>: Sync);
     }
 }

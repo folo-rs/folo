@@ -123,8 +123,8 @@ impl<T> LocalOnceEvent<T> {
     pub fn bind_by_ref(
         &self,
     ) -> (
-        LocalOnceSender<T, ByRefLocalEvent<'_, T>>,
-        LocalOnceReceiver<T, ByRefLocalEvent<'_, T>>,
+        LocalOnceSender<T, RefLocalEvent<'_, T>>,
+        LocalOnceReceiver<T, RefLocalEvent<'_, T>>,
     ) {
         self.bind_by_ref_checked()
             .expect("LocalOnceEvent has already been bound")
@@ -153,16 +153,16 @@ impl<T> LocalOnceEvent<T> {
     pub fn bind_by_ref_checked(
         &self,
     ) -> Option<(
-        LocalOnceSender<T, ByRefLocalEvent<'_, T>>,
-        LocalOnceReceiver<T, ByRefLocalEvent<'_, T>>,
+        LocalOnceSender<T, RefLocalEvent<'_, T>>,
+        LocalOnceReceiver<T, RefLocalEvent<'_, T>>,
     )> {
         if self.is_bound.replace(true) {
             return None;
         }
 
         Some((
-            LocalOnceSender::new(ByRefLocalEvent { event: self }),
-            LocalOnceReceiver::new(ByRefLocalEvent { event: self }),
+            LocalOnceSender::new(RefLocalEvent { event: self }),
+            LocalOnceReceiver::new(RefLocalEvent { event: self }),
         ))
     }
 
@@ -189,8 +189,8 @@ impl<T> LocalOnceEvent<T> {
     pub fn bind_by_rc(
         self: &Rc<Self>,
     ) -> (
-        LocalOnceSender<T, ByRcLocalEvent<T>>,
-        LocalOnceReceiver<T, ByRcLocalEvent<T>>,
+        LocalOnceSender<T, RcLocalEvent<T>>,
+        LocalOnceReceiver<T, RcLocalEvent<T>>,
     ) {
         self.bind_by_rc_checked()
             .expect("LocalOnceEvent has already been bound")
@@ -223,18 +223,18 @@ impl<T> LocalOnceEvent<T> {
     pub fn bind_by_rc_checked(
         self: &Rc<Self>,
     ) -> Option<(
-        LocalOnceSender<T, ByRcLocalEvent<T>>,
-        LocalOnceReceiver<T, ByRcLocalEvent<T>>,
+        LocalOnceSender<T, RcLocalEvent<T>>,
+        LocalOnceReceiver<T, RcLocalEvent<T>>,
     )> {
         if self.is_bound.replace(true) {
             return None;
         }
 
         Some((
-            LocalOnceSender::new(ByRcLocalEvent {
+            LocalOnceSender::new(RcLocalEvent {
                 event: Rc::clone(self),
             }),
-            LocalOnceReceiver::new(ByRcLocalEvent {
+            LocalOnceReceiver::new(RcLocalEvent {
                 event: Rc::clone(self),
             }),
         ))
@@ -273,8 +273,8 @@ impl<T> LocalOnceEvent<T> {
     pub unsafe fn bind_by_ptr(
         self: Pin<&Self>,
     ) -> (
-        LocalOnceSender<T, ByPtrLocalEvent<T>>,
-        LocalOnceReceiver<T, ByPtrLocalEvent<T>>,
+        LocalOnceSender<T, PtrLocalEvent<T>>,
+        LocalOnceReceiver<T, PtrLocalEvent<T>>,
     ) {
         // SAFETY: Caller has guaranteed event lifetime management
         unsafe { self.bind_by_ptr_checked() }.expect("LocalOnceEvent has already been bound")
@@ -312,8 +312,8 @@ impl<T> LocalOnceEvent<T> {
     pub unsafe fn bind_by_ptr_checked(
         self: Pin<&Self>,
     ) -> Option<(
-        LocalOnceSender<T, ByPtrLocalEvent<T>>,
-        LocalOnceReceiver<T, ByPtrLocalEvent<T>>,
+        LocalOnceSender<T, PtrLocalEvent<T>>,
+        LocalOnceReceiver<T, PtrLocalEvent<T>>,
     )> {
         if self.is_bound.replace(true) {
             return None;
@@ -322,8 +322,8 @@ impl<T> LocalOnceEvent<T> {
         let event_ptr = NonNull::from(self.get_ref());
 
         Some((
-            LocalOnceSender::new(ByPtrLocalEvent { event: event_ptr }),
-            LocalOnceReceiver::new(ByPtrLocalEvent { event: event_ptr }),
+            LocalOnceSender::new(PtrLocalEvent { event: event_ptr }),
+            LocalOnceReceiver::new(PtrLocalEvent { event: event_ptr }),
         ))
     }
 
@@ -448,20 +448,20 @@ pub trait LocalEventRef<T>: Deref<Target = LocalOnceEvent<T>> + Sealed {}
 ///
 /// Only used in type names. Instances are created internally by [`LocalOnceEvent`].
 #[derive(Copy, Debug)]
-pub struct ByRefLocalEvent<'a, T> {
+pub struct RefLocalEvent<'a, T> {
     event: &'a LocalOnceEvent<T>,
 }
 
-impl<T> Sealed for ByRefLocalEvent<'_, T> {}
-impl<T> LocalEventRef<T> for ByRefLocalEvent<'_, T> {}
-impl<T> Deref for ByRefLocalEvent<'_, T> {
+impl<T> Sealed for RefLocalEvent<'_, T> {}
+impl<T> LocalEventRef<T> for RefLocalEvent<'_, T> {}
+impl<T> Deref for RefLocalEvent<'_, T> {
     type Target = LocalOnceEvent<T>;
 
     fn deref(&self) -> &Self::Target {
         self.event
     }
 }
-impl<T> Clone for ByRefLocalEvent<'_, T> {
+impl<T> Clone for RefLocalEvent<'_, T> {
     fn clone(&self) -> Self {
         Self { event: self.event }
     }
@@ -471,20 +471,20 @@ impl<T> Clone for ByRefLocalEvent<'_, T> {
 ///
 /// Only used in type names. Instances are created internally by [`LocalOnceEvent`].
 #[derive(Debug)]
-pub struct ByRcLocalEvent<T> {
+pub struct RcLocalEvent<T> {
     event: Rc<LocalOnceEvent<T>>,
 }
 
-impl<T> Sealed for ByRcLocalEvent<T> {}
-impl<T> LocalEventRef<T> for ByRcLocalEvent<T> {}
-impl<T> Deref for ByRcLocalEvent<T> {
+impl<T> Sealed for RcLocalEvent<T> {}
+impl<T> LocalEventRef<T> for RcLocalEvent<T> {}
+impl<T> Deref for RcLocalEvent<T> {
     type Target = LocalOnceEvent<T>;
 
     fn deref(&self) -> &Self::Target {
         &self.event
     }
 }
-impl<T> Clone for ByRcLocalEvent<T> {
+impl<T> Clone for RcLocalEvent<T> {
     fn clone(&self) -> Self {
         Self {
             event: Rc::clone(&self.event),
@@ -496,13 +496,13 @@ impl<T> Clone for ByRcLocalEvent<T> {
 ///
 /// Only used in type names. Instances are created internally by [`LocalOnceEvent`].
 #[derive(Copy, Debug)]
-pub struct ByPtrLocalEvent<T> {
+pub struct PtrLocalEvent<T> {
     event: NonNull<LocalOnceEvent<T>>,
 }
 
-impl<T> Sealed for ByPtrLocalEvent<T> {}
-impl<T> LocalEventRef<T> for ByPtrLocalEvent<T> {}
-impl<T> Deref for ByPtrLocalEvent<T> {
+impl<T> Sealed for PtrLocalEvent<T> {}
+impl<T> LocalEventRef<T> for PtrLocalEvent<T> {}
+impl<T> Deref for PtrLocalEvent<T> {
     type Target = LocalOnceEvent<T>;
 
     fn deref(&self) -> &Self::Target {
@@ -510,7 +510,7 @@ impl<T> Deref for ByPtrLocalEvent<T> {
         unsafe { self.event.as_ref() }
     }
 }
-impl<T> Clone for ByPtrLocalEvent<T> {
+impl<T> Clone for PtrLocalEvent<T> {
     fn clone(&self) -> Self {
         Self { event: self.event }
     }
@@ -867,11 +867,11 @@ mod tests {
     fn thread_safety() {
         // Nothing is Send or Sync - everything is stuck on one thread.
         assert_not_impl_any!(LocalOnceEvent<u32>: Send, Sync);
-        assert_not_impl_any!(LocalOnceSender<u32, ByRefLocalEvent<'static, u32>>: Send, Sync);
-        assert_not_impl_any!(LocalOnceReceiver<u32, ByRefLocalEvent<'static, u32>>: Send, Sync);
-        assert_not_impl_any!(LocalOnceSender<u32, ByRcLocalEvent<u32>>: Send, Sync);
-        assert_not_impl_any!(LocalOnceReceiver<u32, ByRcLocalEvent<u32>>: Send, Sync);
-        assert_not_impl_any!(LocalOnceSender<u32, ByPtrLocalEvent<u32>>: Send, Sync);
-        assert_not_impl_any!(LocalOnceReceiver<u32, ByPtrLocalEvent<u32>>: Send, Sync);
+        assert_not_impl_any!(LocalOnceSender<u32, RefLocalEvent<'static, u32>>: Send, Sync);
+        assert_not_impl_any!(LocalOnceReceiver<u32, RefLocalEvent<'static, u32>>: Send, Sync);
+        assert_not_impl_any!(LocalOnceSender<u32, RcLocalEvent<u32>>: Send, Sync);
+        assert_not_impl_any!(LocalOnceReceiver<u32, RcLocalEvent<u32>>: Send, Sync);
+        assert_not_impl_any!(LocalOnceSender<u32, PtrLocalEvent<u32>>: Send, Sync);
+        assert_not_impl_any!(LocalOnceReceiver<u32, PtrLocalEvent<u32>>: Send, Sync);
     }
 }

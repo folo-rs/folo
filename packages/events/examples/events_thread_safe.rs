@@ -39,7 +39,7 @@ fn main() {
     });
 
     // Example 3: Cross-thread pattern - endpoints extracted before threading
-    // Note: With ByRef types, the Event must live until threads complete.
+    // Note: With Ref types, the Event must live until threads complete.
     // This pattern avoids the lifetime issue by using a scoped approach.
     println!();
     println!("3. Cross-thread communication pattern:");

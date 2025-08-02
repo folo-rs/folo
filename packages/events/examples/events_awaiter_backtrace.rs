@@ -8,7 +8,7 @@
 
 use std::pin::pin;
 
-use events::{ByRefEvent, OnceEvent, OnceReceiver};
+use events::{RefEvent, OnceEvent, OnceReceiver};
 use futures::executor::block_on;
 use futures::task::{Context, noop_waker_ref};
 
@@ -33,7 +33,7 @@ fn main() {
 }
 
 // You will see the name of this function in the backtrace because it is doing the await.
-fn await_on_event_via_receiver(receiver: OnceReceiver<String, ByRefEvent<'_, String>>) {
+fn await_on_event_via_receiver(receiver: OnceReceiver<String, RefEvent<'_, String>>) {
     let mut context = Context::from_waker(noop_waker_ref());
     let mut pinned = pin!(receiver);
 
