@@ -23,6 +23,8 @@ fn main() {
 
         await_on_event_via_receiver(receiver);
 
+        // This method is only available in debug builds, as it carries heavy performance overhead.
+        #[cfg(debug_assertions)]
         event.inspect_awaiter(|backtrace| match backtrace {
             Some(backtrace) => println!("Awaiter backtrace: {backtrace}"),
             None => unreachable!("No awaiter found"),
