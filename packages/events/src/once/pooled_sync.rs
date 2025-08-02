@@ -18,7 +18,7 @@ use pinned_pool::{Key, PinnedPool};
 
 use super::sync::OnceEvent;
 use super::with_ref_count::WithRefCount;
-use crate::{Disconnected, ERR_POISONED_LOCK, Sealed};
+use crate::{Disconnected, ERR_POISONED_LOCK, ReflectiveTSend, Sealed};
 
 /// A pool that manages thread-safe events with automatic cleanup.
 ///
@@ -114,8 +114,8 @@ where
     pub fn bind_by_ref(
         &self,
     ) -> (
-        PooledOnceSender<T, RefPool<'_, T>>,
-        PooledOnceReceiver<T, RefPool<'_, T>>,
+        PooledOnceSender<RefPool<'_, T>>,
+        PooledOnceReceiver<RefPool<'_, T>>,
     ) {
         let mut inner_pool = self.pool.lock().expect(ERR_POISONED_LOCK);
 
@@ -173,10 +173,7 @@ where
     /// ```
     pub fn bind_by_arc(
         self: &Arc<Self>,
-    ) -> (
-        PooledOnceSender<T, ArcPool<T>>,
-        PooledOnceReceiver<T, ArcPool<T>>,
-    ) {
+    ) -> (PooledOnceSender<ArcPool<T>>, PooledOnceReceiver<ArcPool<T>>) {
         let mut inner_pool = self.pool.lock().expect(ERR_POISONED_LOCK);
 
         let inserter = inner_pool.begin_insert();
@@ -243,10 +240,7 @@ where
     #[must_use]
     pub unsafe fn bind_by_ptr(
         self: Pin<&Self>,
-    ) -> (
-        PooledOnceSender<T, PtrPool<T>>,
-        PooledOnceReceiver<T, PtrPool<T>>,
-    ) {
+    ) -> (PooledOnceSender<PtrPool<T>>, PooledOnceReceiver<PtrPool<T>>) {
         let mut inner_pool = self.pool.lock().expect(ERR_POISONED_LOCK);
 
         let inserter = inner_pool.begin_insert();
@@ -391,7 +385,7 @@ where
 ///
 /// This is a sealed trait and exists for internal use only. You never need to use it.
 #[expect(private_bounds, reason = "intentional - sealed trait")]
-pub trait PoolRef<T>: Deref<Target = OnceEventPool<T>> + Sealed
+pub trait PoolRef<T>: Deref<Target = OnceEventPool<T>> + ReflectiveTSend + Sealed
 where
     T: Send,
 {
@@ -428,6 +422,9 @@ where
         Self { pool: self.pool }
     }
 }
+impl<T: Send> ReflectiveTSend for RefPool<'_, T> {
+    type T = T;
+}
 
 /// An event pool referenced via `Arc` shared reference.
 ///
@@ -462,6 +459,9 @@ where
         }
     }
 }
+impl<T: Send> ReflectiveTSend for ArcPool<T> {
+    type T = T;
+}
 
 /// An event pool referenced via raw pointer.
 ///
@@ -495,35 +495,37 @@ where
         Self { pool: self.pool }
     }
 }
+impl<T: Send> ReflectiveTSend for PtrPool<T> {
+    type T = T;
+}
 // SAFETY: This is only used with the thread-safe pool (the pool is Sync).
 unsafe impl<T> Send for PtrPool<T> where T: Send {}
 
-/// A sender endpoint for pooled  events that holds a reference to the pool.
+/// A receiver that can receive a single value through a thread-safe event.
 ///
-/// This sender is created from [`OnceEventPool::bind_by_ref`] and automatically manages
-/// the lifetime of the underlying event. When both sender and receiver are dropped,
-/// the event is automatically returned to the pool.
+/// The type of the value is the inner type parameter,
+/// i.e. the `T` in `PooledOnceReceiver<ArcPool<T>>`.
 ///
-/// This is the single-threaded variant that cannot be sent across threads.
+/// The outer type parameter determines the mechanism by which the endpoint is bound to the event
+/// pool. Different binding mechanisms offer different performance characteristics and resource
+/// management patterns.
 #[derive(Debug)]
-pub struct PooledOnceSender<T, R>
+pub struct PooledOnceSender<P>
 where
-    T: Send,
-    R: PoolRef<T>,
+    P: PoolRef<<P as ReflectiveTSend>::T>,
 {
     // This is a pointer to avoid contaminating the type signature with the event lifetime.
     //
     // SAFETY: We rely on the inner pool guaranteeing pinning and us owning a counted reference.
-    event: Option<NonNull<WithRefCount<OnceEvent<T>>>>,
+    event: Option<NonNull<WithRefCount<OnceEvent<P::T>>>>,
 
-    pool_ref: R,
+    pool_ref: P,
     key: Key,
 }
 
-impl<T, R> PooledOnceSender<T, R>
+impl<P> PooledOnceSender<P>
 where
-    T: Send,
-    R: PoolRef<T>,
+    P: PoolRef<<P as ReflectiveTSend>::T>,
 {
     /// Sends a value through the event.
     ///
@@ -542,7 +544,7 @@ where
     /// let value = futures::executor::block_on(receiver).unwrap();
     /// assert_eq!(value, 42);
     /// ```
-    pub fn send(self, value: T) {
+    pub fn send(self, value: P::T) {
         // SAFETY: See comments on field.
         let event = unsafe {
             self.event
@@ -554,10 +556,9 @@ where
     }
 }
 
-impl<T, R> Drop for PooledOnceSender<T, R>
+impl<P> Drop for PooledOnceSender<P>
 where
-    T: Send,
-    R: PoolRef<T>,
+    P: PoolRef<<P as ReflectiveTSend>::T>,
 {
     fn drop(&mut self) {
         // SAFETY: See comments on field.
@@ -582,39 +583,33 @@ where
 
 // SAFETY: The NonNull marks it !Send by default but we know that everything behind the pointer
 // is thread-safe, so all is well. We also require `Send` from `R` to be extra safe here.
-unsafe impl<T, R> Send for PooledOnceSender<T, R>
-where
-    T: Send,
-    R: PoolRef<T> + Send,
-{
-}
+unsafe impl<P> Send for PooledOnceSender<P> where P: PoolRef<<P as ReflectiveTSend>::T> + Send {}
 
-/// A receiver endpoint for pooled  events that holds a reference to the pool.
+/// A receiver that can receive a single value through a thread-safe event.
 ///
-/// This receiver is created from [`OnceEventPool::bind_by_ref`] and automatically manages
-/// the lifetime of the underlying event. When both sender and receiver are dropped,
-/// the event is automatically returned to the pool.
+/// The type of the value is the inner type parameter,
+/// i.e. the `T` in `PooledOnceReceiver<ArcPool<T>>`.
 ///
-/// This is the single-threaded variant that cannot be sent across threads.
+/// The outer type parameter determines the mechanism by which the endpoint is bound to the event
+/// pool. Different binding mechanisms offer different performance characteristics and resource
+/// management patterns.
 #[derive(Debug)]
-pub struct PooledOnceReceiver<T, R>
+pub struct PooledOnceReceiver<P>
 where
-    T: Send,
-    R: PoolRef<T>,
+    P: PoolRef<<P as ReflectiveTSend>::T>,
 {
     // This is a pointer to avoid contaminating the type signature with the event lifetime.
     //
     // SAFETY: We rely on the inner pool guaranteeing pinning and us owning a counted reference.
-    event: Option<NonNull<WithRefCount<OnceEvent<T>>>>,
+    event: Option<NonNull<WithRefCount<OnceEvent<P::T>>>>,
 
-    pool_ref: R,
+    pool_ref: P,
     key: Key,
 }
 
-impl<T, R> PooledOnceReceiver<T, R>
+impl<P> PooledOnceReceiver<P>
 where
-    T: Send,
-    R: PoolRef<T>,
+    P: PoolRef<<P as ReflectiveTSend>::T>,
 {
     /// Drops the inner state, releasing the event back to the pool.
     /// May also be used from contexts where the receiver itself is not yet consumed.
@@ -640,12 +635,11 @@ where
     }
 }
 
-impl<T, R> Future for PooledOnceReceiver<T, R>
+impl<P> Future for PooledOnceReceiver<P>
 where
-    T: Send,
-    R: PoolRef<T>,
+    P: PoolRef<<P as ReflectiveTSend>::T>,
 {
-    type Output = Result<T, Disconnected>;
+    type Output = Result<P::T, Disconnected>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         // SAFETY: We are not moving anything, just touching internal state.
@@ -670,10 +664,9 @@ where
     }
 }
 
-impl<T, R> Drop for PooledOnceReceiver<T, R>
+impl<P> Drop for PooledOnceReceiver<P>
 where
-    T: Send,
-    R: PoolRef<T>,
+    P: PoolRef<<P as ReflectiveTSend>::T>,
 {
     fn drop(&mut self) {
         self.drop_inner();
@@ -682,12 +675,7 @@ where
 
 // SAFETY: The NonNull marks it !Send by default but we know that everything behind the pointer
 // is thread-safe, so all is well. We also require `Send` from `R` to be extra safe here.
-unsafe impl<T, R> Send for PooledOnceReceiver<T, R>
-where
-    T: Send,
-    R: PoolRef<T> + Send,
-{
-}
+unsafe impl<P> Send for PooledOnceReceiver<P> where P: PoolRef<<P as ReflectiveTSend>::T> + Send {}
 
 #[cfg(test)]
 mod tests {
@@ -1334,17 +1322,17 @@ mod tests {
 
         // These are all meant to be consumed locally - they may move between threads but are
         // not shared between threads, so Sync is not expected, only Send.
-        assert_impl_all!(PooledOnceSender<u32, RefPool<'static, u32>>: Send);
-        assert_impl_all!(PooledOnceReceiver<u32, RefPool<'static, u32>>: Send);
-        assert_impl_all!(PooledOnceSender<u32, ArcPool<u32>>: Send);
-        assert_impl_all!(PooledOnceReceiver<u32, ArcPool<u32>>: Send);
-        assert_impl_all!(PooledOnceSender<u32, PtrPool<u32>>: Send);
-        assert_impl_all!(PooledOnceReceiver<u32, PtrPool<u32>>: Send);
-        assert_not_impl_any!(PooledOnceSender<u32, RefPool<'static, u32>>: Sync);
-        assert_not_impl_any!(PooledOnceReceiver<u32, RefPool<'static, u32>>: Sync);
-        assert_not_impl_any!(PooledOnceSender<u32, ArcPool<u32>>: Sync);
-        assert_not_impl_any!(PooledOnceReceiver<u32, ArcPool<u32>>: Sync);
-        assert_not_impl_any!(PooledOnceSender<u32, PtrPool<u32>>: Sync);
-        assert_not_impl_any!(PooledOnceReceiver<u32, PtrPool<u32>>: Sync);
+        assert_impl_all!(PooledOnceSender<RefPool<'static, u32>>: Send);
+        assert_impl_all!(PooledOnceReceiver<RefPool<'static, u32>>: Send);
+        assert_impl_all!(PooledOnceSender<ArcPool<u32>>: Send);
+        assert_impl_all!(PooledOnceReceiver<ArcPool<u32>>: Send);
+        assert_impl_all!(PooledOnceSender<PtrPool<u32>>: Send);
+        assert_impl_all!(PooledOnceReceiver<PtrPool<u32>>: Send);
+        assert_not_impl_any!(PooledOnceSender<RefPool<'static, u32>>: Sync);
+        assert_not_impl_any!(PooledOnceReceiver<RefPool<'static, u32>>: Sync);
+        assert_not_impl_any!(PooledOnceSender<ArcPool<u32>>: Sync);
+        assert_not_impl_any!(PooledOnceReceiver<ArcPool<u32>>: Sync);
+        assert_not_impl_any!(PooledOnceSender<PtrPool<u32>>: Sync);
+        assert_not_impl_any!(PooledOnceReceiver<PtrPool<u32>>: Sync);
     }
 }

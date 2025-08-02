@@ -16,7 +16,10 @@ use std::sync::{Arc, Mutex};
 use std::task::Waker;
 use std::{mem, task};
 
-use crate::{BacktraceType, Disconnected, ERR_POISONED_LOCK, Sealed, ValueKind, capture_backtrace};
+use crate::{
+    BacktraceType, Disconnected, ERR_POISONED_LOCK, ReflectiveTSend, Sealed, ValueKind,
+    capture_backtrace,
+};
 
 /// State of a thread-safe event.
 #[derive(Debug)]
@@ -123,12 +126,7 @@ where
     /// let (sender, receiver) = event.bind_by_ref();
     /// ```
     #[must_use]
-    pub fn bind_by_ref(
-        &self,
-    ) -> (
-        OnceSender<T, RefEvent<'_, T>>,
-        OnceReceiver<T, RefEvent<'_, T>>,
-    ) {
+    pub fn bind_by_ref(&self) -> (OnceSender<RefEvent<'_, T>>, OnceReceiver<RefEvent<'_, T>>) {
         self.bind_by_ref_checked()
             .expect("OnceEvent has already been bound")
     }
@@ -155,10 +153,7 @@ where
     #[must_use]
     pub fn bind_by_ref_checked(
         &self,
-    ) -> Option<(
-        OnceSender<T, RefEvent<'_, T>>,
-        OnceReceiver<T, RefEvent<'_, T>>,
-    )> {
+    ) -> Option<(OnceSender<RefEvent<'_, T>>, OnceReceiver<RefEvent<'_, T>>)> {
         if self.is_bound.swap(true, Ordering::Relaxed) {
             return None;
         }
@@ -189,9 +184,7 @@ where
     /// let (sender, receiver) = event.bind_by_arc();
     /// ```
     #[must_use]
-    pub fn bind_by_arc(
-        self: &Arc<Self>,
-    ) -> (OnceSender<T, ArcEvent<T>>, OnceReceiver<T, ArcEvent<T>>) {
+    pub fn bind_by_arc(self: &Arc<Self>) -> (OnceSender<ArcEvent<T>>, OnceReceiver<ArcEvent<T>>) {
         self.bind_by_arc_checked()
             .expect("OnceEvent has already been bound")
     }
@@ -222,7 +215,7 @@ where
     )]
     pub fn bind_by_arc_checked(
         self: &Arc<Self>,
-    ) -> Option<(OnceSender<T, ArcEvent<T>>, OnceReceiver<T, ArcEvent<T>>)> {
+    ) -> Option<(OnceSender<ArcEvent<T>>, OnceReceiver<ArcEvent<T>>)> {
         if self.is_bound.swap(true, Ordering::Relaxed) {
             return None;
         }
@@ -272,7 +265,7 @@ where
     #[must_use]
     pub unsafe fn bind_by_ptr(
         self: Pin<&Self>,
-    ) -> (OnceSender<T, PtrEvent<T>>, OnceReceiver<T, PtrEvent<T>>) {
+    ) -> (OnceSender<PtrEvent<T>>, OnceReceiver<PtrEvent<T>>) {
         // SAFETY: Caller has guaranteed event lifetime management
         unsafe { self.bind_by_ptr_checked() }.expect("OnceEvent has already been bound")
     }
@@ -310,7 +303,7 @@ where
     )]
     pub unsafe fn bind_by_ptr_checked(
         self: Pin<&Self>,
-    ) -> Option<(OnceSender<T, PtrEvent<T>>, OnceReceiver<T, PtrEvent<T>>)> {
+    ) -> Option<(OnceSender<PtrEvent<T>>, OnceReceiver<PtrEvent<T>>)> {
         if self.is_bound.swap(true, Ordering::Relaxed) {
             return None;
         }
@@ -443,7 +436,7 @@ where
 ///
 /// This is a sealed trait and exists for internal use only. You never need to use it.
 #[expect(private_bounds, reason = "intentional - sealed trait")]
-pub trait EventRef<T>: Deref<Target = OnceEvent<T>> + Sealed
+pub trait EventRef<T>: Deref<Target = OnceEvent<T>> + ReflectiveTSend + Sealed
 where
     T: Send,
 {
@@ -480,6 +473,9 @@ where
         Self { event: self.event }
     }
 }
+impl<T: Send> ReflectiveTSend for RefEvent<'_, T> {
+    type T = T;
+}
 
 /// An event referenced via `Arc` shared reference.
 ///
@@ -514,6 +510,9 @@ where
         }
     }
 }
+impl<T: Send> ReflectiveTSend for ArcEvent<T> {
+    type T = T;
+}
 
 /// An event referenced via raw pointer.
 ///
@@ -547,37 +546,39 @@ where
         Self { event: self.event }
     }
 }
+impl<T: Send> ReflectiveTSend for PtrEvent<T> {
+    type T = T;
+}
 // SAFETY: This is only used with the thread-safe event (the event is Sync).
 unsafe impl<T> Send for PtrEvent<T> where T: Send {}
 
-/// A sender that can send a value through a single-threaded event using Rc ownership.
+/// A sender that can send a single value through a thread-safe event.
 ///
-/// The sender owns an Rc to the event and is single-threaded.
-/// After calling [`send`](OnceSender::send), the sender is consumed.
+/// The type of the value is the inner type parameter,
+/// i.e. the `T` in `OnceSender<ArcEvent<T>>`.
+///
+/// The outer type parameter determines the mechanism by which the endpoint is bound to the event.
+/// Different binding mechanisms offer different performance characteristics and resource
+/// management patterns.
 #[derive(Debug)]
-pub struct OnceSender<T, R>
+pub struct OnceSender<E>
 where
-    T: Send,
-    R: EventRef<T>,
+    E: EventRef<<E as ReflectiveTSend>::T>,
 {
-    event_ref: R,
-
-    _t: PhantomData<T>,
+    event_ref: E,
 
     // We do not expect use cases that require Sync, so we suppress it to leave
     // design flexibility for future changes.
     _not_sync: PhantomData<Cell<()>>,
 }
 
-impl<T, R> OnceSender<T, R>
+impl<E> OnceSender<E>
 where
-    T: Send,
-    R: EventRef<T>,
+    E: EventRef<<E as ReflectiveTSend>::T>,
 {
-    fn new(event_ref: R) -> Self {
+    fn new(event_ref: E) -> Self {
         Self {
             event_ref,
-            _t: PhantomData,
             _not_sync: PhantomData,
         }
     }
@@ -598,60 +599,57 @@ where
     /// let (sender, _receiver) = event.bind_by_arc();
     /// sender.send(42);
     /// ```
-    pub fn send(self, value: T) {
+    pub fn send(self, value: E::T) {
         self.event_ref.set(value);
     }
 }
 
-impl<T, R> Drop for OnceSender<T, R>
+impl<E> Drop for OnceSender<E>
 where
-    T: Send,
-    R: EventRef<T>,
+    E: EventRef<<E as ReflectiveTSend>::T>,
 {
     fn drop(&mut self) {
         self.event_ref.sender_dropped();
     }
 }
 
-/// A receiver that can receive a value from a single-threaded event using Rc ownership.
+/// A receiver that can receive a single value through a thread-safe event.
 ///
-/// The receiver owns an Rc to the event and is single-threaded.
-/// After awaiting the receiver, it is consumed.
+/// The type of the value is the inner type parameter,
+/// i.e. the `T` in `OnceReceiver<ArcEvent<T>>`.
+///
+/// The outer type parameter determines the mechanism by which the endpoint is bound to the event.
+/// Different binding mechanisms offer different performance characteristics and resource
+/// management patterns.
 #[derive(Debug)]
-pub struct OnceReceiver<T, R>
+pub struct OnceReceiver<E>
 where
-    T: Send,
-    R: EventRef<T>,
+    E: EventRef<<E as ReflectiveTSend>::T>,
 {
-    event_ref: R,
-
-    _t: PhantomData<T>,
+    event_ref: E,
 
     // We do not expect use cases that require Sync, so we suppress it to leave
     // design flexibility for future changes.
     _not_sync: PhantomData<Cell<()>>,
 }
 
-impl<T, R> OnceReceiver<T, R>
+impl<E> OnceReceiver<E>
 where
-    T: Send,
-    R: EventRef<T>,
+    E: EventRef<<E as ReflectiveTSend>::T>,
 {
-    fn new(event_ref: R) -> Self {
+    fn new(event_ref: E) -> Self {
         Self {
             event_ref,
-            _t: PhantomData,
             _not_sync: PhantomData,
         }
     }
 }
 
-impl<T, R> Future for OnceReceiver<T, R>
+impl<E> Future for OnceReceiver<E>
 where
-    T: Send,
-    R: EventRef<T>,
+    E: EventRef<<E as ReflectiveTSend>::T>,
 {
-    type Output = Result<T, Disconnected>;
+    type Output = Result<E::T, Disconnected>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         self.event_ref
@@ -935,17 +933,17 @@ mod tests {
 
         // These are all meant to be consumed ly - they may move between threads but are
         // not shared between threads, so Sync is not expected, only Send.
-        assert_impl_all!(OnceSender<u32, RefEvent<'static, u32>>: Send);
-        assert_impl_all!(OnceReceiver<u32, RefEvent<'static, u32>>: Send);
-        assert_impl_all!(OnceSender<u32, ArcEvent<u32>>: Send);
-        assert_impl_all!(OnceReceiver<u32, ArcEvent<u32>>: Send);
-        assert_impl_all!(OnceSender<u32, PtrEvent<u32>>: Send);
-        assert_impl_all!(OnceReceiver<u32, PtrEvent<u32>>: Send);
-        assert_not_impl_any!(OnceSender<u32, RefEvent<'static, u32>>: Sync);
-        assert_not_impl_any!(OnceReceiver<u32, RefEvent<'static, u32>>: Sync);
-        assert_not_impl_any!(OnceSender<u32, ArcEvent<u32>>: Sync);
-        assert_not_impl_any!(OnceReceiver<u32, ArcEvent<u32>>: Sync);
-        assert_not_impl_any!(OnceSender<u32, PtrEvent<u32>>: Sync);
-        assert_not_impl_any!(OnceReceiver<u32, PtrEvent<u32>>: Sync);
+        assert_impl_all!(OnceSender<RefEvent<'static, u32>>: Send);
+        assert_impl_all!(OnceReceiver<RefEvent<'static, u32>>: Send);
+        assert_impl_all!(OnceSender<ArcEvent<u32>>: Send);
+        assert_impl_all!(OnceReceiver<ArcEvent<u32>>: Send);
+        assert_impl_all!(OnceSender<PtrEvent<u32>>: Send);
+        assert_impl_all!(OnceReceiver<PtrEvent<u32>>: Send);
+        assert_not_impl_any!(OnceSender<RefEvent<'static, u32>>: Sync);
+        assert_not_impl_any!(OnceReceiver<RefEvent<'static, u32>>: Sync);
+        assert_not_impl_any!(OnceSender<ArcEvent<u32>>: Sync);
+        assert_not_impl_any!(OnceReceiver<ArcEvent<u32>>: Sync);
+        assert_not_impl_any!(OnceSender<PtrEvent<u32>>: Sync);
+        assert_not_impl_any!(OnceReceiver<PtrEvent<u32>>: Sync);
     }
 }

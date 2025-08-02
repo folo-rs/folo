@@ -15,7 +15,7 @@ use std::rc::Rc;
 use std::task::Waker;
 use std::{mem, task};
 
-use crate::{BacktraceType, Disconnected, Sealed, ValueKind, capture_backtrace};
+use crate::{BacktraceType, Disconnected, ReflectiveT, Sealed, ValueKind, capture_backtrace};
 
 /// State of a single-threaded event.
 #[derive(Debug)]
@@ -123,8 +123,8 @@ impl<T> LocalOnceEvent<T> {
     pub fn bind_by_ref(
         &self,
     ) -> (
-        LocalOnceSender<T, RefLocalEvent<'_, T>>,
-        LocalOnceReceiver<T, RefLocalEvent<'_, T>>,
+        LocalOnceSender<RefLocalEvent<'_, T>>,
+        LocalOnceReceiver<RefLocalEvent<'_, T>>,
     ) {
         self.bind_by_ref_checked()
             .expect("LocalOnceEvent has already been bound")
@@ -153,8 +153,8 @@ impl<T> LocalOnceEvent<T> {
     pub fn bind_by_ref_checked(
         &self,
     ) -> Option<(
-        LocalOnceSender<T, RefLocalEvent<'_, T>>,
-        LocalOnceReceiver<T, RefLocalEvent<'_, T>>,
+        LocalOnceSender<RefLocalEvent<'_, T>>,
+        LocalOnceReceiver<RefLocalEvent<'_, T>>,
     )> {
         if self.is_bound.replace(true) {
             return None;
@@ -189,8 +189,8 @@ impl<T> LocalOnceEvent<T> {
     pub fn bind_by_rc(
         self: &Rc<Self>,
     ) -> (
-        LocalOnceSender<T, RcLocalEvent<T>>,
-        LocalOnceReceiver<T, RcLocalEvent<T>>,
+        LocalOnceSender<RcLocalEvent<T>>,
+        LocalOnceReceiver<RcLocalEvent<T>>,
     ) {
         self.bind_by_rc_checked()
             .expect("LocalOnceEvent has already been bound")
@@ -223,8 +223,8 @@ impl<T> LocalOnceEvent<T> {
     pub fn bind_by_rc_checked(
         self: &Rc<Self>,
     ) -> Option<(
-        LocalOnceSender<T, RcLocalEvent<T>>,
-        LocalOnceReceiver<T, RcLocalEvent<T>>,
+        LocalOnceSender<RcLocalEvent<T>>,
+        LocalOnceReceiver<RcLocalEvent<T>>,
     )> {
         if self.is_bound.replace(true) {
             return None;
@@ -273,8 +273,8 @@ impl<T> LocalOnceEvent<T> {
     pub unsafe fn bind_by_ptr(
         self: Pin<&Self>,
     ) -> (
-        LocalOnceSender<T, PtrLocalEvent<T>>,
-        LocalOnceReceiver<T, PtrLocalEvent<T>>,
+        LocalOnceSender<PtrLocalEvent<T>>,
+        LocalOnceReceiver<PtrLocalEvent<T>>,
     ) {
         // SAFETY: Caller has guaranteed event lifetime management
         unsafe { self.bind_by_ptr_checked() }.expect("LocalOnceEvent has already been bound")
@@ -312,8 +312,8 @@ impl<T> LocalOnceEvent<T> {
     pub unsafe fn bind_by_ptr_checked(
         self: Pin<&Self>,
     ) -> Option<(
-        LocalOnceSender<T, PtrLocalEvent<T>>,
-        LocalOnceReceiver<T, PtrLocalEvent<T>>,
+        LocalOnceSender<PtrLocalEvent<T>>,
+        LocalOnceReceiver<PtrLocalEvent<T>>,
     )> {
         if self.is_bound.replace(true) {
             return None;
@@ -442,7 +442,7 @@ impl<T> Default for LocalOnceEvent<T> {
 ///
 /// This is a sealed trait and exists for internal use only. You never need to use it.
 #[expect(private_bounds, reason = "intentional - sealed trait")]
-pub trait LocalEventRef<T>: Deref<Target = LocalOnceEvent<T>> + Sealed {}
+pub trait LocalEventRef<T>: Deref<Target = LocalOnceEvent<T>> + ReflectiveT + Sealed {}
 
 /// An event referenced via `&` shared reference.
 ///
@@ -465,6 +465,9 @@ impl<T> Clone for RefLocalEvent<'_, T> {
     fn clone(&self) -> Self {
         Self { event: self.event }
     }
+}
+impl<T> ReflectiveT for RefLocalEvent<'_, T> {
+    type T = T;
 }
 
 /// An event referenced via `Rc` shared reference.
@@ -491,6 +494,9 @@ impl<T> Clone for RcLocalEvent<T> {
         }
     }
 }
+impl<T> ReflectiveT for RcLocalEvent<T> {
+    type T = T;
+}
 
 /// An event referenced via raw pointer.
 ///
@@ -515,30 +521,32 @@ impl<T> Clone for PtrLocalEvent<T> {
         Self { event: self.event }
     }
 }
-
-/// A sender that can send a value through a single-threaded event using Rc ownership.
-///
-/// The sender owns an Rc to the event and is single-threaded.
-/// After calling [`send`](LocalOnceSender::send), the sender is consumed.
-#[derive(Debug)]
-pub struct LocalOnceSender<T, R>
-where
-    R: LocalEventRef<T>,
-{
-    event_ref: R,
-
-    _t: PhantomData<T>,
+impl<T> ReflectiveT for PtrLocalEvent<T> {
+    type T = T;
 }
 
-impl<T, R> LocalOnceSender<T, R>
+/// A sender that can send a single value through a single-threaded event.
+///
+/// The type of the value is the inner type parameter,
+/// i.e. the `T` in `LocalOnceSender<ArcEvent<T>>`.
+///
+/// The outer type parameter determines the mechanism by which the endpoint is bound to the event.
+/// Different binding mechanisms offer different performance characteristics and resource
+/// management patterns.
+#[derive(Debug)]
+pub struct LocalOnceSender<E>
 where
-    R: LocalEventRef<T>,
+    E: LocalEventRef<<E as ReflectiveT>::T>,
 {
-    fn new(event_ref: R) -> Self {
-        Self {
-            event_ref,
-            _t: PhantomData,
-        }
+    event_ref: E,
+}
+
+impl<E> LocalOnceSender<E>
+where
+    E: LocalEventRef<<E as ReflectiveT>::T>,
+{
+    fn new(event_ref: E) -> Self {
+        Self { event_ref }
     }
 
     /// Sends a value through the event.
@@ -557,51 +565,50 @@ where
     /// let (sender, _receiver) = event.bind_by_rc();
     /// sender.send(42);
     /// ```
-    pub fn send(self, value: T) {
+    pub fn send(self, value: E::T) {
         self.event_ref.set(value);
     }
 }
 
-impl<T, R> Drop for LocalOnceSender<T, R>
+impl<E> Drop for LocalOnceSender<E>
 where
-    R: LocalEventRef<T>,
+    E: LocalEventRef<<E as ReflectiveT>::T>,
 {
     fn drop(&mut self) {
         self.event_ref.sender_dropped();
     }
 }
 
-/// A receiver that can receive a value from a single-threaded event using Rc ownership.
+/// A receiver that can receive a single value through a single-threaded event.
 ///
-/// The receiver owns an Rc to the event and is single-threaded.
-/// After awaiting the receiver, it is consumed.
+/// The type of the value is the inner type parameter,
+/// i.e. the `T` in `LocalOnceReceiver<ArcEvent<T>>`.
+///
+/// The outer type parameter determines the mechanism by which the endpoint is bound to the event.
+/// Different binding mechanisms offer different performance characteristics and resource
+/// management patterns.
 #[derive(Debug)]
-pub struct LocalOnceReceiver<T, R>
+pub struct LocalOnceReceiver<E>
 where
-    R: LocalEventRef<T>,
+    E: LocalEventRef<<E as ReflectiveT>::T>,
 {
-    event_ref: R,
-
-    _t: PhantomData<T>,
+    event_ref: E,
 }
 
-impl<T, R> LocalOnceReceiver<T, R>
+impl<E> LocalOnceReceiver<E>
 where
-    R: LocalEventRef<T>,
+    E: LocalEventRef<<E as ReflectiveT>::T>,
 {
-    fn new(event_ref: R) -> Self {
-        Self {
-            event_ref,
-            _t: PhantomData,
-        }
+    fn new(event_ref: E) -> Self {
+        Self { event_ref }
     }
 }
 
-impl<T, R> Future for LocalOnceReceiver<T, R>
+impl<E> Future for LocalOnceReceiver<E>
 where
-    R: LocalEventRef<T>,
+    E: LocalEventRef<<E as ReflectiveT>::T>,
 {
-    type Output = Result<T, Disconnected>;
+    type Output = Result<E::T, Disconnected>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         self.event_ref
@@ -867,11 +874,11 @@ mod tests {
     fn thread_safety() {
         // Nothing is Send or Sync - everything is stuck on one thread.
         assert_not_impl_any!(LocalOnceEvent<u32>: Send, Sync);
-        assert_not_impl_any!(LocalOnceSender<u32, RefLocalEvent<'static, u32>>: Send, Sync);
-        assert_not_impl_any!(LocalOnceReceiver<u32, RefLocalEvent<'static, u32>>: Send, Sync);
-        assert_not_impl_any!(LocalOnceSender<u32, RcLocalEvent<u32>>: Send, Sync);
-        assert_not_impl_any!(LocalOnceReceiver<u32, RcLocalEvent<u32>>: Send, Sync);
-        assert_not_impl_any!(LocalOnceSender<u32, PtrLocalEvent<u32>>: Send, Sync);
-        assert_not_impl_any!(LocalOnceReceiver<u32, PtrLocalEvent<u32>>: Send, Sync);
+        assert_not_impl_any!(LocalOnceSender<RefLocalEvent<'static, u32>>: Send, Sync);
+        assert_not_impl_any!(LocalOnceReceiver<RefLocalEvent<'static, u32>>: Send, Sync);
+        assert_not_impl_any!(LocalOnceSender<RcLocalEvent<u32>>: Send, Sync);
+        assert_not_impl_any!(LocalOnceReceiver<RcLocalEvent<u32>>: Send, Sync);
+        assert_not_impl_any!(LocalOnceSender<PtrLocalEvent<u32>>: Send, Sync);
+        assert_not_impl_any!(LocalOnceReceiver<PtrLocalEvent<u32>>: Send, Sync);
     }
 }

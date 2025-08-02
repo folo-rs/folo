@@ -19,7 +19,7 @@ use pinned_pool::{Key, PinnedPool};
 
 use super::local::LocalOnceEvent;
 use super::with_ref_count::LocalWithRefCount;
-use crate::{Disconnected, Sealed};
+use crate::{Disconnected, ReflectiveT, Sealed};
 
 /// A pool that manages single-threaded events with automatic cleanup.
 ///
@@ -106,8 +106,8 @@ impl<T> LocalOnceEventPool<T> {
     pub fn bind_by_ref(
         &self,
     ) -> (
-        PooledLocalOnceSender<T, RefLocalPool<'_, T>>,
-        PooledLocalOnceReceiver<T, RefLocalPool<'_, T>>,
+        PooledLocalOnceSender<RefLocalPool<'_, T>>,
+        PooledLocalOnceReceiver<RefLocalPool<'_, T>>,
     ) {
         let mut inner_pool = self.pool.borrow_mut();
         let inserter = inner_pool.begin_insert();
@@ -165,8 +165,8 @@ impl<T> LocalOnceEventPool<T> {
     pub fn bind_by_rc(
         self: &Rc<Self>,
     ) -> (
-        PooledLocalOnceSender<T, RcLocalPool<T>>,
-        PooledLocalOnceReceiver<T, RcLocalPool<T>>,
+        PooledLocalOnceSender<RcLocalPool<T>>,
+        PooledLocalOnceReceiver<RcLocalPool<T>>,
     ) {
         let mut inner_pool = self.pool.borrow_mut();
         let inserter = inner_pool.begin_insert();
@@ -238,8 +238,8 @@ impl<T> LocalOnceEventPool<T> {
     pub unsafe fn bind_by_ptr(
         self: Pin<&Self>,
     ) -> (
-        PooledLocalOnceSender<T, PtrLocalPool<T>>,
-        PooledLocalOnceReceiver<T, PtrLocalPool<T>>,
+        PooledLocalOnceSender<PtrLocalPool<T>>,
+        PooledLocalOnceReceiver<PtrLocalPool<T>>,
     ) {
         let mut inner_pool = self.pool.borrow_mut();
         let inserter = inner_pool.begin_insert();
@@ -381,7 +381,7 @@ impl<T> Default for LocalOnceEventPool<T> {
 ///
 /// This is a sealed trait and exists for internal use only. You never need to use it.
 #[expect(private_bounds, reason = "intentional - sealed trait")]
-pub trait LocalPoolRef<T>: Deref<Target = LocalOnceEventPool<T>> + Sealed {}
+pub trait LocalPoolRef<T>: Deref<Target = LocalOnceEventPool<T>> + ReflectiveT + Sealed {}
 
 /// An event pool referenced via `&` shared reference.
 ///
@@ -404,6 +404,9 @@ impl<T> Clone for RefLocalPool<'_, T> {
     fn clone(&self) -> Self {
         Self { pool: self.pool }
     }
+}
+impl<T> ReflectiveT for RefLocalPool<'_, T> {
+    type T = T;
 }
 
 /// An event pool referenced via `Rc` shared reference.
@@ -430,6 +433,9 @@ impl<T> Clone for RcLocalPool<T> {
         }
     }
 }
+impl<T> ReflectiveT for RcLocalPool<T> {
+    type T = T;
+}
 
 /// An event pool referenced via raw pointer.
 ///
@@ -454,6 +460,9 @@ impl<T> Clone for PtrLocalPool<T> {
         Self { pool: self.pool }
     }
 }
+impl<T> ReflectiveT for PtrLocalPool<T> {
+    type T = T;
+}
 
 /// A sender endpoint for pooled local events that holds a reference to the pool.
 ///
@@ -463,22 +472,22 @@ impl<T> Clone for PtrLocalPool<T> {
 ///
 /// This is the single-threaded variant that cannot be sent across threads.
 #[derive(Debug)]
-pub struct PooledLocalOnceSender<T, R>
+pub struct PooledLocalOnceSender<P>
 where
-    R: LocalPoolRef<T>,
+    P: LocalPoolRef<<P as ReflectiveT>::T>,
 {
     // This is a pointer to avoid contaminating the type signature with the event lifetime.
     //
     // SAFETY: We rely on the inner pool guaranteeing pinning and us owning a counted reference.
-    event: Option<NonNull<LocalWithRefCount<LocalOnceEvent<T>>>>,
+    event: Option<NonNull<LocalWithRefCount<LocalOnceEvent<P::T>>>>,
 
-    pool_ref: R,
+    pool_ref: P,
     key: Key,
 }
 
-impl<T, R> PooledLocalOnceSender<T, R>
+impl<P> PooledLocalOnceSender<P>
 where
-    R: LocalPoolRef<T>,
+    P: LocalPoolRef<<P as ReflectiveT>::T>,
 {
     /// Sends a value through the event.
     ///
@@ -497,7 +506,7 @@ where
     /// let value = futures::executor::block_on(receiver).unwrap();
     /// assert_eq!(value, 42);
     /// ```
-    pub fn send(self, value: T) {
+    pub fn send(self, value: P::T) {
         // SAFETY: See comments on field.
         let event = unsafe {
             self.event
@@ -509,9 +518,9 @@ where
     }
 }
 
-impl<T, R> Drop for PooledLocalOnceSender<T, R>
+impl<P> Drop for PooledLocalOnceSender<P>
 where
-    R: LocalPoolRef<T>,
+    P: LocalPoolRef<<P as ReflectiveT>::T>,
 {
     fn drop(&mut self) {
         // SAFETY: See comments on field.
@@ -538,22 +547,22 @@ where
 ///
 /// This is the single-threaded variant that cannot be sent across threads.
 #[derive(Debug)]
-pub struct PooledLocalOnceReceiver<T, R>
+pub struct PooledLocalOnceReceiver<P>
 where
-    R: LocalPoolRef<T>,
+    P: LocalPoolRef<<P as ReflectiveT>::T>,
 {
     // This is a pointer to avoid contaminating the type signature with the event lifetime.
     //
     // SAFETY: We rely on the inner pool guaranteeing pinning and us owning a counted reference.
-    event: Option<NonNull<LocalWithRefCount<LocalOnceEvent<T>>>>,
+    event: Option<NonNull<LocalWithRefCount<LocalOnceEvent<P::T>>>>,
 
-    pool_ref: R,
+    pool_ref: P,
     key: Key,
 }
 
-impl<T, R> PooledLocalOnceReceiver<T, R>
+impl<P> PooledLocalOnceReceiver<P>
 where
-    R: LocalPoolRef<T>,
+    P: LocalPoolRef<<P as ReflectiveT>::T>,
 {
     /// Drops the inner state, releasing the event back to the pool.
     /// May also be used from contexts where the receiver itself is not yet consumed.
@@ -575,11 +584,11 @@ where
     }
 }
 
-impl<T, R> Future for PooledLocalOnceReceiver<T, R>
+impl<P> Future for PooledLocalOnceReceiver<P>
 where
-    R: LocalPoolRef<T>,
+    P: LocalPoolRef<<P as ReflectiveT>::T>,
 {
-    type Output = Result<T, Disconnected>;
+    type Output = Result<P::T, Disconnected>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         // SAFETY: We are not moving anything, just touching internal state.
@@ -604,9 +613,9 @@ where
     }
 }
 
-impl<T, R> Drop for PooledLocalOnceReceiver<T, R>
+impl<P> Drop for PooledLocalOnceReceiver<P>
 where
-    R: LocalPoolRef<T>,
+    P: LocalPoolRef<<P as ReflectiveT>::T>,
 {
     fn drop(&mut self) {
         self.drop_inner();
@@ -1006,11 +1015,11 @@ mod tests {
     fn thread_safety() {
         // Nothing is Send or Sync - everything is stuck on one thread.
         assert_not_impl_any!(LocalOnceEventPool<u32>: Send, Sync);
-        assert_not_impl_any!(PooledLocalOnceSender<u32, RefLocalPool<'static, u32>>: Send, Sync);
-        assert_not_impl_any!(PooledLocalOnceReceiver<u32, RefLocalPool<'static, u32>>: Send, Sync);
-        assert_not_impl_any!(PooledLocalOnceSender<u32, RcLocalPool<u32>>: Send, Sync);
-        assert_not_impl_any!(PooledLocalOnceReceiver<u32, RcLocalPool<u32>>: Send, Sync);
-        assert_not_impl_any!(PooledLocalOnceSender<u32, PtrLocalPool<u32>>: Send, Sync);
-        assert_not_impl_any!(PooledLocalOnceReceiver<u32, PtrLocalPool<u32>>: Send, Sync);
+        assert_not_impl_any!(PooledLocalOnceSender<RefLocalPool<'static, u32>>: Send, Sync);
+        assert_not_impl_any!(PooledLocalOnceReceiver<RefLocalPool<'static, u32>>: Send, Sync);
+        assert_not_impl_any!(PooledLocalOnceSender<RcLocalPool<u32>>: Send, Sync);
+        assert_not_impl_any!(PooledLocalOnceReceiver<RcLocalPool<u32>>: Send, Sync);
+        assert_not_impl_any!(PooledLocalOnceSender<PtrLocalPool<u32>>: Send, Sync);
+        assert_not_impl_any!(PooledLocalOnceReceiver<PtrLocalPool<u32>>: Send, Sync);
     }
 }
