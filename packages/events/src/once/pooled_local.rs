@@ -17,9 +17,7 @@ use std::task;
 
 use pinned_pool::{Key, PinnedPool};
 
-use super::local::LocalOnceEvent;
-use super::with_ref_count::LocalWithRefCount;
-use crate::{Disconnected, ReflectiveT, Sealed};
+use crate::{Disconnected, LocalOnceEvent, LocalWithTwoOwners, ReflectiveT, Sealed};
 
 /// A pool that manages single-threaded events with automatic cleanup.
 ///
@@ -55,7 +53,7 @@ use crate::{Disconnected, ReflectiveT, Sealed};
 /// ```
 #[derive(Debug)]
 pub struct LocalOnceEventPool<T> {
-    pool: RefCell<PinnedPool<LocalWithRefCount<LocalOnceEvent<T>>>>,
+    pool: RefCell<PinnedPool<LocalWithTwoOwners<LocalOnceEvent<T>>>>,
 
     // It is invalid to move this type once it has been pinned.
     _requires_pinning: PhantomPinned,
@@ -114,8 +112,7 @@ impl<T> LocalOnceEventPool<T> {
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        // One reference by sender, one reference by receiver.
-        let item = inserter.insert(LocalWithRefCount::new(2, LocalOnceEvent::new()));
+        let item = inserter.insert(LocalWithTwoOwners::new(LocalOnceEvent::new()));
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -172,8 +169,7 @@ impl<T> LocalOnceEventPool<T> {
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        // One reference by sender, one reference by receiver.
-        let item = inserter.insert(LocalWithRefCount::new(2, LocalOnceEvent::new()));
+        let item = inserter.insert(LocalWithTwoOwners::new(LocalOnceEvent::new()));
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -244,8 +240,7 @@ impl<T> LocalOnceEventPool<T> {
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        // One reference by sender, one reference by receiver.
-        let item = inserter.insert(LocalWithRefCount::new(2, LocalOnceEvent::new()));
+        let item = inserter.insert(LocalWithTwoOwners::new(LocalOnceEvent::new()));
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -477,7 +472,7 @@ where
     // This is a pointer to avoid contaminating the type signature with the event lifetime.
     //
     // SAFETY: We rely on the inner pool guaranteeing pinning and us owning a counted reference.
-    event: Option<NonNull<LocalWithRefCount<LocalOnceEvent<P::T>>>>,
+    event: Option<NonNull<LocalWithTwoOwners<LocalOnceEvent<P::T>>>>,
 
     pool_ref: P,
     key: Key,
@@ -526,14 +521,14 @@ where
         // SAFETY: See comments on field.
         let event = unsafe { self.event.expect("only possible on double drop").as_ref() };
 
+        // The event is going to be destroyed, so we cannot reference it anymore.
+        self.event = None;
+
         // Signal that the sender was dropped before handling reference counting.
         // This ensures receivers get Disconnected errors if the sender is dropped without sending.
         event.sender_dropped();
 
-        if event.dec_ref() {
-            // The event is going to be destroyed, so we cannot reference it anymore.
-            self.event = None;
-
+        if event.release_one() {
             self.pool_ref.pool.borrow_mut().remove(self.key);
         }
     }
@@ -554,7 +549,7 @@ where
     // This is a pointer to avoid contaminating the type signature with the event lifetime.
     //
     // SAFETY: We rely on the inner pool guaranteeing pinning and us owning a counted reference.
-    event: Option<NonNull<LocalWithRefCount<LocalOnceEvent<P::T>>>>,
+    event: Option<NonNull<LocalWithTwoOwners<LocalOnceEvent<P::T>>>>,
 
     pool_ref: P,
     key: Key,
@@ -572,13 +567,14 @@ where
             return;
         };
 
+        // Regardless of whether we were the last reference holder or not, we are no longer
+        // allowed to reference the event as we are releasing our reference.
+        self.event = None;
+
         // SAFETY: See comments on field.
         let event = unsafe { event.as_ref() };
 
-        if event.dec_ref() {
-            // The event is going to be destroyed, so we cannot reference it anymore.
-            self.event = None;
-
+        if event.release_one() {
             self.pool_ref.pool.borrow_mut().remove(self.key);
         }
     }

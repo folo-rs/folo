@@ -16,9 +16,7 @@ use std::task;
 
 use pinned_pool::{Key, PinnedPool};
 
-use super::sync::OnceEvent;
-use super::with_ref_count::WithRefCount;
-use crate::{Disconnected, ERR_POISONED_LOCK, ReflectiveTSend, Sealed};
+use crate::{Disconnected, ERR_POISONED_LOCK, OnceEvent, ReflectiveTSend, Sealed, WithTwoOwners};
 
 /// A pool that manages thread-safe events with automatic cleanup.
 ///
@@ -57,7 +55,7 @@ pub struct OnceEventPool<T>
 where
     T: Send,
 {
-    pool: Mutex<PinnedPool<WithRefCount<OnceEvent<T>>>>,
+    pool: Mutex<PinnedPool<WithTwoOwners<OnceEvent<T>>>>,
 
     // It is invalid to move this type once it has been pinned.
     _requires_pinning: PhantomPinned,
@@ -123,8 +121,7 @@ where
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        // One reference by sender, one reference by receiver.
-        let item = inserter.insert(WithRefCount::new(2, OnceEvent::new()));
+        let item = inserter.insert(WithTwoOwners::new(OnceEvent::new()));
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -179,8 +176,7 @@ where
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        // One reference by sender, one reference by receiver.
-        let item = inserter.insert(WithRefCount::new(2, OnceEvent::new()));
+        let item = inserter.insert(WithTwoOwners::new(OnceEvent::new()));
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -244,8 +240,7 @@ where
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        // One reference by sender, one reference by receiver.
-        let item = inserter.insert(WithRefCount::new(2, OnceEvent::new()));
+        let item = inserter.insert(WithTwoOwners::new(OnceEvent::new()));
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -513,7 +508,7 @@ where
     // This is a pointer to avoid contaminating the type signature with the event lifetime.
     //
     // SAFETY: We rely on the inner pool guaranteeing pinning and us owning a counted reference.
-    event: Option<NonNull<WithRefCount<OnceEvent<P::T>>>>,
+    event: Option<NonNull<WithTwoOwners<OnceEvent<P::T>>>>,
 
     pool_ref: P,
     key: Key,
@@ -562,14 +557,14 @@ where
         // SAFETY: See comments on field.
         let event = unsafe { self.event.expect("only possible on double drop").as_ref() };
 
+        // The event is going to be destroyed, so we cannot reference it anymore.
+        self.event = None;
+
         // Signal that the sender was dropped before handling reference counting.
         // This ensures receivers get Disconnected errors if the sender is dropped without sending.
         event.sender_dropped();
 
-        if event.dec_ref() {
-            // The event is going to be destroyed, so we cannot reference it anymore.
-            self.event = None;
-
+        if event.release_one() {
             self.pool_ref
                 .pool
                 .lock()
@@ -599,7 +594,7 @@ where
     // This is a pointer to avoid contaminating the type signature with the event lifetime.
     //
     // SAFETY: We rely on the inner pool guaranteeing pinning and us owning a counted reference.
-    event: Option<NonNull<WithRefCount<OnceEvent<P::T>>>>,
+    event: Option<NonNull<WithTwoOwners<OnceEvent<P::T>>>>,
 
     pool_ref: P,
     key: Key,
@@ -618,13 +613,13 @@ where
         };
 
         // Regardless of whether we were the last reference holder or not, we are no longer
-        // allowed to reference the event as we are decrementing the reference count.
+        // allowed to reference the event as we are releasing our reference.
         self.event = None;
 
         // SAFETY: See comments on field.
         let event = unsafe { event.as_ref() };
 
-        if event.dec_ref() {
+        if event.release_one() {
             self.pool_ref
                 .pool
                 .lock()
