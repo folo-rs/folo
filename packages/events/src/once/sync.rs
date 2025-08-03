@@ -167,6 +167,36 @@ where
     }
 
     /// Returns both the sender and receiver for this event,
+    /// connected by a shared reference to the event.
+    ///
+    /// This method assumes the event is not already bound and skips the check for performance.
+    /// If the event is already bound, the behavior is unspecified but will not cause memory
+    /// unsafety - it may result in panics when using the senders or receivers.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use events::OnceEvent;
+    ///
+    /// let event = OnceEvent::<i32>::new();
+    /// // We know this is the first and only binding of this event
+    /// let (sender, receiver) = event.bind_by_ref_unchecked();
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn bind_by_ref_unchecked(
+        &self,
+    ) -> (OnceSender<RefEvent<'_, T>>, OnceReceiver<RefEvent<'_, T>>) {
+        // Mark as bound for consistency with other methods
+        self.is_bound.store(true, Ordering::Relaxed);
+
+        (
+            OnceSender::new(RefEvent { event: self }),
+            OnceReceiver::new(RefEvent { event: self }),
+        )
+    }
+
+    /// Returns both the sender and receiver for this event,
     /// connected by an `Arc` to the event.
     ///
     /// This method requires the event to be wrapped in an [`Arc`] when called.
@@ -232,6 +262,44 @@ where
                 event: Arc::clone(self),
             }),
         ))
+    }
+
+    /// Returns both the sender and receiver for this event,
+    /// connected by an `Arc` to the event.
+    ///
+    /// This method assumes the event is not already bound and skips the check for performance.
+    /// If the event is already bound, the behavior is unspecified but will not cause memory
+    /// unsafety - it may result in panics when using the senders or receivers.
+    ///
+    /// This method requires the event to be wrapped in an [`Arc`] when called.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use events::OnceEvent;
+    ///
+    /// let event = Arc::new(OnceEvent::<i32>::new());
+    /// // We know this is the first and only binding of this event
+    /// let (sender, receiver) = event.bind_by_arc_unchecked();
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn bind_by_arc_unchecked(
+        self: &Arc<Self>,
+    ) -> (OnceSender<ArcEvent<T>>, OnceReceiver<ArcEvent<T>>) {
+        // Mark as bound for consistency with other methods
+        self.is_bound.store(true, Ordering::Relaxed);
+
+        (
+            OnceSender::new(ArcEvent {
+                event: Arc::clone(self),
+            }),
+            OnceReceiver::new(ArcEvent {
+                event: Arc::clone(self),
+            }),
+        )
     }
 
     /// Returns both the sender and receiver for this event,
@@ -320,6 +388,46 @@ where
             OnceSender::new(PtrEvent { event: event_ptr }),
             OnceReceiver::new(PtrEvent { event: event_ptr }),
         ))
+    }
+
+    /// Returns both the sender and receiver for this event,
+    /// connected by a raw pointer to the event.
+    ///
+    /// This method assumes the event is not already bound and skips the check for performance.
+    /// If the event is already bound, the behavior is unspecified but will not cause memory
+    /// unsafety - it may result in panics when using the senders or receivers.
+    ///
+    /// This method requires the event to be pinned when called.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that:
+    /// - The event remains alive and pinned for the entire lifetime of the sender and receiver.
+    /// - The sender and receiver are dropped before the event is dropped.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use events::OnceEvent;
+    ///
+    /// let mut event = Box::pin(OnceEvent::<i32>::new());
+    /// // SAFETY: We ensure the event outlives the sender and receiver
+    /// let (sender, receiver) = unsafe { event.as_ref().bind_by_ptr_unchecked() };
+    /// ```
+    #[must_use]
+    #[inline]
+    pub unsafe fn bind_by_ptr_unchecked(
+        self: Pin<&Self>,
+    ) -> (OnceSender<PtrEvent<T>>, OnceReceiver<PtrEvent<T>>) {
+        // Mark as bound for consistency with other methods
+        self.is_bound.store(true, Ordering::Relaxed);
+
+        let event_ptr = NonNull::from(self.get_ref());
+
+        (
+            OnceSender::new(PtrEvent { event: event_ptr }),
+            OnceReceiver::new(PtrEvent { event: event_ptr }),
+        )
     }
 
     /// Uses the provided closure to inspect the backtrace of the current awaiter,
@@ -726,6 +834,21 @@ mod tests {
     }
 
     #[test]
+    fn event_by_ref_unchecked_works() {
+        with_watchdog(|| {
+            futures::executor::block_on(async {
+                let event = OnceEvent::<i32>::new();
+                // We know this is the first and only binding of this event
+                let (sender, receiver) = event.bind_by_ref_unchecked();
+
+                sender.send(42);
+                let value = receiver.await.unwrap();
+                assert_eq!(value, 42);
+            });
+        });
+    }
+
+    #[test]
     fn event_send_succeeds_without_receiver() {
         let event = OnceEvent::<i32>::new();
         let (sender, _receiver) = event.bind_by_ref();
@@ -778,6 +901,19 @@ mod tests {
 
         let endpoints2 = event.bind_by_arc_checked();
         assert!(endpoints2.is_none());
+    }
+
+    #[test]
+    fn event_by_arc_unchecked_works() {
+        with_watchdog(|| {
+            let event = Arc::new(OnceEvent::<String>::new());
+            // We know this is the first and only binding of this event
+            let (sender, receiver) = event.bind_by_arc_unchecked();
+
+            sender.send("Hello from Arc unchecked".to_string());
+            let value = futures::executor::block_on(receiver).unwrap();
+            assert_eq!(value, "Hello from Arc unchecked");
+        });
     }
 
     #[test]
@@ -834,6 +970,21 @@ mod tests {
             // SAFETY: We ensure the event outlives the endpoints within this test
             let endpoints2 = unsafe { event.as_ref().bind_by_ptr_checked() };
             assert!(endpoints2.is_none());
+        });
+    }
+
+    #[test]
+    fn event_by_ptr_unchecked_works() {
+        with_watchdog(|| {
+            let event = Box::pin(OnceEvent::<String>::new());
+
+            // SAFETY: We ensure the event outlives the sender and receiver
+            let (sender, receiver) = unsafe { event.as_ref().bind_by_ptr_unchecked() };
+
+            sender.send("Hello from pointer unchecked".to_string());
+            let value = futures::executor::block_on(receiver).unwrap();
+            assert_eq!(value, "Hello from pointer unchecked");
+            // sender and receiver are dropped here, before event
         });
     }
 

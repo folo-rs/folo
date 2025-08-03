@@ -169,6 +169,39 @@ impl<T> LocalOnceEvent<T> {
     }
 
     /// Returns both the sender and receiver for this event,
+    /// connected by a shared reference to the event.
+    ///
+    /// This method assumes the event is not already bound and skips the check for performance.
+    /// If the event is already bound, the behavior is unspecified but will not cause memory
+    /// unsafety - it may result in panics when using the senders or receivers.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use events::LocalOnceEvent;
+    ///
+    /// let event = LocalOnceEvent::<i32>::new();
+    /// // We know this is the first and only binding of this event
+    /// let (sender, receiver) = event.bind_by_ref_unchecked();
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn bind_by_ref_unchecked(
+        &self,
+    ) -> (
+        LocalOnceSender<RefLocalEvent<'_, T>>,
+        LocalOnceReceiver<RefLocalEvent<'_, T>>,
+    ) {
+        // Mark as bound for consistency with other methods
+        self.is_bound.set(true);
+
+        (
+            LocalOnceSender::new(RefLocalEvent { event: self }),
+            LocalOnceReceiver::new(RefLocalEvent { event: self }),
+        )
+    }
+
+    /// Returns both the sender and receiver for this event,
     /// connected by an `Rc` to the event.
     ///
     /// This method requires the event to be wrapped in an [`Rc`] when called.
@@ -242,6 +275,47 @@ impl<T> LocalOnceEvent<T> {
                 event: Rc::clone(self),
             }),
         ))
+    }
+
+    /// Returns both the sender and receiver for this event,
+    /// connected by an `Rc` to the event.
+    ///
+    /// This method assumes the event is not already bound and skips the check for performance.
+    /// If the event is already bound, the behavior is unspecified but will not cause memory
+    /// unsafety - it may result in panics when using the senders or receivers.
+    ///
+    /// This method requires the event to be wrapped in an [`Rc`] when called.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::rc::Rc;
+    ///
+    /// use events::LocalOnceEvent;
+    ///
+    /// let event = Rc::new(LocalOnceEvent::<i32>::new());
+    /// // We know this is the first and only binding of this event
+    /// let (sender, receiver) = event.bind_by_rc_unchecked();
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn bind_by_rc_unchecked(
+        self: &Rc<Self>,
+    ) -> (
+        LocalOnceSender<RcLocalEvent<T>>,
+        LocalOnceReceiver<RcLocalEvent<T>>,
+    ) {
+        // Mark as bound for consistency with other methods
+        self.is_bound.set(true);
+
+        (
+            LocalOnceSender::new(RcLocalEvent {
+                event: Rc::clone(self),
+            }),
+            LocalOnceReceiver::new(RcLocalEvent {
+                event: Rc::clone(self),
+            }),
+        )
     }
 
     /// Returns both the sender and receiver for this event,
@@ -331,6 +405,49 @@ impl<T> LocalOnceEvent<T> {
             LocalOnceSender::new(PtrLocalEvent { event: event_ptr }),
             LocalOnceReceiver::new(PtrLocalEvent { event: event_ptr }),
         ))
+    }
+
+    /// Returns both the sender and receiver for this event,
+    /// connected by a raw pointer to the event.
+    ///
+    /// This method assumes the event is not already bound and skips the check for performance.
+    /// If the event is already bound, the behavior is unspecified but will not cause memory
+    /// unsafety - it may result in panics when using the senders or receivers.
+    ///
+    /// This method requires the event to be pinned when called.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that:
+    /// - The event remains alive and pinned for the entire lifetime of the sender and receiver.
+    /// - The sender and receiver are dropped before the event is dropped.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use events::LocalOnceEvent;
+    ///
+    /// let mut event = Box::pin(LocalOnceEvent::<i32>::new());
+    /// // SAFETY: We ensure the event outlives the sender and receiver
+    /// let (sender, receiver) = unsafe { event.as_ref().bind_by_ptr_unchecked() };
+    /// ```
+    #[must_use]
+    #[inline]
+    pub unsafe fn bind_by_ptr_unchecked(
+        self: Pin<&Self>,
+    ) -> (
+        LocalOnceSender<PtrLocalEvent<T>>,
+        LocalOnceReceiver<PtrLocalEvent<T>>,
+    ) {
+        // Mark as bound for consistency with other methods
+        self.is_bound.set(true);
+
+        let event_ptr = NonNull::from(self.get_ref());
+
+        (
+            LocalOnceSender::new(PtrLocalEvent { event: event_ptr }),
+            LocalOnceReceiver::new(PtrLocalEvent { event: event_ptr }),
+        )
     }
 
     /// Uses the provided closure to inspect the backtrace of the current awaiter,
@@ -683,6 +800,19 @@ mod tests {
     }
 
     #[test]
+    fn local_event_by_ref_unchecked_works() {
+        with_watchdog(|| {
+            let event = LocalOnceEvent::<i32>::new();
+            // We know this is the first and only binding of this event
+            let (sender, receiver) = event.bind_by_ref_unchecked();
+
+            sender.send(42);
+            let value = futures::executor::block_on(receiver);
+            assert_eq!(value.unwrap(), 42);
+        });
+    }
+
+    #[test]
     fn local_event_send_succeeds_without_receiver() {
         let event = LocalOnceEvent::<i32>::new();
         let (sender, _receiver) = event.bind_by_ref();
@@ -728,6 +858,19 @@ mod tests {
 
         let endpoints2 = event.bind_by_rc_checked();
         assert!(endpoints2.is_none());
+    }
+
+    #[test]
+    fn local_event_by_rc_unchecked_works() {
+        with_watchdog(|| {
+            let event = Rc::new(LocalOnceEvent::<String>::new());
+            // We know this is the first and only binding of this event
+            let (sender, receiver) = event.bind_by_rc_unchecked();
+
+            sender.send("Hello from Rc unchecked".to_string());
+            let value = futures::executor::block_on(receiver);
+            assert_eq!(value.unwrap(), "Hello from Rc unchecked");
+        });
     }
 
     #[test]
@@ -779,6 +922,21 @@ mod tests {
             // SAFETY: We ensure the event outlives the endpoints within this test
             let endpoints2 = unsafe { event.as_ref().bind_by_ptr_checked() };
             assert!(endpoints2.is_none());
+        });
+    }
+
+    #[test]
+    fn local_event_by_ptr_unchecked_works() {
+        with_watchdog(|| {
+            let event = Box::pin(LocalOnceEvent::<String>::new());
+
+            // SAFETY: We ensure the event outlives the sender and receiver
+            let (sender, receiver) = unsafe { event.as_ref().bind_by_ptr_unchecked() };
+
+            sender.send("Hello from pointer unchecked".to_string());
+            let value = futures::executor::block_on(receiver);
+            assert_eq!(value.unwrap(), "Hello from pointer unchecked");
+            // sender and receiver are dropped here, before event
         });
     }
 
