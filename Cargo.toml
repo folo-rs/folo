@@ -88,6 +88,7 @@ rsevents = { version = "0.3.1", default-features = false }
 scc = { version = "2.3", default-features = false }
 scopeguard = { version = "1.2", default-features = false }
 seq-macro = { version = "0.3", default-features = false }
+serial_test = { version = "3.2", default-features = false }
 simple-mermaid = { version = "0.2", default-features = false }
 smallvec = { version = "1.15.0", default-features = false }
 static_assertions = { version = "1", default-features = false }

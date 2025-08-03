@@ -538,6 +538,8 @@ fn normalize_path(path: &Path) -> PathBuf {
 mod tests {
     use std::fs;
 
+    use serial_test::serial;
+
     use super::*;
 
     #[test]
@@ -652,23 +654,19 @@ version = "0.1.0"
     }
 
     #[test]
+    #[serial] // This test uses file!() which gives a relative path that depends on the current working directory
     fn validate_workspace_context_from_workspace() {
         // This test ensures validation works when both current dir and target are in the same workspace
         // Use the current source file which should exist and be in the workspace
         let current_file = file!(); // This gives us the path to this source file
         let current_file_path = Path::new(current_file);
 
-        // Skip this test if we cannot find the workspace root from the current file
-        // This can happen in isolated test environments
-        if find_workspace_root(current_file_path).is_err() {
-            return; // Skip the test
-        }
-
         validate_workspace_context(current_file_path)
             .expect("Should validate successfully when both paths are in the same workspace");
     }
 
     #[test]
+    #[serial] // This test changes the global working directory, so must run serially to avoid interference with other tests
     fn validate_workspace_context_from_temp_dir() {
         // Save current directory
         let original_dir = std::env::current_dir().unwrap();
@@ -695,6 +693,7 @@ version = "0.1.0"
     }
 
     #[test]
+    #[serial] // This test changes the global working directory, so must run serially to avoid interference with other tests
     fn validate_workspace_context_different_workspaces() {
         // This test verifies that the tool rejects when current dir and target are in different workspaces
         // We'll simulate this by creating a fake workspace structure
@@ -765,14 +764,8 @@ version = "0.1.0"
     }
 
     #[test]
+    #[serial] // This test uses a relative path that depends on the current working directory for resolution
     fn validate_workspace_context_relative_path_outside() {
-        // Test that relative paths going outside the workspace are rejected
-        // Skip this test if we're not running from within a workspace (e.g., isolated test environments)
-        let current_dir = std::env::current_dir().unwrap();
-        if find_workspace_root(&current_dir).is_err() {
-            return; // Skip the test
-        }
-
         let result = validate_workspace_context(Path::new("../../../outside_workspace/file.rs"));
         assert!(result.is_err(), "Expected error but validation succeeded!");
         // The error could be about the file not existing or being outside workspace
