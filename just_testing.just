@@ -113,7 +113,7 @@ run-examples:
                 $job = Start-Job -ScriptBlock {
                     param($pkg, $example_name)
                     $env:IS_TESTING = "1"
-                    & cargo run --package $pkg --example $example_name --locked 2>&1
+                    & cargo run --package $pkg --example $example_name --all-features --locked 2>&1
                     return $LASTEXITCODE
                 } -ArgumentList $pkg, $example_name
                 
