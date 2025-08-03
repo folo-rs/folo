@@ -71,6 +71,8 @@ pub struct LocalOnceEvent<T> {
     // Our API contract requires that an event can only be bound once, so we have to check this
     // because it is not feasible to create an API that can consume the event when creating the
     // sender-receiver pair (all we have might be a shared reference to the event).
+    //
+    // This field is not used with pooled events - the pool ensures uniqueness.
     is_bound: Cell<bool>,
 
     // Everything to do with this event is single-threaded,
