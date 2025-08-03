@@ -271,14 +271,63 @@ impl fmt::Display for Report {
         {
             writeln!(f, "No allocation statistics captured.")?;
         } else {
-            writeln!(f, "Allocation statistics:")?;
+            writeln!(f, "Allocation statistics (bytes):")?;
+            writeln!(f)?;
 
             // Sort operations by name for consistent output
             let mut sorted_ops: Vec<_> = self.operations.iter().collect();
             sorted_ops.sort_by_key(|(name, _)| *name);
 
+            // Calculate the maximum width needed for the operation name column
+            let max_name_width = sorted_ops
+                .iter()
+                .map(|(name, _)| name.len())
+                .max()
+                .unwrap_or(0)
+                .max("Operation".len());
+
+            // Calculate the maximum width needed for the mean column
+            let max_mean_width = sorted_ops
+                .iter()
+                .map(|(_, operation)| operation.mean().to_string().len())
+                .max()
+                .unwrap_or(0)
+                .max("Mean".len());
+
+            // Print table header
+            writeln!(
+                f,
+                "| {:<name_width$} | {:>mean_width$} |",
+                "Operation",
+                "Mean",
+                name_width = max_name_width,
+                mean_width = max_mean_width
+            )?;
+            let separator_name_width = max_name_width
+                .checked_add(2)
+                .expect("operation name width fits in memory, adding 2 cannot overflow");
+            let separator_mean_width = max_mean_width
+                .checked_add(2)
+                .expect("mean width fits in memory, adding 2 cannot overflow");
+            writeln!(
+                f,
+                "|{:-<name_width$}|{:-<mean_width$}|",
+                "",
+                "",
+                name_width = separator_name_width,
+                mean_width = separator_mean_width
+            )?;
+
+            // Print table rows
             for (name, operation) in sorted_ops {
-                writeln!(f, "  {name}: {operation}")?;
+                writeln!(
+                    f,
+                    "| {:<name_width$} | {:>mean_width$} |",
+                    name,
+                    operation.mean(),
+                    name_width = max_name_width,
+                    mean_width = max_mean_width
+                )?;
             }
         }
         Ok(())

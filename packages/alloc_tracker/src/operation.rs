@@ -394,7 +394,7 @@ mod tests {
         // Verify the session shows the data was merged
         let session_display = format!("{session}");
         println!("Actual session display: '{session_display}'");
-        assert!(session_display.contains("100 bytes (mean)")); // 500 bytes / 5 iterations = 100
+        assert!(session_display.contains("| test      |  100 |")); // 500 bytes / 5 iterations = 100
     }
 
     #[test]
@@ -422,7 +422,7 @@ mod tests {
 
         // Session should show merged results: 800 bytes, 5 iterations = 160 bytes mean
         let session_display = format!("{session}");
-        assert!(session_display.contains("160 bytes (mean)"));
+        assert!(session_display.contains("| test      |  160 |"));
     }
 
     static_assertions::assert_impl_all!(Operation: Send, Sync);
