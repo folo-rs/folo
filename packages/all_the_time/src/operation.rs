@@ -4,10 +4,8 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::constants::ERR_POISONED_LOCK;
 use crate::pal::PlatformFacade;
-use crate::session::OperationMetrics;
-use crate::{ProcessSpan, ThreadSpan};
+use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 
 /// Calculates mean processor time per operation across multiple iterations.
 ///
@@ -230,12 +228,12 @@ mod tests {
     fn tracks_single_duration() {
         let session = create_test_session();
         let operation = session.operation("test");
-        
+
         // Directly test the metrics
         let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
         metrics.add_iterations(Duration::from_millis(100), 1);
         drop(metrics);
-        
+
         assert_eq!(operation.mean(), Duration::from_millis(100));
         assert_eq!(operation.total_iterations(), 1);
         assert_eq!(operation.total_processor_time(), Duration::from_millis(100));
@@ -245,7 +243,7 @@ mod tests {
     fn calculates_mean_of_multiple_durations() {
         let session = create_test_session();
         let operation = session.operation("test");
-        
+
         // Directly test the metrics
         {
             let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
@@ -253,7 +251,7 @@ mod tests {
             metrics.add_iterations(Duration::from_millis(200), 1);
             metrics.add_iterations(Duration::from_millis(300), 1);
         }
-        
+
         assert_eq!(operation.mean(), Duration::from_millis(200)); // (100 + 200 + 300) / 3
         assert_eq!(operation.total_iterations(), 3);
         assert_eq!(operation.total_processor_time(), Duration::from_millis(600));
@@ -263,14 +261,14 @@ mod tests {
     fn handles_zero_durations() {
         let session = create_test_session();
         let operation = session.operation("test");
-        
+
         // Directly test the metrics
         {
             let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
             metrics.add_iterations(Duration::ZERO, 1);
             metrics.add_iterations(Duration::ZERO, 1);
         }
-        
+
         assert_eq!(operation.mean(), Duration::ZERO);
         assert_eq!(operation.total_iterations(), 2);
         assert_eq!(operation.total_processor_time(), Duration::ZERO);

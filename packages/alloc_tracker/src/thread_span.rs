@@ -3,10 +3,7 @@
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
-use crate::Operation;
-use crate::allocator::THREAD_BYTES_ALLOCATED;
-use crate::constants::ERR_POISONED_LOCK;
-use crate::session::OperationMetrics;
+use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics, THREAD_BYTES_ALLOCATED};
 
 /// A tracked span of code that tracks allocations on this thread between creation and drop.
 ///

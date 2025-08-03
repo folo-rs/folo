@@ -5,10 +5,7 @@ use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use crate::Operation;
-use crate::allocator::TOTAL_BYTES_ALLOCATED;
-use crate::constants::ERR_POISONED_LOCK;
-use crate::session::OperationMetrics;
+use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics, TOTAL_BYTES_ALLOCATED};
 
 /// A tracked span of code that tracks process-wide allocations between creation and drop.
 ///

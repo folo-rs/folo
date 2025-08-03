@@ -4,10 +4,9 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::Operation;
-use crate::constants::ERR_POISONED_LOCK;
 use crate::pal::{Platform, PlatformFacade};
-use crate::session::OperationMetrics;
+use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
+
 /// A tracked span of code that tracks thread processor time between creation and drop.
 ///
 /// This span tracks processor time consumed by the current thread only.

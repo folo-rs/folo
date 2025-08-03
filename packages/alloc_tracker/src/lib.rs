@@ -119,14 +119,17 @@
 mod allocator;
 mod constants;
 mod operation;
+mod operation_metrics;
 mod process_span;
 mod report;
 mod session;
 mod thread_span;
 
 pub use allocator::*;
+pub(crate) use constants::*;
 pub use operation::*;
-pub use process_span::ProcessSpan;
-pub use report::{Report, ReportOperation};
+pub(crate) use operation_metrics::*;
+pub use process_span::*;
+pub use report::*;
 pub use session::*;
-pub use thread_span::ThreadSpan;
+pub use thread_span::*;

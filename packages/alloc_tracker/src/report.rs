@@ -89,7 +89,7 @@ impl Report {
     /// Creates a report from shared operation data.
     #[must_use]
     pub(crate) fn from_operation_data(
-        operation_data: &HashMap<String, crate::session::OperationMetrics>,
+        operation_data: &HashMap<String, crate::operation_metrics::OperationMetrics>,
     ) -> Self {
         let report_operations = operation_data
             .iter()

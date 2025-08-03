@@ -3,9 +3,7 @@
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use crate::constants::ERR_POISONED_LOCK;
-use crate::session::OperationMetrics;
-use crate::{ProcessSpan, ThreadSpan};
+use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 
 /// A measurement handle for tracking mean memory allocation per operation across multiple iterations.
 ///
@@ -212,7 +210,7 @@ mod tests {
     #[test]
     fn operation_add_single() {
         let operation = create_test_operation();
-        
+
         // Directly test the metrics
         {
             let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
@@ -227,8 +225,8 @@ mod tests {
     #[test]
     fn operation_add_multiple() {
         let operation = create_test_operation();
-        
-        // Directly test the metrics  
+
+        // Directly test the metrics
         {
             let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
             metrics.add_iterations(100, 1);
@@ -244,7 +242,7 @@ mod tests {
     #[test]
     fn operation_add_zero() {
         let operation = create_test_operation();
-        
+
         // Directly test the metrics
         {
             let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
@@ -380,7 +378,7 @@ mod tests {
         // Create and use operation
         {
             let operation = session.operation("test");
-            
+
             // Directly test the metrics
             {
                 let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);

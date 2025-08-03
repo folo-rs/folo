@@ -5,10 +5,8 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::Operation;
-use crate::constants::ERR_POISONED_LOCK;
 use crate::pal::{Platform, PlatformFacade};
-use crate::session::OperationMetrics;
+use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 
 /// Use this to track processor times for code that runs on any thread.
 ///

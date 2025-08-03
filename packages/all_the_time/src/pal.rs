@@ -10,7 +10,7 @@ mod facade;
 mod fake;
 mod real;
 
-pub(crate) use abstractions::Platform;
-pub(crate) use facade::PlatformFacade;
+pub(crate) use abstractions::*;
+pub(crate) use facade::*;
 #[cfg(test)]
-pub(crate) use fake::FakePlatform;
+pub(crate) use fake::*;
