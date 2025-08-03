@@ -144,6 +144,33 @@
 //!
 //! allocs.print_to_stdout();
 //! ```
+//!
+//! # Processor Time Tracking (`all_the_time` feature)
+//!
+//! When the `all_the_time` feature is enabled, the [`AllTheTimeExt`] extension trait becomes
+//! available, providing convenient processor time tracking for benchmarks:
+//!
+//! ```ignore
+//! use all_the_time::Session;
+//! use par_bench::{AllTheTimeExt, Run, ThreadPool};
+//!
+//! let processor_time = Session::new();
+//! let mut pool = ThreadPool::new(&ProcessorSet::default());
+//!
+//! let results = Run::new()
+//!     .measure_processor_time(&processor_time, "my_operation")
+//!     .iter(|_| {
+//!         // Perform processor-intensive work
+//!         let mut sum = 0;
+//!         for i in 0..1000 {
+//!             sum += i * i;
+//!         }
+//!         std::hint::black_box(sum);
+//!     })
+//!     .execute_on(&mut pool, 1000);
+//!
+//! processor_time.print_to_stdout();
+//! ```
 
 #![cfg_attr(miri, allow(dead_code, unused_imports))]
 
@@ -161,6 +188,11 @@ pub mod configure;
 #[cfg(feature = "alloc_tracker")]
 mod alloc_tracker_ext;
 
+#[cfg(feature = "all_the_time")]
+mod all_the_time_ext;
+
+#[cfg(feature = "all_the_time")]
+pub use all_the_time_ext::*;
 #[cfg(feature = "alloc_tracker")]
 pub use alloc_tracker_ext::*;
 pub use run::*;

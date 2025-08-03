@@ -12,10 +12,12 @@ rust-version.workspace = true
 
 [features]
 default = []
+all_the_time = ["dep:all_the_time"]
 alloc_tracker = ["dep:alloc_tracker"]
 criterion = ["dep:criterion"]
 
 [dependencies]
+all_the_time = { workspace = true, optional = true }
 alloc_tracker = { workspace = true, optional = true }
 criterion = { workspace = true, optional = true }
 derive_more = { workspace = true, features = ["debug"] }
