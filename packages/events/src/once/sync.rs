@@ -79,9 +79,6 @@ where
     // Our API contract requires that an event can only be bound once, so we have to check this
     // because it is not feasible to create an API that can consume the event when creating the
     // sender-receiver pair (all we have might be a shared reference to the event).
-    //
-    // We may in the future allow unchecked binding to skip this check as an optimization but
-    // for now correctness is most important.
     is_bound: AtomicBool,
 
     // It is invalid to move this type once it has been pinned.
