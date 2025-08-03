@@ -496,6 +496,93 @@ mod tests {
     }
 
     #[test]
+    #[cfg(all(not(miri), feature = "alloc_tracker", feature = "all_the_time"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
+    fn api_supports_groups_in_any_order() {
+        let allocs = alloc_tracker::Session::new();
+        let processor_time = all_the_time::Session::new();
+        let mut pool = ThreadPool::new(ProcessorSet::default());
+
+        // Test 1: .measure_resource_usage() before .groups()
+        let results1 = Run::new()
+            .prepare_iter(|_| 42_i32)
+            .measure_resource_usage("test1", |measure| {
+                measure.allocs(&allocs).processor_time(&processor_time)
+            })
+            .groups(new_zealand::nz!(2))
+            .iter(|_| {
+                let _data = [1, 2, 3, 4, 5].to_vec();
+            })
+            .execute_on(&mut pool, 10);
+
+        assert!(results1.measure_outputs().count() > 0);
+
+        // Test 2: .groups() before .measure_resource_usage()
+        let results2 = Run::new()
+            .prepare_iter(|_| 42_i32)
+            .groups(new_zealand::nz!(2))
+            .measure_resource_usage("test2", |measure| {
+                measure.allocs(&allocs).processor_time(&processor_time)
+            })
+            .iter(|_| {
+                let _data = [1, 2, 3, 4, 5].to_vec();
+            })
+            .execute_on(&mut pool, 10);
+
+        assert!(results2.measure_outputs().count() > 0);
+    }
+
+    #[test]
+    fn api_supports_groups_immediately_after_new() {
+        // Test that Run::new().groups() works
+        let _run = Run::new()
+            .groups(new_zealand::nz!(2));
+        
+        // Test the full chain with groups first
+        let _run = Run::new()
+            .groups(new_zealand::nz!(2))
+            .iter(|_| {
+                std::hint::black_box(42);
+            });
+    }
+
+    #[test] 
+    #[cfg(all(not(miri), feature = "alloc_tracker"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
+    fn api_supports_measure_resource_usage_after_groups_only() {
+        let allocs = alloc_tracker::Session::new();
+        let mut pool = ThreadPool::new(ProcessorSet::default());
+
+        // Test pattern: Run::new().groups().measure_resource_usage()
+        let results = Run::new()
+            .groups(new_zealand::nz!(2))
+            .measure_resource_usage("test", |measure| measure.allocs(&allocs))
+            .iter(|_| {
+                let _data = [1, 2, 3, 4, 5].to_vec();
+            })
+            .execute_on(&mut pool, 10);
+
+        assert!(results.measure_outputs().count() > 0);
+    }
+
+    #[test] 
+    #[cfg(all(not(miri), feature = "alloc_tracker"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
+    fn api_supports_original_pattern_groups_prepare_iter_measure() {
+        let allocs = alloc_tracker::Session::new();
+        let mut pool = ThreadPool::new(ProcessorSet::default());
+
+        // Test original pattern: Run::new().groups().prepare_iter().measure_resource_usage()
+        let results = Run::new()
+            .groups(new_zealand::nz!(2))
+            .prepare_iter(|_| 42_i32)
+            .measure_resource_usage("test", |measure| measure.allocs(&allocs))
+            .iter(|_| {
+                let _data = [1, 2, 3, 4, 5].to_vec();
+            })
+            .execute_on(&mut pool, 10);
+
+        assert!(results.measure_outputs().count() > 0);
+    }
+
+    #[test]
     #[cfg(all(not(miri), feature = "alloc_tracker"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
     fn measure_resource_usage_with_thread_state() {
         let allocs = alloc_tracker::Session::new();
