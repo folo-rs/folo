@@ -39,3 +39,7 @@ harness = false
 [[bench]]
 name = "events_overhead_comparison"
 harness = false
+
+[[bench]]
+name = "events_full_cycle_comparison"
+harness = false
