@@ -1,14 +1,12 @@
 //! Example demonstrating combined resource usage tracking with `par_bench`.
 
-use many_cpus::ProcessorSet;
-use par_bench::{ResourceUsageExt, Run, ThreadPool};
-
+#[cfg(feature = "all_the_time")]
+use all_the_time::Session as TimeSession;
 // Conditionally import the sessions based on available features
 #[cfg(feature = "alloc_tracker")]
 use alloc_tracker::{Allocator, Session as AllocSession};
-
-#[cfg(feature = "all_the_time")]
-use all_the_time::Session as TimeSession;
+use many_cpus::ProcessorSet;
+use par_bench::{ResourceUsageExt, Run, ThreadPool};
 
 // Set up global allocator for allocation tracking (if feature is enabled)
 #[cfg(feature = "alloc_tracker")]

@@ -13,13 +13,12 @@
 /// # Examples
 ///
 /// ```
-/// use many_cpus::ProcessorSet;
-/// use par_bench::{ResourceUsageExt, Run, ThreadPool};
-///
+/// use all_the_time::Session as TimeSession;
 /// # #[cfg(all(feature = "alloc_tracker", feature = "all_the_time"))]
 /// # fn example() {
 /// use alloc_tracker::{Allocator, Session as AllocSession};
-/// use all_the_time::Session as TimeSession;
+/// use many_cpus::ProcessorSet;
+/// use par_bench::{ResourceUsageExt, Run, ThreadPool};
 ///
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
@@ -30,13 +29,11 @@
 ///
 /// let run = Run::new()
 ///     .measure_resource_usage("my_operation", |measure| {
-///         measure
-///             .allocs(&allocs)
-///             .processor_time(&processor_time)
+///         measure.allocs(&allocs).processor_time(&processor_time)
 ///     })
 ///     .iter(|_| {
 ///         let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
-///         
+///
 ///         // Perform processor-intensive work
 ///         let mut sum = 0_u64;
 ///         for i in 0_u64..1000 {
@@ -89,9 +86,7 @@ pub trait ResourceUsageExt<'a, ThreadState> {
     /// let mut pool = ThreadPool::new(&ProcessorSet::default());
     ///
     /// let run = Run::new()
-    ///     .measure_resource_usage("vector_creation", |measure| {
-    ///         measure.allocs(&allocs)
-    ///     })
+    ///     .measure_resource_usage("vector_creation", |measure| measure.allocs(&allocs))
     ///     .iter(|_| {
     ///         let _data = vec![1, 2, 3, 4, 5];
     ///     });
@@ -139,7 +134,7 @@ pub trait ResourceUsageExt<'a, ThreadState> {
 ///
 /// This builder allows you to configure which types of resource usage should be tracked
 /// during benchmark execution. The available methods depend on which features are enabled.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct ResourceUsageMeasureBuilder<'a> {
     #[cfg(feature = "alloc_tracker")]
     alloc_session: Option<&'a alloc_tracker::Session>,
@@ -318,7 +313,9 @@ impl<'a> ResourceUsageExt<'a, ()> for crate::configure::RunInitial {
         self.measure_wrapper(
             {
                 let builder = builder.clone();
-                move |args| ResourceUsageState::new(&builder, operation_name, args.meta().iterations())
+                move |args| {
+                    ResourceUsageState::new(&builder, operation_name, args.meta().iterations())
+                }
             },
             move |state| state.into_output(&builder),
         )
@@ -345,7 +342,9 @@ impl<'a, ThreadState> ResourceUsageExt<'a, ThreadState>
         self.measure_wrapper(
             {
                 let builder = builder.clone();
-                move |args| ResourceUsageState::new(&builder, operation_name, args.meta().iterations())
+                move |args| {
+                    ResourceUsageState::new(&builder, operation_name, args.meta().iterations())
+                }
             },
             move |state| state.into_output(&builder),
         )
@@ -372,7 +371,9 @@ impl<'a, ThreadState, IterState> ResourceUsageExt<'a, ThreadState>
         self.measure_wrapper(
             {
                 let builder = builder.clone();
-                move |args| ResourceUsageState::new(&builder, operation_name, args.meta().iterations())
+                move |args| {
+                    ResourceUsageState::new(&builder, operation_name, args.meta().iterations())
+                }
             },
             move |state| state.into_output(&builder),
         )
@@ -464,9 +465,7 @@ mod tests {
 
         let results = Run::new()
             .measure_resource_usage("test_operation", |measure| {
-                measure
-                    .allocs(&allocs)
-                    .processor_time(&processor_time)
+                measure.allocs(&allocs).processor_time(&processor_time)
             })
             .iter(|_| {
                 // Allocate memory and perform CPU work
