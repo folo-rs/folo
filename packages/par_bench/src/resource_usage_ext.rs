@@ -29,10 +29,10 @@
 /// let mut pool = ThreadPool::new(&ProcessorSet::default());
 ///
 /// let run = Run::new()
-///     .measure_resource_usage(|measure| {
+///     .measure_resource_usage("my_operation", |measure| {
 ///         measure
-///             .allocs(&allocs, "my_operation")
-///             .processor_time(&processor_time, "my_operation")
+///             .allocs(&allocs)
+///             .processor_time(&processor_time)
 ///     })
 ///     .iter(|_| {
 ///         let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
@@ -69,6 +69,7 @@ pub trait ResourceUsageExt<'a, ThreadState> {
     ///
     /// # Parameters
     ///
+    /// * `operation_name` - The name to assign to this operation in all tracking results
     /// * `configure` - A callback that configures which resource measurements to track
     ///
     /// # Examples
@@ -88,8 +89,8 @@ pub trait ResourceUsageExt<'a, ThreadState> {
     /// let mut pool = ThreadPool::new(&ProcessorSet::default());
     ///
     /// let run = Run::new()
-    ///     .measure_resource_usage(|measure| {
-    ///         measure.allocs(&allocs, "vector_creation")
+    ///     .measure_resource_usage("vector_creation", |measure| {
+    ///         measure.allocs(&allocs)
     ///     })
     ///     .iter(|_| {
     ///         let _data = vec![1, 2, 3, 4, 5];
@@ -113,8 +114,8 @@ pub trait ResourceUsageExt<'a, ThreadState> {
     /// let mut pool = ThreadPool::new(&ProcessorSet::default());
     ///
     /// let run = Run::new()
-    ///     .measure_resource_usage(|measure| {
-    ///         measure.processor_time(&processor_time, "cpu_work")
+    ///     .measure_resource_usage("cpu_work", |measure| {
+    ///         measure.processor_time(&processor_time)
     ///     })
     ///     .iter(|_| {
     ///         let mut sum = 0_u64;
@@ -129,7 +130,7 @@ pub trait ResourceUsageExt<'a, ThreadState> {
     /// # #[cfg(feature = "all_the_time")]
     /// # example();
     /// ```
-    fn measure_resource_usage<F>(self, configure: F) -> Self::Output
+    fn measure_resource_usage<F>(self, operation_name: &'a str, configure: F) -> Self::Output
     where
         F: FnOnce(ResourceUsageMeasureBuilder<'a>) -> ResourceUsageMeasureBuilder<'a>;
 }
@@ -142,13 +143,9 @@ pub trait ResourceUsageExt<'a, ThreadState> {
 pub struct ResourceUsageMeasureBuilder<'a> {
     #[cfg(feature = "alloc_tracker")]
     alloc_session: Option<&'a alloc_tracker::Session>,
-    #[cfg(feature = "alloc_tracker")]
-    alloc_operation_name: Option<&'a str>,
 
     #[cfg(feature = "all_the_time")]
     time_session: Option<&'a all_the_time::Session>,
-    #[cfg(feature = "all_the_time")]
-    time_operation_name: Option<&'a str>,
 }
 
 impl<'a> ResourceUsageMeasureBuilder<'a> {
@@ -158,13 +155,9 @@ impl<'a> ResourceUsageMeasureBuilder<'a> {
         Self {
             #[cfg(feature = "alloc_tracker")]
             alloc_session: None,
-            #[cfg(feature = "alloc_tracker")]
-            alloc_operation_name: None,
 
             #[cfg(feature = "all_the_time")]
             time_session: None,
-            #[cfg(feature = "all_the_time")]
-            time_operation_name: None,
         }
     }
 
@@ -175,12 +168,10 @@ impl<'a> ResourceUsageMeasureBuilder<'a> {
     /// # Parameters
     ///
     /// * `session` - The allocation tracking session to use
-    /// * `operation_name` - The name to assign to this operation in the tracking results
     #[cfg(feature = "alloc_tracker")]
     #[must_use]
-    pub fn allocs(mut self, session: &'a alloc_tracker::Session, operation_name: &'a str) -> Self {
+    pub fn allocs(mut self, session: &'a alloc_tracker::Session) -> Self {
         self.alloc_session = Some(session);
-        self.alloc_operation_name = Some(operation_name);
         self
     }
 
@@ -191,16 +182,10 @@ impl<'a> ResourceUsageMeasureBuilder<'a> {
     /// # Parameters
     ///
     /// * `session` - The processor time tracking session to use
-    /// * `operation_name` - The name to assign to this operation in the tracking results
     #[cfg(feature = "all_the_time")]
     #[must_use]
-    pub fn processor_time(
-        mut self,
-        session: &'a all_the_time::Session,
-        operation_name: &'a str,
-    ) -> Self {
+    pub fn processor_time(mut self, session: &'a all_the_time::Session) -> Self {
         self.time_session = Some(session);
-        self.time_operation_name = Some(operation_name);
         self
     }
 }
@@ -268,16 +253,16 @@ pub struct ResourceUsageState {
 impl ResourceUsageState {
     /// Creates a new resource usage state from the builder configuration.
     #[must_use]
-    pub(crate) fn new(builder: &ResourceUsageMeasureBuilder<'_>, iterations: u64) -> Self {
+    pub(crate) fn new(
+        builder: &ResourceUsageMeasureBuilder<'_>,
+        operation_name: &str,
+        iterations: u64,
+    ) -> Self {
         Self {
             #[cfg(feature = "alloc_tracker")]
             alloc_span: builder.alloc_session.map(|session| {
                 session
-                    .operation(
-                        builder
-                            .alloc_operation_name
-                            .expect("operation name must be set if session is set"),
-                    )
+                    .operation(operation_name)
                     .measure_thread()
                     .iterations(iterations)
             }),
@@ -285,11 +270,7 @@ impl ResourceUsageState {
             #[cfg(feature = "all_the_time")]
             time_span: builder.time_session.map(|session| {
                 session
-                    .operation(
-                        builder
-                            .time_operation_name
-                            .expect("operation name must be set if session is set"),
-                    )
+                    .operation(operation_name)
                     .measure_thread()
                     .iterations(iterations)
             }),
@@ -328,7 +309,7 @@ impl<'a> ResourceUsageExt<'a, ()> for crate::configure::RunInitial {
     type Output =
         crate::configure::RunWithWrapperState<'a, (), (), ResourceUsageState, ResourceUsageOutput>;
 
-    fn measure_resource_usage<F>(self, configure: F) -> Self::Output
+    fn measure_resource_usage<F>(self, operation_name: &'a str, configure: F) -> Self::Output
     where
         F: FnOnce(ResourceUsageMeasureBuilder<'a>) -> ResourceUsageMeasureBuilder<'a>,
     {
@@ -337,7 +318,7 @@ impl<'a> ResourceUsageExt<'a, ()> for crate::configure::RunInitial {
         self.measure_wrapper(
             {
                 let builder = builder.clone();
-                move |args| ResourceUsageState::new(&builder, args.meta().iterations())
+                move |args| ResourceUsageState::new(&builder, operation_name, args.meta().iterations())
             },
             move |state| state.into_output(&builder),
         )
@@ -355,7 +336,7 @@ impl<'a, ThreadState> ResourceUsageExt<'a, ThreadState>
         ResourceUsageOutput,
     >;
 
-    fn measure_resource_usage<F>(self, configure: F) -> Self::Output
+    fn measure_resource_usage<F>(self, operation_name: &'a str, configure: F) -> Self::Output
     where
         F: FnOnce(ResourceUsageMeasureBuilder<'a>) -> ResourceUsageMeasureBuilder<'a>,
     {
@@ -364,7 +345,7 @@ impl<'a, ThreadState> ResourceUsageExt<'a, ThreadState>
         self.measure_wrapper(
             {
                 let builder = builder.clone();
-                move |args| ResourceUsageState::new(&builder, args.meta().iterations())
+                move |args| ResourceUsageState::new(&builder, operation_name, args.meta().iterations())
             },
             move |state| state.into_output(&builder),
         )
@@ -382,7 +363,7 @@ impl<'a, ThreadState, IterState> ResourceUsageExt<'a, ThreadState>
         ResourceUsageOutput,
     >;
 
-    fn measure_resource_usage<F>(self, configure: F) -> Self::Output
+    fn measure_resource_usage<F>(self, operation_name: &'a str, configure: F) -> Self::Output
     where
         F: FnOnce(ResourceUsageMeasureBuilder<'a>) -> ResourceUsageMeasureBuilder<'a>,
     {
@@ -391,7 +372,7 @@ impl<'a, ThreadState, IterState> ResourceUsageExt<'a, ThreadState>
         self.measure_wrapper(
             {
                 let builder = builder.clone();
-                move |args| ResourceUsageState::new(&builder, args.meta().iterations())
+                move |args| ResourceUsageState::new(&builder, operation_name, args.meta().iterations())
             },
             move |state| state.into_output(&builder),
         )
@@ -421,7 +402,7 @@ mod tests {
         let mut pool = ThreadPool::new(ProcessorSet::single());
 
         let results = Run::new()
-            .measure_resource_usage(|measure| measure.allocs(&allocs, "test_operation"))
+            .measure_resource_usage("test_operation", |measure| measure.allocs(&allocs))
             .iter(|_| {
                 // Allocate some memory to generate allocation activity
                 let _data = [1, 2, 3, 4, 5].to_vec();
@@ -448,8 +429,8 @@ mod tests {
         let mut pool = ThreadPool::new(ProcessorSet::single());
 
         let results = Run::new()
-            .measure_resource_usage(|measure| {
-                measure.processor_time(&processor_time, "test_operation")
+            .measure_resource_usage("test_operation", |measure| {
+                measure.processor_time(&processor_time)
             })
             .iter(|_| {
                 // Perform some CPU-intensive work
@@ -482,10 +463,10 @@ mod tests {
         let mut pool = ThreadPool::new(ProcessorSet::single());
 
         let results = Run::new()
-            .measure_resource_usage(|measure| {
+            .measure_resource_usage("test_operation", |measure| {
                 measure
-                    .allocs(&allocs, "test_operation")
-                    .processor_time(&processor_time, "test_operation")
+                    .allocs(&allocs)
+                    .processor_time(&processor_time)
             })
             .iter(|_| {
                 // Allocate memory and perform CPU work
@@ -523,7 +504,7 @@ mod tests {
 
         let results = Run::new()
             .prepare_thread(|_| String::from("thread_data"))
-            .measure_resource_usage(|measure| measure.allocs(&allocs, "test_with_state"))
+            .measure_resource_usage("test_with_state", |measure| measure.allocs(&allocs))
             .iter(|args| {
                 // Use thread state and allocate memory
                 let _combined = format!("{}_allocated", args.thread_state());

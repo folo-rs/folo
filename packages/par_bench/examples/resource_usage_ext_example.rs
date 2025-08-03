@@ -30,7 +30,7 @@ fn main() {
 
     // Configure which measurements to track based on available features
     let results = Run::new()
-        .measure_resource_usage(|measure| {
+        .measure_resource_usage("combined_work", |measure| {
             #[allow(
                 unused_mut,
                 reason = "Variable is conditionally mutated based on feature flags"
@@ -39,12 +39,12 @@ fn main() {
 
             #[cfg(feature = "alloc_tracker")]
             {
-                measure = measure.allocs(&allocs, "combined_work");
+                measure = measure.allocs(&allocs);
             }
 
             #[cfg(feature = "all_the_time")]
             {
-                measure = measure.processor_time(&processor_time, "combined_work");
+                measure = measure.processor_time(&processor_time);
             }
 
             measure
