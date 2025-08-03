@@ -12,9 +12,11 @@ rust-version.workspace = true
 
 [features]
 default = []
+alloc_tracker = ["dep:alloc_tracker"]
 criterion = ["dep:criterion"]
 
 [dependencies]
+alloc_tracker = { workspace = true, optional = true }
 criterion = { workspace = true, optional = true }
 derive_more = { workspace = true, features = ["debug"] }
 many_cpus = { workspace = true }

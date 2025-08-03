@@ -24,7 +24,7 @@ many_cpus = { path = "../many_cpus" }
 many_cpus_benchmarking = { path = "../many_cpus_benchmarking" }
 new_zealand = { path = "../new_zealand" }
 oneshot = { workspace = true }
-par_bench = { path = "../par_bench", features = ["criterion"] }
+par_bench = { path = "../par_bench", features = ["criterion", "alloc_tracker"] }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
 

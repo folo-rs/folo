@@ -494,6 +494,12 @@ justifying why it is correct to exclude them).
 Naturally, if it is possible to redesign a test so it does not rely on the operating system, that
 is even better. However, this is not always possible.
 
+If excluding tests due to  `#[cfg(not(miri))]` causes warnings about unused imports and dead code,
+simply suppress these warnings at the `lib.rs` level via
+`#![cfg_attr(miri, allow(dead_code, unused_imports))]` because we do not want to restructure our
+code/imports simply because some of it is disabled under Miri.
+
+
 # Mutation testing coverage and skipping mutations
 
 It is acceptable to skip mutations if they are impractical to test. Some justifiable reasons are:

@@ -119,6 +119,33 @@
 //! # }
 //! # }
 //! ```
+//!
+//! # Allocation Tracking (`alloc_tracker` feature)
+//!
+//! When the `alloc_tracker` feature is enabled, the [`AllocTrackerExt`] extension trait becomes
+//! available, providing convenient allocation tracking for benchmarks:
+//!
+//! ```ignore
+//! use alloc_tracker::{Allocator, Session};
+//! use par_bench::{AllocTrackerExt, Run, ThreadPool};
+//!
+//! #[global_allocator]
+//! static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+//!
+//! let allocs = Session::new();
+//! let mut pool = ThreadPool::new(&ProcessorSet::default());
+//!
+//! let results = Run::new()
+//!     .measure_allocs(&allocs, "my_operation")
+//!     .iter(|_| {
+//!         let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
+//!     })
+//!     .execute_on(&mut pool, 1000);
+//!
+//! allocs.print_to_stdout();
+//! ```
+
+#![cfg_attr(miri, allow(dead_code, unused_imports))]
 
 mod run;
 mod run_configured;
@@ -131,6 +158,11 @@ mod threadpool;
 pub mod args;
 pub mod configure;
 
+#[cfg(feature = "alloc_tracker")]
+mod alloc_tracker_ext;
+
+#[cfg(feature = "alloc_tracker")]
+pub use alloc_tracker_ext::*;
 pub use run::*;
 pub use run_configured::*;
 pub use run_meta::*;

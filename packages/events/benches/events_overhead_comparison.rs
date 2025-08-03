@@ -16,11 +16,11 @@ use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use alloc_tracker::{Allocator, Session, ThreadSpan};
+use alloc_tracker::{Allocator, Session};
 use criterion::{Criterion, criterion_group, criterion_main};
 use events::{LocalOnceEvent, LocalOnceEventPool, OnceEvent, OnceEventPool};
 use many_cpus::ProcessorSet;
-use par_bench::{Run, ThreadPool, args};
+use par_bench::{AllocTrackerExt, Run, ThreadPool};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
@@ -37,7 +37,7 @@ fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("events_overhead_comparison");
 
     Run::new()
-        .measure_wrapper(measure_allocs(&allocs, "local_once_event_ref"), |_| {})
+        .measure_allocs(&allocs, "local_once_event_ref")
         .iter(|_| {
             let event = LocalOnceEvent::<Payload>::new();
             drop(event.bind_by_ref());
@@ -45,10 +45,7 @@ fn entrypoint(c: &mut Criterion) {
         .execute_criterion_on(&mut one_thread, &mut group, "local_once_event_ref");
 
     Run::new()
-        .measure_wrapper(
-            measure_allocs(&allocs, "local_once_event_ref_unchecked"),
-            |_| {},
-        )
+        .measure_allocs(&allocs, "local_once_event_ref_unchecked")
         .iter(|_| {
             let event = LocalOnceEvent::<Payload>::new();
             drop(event.bind_by_ref_unchecked());
@@ -60,7 +57,7 @@ fn entrypoint(c: &mut Criterion) {
         );
 
     Run::new()
-        .measure_wrapper(measure_allocs(&allocs, "local_once_event_rc"), |_| {})
+        .measure_allocs(&allocs, "local_once_event_rc")
         .iter(|_| {
             let event = Rc::new(LocalOnceEvent::<Payload>::new());
             drop(event.bind_by_rc());
@@ -68,10 +65,7 @@ fn entrypoint(c: &mut Criterion) {
         .execute_criterion_on(&mut one_thread, &mut group, "local_once_event_rc");
 
     Run::new()
-        .measure_wrapper(
-            measure_allocs(&allocs, "local_once_event_rc_unchecked"),
-            |_| {},
-        )
+        .measure_allocs(&allocs, "local_once_event_rc_unchecked")
         .iter(|_| {
             let event = Rc::new(LocalOnceEvent::<Payload>::new());
             drop(event.bind_by_rc_unchecked());
@@ -79,7 +73,7 @@ fn entrypoint(c: &mut Criterion) {
         .execute_criterion_on(&mut one_thread, &mut group, "local_once_event_rc_unchecked");
 
     Run::new()
-        .measure_wrapper(measure_allocs(&allocs, "local_once_event_ptr"), |_| {})
+        .measure_allocs(&allocs, "local_once_event_ptr")
         .iter(|_| {
             let event = pin!(LocalOnceEvent::<Payload>::new());
             // SAFETY: We are immediately dropping the sender/receiver, so `event` outlives them.
@@ -90,10 +84,7 @@ fn entrypoint(c: &mut Criterion) {
         .execute_criterion_on(&mut one_thread, &mut group, "local_once_event_ptr");
 
     Run::new()
-        .measure_wrapper(
-            measure_allocs(&allocs, "local_once_event_ptr_unchecked"),
-            |_| {},
-        )
+        .measure_allocs(&allocs, "local_once_event_ptr_unchecked")
         .iter(|_| {
             let event = pin!(LocalOnceEvent::<Payload>::new());
             // SAFETY: We are immediately dropping the sender/receiver, so `event` outlives them.
@@ -108,7 +99,7 @@ fn entrypoint(c: &mut Criterion) {
         );
 
     Run::new()
-        .measure_wrapper(measure_allocs(&allocs, "once_event_ref"), |_| {})
+        .measure_allocs(&allocs, "once_event_ref")
         .iter(|_| {
             let event = OnceEvent::<Payload>::new();
             drop(event.bind_by_ref());
@@ -116,7 +107,7 @@ fn entrypoint(c: &mut Criterion) {
         .execute_criterion_on(&mut one_thread, &mut group, "once_event_ref");
 
     Run::new()
-        .measure_wrapper(measure_allocs(&allocs, "once_event_ref_unchecked"), |_| {})
+        .measure_allocs(&allocs, "once_event_ref_unchecked")
         .iter(|_| {
             let event = OnceEvent::<Payload>::new();
             drop(event.bind_by_ref_unchecked());
@@ -124,7 +115,7 @@ fn entrypoint(c: &mut Criterion) {
         .execute_criterion_on(&mut one_thread, &mut group, "once_event_ref_unchecked");
 
     Run::new()
-        .measure_wrapper(measure_allocs(&allocs, "once_event_arc"), |_| {})
+        .measure_allocs(&allocs, "once_event_arc")
         .iter(|_| {
             let event = Arc::new(OnceEvent::<Payload>::new());
             drop(event.bind_by_arc());
@@ -132,7 +123,7 @@ fn entrypoint(c: &mut Criterion) {
         .execute_criterion_on(&mut one_thread, &mut group, "once_event_arc");
 
     Run::new()
-        .measure_wrapper(measure_allocs(&allocs, "once_event_arc_unchecked"), |_| {})
+        .measure_allocs(&allocs, "once_event_arc_unchecked")
         .iter(|_| {
             let event = Arc::new(OnceEvent::<Payload>::new());
             drop(event.bind_by_arc_unchecked());
@@ -140,7 +131,7 @@ fn entrypoint(c: &mut Criterion) {
         .execute_criterion_on(&mut one_thread, &mut group, "once_event_arc_unchecked");
 
     Run::new()
-        .measure_wrapper(measure_allocs(&allocs, "once_event_ptr"), |_| {})
+        .measure_allocs(&allocs, "once_event_ptr")
         .iter(|_| {
             let event = pin!(OnceEvent::<Payload>::new());
             // SAFETY: We are immediately dropping the sender/receiver, so `event` outlives them.
@@ -151,7 +142,7 @@ fn entrypoint(c: &mut Criterion) {
         .execute_criterion_on(&mut one_thread, &mut group, "once_event_ptr");
 
     Run::new()
-        .measure_wrapper(measure_allocs(&allocs, "once_event_ptr_unchecked"), |_| {})
+        .measure_allocs(&allocs, "once_event_ptr_unchecked")
         .iter(|_| {
             let event = pin!(OnceEvent::<Payload>::new());
             // SAFETY: We are immediately dropping the sender/receiver, so `event` outlives them.
@@ -163,10 +154,7 @@ fn entrypoint(c: &mut Criterion) {
 
     Run::new()
         .prepare_thread(|_| LocalOnceEventPool::<Payload>::new())
-        .measure_wrapper(
-            measure_allocs(&allocs, "pooled_local_once_event_ref"),
-            |_| {},
-        )
+        .measure_allocs(&allocs, "pooled_local_once_event_ref")
         .iter(|args| {
             drop(args.thread_state().bind_by_ref());
         })
@@ -174,10 +162,7 @@ fn entrypoint(c: &mut Criterion) {
 
     Run::new()
         .prepare_thread(|_| Rc::new(LocalOnceEventPool::<Payload>::new()))
-        .measure_wrapper(
-            measure_allocs(&allocs, "pooled_local_once_event_rc"),
-            |_| {},
-        )
+        .measure_allocs(&allocs, "pooled_local_once_event_rc")
         .iter(|args| {
             drop(args.thread_state().bind_by_rc());
         })
@@ -185,10 +170,7 @@ fn entrypoint(c: &mut Criterion) {
 
     Run::new()
         .prepare_thread(|_| Box::pin(LocalOnceEventPool::<Payload>::new()))
-        .measure_wrapper(
-            measure_allocs(&allocs, "pooled_local_once_event_ptr"),
-            |_| {},
-        )
+        .measure_allocs(&allocs, "pooled_local_once_event_ptr")
         .iter(|args| {
             // SAFETY: We are immediately dropping the sender/receiver, so the pool outlives them.
             // The pool is also pinned, as required.
@@ -200,7 +182,7 @@ fn entrypoint(c: &mut Criterion) {
 
     Run::new()
         .prepare_thread(|_| OnceEventPool::<Payload>::new())
-        .measure_wrapper(measure_allocs(&allocs, "pooled_once_event_ref"), |_| {})
+        .measure_allocs(&allocs, "pooled_once_event_ref")
         .iter(|args| {
             drop(args.thread_state().bind_by_ref());
         })
@@ -208,7 +190,7 @@ fn entrypoint(c: &mut Criterion) {
 
     Run::new()
         .prepare_thread(|_| Arc::new(OnceEventPool::<Payload>::new()))
-        .measure_wrapper(measure_allocs(&allocs, "pooled_once_event_arc"), |_| {})
+        .measure_allocs(&allocs, "pooled_once_event_arc")
         .iter(|args| {
             drop(args.thread_state().bind_by_arc());
         })
@@ -216,7 +198,7 @@ fn entrypoint(c: &mut Criterion) {
 
     Run::new()
         .prepare_thread(|_| Box::pin(OnceEventPool::<Payload>::new()))
-        .measure_wrapper(measure_allocs(&allocs, "pooled_once_event_ptr"), |_| {})
+        .measure_allocs(&allocs, "pooled_once_event_ptr")
         .iter(|args| {
             // SAFETY: We are immediately dropping the sender/receiver, so the pool outlives them.
             // The pool is also pinned, as required.
@@ -227,7 +209,7 @@ fn entrypoint(c: &mut Criterion) {
         .execute_criterion_on(&mut one_thread, &mut group, "pooled_once_event_ptr");
 
     Run::new()
-        .measure_wrapper(measure_allocs(&allocs, "oneshot_channel"), |_| {})
+        .measure_allocs(&allocs, "oneshot_channel")
         .iter(|_| {
             let (sender, receiver) = oneshot::channel::<Payload>();
             drop(sender);
@@ -237,7 +219,7 @@ fn entrypoint(c: &mut Criterion) {
 
     #[expect(clippy::absolute_paths, reason = "being explicit")]
     Run::new()
-        .measure_wrapper(measure_allocs(&allocs, "futures_oneshot_channel"), |_| {})
+        .measure_allocs(&allocs, "futures_oneshot_channel")
         .iter(|_| {
             let (sender, receiver) = futures::channel::oneshot::channel::<Payload>();
             drop(sender);
@@ -248,17 +230,4 @@ fn entrypoint(c: &mut Criterion) {
     group.finish();
 
     allocs.print_to_stdout();
-}
-
-/// Creates a measure wrapper closure for allocation tracking with the given operation name.
-fn measure_allocs<'a, ThreadState>(
-    allocs: &'a Session,
-    operation_name: &'a str,
-) -> impl Fn(args::MeasureWrapperBegin<'_, ThreadState>) -> ThreadSpan + Send + Sync + 'a {
-    move |args| {
-        allocs
-            .operation(operation_name)
-            .measure_thread()
-            .iterations(args.meta().iterations())
-    }
 }
