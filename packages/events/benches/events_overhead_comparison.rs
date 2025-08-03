@@ -40,10 +40,28 @@ fn entrypoint(c: &mut Criterion) {
 
     Run::new()
         .iter(|_| {
+            let event = LocalOnceEvent::<Payload>::new();
+            drop(event.bind_by_ref_unchecked());
+        })
+        .execute_criterion_on(
+            &mut one_thread,
+            &mut group,
+            "local_once_event_ref_unchecked",
+        );
+
+    Run::new()
+        .iter(|_| {
             let event = Rc::new(LocalOnceEvent::<Payload>::new());
             drop(event.bind_by_rc());
         })
         .execute_criterion_on(&mut one_thread, &mut group, "local_once_event_rc");
+
+    Run::new()
+        .iter(|_| {
+            let event = Rc::new(LocalOnceEvent::<Payload>::new());
+            drop(event.bind_by_rc_unchecked());
+        })
+        .execute_criterion_on(&mut one_thread, &mut group, "local_once_event_rc_unchecked");
 
     Run::new()
         .iter(|_| {
@@ -57,10 +75,31 @@ fn entrypoint(c: &mut Criterion) {
 
     Run::new()
         .iter(|_| {
+            let event = pin!(LocalOnceEvent::<Payload>::new());
+            // SAFETY: We are immediately dropping the sender/receiver, so `event` outlives them.
+            unsafe {
+                drop(event.as_ref().bind_by_ptr_unchecked());
+            }
+        })
+        .execute_criterion_on(
+            &mut one_thread,
+            &mut group,
+            "local_once_event_ptr_unchecked",
+        );
+
+    Run::new()
+        .iter(|_| {
             let event = OnceEvent::<Payload>::new();
             drop(event.bind_by_ref());
         })
         .execute_criterion_on(&mut one_thread, &mut group, "once_event_ref");
+
+    Run::new()
+        .iter(|_| {
+            let event = OnceEvent::<Payload>::new();
+            drop(event.bind_by_ref_unchecked());
+        })
+        .execute_criterion_on(&mut one_thread, &mut group, "once_event_ref_unchecked");
 
     Run::new()
         .iter(|_| {
@@ -71,6 +110,13 @@ fn entrypoint(c: &mut Criterion) {
 
     Run::new()
         .iter(|_| {
+            let event = Arc::new(OnceEvent::<Payload>::new());
+            drop(event.bind_by_arc_unchecked());
+        })
+        .execute_criterion_on(&mut one_thread, &mut group, "once_event_arc_unchecked");
+
+    Run::new()
+        .iter(|_| {
             let event = pin!(OnceEvent::<Payload>::new());
             // SAFETY: We are immediately dropping the sender/receiver, so `event` outlives them.
             unsafe {
@@ -78,6 +124,16 @@ fn entrypoint(c: &mut Criterion) {
             }
         })
         .execute_criterion_on(&mut one_thread, &mut group, "once_event_ptr");
+
+    Run::new()
+        .iter(|_| {
+            let event = pin!(OnceEvent::<Payload>::new());
+            // SAFETY: We are immediately dropping the sender/receiver, so `event` outlives them.
+            unsafe {
+                drop(event.as_ref().bind_by_ptr_unchecked());
+            }
+        })
+        .execute_criterion_on(&mut one_thread, &mut group, "once_event_ptr_unchecked");
 
     Run::new()
         .prepare_thread(|_| LocalOnceEventPool::<Payload>::new())
