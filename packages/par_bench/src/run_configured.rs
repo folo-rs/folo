@@ -147,7 +147,7 @@ where
 
         RunSummary {
             mean_duration: calculate_mean_duration(pool.thread_count(), total_elapsed_nanos),
-            measure_output: measure_outputs.into_boxed_slice(),
+            measure_output: Some(measure_outputs.into_boxed_slice()),
         }
     }
 }
@@ -207,7 +207,7 @@ fn calculate_mean_duration(thread_count: NonZero<usize>, total_elapsed_nanos: u1
 pub struct RunSummary<MeasureOutput> {
     mean_duration: Duration,
 
-    measure_output: Box<[MeasureOutput]>,
+    measure_output: Option<Box<[MeasureOutput]>>,
 }
 
 impl<MeasureOutput> RunSummary<MeasureOutput> {
@@ -245,6 +245,10 @@ impl<MeasureOutput> RunSummary<MeasureOutput> {
     /// The outputs are produced by the measurement wrapper end callback and can contain
     /// any thread-specific measurement data.
     ///
+    /// # Panics
+    ///
+    /// Panics if the measure outputs have already been consumed via `take_measure_outputs()`.
+    ///
     /// # Examples
     ///
     /// ```
@@ -276,7 +280,56 @@ impl<MeasureOutput> RunSummary<MeasureOutput> {
     /// # }
     /// ```
     pub fn measure_outputs(&self) -> impl Iterator<Item = &MeasureOutput> {
-        self.measure_output.iter()
+        self.measure_output
+            .as_ref()
+            .expect("measure outputs already consumed")
+            .iter()
+    }
+
+    /// Takes ownership of the measurement outputs, consuming them from the summary.
+    ///
+    /// Returns a boxed slice containing one measurement output per thread that
+    /// participated in the benchmark run. After calling this method, subsequent
+    /// calls to `measure_outputs()` or `take_measure_outputs()` will panic.
+    ///
+    /// This method is useful when you need to own the measurement data rather
+    /// than just iterate over references to it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the measure outputs have already been consumed via a previous
+    /// call to `take_measure_outputs()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use many_cpus::ProcessorSet;
+    /// use par_bench::{Run, ThreadPool};
+    ///
+    /// # fn main() {
+    /// let mut pool = ThreadPool::new(&ProcessorSet::default());
+    /// let mut results = Run::new()
+    ///     .measure_wrapper(
+    ///         |_| (),         // Start measurement
+    ///         |_state| 42u64, // Return some measurement
+    ///     )
+    ///     .iter(|_| std::hint::black_box(42 * 42))
+    ///     .execute_on(&mut pool, 1000);
+    ///
+    /// // Take ownership of all measurement outputs
+    /// let owned_outputs = results.take_measure_outputs();
+    /// println!("Collected {} measurements", owned_outputs.len());
+    ///
+    /// // Process the owned data
+    /// for (i, measurement) in owned_outputs.iter().enumerate() {
+    ///     println!("Thread {}: {}", i, measurement);
+    /// }
+    /// # }
+    /// ```
+    pub fn take_measure_outputs(&mut self) -> Box<[MeasureOutput]> {
+        self.measure_output
+            .take()
+            .expect("measure outputs already consumed")
     }
 }
 

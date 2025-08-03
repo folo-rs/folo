@@ -29,10 +29,6 @@
     reason = "No need for API documentation in benchmark code"
 )]
 
-// TODO: Make sure we destroy the events in the measured part. Even though we are more flexible
-// and could postpone that out of the hot path, the competitors do it on the hot path, so for a
-// fair comparison we should, as well.
-
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock, Mutex};
 

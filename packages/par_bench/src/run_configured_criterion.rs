@@ -26,9 +26,19 @@ where
         pool: &mut ThreadPool,
         group: &mut BenchmarkGroup<'_, WallTime>,
         name: &str,
-    ) {
-        group.bench_function(name, move |b| {
-            b.iter_custom(|iters| self.execute_on(pool, iters).mean_duration());
+    ) -> Vec<MeasureOutput> {
+        let mut measure_outputs = Vec::new();
+
+        group.bench_function(name, |b| {
+            b.iter_custom(|iters| {
+                let mut result = self.execute_on(pool, iters);
+
+                measure_outputs.extend(result.take_measure_outputs());
+
+                result.mean_duration()
+            });
         });
+
+        measure_outputs
     }
 }

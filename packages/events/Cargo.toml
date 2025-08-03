@@ -18,6 +18,7 @@ futures = { workspace = true }
 pinned_pool = { workspace = true }
 
 [dev-dependencies]
+alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
 many_cpus = { path = "../many_cpus" }
 many_cpus_benchmarking = { path = "../many_cpus_benchmarking" }
