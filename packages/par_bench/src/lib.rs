@@ -120,46 +120,32 @@
 //! # }
 //! ```
 //!
-//! # Allocation Tracking (`alloc_tracker` feature)
+//! # Resource Usage Tracking
 //!
-//! When the `alloc_tracker` feature is enabled, the [`AllocTrackerExt`] extension trait becomes
-//! available, providing convenient allocation tracking for benchmarks:
+//! When either the `alloc_tracker` or `all_the_time` features are enabled, the [`ResourceUsageExt`]
+//! extension trait becomes available, providing convenient resource usage tracking for benchmarks:
 //!
 //! ```ignore
-//! use alloc_tracker::{Allocator, Session};
-//! use par_bench::{AllocTrackerExt, Run, ThreadPool};
+//! use alloc_tracker::{Allocator, Session as AllocSession};
+//! use all_the_time::Session as TimeSession;
+//! use par_bench::{ResourceUsageExt, Run, ThreadPool};
 //!
 //! #[global_allocator]
 //! static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 //!
-//! let allocs = Session::new();
+//! let allocs = AllocSession::new();
+//! let processor_time = TimeSession::new();
 //! let mut pool = ThreadPool::new(&ProcessorSet::default());
 //!
 //! let results = Run::new()
-//!     .measure_allocs(&allocs, "my_operation")
+//!     .measure_resource_usage(|measure| {
+//!         measure
+//!             .allocs(&allocs, "my_operation")
+//!             .processor_time(&processor_time, "my_operation")
+//!     })
 //!     .iter(|_| {
 //!         let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
-//!     })
-//!     .execute_on(&mut pool, 1000);
-//!
-//! allocs.print_to_stdout();
-//! ```
-//!
-//! # Processor Time Tracking (`all_the_time` feature)
-//!
-//! When the `all_the_time` feature is enabled, the [`AllTheTimeExt`] extension trait becomes
-//! available, providing convenient processor time tracking for benchmarks:
-//!
-//! ```ignore
-//! use all_the_time::Session;
-//! use par_bench::{AllTheTimeExt, Run, ThreadPool};
-//!
-//! let processor_time = Session::new();
-//! let mut pool = ThreadPool::new(&ProcessorSet::default());
-//!
-//! let results = Run::new()
-//!     .measure_processor_time(&processor_time, "my_operation")
-//!     .iter(|_| {
+//!         
 //!         // Perform processor-intensive work
 //!         let mut sum = 0;
 //!         for i in 0..1000 {
@@ -169,7 +155,35 @@
 //!     })
 //!     .execute_on(&mut pool, 1000);
 //!
-//! processor_time.print_to_stdout();
+//! // Access the combined resource usage data
+//! for output in results.measure_outputs() {
+//!     if let Some(alloc_report) = output.allocs() {
+//!         println!("Allocation data available");
+//!     }
+//!     if let Some(time_report) = output.processor_time() {
+//!         println!("Processor time data available");
+//!     }
+//! }
+//! ```
+//!
+//! You can also use just one type of measurement:
+//!
+//! ```ignore
+//! // Just allocation tracking
+//! let results = Run::new()
+//!     .measure_resource_usage(|measure| {
+//!         measure.allocs(&allocs, "alloc_only")
+//!     })
+//!     .iter(|_| { /* work */ })
+//!     .execute_on(&mut pool, 1000);
+//!
+//! // Just processor time tracking
+//! let results = Run::new()
+//!     .measure_resource_usage(|measure| {
+//!         measure.processor_time(&processor_time, "time_only")
+//!     })
+//!     .iter(|_| { /* work */ })
+//!     .execute_on(&mut pool, 1000);
 //! ```
 
 #![cfg_attr(miri, allow(dead_code, unused_imports))]
@@ -185,16 +199,11 @@ mod threadpool;
 pub mod args;
 pub mod configure;
 
-#[cfg(feature = "alloc_tracker")]
-mod alloc_tracker_ext;
+#[cfg(any(feature = "alloc_tracker", feature = "all_the_time"))]
+mod resource_usage_ext;
 
-#[cfg(feature = "all_the_time")]
-mod all_the_time_ext;
-
-#[cfg(feature = "all_the_time")]
-pub use all_the_time_ext::*;
-#[cfg(feature = "alloc_tracker")]
-pub use alloc_tracker_ext::*;
+#[cfg(any(feature = "alloc_tracker", feature = "all_the_time"))]
+pub use resource_usage_ext::*;
 pub use run::*;
 pub use run_configured::*;
 pub use run_meta::*;
