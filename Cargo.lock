@@ -423,6 +423,7 @@ dependencies = [
 name = "events"
 version = "0.2.0"
 dependencies = [
+ "all_the_time",
  "alloc_tracker",
  "criterion",
  "futures",

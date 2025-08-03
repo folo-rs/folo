@@ -32,13 +32,18 @@
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock, Mutex};
 
+use all_the_time::Session as TimeSession;
+use alloc_tracker::{Allocator, Session};
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, Criterion, criterion_group, criterion_main};
 use events::{LocalOnceEvent, LocalOnceEventPool, OnceEvent, OnceEventPool};
 use futures::executor::block_on;
 use many_cpus::ProcessorSet;
 use new_zealand::nz;
-use par_bench::{Run, ThreadPool};
+use par_bench::{ResourceUsageExt, Run, ThreadPool};
+
+#[global_allocator]
+static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
@@ -49,23 +54,25 @@ static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> =
     LazyLock::new(|| ProcessorSet::builder().take(nz!(2)));
 
 fn entrypoint(c: &mut Criterion) {
+    let allocs = Session::new();
+    let processor_time = TimeSession::new();
     let mut one_thread = ThreadPool::new(ProcessorSet::single());
 
     let mut group = c.benchmark_group("events_comparison_st");
 
-    local_once_event_ref_st(&mut one_thread, &mut group);
-    local_once_event_rc_st(&mut one_thread, &mut group);
-    local_once_event_ptr_st(&mut one_thread, &mut group);
-    once_event_arc_st(&mut one_thread, &mut group);
-    once_event_ptr_st(&mut one_thread, &mut group);
-    pooled_local_once_event_ref_st(&mut one_thread, &mut group);
-    pooled_local_once_event_rc_st(&mut one_thread, &mut group);
-    pooled_local_once_event_ptr_st(&mut one_thread, &mut group);
-    pooled_once_event_ref_st(&mut one_thread, &mut group);
-    pooled_once_event_arc_st(&mut one_thread, &mut group);
-    pooled_once_event_ptr_st(&mut one_thread, &mut group);
-    oneshot_channel_st(&mut one_thread, &mut group);
-    futures_oneshot_channel_st(&mut one_thread, &mut group);
+    local_once_event_ref_st(&mut one_thread, &mut group, &allocs, &processor_time);
+    local_once_event_rc_st(&mut one_thread, &mut group, &allocs, &processor_time);
+    local_once_event_ptr_st(&mut one_thread, &mut group, &allocs, &processor_time);
+    once_event_arc_st(&mut one_thread, &mut group, &allocs, &processor_time);
+    once_event_ptr_st(&mut one_thread, &mut group, &allocs, &processor_time);
+    pooled_local_once_event_ref_st(&mut one_thread, &mut group, &allocs, &processor_time);
+    pooled_local_once_event_rc_st(&mut one_thread, &mut group, &allocs, &processor_time);
+    pooled_local_once_event_ptr_st(&mut one_thread, &mut group, &allocs, &processor_time);
+    pooled_once_event_ref_st(&mut one_thread, &mut group, &allocs, &processor_time);
+    pooled_once_event_arc_st(&mut one_thread, &mut group, &allocs, &processor_time);
+    pooled_once_event_ptr_st(&mut one_thread, &mut group, &allocs, &processor_time);
+    oneshot_channel_st(&mut one_thread, &mut group, &allocs, &processor_time);
+    futures_oneshot_channel_st(&mut one_thread, &mut group, &allocs, &processor_time);
 
     group.finish();
 
@@ -84,6 +91,9 @@ fn entrypoint(c: &mut Criterion) {
 
         group.finish();
     }
+
+    allocs.print_to_stdout();
+    processor_time.print_to_stdout();
 }
 
 fn once_event_arc_mt(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
@@ -386,9 +396,17 @@ fn pooled_once_event_ptr_mt(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_
     });
 }
 
-fn local_once_event_ref_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+fn local_once_event_ref_st(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
     Run::new()
         .prepare_iter(|_| LocalOnceEvent::<Payload>::new())
+        .measure_resource_usage("local_once_event_ref", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
+        })
         .iter(|args| {
             // We bind a bit later here than in the other benchmarks because the by-ref mode
             // is a bit cumbersome. Good enough, just remember there is some tiny overhead.
@@ -400,11 +418,19 @@ fn local_once_event_ref_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_,
         .execute_criterion_on(pool, group, "local_once_event_ref");
 }
 
-fn local_once_event_rc_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+fn local_once_event_rc_st(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
     Run::new()
         .prepare_iter(|_| {
             let event = Rc::new(LocalOnceEvent::<Payload>::new());
             event.bind_by_rc()
+        })
+        .measure_resource_usage("local_once_event_rc", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|mut args| {
             let (sender, receiver) = args.take_iter_state();
@@ -415,7 +441,12 @@ fn local_once_event_rc_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, 
         .execute_criterion_on(pool, group, "local_once_event_rc");
 }
 
-fn local_once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+fn local_once_event_ptr_st(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
     Run::new()
         .prepare_iter(|_| {
             let event = Box::pin(LocalOnceEvent::<Payload>::new());
@@ -425,6 +456,9 @@ fn local_once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_,
             let (sender, receiver) = unsafe { event.as_ref().bind_by_ptr() };
 
             (event, sender, receiver)
+        })
+        .measure_resource_usage("local_once_event_ptr", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|mut args| {
             let (event, sender, receiver) = args.take_iter_state();
@@ -439,11 +473,19 @@ fn local_once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_,
         .execute_criterion_on(pool, group, "local_once_event_ptr");
 }
 
-fn once_event_arc_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+fn once_event_arc_st(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
     Run::new()
         .prepare_iter(|_| {
             let event = Arc::new(OnceEvent::<Payload>::new());
             event.bind_by_arc()
+        })
+        .measure_resource_usage("once_event_arc", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|mut args| {
             let (sender, receiver) = args.take_iter_state();
@@ -454,7 +496,12 @@ fn once_event_arc_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallT
         .execute_criterion_on(pool, group, "once_event_arc");
 }
 
-fn once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+fn once_event_ptr_st(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
     Run::new()
         .prepare_iter(|_| {
             let event = Box::pin(OnceEvent::<Payload>::new());
@@ -464,6 +511,9 @@ fn once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallT
             let (sender, receiver) = unsafe { event.as_ref().bind_by_ptr() };
 
             (event, sender, receiver)
+        })
+        .measure_resource_usage("once_event_ptr", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|mut args| {
             let (event, sender, receiver) = args.take_iter_state();
@@ -478,9 +528,17 @@ fn once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallT
         .execute_criterion_on(pool, group, "once_event_ptr");
 }
 
-fn oneshot_channel_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+fn oneshot_channel_st(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
     Run::new()
         .prepare_iter(|_| oneshot::channel())
+        .measure_resource_usage("oneshot_channel", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
+        })
         .iter(|mut args| {
             let (sender, receiver) = args.take_iter_state();
 
@@ -490,10 +548,18 @@ fn oneshot_channel_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, Wall
         .execute_criterion_on(pool, group, "oneshot_channel");
 }
 
-fn futures_oneshot_channel_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+fn futures_oneshot_channel_st(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
     #[expect(clippy::absolute_paths, reason = "being explicit")]
     Run::new()
         .prepare_iter(|_| futures::channel::oneshot::channel())
+        .measure_resource_usage("futures_oneshot_channel", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
+        })
         .iter(|mut args| {
             let (sender, receiver) = args.take_iter_state();
 
@@ -503,9 +569,17 @@ fn futures_oneshot_channel_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<
         .execute_criterion_on(pool, group, "futures_oneshot_channel");
 }
 
-fn pooled_local_once_event_ref_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+fn pooled_local_once_event_ref_st(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
     Run::new()
         .prepare_thread(|_| LocalOnceEventPool::<Payload>::new())
+        .measure_resource_usage("pooled_local_once_event_ref", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
+        })
         .iter(|args| {
             // We bind a bit later here than in the other benchmarks because the by-ref mode
             // is a bit cumbersome. Good enough, just remember there is some tiny overhead.
@@ -517,10 +591,18 @@ fn pooled_local_once_event_ref_st(pool: &mut ThreadPool, group: &mut BenchmarkGr
         .execute_criterion_on(pool, group, "pooled_local_once_event_ref");
 }
 
-fn pooled_local_once_event_rc_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+fn pooled_local_once_event_rc_st(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
     Run::new()
         .prepare_thread(|_| Rc::new(LocalOnceEventPool::<Payload>::new()))
         .prepare_iter(|args| args.thread_state().bind_by_rc())
+        .measure_resource_usage("pooled_local_once_event_rc", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
+        })
         .iter(|mut args| {
             let (sender, receiver) = args.take_iter_state();
 
@@ -530,7 +612,12 @@ fn pooled_local_once_event_rc_st(pool: &mut ThreadPool, group: &mut BenchmarkGro
         .execute_criterion_on(pool, group, "pooled_local_once_event_rc");
 }
 
-fn pooled_local_once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+fn pooled_local_once_event_ptr_st(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
     Run::new()
         .prepare_thread(|_| Box::pin(LocalOnceEventPool::<Payload>::new()))
         .prepare_iter(|args| {
@@ -539,6 +626,9 @@ fn pooled_local_once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGr
             let (sender, receiver) = unsafe { args.thread_state().as_ref().bind_by_ptr() };
 
             (sender, receiver)
+        })
+        .measure_resource_usage("pooled_local_once_event_ptr", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|mut args| {
             let (sender, receiver) = args.take_iter_state();
@@ -549,9 +639,17 @@ fn pooled_local_once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGr
         .execute_criterion_on(pool, group, "pooled_local_once_event_ptr");
 }
 
-fn pooled_once_event_ref_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+fn pooled_once_event_ref_st(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
     Run::new()
         .prepare_thread(|_| OnceEventPool::<Payload>::new())
+        .measure_resource_usage("pooled_once_event_ref", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
+        })
         .iter(|args| {
             // We bind a bit later here than in the other benchmarks because the by-ref mode
             // is a bit cumbersome. Good enough, just remember there is some tiny overhead.
@@ -563,10 +661,18 @@ fn pooled_once_event_ref_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_
         .execute_criterion_on(pool, group, "pooled_once_event_ref");
 }
 
-fn pooled_once_event_arc_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+fn pooled_once_event_arc_st(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
     Run::new()
         .prepare_thread(|_| Arc::new(OnceEventPool::<Payload>::new()))
         .prepare_iter(|args| args.thread_state().bind_by_arc())
+        .measure_resource_usage("pooled_once_event_arc", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
+        })
         .iter(|mut args| {
             let (sender, receiver) = args.take_iter_state();
 
@@ -576,7 +682,12 @@ fn pooled_once_event_arc_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_
         .execute_criterion_on(pool, group, "pooled_once_event_arc");
 }
 
-fn pooled_once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallTime>) {
+fn pooled_once_event_ptr_st(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
     Run::new()
         .prepare_thread(|_| Box::pin(OnceEventPool::<Payload>::new()))
         .prepare_iter(|args| {
@@ -585,6 +696,9 @@ fn pooled_once_event_ptr_st(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_
             let (sender, receiver) = unsafe { args.thread_state().as_ref().bind_by_ptr() };
 
             (sender, receiver)
+        })
+        .measure_resource_usage("pooled_once_event_ptr", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|mut args| {
             let (sender, receiver) = args.take_iter_state();
