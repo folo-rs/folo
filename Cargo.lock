@@ -28,7 +28,7 @@ dependencies = [
 
 [[package]]
 name = "all_the_time"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "cpu-time",
  "criterion",
@@ -38,7 +38,7 @@ dependencies = [
 
 [[package]]
 name = "alloc_tracker"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "criterion",
  "mutants",
@@ -184,7 +184,7 @@ checksum = "1b8e56985ec62d17e9c1001dc89c88ecd7dc08e47eba5ec7c29c7b5eeecde967"
 
 [[package]]
 name = "blind_pool"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -207,7 +207,7 @@ checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
 name = "cargo-detect-package"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "argh",
  "serial_test",
@@ -421,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "events"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -1035,7 +1035,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "opaque_pool"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -1045,7 +1045,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
