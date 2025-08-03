@@ -534,18 +534,15 @@ mod tests {
     #[test]
     fn api_supports_groups_immediately_after_new() {
         // Test that Run::new().groups() works
-        let _run = Run::new()
-            .groups(new_zealand::nz!(2));
-        
+        let _run = Run::new().groups(new_zealand::nz!(2));
+
         // Test the full chain with groups first
-        let _run = Run::new()
-            .groups(new_zealand::nz!(2))
-            .iter(|_| {
-                std::hint::black_box(42);
-            });
+        let _run = Run::new().groups(new_zealand::nz!(2)).iter(|_| {
+            std::hint::black_box(42);
+        });
     }
 
-    #[test] 
+    #[test]
     #[cfg(all(not(miri), feature = "alloc_tracker"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
     fn api_supports_measure_resource_usage_after_groups_only() {
         let allocs = alloc_tracker::Session::new();
@@ -563,7 +560,7 @@ mod tests {
         assert!(results.measure_outputs().count() > 0);
     }
 
-    #[test] 
+    #[test]
     #[cfg(all(not(miri), feature = "alloc_tracker"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
     fn api_supports_original_pattern_groups_prepare_iter_measure() {
         let allocs = alloc_tracker::Session::new();
