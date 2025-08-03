@@ -1,26 +1,11 @@
 //! Mean allocation tracking.
 
-use std::cell::Cell;
 use std::fmt;
-use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use crate::constants::ERR_POISONED_LOCK;
 use crate::session::OperationMetrics;
 use crate::{ProcessSpan, ThreadSpan};
-
-/// Error returned when iteration count exceeds supported limits.
-#[derive(Clone, Copy, Debug)]
-#[non_exhaustive]
-pub struct AddIterationsError;
-
-impl fmt::Display for AddIterationsError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "iteration count overflow")
-    }
-}
-
-impl std::error::Error for AddIterationsError {}
 
 /// A measurement handle for tracking mean memory allocation per operation across multiple iterations.
 ///
@@ -54,7 +39,6 @@ impl std::error::Error for AddIterationsError {}
 #[derive(Debug)]
 pub struct Operation {
     metrics: Arc<Mutex<OperationMetrics>>,
-    _not_sync: PhantomData<Cell<()>>,
 }
 
 impl Operation {
@@ -62,7 +46,6 @@ impl Operation {
     pub(crate) fn new(_name: String, operation_data: Arc<Mutex<OperationMetrics>>) -> Self {
         Self {
             metrics: operation_data,
-            _not_sync: PhantomData,
         }
     }
 
@@ -70,37 +53,6 @@ impl Operation {
     #[must_use]
     pub(crate) fn metrics(&self) -> Arc<Mutex<OperationMetrics>> {
         Arc::clone(&self.metrics)
-    }
-
-    /// Adds a memory delta value to the mean calculation.
-    ///
-    /// This method is called by [`ProcessSpan`] or [`ThreadSpan`] when it is dropped.
-    /// Internally delegates to `add_iterations()` with a count of 1.
-    #[cfg(test)]
-    pub(crate) fn add(&self, delta: u64) {
-        self.add_iterations(delta, 1);
-    }
-
-    /// Adds multiple iterations of the same allocation to the mean calculation.
-    ///
-    /// This is a more efficient version of calling `add()` multiple times with the same delta.
-    /// This method is used by span types when they measure multiple iterations.
-    #[cfg(test)]
-    pub(crate) fn add_iterations(&self, delta: u64, iterations: u64) {
-        let total_bytes = delta
-            .checked_mul(iterations)
-            .expect("bytes * iterations overflows u64 - this indicates an unrealistic scenario");
-
-        let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
-
-        data.total_bytes_allocated = data
-            .total_bytes_allocated
-            .checked_add(total_bytes)
-            .expect("total bytes allocated overflows u64 - this indicates an unrealistic scenario");
-
-        data.total_iterations = data.total_iterations.checked_add(iterations).expect(
-            "total iterations count overflows u64 - this indicates an unrealistic scenario",
-        );
     }
 
     /// Creates a span that tracks thread allocations from creation until it is dropped.
@@ -260,7 +212,12 @@ mod tests {
     #[test]
     fn operation_add_single() {
         let operation = create_test_operation();
-        operation.add(100);
+        
+        // Directly test the metrics
+        {
+            let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
+            metrics.add_iterations(100, 1);
+        }
 
         assert_eq!(operation.mean(), 100);
         assert_eq!(operation.total_iterations(), 1);
@@ -270,9 +227,14 @@ mod tests {
     #[test]
     fn operation_add_multiple() {
         let operation = create_test_operation();
-        operation.add(100);
-        operation.add(200);
-        operation.add(300);
+        
+        // Directly test the metrics  
+        {
+            let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
+            metrics.add_iterations(100, 1);
+            metrics.add_iterations(200, 1);
+            metrics.add_iterations(300, 1);
+        }
 
         assert_eq!(operation.mean(), 200); // (100 + 200 + 300) / 3
         assert_eq!(operation.total_iterations(), 3);
@@ -282,8 +244,13 @@ mod tests {
     #[test]
     fn operation_add_zero() {
         let operation = create_test_operation();
-        operation.add(0);
-        operation.add(0);
+        
+        // Directly test the metrics
+        {
+            let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
+            metrics.add_iterations(0, 1);
+            metrics.add_iterations(0, 1);
+        }
 
         assert_eq!(operation.mean(), 0);
         assert_eq!(operation.total_iterations(), 2);
@@ -392,42 +359,6 @@ mod tests {
     }
 
     #[test]
-    fn add_iterations_direct_call() {
-        let operation = create_test_operation();
-
-        // Test direct call to add_iterations
-        operation.add_iterations(100, 5);
-
-        assert_eq!(operation.total_iterations(), 5);
-        assert_eq!(operation.total_bytes_allocated(), 500);
-        assert_eq!(operation.mean(), 100);
-    }
-
-    #[test]
-    fn add_iterations_zero_iterations() {
-        let operation = create_test_operation();
-
-        // Adding zero iterations should work and do nothing
-        operation.add_iterations(100, 0);
-
-        assert_eq!(operation.total_iterations(), 0);
-        assert_eq!(operation.total_bytes_allocated(), 0);
-        assert_eq!(operation.mean(), 0);
-    }
-
-    #[test]
-    fn add_iterations_zero_allocation() {
-        let operation = create_test_operation();
-
-        // Adding zero allocation should work
-        operation.add_iterations(0, 1000);
-
-        assert_eq!(operation.total_iterations(), 1000);
-        assert_eq!(operation.total_bytes_allocated(), 0);
-        assert_eq!(operation.mean(), 0);
-    }
-
-    #[test]
     fn operation_batch_iterations() {
         let operation = create_test_operation();
 
@@ -449,7 +380,12 @@ mod tests {
         // Create and use operation
         {
             let operation = session.operation("test");
-            operation.add_iterations(100, 5);
+            
+            // Directly test the metrics
+            {
+                let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
+                metrics.add_iterations(100, 5);
+            }
             // operation is dropped here, merging data into session
         }
 
@@ -470,8 +406,12 @@ mod tests {
         let op1 = session.operation("test");
         let op2 = session.operation("test");
 
-        op1.add_iterations(100, 2); // 200 bytes, 2 iterations
-        op2.add_iterations(200, 3); // 600 bytes, 3 iterations
+        // Directly manipulate the metrics
+        {
+            let mut metrics = op1.metrics.lock().expect(ERR_POISONED_LOCK);
+            metrics.add_iterations(100, 2); // 200 bytes, 2 iterations
+            metrics.add_iterations(200, 3); // 600 bytes, 3 iterations
+        }
 
         // Both operations share the same data immediately since they have the same name
         // Total: 800 bytes, 5 iterations = 160 bytes mean
@@ -487,8 +427,5 @@ mod tests {
         assert!(session_display.contains("160 bytes (mean)"));
     }
 
-    // Static assertions for thread safety
-    static_assertions::assert_impl_all!(Operation: Send);
-    static_assertions::assert_not_impl_any!(Operation: Sync);
-    // Operation is Send but !Sync due to PhantomData<Cell<()>>
+    static_assertions::assert_impl_all!(Operation: Send, Sync);
 }

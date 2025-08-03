@@ -1,9 +1,5 @@
-//! Session management for allocation tracking.
-
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
-use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use crate::constants::ERR_POISONED_LOCK;
@@ -16,15 +12,28 @@ pub(crate) struct OperationMetrics {
     pub(crate) total_iterations: u64,
 }
 
+impl OperationMetrics {
+    /// Adds multiple iterations of the same allocation to the metrics.
+    ///
+    /// This is a more efficient version of calling individual add operations multiple times with the same delta.
+    /// This method is used by operation and span types when they measure multiple iterations.
+    pub(crate) fn add_iterations(&mut self, delta: u64, iterations: u64) {
+        let total_bytes = delta
+            .checked_mul(iterations)
+            .expect("bytes * iterations overflows u64 - this indicates an unrealistic scenario");
+
+        self.total_bytes_allocated = self
+            .total_bytes_allocated
+            .checked_add(total_bytes)
+            .expect("total bytes allocated overflows u64 - this indicates an unrealistic scenario");
+
+        self.total_iterations = self.total_iterations.checked_add(iterations).expect(
+            "total iterations count overflows u64 - this indicates an unrealistic scenario",
+        );
+    }
+}
+
 /// Manages allocation tracking session state and contains operations.
-///
-/// This type ensures that allocation tracking is properly enabled and disabled,
-/// and prevents multiple concurrent tracking sessions which would interfere with
-/// each other. It also serves as a container for tracking operations.
-///
-/// While `Session` is single-threaded, reports from sessions can be converted to
-/// thread-safe [`Report`](crate::Report) instances using [`to_report()`](Self::to_report)
-/// and sent to other threads for processing.
 ///
 /// # Examples
 ///
@@ -53,7 +62,6 @@ pub(crate) struct OperationMetrics {
 #[derive(Debug)]
 pub struct Session {
     operations: Arc<Mutex<HashMap<String, Arc<Mutex<OperationMetrics>>>>>,
-    _not_sync: PhantomData<Cell<()>>,
 }
 
 impl Session {
@@ -79,15 +87,14 @@ impl Session {
     pub fn new() -> Self {
         Self {
             operations: Arc::new(Mutex::new(HashMap::new())),
-            _not_sync: PhantomData,
         }
     }
 
     /// Creates or retrieves an operation with the given name.
     ///
-    /// This method exclusively borrows the session, ensuring that operations
-    /// cannot be created concurrently. If an operation with the given name
-    /// already exists, its existing statistics are preserved.
+    /// If an operation with the given name already exists, its existing statistics are preserved
+    /// and any consecutive or concurrent use of multiple such `Operation` instances will merge
+    /// the data sets.
     ///
     /// # Examples
     ///
@@ -126,8 +133,6 @@ impl Session {
     /// Creates a thread-safe report from this session.
     ///
     /// The report contains a snapshot of all memory allocation statistics captured by this session.
-    /// Unlike the single-threaded `Session`, reports can be safely sent to other threads for
-    /// processing and can be merged with other reports.
     ///
     /// # Examples
     ///
@@ -145,7 +150,6 @@ impl Session {
     /// }
     ///
     /// let report = session.to_report();
-    /// // Report can now be sent to another thread
     /// report.print_to_stdout();
     /// ```
     #[must_use]
@@ -160,6 +164,7 @@ impl Session {
                 )
             })
             .collect();
+
         Report::from_operation_data(&operation_data)
     }
 
@@ -196,8 +201,50 @@ impl fmt::Display for Session {
 mod tests {
     use super::*;
 
-    // Static assertions for thread safety
-    static_assertions::assert_impl_all!(Session: Send);
-    static_assertions::assert_not_impl_any!(Session: Sync);
-    // Session is Send but !Sync due to PhantomData<Cell<()>>
+    #[test]
+    fn operation_metrics_default_values() {
+        let metrics = OperationMetrics::default();
+        assert_eq!(metrics.total_bytes_allocated, 0);
+        assert_eq!(metrics.total_iterations, 0);
+    }
+
+    #[test]
+    fn operation_metrics_add_iterations_basic() {
+        let mut metrics = OperationMetrics::default();
+        metrics.add_iterations(100, 5);
+
+        assert_eq!(metrics.total_iterations, 5);
+        assert_eq!(metrics.total_bytes_allocated, 500);
+    }
+
+    #[test]
+    fn operation_metrics_add_iterations_zero_iterations() {
+        let mut metrics = OperationMetrics::default();
+        metrics.add_iterations(100, 0);
+
+        assert_eq!(metrics.total_iterations, 0);
+        assert_eq!(metrics.total_bytes_allocated, 0);
+    }
+
+    #[test]
+    fn operation_metrics_add_iterations_zero_allocation() {
+        let mut metrics = OperationMetrics::default();
+        metrics.add_iterations(0, 1000);
+
+        assert_eq!(metrics.total_iterations, 1000);
+        assert_eq!(metrics.total_bytes_allocated, 0);
+    }
+
+    #[test]
+    fn operation_metrics_add_iterations_accumulates() {
+        let mut metrics = OperationMetrics::default();
+        metrics.add_iterations(100, 2); // 200 bytes, 2 iterations
+        metrics.add_iterations(200, 3); // 600 bytes, 3 iterations
+
+        assert_eq!(metrics.total_iterations, 5);
+        assert_eq!(metrics.total_bytes_allocated, 800);
+    }
+
+    // The type is thread-safe.
+    static_assertions::assert_impl_all!(Session: Send, Sync);
 }

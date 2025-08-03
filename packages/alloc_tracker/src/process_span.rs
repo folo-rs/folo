@@ -109,21 +109,8 @@ impl ProcessSpan {
 impl Drop for ProcessSpan {
     fn drop(&mut self) {
         let delta = self.to_delta();
-
-        let total_bytes = delta
-            .checked_mul(self.iterations)
-            .expect("bytes * iterations overflows u64 - this indicates an unrealistic scenario");
-
         let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
-
-        data.total_bytes_allocated = data
-            .total_bytes_allocated
-            .checked_add(total_bytes)
-            .expect("total bytes allocated overflows u64 - this indicates an unrealistic scenario");
-
-        data.total_iterations = data.total_iterations.checked_add(self.iterations).expect(
-            "total iterations count overflows u64 - this indicates an unrealistic scenario",
-        );
+        data.add_iterations(delta, self.iterations);
     }
 }
 

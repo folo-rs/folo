@@ -154,27 +154,8 @@ impl ProcessSpan {
 impl Drop for ProcessSpan {
     fn drop(&mut self) {
         let duration = self.to_duration();
-
-        // Calculate total duration by multiplying duration by iterations
-        let total_duration_nanos = duration.as_nanos()
-            .checked_mul(u128::from(self.iterations))
-            .expect("duration multiplied by iterations overflows u128 - this indicates an unrealistic scenario");
-
-        let total_duration = Duration::from_nanos(
-            total_duration_nanos
-                .try_into()
-                .expect("total duration exceeds maximum Duration value - this indicates an unrealistic scenario"),
-        );
-
-        // Add directly to operation data
         let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
-        data.total_processor_time = data.total_processor_time.checked_add(total_duration).expect(
-            "processor time accumulation overflows Duration - this indicates an unrealistic scenario",
-        );
-
-        data.total_iterations = data.total_iterations.checked_add(self.iterations).expect(
-            "total iterations count overflows u64 - this indicates an unrealistic scenario",
-        );
+        data.add_iterations(duration, self.iterations);
     }
 }
 

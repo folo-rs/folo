@@ -1,8 +1,6 @@
 //! Mean processor time tracking.
 
-use std::cell::Cell;
 use std::fmt;
-use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,6 +15,8 @@ use crate::{ProcessSpan, ThreadSpan};
 /// to understand the mean processor time footprint of repeated operations.
 ///
 /// Operations share data directly with the session - data is merged when spans are dropped.
+///
+/// Multiple operations with the same name can be created concurrently.
 ///
 /// # Examples
 ///
@@ -45,7 +45,6 @@ use crate::{ProcessSpan, ThreadSpan};
 pub struct Operation {
     metrics: Arc<Mutex<OperationMetrics>>,
     platform: PlatformFacade,
-    _not_sync: PhantomData<Cell<()>>,
 }
 
 impl Operation {
@@ -59,7 +58,6 @@ impl Operation {
         Self {
             metrics: operation_data,
             platform,
-            _not_sync: PhantomData,
         }
     }
 
@@ -73,51 +71,6 @@ impl Operation {
     #[must_use]
     pub(crate) fn metrics(&self) -> Arc<Mutex<OperationMetrics>> {
         Arc::clone(&self.metrics)
-    }
-
-    /// Adds a processor time duration to the mean calculation.
-    ///
-    /// This method is typically called by span types when they are dropped.
-    /// Internally delegates to `add_iterations()` with a count of 1.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the duration addition or iteration count would overflow.
-    #[cfg(test)]
-    pub(crate) fn add(&self, duration: Duration) {
-        self.add_iterations(duration, 1);
-    }
-
-    /// Adds multiple iterations of the same duration to the mean calculation.
-    ///
-    /// This is a more efficient version of calling `add()` multiple times with the same duration.
-    /// This method is used by span types when they measure multiple iterations.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the duration multiplication or total time accumulation would overflow.
-    #[cfg(test)]
-    pub(crate) fn add_iterations(&self, duration: Duration, iterations: u64) {
-        // Calculate total duration by multiplying duration by iterations
-        let total_duration_nanos = duration.as_nanos()
-            .checked_mul(u128::from(iterations))
-            .expect("duration multiplied by iterations overflows u128 - this indicates an unrealistic scenario");
-
-        let total_duration = Duration::from_nanos(
-            total_duration_nanos
-                .try_into()
-                .expect("total duration exceeds maximum Duration value - this indicates an unrealistic scenario"),
-        );
-
-        // Add directly to operation data
-        let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
-        data.total_processor_time = data.total_processor_time.checked_add(total_duration).expect(
-            "processor time accumulation overflows Duration - this indicates an unrealistic scenario",
-        );
-
-        data.total_iterations = data.total_iterations.checked_add(iterations).expect(
-            "total iterations count overflows u64 - this indicates an unrealistic scenario",
-        );
     }
 
     /// Creates a span that tracks thread processor time from creation until it is dropped.
@@ -277,7 +230,12 @@ mod tests {
     fn tracks_single_duration() {
         let session = create_test_session();
         let operation = session.operation("test");
-        operation.add(Duration::from_millis(100));
+        
+        // Directly test the metrics
+        let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
+        metrics.add_iterations(Duration::from_millis(100), 1);
+        drop(metrics);
+        
         assert_eq!(operation.mean(), Duration::from_millis(100));
         assert_eq!(operation.total_iterations(), 1);
         assert_eq!(operation.total_processor_time(), Duration::from_millis(100));
@@ -287,9 +245,15 @@ mod tests {
     fn calculates_mean_of_multiple_durations() {
         let session = create_test_session();
         let operation = session.operation("test");
-        operation.add(Duration::from_millis(100));
-        operation.add(Duration::from_millis(200));
-        operation.add(Duration::from_millis(300));
+        
+        // Directly test the metrics
+        {
+            let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
+            metrics.add_iterations(Duration::from_millis(100), 1);
+            metrics.add_iterations(Duration::from_millis(200), 1);
+            metrics.add_iterations(Duration::from_millis(300), 1);
+        }
+        
         assert_eq!(operation.mean(), Duration::from_millis(200)); // (100 + 200 + 300) / 3
         assert_eq!(operation.total_iterations(), 3);
         assert_eq!(operation.total_processor_time(), Duration::from_millis(600));
@@ -299,8 +263,14 @@ mod tests {
     fn handles_zero_durations() {
         let session = create_test_session();
         let operation = session.operation("test");
-        operation.add(Duration::ZERO);
-        operation.add(Duration::ZERO);
+        
+        // Directly test the metrics
+        {
+            let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
+            metrics.add_iterations(Duration::ZERO, 1);
+            metrics.add_iterations(Duration::ZERO, 1);
+        }
+        
         assert_eq!(operation.mean(), Duration::ZERO);
         assert_eq!(operation.total_iterations(), 2);
         assert_eq!(operation.total_processor_time(), Duration::ZERO);
@@ -345,47 +315,5 @@ mod tests {
         assert!(operation.total_processor_time() >= Duration::ZERO);
     }
 
-    #[test]
-    fn add_iterations_direct_call() {
-        let session = create_test_session();
-        let operation = session.operation("test");
-
-        // Test direct call to add_iterations
-        operation.add_iterations(Duration::from_millis(100), 5);
-
-        assert_eq!(operation.total_iterations(), 5);
-        assert_eq!(operation.total_processor_time(), Duration::from_millis(500));
-        assert_eq!(operation.mean(), Duration::from_millis(100));
-    }
-
-    #[test]
-    fn add_iterations_zero_iterations() {
-        let session = create_test_session();
-        let operation = session.operation("test");
-
-        // Adding zero iterations should work and do nothing
-        operation.add_iterations(Duration::from_millis(100), 0);
-
-        assert_eq!(operation.total_iterations(), 0);
-        assert_eq!(operation.total_processor_time(), Duration::ZERO);
-        assert_eq!(operation.mean(), Duration::ZERO);
-    }
-
-    #[test]
-    fn add_iterations_zero_duration() {
-        let session = create_test_session();
-        let operation = session.operation("test");
-
-        // Adding zero duration should work
-        operation.add_iterations(Duration::ZERO, 1000);
-
-        assert_eq!(operation.total_iterations(), 1000);
-        assert_eq!(operation.total_processor_time(), Duration::ZERO);
-        assert_eq!(operation.mean(), Duration::ZERO);
-    }
-
-    // Static assertions for thread safety
-    static_assertions::assert_impl_all!(Operation: Send);
-    static_assertions::assert_not_impl_any!(Operation: Sync);
-    // Operation is Send but !Sync due to PhantomData<Cell<()>>
+    static_assertions::assert_impl_all!(Operation: Send, Sync);
 }
