@@ -2,6 +2,10 @@
 //!
 //! This example shows how to use `Report` to combine memory allocation measurements
 //! from multiple threads, including both same-operation merging and different-operation merging.
+//! 
+//! This is not a requirement of using multiple threads but may be a useful feature in cases
+//! where multiple independent session needs to be merged. The multithreading is just a simple
+//! example case.
 //!
 //! Run with: `cargo run --example alloc_tracker_threaded_reports`
 
