@@ -25,13 +25,13 @@ miri-example EXAMPLE:
 
 [group('testing')]
 test FILTER="":
-    cargo nextest run {{ target_package }} --all-features {{ FILTER }} --locked
+    cargo nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast
 
 # We run benches separately because they are slow in Nextest multi-process mode,
 # probably due to the Gnuplot integration that spawns an external process.
 [group('testing')]
 test-benches FILTER="":
-    cargo test {{ target_package }} --benches --all-features {{ FILTER }} --locked
+    cargo test {{ target_package }} --benches --all-features {{ FILTER }} --locked --no-fail-fast
 
 [group('testing')]
 [script]

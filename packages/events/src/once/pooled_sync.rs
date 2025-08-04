@@ -1239,7 +1239,7 @@ mod tests {
     fn inspect_awaiters_no_awaiters() {
         let pool = OnceEventPool::<String>::new();
 
-        // Create some events but don't await them
+        // Create some events but don't await them. They must still be inspected.
         let (_sender1, _receiver1) = pool.bind_by_ref();
         let (_sender2, _receiver2) = pool.bind_by_ref();
 
@@ -1248,7 +1248,7 @@ mod tests {
             count += 1;
         });
 
-        assert_eq!(count, 0);
+        assert_eq!(count, 2);
     }
 
     #[cfg(debug_assertions)]
@@ -1273,37 +1273,6 @@ mod tests {
             count += 1;
         });
 
-        assert_eq!(count, 2);
-    }
-
-    #[cfg(debug_assertions)]
-    #[test]
-    fn inspect_awaiters_mixed_states() {
-        let pool = OnceEventPool::<String>::new();
-
-        // Create multiple events in different states
-        let (_sender1, receiver1) = pool.bind_by_ref();
-        let (sender2, receiver2) = pool.bind_by_ref();
-        let (_sender3, receiver3) = pool.bind_by_ref();
-
-        // Only poll receiver1 and receiver3
-        let mut context = task::Context::from_waker(noop_waker_ref());
-        let mut pinned_receiver1 = pin!(receiver1);
-        let mut pinned_receiver3 = pin!(receiver3);
-
-        let _poll1 = pinned_receiver1.as_mut().poll(&mut context);
-        let _poll3 = pinned_receiver3.as_mut().poll(&mut context);
-
-        // Complete sender2 without polling its receiver
-        sender2.send("completed".to_string());
-        drop(receiver2);
-
-        let mut count = 0;
-        pool.inspect_awaiters(|_backtrace| {
-            count += 1;
-        });
-
-        // Should only count the two that are actually awaiting
         assert_eq!(count, 2);
     }
 

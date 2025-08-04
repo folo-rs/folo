@@ -28,10 +28,7 @@ enum EventState<T> {
     NotSet,
 
     /// No value has been set yet, but someone is waiting for it.
-    ///
-    /// In debug builds, also includes a backtrace of the awaiter.
-    /// The backtrace will be empty if backtraces are not enabled via environment variables.
-    Awaiting(Waker, BacktraceType),
+    Awaiting(Waker),
 
     /// A value has been set but nobody has yet started waiting.
     Set(ValueKind<T>),
@@ -76,6 +73,12 @@ where
 {
     state: Mutex<EventState<T>>,
 
+    // In debug builds, we save the backtrace of the most recent awaiter here. This will not be
+    // cleared merely by exiting the `Awaiting` state, as even in the `Set` state there is value
+    // in retaining the backtrace for debugging purposes.
+    #[cfg(debug_assertions)]
+    backtrace: Mutex<Option<BacktraceType>>,
+
     // Our API contract requires that an event can only be bound once, so we have to check this
     // because it is not feasible to create an API that can consume the event when creating the
     // sender-receiver pair (all we have might be a shared reference to the event).
@@ -104,6 +107,8 @@ where
     pub fn new() -> Self {
         Self {
             state: Mutex::new(EventState::NotSet),
+            #[cfg(debug_assertions)]
+            backtrace: Mutex::new(None),
             is_bound: AtomicBool::new(false),
             _requires_pinning: PhantomPinned,
         }
@@ -438,12 +443,8 @@ where
     /// The closure receives `None` if no one is awaiting the event.
     #[cfg(debug_assertions)]
     pub fn inspect_awaiter(&self, f: impl FnOnce(Option<&Backtrace>)) {
-        let state = self.state.lock().expect(ERR_POISONED_LOCK);
-
-        match &*state {
-            EventState::Awaiting(_, backtrace) => f(Some(backtrace)),
-            _ => f(None),
-        }
+        let backtrace = self.backtrace.lock().expect(ERR_POISONED_LOCK);
+        f(backtrace.as_ref());
     }
 
     pub(crate) fn set(&self, result: T) {
@@ -456,12 +457,12 @@ where
                 EventState::NotSet => {
                     *state = EventState::Set(ValueKind::Real(result));
                 }
-                EventState::Awaiting(_, _) => {
+                EventState::Awaiting(_) => {
                     let previous_state =
                         mem::replace(&mut *state, EventState::Set(ValueKind::Real(result)));
 
                     match previous_state {
-                        EventState::Awaiting(w, _) => waker = Some(w),
+                        EventState::Awaiting(w) => waker = Some(w),
                         _ => unreachable!("we are re-matching an already matched pattern"),
                     }
                 }
@@ -483,17 +484,23 @@ where
 
     // We are intended to be polled via Future::poll, so we have an equivalent signature here.
     pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
+        #[cfg(debug_assertions)]
+        self.backtrace
+            .lock()
+            .expect(ERR_POISONED_LOCK)
+            .replace(capture_backtrace());
+
         let mut state = self.state.lock().expect(ERR_POISONED_LOCK);
 
         match &*state {
             EventState::NotSet => {
-                *state = EventState::Awaiting(waker.clone(), capture_backtrace());
+                *state = EventState::Awaiting(waker.clone());
                 None
             }
-            EventState::Awaiting(_, _) => {
+            EventState::Awaiting(_) => {
                 // This is permitted by the Future API contract, in which case only the waker
                 // from the most recent poll should be woken up when the result is available.
-                *state = EventState::Awaiting(waker.clone(), capture_backtrace());
+                *state = EventState::Awaiting(waker.clone());
                 None
             }
             EventState::Set(_) => {
@@ -522,12 +529,12 @@ where
             EventState::NotSet => {
                 *state = EventState::Set(ValueKind::Disconnected);
             }
-            EventState::Awaiting(_, _) => {
+            EventState::Awaiting(_) => {
                 let previous_state =
                     mem::replace(&mut *state, EventState::Set(ValueKind::Disconnected));
 
                 match previous_state {
-                    EventState::Awaiting(waker, _) => waker.wake(),
+                    EventState::Awaiting(waker) => waker.wake(),
                     _ => unreachable!("we are re-matching an already matched pattern"),
                 }
             }
