@@ -342,8 +342,8 @@ impl<T> LocalOnceEventPool<T> {
         inner_pool.shrink_to_fit();
     }
 
-    /// Uses the provided closure to inspect the backtraces of the current awaiter of each
-    /// event in the pool that is currently being awaited by someone.
+    /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
+    /// event in the pool (or `None` if it has never been awaited).
     ///
     /// This method is only available in debug builds (`cfg(debug_assertions)`).
     /// For any data to be present, `RUST_BACKTRACE=1` or `RUST_LIB_BACKTRACE=1` must be set.
@@ -351,15 +351,11 @@ impl<T> LocalOnceEventPool<T> {
     /// The closure is called once for each event in the pool that is currently being awaited by
     /// someone.
     #[cfg(debug_assertions)]
-    pub fn inspect_awaiters(&self, mut f: impl FnMut(&Backtrace)) {
+    pub fn inspect_awaiters(&self, mut f: impl FnMut(Option<&Backtrace>)) {
         let pool = self.pool.borrow();
 
         for event in pool.iter() {
-            event.inspect_awaiter(|bt| {
-                if let Some(bt) = bt {
-                    f(bt);
-                }
-            });
+            event.inspect_awaiter(&mut f);
         }
     }
 }
