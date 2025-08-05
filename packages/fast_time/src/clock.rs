@@ -85,7 +85,10 @@ impl Clock {
     /// ```
     #[must_use]
     pub fn new() -> Self {
-        Self::from_pal(PlatformFacade::real())
+        #[cfg(not(miri))]
+        return Self::from_pal(PlatformFacade::real());
+        #[cfg(miri)]
+        return Self::from_pal(PlatformFacade::rust());
     }
 
     #[must_use]
@@ -140,7 +143,6 @@ impl Default for Clock {
 }
 
 #[cfg(test)]
-#[cfg(not(miri))] // Miri cannot talk to the real platform.
 mod tests {
     use super::*;
 

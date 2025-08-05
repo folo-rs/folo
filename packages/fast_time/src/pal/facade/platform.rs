@@ -4,19 +4,33 @@ use std::sync::Arc;
 
 #[cfg(test)]
 use crate::pal::MockPlatform;
-use crate::pal::{BUILD_TARGET_PLATFORM, BuildTargetPlatform, Platform, TimeSourceFacade};
+#[cfg(miri)]
+use crate::pal::RustPlatform;
+#[cfg(not(miri))]
+use crate::pal::{BUILD_TARGET_PLATFORM, BuildTargetPlatform};
+use crate::pal::{Platform, TimeSourceFacade};
 
 #[derive(Clone)]
 pub(crate) enum PlatformFacade {
+    #[cfg(not(miri))]
     Real(&'static BuildTargetPlatform),
+
+    #[cfg(miri)]
+    Rust(&'static RustPlatform),
 
     #[cfg(test)]
     Mock(Arc<MockPlatform>),
 }
 
 impl PlatformFacade {
+    #[cfg(not(miri))]
     pub(crate) fn real() -> Self {
         Self::Real(&BUILD_TARGET_PLATFORM)
+    }
+
+    #[cfg(miri)]
+    pub(crate) fn rust() -> Self {
+        Self::Rust(&RustPlatform)
     }
 }
 
@@ -25,16 +39,27 @@ impl Platform for PlatformFacade {
 
     fn new_time_source(&self) -> TimeSourceFacade {
         match self {
+            #[cfg(not(miri))]
             Self::Real(p) => p.new_time_source().into(),
+            #[cfg(miri)]
+            Self::Rust(p) => p.new_time_source().into(),
             #[cfg(test)]
             Self::Mock(p) => p.new_time_source().into(),
         }
     }
 }
 
+#[cfg(not(miri))]
 impl From<&'static BuildTargetPlatform> for PlatformFacade {
     fn from(p: &'static BuildTargetPlatform) -> Self {
         Self::Real(p)
+    }
+}
+
+#[cfg(miri)]
+impl From<&'static RustPlatform> for PlatformFacade {
+    fn from(p: &'static RustPlatform) -> Self {
+        Self::Rust(p)
     }
 }
 
@@ -48,7 +73,10 @@ impl From<MockPlatform> for PlatformFacade {
 impl Debug for PlatformFacade {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            #[cfg(not(miri))]
             Self::Real(p) => p.fmt(f),
+            #[cfg(miri)]
+            Self::Rust(p) => p.fmt(f),
             #[cfg(test)]
             Self::Mock(p) => p.fmt(f),
         }
