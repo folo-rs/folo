@@ -139,6 +139,111 @@ impl Instant {
     pub fn saturating_duration_since(&self, earlier: Self) -> Duration {
         self.inner.saturating_duration_since(earlier.inner)
     }
+
+    /// Calculates the duration since an earlier instant.
+    ///
+    /// This is an alias for [`saturating_duration_since`](Self::saturating_duration_since)
+    /// to maintain compatibility with `std::time::Instant`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::time::Duration;
+    ///
+    /// use fast_time::Clock;
+    ///
+    /// let mut clock = Clock::new();
+    /// let start = clock.now();
+    /// let end = clock.now();
+    ///
+    /// let duration = end.duration_since(start);
+    /// ```
+    #[must_use]
+    pub fn duration_since(&self, earlier: Self) -> Duration {
+        self.saturating_duration_since(earlier)
+    }
+
+    /// Calculates the duration since an earlier instant, returning `None` if the earlier
+    /// instant is actually later than this instant.
+    ///
+    /// Unlike [`saturating_duration_since`](Self::saturating_duration_since), this method
+    /// returns `None` instead of zero when the earlier instant is later.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::time::Duration;
+    ///
+    /// use fast_time::Clock;
+    ///
+    /// let mut clock = Clock::new();
+    /// let start = clock.now();
+    ///
+    /// // Simulate some work to ensure time passes
+    /// std::thread::sleep(Duration::from_millis(10));
+    ///
+    /// let end = clock.now();
+    ///
+    /// // Normal case: end should be later than start
+    /// match end.checked_duration_since(start) {
+    ///     Some(duration) => println!("Elapsed: {:?}", duration),
+    ///     None => println!("Time went backwards"),
+    /// }
+    ///
+    /// // Test with the same instant - should return Some(Duration::ZERO)
+    /// let same_instant = clock.now();
+    /// assert_eq!(same_instant.checked_duration_since(same_instant), Some(Duration::ZERO));
+    /// ```
+    #[must_use]
+    pub fn checked_duration_since(&self, earlier: Self) -> Option<Duration> {
+        self.inner.checked_duration_since(earlier.inner)
+    }
+
+    /// Adds a duration to this instant, returning `None` if overflow occurred.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::time::Duration;
+    ///
+    /// use fast_time::Clock;
+    ///
+    /// let mut clock = Clock::new();
+    /// let instant = clock.now();
+    ///
+    /// let later = instant.checked_add(Duration::from_secs(5)).unwrap();
+    /// assert!(later > instant);
+    ///
+    /// // This would overflow
+    /// assert!(instant.checked_add(Duration::MAX).is_none());
+    /// ```
+    #[must_use]
+    pub fn checked_add(&self, duration: Duration) -> Option<Self> {
+        self.inner.checked_add(duration).map(Self::from)
+    }
+
+    /// Subtracts a duration from this instant, returning `None` if underflow occurred.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::time::Duration;
+    ///
+    /// use fast_time::Clock;
+    ///
+    /// let mut clock = Clock::new();
+    /// let instant = clock.now();
+    ///
+    /// let earlier = instant.checked_sub(Duration::from_secs(5)).unwrap();
+    /// assert!(earlier < instant);
+    ///
+    /// // This would underflow
+    /// assert!(instant.checked_sub(Duration::MAX).is_none());
+    /// ```
+    #[must_use]
+    pub fn checked_sub(&self, duration: Duration) -> Option<Self> {
+        self.inner.checked_sub(duration).map(Self::from)
+    }
 }
 
 impl From<std::time::Instant> for Instant {
@@ -271,5 +376,95 @@ mod tests {
 
         let duration = instant1.elapsed(&mut clock);
         assert_eq!(duration, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn checked_duration_since_can_math() {
+        use std::time::Duration;
+
+        // Create synthetic test data using arbitrary durations added to a base instant
+        let base_instant = std::time::Instant::now();
+        let instant1 = Instant::from(base_instant);
+        let instant2 = Instant::from(base_instant + Duration::from_secs(10));
+
+        // Test normal case: later instant minus earlier instant
+        let duration = instant2.checked_duration_since(instant1);
+        assert_eq!(duration, Some(Duration::from_secs(10)));
+
+        // Test reverse case: earlier instant minus later instant should return None
+        let duration_reverse = instant1.checked_duration_since(instant2);
+        assert_eq!(duration_reverse, None);
+
+        // Test same instant
+        let duration_same = instant1.checked_duration_since(instant1);
+        assert_eq!(duration_same, Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn duration_since_is_alias_for_saturating_duration_since() {
+        use std::time::Duration;
+
+        let base_instant = std::time::Instant::now();
+        let instant1 = Instant::from(base_instant);
+        let instant2 = Instant::from(base_instant + Duration::from_secs(5));
+
+        // Both methods should return the same result
+        let duration_saturating = instant2.saturating_duration_since(instant1);
+        let duration_alias = instant2.duration_since(instant1);
+        assert_eq!(duration_saturating, duration_alias);
+
+        // Test reverse case: both should return zero
+        let duration_saturating_reverse = instant1.saturating_duration_since(instant2);
+        let duration_alias_reverse = instant1.duration_since(instant2);
+        assert_eq!(duration_saturating_reverse, duration_alias_reverse);
+        assert_eq!(duration_alias_reverse, Duration::ZERO);
+    }
+
+    #[test]
+    fn checked_add_can_math() {
+        use std::time::Duration;
+
+        let base_instant = std::time::Instant::now();
+        let instant = Instant::from(base_instant);
+
+        // Test normal addition
+        let duration = Duration::from_secs(5);
+        let later_instant = instant.checked_add(duration).unwrap();
+        let expected = Instant::from(base_instant + duration);
+        assert_eq!(later_instant, expected);
+
+        // Test that the result is indeed later
+        assert!(later_instant > instant);
+
+        // Test zero addition
+        let same_instant = instant.checked_add(Duration::ZERO).unwrap();
+        assert_eq!(same_instant, instant);
+    }
+
+    #[test]
+    fn checked_sub_can_math() {
+        use std::time::Duration;
+
+        let base_instant = std::time::Instant::now();
+        let duration = Duration::from_secs(10);
+        let later_instant = base_instant + duration;
+        let instant = Instant::from(later_instant);
+
+        // Test normal subtraction
+        let earlier_instant = instant.checked_sub(Duration::from_secs(5)).unwrap();
+        let expected = Instant::from(later_instant.checked_sub(Duration::from_secs(5)).unwrap());
+        assert_eq!(earlier_instant, expected);
+
+        // Test that the result is indeed earlier
+        assert!(earlier_instant < instant);
+
+        // Test zero subtraction
+        let same_instant = instant.checked_sub(Duration::ZERO).unwrap();
+        assert_eq!(same_instant, instant);
+
+        // Test subtracting the full duration
+        let base_again = instant.checked_sub(duration).unwrap();
+        let expected_base = Instant::from(base_instant);
+        assert_eq!(base_again, expected_base);
     }
 }
