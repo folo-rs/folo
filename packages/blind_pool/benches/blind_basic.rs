@@ -18,19 +18,18 @@ criterion_main!(benches);
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
-type TestItem = usize;
-const TEST_VALUE: TestItem = 1024;
+const U64_TEST_VALUE: u64 = 1024;
 
-// Custom struct with same size as u64 but different alignment
+// Custom struct with same layout as u64.
 #[repr(C, align(8))]
-struct AlignedU32 {
+struct AlmostU64 {
     value: u32,
     _padding: u32,
 }
 
 // Different type with different layout
-type DifferentType = u32;
-const DIFFERENT_VALUE: DifferentType = 512;
+type NotU64 = u32;
+const NOT_U64_TEST_VALUE: NotU64 = 512;
 
 fn entrypoint(c: &mut Criterion) {
     let allocs = alloc_tracker::Session::new();
@@ -64,7 +63,7 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for pool in &mut pools {
-                _ = black_box(pool.insert(black_box(TEST_VALUE)));
+                _ = black_box(pool.insert(black_box(U64_TEST_VALUE)));
             }
 
             start.elapsed()
@@ -80,7 +79,7 @@ fn entrypoint(c: &mut Criterion) {
 
             // Pre-warm each pool with one item.
             for pool in &mut pools {
-                _ = pool.insert(TEST_VALUE);
+                _ = pool.insert(U64_TEST_VALUE);
             }
 
             let _span = allocs_op.measure_thread().iterations(iters);
@@ -88,7 +87,7 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for pool in &mut pools {
-                _ = black_box(pool.insert(black_box(TEST_VALUE)));
+                _ = black_box(pool.insert(black_box(U64_TEST_VALUE)));
             }
 
             start.elapsed()
@@ -107,8 +106,8 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for pool in &mut pools {
-                _ = black_box(pool.insert(black_box(TEST_VALUE)));
-                _ = black_box(pool.insert(black_box(AlignedU32 {
+                _ = black_box(pool.insert(black_box(U64_TEST_VALUE)));
+                _ = black_box(pool.insert(black_box(AlmostU64 {
                     value: 42,
                     _padding: 0,
                 })));
@@ -127,7 +126,7 @@ fn entrypoint(c: &mut Criterion) {
 
             // Pre-warm each pool with one item.
             for pool in &mut pools {
-                _ = pool.insert(TEST_VALUE);
+                _ = pool.insert(U64_TEST_VALUE);
             }
 
             let _span = allocs_op.measure_thread().iterations(iters);
@@ -135,8 +134,8 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for pool in &mut pools {
-                _ = black_box(pool.insert(black_box(TEST_VALUE)));
-                _ = black_box(pool.insert(black_box(AlignedU32 {
+                _ = black_box(pool.insert(black_box(U64_TEST_VALUE)));
+                _ = black_box(pool.insert(black_box(AlmostU64 {
                     value: 42,
                     _padding: 0,
                 })));
@@ -158,8 +157,8 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for pool in &mut pools {
-                _ = black_box(pool.insert(black_box(TEST_VALUE)));
-                _ = black_box(pool.insert(black_box(DIFFERENT_VALUE)));
+                _ = black_box(pool.insert(black_box(U64_TEST_VALUE)));
+                _ = black_box(pool.insert(black_box(NOT_U64_TEST_VALUE)));
             }
 
             start.elapsed()
@@ -175,7 +174,7 @@ fn entrypoint(c: &mut Criterion) {
 
             // Pre-warm each pool with one item.
             for pool in &mut pools {
-                _ = pool.insert(TEST_VALUE);
+                _ = pool.insert(U64_TEST_VALUE);
             }
 
             let _span = allocs_op.measure_thread().iterations(iters);
@@ -183,8 +182,8 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for pool in &mut pools {
-                _ = black_box(pool.insert(black_box(TEST_VALUE)));
-                _ = black_box(pool.insert(black_box(DIFFERENT_VALUE)));
+                _ = black_box(pool.insert(black_box(U64_TEST_VALUE)));
+                _ = black_box(pool.insert(black_box(NOT_U64_TEST_VALUE)));
             }
 
             start.elapsed()
@@ -195,7 +194,7 @@ fn entrypoint(c: &mut Criterion) {
     group.bench_function("read_one", |b| {
         b.iter_custom(|iters| {
             let mut pool = BlindPool::new();
-            let pooled = pool.insert(TEST_VALUE);
+            let pooled = pool.insert(U64_TEST_VALUE);
 
             let _span = allocs_op.measure_thread().iterations(iters);
 
@@ -217,7 +216,7 @@ fn entrypoint(c: &mut Criterion) {
 
             // Pre-populate pool with 10k items.
             for _ in 0..10_000 {
-                _ = pool.insert(TEST_VALUE);
+                _ = pool.insert(U64_TEST_VALUE);
             }
 
             let _span = allocs_op.measure_thread().iterations(iters);
@@ -239,7 +238,7 @@ fn entrypoint(c: &mut Criterion) {
 
             // Pre-populate pool with 10k items.
             for _ in 0..10_000 {
-                _ = pool.insert(TEST_VALUE);
+                _ = pool.insert(U64_TEST_VALUE);
             }
 
             let _span = allocs_op.measure_thread().iterations(iters);
@@ -261,7 +260,7 @@ fn entrypoint(c: &mut Criterion) {
 
             // Pre-populate pool with 10k items.
             for _ in 0..10_000 {
-                _ = pool.insert(TEST_VALUE);
+                _ = pool.insert(U64_TEST_VALUE);
             }
 
             let _span = allocs_op.measure_thread().iterations(iters);
@@ -269,7 +268,7 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for _ in 0..iters {
-                _ = black_box(pool.capacity_of::<TestItem>());
+                _ = black_box(pool.capacity_of::<u64>());
             }
 
             start.elapsed()
@@ -280,8 +279,8 @@ fn entrypoint(c: &mut Criterion) {
     group.bench_function("read_one_two_types_same_layout", |b| {
         b.iter_custom(|iters| {
             let mut pool = BlindPool::new();
-            let pooled1 = pool.insert(TEST_VALUE);
-            let pooled2 = pool.insert(AlignedU32 {
+            let pooled1 = pool.insert(U64_TEST_VALUE);
+            let pooled2 = pool.insert(AlmostU64 {
                 value: 42,
                 _padding: 0,
             });
@@ -305,8 +304,8 @@ fn entrypoint(c: &mut Criterion) {
     group.bench_function("read_one_two_types_different_layout", |b| {
         b.iter_custom(|iters| {
             let mut pool = BlindPool::new();
-            let pooled1 = pool.insert(TEST_VALUE);
-            let pooled2 = pool.insert(DIFFERENT_VALUE);
+            let pooled1 = pool.insert(U64_TEST_VALUE);
+            let pooled2 = pool.insert(NOT_U64_TEST_VALUE);
 
             let _span = allocs_op.measure_thread().iterations(iters);
 
@@ -332,7 +331,7 @@ fn entrypoint(c: &mut Criterion) {
 
             let pooled_items = pools
                 .iter_mut()
-                .map(|pool| pool.insert(TEST_VALUE))
+                .map(|pool| pool.insert(U64_TEST_VALUE))
                 .collect::<Vec<_>>();
 
             let _span = allocs_op.measure_thread().iterations(iters);
@@ -357,8 +356,8 @@ fn entrypoint(c: &mut Criterion) {
             let pooled_pairs = pools
                 .iter_mut()
                 .map(|pool| {
-                    let pooled1 = pool.insert(TEST_VALUE);
-                    let pooled2 = pool.insert(AlignedU32 {
+                    let pooled1 = pool.insert(U64_TEST_VALUE);
+                    let pooled2 = pool.insert(AlmostU64 {
                         value: 42,
                         _padding: 0,
                     });
@@ -389,8 +388,8 @@ fn entrypoint(c: &mut Criterion) {
             let pooled_pairs = pools
                 .iter_mut()
                 .map(|pool| {
-                    let pooled1 = pool.insert(TEST_VALUE);
-                    let pooled2 = pool.insert(DIFFERENT_VALUE);
+                    let pooled1 = pool.insert(U64_TEST_VALUE);
+                    let pooled2 = pool.insert(NOT_U64_TEST_VALUE);
                     (pooled1, pooled2)
                 })
                 .collect::<Vec<_>>();
@@ -425,7 +424,7 @@ fn entrypoint(c: &mut Criterion) {
 
             for pool in &mut pools {
                 for _ in 0..10_000 {
-                    _ = black_box(pool.insert(black_box(TEST_VALUE)));
+                    _ = black_box(pool.insert(black_box(U64_TEST_VALUE)));
                 }
             }
 
@@ -454,13 +453,13 @@ fn entrypoint(c: &mut Criterion) {
 
                     // Add the 5 that we will later remove.
                     for _ in 0..5 {
-                        let pooled = pool.insert(black_box(TEST_VALUE));
+                        let pooled = pool.insert(black_box(U64_TEST_VALUE));
                         to_remove.push(pooled);
                     }
 
                     // Add the 5 that we will keep.
                     for _ in 0..5 {
-                        _ = black_box(pool.insert(black_box(TEST_VALUE)));
+                        _ = black_box(pool.insert(black_box(U64_TEST_VALUE)));
                     }
 
                     // Remove the first 5.
@@ -485,7 +484,7 @@ fn entrypoint(c: &mut Criterion) {
             let pooled_sets = pools
                 .iter_mut()
                 .map(|pool| {
-                    iter::repeat_with(|| pool.insert(TEST_VALUE))
+                    iter::repeat_with(|| pool.insert(U64_TEST_VALUE))
                         .take(10_000)
                         .collect::<Vec<_>>()
                 })
