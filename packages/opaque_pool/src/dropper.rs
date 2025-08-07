@@ -17,7 +17,7 @@ impl Dropper {
     ///
     /// The caller must ensure that:
     ///
-    /// 1. The target outlives the `Dropper` instance.
+    /// 1. The target pointer is valid for `T` writes for the lifetime of the `Dropper` instance.
     /// 2. The target is not dropped through its normal lifetime (e.g., by calling `drop()`
     ///    or letting it go out of scope) while the `Dropper` exists.
     /// 3. Only one `Dropper` instance exists for any given target at a time.
