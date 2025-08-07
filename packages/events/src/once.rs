@@ -7,6 +7,10 @@ mod sync;
 mod two_owners;
 mod value_kind;
 
+#[allow(
+    unused_imports,
+    reason = "conditional compilation can leave these unused in some cases"
+)]
 pub(crate) use backtrace::*;
 pub use extract_t::*;
 pub use local::*;
