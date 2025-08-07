@@ -16,10 +16,9 @@ use std::sync::{Arc, Mutex};
 use std::task::Waker;
 use std::{mem, task};
 
-use crate::{
-    BacktraceType, Disconnected, ERR_POISONED_LOCK, ReflectiveTSend, Sealed, ValueKind,
-    capture_backtrace,
-};
+#[cfg(debug_assertions)]
+use crate::{BacktraceType, capture_backtrace};
+use crate::{Disconnected, ERR_POISONED_LOCK, ReflectiveTSend, Sealed, ValueKind};
 
 /// State of a thread-safe event.
 #[derive(Debug)]

@@ -1,3 +1,8 @@
+#![allow(
+    dead_code,
+    reason = "conditional compilation can leave these unused in some cases"
+)]
+
 use std::backtrace::Backtrace;
 #[cfg(not(debug_assertions))]
 use std::marker::PhantomData;

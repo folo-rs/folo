@@ -17,7 +17,9 @@ use std::rc::Rc;
 use std::task::Waker;
 use std::{mem, task};
 
-use crate::{BacktraceType, Disconnected, ReflectiveT, Sealed, ValueKind, capture_backtrace};
+#[cfg(debug_assertions)]
+use crate::{BacktraceType, capture_backtrace};
+use crate::{Disconnected, ReflectiveT, Sealed, ValueKind};
 
 /// State of a single-threaded event.
 #[derive(Debug)]
