@@ -128,7 +128,7 @@ fn once_event_arc_mt(
                         (None, Some(receivers.lock().unwrap().pop().unwrap()))
                     }
                 })
-                .measure_resource_usage("once_event_arc", |measure| {
+                .measure_resource_usage("once_event_arc_mt", |measure| {
                     measure.allocs(allocs).processor_time(processor_time)
                 })
                 .iter(|mut args| {
@@ -185,7 +185,7 @@ fn once_event_ptr_mt(
                         (None, Some(receivers.lock().unwrap().pop().unwrap()))
                     }
                 })
-                .measure_resource_usage("once_event_ptr", |measure| {
+                .measure_resource_usage("once_event_ptr_mt", |measure| {
                     measure.allocs(allocs).processor_time(processor_time)
                 })
                 .iter(|mut args| {
@@ -233,7 +233,7 @@ fn oneshot_channel_mt(
                         (None, Some(receivers.lock().unwrap().pop().unwrap()))
                     }
                 })
-                .measure_resource_usage("oneshot_channel", |measure| {
+                .measure_resource_usage("oneshot_channel_mt", |measure| {
                     measure.allocs(allocs).processor_time(processor_time)
                 })
                 .iter(|mut args| {
@@ -282,7 +282,7 @@ fn futures_oneshot_channel_mt(
                         (None, Some(receivers.lock().unwrap().pop().unwrap()))
                     }
                 })
-                .measure_resource_usage("futures_oneshot_channel", |measure| {
+                .measure_resource_usage("futures_oneshot_channel_mt", |measure| {
                     measure.allocs(allocs).processor_time(processor_time)
                 })
                 .iter(|mut args| {
@@ -332,7 +332,7 @@ fn pooled_once_event_ref_mt(
                         (None, Some(receivers.lock().unwrap().pop().unwrap()))
                     }
                 })
-                .measure_resource_usage("pooled_once_event_ref", |measure| {
+                .measure_resource_usage("pooled_once_event_ref_mt", |measure| {
                     measure.allocs(allocs).processor_time(processor_time)
                 })
                 .iter(|mut args| {
@@ -382,7 +382,7 @@ fn pooled_once_event_arc_mt(
                         (None, Some(receivers.lock().unwrap().pop().unwrap()))
                     }
                 })
-                .measure_resource_usage("pooled_once_event_arc", |measure| {
+                .measure_resource_usage("pooled_once_event_arc_mt", |measure| {
                     measure.allocs(allocs).processor_time(processor_time)
                 })
                 .iter(|mut args| {
@@ -435,7 +435,7 @@ fn pooled_once_event_ptr_mt(
                         (None, Some(receivers.lock().unwrap().pop().unwrap()))
                     }
                 })
-                .measure_resource_usage("pooled_once_event_ptr", |measure| {
+                .measure_resource_usage("pooled_once_event_ptr_mt", |measure| {
                     measure.allocs(allocs).processor_time(processor_time)
                 })
                 .iter(|mut args| {
@@ -541,7 +541,7 @@ fn once_event_arc_st(
             let event = Arc::new(OnceEvent::<Payload>::new());
             event.bind_by_arc()
         })
-        .measure_resource_usage("once_event_arc", |measure| {
+        .measure_resource_usage("once_event_arc_st", |measure| {
             measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|mut args| {
@@ -569,7 +569,7 @@ fn once_event_ptr_st(
 
             (event, sender, receiver)
         })
-        .measure_resource_usage("once_event_ptr", |measure| {
+        .measure_resource_usage("once_event_ptr_st", |measure| {
             measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|mut args| {
@@ -593,7 +593,7 @@ fn oneshot_channel_st(
 ) {
     Run::new()
         .prepare_iter(|_| oneshot::channel())
-        .measure_resource_usage("oneshot_channel", |measure| {
+        .measure_resource_usage("oneshot_channel_st", |measure| {
             measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|mut args| {
@@ -614,7 +614,7 @@ fn futures_oneshot_channel_st(
     #[expect(clippy::absolute_paths, reason = "being explicit")]
     Run::new()
         .prepare_iter(|_| futures::channel::oneshot::channel())
-        .measure_resource_usage("futures_oneshot_channel", |measure| {
+        .measure_resource_usage("futures_oneshot_channel_st", |measure| {
             measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|mut args| {
@@ -704,7 +704,7 @@ fn pooled_once_event_ref_st(
 ) {
     Run::new()
         .prepare_thread(|_| OnceEventPool::<Payload>::new())
-        .measure_resource_usage("pooled_once_event_ref", |measure| {
+        .measure_resource_usage("pooled_once_event_ref_st", |measure| {
             measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|args| {
@@ -727,7 +727,7 @@ fn pooled_once_event_arc_st(
     Run::new()
         .prepare_thread(|_| Arc::new(OnceEventPool::<Payload>::new()))
         .prepare_iter(|args| args.thread_state().bind_by_arc())
-        .measure_resource_usage("pooled_once_event_arc", |measure| {
+        .measure_resource_usage("pooled_once_event_arc_st", |measure| {
             measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|mut args| {
@@ -754,7 +754,7 @@ fn pooled_once_event_ptr_st(
 
             (sender, receiver)
         })
-        .measure_resource_usage("pooled_once_event_ptr", |measure| {
+        .measure_resource_usage("pooled_once_event_ptr_st", |measure| {
             measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|mut args| {
