@@ -138,14 +138,36 @@ where
         }
     }
 
-    /// Creates a new heap-allocated thread-safe event, returning both the sender and receiver
-    /// for this event.
+    /// Creates a new thread-safe event with automatically managed heap storage,
+    /// returning both the sender and receiver for this event.
     ///
-    /// The memory used by the event is automatically released when both endpoints are dropped.
+    /// The memory used by the event is released when both endpoints are dropped.
+    /// This is similar to `oneshot::channel()`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::thread;
+    ///
+    /// use events::OnceEvent;
+    /// # use futures::executor::block_on;
+    ///
+    /// let (sender, receiver) = OnceEvent::<String>::new_managed();
+    ///
+    /// let sender_handle = thread::spawn(move || {
+    ///     sender.send("Hello from a managed event!".to_string());
+    /// });
+    ///
+    /// let receiver_handle = thread::spawn(move || block_on(receiver));
+    ///
+    /// sender_handle.join().unwrap();
+    /// let message = receiver_handle.join().unwrap().unwrap();
+    /// assert_eq!(message, "Hello from a managed event!");
+    /// ```
     #[must_use]
     #[inline]
-    pub fn new_heap() -> (OnceSender<HeapEvent<T>>, OnceReceiver<HeapEvent<T>>) {
-        let (sender_event, receiver_event) = HeapEvent::new_pair();
+    pub fn new_managed() -> (OnceSender<ManagedEvent<T>>, OnceReceiver<ManagedEvent<T>>) {
+        let (sender_event, receiver_event) = ManagedEvent::new_pair();
 
         (
             OnceSender::new(sender_event),
@@ -235,7 +257,8 @@ where
     ///
     /// let event = OnceEvent::<i32>::new();
     /// // We know this is the first and only binding of this event
-    /// let (sender, receiver) = event.bind_by_ref_unchecked();
+    /// // SAFETY: We know this is the first and only binding of this event
+    /// let (sender, receiver) = unsafe { event.bind_by_ref_unchecked() };
     /// ```
     #[must_use]
     #[inline]
@@ -349,7 +372,8 @@ where
     ///
     /// let event = Arc::new(OnceEvent::<i32>::new());
     /// // We know this is the first and only binding of this event
-    /// let (sender, receiver) = event.bind_by_arc_unchecked();
+    /// // SAFETY: We know this is the first and only binding of this event
+    /// let (sender, receiver) = unsafe { event.bind_by_arc_unchecked() };
     /// ```
     #[must_use]
     #[inline]
@@ -509,6 +533,10 @@ where
     /// Initializes the event in-place at a pinned location and returns both the sender and
     /// receiver for this event, connected by a raw pointer to the event.
     ///
+    /// This method is useful for high-performance scenarios where you want to avoid heap
+    /// allocation and have precise control over memory layout, especially in multi-threaded
+    /// contexts.
+    ///
     /// # Safety
     ///
     /// The caller must ensure that:
@@ -516,6 +544,40 @@ where
     ///   of the sender and receiver.
     /// - The sender and receiver are dropped before the event is dropped.
     /// - The event is eventually dropped by its owner.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::mem::MaybeUninit;
+    /// use std::pin::pin;
+    /// use std::thread;
+    ///
+    /// use events::OnceEvent;
+    /// # use futures::executor::block_on;
+    ///
+    /// let mut event_storage = pin!(MaybeUninit::uninit());
+    ///
+    /// // SAFETY: We keep the event alive until sender/receiver are done
+    /// let (sender, receiver) =
+    ///     unsafe { OnceEvent::<String>::new_in_place_by_ptr(event_storage.as_mut()) };
+    ///
+    /// let sender_handle = thread::spawn(move || {
+    ///     sender.send("Hello from in-place event!".to_string());
+    /// });
+    ///
+    /// let receiver_handle = thread::spawn(move || block_on(receiver));
+    ///
+    /// sender_handle.join().unwrap();
+    /// let message = receiver_handle.join().unwrap().unwrap();
+    /// assert_eq!(message, "Hello from in-place event!");
+    ///
+    /// // Both sender and receiver are dropped here, before we drop the event
+    ///
+    /// // SAFETY: We initialized it above and have dropped both sender and receiver
+    /// unsafe {
+    ///     event_storage.get_unchecked_mut().assume_init_drop();
+    /// }
+    /// ```
     #[must_use]
     #[inline]
     pub unsafe fn new_in_place_by_ptr(
@@ -1032,14 +1094,14 @@ unsafe impl<T> Send for PtrEvent<T> where T: Send {}
 ///
 /// Only used in type names. Instances are created internally by [`OnceEvent`].
 #[derive(Debug)]
-pub struct HeapEvent<T>
+pub struct ManagedEvent<T>
 where
     T: Send,
 {
     event: NonNull<WithTwoOwners<OnceEvent<T>>>,
 }
 
-impl<T> HeapEvent<T>
+impl<T> ManagedEvent<T>
 where
     T: Send,
 {
@@ -1053,9 +1115,9 @@ where
     }
 }
 
-impl<T> Sealed for HeapEvent<T> where T: Send {}
-impl<T> EventRef<T> for HeapEvent<T> where T: Send {}
-impl<T> Deref for HeapEvent<T>
+impl<T> Sealed for ManagedEvent<T> where T: Send {}
+impl<T> EventRef<T> for ManagedEvent<T> where T: Send {}
+impl<T> Deref for ManagedEvent<T>
 where
     T: Send,
 {
@@ -1067,7 +1129,7 @@ where
         unsafe { self.event.as_ref() }
     }
 }
-impl<T> Clone for HeapEvent<T>
+impl<T> Clone for ManagedEvent<T>
 where
     T: Send,
 {
@@ -1075,13 +1137,13 @@ where
         Self { event: self.event }
     }
 }
-impl<T> ReflectiveTSend for HeapEvent<T>
+impl<T> ReflectiveTSend for ManagedEvent<T>
 where
     T: Send,
 {
     type T = T;
 }
-impl<T> Drop for HeapEvent<T>
+impl<T> Drop for ManagedEvent<T>
 where
     T: Send,
 {
@@ -1101,6 +1163,8 @@ where
         }
     }
 }
+// SAFETY: This is only used with the thread-safe event (the event is Sync).
+unsafe impl<T> Send for ManagedEvent<T> where T: Send {}
 
 /// A sender that can send a single value through a thread-safe event.
 ///
@@ -1526,6 +1590,226 @@ mod tests {
     }
 
     #[test]
+    fn event_new_managed_basic() {
+        with_watchdog(|| {
+            let (sender, receiver) = OnceEvent::<String>::new_managed();
+
+            sender.send("Hello from heap!".to_string());
+            let value = futures::executor::block_on(receiver);
+            assert_eq!(value.unwrap(), "Hello from heap!");
+        });
+    }
+
+    #[test]
+    fn event_new_managed_cross_thread() {
+        with_watchdog(|| {
+            let (sender, receiver) = OnceEvent::<String>::new_managed();
+
+            let sender_handle = thread::spawn(move || {
+                sender.send("Hello from another thread!".to_string());
+            });
+
+            let receiver_handle = thread::spawn(move || futures::executor::block_on(receiver));
+
+            sender_handle.join().unwrap();
+            let message = receiver_handle.join().unwrap().unwrap();
+            assert_eq!(message, "Hello from another thread!");
+        });
+    }
+
+    #[test]
+    fn event_new_managed_without_receiver() {
+        let (sender, _receiver) = OnceEvent::<i32>::new_managed();
+
+        // Send should still succeed even if we don't have a receiver
+        sender.send(42);
+    }
+
+    #[test]
+    fn event_new_managed_receiver_gets_disconnected_when_sender_dropped() {
+        with_watchdog(|| {
+            futures::executor::block_on(async {
+                let (sender, receiver) = OnceEvent::<i32>::new_managed();
+
+                // Drop the sender without sending anything
+                drop(sender);
+
+                // Receiver should get a Disconnected error
+                let result = receiver.await;
+                assert!(result.is_err());
+                assert!(matches!(result, Err(Disconnected)));
+            });
+        });
+    }
+
+    #[test]
+    fn event_new_managed_different_types() {
+        with_watchdog(|| {
+            // Test with different types to ensure generic functionality
+            let (sender1, receiver1) = OnceEvent::<u64>::new_managed();
+            let (sender2, receiver2) = OnceEvent::<Vec<String>>::new_managed();
+
+            sender1.send(12345);
+            sender2.send(vec!["hello".to_string(), "world".to_string()]);
+
+            let value1 = futures::executor::block_on(receiver1);
+            let value2 = futures::executor::block_on(receiver2);
+
+            assert_eq!(value1.unwrap(), 12345);
+            assert_eq!(
+                value2.unwrap(),
+                vec!["hello".to_string(), "world".to_string()]
+            );
+        });
+    }
+
+    #[test]
+    fn event_new_in_place_by_ptr_basic() {
+        with_watchdog(|| {
+            futures::executor::block_on(async {
+                let mut event_storage = pin!(MaybeUninit::uninit());
+
+                // SAFETY: We keep the event alive until sender/receiver are done.
+                let (sender, receiver) =
+                    unsafe { OnceEvent::<String>::new_in_place_by_ptr(event_storage.as_mut()) };
+
+                sender.send("Hello from in-place!".to_string());
+                let value = receiver.await.unwrap();
+                assert_eq!(value, "Hello from in-place!");
+
+                // SAFETY: We initialized it above and have dropped both sender and receiver.
+                let event_storage_ref = unsafe { event_storage.get_unchecked_mut() };
+
+                // SAFETY: We initialized it above and have dropped both sender and receiver.
+                unsafe {
+                    event_storage_ref.assume_init_drop();
+                }
+            });
+        });
+    }
+
+    #[test]
+    fn event_new_in_place_by_ptr_cross_thread() {
+        with_watchdog(|| {
+            futures::executor::block_on(async {
+                let mut event_storage = pin!(MaybeUninit::uninit());
+
+                // SAFETY: We keep the event alive until sender/receiver are done.
+                let (sender, receiver) =
+                    unsafe { OnceEvent::<String>::new_in_place_by_ptr(event_storage.as_mut()) };
+
+                let sender_handle = thread::spawn(move || {
+                    sender.send("Hello from cross-thread in-place!".to_string());
+                });
+
+                let receiver_handle = thread::spawn(move || futures::executor::block_on(receiver));
+
+                sender_handle.join().unwrap();
+                let message = receiver_handle.join().unwrap().unwrap();
+                assert_eq!(message, "Hello from cross-thread in-place!");
+
+                // SAFETY: We initialized it above and have dropped both sender and receiver.
+                let event_storage_ref = unsafe { event_storage.get_unchecked_mut() };
+
+                // SAFETY: We initialized it above and have dropped both sender and receiver.
+                unsafe {
+                    event_storage_ref.assume_init_drop();
+                }
+            });
+        });
+    }
+
+    #[test]
+    fn event_new_in_place_by_ptr_without_receiver() {
+        let mut event_storage = pin!(MaybeUninit::uninit());
+
+        // SAFETY: We keep the event alive until sender/receiver are done.
+        let (sender, _receiver) =
+            unsafe { OnceEvent::<i32>::new_in_place_by_ptr(event_storage.as_mut()) };
+
+        // Send should still succeed even if we don't have a receiver
+        sender.send(42);
+
+        // SAFETY: We initialized it above and have dropped both sender and receiver.
+        let event_storage_ref = unsafe { event_storage.get_unchecked_mut() };
+
+        // SAFETY: We initialized it above and have dropped both sender and receiver.
+        unsafe {
+            event_storage_ref.assume_init_drop();
+        }
+    }
+
+    #[test]
+    fn event_new_in_place_by_ptr_receiver_gets_disconnected_when_sender_dropped() {
+        with_watchdog(|| {
+            futures::executor::block_on(async {
+                let mut event_storage = pin!(MaybeUninit::uninit());
+
+                // SAFETY: We keep the event alive until sender/receiver are done.
+                let (sender, receiver) =
+                    unsafe { OnceEvent::<i32>::new_in_place_by_ptr(event_storage.as_mut()) };
+
+                // Drop the sender without sending anything
+                drop(sender);
+
+                // Receiver should get a Disconnected error
+                let result = receiver.await;
+                assert!(result.is_err());
+                assert!(matches!(result, Err(Disconnected)));
+
+                // SAFETY: We initialized it above and have dropped both sender and receiver.
+                let event_storage_ref = unsafe { event_storage.get_unchecked_mut() };
+
+                // SAFETY: We initialized it above and have dropped both sender and receiver.
+                unsafe {
+                    event_storage_ref.assume_init_drop();
+                }
+            });
+        });
+    }
+
+    #[test]
+    fn event_new_in_place_by_ptr_different_types() {
+        with_watchdog(|| {
+            futures::executor::block_on(async {
+                let mut event_storage1 = pin!(MaybeUninit::uninit());
+                let mut event_storage2 = pin!(MaybeUninit::uninit());
+
+                // SAFETY: We keep the events alive until sender/receiver are done.
+                let (sender1, receiver1) =
+                    unsafe { OnceEvent::<u64>::new_in_place_by_ptr(event_storage1.as_mut()) };
+                // SAFETY: We keep the events alive until sender/receiver are done.
+                let (sender2, receiver2) =
+                    unsafe { OnceEvent::<Vec<i32>>::new_in_place_by_ptr(event_storage2.as_mut()) };
+
+                sender1.send(98765);
+                sender2.send(vec![1, 2, 3, 4, 5]);
+
+                let value1 = receiver1.await.unwrap();
+                let value2 = receiver2.await.unwrap();
+
+                assert_eq!(value1, 98765);
+                assert_eq!(value2, vec![1, 2, 3, 4, 5]);
+
+                // SAFETY: We initialized them above and have dropped both sender and receiver.
+                let event_storage1_ref = unsafe { event_storage1.get_unchecked_mut() };
+                // SAFETY: We initialized them above and have dropped both sender and receiver.
+                let event_storage2_ref = unsafe { event_storage2.get_unchecked_mut() };
+
+                // SAFETY: We initialized them above and have dropped both sender and receiver.
+                unsafe {
+                    event_storage1_ref.assume_init_drop();
+                }
+
+                // SAFETY: We initialized them above and have dropped both sender and receiver.
+                unsafe {
+                    event_storage2_ref.assume_init_drop();
+                }
+            });
+        });
+    }
+
+    #[test]
     fn thread_safety() {
         // The event is accessed across threads, so requires Sync as well as Send.
         assert_impl_all!(OnceEvent<u32>: Send, Sync);
@@ -1538,11 +1822,15 @@ mod tests {
         assert_impl_all!(OnceReceiver<ArcEvent<u32>>: Send);
         assert_impl_all!(OnceSender<PtrEvent<u32>>: Send);
         assert_impl_all!(OnceReceiver<PtrEvent<u32>>: Send);
+        assert_impl_all!(OnceSender<ManagedEvent<u32>>: Send);
+        assert_impl_all!(OnceReceiver<ManagedEvent<u32>>: Send);
         assert_not_impl_any!(OnceSender<RefEvent<'static, u32>>: Sync);
         assert_not_impl_any!(OnceReceiver<RefEvent<'static, u32>>: Sync);
         assert_not_impl_any!(OnceSender<ArcEvent<u32>>: Sync);
         assert_not_impl_any!(OnceReceiver<ArcEvent<u32>>: Sync);
         assert_not_impl_any!(OnceSender<PtrEvent<u32>>: Sync);
         assert_not_impl_any!(OnceReceiver<PtrEvent<u32>>: Sync);
+        assert_not_impl_any!(OnceSender<ManagedEvent<u32>>: Sync);
+        assert_not_impl_any!(OnceReceiver<ManagedEvent<u32>>: Sync);
     }
 }

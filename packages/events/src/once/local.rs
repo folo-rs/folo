@@ -132,17 +132,33 @@ impl<T> LocalOnceEvent<T> {
         }
     }
 
-    /// Creates a new heap-allocated single-threaded event, returning both the sender and receiver
-    /// for this event.
+    /// Creates a new single-threaded event with automatically managed heap storage,
+    /// returning both the sender and receiver for this event.
     ///
-    /// The memory used by the event is automatically released when both endpoints are dropped.
+    /// The memory used by the event is released when both endpoints are dropped.
+    /// This is similar to `oneshot::channel()` but for single-threaded use cases.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use events::LocalOnceEvent;
+    /// # use futures::executor::block_on;
+    ///
+    /// # block_on(async {
+    /// let (sender, receiver) = LocalOnceEvent::<String>::new_managed();
+    ///
+    /// sender.send("Hello from the managed event!".to_string());
+    /// let message = receiver.await.unwrap();
+    /// assert_eq!(message, "Hello from the managed event!");
+    /// # });
+    /// ```
     #[must_use]
     #[inline]
-    pub fn new_heap() -> (
-        LocalOnceSender<HeapLocalEvent<T>>,
-        LocalOnceReceiver<HeapLocalEvent<T>>,
+    pub fn new_managed() -> (
+        LocalOnceSender<ManagedLocalEvent<T>>,
+        LocalOnceReceiver<ManagedLocalEvent<T>>,
     ) {
-        let (sender_event, receiver_event) = HeapLocalEvent::new_pair();
+        let (sender_event, receiver_event) = ManagedLocalEvent::new_pair();
 
         (
             LocalOnceSender::new(sender_event),
@@ -232,7 +248,8 @@ impl<T> LocalOnceEvent<T> {
     ///
     /// let event = LocalOnceEvent::<i32>::new();
     /// // We know this is the first and only binding of this event
-    /// let (sender, receiver) = event.bind_by_ref_unchecked();
+    /// // SAFETY: We know this is the first and only binding of this event
+    /// let (sender, receiver) = unsafe { event.bind_by_ref_unchecked() };
     /// ```
     #[must_use]
     #[inline]
@@ -348,7 +365,8 @@ impl<T> LocalOnceEvent<T> {
     ///
     /// let event = Rc::new(LocalOnceEvent::<i32>::new());
     /// // We know this is the first and only binding of this event
-    /// let (sender, receiver) = event.bind_by_rc_unchecked();
+    /// // SAFETY: We know this is the first and only binding of this event
+    /// let (sender, receiver) = unsafe { event.bind_by_rc_unchecked() };
     /// ```
     #[must_use]
     #[inline]
@@ -505,6 +523,9 @@ impl<T> LocalOnceEvent<T> {
     /// Initializes the event in-place at a pinned location and returns both the sender and
     /// receiver for this event, connected by a raw pointer to the event.
     ///
+    /// This method is useful for high-performance scenarios where you want to avoid heap
+    /// allocation and have precise control over memory layout.
+    ///
     /// # Safety
     ///
     /// The caller must ensure that:
@@ -512,6 +533,35 @@ impl<T> LocalOnceEvent<T> {
     ///   of the sender and receiver.
     /// - The sender and receiver are dropped before the event is dropped.
     /// - The event is eventually dropped by its owner.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::mem::MaybeUninit;
+    /// use std::pin::pin;
+    ///
+    /// use events::LocalOnceEvent;
+    /// # use futures::executor::block_on;
+    ///
+    /// # block_on(async {
+    /// let mut event_storage = pin!(MaybeUninit::uninit());
+    ///
+    /// // SAFETY: We keep the event alive until sender/receiver are done
+    /// let (sender, receiver) =
+    ///     unsafe { LocalOnceEvent::<i32>::new_in_place_by_ptr(event_storage.as_mut()) };
+    ///
+    /// sender.send(42);
+    /// let value = receiver.await.unwrap();
+    /// assert_eq!(value, 42);
+    ///
+    /// // Both sender and receiver are dropped here, before we drop the event
+    ///
+    /// // SAFETY: We initialized it above and have dropped both sender and receiver
+    /// unsafe {
+    ///     event_storage.get_unchecked_mut().assume_init_drop();
+    /// }
+    /// # });
+    /// ```
     #[must_use]
     #[inline]
     pub unsafe fn new_in_place_by_ptr(
@@ -816,11 +866,11 @@ impl<T> ReflectiveT for PtrLocalEvent<T> {
 ///
 /// Only used in type names. Instances are created internally by [`LocalOnceEvent`].
 #[derive(Debug)]
-pub struct HeapLocalEvent<T> {
+pub struct ManagedLocalEvent<T> {
     event: NonNull<LocalWithTwoOwners<LocalOnceEvent<T>>>,
 }
 
-impl<T> HeapLocalEvent<T> {
+impl<T> ManagedLocalEvent<T> {
     fn new_pair() -> (Self, Self) {
         let event = NonNull::new(Box::into_raw(Box::new(LocalWithTwoOwners::new(
             LocalOnceEvent::new_bound(),
@@ -831,9 +881,9 @@ impl<T> HeapLocalEvent<T> {
     }
 }
 
-impl<T> Sealed for HeapLocalEvent<T> {}
-impl<T> LocalEventRef<T> for HeapLocalEvent<T> {}
-impl<T> Deref for HeapLocalEvent<T> {
+impl<T> Sealed for ManagedLocalEvent<T> {}
+impl<T> LocalEventRef<T> for ManagedLocalEvent<T> {}
+impl<T> Deref for ManagedLocalEvent<T> {
     type Target = LocalOnceEvent<T>;
 
     fn deref(&self) -> &Self::Target {
@@ -842,15 +892,15 @@ impl<T> Deref for HeapLocalEvent<T> {
         unsafe { self.event.as_ref() }
     }
 }
-impl<T> Clone for HeapLocalEvent<T> {
+impl<T> Clone for ManagedLocalEvent<T> {
     fn clone(&self) -> Self {
         Self { event: self.event }
     }
 }
-impl<T> ReflectiveT for HeapLocalEvent<T> {
+impl<T> ReflectiveT for ManagedLocalEvent<T> {
     type T = T;
 }
-impl<T> Drop for HeapLocalEvent<T> {
+impl<T> Drop for ManagedLocalEvent<T> {
     fn drop(&mut self) {
         // On drop, we need to coordinate with the `LocalWithTwoOwners` to ensure proper cleanup.
         // The last of either the sender or receiver will clean up the event.
@@ -1258,6 +1308,180 @@ mod tests {
         });
 
         assert!(called);
+    }
+
+    #[test]
+    fn local_event_new_managed_basic() {
+        with_watchdog(|| {
+            let (sender, receiver) = LocalOnceEvent::<String>::new_managed();
+
+            sender.send("Hello from heap!".to_string());
+            let value = futures::executor::block_on(receiver);
+            assert_eq!(value.unwrap(), "Hello from heap!");
+        });
+    }
+
+    #[test]
+    fn local_event_new_managed_without_receiver() {
+        let (sender, _receiver) = LocalOnceEvent::<i32>::new_managed();
+
+        // Send should still succeed even if we don't have a receiver
+        sender.send(42);
+    }
+
+    #[test]
+    fn local_event_new_managed_receiver_gets_disconnected_when_sender_dropped() {
+        with_watchdog(|| {
+            futures::executor::block_on(async {
+                let (sender, receiver) = LocalOnceEvent::<i32>::new_managed();
+
+                // Drop the sender without sending anything
+                drop(sender);
+
+                // Receiver should get a Disconnected error
+                let result = receiver.await;
+                assert!(result.is_err());
+                assert!(matches!(result, Err(Disconnected)));
+            });
+        });
+    }
+
+    #[test]
+    fn local_event_new_managed_different_types() {
+        with_watchdog(|| {
+            // Test with different types to ensure generic functionality
+            let (sender1, receiver1) = LocalOnceEvent::<u64>::new_managed();
+            let (sender2, receiver2) = LocalOnceEvent::<Vec<String>>::new_managed();
+
+            sender1.send(12345);
+            sender2.send(vec!["hello".to_string(), "world".to_string()]);
+
+            let value1 = futures::executor::block_on(receiver1);
+            let value2 = futures::executor::block_on(receiver2);
+
+            assert_eq!(value1.unwrap(), 12345);
+            assert_eq!(
+                value2.unwrap(),
+                vec!["hello".to_string(), "world".to_string()]
+            );
+        });
+    }
+
+    #[test]
+    fn local_event_new_in_place_by_ptr_basic() {
+        with_watchdog(|| {
+            futures::executor::block_on(async {
+                let mut event_storage = pin!(MaybeUninit::uninit());
+
+                // SAFETY: We keep the event alive until sender/receiver are done
+                let (sender, receiver) = unsafe {
+                    LocalOnceEvent::<String>::new_in_place_by_ptr(event_storage.as_mut())
+                };
+
+                sender.send("Hello from in-place!".to_string());
+                let value = receiver.await.unwrap();
+                assert_eq!(value, "Hello from in-place!");
+
+                // SAFETY: We initialized it above and have dropped both sender and receiver.
+                let event_storage_ref = unsafe { event_storage.get_unchecked_mut() };
+
+                // SAFETY: We initialized it above and have dropped both sender and receiver.
+                unsafe {
+                    event_storage_ref.assume_init_drop();
+                }
+            });
+        });
+    }
+
+    #[test]
+    fn local_event_new_in_place_by_ptr_without_receiver() {
+        let mut event_storage = pin!(MaybeUninit::uninit());
+
+        // SAFETY: We keep the event alive until sender/receiver are done
+        let (sender, _receiver) =
+            unsafe { LocalOnceEvent::<i32>::new_in_place_by_ptr(event_storage.as_mut()) };
+
+        // Send should still succeed even if we don't have a receiver
+        sender.send(42);
+
+        // SAFETY: We initialized it above and have dropped both sender and receiver.
+        let event_storage_ref = unsafe { event_storage.get_unchecked_mut() };
+
+        // SAFETY: We initialized it above and have dropped both sender and receiver.
+        unsafe {
+            event_storage_ref.assume_init_drop();
+        }
+    }
+
+    #[test]
+    fn local_event_new_in_place_by_ptr_receiver_gets_disconnected_when_sender_dropped() {
+        with_watchdog(|| {
+            futures::executor::block_on(async {
+                let mut event_storage = pin!(MaybeUninit::uninit());
+
+                // SAFETY: We keep the event alive until sender/receiver are done
+                let (sender, receiver) =
+                    unsafe { LocalOnceEvent::<i32>::new_in_place_by_ptr(event_storage.as_mut()) };
+
+                // Drop the sender without sending anything
+                drop(sender);
+
+                // Receiver should get a Disconnected error
+                let result = receiver.await;
+                assert!(result.is_err());
+                assert!(matches!(result, Err(Disconnected)));
+
+                // SAFETY: We initialized it above and have dropped both sender and receiver.
+                let event_storage_ref = unsafe { event_storage.get_unchecked_mut() };
+
+                // SAFETY: We initialized it above and have dropped both sender and receiver.
+                unsafe {
+                    event_storage_ref.assume_init_drop();
+                }
+            });
+        });
+    }
+
+    #[test]
+    fn local_event_new_in_place_by_ptr_different_types() {
+        with_watchdog(|| {
+            futures::executor::block_on(async {
+                let mut event_storage1 = pin!(MaybeUninit::uninit());
+                let mut event_storage2 = pin!(MaybeUninit::uninit());
+
+                // SAFETY: We keep the events alive until sender/receiver are done
+                let (sender1, receiver1) =
+                    unsafe { LocalOnceEvent::<u64>::new_in_place_by_ptr(event_storage1.as_mut()) };
+                // SAFETY: We keep the events alive until sender/receiver are done.
+                let (sender2, receiver2) = unsafe {
+                    LocalOnceEvent::<Vec<i32>>::new_in_place_by_ptr(event_storage2.as_mut())
+                };
+
+                sender1.send(98765);
+                sender2.send(vec![1, 2, 3, 4, 5]);
+
+                let value1 = receiver1.await.unwrap();
+                let value2 = receiver2.await.unwrap();
+
+                assert_eq!(value1, 98765);
+                assert_eq!(value2, vec![1, 2, 3, 4, 5]);
+
+                // SAFETY: We initialized them above and have dropped both sender and receiver.
+                let event_storage1_ref = unsafe { event_storage1.get_unchecked_mut() };
+                // SAFETY: We initialized them above and have dropped both sender and receiver.
+                let event_storage2_ref = unsafe { event_storage2.get_unchecked_mut() };
+
+                // SAFETY: We initialized them above and have dropped both sender and receiver.
+                unsafe {
+                    event_storage1_ref.assume_init_drop();
+                }
+
+                // SAFETY: We initialized them above and have dropped both sender and receiver.
+                unsafe {
+                    event_storage2_ref.assume_init_drop();
+                }
+            });
+        });
     }
 
     #[test]

@@ -141,7 +141,7 @@ fn local_once_event_ptr(
             measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|_| {
-            let event = Box::pin(LocalOnceEvent::<Payload>::new());
+            let event = pin!(LocalOnceEvent::<Payload>::new());
 
             // SAFETY: We keep the event alive for the duration of this scope.
             let (sender, receiver) = unsafe { event.as_ref().bind_by_ptr() };
@@ -219,7 +219,7 @@ fn once_event_ptr(
             measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|_| {
-            let event = Box::pin(OnceEvent::<Payload>::new());
+            let event = pin!(OnceEvent::<Payload>::new());
 
             // SAFETY: We keep the event alive for the duration of this scope.
             let (sender, receiver) = unsafe { event.as_ref().bind_by_ptr() };
