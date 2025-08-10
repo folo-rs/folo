@@ -24,7 +24,7 @@ use std::task::Waker;
 use crate::{BacktraceType, ERR_POISONED_LOCK, capture_backtrace};
 use crate::{
     Disconnected, EVENT_AWAITING, EVENT_BOUND, EVENT_DISCONNECTED, EVENT_SET, EVENT_SIGNALING,
-    EVENT_UNBOUND, ReflectiveTSend, Sealed,
+    EVENT_UNBOUND, ReflectiveTSend, Sealed, WithTwoOwners,
 };
 
 /// A one-time event that can send and receive a value of type `T`, potentially across threads.
@@ -111,6 +111,7 @@ where
     /// let event = OnceEvent::<i32>::new();
     /// ```
     #[must_use]
+    #[inline]
     pub fn new() -> Self {
         Self {
             state: AtomicU8::new(EVENT_UNBOUND),
@@ -135,6 +136,21 @@ where
             backtrace: Mutex::new(None),
             _requires_pinning: PhantomPinned,
         }
+    }
+
+    /// Creates a new heap-allocated thread-safe event, returning both the sender and receiver
+    /// for this event.
+    ///
+    /// The memory used by the event is automatically released when both endpoints are dropped.
+    #[must_use]
+    #[inline]
+    pub fn new_heap() -> (OnceSender<HeapEvent<T>>, OnceReceiver<HeapEvent<T>>) {
+        let (sender_event, receiver_event) = HeapEvent::new_pair();
+
+        (
+            OnceSender::new(sender_event),
+            OnceReceiver::new(receiver_event),
+        )
     }
 
     /// Returns both the sender and receiver for this event,
@@ -1011,6 +1027,80 @@ impl<T: Send> ReflectiveTSend for PtrEvent<T> {
 }
 // SAFETY: This is only used with the thread-safe event (the event is Sync).
 unsafe impl<T> Send for PtrEvent<T> where T: Send {}
+
+/// An event stored on the heap, with automatically managed storage.
+///
+/// Only used in type names. Instances are created internally by [`OnceEvent`].
+#[derive(Debug)]
+pub struct HeapEvent<T>
+where
+    T: Send,
+{
+    event: NonNull<WithTwoOwners<OnceEvent<T>>>,
+}
+
+impl<T> HeapEvent<T>
+where
+    T: Send,
+{
+    fn new_pair() -> (Self, Self) {
+        let event = NonNull::new(Box::into_raw(Box::new(WithTwoOwners::new(
+            OnceEvent::new_bound(),
+        ))))
+        .expect("freshly allocated Box cannot be null");
+
+        (Self { event }, Self { event })
+    }
+}
+
+impl<T> Sealed for HeapEvent<T> where T: Send {}
+impl<T> EventRef<T> for HeapEvent<T> where T: Send {}
+impl<T> Deref for HeapEvent<T>
+where
+    T: Send,
+{
+    type Target = OnceEvent<T>;
+
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: Storage is automatically managed - as long as either sender/receiver
+        // are alive, we are guaranteed that the event is alive.
+        unsafe { self.event.as_ref() }
+    }
+}
+impl<T> Clone for HeapEvent<T>
+where
+    T: Send,
+{
+    fn clone(&self) -> Self {
+        Self { event: self.event }
+    }
+}
+impl<T> ReflectiveTSend for HeapEvent<T>
+where
+    T: Send,
+{
+    type T = T;
+}
+impl<T> Drop for HeapEvent<T>
+where
+    T: Send,
+{
+    fn drop(&mut self) {
+        // On drop, we need to coordinate with the `LocalWithTwoOwners` to ensure proper cleanup.
+        // The last of either the sender or receiver will clean up the event.
+
+        // SAFETY: Storage is automatically managed - as long as either sender/receiver
+        // are alive, we are guaranteed that the event is alive.
+        let event_wrapper = unsafe { self.event.as_ref() };
+
+        if event_wrapper.release_one() {
+            // This was the last reference - free the memory now.
+
+            // SAFETY: Yes, it really is the type we are claiming it to be - we made it!
+            drop(unsafe { Box::from_raw(self.event.as_ptr()) });
+        }
+    }
+}
 
 /// A sender that can send a single value through a thread-safe event.
 ///

@@ -22,7 +22,7 @@ use std::task::Waker;
 use crate::{BacktraceType, capture_backtrace};
 use crate::{
     Disconnected, EVENT_AWAITING, EVENT_BOUND, EVENT_DISCONNECTED, EVENT_SET, EVENT_UNBOUND,
-    ReflectiveT, Sealed,
+    LocalWithTwoOwners, ReflectiveT, Sealed,
 };
 
 /// A one-time event that can send and receive a value of type `T` on a single thread.
@@ -103,6 +103,7 @@ impl<T> LocalOnceEvent<T> {
     /// let event = LocalOnceEvent::<i32>::new();
     /// ```
     #[must_use]
+    #[inline]
     pub fn new() -> Self {
         Self {
             state: Cell::new(EVENT_UNBOUND),
@@ -129,6 +130,24 @@ impl<T> LocalOnceEvent<T> {
             _single_threaded: PhantomData,
             _requires_pinning: PhantomPinned,
         }
+    }
+
+    /// Creates a new heap-allocated single-threaded event, returning both the sender and receiver
+    /// for this event.
+    ///
+    /// The memory used by the event is automatically released when both endpoints are dropped.
+    #[must_use]
+    #[inline]
+    pub fn new_heap() -> (
+        LocalOnceSender<HeapLocalEvent<T>>,
+        LocalOnceReceiver<HeapLocalEvent<T>>,
+    ) {
+        let (sender_event, receiver_event) = HeapLocalEvent::new_pair();
+
+        (
+            LocalOnceSender::new(sender_event),
+            LocalOnceReceiver::new(receiver_event),
+        )
     }
 
     /// Returns both the sender and receiver for this event,
@@ -791,6 +810,62 @@ impl<T> Clone for PtrLocalEvent<T> {
 }
 impl<T> ReflectiveT for PtrLocalEvent<T> {
     type T = T;
+}
+
+/// An event stored on the heap, with automatically managed storage.
+///
+/// Only used in type names. Instances are created internally by [`LocalOnceEvent`].
+#[derive(Debug)]
+pub struct HeapLocalEvent<T> {
+    event: NonNull<LocalWithTwoOwners<LocalOnceEvent<T>>>,
+}
+
+impl<T> HeapLocalEvent<T> {
+    fn new_pair() -> (Self, Self) {
+        let event = NonNull::new(Box::into_raw(Box::new(LocalWithTwoOwners::new(
+            LocalOnceEvent::new_bound(),
+        ))))
+        .expect("freshly allocated Box cannot be null");
+
+        (Self { event }, Self { event })
+    }
+}
+
+impl<T> Sealed for HeapLocalEvent<T> {}
+impl<T> LocalEventRef<T> for HeapLocalEvent<T> {}
+impl<T> Deref for HeapLocalEvent<T> {
+    type Target = LocalOnceEvent<T>;
+
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: Storage is automatically managed - as long as either sender/receiver
+        // are alive, we are guaranteed that the event is alive.
+        unsafe { self.event.as_ref() }
+    }
+}
+impl<T> Clone for HeapLocalEvent<T> {
+    fn clone(&self) -> Self {
+        Self { event: self.event }
+    }
+}
+impl<T> ReflectiveT for HeapLocalEvent<T> {
+    type T = T;
+}
+impl<T> Drop for HeapLocalEvent<T> {
+    fn drop(&mut self) {
+        // On drop, we need to coordinate with the `LocalWithTwoOwners` to ensure proper cleanup.
+        // The last of either the sender or receiver will clean up the event.
+
+        // SAFETY: Storage is automatically managed - as long as either sender/receiver
+        // are alive, we are guaranteed that the event is alive.
+        let event_wrapper = unsafe { self.event.as_ref() };
+
+        if event_wrapper.release_one() {
+            // This was the last reference - free the memory now.
+
+            // SAFETY: Yes, it really is the type we are claiming it to be - we made it!
+            drop(unsafe { Box::from_raw(self.event.as_ptr()) });
+        }
+    }
 }
 
 /// A sender that can send a single value through a single-threaded event.
