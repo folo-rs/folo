@@ -39,6 +39,8 @@
 )]
 
 use std::hint::black_box;
+use std::mem::MaybeUninit;
+use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -69,8 +71,10 @@ fn entrypoint(c: &mut Criterion) {
     local_once_event_ref(&mut one_thread, &mut group, &allocs, &processor_time);
     local_once_event_rc(&mut one_thread, &mut group, &allocs, &processor_time);
     local_once_event_ptr(&mut one_thread, &mut group, &allocs, &processor_time);
+    local_once_event_in_place_ptr(&mut one_thread, &mut group, &allocs, &processor_time);
     once_event_arc(&mut one_thread, &mut group, &allocs, &processor_time);
     once_event_ptr(&mut one_thread, &mut group, &allocs, &processor_time);
+    once_event_in_place_ptr(&mut one_thread, &mut group, &allocs, &processor_time);
     pooled_local_once_event_ref(&mut one_thread, &mut group, &allocs, &processor_time);
     pooled_local_once_event_rc(&mut one_thread, &mut group, &allocs, &processor_time);
     pooled_local_once_event_ptr(&mut one_thread, &mut group, &allocs, &processor_time);
@@ -151,6 +155,39 @@ fn local_once_event_ptr(
         .execute_criterion_on(pool, group, "local_once_event_ptr");
 }
 
+fn local_once_event_in_place_ptr(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
+    Run::new()
+        .measure_resource_usage("local_once_event_in_place_ptr", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
+        })
+        .iter(|_| {
+            let mut event_storage = pin!(MaybeUninit::uninit());
+
+            // SAFETY: We keep the event alive until sender/receiver are done and then we have
+            // to properly drop the event.
+            let (sender, receiver) =
+                unsafe { LocalOnceEvent::<Payload>::new_in_place_by_ptr(event_storage.as_mut()) };
+
+            sender.send(42);
+            black_box(block_on(receiver).unwrap());
+
+            // SAFETY: We are just removing the Pin wrapper so we can drop it because the
+            // MaybeUninit type is not designed for pinned usage, so does not understand Pin.
+            let event_storage_ref = unsafe { event_storage.get_unchecked_mut() };
+
+            // SAFETY: We initialized it above and have dropped both sender and receiver now.
+            unsafe {
+                event_storage_ref.assume_init_drop();
+            }
+        })
+        .execute_criterion_on(pool, group, "local_once_event_in_place_ptr");
+}
+
 fn once_event_arc(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
@@ -194,6 +231,41 @@ fn once_event_ptr(
             drop(event);
         })
         .execute_criterion_on(pool, group, "once_event_ptr");
+}
+
+fn once_event_in_place_ptr(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
+    Run::new()
+        .measure_resource_usage("once_event_in_place_ptr", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
+        })
+        .iter(|_| {
+            let mut event_storage = pin!(MaybeUninit::uninit());
+
+            // SAFETY: We keep the event alive until sender/receiver are done and then we have
+            // to properly drop the event.
+            let (sender, receiver) =
+                unsafe { OnceEvent::<Payload>::new_in_place_by_ptr(event_storage.as_mut()) };
+
+            sender.send(42);
+            black_box(block_on(receiver).unwrap());
+
+            // We are required to keep the event alive until both sender and receiver are gone.
+
+            // SAFETY: We are just removing the Pin wrapper so we can drop it because the
+            // MaybeUninit type is not designed for pinned usage, so does not understand Pin.
+            let event_storage_ref = unsafe { event_storage.get_unchecked_mut() };
+
+            // SAFETY: We initialized it above and have dropped both sender and receiver now.
+            unsafe {
+                event_storage_ref.assume_init_drop();
+            }
+        })
+        .execute_criterion_on(pool, group, "once_event_in_place_ptr");
 }
 
 fn oneshot_channel(

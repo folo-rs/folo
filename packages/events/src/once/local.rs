@@ -483,6 +483,37 @@ impl<T> LocalOnceEvent<T> {
         )
     }
 
+    /// Initializes the event in-place at a pinned location and returns both the sender and
+    /// receiver for this event, connected by a raw pointer to the event.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that:
+    /// - The place the event is stored remains valid for the entire lifetime
+    ///   of the sender and receiver.
+    /// - The sender and receiver are dropped before the event is dropped.
+    /// - The event is eventually dropped by its owner.
+    #[must_use]
+    #[inline]
+    pub unsafe fn new_in_place_by_ptr(
+        place: Pin<&mut MaybeUninit<Self>>,
+    ) -> (
+        LocalOnceSender<PtrLocalEvent<T>>,
+        LocalOnceReceiver<PtrLocalEvent<T>>,
+    ) {
+        // SAFETY: We are not moving anything - in fact, there is nothing in there to move yet.
+        let place = unsafe { place.get_unchecked_mut() };
+
+        let event = place.write(Self::new_bound());
+
+        let event_ptr = NonNull::from(event);
+
+        (
+            LocalOnceSender::new(PtrLocalEvent { event: event_ptr }),
+            LocalOnceReceiver::new(PtrLocalEvent { event: event_ptr }),
+        )
+    }
+
     /// Uses the provided closure to inspect the backtrace of the current awaiter,
     /// if there is an awaiter and if backtrace capturing is enabled.
     ///

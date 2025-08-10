@@ -12,6 +12,7 @@
     reason = "No need for API documentation in benchmark code"
 )]
 
+use std::mem::MaybeUninit;
 use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -107,6 +108,28 @@ fn entrypoint(c: &mut Criterion) {
         );
 
     Run::new()
+        .measure_resource_usage("local_once_event_in_place_ptr", |measure| {
+            measure.allocs(&allocs)
+        })
+        .iter(|_| {
+            let mut event_storage = pin!(MaybeUninit::uninit());
+
+            // SAFETY: We keep the event alive until sender/receiver are done and then we have
+            // to properly drop the event. Sender/receiver go away immediately, we drop below.
+            drop(unsafe { LocalOnceEvent::<Payload>::new_in_place_by_ptr(event_storage.as_mut()) });
+
+            // SAFETY: We are just removing the Pin wrapper so we can drop it because the
+            // MaybeUninit type is not designed for pinned usage, so does not understand Pin.
+            let event_storage_ref = unsafe { event_storage.get_unchecked_mut() };
+
+            // SAFETY: We initialized it above and have dropped both sender and receiver now.
+            unsafe {
+                event_storage_ref.assume_init_drop();
+            }
+        })
+        .execute_criterion_on(&mut one_thread, &mut group, "local_once_event_in_place_ptr");
+
+    Run::new()
         .measure_resource_usage("once_event_ref", |measure| measure.allocs(&allocs))
         .iter(|_| {
             let event = OnceEvent::<Payload>::new();
@@ -167,6 +190,26 @@ fn entrypoint(c: &mut Criterion) {
             }
         })
         .execute_criterion_on(&mut one_thread, &mut group, "once_event_ptr_unchecked");
+
+    Run::new()
+        .measure_resource_usage("once_event_in_place_ptr", |measure| measure.allocs(&allocs))
+        .iter(|_| {
+            let mut event_storage = pin!(MaybeUninit::uninit());
+
+            // SAFETY: We keep the event alive until sender/receiver are done and then we have
+            // to properly drop the event. Sender/receiver go away immediately, we drop below.
+            drop(unsafe { OnceEvent::<Payload>::new_in_place_by_ptr(event_storage.as_mut()) });
+
+            // SAFETY: We are just removing the Pin wrapper so we can drop it because the
+            // MaybeUninit type is not designed for pinned usage, so does not understand Pin.
+            let event_storage_ref = unsafe { event_storage.get_unchecked_mut() };
+
+            // SAFETY: We initialized it above and have dropped both sender and receiver now.
+            unsafe {
+                event_storage_ref.assume_init_drop();
+            }
+        })
+        .execute_criterion_on(&mut one_thread, &mut group, "once_event_in_place_ptr");
 
     Run::new()
         .prepare_thread(|_| LocalOnceEventPool::<Payload>::new())
