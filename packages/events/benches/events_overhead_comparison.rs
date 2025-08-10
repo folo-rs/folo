@@ -120,7 +120,8 @@ fn entrypoint(c: &mut Criterion) {
         })
         .iter(|_| {
             let event = OnceEvent::<Payload>::new();
-            drop(event.bind_by_ref_unchecked());
+            // SAFETY: We know this is the first and only binding of this event
+            drop(unsafe { event.bind_by_ref_unchecked() });
         })
         .execute_criterion_on(&mut one_thread, &mut group, "once_event_ref_unchecked");
 
@@ -138,7 +139,8 @@ fn entrypoint(c: &mut Criterion) {
         })
         .iter(|_| {
             let event = Arc::new(OnceEvent::<Payload>::new());
-            drop(event.bind_by_arc_unchecked());
+            // SAFETY: We know this is the first and only binding of this event
+            drop(unsafe { event.bind_by_arc_unchecked() });
         })
         .execute_criterion_on(&mut one_thread, &mut group, "once_event_arc_unchecked");
 

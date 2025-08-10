@@ -497,18 +497,18 @@ impl<T> LocalOnceEvent<T> {
     }
 
     pub(crate) fn set(&self, result: T) {
-        let value = self.value.get();
+        let value_cell = self.value.get();
 
         // We can start by setting the value - this has to happen no matter what.
         // Everything else we do here is just to get the awaiter to come pick it up.
         //
-        // SAFETY: It is legal for the sender to write here because we know that nobody else will
+        // SAFETY: It is valid for the sender to write here because we know that nobody else will
         // be accessing this field at this time. This is guaranteed by:
         // * There is only one sender and it is single-threaded, so it cannot be used in parallel.
         // * The receiver will only access this field in the "Set" state, which can only be entered
         //   from later on in this method.
         unsafe {
-            value.write(MaybeUninit::new(result));
+            value_cell.write(MaybeUninit::new(result));
         }
 
         // A "set" operation is always a state increment. See `event_state.rs`.
@@ -517,16 +517,18 @@ impl<T> LocalOnceEvent<T> {
 
         match previous_state {
             EVENT_BOUND => {
+                // Current state: EVENT_SET
                 // There was nobody listening via the receiver - our work here is done.
             }
             EVENT_AWAITING => {
-                // There was someone listening via the receiver. We need to set the value
-                // and notify the awaiter that they can come back for the value now.
+                // Current state: EVENT_SIGNALING
+                // There was someone listening via the receiver. We need to
+                // notify the awaiter that they can come back for the value now.
 
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
                 // the type is single-threaded and does not let any references escape.
-                let awaiter = unsafe {
+                let awaiter_cell = unsafe {
                     self.awaiter
                         .get()
                         .as_mut()
@@ -535,7 +537,7 @@ impl<T> LocalOnceEvent<T> {
 
                 // We extract the waker and consider the field uninitialized again.
                 // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
-                let waker = unsafe { awaiter.assume_init_read() };
+                let waker = unsafe { awaiter_cell.assume_init_read() };
 
                 // Before sending the wake signal we must transition into `EVENT_SET` state, so
                 // as soon as it wakes up it can grab the result. Granted, as this specific type
@@ -567,14 +569,14 @@ impl<T> LocalOnceEvent<T> {
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
                 // the type is single-threaded and does not let any references escape.
-                let awaiter = unsafe {
+                let awaiter_cell = unsafe {
                     self.awaiter
                         .get()
                         .as_mut()
                         .expect("UnsafeCell pointer is never null")
                 };
 
-                awaiter.write(waker.clone());
+                awaiter_cell.write(waker.clone());
 
                 // The sender will wake us up when it has set the value.
                 self.state.set(EVENT_AWAITING);
@@ -608,14 +610,14 @@ impl<T> LocalOnceEvent<T> {
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
                 // the type is single-threaded and does not let any references escape.
-                let awaiter = unsafe {
+                let awaiter_cell = unsafe {
                     self.awaiter
                         .get()
                         .as_mut()
                         .expect("UnsafeCell pointer is never null")
                 };
 
-                awaiter.write(waker.clone());
+                awaiter_cell.write(waker.clone());
                 None
             }
             EVENT_DISCONNECTED => {
@@ -646,7 +648,7 @@ impl<T> LocalOnceEvent<T> {
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
                 // the type is single-threaded and does not let any references escape.
-                let awaiter = unsafe {
+                let awaiter_cell = unsafe {
                     self.awaiter
                         .get()
                         .as_mut()
@@ -655,7 +657,7 @@ impl<T> LocalOnceEvent<T> {
 
                 // We extract the waker and consider the field uninitialized again.
                 // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
-                let waker = unsafe { awaiter.assume_init_read() };
+                let waker = unsafe { awaiter_cell.assume_init_read() };
 
                 // Come and get it.
                 waker.wake();

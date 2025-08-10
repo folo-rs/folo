@@ -5,36 +5,27 @@
 
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
-use std::cell::Cell;
+use std::cell::{Cell, UnsafeCell};
 use std::future::Future;
+use std::hint::spin_loop;
 use std::marker::{PhantomData, PhantomPinned};
+use std::mem::{ManuallyDrop, MaybeUninit};
 use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(debug_assertions)]
+use std::sync::Mutex;
+use std::sync::atomic::{self, AtomicU8};
+use std::task;
 use std::task::Waker;
-use std::{mem, task};
 
 #[cfg(debug_assertions)]
-use crate::{BacktraceType, capture_backtrace};
-use crate::{Disconnected, ERR_POISONED_LOCK, ReflectiveTSend, Sealed, ValueKind};
-
-/// State of a thread-safe event.
-#[derive(Debug)]
-enum EventState<T> {
-    /// No value has been set yet, and no one is waiting.
-    NotSet,
-
-    /// No value has been set yet, but someone is waiting for it.
-    Awaiting(Waker),
-
-    /// A value has been set but nobody has yet started waiting.
-    Set(ValueKind<T>),
-
-    /// The value has been set and consumed.
-    Consumed,
-}
+use crate::{BacktraceType, ERR_POISONED_LOCK, capture_backtrace};
+use crate::{
+    Disconnected, EVENT_AWAITING, EVENT_BOUND, EVENT_DISCONNECTED, EVENT_SET, EVENT_SIGNALING,
+    EVENT_UNBOUND, ReflectiveTSend, Sealed,
+};
 
 /// A one-time event that can send and receive a value of type `T`, potentially across threads.
 ///
@@ -70,20 +61,35 @@ pub struct OnceEvent<T>
 where
     T: Send,
 {
-    state: Mutex<EventState<T>>,
+    /// The logical state of the event; see `event_state.rs`.
+    state: AtomicU8,
+
+    /// If `state` is `EVENT_AWAITING` or `EVENT_RESOLVING`, this field is initialized with the
+    /// waker of whoever most recently awaited the receiver. In other states, this field is not
+    /// initialized.
+    ///
+    /// We use `MaybeUninit` to minimize the storage and avoid an `Option` or enum overhead,
+    /// as we already track the presence via `state`.
+    ///
+    /// We use `UnsafeCell` because we are a synchronization primitive and
+    /// do our own synchronization.
+    awaiter: UnsafeCell<MaybeUninit<Waker>>,
+
+    /// If `state` is `EVENT_SET`, this field is initialized with the value that was sent by
+    /// the sender. In other states, this field is not initialized.
+    ///
+    /// We use `MaybeUninit` to minimize the storage and avoid an `Option` or enum overhead,
+    /// as we already track the presence via `state`.
+    ///
+    /// We use `UnsafeCell` because we are a synchronization primitive and
+    /// do our own synchronization.
+    value: UnsafeCell<MaybeUninit<T>>,
 
     // In debug builds, we save the backtrace of the most recent awaiter here. This will not be
     // cleared merely by exiting the `Awaiting` state, as even in the `Set` state there is value
     // in retaining the backtrace for debugging purposes.
     #[cfg(debug_assertions)]
     backtrace: Mutex<Option<BacktraceType>>,
-
-    // Our API contract requires that an event can only be bound once, so we have to check this
-    // because it is not feasible to create an API that can consume the event when creating the
-    // sender-receiver pair (all we have might be a shared reference to the event).
-    //
-    // This field is not used with pooled events - the pool ensures uniqueness.
-    is_bound: AtomicBool,
 
     // It is invalid to move this type once it has been pinned.
     _requires_pinning: PhantomPinned,
@@ -95,6 +101,8 @@ where
 {
     /// Creates a new thread-safe event.
     ///
+    /// The event must be bound to a sender-receiver pair to be used.
+    ///
     /// # Example
     ///
     /// ```rust
@@ -105,10 +113,26 @@ where
     #[must_use]
     pub fn new() -> Self {
         Self {
-            state: Mutex::new(EventState::NotSet),
+            state: AtomicU8::new(EVENT_UNBOUND),
+            awaiter: UnsafeCell::new(MaybeUninit::uninit()),
+            value: UnsafeCell::new(MaybeUninit::uninit()),
             #[cfg(debug_assertions)]
             backtrace: Mutex::new(None),
-            is_bound: AtomicBool::new(false),
+            _requires_pinning: PhantomPinned,
+        }
+    }
+
+    /// Creates a new thread-safe event that starts in the bound state.
+    ///
+    /// This is for internal use only - pooled events start in the bound state.
+    #[must_use]
+    pub(crate) fn new_bound() -> Self {
+        Self {
+            state: AtomicU8::new(EVENT_BOUND),
+            awaiter: UnsafeCell::new(MaybeUninit::uninit()),
+            value: UnsafeCell::new(MaybeUninit::uninit()),
+            #[cfg(debug_assertions)]
+            backtrace: Mutex::new(None),
             _requires_pinning: PhantomPinned,
         }
     }
@@ -159,7 +183,17 @@ where
     pub fn bind_by_ref_checked(
         &self,
     ) -> Option<(OnceSender<RefEvent<'_, T>>, OnceReceiver<RefEvent<'_, T>>)> {
-        if self.is_bound.swap(true, Ordering::Relaxed) {
+        // We use Relaxed because this does not affect any other state of the event.
+        if self
+            .state
+            .compare_exchange(
+                EVENT_UNBOUND,
+                EVENT_BOUND,
+                atomic::Ordering::Relaxed,
+                atomic::Ordering::Relaxed,
+            )
+            .is_err()
+        {
             return None;
         }
 
@@ -173,8 +207,10 @@ where
     /// connected by a shared reference to the event.
     ///
     /// This method assumes the event is not already bound and skips the check for performance.
-    /// If the event is already bound, the behavior is unspecified but will not cause memory
-    /// unsafety - it may result in panics when using the senders or receivers.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee the event is not already bound.
     ///
     /// # Example
     ///
@@ -187,11 +223,11 @@ where
     /// ```
     #[must_use]
     #[inline]
-    pub fn bind_by_ref_unchecked(
+    pub unsafe fn bind_by_ref_unchecked(
         &self,
     ) -> (OnceSender<RefEvent<'_, T>>, OnceReceiver<RefEvent<'_, T>>) {
-        // Mark as bound for consistency with other methods
-        self.is_bound.store(true, Ordering::Relaxed);
+        // We use Relaxed because this does not affect any other state of the event.
+        self.state.store(EVENT_BOUND, atomic::Ordering::Relaxed);
 
         (
             OnceSender::new(RefEvent { event: self }),
@@ -253,7 +289,17 @@ where
     pub fn bind_by_arc_checked(
         self: &Arc<Self>,
     ) -> Option<(OnceSender<ArcEvent<T>>, OnceReceiver<ArcEvent<T>>)> {
-        if self.is_bound.swap(true, Ordering::Relaxed) {
+        // We use Relaxed because this does not affect any other state of the event.
+        if self
+            .state
+            .compare_exchange(
+                EVENT_UNBOUND,
+                EVENT_BOUND,
+                atomic::Ordering::Relaxed,
+                atomic::Ordering::Relaxed,
+            )
+            .is_err()
+        {
             return None;
         }
 
@@ -271,10 +317,12 @@ where
     /// connected by an `Arc` to the event.
     ///
     /// This method assumes the event is not already bound and skips the check for performance.
-    /// If the event is already bound, the behavior is unspecified but will not cause memory
-    /// unsafety - it may result in panics when using the senders or receivers.
     ///
     /// This method requires the event to be wrapped in an [`Arc`] when called.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee the event is not already bound.
     ///
     /// # Example
     ///
@@ -289,11 +337,11 @@ where
     /// ```
     #[must_use]
     #[inline]
-    pub fn bind_by_arc_unchecked(
+    pub unsafe fn bind_by_arc_unchecked(
         self: &Arc<Self>,
     ) -> (OnceSender<ArcEvent<T>>, OnceReceiver<ArcEvent<T>>) {
-        // Mark as bound for consistency with other methods
-        self.is_bound.store(true, Ordering::Relaxed);
+        // We use Relaxed because this does not affect any other state of the event.
+        self.state.store(EVENT_BOUND, atomic::Ordering::Relaxed);
 
         (
             OnceSender::new(ArcEvent {
@@ -381,7 +429,17 @@ where
     pub unsafe fn bind_by_ptr_checked(
         self: Pin<&Self>,
     ) -> Option<(OnceSender<PtrEvent<T>>, OnceReceiver<PtrEvent<T>>)> {
-        if self.is_bound.swap(true, Ordering::Relaxed) {
+        // We use Relaxed because this does not affect any other state of the event.
+        if self
+            .state
+            .compare_exchange(
+                EVENT_UNBOUND,
+                EVENT_BOUND,
+                atomic::Ordering::Relaxed,
+                atomic::Ordering::Relaxed,
+            )
+            .is_err()
+        {
             return None;
         }
 
@@ -397,14 +455,13 @@ where
     /// connected by a raw pointer to the event.
     ///
     /// This method assumes the event is not already bound and skips the check for performance.
-    /// If the event is already bound, the behavior is unspecified but will not cause memory
-    /// unsafety - it may result in panics when using the senders or receivers.
     ///
     /// This method requires the event to be pinned when called.
     ///
     /// # Safety
     ///
     /// The caller must ensure that:
+    /// - The event is not already bound.
     /// - The event remains alive and pinned for the entire lifetime of the sender and receiver.
     /// - The sender and receiver are dropped before the event is dropped.
     ///
@@ -422,8 +479,8 @@ where
     pub unsafe fn bind_by_ptr_unchecked(
         self: Pin<&Self>,
     ) -> (OnceSender<PtrEvent<T>>, OnceReceiver<PtrEvent<T>>) {
-        // Mark as bound for consistency with other methods
-        self.is_bound.store(true, Ordering::Relaxed);
+        // We use Relaxed because this does not affect any other state of the event.
+        self.state.store(EVENT_BOUND, atomic::Ordering::Relaxed);
 
         let event_ptr = NonNull::from(self.get_ref());
 
@@ -447,37 +504,70 @@ where
     }
 
     pub(crate) fn set(&self, result: T) {
-        let mut waker: Option<Waker> = None;
+        let value_cell = self.value.get();
 
-        {
-            let mut state = self.state.lock().expect(ERR_POISONED_LOCK);
-
-            match &*state {
-                EventState::NotSet => {
-                    *state = EventState::Set(ValueKind::Real(result));
-                }
-                EventState::Awaiting(_) => {
-                    let previous_state =
-                        mem::replace(&mut *state, EventState::Set(ValueKind::Real(result)));
-
-                    match previous_state {
-                        EventState::Awaiting(w) => waker = Some(w),
-                        _ => unreachable!("we are re-matching an already matched pattern"),
-                    }
-                }
-                EventState::Set(_) => {
-                    panic!("result already set");
-                }
-                EventState::Consumed => {
-                    panic!("result already consumed");
-                }
-            }
+        // We can start by setting the value - this has to happen no matter what.
+        // Everything else we do here is just to get the awaiter to come pick it up.
+        //
+        // SAFETY: It is valid for the sender to write here because we know that nobody else will
+        // be accessing this field at this time. This is guaranteed by:
+        // * There is only one sender and it is !Sync, so it cannot be used in parallel.
+        // * The receiver will only access this field in the "Set" state, which can only be entered
+        //   from later on in this method.
+        unsafe {
+            value_cell.write(MaybeUninit::new(result));
         }
 
-        // We perform the wake-up outside the lock to avoid unnecessary contention if the receiver
-        // of the result wakes up instantly and we have not released our lock yet.
-        if let Some(waker) = waker {
-            waker.wake();
+        // A "set" operation is always a state increment. See `event_state.rs`.
+        // We use `Release` ordering for the write because we are
+        // releasing the synchronization block of `value`.
+        let previous_state = self.state.fetch_add(1, atomic::Ordering::Release);
+
+        match previous_state {
+            EVENT_BOUND => {
+                // Current state: EVENT_SET
+                // There was nobody listening via the receiver - our work here is done.
+            }
+            EVENT_AWAITING => {
+                // Current state: EVENT_SIGNALING
+                // There was someone listening via the receiver. We need to
+                // notify the awaiter that they can come back for the value now.
+
+                // We need to acquire the synchronization block for the `awaiter`.
+                atomic::fence(atomic::Ordering::Acquire);
+
+                // SAFETY: The only other potential references to the field are other short-lived
+                // references in this type, which cannot exist at the moment because
+                // we are in the `EVENT_SIGNALING` state that acts as a mutex to block access
+                // to the `awaiter` field.
+                let awaiter_cell = unsafe {
+                    self.awaiter
+                        .get()
+                        .as_mut()
+                        .expect("UnsafeCell pointer is never null")
+                };
+
+                // We extract the waker and consider the field uninitialized again.
+                // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
+                let waker = unsafe { awaiter_cell.assume_init_read() };
+
+                // Before we send the wake signal we must transition into the `EVENT_SET` state
+                // so that the receiver can directly pick up the result when it comes back.
+                //
+                // We use Release ordering because we are releasing the synchronization block of
+                // the `awaiter`. Note that `value` was already released by `fetch_add()` above.
+                self.state.store(EVENT_SET, atomic::Ordering::Release);
+
+                // Come and get it.
+                //
+                // As the event is multithreaded, the receiver may already have returned to us
+                // before we send this wake signal - that is fine. If that happens, this signal
+                // is simply a no-op.
+                waker.wake();
+            }
+            _ => {
+                unreachable!("unreachable OnceEvent state on set: {previous_state}");
+            }
         }
     }
 
@@ -489,55 +579,275 @@ where
             .expect(ERR_POISONED_LOCK)
             .replace(capture_backtrace());
 
-        let mut state = self.state.lock().expect(ERR_POISONED_LOCK);
-
-        match &*state {
-            EventState::NotSet => {
-                *state = EventState::Awaiting(waker.clone());
-                None
+        // We use Acquire because we are (depending on the state) acquiring the synchronization
+        // block for `value` and/or `awaiter`.
+        match self.state.load(atomic::Ordering::Acquire) {
+            EVENT_BOUND => self.poll_bound(waker),
+            EVENT_SET => Some(Ok(self.poll_set())),
+            EVENT_AWAITING => self.poll_awaiting(waker),
+            EVENT_SIGNALING => self.poll_signaling(waker),
+            EVENT_DISCONNECTED => {
+                // There is no result coming, ever! This is the end.
+                Some(Err(Disconnected))
             }
-            EventState::Awaiting(_) => {
-                // This is permitted by the Future API contract, in which case only the waker
-                // from the most recent poll should be woken up when the result is available.
-                *state = EventState::Awaiting(waker.clone());
-                None
-            }
-            EventState::Set(_) => {
-                let previous_state = mem::replace(&mut *state, EventState::Consumed);
-
-                match previous_state {
-                    EventState::Set(result) => match result {
-                        ValueKind::Real(value) => Some(Ok(value)),
-                        ValueKind::Disconnected => Some(Err(Disconnected)),
-                    },
-                    _ => unreachable!("we are re-matching an already matched pattern"),
-                }
-            }
-            EventState::Consumed => {
-                // We do not want to keep a copy of the result around, so we can only return it once.
-                // The futures API contract allows us to panic in this situation.
-                panic!("event polled after result was already consumed");
+            state => {
+                unreachable!("unreachable OnceEvent state on poll: {state}");
             }
         }
     }
 
-    pub(crate) fn sender_dropped(&self) {
-        let mut state = self.state.lock().expect(ERR_POISONED_LOCK);
+    /// `poll()` impl for `EVENT_BOUND` state.
+    ///
+    /// Assumes acquired synchronization block for `awaiter`.
+    fn poll_bound(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
+        // The sender has not yet set any value, so we will have to wait.
 
-        match &*state {
-            EventState::NotSet => {
-                *state = EventState::Set(ValueKind::Disconnected);
+        // SAFETY: The only other potential references to the field are other short-lived
+        // references in this type, which cannot exist at the moment because the receiver
+        // is !Sync so cannot be used in parallel, while the sender is only allowed to
+        // access this field in states that explicitly allow it, which we can only be
+        // entered by the receiver in this method.
+        let awaiter_cell = unsafe {
+            self.awaiter
+                .get()
+                .as_mut()
+                .expect("UnsafeCell pointer is never null")
+        };
+
+        awaiter_cell.write(waker.clone());
+
+        // The sender is concurrently racing us to either EVENT_SET or EVENT_DISCONNECTED.
+        // We use Release ordering on success because we are releasing the synchronization
+        // block for `awaiter`.
+        // We use Acquire ordering in failure because on state transition, we acquire the
+        // synchronization block for `awaiter` and `value`.
+        match self.state.compare_exchange(
+            EVENT_BOUND,
+            EVENT_AWAITING,
+            atomic::Ordering::Release,
+            atomic::Ordering::Acquire,
+        ) {
+            Ok(_) => {
+                // We successfully transitioned to the EVENT_AWAITING state.
+                // The sender will wake us up when it sets the value.
+                None
             }
-            EventState::Awaiting(_) => {
-                let previous_state =
-                    mem::replace(&mut *state, EventState::Set(ValueKind::Disconnected));
+            Err(EVENT_SET) => {
+                // The sender has set the value while we were doing our thing.
+                // We know that the sender will have gone away by this point.
+                // We need to clean up our awaiter and pick up the value.
 
-                match previous_state {
-                    EventState::Awaiting(waker) => waker.wake(),
-                    _ => unreachable!("we are re-matching an already matched pattern"),
+                // SAFETY: The sender is gone - there is nobody else who might be touching
+                // the event anymore, we are essentially in a single-threaded mode now.
+                // We also just set the value there previously and the event
+                // has undergone a transition that could not have affected this value.
+                unsafe {
+                    self.destroy_awaiter();
                 }
+
+                Some(Ok(self.poll_set()))
             }
-            _ => {}
+            Err(EVENT_DISCONNECTED) => {
+                // The sender was dropped without setting the event.
+                // We need to clean up our awaiter and return an error.
+
+                // SAFETY: The sender is gone - there is nobody else who might be touching
+                // the event anymore, we are essentially in a single-threaded mode now.
+                // We also just set the value there previously and the event
+                // has undergone a transition that could not have affected this value.
+                unsafe {
+                    self.destroy_awaiter();
+                }
+
+                Some(Err(Disconnected))
+            }
+            Err(state) => {
+                unreachable!(
+                    "unreachable OnceEvent state on poll state transition that followed EVENT_BOUND: {state}"
+                );
+            }
+        }
+    }
+
+    /// `poll()` impl for `EVENT_SET` state.
+    ///
+    /// Assumes acquired synchronization block for `value`.
+    fn poll_set(&self) -> T {
+        // The sender has delivered a value and we can complete the event.
+        // We know that the sender will have gone away by this point.
+
+        // SAFETY: The sender is gone - there is nobody else who might be touching
+        // the event anymore, we are essentially in a single-threaded mode now.
+        let value_cell = unsafe {
+            self.value
+                .get()
+                .as_mut()
+                .expect("UnsafeCell pointer is never null")
+        };
+
+        // We extract the value and consider the cell uninitialized.
+        //
+        // SAFETY: We were in EVENT_SET which guarantees there is a value in there.
+        unsafe { value_cell.assume_init_read() }
+    }
+
+    /// `poll()` impl for `EVENT_AWAITING` state.
+    ///
+    /// Assumes acquired synchronization block for `awaiter`.
+    fn poll_awaiting(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
+        // We are re-polling after previously starting a wait. This is fine
+        // and we just need to clean up the previous waker, replacing it with
+        // a new one.
+
+        // The danger here is that the sender may be, at the same time, taking the old
+        // waiter and using it. We cannot touch the `awaiter` field right now, as we do
+        // not have exclusive access. Instead, we must first transition back into the
+        // `EVENT_BOUND` state, then replace the awaiter, then transition back into the
+        // `EVENT_AWAITING` state. This way the sender will not do anything invalid.
+        // Each state transition is, of course, a potential race that we need to care for.
+
+        // We use Relaxed on both success and failure because we do not yet change
+        // externally visible state, merely continue to use our already acquired `awaiter`
+        // field that purely sender-side transitions cannot acquire on their own.
+        match self.state.compare_exchange(
+            EVENT_AWAITING,
+            EVENT_BOUND,
+            atomic::Ordering::Relaxed,
+            atomic::Ordering::Relaxed,
+        ) {
+            Ok(_) => {
+                // We have successfully transitioned into EVENT_BOUND.
+                // We must destroy the old awaiter and then act as if we were never in
+                // EVENT_AWAITING in the first place, going through the EVENT_BOUND path.
+
+                // SAFETY: We have entered the `EVENT_BOUND` state which makes it invalid
+                // for the sender to touch `awaiter`. The receiver is !Sync, so we have
+                // the only reference here.
+                // We also just came from `EVENT_AWAITING` which guarantees there is an
+                // awaiter in the cell as we are the only one allowed to touch the field.
+                unsafe {
+                    self.destroy_awaiter();
+                }
+
+                // Now we go back into the normal `EVENT_BOUND` path.
+                self.poll_bound(waker)
+            }
+            Err(EVENT_SET) => {
+                // The sender has transitioned the event into EVENT_SET while we were
+                // doing our thing. This is fine - we can destroy the old awaiter and
+                // simply continue as if we were never in EVENT_AWAITING, going through
+                // the EVENT_SET path instead.
+
+                // SAFETY: We have entered the `EVENT_SET` state which makes it invalid
+                // for the sender to touch `awaiter`. The receiver is !Sync, so we have
+                // the only reference here.
+                // We also just came from `EVENT_AWAITING` which guarantees there is an
+                // awaiter in the cell as we are the only one allowed to touch the field.
+                unsafe {
+                    self.destroy_awaiter();
+                }
+
+                // Now we go back into the normal `EVENT_SET` path.
+                Some(Ok(self.poll_set()))
+            }
+            Err(EVENT_SIGNALING) => {
+                // The sender is in the middle of a state transition. It is using the old
+                // waker, so we cannot touch it any more. We really cannot do anything here
+                // except wait for the sender to complete its state transition into
+                // EVENT_SET or EVENT_DISCONNECTED.
+
+                self.poll_signaling(waker)
+            }
+            Err(state) => {
+                unreachable!(
+                    "unreachable OnceEvent state on poll state transition that followed EVENT_AWAITING: {state}"
+                );
+            }
+        }
+    }
+
+    /// `poll()` impl for `EVENT_SIGNALING` state.
+    fn poll_signaling(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
+        // This is pretty much a mutex - we are locked out of touching the event state until
+        // the sender completes its state transition into either EVENT_SET or EVENT_DISCONNECTED.
+
+        while self.state.load(atomic::Ordering::Relaxed) == EVENT_SIGNALING {
+            // The sender-side transition is just a few instructions,
+            // which should be near-instantaneous so we just spin.
+            spin_loop();
+        }
+
+        // After the sender-side transition, we go back to the start and repeat the entire poll.
+        self.poll(waker)
+    }
+
+    /// Drops the current awaiter.
+    ///
+    /// # Safety
+    ///
+    /// Assumes acquired synchronization block for `awaiter`.
+    /// Assumes there is a value in `awaiter`.
+    unsafe fn destroy_awaiter(&self) {
+        // SAFETY: Forwarding guarantees from the caller.
+        let awaiter_cell = unsafe {
+            self.awaiter
+                .get()
+                .as_mut()
+                .expect("UnsafeCell pointer is never null")
+        };
+
+        // SAFETY: Forwarding guarantees from the caller.
+        unsafe {
+            awaiter_cell.assume_init_drop();
+        }
+    }
+
+    pub(crate) fn sender_dropped_without_set(&self) {
+        // We use Relaxed because we use fences to synchronize below.
+        let previous_state = self
+            .state
+            .swap(EVENT_DISCONNECTED, atomic::Ordering::Relaxed);
+
+        match previous_state {
+            EVENT_BOUND => {
+                // There was nobody listening via the receiver - our work here is done.
+            }
+            EVENT_AWAITING => {
+                // There was someone listening via the receiver. We need to
+                // notify the awaiter that they can come back for the disconnect signal now.
+
+                // We need to acquire the synchronization block for the `awaiter`.
+                atomic::fence(atomic::Ordering::Acquire);
+
+                // Note that we do not need to go into the `EVENT_SIGNALING` state here
+                // because the receiver will never set a new awaiter in the `EVENT_DISCONNECTED`
+                // state.
+
+                // SAFETY: The only other potential references to the field are other short-lived
+                // references in this type, which cannot exist at the moment because
+                // we are in the `EVENT_SIGNALING` state that acts as a mutex to block access
+                // to the `awaiter` field.
+                let awaiter_cell = unsafe {
+                    self.awaiter
+                        .get()
+                        .as_mut()
+                        .expect("UnsafeCell pointer is never null")
+                };
+
+                // We extract the waker and consider the field uninitialized again.
+                // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
+                let waker = unsafe { awaiter_cell.assume_init_read() };
+
+                // Come and get it.
+                //
+                // As the event is multithreaded, the receiver may already have returned to us
+                // before we send this wake signal - that is fine. If that happens, this signal
+                // is simply a no-op.
+                waker.wake();
+            }
+            _ => {
+                unreachable!("unreachable OnceEvent state on disconnect: {previous_state}");
+            }
         }
     }
 }
@@ -550,6 +860,9 @@ where
         Self::new()
     }
 }
+
+// SAFETY: We are a synchronization primitive, so we do our own synchronization.
+unsafe impl<T: Send> Sync for OnceEvent<T> {}
 
 /// Enables a sender or receiver to reference the event that connects them.
 ///
@@ -720,7 +1033,10 @@ where
     /// ```
     #[inline]
     pub fn send(self, value: E::T) {
-        self.event_ref.set(value);
+        // Once we call set(), we no longer need to call the drop logic.
+        let this = ManuallyDrop::new(self);
+
+        this.event_ref.set(value);
     }
 }
 
@@ -730,7 +1046,7 @@ where
 {
     #[inline]
     fn drop(&mut self) {
-        self.event_ref.sender_dropped();
+        self.event_ref.sender_dropped_without_set();
     }
 }
 
@@ -843,8 +1159,8 @@ mod tests {
         with_watchdog(|| {
             futures::executor::block_on(async {
                 let event = OnceEvent::<i32>::new();
-                // We know this is the first and only binding of this event
-                let (sender, receiver) = event.bind_by_ref_unchecked();
+                // SAFETY: We know this is the first and only binding of this event
+                let (sender, receiver) = unsafe { event.bind_by_ref_unchecked() };
 
                 sender.send(42);
                 let value = receiver.await.unwrap();
@@ -912,8 +1228,8 @@ mod tests {
     fn event_by_arc_unchecked_works() {
         with_watchdog(|| {
             let event = Arc::new(OnceEvent::<String>::new());
-            // We know this is the first and only binding of this event
-            let (sender, receiver) = event.bind_by_arc_unchecked();
+            // SAFETY: We know this is the first and only binding of this event
+            let (sender, receiver) = unsafe { event.bind_by_arc_unchecked() };
 
             sender.send("Hello from Arc unchecked".to_string());
             let value = futures::executor::block_on(receiver).unwrap();

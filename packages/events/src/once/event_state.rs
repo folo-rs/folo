@@ -12,8 +12,6 @@
 //!                 we transition into the "set" state from this state, at which point the receiver
 //!                 is welcome to receive the payload.
 //! 5 - disconnected - the sender was dropped without setting the event.
-//! 6 - consumed - in debug builds, we set this state after both sender and receiver are done;
-//!                we never expect this state to be seen but have it here just in case.
 //!
 //! A key optimization is that the crucial transitions of the sender are a simple `+= 1` operation:
 //!
@@ -28,5 +26,3 @@ pub(crate) const EVENT_SET: u8 = 2;
 pub(crate) const EVENT_AWAITING: u8 = 3;
 pub(crate) const EVENT_SIGNALING: u8 = 4;
 pub(crate) const EVENT_DISCONNECTED: u8 = 5;
-#[cfg(debug_assertions)]
-pub(crate) const EVENT_CONSUMED: u8 = 6;
