@@ -398,10 +398,16 @@ impl<'a, ThreadState, IterState> ResourceUsageExt<'a, ThreadState>
 
 #[cfg(test)]
 mod tests {
+    use std::sync::LazyLock;
+
     use many_cpus::ProcessorSet;
+    use new_zealand::nz;
 
     use super::ResourceUsageExt;
     use crate::{Run, ThreadPool};
+
+    static FOUR_PROCESSORS: LazyLock<Option<ProcessorSet>> =
+        LazyLock::new(|| ProcessorSet::builder().take(nz!(4)));
 
     #[test]
     fn module_loads() {
@@ -621,5 +627,68 @@ mod tests {
         // Verify that the session recorded the operation
         let report = allocs.to_report();
         assert!(!report.is_empty());
+    }
+
+    #[test]
+    #[cfg(all(not(miri), feature = "alloc_tracker"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
+    fn create_resource_usage_state_factory_divides_iterations_correctly() {
+        // Skip test if there's only one processor to avoid division by 1 (no effect)
+        let Some(processors) = FOUR_PROCESSORS.as_ref() else {
+            println!("Skipping test create_resource_usage_state_factory_divides_iterations_correctly: not enough processors");
+            return;
+        };
+
+        let allocs = alloc_tracker::Session::new();
+        let mut pool = ThreadPool::new(processors);
+
+        // Each thread will execute 1000 iterations, but the allocation tracker should 
+        // record the iterations as 1000/4 = 250 per thread to get correct averages
+        let iterations = 1000_u64;
+        #[expect(
+            clippy::integer_division,
+            reason = "testing the exact division behavior we want to verify"
+        )]
+        let expected_iterations_per_thread = iterations / pool.thread_count().get() as u64;
+
+        let results = Run::new()
+            .measure_resource_usage("iteration_division_test", |measure| measure.allocs(&allocs))
+            .iter(|_| {
+                // For this test, we don't need to actually allocate since we're just 
+                // testing the iteration division logic, not the allocation tracking itself
+                std::hint::black_box(42);
+            })
+            .execute_on(&mut pool, iterations);
+
+        // Verify that we got results back
+        assert!(results.measure_outputs().count() > 0);
+
+        // Verify that allocation tracking worked (even if no allocations happened)
+        for output in results.measure_outputs() {
+            assert!(output.allocs().is_some());
+        }
+
+        // The key test: Verify that the allocation tracker got the divided iteration count
+        // rather than the full iteration count. This ensures proper average calculations.
+        let report = allocs.to_report();
+        assert!(!report.is_empty());
+        
+        let operations: Vec<_> = report.operations().collect();
+        let (_operation_name, operation_stats) = operations
+            .iter()
+            .find(|(name, _)| *name == "iteration_division_test")
+            .expect("Should find our test operation");
+        
+        // Each thread should report the divided iteration count, not the full count
+        // With 4 threads, total tracked iterations should be 4 * (1000/4) = 1000, not 4000
+        let total_tracked_iterations = operation_stats.total_iterations();
+        let expected_total_tracked_iterations = pool.thread_count().get() as u64 * expected_iterations_per_thread;
+        
+        assert_eq!(total_tracked_iterations, expected_total_tracked_iterations,
+            "The create_resource_usage_state_factory should divide iterations per thread \
+             to avoid inflating the iteration count. Expected {expected_total_tracked_iterations} iterations tracked, got {total_tracked_iterations}");
+
+        // Since we didn't allocate, we expect 0 mean, which verifies our test setup is working
+        let mean_bytes = operation_stats.mean();
+        assert_eq!(mean_bytes, 0, "Expected 0 mean bytes since no allocations occurred, got {mean_bytes}");
     }
 }
