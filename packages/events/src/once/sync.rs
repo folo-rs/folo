@@ -38,7 +38,7 @@ use crate::{
 /// To reuse event resources for many operations and avoid constantly recreating events, use
 /// [`OnceEventPool`][crate::OnceEventPool].
 ///
-/// For single-threaded usage, see [`OnceEvent`][crate::OnceEvent] which has
+/// For single-threaded usage, see [`LocalOnceEvent`][crate::LocalOnceEvent] which has
 /// lower overhead.
 ///
 /// # Example
