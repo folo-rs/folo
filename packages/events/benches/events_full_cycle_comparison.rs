@@ -72,9 +72,11 @@ fn entrypoint(c: &mut Criterion) {
     local_once_event_rc(&mut one_thread, &mut group, &allocs, &processor_time);
     local_once_event_ptr(&mut one_thread, &mut group, &allocs, &processor_time);
     local_once_event_in_place_ptr(&mut one_thread, &mut group, &allocs, &processor_time);
+    local_once_event_managed(&mut one_thread, &mut group, &allocs, &processor_time);
     once_event_arc(&mut one_thread, &mut group, &allocs, &processor_time);
     once_event_ptr(&mut one_thread, &mut group, &allocs, &processor_time);
     once_event_in_place_ptr(&mut one_thread, &mut group, &allocs, &processor_time);
+    once_event_managed(&mut one_thread, &mut group, &allocs, &processor_time);
     pooled_local_once_event_ref(&mut one_thread, &mut group, &allocs, &processor_time);
     pooled_local_once_event_rc(&mut one_thread, &mut group, &allocs, &processor_time);
     pooled_local_once_event_ptr(&mut one_thread, &mut group, &allocs, &processor_time);
@@ -188,6 +190,25 @@ fn local_once_event_in_place_ptr(
         .execute_criterion_on(pool, group, "local_once_event_in_place_ptr");
 }
 
+fn local_once_event_managed(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
+    Run::new()
+        .measure_resource_usage("local_once_event_managed", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
+        })
+        .iter(|_| {
+            let (sender, receiver) = LocalOnceEvent::<Payload>::new_managed();
+
+            sender.send(42);
+            black_box(block_on(receiver).unwrap());
+        })
+        .execute_criterion_on(pool, group, "local_once_event_managed");
+}
+
 fn once_event_arc(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
@@ -266,6 +287,25 @@ fn once_event_in_place_ptr(
             }
         })
         .execute_criterion_on(pool, group, "once_event_in_place_ptr");
+}
+
+fn once_event_managed(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
+    Run::new()
+        .measure_resource_usage("once_event_managed", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
+        })
+        .iter(|_| {
+            let (sender, receiver) = OnceEvent::<Payload>::new_managed();
+
+            sender.send(42);
+            black_box(block_on(receiver).unwrap());
+        })
+        .execute_criterion_on(pool, group, "once_event_managed");
 }
 
 fn oneshot_channel(

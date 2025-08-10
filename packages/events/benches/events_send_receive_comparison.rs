@@ -64,8 +64,10 @@ fn entrypoint(c: &mut Criterion) {
     local_once_event_ref_st(&mut one_thread, &mut group, &allocs, &processor_time);
     local_once_event_rc_st(&mut one_thread, &mut group, &allocs, &processor_time);
     local_once_event_ptr_st(&mut one_thread, &mut group, &allocs, &processor_time);
+    local_once_event_managed_st(&mut one_thread, &mut group, &allocs, &processor_time);
     once_event_arc_st(&mut one_thread, &mut group, &allocs, &processor_time);
     once_event_ptr_st(&mut one_thread, &mut group, &allocs, &processor_time);
+    once_event_managed_st(&mut one_thread, &mut group, &allocs, &processor_time);
     pooled_local_once_event_ref_st(&mut one_thread, &mut group, &allocs, &processor_time);
     pooled_local_once_event_rc_st(&mut one_thread, &mut group, &allocs, &processor_time);
     pooled_local_once_event_ptr_st(&mut one_thread, &mut group, &allocs, &processor_time);
@@ -84,6 +86,7 @@ fn entrypoint(c: &mut Criterion) {
 
         once_event_arc_mt(two_threads, &mut group, &allocs, &processor_time);
         once_event_ptr_mt(two_threads, &mut group, &allocs, &processor_time);
+        once_event_managed_mt(two_threads, &mut group, &allocs, &processor_time);
         pooled_once_event_ref_mt(two_threads, &mut group, &allocs, &processor_time);
         pooled_once_event_arc_mt(two_threads, &mut group, &allocs, &processor_time);
         pooled_once_event_ptr_mt(two_threads, &mut group, &allocs, &processor_time);
@@ -132,6 +135,54 @@ fn once_event_arc_mt(
                     }
                 })
                 .measure_resource_usage("once_event_arc_mt", |measure| {
+                    measure.allocs(allocs).processor_time(processor_time)
+                })
+                .iter(|mut args| {
+                    let (sender, receiver) = args.take_iter_state();
+
+                    if let Some(sender) = sender {
+                        sender.send(42);
+                    } else if let Some(receiver) = receiver {
+                        black_box(block_on(receiver).unwrap());
+                    }
+                })
+                .execute_on(pool, iters)
+                .mean_duration()
+        });
+    });
+}
+
+fn once_event_managed_mt(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
+    group.bench_function("once_event_managed", |b| {
+        b.iter_custom(|iters| {
+            let mut senders = Vec::with_capacity(usize::try_from(iters).unwrap());
+            let mut receivers = Vec::with_capacity(usize::try_from(iters).unwrap());
+
+            for _ in 0..iters {
+                let (sender, receiver) = OnceEvent::<Payload>::new_managed();
+                senders.push(sender);
+                receivers.push(receiver);
+            }
+
+            let senders = Mutex::new(senders);
+            let receivers = Mutex::new(receivers);
+
+            Run::new()
+                // Group 0 sends, group 1 receives.
+                .groups(nz!(2))
+                .prepare_iter(|args| {
+                    if args.meta().group_index() == 0 {
+                        (Some(senders.lock().unwrap().pop().unwrap()), None)
+                    } else {
+                        (None, Some(receivers.lock().unwrap().pop().unwrap()))
+                    }
+                })
+                .measure_resource_usage("once_event_managed_mt", |measure| {
                     measure.allocs(allocs).processor_time(processor_time)
                 })
                 .iter(|mut args| {
@@ -533,6 +584,26 @@ fn local_once_event_ptr_st(
         .execute_criterion_on(pool, group, "local_once_event_ptr");
 }
 
+fn local_once_event_managed_st(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
+    Run::new()
+        .prepare_iter(|_| LocalOnceEvent::<Payload>::new_managed())
+        .measure_resource_usage("local_once_event_managed", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
+        })
+        .iter(|mut args| {
+            let (sender, receiver) = args.take_iter_state();
+
+            sender.send(42);
+            black_box(block_on(receiver).unwrap());
+        })
+        .execute_criterion_on(pool, group, "local_once_event_managed");
+}
+
 fn once_event_arc_st(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
@@ -586,6 +657,26 @@ fn once_event_ptr_st(
             drop(event);
         })
         .execute_criterion_on(pool, group, "once_event_ptr");
+}
+
+fn once_event_managed_st(
+    pool: &mut ThreadPool,
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    allocs: &Session,
+    processor_time: &TimeSession,
+) {
+    Run::new()
+        .prepare_iter(|_| OnceEvent::<Payload>::new_managed())
+        .measure_resource_usage("once_event_managed_st", |measure| {
+            measure.allocs(allocs).processor_time(processor_time)
+        })
+        .iter(|mut args| {
+            let (sender, receiver) = args.take_iter_state();
+
+            sender.send(42);
+            black_box(block_on(receiver).unwrap());
+        })
+        .execute_criterion_on(pool, group, "once_event_managed");
 }
 
 fn oneshot_channel_st(

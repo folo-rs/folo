@@ -108,6 +108,15 @@ fn entrypoint(c: &mut Criterion) {
         );
 
     Run::new()
+        .measure_resource_usage("local_once_event_managed", |measure| measure.allocs(&allocs))
+        .iter(|_| {
+            let (sender, receiver) = LocalOnceEvent::<Payload>::new_managed();
+            drop(sender);
+            drop(receiver);
+        })
+        .execute_criterion_on(&mut one_thread, &mut group, "local_once_event_managed");
+
+    Run::new()
         .measure_resource_usage("local_once_event_in_place_ptr", |measure| {
             measure.allocs(&allocs)
         })
@@ -190,6 +199,15 @@ fn entrypoint(c: &mut Criterion) {
             }
         })
         .execute_criterion_on(&mut one_thread, &mut group, "once_event_ptr_unchecked");
+
+    Run::new()
+        .measure_resource_usage("once_event_managed", |measure| measure.allocs(&allocs))
+        .iter(|_| {
+            let (sender, receiver) = OnceEvent::<Payload>::new_managed();
+            drop(sender);
+            drop(receiver);
+        })
+        .execute_criterion_on(&mut one_thread, &mut group, "once_event_managed");
 
     Run::new()
         .measure_resource_usage("once_event_in_place_ptr", |measure| measure.allocs(&allocs))
