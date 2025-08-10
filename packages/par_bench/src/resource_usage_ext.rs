@@ -300,6 +300,37 @@ impl ResourceUsageState {
     }
 }
 
+/// Creates a resource usage state factory function for the given builder and operation name.
+///
+/// This function handles the calculation of per-thread iterations to avoid double-counting
+/// in parallel benchmark scenarios.
+fn create_resource_usage_state_factory<'a, ThreadState>(
+    builder: ResourceUsageMeasureBuilder<'a>,
+    operation_name: &'a str,
+) -> impl Fn(crate::args::MeasureWrapperBegin<'_, ThreadState>) -> ResourceUsageState + 'a {
+    move |args| {
+        // NB! As we are working with parallel benchmarking, we need to ensure we count
+        // each GLOBAL iteration for comparable results. The measurement wrapper,
+        // however is LOCAL to each thread. We would multi-count iterations if we just
+        // used this as-is (with 4 threads, we would count 4x iterations).
+        //
+        // We fixup this with a simple division to offset it back again.
+        // Ensure we never get 0 iterations by using max(1, division_result).
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "NonZero eliminates division by zero"
+        )]
+        #[expect(
+            clippy::integer_division,
+            reason = "we accept imperfect accuracy - typical iteration counts are high enough for it not to matter"
+        )]
+        let iterations =
+            (args.meta().iterations() / args.meta().thread_count().get() as u64).max(1);
+
+        ResourceUsageState::new(&builder, operation_name, iterations)
+    }
+}
+
 impl<'a> ResourceUsageExt<'a, ()> for crate::configure::RunInitial {
     type Output =
         crate::configure::RunWithWrapperState<'a, (), (), ResourceUsageState, ResourceUsageOutput>;
@@ -311,22 +342,7 @@ impl<'a> ResourceUsageExt<'a, ()> for crate::configure::RunInitial {
         let builder = configure(ResourceUsageMeasureBuilder::new());
 
         self.measure_wrapper(
-            {
-                let builder = builder.clone();
-                move |args| {
-                    // NB! As we are working with parallel benchmarking, we need to ensure we count
-                    // each GLOBAL iteration for comparable results. The measurement wrapper,
-                    // however is LOCAL to each thread. We would multi-count iterations if we just
-                    // used this as-is (with 4 threads, we would count 4x iterations).
-                    //
-                    // We fixup this with a simple division to offset it back again.
-                    #[expect(clippy::arithmetic_side_effects, reason = "NonZero eliminates division by zero")]
-                    #[expect(clippy::integer_division, reason = "we accept imperfect accuracy - typical iteration counts are high enough for it not to matter")]
-                    let iterations = args.meta().iterations() / args.meta().thread_count().get() as u64;
-
-                    ResourceUsageState::new(&builder, operation_name, iterations)
-                }
-            },
+            create_resource_usage_state_factory(builder.clone(), operation_name),
             move |state| state.into_output(&builder),
         )
     }
@@ -350,12 +366,7 @@ impl<'a, ThreadState> ResourceUsageExt<'a, ThreadState>
         let builder = configure(ResourceUsageMeasureBuilder::new());
 
         self.measure_wrapper(
-            {
-                let builder = builder.clone();
-                move |args| {
-                    ResourceUsageState::new(&builder, operation_name, args.meta().iterations())
-                }
-            },
+            create_resource_usage_state_factory(builder.clone(), operation_name),
             move |state| state.into_output(&builder),
         )
     }
@@ -379,12 +390,7 @@ impl<'a, ThreadState, IterState> ResourceUsageExt<'a, ThreadState>
         let builder = configure(ResourceUsageMeasureBuilder::new());
 
         self.measure_wrapper(
-            {
-                let builder = builder.clone();
-                move |args| {
-                    ResourceUsageState::new(&builder, operation_name, args.meta().iterations())
-                }
-            },
+            create_resource_usage_state_factory(builder.clone(), operation_name),
             move |state| state.into_output(&builder),
         )
     }

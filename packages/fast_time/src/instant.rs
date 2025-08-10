@@ -192,7 +192,10 @@ impl Instant {
     ///
     /// // Test with the same instant - should return Some(Duration::ZERO)
     /// let same_instant = clock.now();
-    /// assert_eq!(same_instant.checked_duration_since(same_instant), Some(Duration::ZERO));
+    /// assert_eq!(
+    ///     same_instant.checked_duration_since(same_instant),
+    ///     Some(Duration::ZERO)
+    /// );
     /// ```
     #[must_use]
     pub fn checked_duration_since(&self, earlier: Self) -> Option<Duration> {
