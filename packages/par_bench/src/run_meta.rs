@@ -54,16 +54,25 @@ pub struct RunMeta {
     /// The total number of thread groups in the run.
     group_count: NonZero<usize>,
 
+    /// The total number of threads used to execute the run.
+    thread_count: NonZero<usize>,
+
     /// How many iterations will be executed as part of this run.
     iterations: u64,
 }
 
 impl RunMeta {
     /// Creates a new `RunMeta` with the specified index and total count.
-    pub(crate) fn new(group_index: usize, group_count: NonZero<usize>, iterations: u64) -> Self {
+    pub(crate) fn new(
+        group_index: usize,
+        group_count: NonZero<usize>,
+        thread_count: NonZero<usize>,
+        iterations: u64,
+    ) -> Self {
         Self {
             group_index,
             group_count,
+            thread_count,
             iterations,
         }
     }
@@ -78,6 +87,12 @@ impl RunMeta {
     #[must_use]
     pub fn group_count(&self) -> NonZero<usize> {
         self.group_count
+    }
+
+    /// The total number of threads used to execute the run.
+    #[must_use]
+    pub fn thread_count(&self) -> NonZero<usize> {
+        self.thread_count
     }
 
     /// How many iterations will be executed as part of this run.

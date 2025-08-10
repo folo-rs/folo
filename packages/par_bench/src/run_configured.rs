@@ -74,6 +74,7 @@ where
             "thread pool processor count must be divisible by the number of groups"
         );
 
+        let thread_count = pool.thread_count();
         let group_count = self.groups;
 
         let threads_per_group = NonZero::new(threads_per_group)
@@ -87,7 +88,7 @@ where
         let group_indexes = Arc::new(Mutex::new(group_indexes));
 
         // All threads will wait on this before starting, so they start together.
-        let start = Arc::new(Barrier::new(pool.thread_count().get()));
+        let start = Arc::new(Barrier::new(thread_count.get()));
 
         // Break the callbacks out of `self` so we do not send `self` to the pool.
         let prepare_thread_fn = &*self.prepare_thread_fn;
@@ -103,7 +104,7 @@ where
             move || {
                 let group_index = group_indexes.lock().unwrap().pop().unwrap();
 
-                let meta = RunMeta::new(group_index, group_count, iterations);
+                let meta = RunMeta::new(group_index, group_count, thread_count, iterations);
 
                 let thread_state = prepare_thread_fn(args::PrepareThread::new(&meta));
 

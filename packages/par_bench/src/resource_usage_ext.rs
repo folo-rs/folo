@@ -314,7 +314,17 @@ impl<'a> ResourceUsageExt<'a, ()> for crate::configure::RunInitial {
             {
                 let builder = builder.clone();
                 move |args| {
-                    ResourceUsageState::new(&builder, operation_name, args.meta().iterations())
+                    // NB! As we are working with parallel benchmarking, we need to ensure we count
+                    // each GLOBAL iteration for comparable results. The measurement wrapper,
+                    // however is LOCAL to each thread. We would multi-count iterations if we just
+                    // used this as-is (with 4 threads, we would count 4x iterations).
+                    //
+                    // We fixup this with a simple division to offset it back again.
+                    #[expect(clippy::arithmetic_side_effects, reason = "NonZero eliminates division by zero")]
+                    #[expect(clippy::integer_division, reason = "we accept imperfect accuracy - typical iteration counts are high enough for it not to matter")]
+                    let iterations = args.meta().iterations() / args.meta().thread_count().get() as u64;
+
+                    ResourceUsageState::new(&builder, operation_name, iterations)
                 }
             },
             move |state| state.into_output(&builder),
