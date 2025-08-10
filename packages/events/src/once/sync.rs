@@ -12,7 +12,7 @@ use std::marker::{PhantomData, PhantomPinned};
 use std::mem::{ManuallyDrop, MaybeUninit};
 use std::ops::Deref;
 use std::pin::Pin;
-use std::ptr::NonNull;
+use std::ptr::{self, NonNull};
 use std::sync::Arc;
 #[cfg(debug_assertions)]
 use std::sync::Mutex;
@@ -1098,7 +1098,10 @@ pub struct ManagedEvent<T>
 where
     T: Send,
 {
-    event: NonNull<WithTwoOwners<OnceEvent<T>>>,
+    // This needs `UnsafeCell` because not only are we reading it via shared reference (which
+    // would be okay) but we are also deallocating it, which makes Miri unhappy because it
+    // considers that an illegal write operation on a read-permissioned reference.
+    event: NonNull<UnsafeCell<WithTwoOwners<OnceEvent<T>>>>,
 }
 
 impl<T> ManagedEvent<T>
@@ -1106,8 +1109,8 @@ where
     T: Send,
 {
     fn new_pair() -> (Self, Self) {
-        let event = NonNull::new(Box::into_raw(Box::new(WithTwoOwners::new(
-            OnceEvent::new_bound(),
+        let event = NonNull::new(Box::into_raw(Box::new(UnsafeCell::new(
+            WithTwoOwners::new(OnceEvent::new_bound()),
         ))))
         .expect("freshly allocated Box cannot be null");
 
@@ -1126,7 +1129,16 @@ where
     fn deref(&self) -> &Self::Target {
         // SAFETY: Storage is automatically managed - as long as either sender/receiver
         // are alive, we are guaranteed that the event is alive.
-        unsafe { self.event.as_ref() }
+        let event_cell = unsafe { self.event.as_ref() };
+
+        // SAFETY: We only ever access this via shared references, the only time anything
+        // exclusive happens is on drop (which we synchronize manually via reference counting).
+        unsafe {
+            event_cell
+                .get()
+                .as_ref()
+                .expect("UnsafeCell pointer is never null")
+        }
     }
 }
 impl<T> Clone for ManagedEvent<T>
@@ -1148,12 +1160,21 @@ where
     T: Send,
 {
     fn drop(&mut self) {
-        // On drop, we need to coordinate with the `LocalWithTwoOwners` to ensure proper cleanup.
+        // On drop, we need to coordinate with the `WithTwoOwners` to ensure proper cleanup.
         // The last of either the sender or receiver will clean up the event.
 
         // SAFETY: Storage is automatically managed - as long as either sender/receiver
         // are alive, we are guaranteed that the event is alive.
-        let event_wrapper = unsafe { self.event.as_ref() };
+        let event_wrapper_cell = unsafe { self.event.as_ref() };
+
+        // SAFETY: We only ever access this via shared references, the only time anything
+        // exclusive happens is on drop (which we synchronize manually via reference counting).
+        let event_wrapper = unsafe {
+            event_wrapper_cell
+                .get()
+                .as_ref()
+                .expect("UnsafeCell pointer is never null")
+        };
 
         if event_wrapper.release_one() {
             // This was the last reference - free the memory now.
@@ -1216,9 +1237,17 @@ where
     #[inline]
     pub fn send(self, value: E::T) {
         // Once we call set(), we no longer need to call the drop logic.
-        let this = ManuallyDrop::new(self);
+        let mut this = ManuallyDrop::new(self);
 
         this.event_ref.set(value);
+
+        // We still need to drop the event ref itself!
+        let event_ref_raw: *mut E = &raw mut this.event_ref;
+
+        // SAFETY: It is a valid object and ManuallyDrop ensures it will not be auto-dropped.
+        unsafe {
+            ptr::drop_in_place(event_ref_raw);
+        }
     }
 }
 

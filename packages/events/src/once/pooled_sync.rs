@@ -11,7 +11,7 @@ use std::marker::PhantomPinned;
 use std::mem::ManuallyDrop;
 use std::ops::Deref;
 use std::pin::Pin;
-use std::ptr::NonNull;
+use std::ptr::{self, NonNull};
 use std::sync::{Arc, Mutex};
 use std::task;
 
@@ -555,6 +555,12 @@ where
                 .lock()
                 .expect(ERR_POISONED_LOCK)
                 .remove(this.key);
+        }
+
+        // We also still need to drop the pool ref itself!
+        // SAFETY: It is a valid object and ManuallyDrop ensures it will not be auto-dropped.
+        unsafe {
+            ptr::drop_in_place(&raw mut this.pool_ref);
         }
     }
 }

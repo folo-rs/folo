@@ -14,7 +14,7 @@ use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
-use std::task;
+use std::{ptr, task};
 
 use pinned_pool::{Key, PinnedPool};
 
@@ -515,6 +515,12 @@ where
 
         if event.release_one() {
             this.pool_ref.pool.borrow_mut().remove(this.key);
+        }
+
+        // We also still need to drop the pool ref itself!
+        // SAFETY: It is a valid object and ManuallyDrop ensures it will not be auto-dropped.
+        unsafe {
+            ptr::drop_in_place(&raw mut this.pool_ref);
         }
     }
 }

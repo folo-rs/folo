@@ -13,7 +13,7 @@ use std::marker::{PhantomData, PhantomPinned};
 use std::mem::{ManuallyDrop, MaybeUninit};
 use std::ops::Deref;
 use std::pin::Pin;
-use std::ptr::NonNull;
+use std::ptr::{self, NonNull};
 use std::rc::Rc;
 use std::task;
 use std::task::Waker;
@@ -961,9 +961,17 @@ where
     #[inline]
     pub fn send(self, value: E::T) {
         // Once we call set(), we no longer need to call the drop logic.
-        let this = ManuallyDrop::new(self);
+        let mut this = ManuallyDrop::new(self);
 
         this.event_ref.set(value);
+
+        // We still need to drop the event ref itself!
+        let event_ref_raw: *mut E = &raw mut this.event_ref;
+
+        // SAFETY: It is a valid object and ManuallyDrop ensures it will not be auto-dropped.
+        unsafe {
+            ptr::drop_in_place(event_ref_raw);
+        }
     }
 }
 
