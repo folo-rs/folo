@@ -108,7 +108,9 @@ fn entrypoint(c: &mut Criterion) {
         );
 
     Run::new()
-        .measure_resource_usage("local_once_event_managed", |measure| measure.allocs(&allocs))
+        .measure_resource_usage("local_once_event_managed", |measure| {
+            measure.allocs(&allocs)
+        })
         .iter(|_| {
             let (sender, receiver) = LocalOnceEvent::<Payload>::new_managed();
             drop(sender);
