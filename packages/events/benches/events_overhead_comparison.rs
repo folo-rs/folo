@@ -50,7 +50,8 @@ fn entrypoint(c: &mut Criterion) {
         })
         .iter(|_| {
             let event = LocalOnceEvent::<Payload>::new();
-            drop(event.bind_by_ref_unchecked());
+            // SAFETY: We know this is the first and only binding of this event
+            drop(unsafe { event.bind_by_ref_unchecked() });
         })
         .execute_criterion_on(
             &mut one_thread,
@@ -72,7 +73,8 @@ fn entrypoint(c: &mut Criterion) {
         })
         .iter(|_| {
             let event = Rc::new(LocalOnceEvent::<Payload>::new());
-            drop(event.bind_by_rc_unchecked());
+            // SAFETY: We know this is the first and only binding of this event
+            drop(unsafe { event.bind_by_rc_unchecked() });
         })
         .execute_criterion_on(&mut one_thread, &mut group, "local_once_event_rc_unchecked");
 

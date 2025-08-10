@@ -9,6 +9,7 @@ use std::backtrace::Backtrace;
 use std::cell::RefCell;
 use std::future::Future;
 use std::marker::PhantomPinned;
+use std::mem::ManuallyDrop;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::NonNull;
@@ -112,7 +113,7 @@ impl<T> LocalOnceEventPool<T> {
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        let item = inserter.insert(LocalWithTwoOwners::new(LocalOnceEvent::new()));
+        let item = inserter.insert(LocalWithTwoOwners::new(LocalOnceEvent::new_bound()));
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -169,7 +170,7 @@ impl<T> LocalOnceEventPool<T> {
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        let item = inserter.insert(LocalWithTwoOwners::new(LocalOnceEvent::new()));
+        let item = inserter.insert(LocalWithTwoOwners::new(LocalOnceEvent::new_bound()));
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -240,7 +241,7 @@ impl<T> LocalOnceEventPool<T> {
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        let item = inserter.insert(LocalWithTwoOwners::new(LocalOnceEvent::new()));
+        let item = inserter.insert(LocalWithTwoOwners::new(LocalOnceEvent::new_bound()));
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -497,14 +498,24 @@ where
     /// ```
     #[inline]
     pub fn send(self, value: P::T) {
+        // We execute the drop logic inline here.
+        let mut this = ManuallyDrop::new(self);
+
         // SAFETY: See comments on field.
         let event = unsafe {
-            self.event
+            this.event
                 .expect("event is only None during destruction")
                 .as_ref()
         };
 
         event.set(value);
+
+        // The event is going to be destroyed, so we cannot reference it anymore.
+        this.event = None;
+
+        if event.release_one() {
+            this.pool_ref.pool.borrow_mut().remove(this.key);
+        }
     }
 }
 
@@ -522,7 +533,7 @@ where
 
         // Signal that the sender was dropped before handling reference counting.
         // This ensures receivers get Disconnected errors if the sender is dropped without sending.
-        event.sender_dropped();
+        event.sender_dropped_without_set();
 
         if event.release_one() {
             self.pool_ref.pool.borrow_mut().remove(self.key);

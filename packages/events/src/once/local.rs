@@ -10,32 +10,20 @@ use std::cell::RefCell;
 use std::cell::{Cell, UnsafeCell};
 use std::future::Future;
 use std::marker::{PhantomData, PhantomPinned};
+use std::mem::{ManuallyDrop, MaybeUninit};
 use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
+use std::task;
 use std::task::Waker;
-use std::{mem, task};
 
 #[cfg(debug_assertions)]
 use crate::{BacktraceType, capture_backtrace};
-use crate::{Disconnected, ReflectiveT, Sealed, ValueKind};
-
-/// State of a single-threaded event.
-#[derive(Debug)]
-enum EventState<T> {
-    /// No value has been set yet, and no one is waiting.
-    NotSet,
-
-    /// No value has been set yet, but someone is waiting for it.
-    Awaiting(Waker),
-
-    /// A value has been set but nobody has yet started waiting.
-    Set(ValueKind<T>),
-
-    /// The value has been set and consumed.
-    Consumed,
-}
+use crate::{
+    Disconnected, EVENT_AWAITING, EVENT_BOUND, EVENT_DISCONNECTED, EVENT_SET, EVENT_UNBOUND,
+    ReflectiveT, Sealed,
+};
 
 /// A one-time event that can send and receive a value of type `T` on a single thread.
 ///
@@ -64,23 +52,35 @@ enum EventState<T> {
 /// ```
 #[derive(Debug)]
 pub struct LocalOnceEvent<T> {
-    // We only have a get() and a set() that access the state and we guarantee this happens on the
-    // same thread, so there is no point in wasting cycles on borrow counting at runtime with
-    // RefCell - there cannot be any concurrent access to this field.
-    state: UnsafeCell<EventState<T>>,
+    /// The logical state of the event; see `event_state.rs`.
+    state: Cell<u8>,
+
+    /// If `state` is `EVENT_AWAITING` or `EVENT_RESOLVING`, this field is initialized with the
+    /// waker of whoever most recently awaited the receiver. In other states, this field is not
+    /// initialized.
+    ///
+    /// We use `MaybeUninit` to minimize the storage and avoid an `Option` or enum overhead,
+    /// as we already track the presence via `state`.
+    ///
+    /// We use `UnsafeCell` because we are a synchronization primitive and
+    /// do our own synchronization.
+    awaiter: UnsafeCell<MaybeUninit<Waker>>,
+
+    /// If `state` is `EVENT_SET`, this field is initialized with the value that was sent by
+    /// the sender. In other states, this field is not initialized.
+    ///
+    /// We use `MaybeUninit` to minimize the storage and avoid an `Option` or enum overhead,
+    /// as we already track the presence via `state`.
+    ///
+    /// We use `UnsafeCell` because we are a synchronization primitive and
+    /// do our own synchronization.
+    value: UnsafeCell<MaybeUninit<T>>,
 
     // In debug builds, we save the backtrace of the most recent awaiter here. This will not be
     // cleared merely by exiting the `Awaiting` state, as even in the `Set` state there is value
     // in retaining the backtrace for debugging purposes.
     #[cfg(debug_assertions)]
     backtrace: RefCell<Option<BacktraceType>>,
-
-    // Our API contract requires that an event can only be bound once, so we have to check this
-    // because it is not feasible to create an API that can consume the event when creating the
-    // sender-receiver pair (all we have might be a shared reference to the event).
-    //
-    // This field is not used with pooled events - the pool ensures uniqueness.
-    is_bound: Cell<bool>,
 
     // Everything to do with this event is single-threaded,
     // even if T is thread-mobile or thread-safe.
@@ -93,6 +93,8 @@ pub struct LocalOnceEvent<T> {
 impl<T> LocalOnceEvent<T> {
     /// Creates a new single-threaded event.
     ///
+    /// The event must be bound to a sender-receiver pair to be used.
+    ///
     /// # Example
     ///
     /// ```rust
@@ -103,10 +105,27 @@ impl<T> LocalOnceEvent<T> {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            state: UnsafeCell::new(EventState::NotSet),
+            state: Cell::new(EVENT_UNBOUND),
+            awaiter: UnsafeCell::new(MaybeUninit::uninit()),
+            value: UnsafeCell::new(MaybeUninit::uninit()),
             #[cfg(debug_assertions)]
             backtrace: RefCell::new(None),
-            is_bound: Cell::new(false),
+            _single_threaded: PhantomData,
+            _requires_pinning: PhantomPinned,
+        }
+    }
+
+    /// Creates a new single-threaded event that starts in the bound state.
+    ///
+    /// This is for internal use only - pooled events start in the bound state.
+    #[must_use]
+    pub(crate) fn new_bound() -> Self {
+        Self {
+            state: Cell::new(EVENT_BOUND),
+            awaiter: UnsafeCell::new(MaybeUninit::uninit()),
+            value: UnsafeCell::new(MaybeUninit::uninit()),
+            #[cfg(debug_assertions)]
+            backtrace: RefCell::new(None),
             _single_threaded: PhantomData,
             _requires_pinning: PhantomPinned,
         }
@@ -166,9 +185,11 @@ impl<T> LocalOnceEvent<T> {
         LocalOnceSender<RefLocalEvent<'_, T>>,
         LocalOnceReceiver<RefLocalEvent<'_, T>>,
     )> {
-        if self.is_bound.replace(true) {
+        if self.state.get() != EVENT_UNBOUND {
             return None;
         }
+
+        self.state.set(EVENT_BOUND);
 
         Some((
             LocalOnceSender::new(RefLocalEvent { event: self }),
@@ -180,8 +201,10 @@ impl<T> LocalOnceEvent<T> {
     /// connected by a shared reference to the event.
     ///
     /// This method assumes the event is not already bound and skips the check for performance.
-    /// If the event is already bound, the behavior is unspecified but will not cause memory
-    /// unsafety - it may result in panics when using the senders or receivers.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee the event is not already bound.
     ///
     /// # Example
     ///
@@ -194,14 +217,13 @@ impl<T> LocalOnceEvent<T> {
     /// ```
     #[must_use]
     #[inline]
-    pub fn bind_by_ref_unchecked(
+    pub unsafe fn bind_by_ref_unchecked(
         &self,
     ) -> (
         LocalOnceSender<RefLocalEvent<'_, T>>,
         LocalOnceReceiver<RefLocalEvent<'_, T>>,
     ) {
-        // Mark as bound for consistency with other methods
-        self.is_bound.set(true);
+        self.state.set(EVENT_BOUND);
 
         (
             LocalOnceSender::new(RefLocalEvent { event: self }),
@@ -271,9 +293,11 @@ impl<T> LocalOnceEvent<T> {
         LocalOnceSender<RcLocalEvent<T>>,
         LocalOnceReceiver<RcLocalEvent<T>>,
     )> {
-        if self.is_bound.replace(true) {
+        if self.state.get() != EVENT_UNBOUND {
             return None;
         }
+
+        self.state.set(EVENT_BOUND);
 
         Some((
             LocalOnceSender::new(RcLocalEvent {
@@ -289,10 +313,12 @@ impl<T> LocalOnceEvent<T> {
     /// connected by an `Rc` to the event.
     ///
     /// This method assumes the event is not already bound and skips the check for performance.
-    /// If the event is already bound, the behavior is unspecified but will not cause memory
-    /// unsafety - it may result in panics when using the senders or receivers.
     ///
     /// This method requires the event to be wrapped in an [`Rc`] when called.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the event is not already bound.
     ///
     /// # Example
     ///
@@ -307,14 +333,13 @@ impl<T> LocalOnceEvent<T> {
     /// ```
     #[must_use]
     #[inline]
-    pub fn bind_by_rc_unchecked(
+    pub unsafe fn bind_by_rc_unchecked(
         self: &Rc<Self>,
     ) -> (
         LocalOnceSender<RcLocalEvent<T>>,
         LocalOnceReceiver<RcLocalEvent<T>>,
     ) {
-        // Mark as bound for consistency with other methods
-        self.is_bound.set(true);
+        self.state.set(EVENT_BOUND);
 
         (
             LocalOnceSender::new(RcLocalEvent {
@@ -403,9 +428,11 @@ impl<T> LocalOnceEvent<T> {
         LocalOnceSender<PtrLocalEvent<T>>,
         LocalOnceReceiver<PtrLocalEvent<T>>,
     )> {
-        if self.is_bound.replace(true) {
+        if self.state.get() != EVENT_UNBOUND {
             return None;
         }
+
+        self.state.set(EVENT_BOUND);
 
         let event_ptr = NonNull::from(self.get_ref());
 
@@ -419,14 +446,13 @@ impl<T> LocalOnceEvent<T> {
     /// connected by a raw pointer to the event.
     ///
     /// This method assumes the event is not already bound and skips the check for performance.
-    /// If the event is already bound, the behavior is unspecified but will not cause memory
-    /// unsafety - it may result in panics when using the senders or receivers.
     ///
     /// This method requires the event to be pinned when called.
     ///
     /// # Safety
     ///
     /// The caller must ensure that:
+    /// - The event is not already bound.
     /// - The event remains alive and pinned for the entire lifetime of the sender and receiver.
     /// - The sender and receiver are dropped before the event is dropped.
     ///
@@ -447,8 +473,7 @@ impl<T> LocalOnceEvent<T> {
         LocalOnceSender<PtrLocalEvent<T>>,
         LocalOnceReceiver<PtrLocalEvent<T>>,
     ) {
-        // Mark as bound for consistency with other methods
-        self.is_bound.set(true);
+        self.state.set(EVENT_BOUND);
 
         let event_ptr = NonNull::from(self.get_ref());
 
@@ -472,27 +497,56 @@ impl<T> LocalOnceEvent<T> {
     }
 
     pub(crate) fn set(&self, result: T) {
-        // SAFETY: See comments on field.
-        let state = unsafe { &mut *self.state.get() };
+        let value = self.value.get();
 
-        match &*state {
-            EventState::NotSet => {
-                *state = EventState::Set(ValueKind::Real(result));
-            }
-            EventState::Awaiting(_) => {
-                let previous_state =
-                    mem::replace(&mut *state, EventState::Set(ValueKind::Real(result)));
+        // We can start by setting the value - this has to happen no matter what.
+        // Everything else we do here is just to get the awaiter to come pick it up.
+        //
+        // SAFETY: It is legal for the sender to write here because we know that nobody else will
+        // be accessing this field at this time. This is guaranteed by:
+        // * There is only one sender and it is single-threaded, so it cannot be used in parallel.
+        // * The receiver will only access this field in the "Set" state, which can only be entered
+        //   from later on in this method.
+        unsafe {
+            value.write(MaybeUninit::new(result));
+        }
 
-                match previous_state {
-                    EventState::Awaiting(waker) => waker.wake(),
-                    _ => unreachable!("we are re-matching an already matched pattern"),
-                }
+        // A "set" operation is always a state increment. See `event_state.rs`.
+        let previous_state = self.state.get();
+        self.state.set(previous_state.wrapping_add(1));
+
+        match previous_state {
+            EVENT_BOUND => {
+                // There was nobody listening via the receiver - our work here is done.
             }
-            EventState::Set(_) => {
-                panic!("result already set");
+            EVENT_AWAITING => {
+                // There was someone listening via the receiver. We need to set the value
+                // and notify the awaiter that they can come back for the value now.
+
+                // SAFETY: The only other potential references to the field are other short-lived
+                // references in this type, which cannot exist at the moment because
+                // the type is single-threaded and does not let any references escape.
+                let awaiter = unsafe {
+                    self.awaiter
+                        .get()
+                        .as_mut()
+                        .expect("UnsafeCell pointer is never null")
+                };
+
+                // We extract the waker and consider the field uninitialized again.
+                // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
+                let waker = unsafe { awaiter.assume_init_read() };
+
+                // Before sending the wake signal we must transition into `EVENT_SET` state, so
+                // as soon as it wakes up it can grab the result. Granted, as this specific type
+                // is a single-threaded signal, the order of operations does not actually matter.
+                self.state.set(EVENT_SET);
+
+                // Come and get it.
+                waker.wake();
             }
-            EventState::Consumed => {
-                panic!("result already consumed");
+            _ => {
+                unreachable!("unreachable LocalOnceEvent state on set: {previous_state}");
             }
         }
     }
@@ -506,57 +560,109 @@ impl<T> LocalOnceEvent<T> {
         #[cfg(debug_assertions)]
         self.backtrace.replace(Some(capture_backtrace()));
 
-        // SAFETY: See comments on field.
-        let state = unsafe { &mut *self.state.get() };
+        match self.state.get() {
+            EVENT_BOUND => {
+                // The sender has not yet set any value, so we will have to wait.
 
-        match &*state {
-            EventState::NotSet => {
-                *state = EventState::Awaiting(waker.clone());
+                // SAFETY: The only other potential references to the field are other short-lived
+                // references in this type, which cannot exist at the moment because
+                // the type is single-threaded and does not let any references escape.
+                let awaiter = unsafe {
+                    self.awaiter
+                        .get()
+                        .as_mut()
+                        .expect("UnsafeCell pointer is never null")
+                };
+
+                awaiter.write(waker.clone());
+
+                // The sender will wake us up when it has set the value.
+                self.state.set(EVENT_AWAITING);
                 None
             }
-            EventState::Awaiting(_) => {
-                // This is permitted by the Future API contract, in which case only the waker
-                // from the most recent poll should be woken up when the result is available.
-                *state = EventState::Awaiting(waker.clone());
+            EVENT_SET => {
+                // The sender has delivered a value and we can complete the event.
+
+                // SAFETY: The only other potential references to the field are other short-lived
+                // references in this type, which cannot exist at the moment because
+                // the type is single-threaded and does not let any references escape.
+                let value_cell = unsafe {
+                    self.value
+                        .get()
+                        .as_ref()
+                        .expect("UnsafeCell pointer is never null")
+                };
+
+                // We extract the value and consider the cell uninitialized.
+                //
+                // SAFETY: We were in EVENT_SET which guarantees there is a value in there.
+                let value = unsafe { value_cell.assume_init_read() };
+
+                Some(Ok(value))
+            }
+            EVENT_AWAITING => {
+                // We are re-polling after previously starting a wait. This is fine
+                // and we just need to clean up the previous waker, replacing it with
+                // a new one.
+
+                // SAFETY: The only other potential references to the field are other short-lived
+                // references in this type, which cannot exist at the moment because
+                // the type is single-threaded and does not let any references escape.
+                let awaiter = unsafe {
+                    self.awaiter
+                        .get()
+                        .as_mut()
+                        .expect("UnsafeCell pointer is never null")
+                };
+
+                awaiter.write(waker.clone());
                 None
             }
-            EventState::Set(_) => {
-                let previous_state = mem::replace(&mut *state, EventState::Consumed);
-
-                match previous_state {
-                    EventState::Set(result) => match result {
-                        ValueKind::Real(value) => Some(Ok(value)),
-                        ValueKind::Disconnected => Some(Err(Disconnected)),
-                    },
-                    _ => unreachable!("we are re-matching an already matched pattern"),
-                }
+            EVENT_DISCONNECTED => {
+                // There is no result coming, ever! This is the end.
+                Some(Err(Disconnected))
             }
-            EventState::Consumed => {
-                // We do not want to keep a copy of the result around, so we can only return it once.
-                // The futures API contract allows us to panic in this situation.
-                panic!("event polled after result was already consumed");
+            state => {
+                unreachable!("unreachable LocalOnceEvent state on poll: {state}");
             }
         }
     }
 
-    pub(crate) fn sender_dropped(&self) {
-        // SAFETY: See comments on field.
-        let state = unsafe { &mut *self.state.get() };
+    pub(crate) fn sender_dropped_without_set(&self) {
+        let previous_state = self.state.get();
 
-        match &*state {
-            EventState::NotSet => {
-                *state = EventState::Set(ValueKind::Disconnected);
-            }
-            EventState::Awaiting(_) => {
-                let previous_state =
-                    mem::replace(&mut *state, EventState::Set(ValueKind::Disconnected));
+        // We can immediately set this because this is a single-threaded event, so there cannot
+        // be any race condition causing us issues with the receiver seeing this too early.
+        self.state.set(EVENT_DISCONNECTED);
 
-                match previous_state {
-                    EventState::Awaiting(waker) => waker.wake(),
-                    _ => unreachable!("we are re-matching an already matched pattern"),
-                }
+        match previous_state {
+            EVENT_BOUND => {
+                // There was nobody listening via the receiver - our work here is done.
             }
-            _ => {}
+            EVENT_AWAITING => {
+                // There was someone listening via the receiver. We need to notify
+                // the awaiter that they can come back for another check now.
+
+                // SAFETY: The only other potential references to the field are other short-lived
+                // references in this type, which cannot exist at the moment because
+                // the type is single-threaded and does not let any references escape.
+                let awaiter = unsafe {
+                    self.awaiter
+                        .get()
+                        .as_mut()
+                        .expect("UnsafeCell pointer is never null")
+                };
+
+                // We extract the waker and consider the field uninitialized again.
+                // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
+                let waker = unsafe { awaiter.assume_init_read() };
+
+                // Come and get it.
+                waker.wake();
+            }
+            _ => {
+                unreachable!("unreachable LocalOnceEvent state on disconnect: {previous_state}");
+            }
         }
     }
 }
@@ -696,7 +802,10 @@ where
     /// ```
     #[inline]
     pub fn send(self, value: E::T) {
-        self.event_ref.set(value);
+        // Once we call set(), we no longer need to call the drop logic.
+        let this = ManuallyDrop::new(self);
+
+        this.event_ref.set(value);
     }
 }
 
@@ -706,7 +815,7 @@ where
 {
     #[inline]
     fn drop(&mut self) {
-        self.event_ref.sender_dropped();
+        self.event_ref.sender_dropped_without_set();
     }
 }
 
@@ -809,8 +918,8 @@ mod tests {
     fn local_event_by_ref_unchecked_works() {
         with_watchdog(|| {
             let event = LocalOnceEvent::<i32>::new();
-            // We know this is the first and only binding of this event
-            let (sender, receiver) = event.bind_by_ref_unchecked();
+            // SAFETY: We know this is the first and only binding of this event
+            let (sender, receiver) = unsafe { event.bind_by_ref_unchecked() };
 
             sender.send(42);
             let value = futures::executor::block_on(receiver);
@@ -870,8 +979,8 @@ mod tests {
     fn local_event_by_rc_unchecked_works() {
         with_watchdog(|| {
             let event = Rc::new(LocalOnceEvent::<String>::new());
-            // We know this is the first and only binding of this event
-            let (sender, receiver) = event.bind_by_rc_unchecked();
+            // SAFETY: We know this is the first and only binding of this event
+            let (sender, receiver) = unsafe { event.bind_by_rc_unchecked() };
 
             sender.send("Hello from Rc unchecked".to_string());
             let value = futures::executor::block_on(receiver);

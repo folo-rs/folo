@@ -64,21 +64,21 @@ fn entrypoint(c: &mut Criterion) {
     let processor_time = TimeSession::new();
     let mut one_thread = ThreadPool::new(ProcessorSet::single());
 
-    let mut group = c.benchmark_group("events_full_cycle_st");
+    let mut group = c.benchmark_group("events_full_cycle");
 
-    local_once_event_ref_st(&mut one_thread, &mut group, &allocs, &processor_time);
-    local_once_event_rc_st(&mut one_thread, &mut group, &allocs, &processor_time);
-    local_once_event_ptr_st(&mut one_thread, &mut group, &allocs, &processor_time);
-    once_event_arc_st(&mut one_thread, &mut group, &allocs, &processor_time);
-    once_event_ptr_st(&mut one_thread, &mut group, &allocs, &processor_time);
-    pooled_local_once_event_ref_st(&mut one_thread, &mut group, &allocs, &processor_time);
-    pooled_local_once_event_rc_st(&mut one_thread, &mut group, &allocs, &processor_time);
-    pooled_local_once_event_ptr_st(&mut one_thread, &mut group, &allocs, &processor_time);
-    pooled_once_event_ref_st(&mut one_thread, &mut group, &allocs, &processor_time);
-    pooled_once_event_arc_st(&mut one_thread, &mut group, &allocs, &processor_time);
-    pooled_once_event_ptr_st(&mut one_thread, &mut group, &allocs, &processor_time);
-    oneshot_channel_st(&mut one_thread, &mut group, &allocs, &processor_time);
-    futures_oneshot_channel_st(&mut one_thread, &mut group, &allocs, &processor_time);
+    local_once_event_ref(&mut one_thread, &mut group, &allocs, &processor_time);
+    local_once_event_rc(&mut one_thread, &mut group, &allocs, &processor_time);
+    local_once_event_ptr(&mut one_thread, &mut group, &allocs, &processor_time);
+    once_event_arc(&mut one_thread, &mut group, &allocs, &processor_time);
+    once_event_ptr(&mut one_thread, &mut group, &allocs, &processor_time);
+    pooled_local_once_event_ref(&mut one_thread, &mut group, &allocs, &processor_time);
+    pooled_local_once_event_rc(&mut one_thread, &mut group, &allocs, &processor_time);
+    pooled_local_once_event_ptr(&mut one_thread, &mut group, &allocs, &processor_time);
+    pooled_once_event_ref(&mut one_thread, &mut group, &allocs, &processor_time);
+    pooled_once_event_arc(&mut one_thread, &mut group, &allocs, &processor_time);
+    pooled_once_event_ptr(&mut one_thread, &mut group, &allocs, &processor_time);
+    oneshot_channel(&mut one_thread, &mut group, &allocs, &processor_time);
+    futures_oneshot_channel(&mut one_thread, &mut group, &allocs, &processor_time);
 
     group.finish();
 
@@ -86,7 +86,7 @@ fn entrypoint(c: &mut Criterion) {
     processor_time.print_to_stdout();
 }
 
-fn local_once_event_ref_st(
+fn local_once_event_ref(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
     allocs: &Session,
@@ -106,7 +106,7 @@ fn local_once_event_ref_st(
         .execute_criterion_on(pool, group, "local_once_event_ref");
 }
 
-fn local_once_event_rc_st(
+fn local_once_event_rc(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
     allocs: &Session,
@@ -126,7 +126,7 @@ fn local_once_event_rc_st(
         .execute_criterion_on(pool, group, "local_once_event_rc");
 }
 
-fn local_once_event_ptr_st(
+fn local_once_event_ptr(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
     allocs: &Session,
@@ -151,7 +151,7 @@ fn local_once_event_ptr_st(
         .execute_criterion_on(pool, group, "local_once_event_ptr");
 }
 
-fn once_event_arc_st(
+fn once_event_arc(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
     allocs: &Session,
@@ -171,7 +171,7 @@ fn once_event_arc_st(
         .execute_criterion_on(pool, group, "once_event_arc");
 }
 
-fn once_event_ptr_st(
+fn once_event_ptr(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
     allocs: &Session,
@@ -196,7 +196,7 @@ fn once_event_ptr_st(
         .execute_criterion_on(pool, group, "once_event_ptr");
 }
 
-fn oneshot_channel_st(
+fn oneshot_channel(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
     allocs: &Session,
@@ -215,7 +215,7 @@ fn oneshot_channel_st(
         .execute_criterion_on(pool, group, "oneshot_channel");
 }
 
-fn futures_oneshot_channel_st(
+fn futures_oneshot_channel(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
     allocs: &Session,
@@ -235,7 +235,7 @@ fn futures_oneshot_channel_st(
         .execute_criterion_on(pool, group, "futures_oneshot_channel");
 }
 
-fn pooled_local_once_event_ref_st(
+fn pooled_local_once_event_ref(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
     allocs: &Session,
@@ -255,7 +255,7 @@ fn pooled_local_once_event_ref_st(
         .execute_criterion_on(pool, group, "pooled_local_once_event_ref");
 }
 
-fn pooled_local_once_event_rc_st(
+fn pooled_local_once_event_rc(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
     allocs: &Session,
@@ -275,7 +275,7 @@ fn pooled_local_once_event_rc_st(
         .execute_criterion_on(pool, group, "pooled_local_once_event_rc");
 }
 
-fn pooled_local_once_event_ptr_st(
+fn pooled_local_once_event_ptr(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
     allocs: &Session,
@@ -297,7 +297,7 @@ fn pooled_local_once_event_ptr_st(
         .execute_criterion_on(pool, group, "pooled_local_once_event_ptr");
 }
 
-fn pooled_once_event_ref_st(
+fn pooled_once_event_ref(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
     allocs: &Session,
@@ -317,7 +317,7 @@ fn pooled_once_event_ref_st(
         .execute_criterion_on(pool, group, "pooled_once_event_ref");
 }
 
-fn pooled_once_event_arc_st(
+fn pooled_once_event_arc(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
     allocs: &Session,
@@ -337,7 +337,7 @@ fn pooled_once_event_arc_st(
         .execute_criterion_on(pool, group, "pooled_once_event_arc");
 }
 
-fn pooled_once_event_ptr_st(
+fn pooled_once_event_ptr(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
     allocs: &Session,

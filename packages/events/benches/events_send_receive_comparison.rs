@@ -93,6 +93,9 @@ fn entrypoint(c: &mut Criterion) {
         group.finish();
     }
 
+    // Note: we expect all allocations to be zero in this benchmark. If we see a non-zero number
+    // in the results, some benchmark defect must have crept in. The assumption is that merely
+    // sending/receiving the value does not cause allocations with any implementation.
     allocs.print_to_stdout();
     processor_time.print_to_stdout();
 }
