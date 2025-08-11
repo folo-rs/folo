@@ -11,7 +11,7 @@
 //!                 this state is a mutex of sorts, to stop a receiver from updating event state;
 //!                 we transition into the "set" state from this state, at which point the receiver
 //!                 is welcome to receive the payload.
-//! 5 - disconnected - the sender was dropped without setting the event.
+//! 5 - disconnected - one of the endpoints has disconnected before completing the send/receive.
 //!
 //! A key optimization is that the crucial transitions of the sender are a simple `+= 1` operation:
 //!
@@ -19,6 +19,12 @@
 //! * If a receiver is listening, we get `awaiting + 1 = signaling`
 //!
 //! All other states require the sender to already be dropped, so cannot be increment-transitioned.
+//! 
+//! These states are also used to coordinate which of the endpoints drops the event itself:
+//! * If the receiver disconnects first, it will set the `disconnected` state and the sender
+//!   will be responsible for cleaning up the event.
+//! * Otherwise, the receiver is responsible for cleaning up the event (which will end up either
+//!   with a value or with a sender-side disconnect).
 
 pub(crate) const EVENT_UNBOUND: u8 = 0;
 pub(crate) const EVENT_BOUND: u8 = 1;

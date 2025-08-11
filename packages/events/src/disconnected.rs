@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt::Display;
 
 /// Indicates that a sender-receiver pair has disconnected.
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 #[expect(clippy::exhaustive_structs, reason = "intentionally an empty struct")]
 pub struct Disconnected;
 

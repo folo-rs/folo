@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::ops::Deref;
 use std::sync::atomic::{self, AtomicBool};
 
@@ -38,42 +37,6 @@ impl<T> WithTwoOwners<T> {
 }
 
 impl<T> Deref for WithTwoOwners<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
-/// A value that has two owners at the start, with the last remaining owner cleaning up the value.
-#[derive(Debug)]
-pub(crate) struct LocalWithTwoOwners<T> {
-    value: T,
-    is_last_owner: Cell<bool>,
-}
-
-impl<T> LocalWithTwoOwners<T> {
-    #[must_use]
-    pub(crate) fn new(value: T) -> Self {
-        Self {
-            value,
-            is_last_owner: Cell::new(false),
-        }
-    }
-
-    /// Releases ownership, returning a "should clean up" flag (set for the last owner).
-    #[must_use]
-    pub(crate) fn release_one(&self) -> bool {
-        if !self.is_last_owner.replace(true) {
-            // We were not the last owner - someone else will clean up.
-            return false;
-        }
-
-        true
-    }
-}
-
-impl<T> Deref for LocalWithTwoOwners<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
