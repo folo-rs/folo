@@ -421,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "events"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
