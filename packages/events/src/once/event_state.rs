@@ -19,7 +19,7 @@
 //! * If a receiver is listening, we get `awaiting + 1 = signaling`
 //!
 //! All other states require the sender to already be dropped, so cannot be increment-transitioned.
-//! 
+//!
 //! These states are also used to coordinate which of the endpoints drops the event itself:
 //! * If the receiver disconnects first, it will set the `disconnected` state and the sender
 //!   will be responsible for cleaning up the event.
