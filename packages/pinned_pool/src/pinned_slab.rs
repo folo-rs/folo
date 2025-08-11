@@ -165,7 +165,9 @@ impl<T, const CAPACITY: usize> PinnedSlab<T, CAPACITY> {
     }
 
     fn entry_ptr(&self, index: usize) -> NonNull<Entry<T>> {
-        assert!(
+        // This is only debug_assert because we do not rely on this for public API correctness.
+        // The pool's ItemCoordinates logic guarantees that the per-slab indexing is in-bounds.
+        debug_assert!(
             index < CAPACITY,
             "entry {index} index out of bounds in slab of {}",
             type_name::<T>()
@@ -287,10 +289,9 @@ impl<T, const CAPACITY: usize> PinnedSlab<T, CAPACITY> {
         // Push the removed item's entry onto the free stack.
         self.next_free_index = index;
 
-        self.count = self
-            .count
-            .checked_sub(1)
-            .expect("we asserted above that the entry is occupied so count must be non-zero");
+        // We would have panicked above if the entry were not occupied,
+        // so we really did remove an item and this cannot underflow.
+        self.count = self.count.wrapping_sub(1);
     }
 
     /// Iterates through the items in the slab.
@@ -542,11 +543,8 @@ impl<'s, T, const CAPACITY: usize> PinnedSlabInserter<'s, T, CAPACITY> {
         // SAFETY: Items are always pinned - that is the point of this collection.
         let pinned_ref: Pin<&'v mut T> = unsafe { Pin::new_unchecked(init_mut) };
 
-        self.slab.count = self
-            .slab
-            .count
-            .checked_add(1)
-            .expect("guarded by capacity < usize::MAX in slab ctor");
+        // usize overflow implies we have filled all of virtual memory - never going to happen.
+        self.slab.count = self.slab.count.wrapping_add(1);
 
         pinned_ref
     }

@@ -113,7 +113,8 @@ impl<T> LocalOnceEventPool<T> {
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        let item = inserter.insert(LocalOnceEvent::new_bound());
+        // SAFETY: We rely on LocalOnceEvent::new_in_place_bound() for correct initialization.
+        let item = unsafe { inserter.insert_with(LocalOnceEvent::new_in_place_bound) };
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -170,7 +171,8 @@ impl<T> LocalOnceEventPool<T> {
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        let item = inserter.insert(LocalOnceEvent::new_bound());
+        // SAFETY: We rely on LocalOnceEvent::new_in_place_bound() for correct initialization.
+        let item = unsafe { inserter.insert_with(LocalOnceEvent::new_in_place_bound) };
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -241,7 +243,8 @@ impl<T> LocalOnceEventPool<T> {
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        let item = inserter.insert(LocalOnceEvent::new_bound());
+        // SAFETY: We rely on LocalOnceEvent::new_in_place_bound() for correct initialization.
+        let item = unsafe { inserter.insert_with(LocalOnceEvent::new_in_place_bound) };
 
         let item_ptr = NonNull::from(item.get_ref());
 
