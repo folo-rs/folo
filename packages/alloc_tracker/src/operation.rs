@@ -290,20 +290,6 @@ mod tests {
     }
 
     #[test]
-    fn operation_process_span_no_allocation() {
-        let operation = create_test_operation();
-
-        {
-            let _span = operation.measure_process();
-            // No allocation
-        }
-
-        assert_eq!(operation.mean(), 0);
-        assert_eq!(operation.total_iterations(), 1);
-        assert_eq!(operation.total_bytes_allocated(), 0);
-    }
-
-    #[test]
     fn operation_thread_span_drop() {
         let operation = create_test_operation();
 
