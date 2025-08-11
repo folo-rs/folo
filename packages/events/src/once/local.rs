@@ -657,6 +657,25 @@ impl<T> LocalOnceEvent<T> {
             }
             EVENT_DISCONNECTED => {
                 // The receiver has already disconnected, so we can clean up the event now.
+                // We have to first drop the value that we inserted into the event, though.
+
+                // SAFETY: The only other potential references to the field are other short-lived
+                // references in this type, which cannot exist at the moment because
+                // the type is single-threaded and does not let any references escape.
+                let value_cell = unsafe {
+                    self.value
+                        .get()
+                        .as_mut()
+                        .expect("UnsafeCell pointer is never null")
+                };
+
+                // We drop the value and consider the cell uninitialized.
+                //
+                // SAFETY: We were in EVENT_SET which guarantees there is a value in there.
+                unsafe {
+                    value_cell.assume_init_drop();
+                }
+
                 Err(Disconnected)
             }
             _ => {
@@ -669,10 +688,6 @@ impl<T> LocalOnceEvent<T> {
     ///
     /// If `Some` is returned, the caller is the last remaining endpoint and responsible
     /// for cleaning up the event.
-    ///
-    /// # Panics
-    ///
-    /// Panics if polled after a previous poll already signaled completion.
     pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         #[cfg(debug_assertions)]
         self.backtrace.replace(Some(capture_backtrace()));

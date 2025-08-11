@@ -17,7 +17,7 @@ use std::task;
 
 use pinned_pool::{Key, PinnedPool};
 
-use crate::{Disconnected, ERR_POISONED_LOCK, OnceEvent, ReflectiveTSend, Sealed, WithTwoOwners};
+use crate::{Disconnected, ERR_POISONED_LOCK, OnceEvent, ReflectiveTSend, Sealed};
 
 /// A pool that manages thread-safe events with automatic cleanup.
 ///
@@ -56,7 +56,7 @@ pub struct OnceEventPool<T>
 where
     T: Send,
 {
-    pool: Mutex<PinnedPool<WithTwoOwners<OnceEvent<T>>>>,
+    pool: Mutex<PinnedPool<OnceEvent<T>>>,
 
     // It is invalid to move this type once it has been pinned.
     _requires_pinning: PhantomPinned,
@@ -122,7 +122,7 @@ where
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        let item = inserter.insert(WithTwoOwners::new(OnceEvent::new_bound()));
+        let item = inserter.insert(OnceEvent::new_bound());
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -177,7 +177,7 @@ where
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        let item = inserter.insert(WithTwoOwners::new(OnceEvent::new_bound()));
+        let item = inserter.insert(OnceEvent::new_bound());
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -241,7 +241,7 @@ where
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        let item = inserter.insert(WithTwoOwners::new(OnceEvent::new_bound()));
+        let item = inserter.insert(OnceEvent::new_bound());
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -504,8 +504,9 @@ where
 {
     // This is a pointer to avoid contaminating the type signature with the event lifetime.
     //
-    // SAFETY: We rely on the inner pool guaranteeing pinning and us owning a counted reference.
-    event: Option<NonNull<WithTwoOwners<OnceEvent<P::T>>>>,
+    // SAFETY: We rely on the inner pool guaranteeing pinning and the event state machine
+    // itself controlling when it is the appropriate time to release the event.
+    event: Option<NonNull<OnceEvent<P::T>>>,
 
     pool_ref: P,
     key: Key,
@@ -534,7 +535,7 @@ where
     /// ```
     #[inline]
     pub fn send(self, value: P::T) {
-        // We execute the drop logic inline here.
+        // The drop logic is different before/after set(), so we switch to manual drop here.
         let mut this = ManuallyDrop::new(self);
 
         // SAFETY: See comments on field.
@@ -544,12 +545,12 @@ where
                 .as_ref()
         };
 
-        event.set(value);
+        let set_result = event.set(value);
 
         // The event is going to be destroyed, so we cannot reference it anymore.
         this.event = None;
 
-        if event.release_one() {
+        if set_result == Err(Disconnected) {
             this.pool_ref
                 .pool
                 .lock()
@@ -577,11 +578,8 @@ where
         // The event is going to be destroyed, so we cannot reference it anymore.
         self.event = None;
 
-        // Signal that the sender was dropped before handling reference counting.
         // This ensures receivers get Disconnected errors if the sender is dropped without sending.
-        event.sender_dropped_without_set();
-
-        if event.release_one() {
+        if event.sender_dropped_without_set() == Err(Disconnected) {
             self.pool_ref
                 .pool
                 .lock()
@@ -610,8 +608,9 @@ where
 {
     // This is a pointer to avoid contaminating the type signature with the event lifetime.
     //
-    // SAFETY: We rely on the inner pool guaranteeing pinning and us owning a counted reference.
-    event: Option<NonNull<WithTwoOwners<OnceEvent<P::T>>>>,
+    // SAFETY: We rely on the inner pool guaranteeing pinning and the event state machine
+    // itself controlling when it is the appropriate time to release the event.
+    event: Option<NonNull<OnceEvent<P::T>>>,
 
     pool_ref: P,
     key: Key,
@@ -629,14 +628,16 @@ where
             return;
         };
 
+        // SAFETY: See comments on field.
+        let event = unsafe { event.as_ref() };
+
+        let disconnect_result = event.receiver_dropped_early();
+
         // Regardless of whether we were the last reference holder or not, we are no longer
         // allowed to reference the event as we are releasing our reference.
         self.event = None;
 
-        // SAFETY: See comments on field.
-        let event = unsafe { event.as_ref() };
-
-        if event.release_one() {
+        if disconnect_result == Err(Disconnected) {
             self.pool_ref
                 .pool
                 .lock()
@@ -665,6 +666,16 @@ where
         };
 
         let poll_result = event.poll(cx.waker());
+
+        if poll_result.is_some() {
+            // We were the last endpoint connected, so have to clean up the event now.
+            this.pool_ref
+                .pool
+                .lock()
+                .expect(ERR_POISONED_LOCK)
+                .remove(this.key);
+            this.event = None;
+        }
 
         poll_result.map_or_else(
             || task::Poll::Pending,

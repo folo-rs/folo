@@ -5,7 +5,6 @@ mod local;
 mod pooled_local;
 mod pooled_sync;
 mod sync;
-mod two_owners;
 
 #[allow(
     unused_imports,
@@ -18,4 +17,3 @@ pub use local::*;
 pub use pooled_local::*;
 pub use pooled_sync::*;
 pub use sync::*;
-pub(crate) use two_owners::*;

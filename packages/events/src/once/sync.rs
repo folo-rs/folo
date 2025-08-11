@@ -24,7 +24,7 @@ use std::task::Waker;
 use crate::{BacktraceType, ERR_POISONED_LOCK, capture_backtrace};
 use crate::{
     Disconnected, EVENT_AWAITING, EVENT_BOUND, EVENT_DISCONNECTED, EVENT_SET, EVENT_SIGNALING,
-    EVENT_UNBOUND, ReflectiveTSend, Sealed, WithTwoOwners,
+    EVENT_UNBOUND, ReflectiveTSend, Sealed,
 };
 
 /// A one-time event that can send and receive a value of type `T`, potentially across threads.
@@ -609,7 +609,10 @@ where
         f(backtrace.as_ref());
     }
 
-    pub(crate) fn set(&self, result: T) {
+    /// Sets the value of the event and notifies the awaiter, if there is one.
+    ///
+    /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
+    pub(crate) fn set(&self, result: T) -> Result<(), Disconnected> {
         let value_cell = self.value.get();
 
         // We can start by setting the value - this has to happen no matter what.
@@ -633,6 +636,8 @@ where
             EVENT_BOUND => {
                 // Current state: EVENT_SET
                 // There was nobody listening via the receiver - our work here is done.
+                // The receiver was still connected, so it will clean up the event.
+                Ok(())
             }
             EVENT_AWAITING => {
                 // Current state: EVENT_SIGNALING
@@ -670,6 +675,23 @@ where
                 // before we send this wake signal - that is fine. If that happens, this signal
                 // is simply a no-op.
                 waker.wake();
+
+                // The receiver was still connected, so it will clean up the event.
+                Ok(())
+            }
+            EVENT_DISCONNECTED => {
+                // The receiver has been dropped, so we need to clean up the event.
+                // We have to first drop the value that we inserted into the event, though.
+
+                // SAFETY: The receiver is gone - there is nobody else who might be touching
+                // the event anymore, we are essentially in a single-threaded mode now.
+                // We also just inserted the value, so it must still be there because we never
+                // entered a state where the receiver had the permission to extract the value.
+                unsafe {
+                    self.destroy_value();
+                }
+
+                Err(Disconnected)
             }
             _ => {
                 unreachable!("unreachable OnceEvent state on set: {previous_state}");
@@ -677,7 +699,10 @@ where
         }
     }
 
-    // We are intended to be polled via Future::poll, so we have an equivalent signature here.
+    /// We are intended to be polled via `Future::poll`, so we have an equivalent signature here.
+    ///
+    /// If `Some` is returned, the caller is the last remaining endpoint and responsible
+    /// for cleaning up the event.
     pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         #[cfg(debug_assertions)]
         self.backtrace
@@ -908,7 +933,31 @@ where
         }
     }
 
-    pub(crate) fn sender_dropped_without_set(&self) {
+    /// Drops the current value.
+    ///
+    /// # Safety
+    ///
+    /// Assumes acquired synchronization block for `value`.
+    /// Assumes there is a value in `value`.
+    unsafe fn destroy_value(&self) {
+        // SAFETY: Forwarding guarantees from the caller.
+        let value_cell = unsafe {
+            self.value
+                .get()
+                .as_mut()
+                .expect("UnsafeCell pointer is never null")
+        };
+
+        // SAFETY: Forwarding guarantees from the caller.
+        unsafe {
+            value_cell.assume_init_drop();
+        }
+    }
+
+    /// Marks the event as having been disconnected early from the sender side.
+    ///
+    /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
+    pub(crate) fn sender_dropped_without_set(&self) -> Result<(), Disconnected> {
         // We use Relaxed because we use fences to synchronize below.
         let previous_state = self
             .state
@@ -917,6 +966,8 @@ where
         match previous_state {
             EVENT_BOUND => {
                 // There was nobody listening via the receiver - our work here is done.
+                // The receiver still exists, so it will clean up.
+                Ok(())
             }
             EVENT_AWAITING => {
                 // There was someone listening via the receiver. We need to
@@ -950,9 +1001,78 @@ where
                 // before we send this wake signal - that is fine. If that happens, this signal
                 // is simply a no-op.
                 waker.wake();
+
+                // The receiver is the last endpoint remaining, so it will clean up.
+                Ok(())
+            }
+            EVENT_DISCONNECTED => {
+                // The sender is the last endpoint remaining, so it will clean up.
+                Err(Disconnected)
             }
             _ => {
-                unreachable!("unreachable OnceEvent state on disconnect: {previous_state}");
+                unreachable!("unreachable OnceEvent state on sender disconnect: {previous_state}");
+            }
+        }
+    }
+
+    /// Marks the event as having been disconnected early from the receiver side.
+    ///
+    /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
+    pub(crate) fn receiver_dropped_early(&self) -> Result<(), Disconnected> {
+        // We use Relaxed because we use fences to synchronize below.
+        let previous_state = self
+            .state
+            .swap(EVENT_DISCONNECTED, atomic::Ordering::Relaxed);
+
+        match previous_state {
+            EVENT_BOUND => {
+                // The sender had not yet set any value. It will clean up the event later.
+                Ok(())
+            }
+            EVENT_SET => {
+                // The sender has already set a value but we disconnected before we received it.
+                // We need to clean up the value and then later clean up the event, as well.
+
+                // We need to acquire the synchronization block for the `value`.
+                atomic::fence(atomic::Ordering::Acquire);
+
+                // SAFETY: The sender is gone and there is nobody else who might be touching
+                // the event anymore, we are essentially in a single-threaded mode now.
+                // We are in `EVENT_SET` which guarantees there is a value in there.
+                unsafe {
+                    self.destroy_value();
+                }
+
+                // The receiver will clean up.
+                Err(Disconnected)
+            }
+            EVENT_AWAITING => {
+                // We had previously started listening for the value but have not received one,
+                // so the sender is the last endpoint remaining. We need to make sure we clean
+                // up our old waker first, though, as the sender knows nothing about the waker
+                // being present.
+
+                // We need to acquire the synchronization block for the `awaiter`.
+                atomic::fence(atomic::Ordering::Acquire);
+
+                // SAFETY: The sender is gone and there is nobody else who might be touching
+                // the event anymore, we are essentially in a single-threaded mode now.
+                // We are in `EVENT_AWAITING` which guarantees there is a waker in there.
+                unsafe {
+                    self.destroy_awaiter();
+                }
+
+                // The sender will clean up the event later.
+                Ok(())
+            }
+            EVENT_DISCONNECTED => {
+                // The receiver is the last endpoint remaining, so it will clean up.
+                Err(Disconnected)
+            }
+            _ => {
+                unreachable!(
+                    "unreachable OnceEvent state on receiver disconnect: {previous_state}"
+                );
             }
         }
     }
@@ -974,10 +1094,25 @@ unsafe impl<T: Send> Sync for OnceEvent<T> {}
 ///
 /// This is a sealed trait and exists for internal use only. You never need to use it.
 #[expect(private_bounds, reason = "intentional - sealed trait")]
-pub trait EventRef<T>: Deref<Target = OnceEvent<T>> + ReflectiveTSend + Sealed
+pub trait EventRef<T>:
+    Deref<Target = OnceEvent<T>> + ReflectiveTSend + EventRefPrivate<T> + Sealed
 where
     T: Send,
 {
+}
+
+trait EventRefPrivate<T>
+where
+    T: Send,
+{
+    /// Releases the event, asserting that the last endpoint is being dropped.
+    ///
+    /// Depending on the resource management model of the reference, this may be a no-op.
+    /// For example, if the event is managed via `Arc`, the reference count will simply be
+    /// decremented to zero when the implementing type is dropped.
+    ///
+    /// This is primarily intended as a signal for manual resource management models.
+    fn release_event(&self);
 }
 
 /// An event referenced via `&` shared reference.
@@ -993,6 +1128,12 @@ where
 
 impl<T> Sealed for RefEvent<'_, T> where T: Send {}
 impl<T> EventRef<T> for RefEvent<'_, T> where T: Send {}
+impl<T> EventRefPrivate<T> for RefEvent<'_, T>
+where
+    T: Send,
+{
+    fn release_event(&self) {}
+}
 impl<T> Deref for RefEvent<'_, T>
 where
     T: Send,
@@ -1028,6 +1169,12 @@ where
 
 impl<T> Sealed for ArcEvent<T> where T: Send {}
 impl<T> EventRef<T> for ArcEvent<T> where T: Send {}
+impl<T> EventRefPrivate<T> for ArcEvent<T>
+where
+    T: Send,
+{
+    fn release_event(&self) {}
+}
 impl<T> Deref for ArcEvent<T>
 where
     T: Send,
@@ -1065,6 +1212,12 @@ where
 
 impl<T> Sealed for PtrEvent<T> where T: Send {}
 impl<T> EventRef<T> for PtrEvent<T> where T: Send {}
+impl<T> EventRefPrivate<T> for PtrEvent<T>
+where
+    T: Send,
+{
+    fn release_event(&self) {}
+}
 impl<T> Deref for PtrEvent<T>
 where
     T: Send,
@@ -1098,7 +1251,7 @@ pub struct ManagedEvent<T>
 where
     T: Send,
 {
-    event: NonNull<WithTwoOwners<OnceEvent<T>>>,
+    event: NonNull<OnceEvent<T>>,
 }
 
 impl<T> ManagedEvent<T>
@@ -1106,17 +1259,29 @@ where
     T: Send,
 {
     fn new_pair() -> (Self, Self) {
-        let event = NonNull::new(Box::into_raw(Box::new(WithTwoOwners::new(
-            OnceEvent::new_bound(),
-        ))))
-        .expect("freshly allocated Box cannot be null");
+        let event = NonNull::new(Box::into_raw(Box::new(OnceEvent::new_bound())))
+            .expect("freshly allocated Box cannot be null");
 
         (Self { event }, Self { event })
     }
 }
 
+impl<T> EventRefPrivate<T> for ManagedEvent<T>
+where
+    T: Send,
+{
+    fn release_event(&self) {
+        // The caller tells us that they are the last endpoint, so nothing else can possibly
+        // be accessing the event any more. We can safely release the memory.
+
+        // SAFETY: Yes, it really is the type we are claiming it to be - we made it!
+        drop(unsafe { Box::from_raw(self.event.as_ptr()) });
+    }
+}
+
 impl<T> Sealed for ManagedEvent<T> where T: Send {}
 impl<T> EventRef<T> for ManagedEvent<T> where T: Send {}
+
 impl<T> Deref for ManagedEvent<T>
 where
     T: Send,
@@ -1143,26 +1308,6 @@ where
 {
     type T = T;
 }
-impl<T> Drop for ManagedEvent<T>
-where
-    T: Send,
-{
-    fn drop(&mut self) {
-        // On drop, we need to coordinate with the `WithTwoOwners` to ensure proper cleanup.
-        // The last of either the sender or receiver will clean up the event.
-
-        // SAFETY: Storage is automatically managed - as long as either sender/receiver
-        // are alive, we are guaranteed that the event is alive.
-        let event_wrapper = unsafe { self.event.as_ref() };
-
-        if event_wrapper.release_one() {
-            // This was the last reference - free the memory now.
-
-            // SAFETY: Yes, it really is the type we are claiming it to be - we made it!
-            drop(unsafe { Box::from_raw(self.event.as_ptr()) });
-        }
-    }
-}
 // SAFETY: This is only used with the thread-safe event (the event is Sync).
 unsafe impl<T> Send for ManagedEvent<T> where T: Send {}
 
@@ -1181,8 +1326,7 @@ where
 {
     event_ref: E,
 
-    // We do not expect use cases that require Sync, so we suppress it to leave
-    // design flexibility for future changes.
+    // We are not compatible with concurrent sender use from multiple threads.
     _not_sync: PhantomData<Cell<()>>,
 }
 
@@ -1215,17 +1359,18 @@ where
     /// ```
     #[inline]
     pub fn send(self, value: E::T) {
-        // Once we call set(), we no longer need to call the drop logic.
+        // The drop logic is different before/after set(), so we switch to manual drop here.
         let mut this = ManuallyDrop::new(self);
 
-        this.event_ref.set(value);
+        if this.event_ref.set(value) == Err(Disconnected) {
+            // The other endpoint has disconnected, so we need to clean up the event.
+            this.event_ref.release_event();
+        }
 
-        // We still need to drop the event ref itself!
-        let event_ref_raw: *mut E = &raw mut this.event_ref;
-
-        // SAFETY: It is a valid object and ManuallyDrop ensures it will not be auto-dropped.
+        // SAFETY: The field contains a valid object of the right type. We avoid a double-drop
+        // via ManuallyDrop above. We consume `self` so nothing further can happen.
         unsafe {
-            ptr::drop_in_place(event_ref_raw);
+            ptr::drop_in_place(&raw mut this.event_ref);
         }
     }
 }
@@ -1236,7 +1381,10 @@ where
 {
     #[inline]
     fn drop(&mut self) {
-        self.event_ref.sender_dropped_without_set();
+        if self.event_ref.sender_dropped_without_set() == Err(Disconnected) {
+            // The other endpoint has disconnected, so we need to clean up the event.
+            self.event_ref.release_event();
+        }
     }
 }
 
@@ -1253,10 +1401,11 @@ pub struct OnceReceiver<E>
 where
     E: EventRef<<E as ReflectiveTSend>::T>,
 {
-    event_ref: E,
+    // This is `None` if the receiver has already been polled to completion. We need to guard
+    // against that because the event will already be cleaned up after the first poll completes.
+    event_ref: Option<E>,
 
-    // We do not expect use cases that require Sync, so we suppress it to leave
-    // design flexibility for future changes.
+    // We are not compatible with concurrent receiver use from multiple threads.
     _not_sync: PhantomData<Cell<()>>,
 }
 
@@ -1266,7 +1415,7 @@ where
 {
     fn new(event_ref: E) -> Self {
         Self {
-            event_ref,
+            event_ref: Some(event_ref),
             _not_sync: PhantomData,
         }
     }
@@ -1280,9 +1429,41 @@ where
 
     #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
-        self.event_ref
-            .poll(cx.waker())
-            .map_or_else(|| task::Poll::Pending, task::Poll::Ready)
+        let event_ref = self
+            .event_ref
+            .as_ref()
+            .expect("OnceReceiver  polled after completion");
+
+        let inner_poll_result = event_ref.poll(cx.waker());
+
+        // If the poll returns `Some`, we need to clean up the event.
+        if inner_poll_result.is_some() {
+            // We have a slight problem here, though, because if we release the event here and
+            // the memory is freed, what happens if someone foolishly tries to poll again? That
+            // could lead to a memory safety violation if we did it naively. Therefore, we have
+            // to guard against double polling via an `Option`.
+            event_ref.release_event();
+
+            // SAFETY: We are not moving anything, merely updating a field.
+            let this = unsafe { self.get_unchecked_mut() };
+            this.event_ref = None;
+        }
+
+        inner_poll_result.map_or_else(|| task::Poll::Pending, task::Poll::Ready)
+    }
+}
+
+impl<E> Drop for OnceReceiver<E>
+where
+    E: EventRef<<E as ReflectiveTSend>::T>,
+{
+    fn drop(&mut self) {
+        if let Some(event_ref) = self.event_ref.take() {
+            if event_ref.receiver_dropped_early() == Err(Disconnected) {
+                // The sender has already disconnected, so we need to clean up the event.
+                event_ref.release_event();
+            }
+        }
     }
 }
 
@@ -1586,7 +1767,7 @@ mod tests {
         sender.send(42);
 
         // Drop receiver to ensure no awaiter
-        _ = receiver;
+        drop(receiver);
 
         let mut called = false;
         event.inspect_awaiter(|backtrace| {

@@ -539,7 +539,6 @@ where
         // The event is going to be destroyed, so we cannot reference it anymore.
         self.event = None;
 
-        // Signal that the sender was dropped before handling reference counting.
         // This ensures receivers get Disconnected errors if the sender is dropped without sending.
         if event.sender_dropped_without_set() == Err(Disconnected) {
             self.pool_ref.pool.borrow_mut().remove(self.key);
