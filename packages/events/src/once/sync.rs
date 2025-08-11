@@ -1098,10 +1098,7 @@ pub struct ManagedEvent<T>
 where
     T: Send,
 {
-    // This needs `UnsafeCell` because not only are we reading it via shared reference (which
-    // would be okay) but we are also deallocating it, which makes Miri unhappy because it
-    // considers that an illegal write operation on a read-permissioned reference.
-    event: NonNull<UnsafeCell<WithTwoOwners<OnceEvent<T>>>>,
+    event: NonNull<WithTwoOwners<OnceEvent<T>>>,
 }
 
 impl<T> ManagedEvent<T>
@@ -1109,8 +1106,8 @@ where
     T: Send,
 {
     fn new_pair() -> (Self, Self) {
-        let event = NonNull::new(Box::into_raw(Box::new(UnsafeCell::new(
-            WithTwoOwners::new(OnceEvent::new_bound()),
+        let event = NonNull::new(Box::into_raw(Box::new(WithTwoOwners::new(
+            OnceEvent::new_bound(),
         ))))
         .expect("freshly allocated Box cannot be null");
 
@@ -1129,16 +1126,7 @@ where
     fn deref(&self) -> &Self::Target {
         // SAFETY: Storage is automatically managed - as long as either sender/receiver
         // are alive, we are guaranteed that the event is alive.
-        let event_cell = unsafe { self.event.as_ref() };
-
-        // SAFETY: We only ever access this via shared references, the only time anything
-        // exclusive happens is on drop (which we synchronize manually via reference counting).
-        unsafe {
-            event_cell
-                .get()
-                .as_ref()
-                .expect("UnsafeCell pointer is never null")
-        }
+        unsafe { self.event.as_ref() }
     }
 }
 impl<T> Clone for ManagedEvent<T>
@@ -1165,16 +1153,7 @@ where
 
         // SAFETY: Storage is automatically managed - as long as either sender/receiver
         // are alive, we are guaranteed that the event is alive.
-        let event_wrapper_cell = unsafe { self.event.as_ref() };
-
-        // SAFETY: We only ever access this via shared references, the only time anything
-        // exclusive happens is on drop (which we synchronize manually via reference counting).
-        let event_wrapper = unsafe {
-            event_wrapper_cell
-                .get()
-                .as_ref()
-                .expect("UnsafeCell pointer is never null")
-        };
+        let event_wrapper = unsafe { self.event.as_ref() };
 
         if event_wrapper.release_one() {
             // This was the last reference - free the memory now.

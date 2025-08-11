@@ -21,7 +21,8 @@ impl<T> WithTwoOwners<T> {
     /// Releases ownership, returning a "should clean up" flag (set for the last owner).
     #[must_use]
     pub(crate) fn release_one(&self) -> bool {
-        if !self.is_last_owner.fetch_or(true, atomic::Ordering::Relaxed) {
+        // Release because we are releasing the synchronization block of the `self`.
+        if !self.is_last_owner.fetch_or(true, atomic::Ordering::Release) {
             // We were not the last owner - someone else will clean up.
             return false;
         }
