@@ -15,6 +15,7 @@ default = []
 
 [dependencies]
 num-integer = { workspace = true }
+scopeguard = { workspace = true }
 
 [dev-dependencies]
 alloc_tracker = { path = "../alloc_tracker" }
