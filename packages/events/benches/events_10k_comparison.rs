@@ -16,6 +16,10 @@
     clippy::drop_non_drop,
     reason = "Explicit drops for clarity in benchmarks"
 )]
+#![allow(
+    clippy::large_stack_frames,
+    reason = "Some scenarios specifically test stack allocation"
+)]
 
 use std::hint::black_box;
 use std::iter;
@@ -40,7 +44,14 @@ criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
 type Payload = u128;
+
+#[cfg(not(debug_assertions))]
 const EVENT_COUNT: usize = 10_000;
+
+// The events are much bigger if debug assertions are enabled, so just use a few of them.
+// This is generally used only for testing the benchmarks.
+#[cfg(debug_assertions)]
+const EVENT_COUNT: usize = 10;
 
 fn entrypoint(c: &mut Criterion) {
     let allocs = Session::new();
@@ -123,10 +134,6 @@ fn local_once_event_rc(
         .execute_criterion_on(pool, group, "local_once_event_rc");
 }
 
-#[expect(
-    clippy::large_stack_frames,
-    reason = "Benchmark specifically tests stack allocation"
-)]
 fn local_once_event_ptr(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
@@ -179,10 +186,6 @@ fn local_once_event_ptr(
         .execute_criterion_on(pool, group, "local_once_event_ptr");
 }
 
-#[expect(
-    clippy::large_stack_frames,
-    reason = "Benchmark specifically tests stack allocation"
-)]
 fn local_once_event_in_place_ptr(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
@@ -285,10 +288,6 @@ fn once_event_arc(
         .execute_criterion_on(pool, group, "once_event_arc");
 }
 
-#[expect(
-    clippy::large_stack_frames,
-    reason = "Benchmark specifically tests stack allocation"
-)]
 fn once_event_ptr(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
@@ -341,10 +340,6 @@ fn once_event_ptr(
         .execute_criterion_on(pool, group, "once_event_ptr");
 }
 
-#[expect(
-    clippy::large_stack_frames,
-    reason = "Benchmark specifically tests stack allocation"
-)]
 fn once_event_in_place_ptr(
     pool: &mut ThreadPool,
     group: &mut BenchmarkGroup<'_, WallTime>,
