@@ -1074,18 +1074,16 @@ mod tests {
     #[test]
     fn insert_with_panic_leaves_consistent_state() {
         let mut slab = PinnedSlab::<i32, 3>::new(DropPolicy::MayDropItems);
-        
+
         let initial_count = slab.count;
         let initial_next_free = slab.next_free_index;
 
         // Try to insert with a panicking closure.
-        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            unsafe {
-                slab.begin_insert().insert_with_mut(|uninit| {
-                    uninit.write(42);
-                    std::panic!("Panic during initialization!");
-                });
-            }
+        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            slab.begin_insert().insert_with_mut(|uninit| {
+                uninit.write(42);
+                std::panic!("Panic during initialization!");
+            });
         }));
 
         assert!(panic_result.is_err());
@@ -1102,26 +1100,22 @@ mod tests {
     #[test]
     fn insert_with_multiple_panics() {
         let mut slab = PinnedSlab::<i32, 3>::new(DropPolicy::MayDropItems);
-        
+
         // Panic on first insert
-        let panic_result1 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            unsafe {
-                slab.begin_insert().insert_with_mut(|uninit| {
-                    uninit.write(42);
-                    std::panic!("First panic!");
-                });
-            }
+        let panic_result1 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            slab.begin_insert().insert_with_mut(|uninit| {
+                uninit.write(42);
+                std::panic!("First panic!");
+            });
         }));
         assert!(panic_result1.is_err());
 
         // Panic on second insert
-        let panic_result2 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            unsafe {
-                slab.begin_insert().insert_with_mut(|uninit| {
-                    uninit.write(43);
-                    std::panic!("Second panic!");
-                });
-            }
+        let panic_result2 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            slab.begin_insert().insert_with_mut(|uninit| {
+                uninit.write(43);
+                std::panic!("Second panic!");
+            });
         }));
         assert!(panic_result2.is_err());
 

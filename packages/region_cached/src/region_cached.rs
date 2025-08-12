@@ -90,6 +90,12 @@ where
     /// Executes the provided function with a reference to the cached value
     /// in the current memory region.
     ///
+    /// # Panics
+    ///
+    /// This method is panic-safe. If the provided closure panics, any internal state
+    /// modifications are properly rolled back, ensuring that subsequent calls will work
+    /// correctly and other threads won't be left waiting indefinitely.
+    ///
     /// # Example
     ///
     /// ```
@@ -904,9 +910,9 @@ mod tests {
 
     #[test]
     fn clone_panic_does_not_block_other_threads() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::{Arc, Barrier};
         use std::thread;
-        use std::sync::atomic::{AtomicUsize, Ordering};
 
         // Create a custom type that panics on clone for the first attempt.
         #[derive(Debug)]
