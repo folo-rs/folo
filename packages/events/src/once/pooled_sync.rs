@@ -666,20 +666,21 @@ where
 
         let poll_result = event.poll(cx.waker());
 
-        if poll_result.is_some() {
-            // We were the last endpoint connected, so have to clean up the event now.
-            this.pool_ref
-                .pool
-                .lock()
-                .expect(ERR_POISONED_LOCK)
-                .remove(this.key);
-            this.event = None;
-        }
-
         poll_result.map_or_else(
             || task::Poll::Pending,
             |value| {
-                this.drop_inner();
+                // Any result from the inner poll means we were the last endpoint connected,
+                // so we have to clean up the event now.
+                this.pool_ref
+                    .pool
+                    .lock()
+                    .expect(ERR_POISONED_LOCK)
+                    .remove(this.key);
+
+                // The cleanup is already all done by poll() when it returns a result.
+                // This just ensures panic on double poll (otherwise we would violate memory safety).
+                this.event = None;
+
                 task::Poll::Ready(value)
             },
         )
