@@ -3,6 +3,7 @@
 //! This module provides thread-safe event types that can be shared across threads
 //! and used for cross-thread communication.
 
+use std::alloc::{Layout, alloc, dealloc};
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
 use std::cell::{Cell, UnsafeCell};
@@ -115,21 +116,6 @@ where
     pub fn new() -> Self {
         Self {
             state: AtomicU8::new(EVENT_UNBOUND),
-            awaiter: UnsafeCell::new(MaybeUninit::uninit()),
-            value: UnsafeCell::new(MaybeUninit::uninit()),
-            #[cfg(debug_assertions)]
-            backtrace: Mutex::new(None),
-            _requires_pinning: PhantomPinned,
-        }
-    }
-
-    /// Creates a new thread-safe event that starts in the bound state.
-    ///
-    /// This is for internal use only - memory-managed events start in the bound state.
-    #[must_use]
-    pub(crate) fn new_bound() -> Self {
-        Self {
-            state: AtomicU8::new(EVENT_BOUND),
             awaiter: UnsafeCell::new(MaybeUninit::uninit()),
             value: UnsafeCell::new(MaybeUninit::uninit()),
             #[cfg(debug_assertions)]
@@ -616,9 +602,10 @@ where
         // SAFETY: We are not moving anything - in fact, there is nothing in there to move yet.
         let place = unsafe { place.get_unchecked_mut() };
 
-        let event = place.write(Self::new_bound());
+        Self::new_in_place_bound(place);
 
-        let event_ptr = NonNull::from(event);
+        // We cast away the MaybeUninit here because it is now initialized.
+        let event_ptr = NonNull::from(place).cast();
 
         (
             OnceSender::new(PtrEvent { event: event_ptr }),
@@ -1289,10 +1276,22 @@ where
     T: Send,
 {
     fn new_pair() -> (Self, Self) {
-        let event = NonNull::new(Box::into_raw(Box::new(OnceEvent::new_bound())))
-            .expect("freshly allocated Box cannot be null");
+        // SAFETY: The layout is correct for the type we are using - all is well.
+        let event = NonNull::new(unsafe { alloc(Self::layout()) })
+            .expect("memory allocation failed - fatal error")
+            .cast();
+
+        // SAFETY: MaybeUninit is a transparent wrapper, so the layout matches.
+        // This is the only reference, so we have exclusive access rights.
+        let event_as_maybe_uninit = unsafe { event.cast::<MaybeUninit<OnceEvent<T>>>().as_mut() };
+
+        OnceEvent::new_in_place_bound(event_as_maybe_uninit);
 
         (Self { event }, Self { event })
+    }
+
+    const fn layout() -> Layout {
+        Layout::new::<OnceEvent<T>>()
     }
 }
 
@@ -1304,8 +1303,11 @@ where
         // The caller tells us that they are the last endpoint, so nothing else can possibly
         // be accessing the event any more. We can safely release the memory.
 
-        // SAFETY: Yes, it really is the type we are claiming it to be - we made it!
-        drop(unsafe { Box::from_raw(self.event.as_ptr()) });
+        // SAFETY: Still the same type - all is well. We rely on the event state machine
+        // to ensure that there is no double-release happening.
+        unsafe {
+            dealloc(self.event.as_ptr().cast(), Self::layout());
+        }
     }
 }
 
