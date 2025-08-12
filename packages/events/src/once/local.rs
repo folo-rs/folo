@@ -118,7 +118,7 @@ impl<T> LocalOnceEvent<T> {
 
     /// Creates a new single-threaded event that starts in the bound state.
     ///
-    /// This is for internal use only - pooled events start in the bound state.
+    /// This is for internal use only - memory-managed events start in the bound state.
     #[must_use]
     pub(crate) fn new_bound() -> Self {
         Self {
@@ -134,8 +134,7 @@ impl<T> LocalOnceEvent<T> {
 
     /// In-place initializes a new single-threaded event that starts in the bound state.
     ///
-    /// This is for internal use only - pooled events start in the bound state.
-    #[must_use]
+    /// This is for internal use only - memory-managed events start in the bound state.
     pub(crate) fn new_in_place_bound(storage: &mut MaybeUninit<Self>) {
         // The key here is that we can skip initializing the MaybeUninit fields because
         // they start uninitialized by design and the UnsafeCell wrapper is transparent,

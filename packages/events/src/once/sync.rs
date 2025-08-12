@@ -9,7 +9,7 @@ use std::cell::{Cell, UnsafeCell};
 use std::future::Future;
 use std::hint::spin_loop;
 use std::marker::{PhantomData, PhantomPinned};
-use std::mem::{ManuallyDrop, MaybeUninit};
+use std::mem::{ManuallyDrop, MaybeUninit, offset_of};
 use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::{self, NonNull};
@@ -125,7 +125,7 @@ where
 
     /// Creates a new thread-safe event that starts in the bound state.
     ///
-    /// This is for internal use only - pooled events start in the bound state.
+    /// This is for internal use only - memory-managed events start in the bound state.
     #[must_use]
     pub(crate) fn new_bound() -> Self {
         Self {
@@ -135,6 +135,36 @@ where
             #[cfg(debug_assertions)]
             backtrace: Mutex::new(None),
             _requires_pinning: PhantomPinned,
+        }
+    }
+
+    /// In-place initializes a new thread-safe event that starts in the bound state.
+    ///
+    /// This is for internal use only - memory-managed events start in the bound state.
+    pub(crate) fn new_in_place_bound(storage: &mut MaybeUninit<Self>) {
+        // The key here is that we can skip initializing the MaybeUninit fields because
+        // they start uninitialized by design and the UnsafeCell wrapper is transparent,
+        // only affecting accesses and not the contents.
+        let base_ptr = storage.as_mut_ptr();
+
+        // SAFETY: We are making a pointer to a known field at a compiler-guaranteed offset.
+        let state_ptr = unsafe { base_ptr.byte_add(offset_of!(Self, state)) }.cast::<AtomicU8>();
+
+        // SAFETY: This is the matching field of the type we are initializing, so valid for writes.
+        unsafe {
+            state_ptr.write(AtomicU8::new(EVENT_BOUND));
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            // SAFETY: We are making a pointer to a known field at a compiler-guaranteed offset.
+            let backtrace_ptr = unsafe { base_ptr.byte_add(offset_of!(Self, backtrace)) }
+                .cast::<Mutex<Option<BacktraceType>>>();
+
+            // SAFETY: This is the matching field of the type we are initializing, so valid for writes.
+            unsafe {
+                backtrace_ptr.write(Mutex::new(None));
+            }
         }
     }
 
@@ -1432,7 +1462,7 @@ where
         let event_ref = self
             .event_ref
             .as_ref()
-            .expect("OnceReceiver  polled after completion");
+            .expect("OnceReceiver polled after completion");
 
         let inner_poll_result = event_ref.poll(cx.waker());
 

@@ -7,10 +7,10 @@
 //! ```
 
 use std::pin::pin;
+use std::task::{self, Waker};
 
 use events::{OnceEvent, OnceReceiver, RefEvent};
 use futures::executor::block_on;
-use futures::task::{Context, noop_waker_ref};
 
 fn main() {
     println!("=== Event Backtrace Debugging Example ===");
@@ -34,7 +34,7 @@ fn main() {
 
 // You will see the name of this function in the backtrace because it is doing the await.
 fn await_on_event_via_receiver(receiver: OnceReceiver<RefEvent<'_, String>>) {
-    let mut context = Context::from_waker(noop_waker_ref());
+    let mut context = task::Context::from_waker(Waker::noop());
     let mut pinned = pin!(receiver);
 
     drop(pinned.as_mut().poll(&mut context));

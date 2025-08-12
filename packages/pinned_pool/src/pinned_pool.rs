@@ -770,10 +770,10 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
         's: 'v,
     {
         let result = self.slab_inserter.insert(value);
-        *self.pool_length = self
-            .pool_length
-            .checked_add(1)
-            .expect("length overflow: pool cannot contain more items than usize::MAX");
+
+        // usize overflow would suggest the pool contents are larger than virtual memory - never.
+        *self.pool_length = self.pool_length.wrapping_add(1);
+
         result
     }
 
@@ -805,10 +805,10 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
         's: 'v,
     {
         let result = self.slab_inserter.insert_mut(value);
-        *self.pool_length = self
-            .pool_length
-            .checked_add(1)
-            .expect("length overflow: pool cannot contain more items than usize::MAX");
+
+        // usize overflow would suggest the pool contents are larger than virtual memory - never.
+        *self.pool_length = self.pool_length.wrapping_add(1);
+
         result
     }
 
@@ -854,10 +854,10 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
     {
         // SAFETY: Caller guarantees that the closure properly initializes the value.
         let result = unsafe { self.slab_inserter.insert_with(f) };
-        *self.pool_length = self
-            .pool_length
-            .checked_add(1)
-            .expect("length overflow: pool cannot contain more items than usize::MAX");
+
+        // usize overflow would suggest the pool contents are larger than virtual memory - never.
+        *self.pool_length = self.pool_length.wrapping_add(1);
+
         result
     }
 
