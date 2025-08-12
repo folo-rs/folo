@@ -26,6 +26,7 @@ many_cpus_benchmarking = { path = "../many_cpus_benchmarking" }
 new_zealand = { path = "../new_zealand" }
 oneshot = { workspace = true }
 par_bench = { path = "../par_bench", features = ["criterion", "alloc_tracker", "all_the_time"] }
+rand = { workspace = true }
 spin_on = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
@@ -43,4 +44,8 @@ harness = false
 
 [[bench]]
 name = "events_full_cycle_comparison"
+harness = false
+
+[[bench]]
+name = "events_10k_comparison"
 harness = false
