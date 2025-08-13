@@ -839,6 +839,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(miri))] // Test uses thread::sleep which is not supported by Miri
     fn initializer_panic_does_not_block_other_threads() {
         use std::sync::{Arc, Barrier};
         use std::thread;
