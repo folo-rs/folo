@@ -26,14 +26,6 @@
     reason = "No need for API documentation in benchmark code"
 )]
 #![allow(
-    clippy::arithmetic_side_effects,
-    reason = "Arithmetic side effects are acceptable in benchmark code"
-)]
-#![allow(
-    clippy::mutex_atomic,
-    reason = "Using Mutex for simplicity in benchmark coordination"
-)]
-#![allow(
     clippy::drop_non_drop,
     reason = "Explicit drops for clarity in benchmarks"
 )]
@@ -49,9 +41,9 @@ use alloc_tracker::{Allocator, Session};
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, Criterion, criterion_group, criterion_main};
 use events::{LocalOnceEvent, LocalOnceEventPool, OnceEvent, OnceEventPool};
-use futures::executor::block_on;
 use many_cpus::ProcessorSet;
 use par_bench::{ResourceUsageExt, Run, ThreadPool};
+use spin_on::spin_on;
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
@@ -107,7 +99,7 @@ fn local_once_event_ref(
             let (sender, receiver) = event.bind_by_ref();
 
             sender.send(42);
-            black_box(block_on(receiver).unwrap());
+            black_box(spin_on(receiver).unwrap());
         })
         .execute_criterion_on(pool, group, "local_once_event_ref");
 }
@@ -127,7 +119,7 @@ fn local_once_event_rc(
             let (sender, receiver) = event.bind_by_rc();
 
             sender.send(42);
-            black_box(block_on(receiver).unwrap());
+            black_box(spin_on(receiver).unwrap());
         })
         .execute_criterion_on(pool, group, "local_once_event_rc");
 }
@@ -149,7 +141,7 @@ fn local_once_event_ptr(
             let (sender, receiver) = unsafe { event.as_ref().bind_by_ptr() };
 
             sender.send(42);
-            black_box(block_on(receiver).unwrap());
+            black_box(spin_on(receiver).unwrap());
 
             // We are required to keep the event alive until both sender and receiver are gone.
             drop(event);
@@ -176,7 +168,7 @@ fn local_once_event_in_place_ptr(
                 unsafe { LocalOnceEvent::<Payload>::new_in_place_by_ptr(event_storage.as_mut()) };
 
             sender.send(42);
-            black_box(block_on(receiver).unwrap());
+            black_box(spin_on(receiver).unwrap());
 
             // SAFETY: We are just removing the Pin wrapper so we can drop it because the
             // MaybeUninit type is not designed for pinned usage, so does not understand Pin.
@@ -204,7 +196,7 @@ fn local_once_event_managed(
             let (sender, receiver) = LocalOnceEvent::<Payload>::new_managed();
 
             sender.send(42);
-            black_box(block_on(receiver).unwrap());
+            black_box(spin_on(receiver).unwrap());
         })
         .execute_criterion_on(pool, group, "local_once_event_managed");
 }
@@ -224,7 +216,7 @@ fn once_event_arc(
             let (sender, receiver) = event.bind_by_arc();
 
             sender.send(42);
-            black_box(block_on(receiver).unwrap());
+            black_box(spin_on(receiver).unwrap());
         })
         .execute_criterion_on(pool, group, "once_event_arc");
 }
@@ -246,7 +238,7 @@ fn once_event_ptr(
             let (sender, receiver) = unsafe { event.as_ref().bind_by_ptr() };
 
             sender.send(42);
-            black_box(block_on(receiver).unwrap());
+            black_box(spin_on(receiver).unwrap());
 
             // We are required to keep the event alive until both sender and receiver are gone.
             drop(event);
@@ -273,7 +265,7 @@ fn once_event_in_place_ptr(
                 unsafe { OnceEvent::<Payload>::new_in_place_by_ptr(event_storage.as_mut()) };
 
             sender.send(42);
-            black_box(block_on(receiver).unwrap());
+            black_box(spin_on(receiver).unwrap());
 
             // We are required to keep the event alive until both sender and receiver are gone.
 
@@ -303,7 +295,7 @@ fn once_event_managed(
             let (sender, receiver) = OnceEvent::<Payload>::new_managed();
 
             sender.send(42);
-            black_box(block_on(receiver).unwrap());
+            black_box(spin_on(receiver).unwrap());
         })
         .execute_criterion_on(pool, group, "once_event_managed");
 }
@@ -322,7 +314,7 @@ fn oneshot_channel(
             let (sender, receiver) = oneshot::channel();
 
             drop(sender.send(42));
-            black_box(block_on(receiver).unwrap());
+            black_box(spin_on(receiver).unwrap());
         })
         .execute_criterion_on(pool, group, "oneshot_channel");
 }
@@ -342,7 +334,7 @@ fn futures_oneshot_channel(
             let (sender, receiver) = futures::channel::oneshot::channel();
 
             _ = sender.send(42);
-            black_box(block_on(receiver).unwrap());
+            black_box(spin_on(receiver).unwrap());
         })
         .execute_criterion_on(pool, group, "futures_oneshot_channel");
 }
@@ -362,7 +354,7 @@ fn pooled_local_once_event_ref(
             let (sender, receiver) = args.thread_state().bind_by_ref();
 
             sender.send(42);
-            black_box(block_on(receiver).unwrap());
+            black_box(spin_on(receiver).unwrap());
         })
         .execute_criterion_on(pool, group, "pooled_local_once_event_ref");
 }
@@ -382,7 +374,7 @@ fn pooled_local_once_event_rc(
             let (sender, receiver) = args.thread_state().bind_by_rc();
 
             sender.send(42);
-            black_box(block_on(receiver).unwrap());
+            black_box(spin_on(receiver).unwrap());
         })
         .execute_criterion_on(pool, group, "pooled_local_once_event_rc");
 }
@@ -399,12 +391,12 @@ fn pooled_local_once_event_ptr(
             measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|args| {
-            // SAFETY: We keep the pool alive for the duration of the iteration,
-            // dropping it only at the moment of cleanup of each iteration.
+            // SAFETY: We keep the pool alive for the duration of the run,
+            // dropping it only at the moment of cleanup of each run.
             let (sender, receiver) = unsafe { args.thread_state().as_ref().bind_by_ptr() };
 
             sender.send(42);
-            black_box(block_on(receiver).unwrap());
+            black_box(spin_on(receiver).unwrap());
         })
         .execute_criterion_on(pool, group, "pooled_local_once_event_ptr");
 }
@@ -424,7 +416,7 @@ fn pooled_once_event_ref(
             let (sender, receiver) = args.thread_state().bind_by_ref();
 
             sender.send(42);
-            black_box(block_on(receiver).unwrap());
+            black_box(spin_on(receiver).unwrap());
         })
         .execute_criterion_on(pool, group, "pooled_once_event_ref");
 }
@@ -444,7 +436,7 @@ fn pooled_once_event_arc(
             let (sender, receiver) = args.thread_state().bind_by_arc();
 
             sender.send(42);
-            black_box(block_on(receiver).unwrap());
+            black_box(spin_on(receiver).unwrap());
         })
         .execute_criterion_on(pool, group, "pooled_once_event_arc");
 }
@@ -461,12 +453,12 @@ fn pooled_once_event_ptr(
             measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|args| {
-            // SAFETY: We keep the pool alive for the duration of the iteration,
-            // dropping it only at the moment of cleanup of each iteration.
+            // SAFETY: We keep the pool alive for the duration of the run,
+            // dropping it only at the moment of cleanup of each run.
             let (sender, receiver) = unsafe { args.thread_state().as_ref().bind_by_ptr() };
 
             sender.send(42);
-            black_box(block_on(receiver).unwrap());
+            black_box(spin_on(receiver).unwrap());
         })
         .execute_criterion_on(pool, group, "pooled_once_event_ptr");
 }

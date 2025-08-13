@@ -122,7 +122,8 @@ where
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        let item = inserter.insert(OnceEvent::new_bound());
+        // SAFETY: We rely on OnceEvent::new_in_place_bound() for correct initialization.
+        let item = unsafe { inserter.insert_with(OnceEvent::new_in_place_bound) };
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -130,7 +131,7 @@ where
 
         (
             PooledOnceSender {
-                event: Some(item_ptr),
+                event: item_ptr,
                 pool_ref: pool_ref.clone(),
                 key,
             },
@@ -177,7 +178,8 @@ where
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        let item = inserter.insert(OnceEvent::new_bound());
+        // SAFETY: We rely on OnceEvent::new_in_place_bound() for correct initialization.
+        let item = unsafe { inserter.insert_with(OnceEvent::new_in_place_bound) };
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -187,7 +189,7 @@ where
 
         (
             PooledOnceSender {
-                event: Some(item_ptr),
+                event: item_ptr,
                 pool_ref: pool_ref.clone(),
                 key,
             },
@@ -241,7 +243,8 @@ where
         let inserter = inner_pool.begin_insert();
         let key = inserter.key();
 
-        let item = inserter.insert(OnceEvent::new_bound());
+        // SAFETY: We rely on OnceEvent::new_in_place_bound() for correct initialization.
+        let item = unsafe { inserter.insert_with(OnceEvent::new_in_place_bound) };
 
         let item_ptr = NonNull::from(item.get_ref());
 
@@ -251,7 +254,7 @@ where
 
         (
             PooledOnceSender {
-                event: Some(item_ptr),
+                event: item_ptr,
                 pool_ref: pool_ref.clone(),
                 key,
             },
@@ -506,7 +509,7 @@ where
     //
     // SAFETY: We rely on the inner pool guaranteeing pinning and the event state machine
     // itself controlling when it is the appropriate time to release the event.
-    event: Option<NonNull<OnceEvent<P::T>>>,
+    event: NonNull<OnceEvent<P::T>>,
 
     pool_ref: P,
     key: Key,
@@ -538,17 +541,13 @@ where
         // The drop logic is different before/after set(), so we switch to manual drop here.
         let mut this = ManuallyDrop::new(self);
 
-        // SAFETY: See comments on field.
-        let event = unsafe {
-            this.event
-                .expect("event is only None during destruction")
-                .as_ref()
-        };
+        // SAFETY: We rely on the event state machine to only signal "release the event" when
+        // we know it will never be used by any logic path again. We only ever create shared
+        // references, so there is no aliasing conflict risk. The two different paths that will
+        // result in the event being released (set() and drop()) are mutually exclusive.
+        let event = unsafe { this.event.as_ref() };
 
         let set_result = event.set(value);
-
-        // The event is going to be destroyed, so we cannot reference it anymore.
-        this.event = None;
 
         if set_result == Err(Disconnected) {
             this.pool_ref
@@ -572,11 +571,11 @@ where
 {
     #[inline]
     fn drop(&mut self) {
-        // SAFETY: See comments on field.
-        let event = unsafe { self.event.expect("only possible on double drop").as_ref() };
-
-        // The event is going to be destroyed, so we cannot reference it anymore.
-        self.event = None;
+        // SAFETY: We rely on the event state machine to only signal "release the event" when
+        // we know it will never be used by any logic path again. We only ever create shared
+        // references, so there is no aliasing conflict risk. The two different paths that will
+        // result in the event being released (set() and drop()) are mutually exclusive.
+        let event = unsafe { self.event.as_ref() };
 
         // This ensures receivers get Disconnected errors if the sender is dropped without sending.
         if event.sender_dropped_without_set() == Err(Disconnected) {
@@ -667,20 +666,21 @@ where
 
         let poll_result = event.poll(cx.waker());
 
-        if poll_result.is_some() {
-            // We were the last endpoint connected, so have to clean up the event now.
-            this.pool_ref
-                .pool
-                .lock()
-                .expect(ERR_POISONED_LOCK)
-                .remove(this.key);
-            this.event = None;
-        }
-
         poll_result.map_or_else(
             || task::Poll::Pending,
             |value| {
-                this.drop_inner();
+                // Any result from the inner poll means we were the last endpoint connected,
+                // so we have to clean up the event now.
+                this.pool_ref
+                    .pool
+                    .lock()
+                    .expect(ERR_POISONED_LOCK)
+                    .remove(this.key);
+
+                // The cleanup is already all done by poll() when it returns a result.
+                // This just ensures panic on double poll (otherwise we would violate memory safety).
+                this.event = None;
+
                 task::Poll::Ready(value)
             },
         )

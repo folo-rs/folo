@@ -494,19 +494,21 @@ impl<T> PinnedPool<T> {
     {
         let slab_index = self.index_of_slab_with_vacant_slot();
 
-        let slab = self
-            .slabs
-            .get_mut(slab_index)
-            .expect("we just verified that there is a slab with a vacant slot at this index");
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "we just identified that there is a slab with a vacant slot at this index"
+        )]
+        let slab = &mut self.slabs[slab_index];
 
         // We invalidate the "slab with vacant slot" cache here if this is the last vacant slot.
         // It is true that just creating an inserter does not mean we will insert an item. After
         // all, the inserter may be abandoned. However, we do this invalidation preemptively
         // because Rust lifetimes make it hard to modify the pool from the inserter (as we are
         // already borrowing the slab exclusively). Since it is just a cache, this is no big deal.
-        let predicted_slab_filled_slots = slab.len()
-            .checked_add(1)
-            .expect("we cannot overflow because there is at least one free slot, so it means there must be room to increment");
+        //
+        // We cannot overflow because there is at least one free slot, so it means there must
+        // be room to increment
+        let predicted_slab_filled_slots = slab.len().wrapping_add(1);
 
         if predicted_slab_filled_slots == SLAB_CAPACITY {
             self.slab_with_vacant_slot_index = None;
@@ -583,17 +585,16 @@ impl<T> PinnedPool<T> {
     pub fn remove(&mut self, key: Key) {
         let index = ItemCoordinates::<SLAB_CAPACITY>::from_key(key);
 
-        let Some(slab) = self.slabs.get_mut(index.slab_index) else {
-            panic!("key was not associated with an item in the pool")
-        };
+        let slab = self
+            .slabs
+            .get_mut(index.slab_index)
+            .expect("key was not associated with an item in the pool");
 
         slab.remove(index.index_in_slab);
 
         // Update our tracked length since we just removed an item.
-        self.length = self
-            .length
-            .checked_sub(1)
-            .expect("length underflow: cannot remove more items than exist in pool");
+        // Cannot underflow because the slab would have panicked if the item did not exist.
+        self.length = self.length.wrapping_sub(1);
 
         // There is now a vacant slot in this slab! We may want to remember this for fast inserts.
         // We try to remember the lowest index of a slab with a vacant slot, so we
@@ -769,10 +770,10 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
         's: 'v,
     {
         let result = self.slab_inserter.insert(value);
-        *self.pool_length = self
-            .pool_length
-            .checked_add(1)
-            .expect("length overflow: pool cannot contain more items than usize::MAX");
+
+        // usize overflow would suggest the pool contents are larger than virtual memory - never.
+        *self.pool_length = self.pool_length.wrapping_add(1);
+
         result
     }
 
@@ -804,10 +805,10 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
         's: 'v,
     {
         let result = self.slab_inserter.insert_mut(value);
-        *self.pool_length = self
-            .pool_length
-            .checked_add(1)
-            .expect("length overflow: pool cannot contain more items than usize::MAX");
+
+        // usize overflow would suggest the pool contents are larger than virtual memory - never.
+        *self.pool_length = self.pool_length.wrapping_add(1);
+
         result
     }
 
@@ -859,10 +860,10 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
     {
         // SAFETY: Caller guarantees that the closure properly initializes the value.
         let result = unsafe { self.slab_inserter.insert_with(f) };
-        *self.pool_length = self
-            .pool_length
-            .checked_add(1)
-            .expect("length overflow: pool cannot contain more items than usize::MAX");
+
+        // usize overflow would suggest the pool contents are larger than virtual memory - never.
+        *self.pool_length = self.pool_length.wrapping_add(1);
+
         result
     }
 
@@ -915,10 +916,10 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
     {
         // SAFETY: Caller guarantees that the closure properly initializes the value.
         let result = unsafe { self.slab_inserter.insert_with_mut(f) };
-        *self.pool_length = self
-            .pool_length
-            .checked_add(1)
-            .expect("length overflow: pool cannot contain more items than usize::MAX");
+
+        // usize overflow implies we have filled all of virtual memory - never going to happen.
+        *self.pool_length = self.pool_length.wrapping_add(1);
+
         result
     }
 
@@ -984,9 +985,11 @@ impl<const SLAB_CAPACITY: usize> ItemCoordinates<SLAB_CAPACITY> {
     #[must_use]
     fn to_key(&self) -> Key {
         Key {
-            index_in_pool: self.slab_index.checked_mul(SLAB_CAPACITY)
-                .and_then(|x| x.checked_add(self.index_in_slab))
-                .expect("key indicates an item beyond the range of virtual memory - impossible to reach this point from a valid history")
+            // Any overflow here would mean our pool contents are larger than virtual memory, so very unrealistic.
+            index_in_pool: self
+                .slab_index
+                .wrapping_mul(SLAB_CAPACITY)
+                .wrapping_add(self.index_in_slab),
         }
     }
 }

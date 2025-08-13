@@ -3,6 +3,7 @@
 //! This module provides single-threaded event types that have lower overhead
 //! but cannot be shared across threads.
 
+use std::alloc::{Layout, alloc, dealloc};
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
 #[cfg(debug_assertions)]
@@ -10,7 +11,7 @@ use std::cell::RefCell;
 use std::cell::{Cell, UnsafeCell};
 use std::future::Future;
 use std::marker::{PhantomData, PhantomPinned};
-use std::mem::{ManuallyDrop, MaybeUninit};
+use std::mem::{ManuallyDrop, MaybeUninit, offset_of};
 use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::{self, NonNull};
@@ -116,19 +117,33 @@ impl<T> LocalOnceEvent<T> {
         }
     }
 
-    /// Creates a new single-threaded event that starts in the bound state.
+    /// In-place initializes a new single-threaded event that starts in the bound state.
     ///
-    /// This is for internal use only - pooled events start in the bound state.
-    #[must_use]
-    pub(crate) fn new_bound() -> Self {
-        Self {
-            state: Cell::new(EVENT_BOUND),
-            awaiter: UnsafeCell::new(MaybeUninit::uninit()),
-            value: UnsafeCell::new(MaybeUninit::uninit()),
-            #[cfg(debug_assertions)]
-            backtrace: RefCell::new(None),
-            _single_threaded: PhantomData,
-            _requires_pinning: PhantomPinned,
+    /// This is for internal use only - memory-managed events start in the bound state.
+    pub(crate) fn new_in_place_bound(storage: &mut MaybeUninit<Self>) {
+        // The key here is that we can skip initializing the MaybeUninit fields because
+        // they start uninitialized by design and the UnsafeCell wrapper is transparent,
+        // only affecting accesses and not the contents.
+        let base_ptr = storage.as_mut_ptr();
+
+        // SAFETY: We are making a pointer to a known field at a compiler-guaranteed offset.
+        let state_ptr = unsafe { base_ptr.byte_add(offset_of!(Self, state)) }.cast::<Cell<u8>>();
+
+        // SAFETY: This is the matching field of the type we are initializing, so valid for writes.
+        unsafe {
+            state_ptr.write(Cell::new(EVENT_BOUND));
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            // SAFETY: We are making a pointer to a known field at a compiler-guaranteed offset.
+            let backtrace_ptr = unsafe { base_ptr.byte_add(offset_of!(Self, backtrace)) }
+                .cast::<RefCell<Option<BacktraceType>>>();
+
+            // SAFETY: This is the matching field of the type we are initializing, so valid for writes.
+            unsafe {
+                backtrace_ptr.write(RefCell::new(None));
+            }
         }
     }
 
@@ -573,9 +588,10 @@ impl<T> LocalOnceEvent<T> {
         // SAFETY: We are not moving anything - in fact, there is nothing in there to move yet.
         let place = unsafe { place.get_unchecked_mut() };
 
-        let event = place.write(Self::new_bound());
+        Self::new_in_place_bound(place);
 
-        let event_ptr = NonNull::from(event);
+        // We cast away the MaybeUninit here because it is now initialized.
+        let event_ptr = NonNull::from(place).cast();
 
         (
             LocalOnceSender::new(PtrLocalEvent { event: event_ptr }),
@@ -1015,10 +1031,23 @@ pub struct ManagedLocalEvent<T> {
 
 impl<T> ManagedLocalEvent<T> {
     fn new_pair() -> (Self, Self) {
-        let event = NonNull::new(Box::into_raw(Box::new(LocalOnceEvent::new_bound())))
-            .expect("freshly allocated Box cannot be null");
+        // SAFETY: The layout is correct for the type we are using - all is well.
+        let event = NonNull::new(unsafe { alloc(Self::layout()) })
+            .expect("memory allocation failed - fatal error")
+            .cast();
+
+        // SAFETY: MaybeUninit is a transparent wrapper, so the layout matches.
+        // This is the only reference, so we have exclusive access rights.
+        let event_as_maybe_uninit =
+            unsafe { event.cast::<MaybeUninit<LocalOnceEvent<T>>>().as_mut() };
+
+        LocalOnceEvent::new_in_place_bound(event_as_maybe_uninit);
 
         (Self { event }, Self { event })
+    }
+
+    const fn layout() -> Layout {
+        Layout::new::<LocalOnceEvent<T>>()
     }
 }
 
@@ -1027,8 +1056,11 @@ impl<T> LocalEventRefPrivate<T> for ManagedLocalEvent<T> {
         // The caller tells us that they are the last endpoint, so nothing else can possibly
         // be accessing the event any more. We can safely release the memory.
 
-        // SAFETY: Yes, it really is the type we are claiming it to be - we made it!
-        drop(unsafe { Box::from_raw(self.event.as_ptr()) });
+        // SAFETY: Still the same type - all is well. We rely on the event state machine
+        // to ensure that there is no double-release happening.
+        unsafe {
+            dealloc(self.event.as_ptr().cast(), Self::layout());
+        }
     }
 }
 

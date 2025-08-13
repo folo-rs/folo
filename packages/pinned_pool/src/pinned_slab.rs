@@ -1,7 +1,7 @@
 use core::panic;
 use std::alloc::{Layout, alloc, dealloc};
 use std::any::type_name;
-use std::mem::MaybeUninit;
+use std::mem::{MaybeUninit, size_of};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::{mem, thread};
@@ -100,6 +100,8 @@ impl<T, const CAPACITY: usize> PinnedSlab<T, CAPACITY> {
             "we do not intend to handle allocation failure as a real possibility - OOM is panic",
         );
 
+        ensure_virtual_pages_mapped_to_physical_pages::<Entry<T>, CAPACITY>(ptr);
+
         // Initialize all slots to `Vacant` to start with.
         for index in 0..CAPACITY {
             // SAFETY: We ensure in `layout()` that there is enough space for all items up to our
@@ -165,7 +167,9 @@ impl<T, const CAPACITY: usize> PinnedSlab<T, CAPACITY> {
     }
 
     fn entry_ptr(&self, index: usize) -> NonNull<Entry<T>> {
-        assert!(
+        // This is only debug_assert because we do not rely on this for public API correctness.
+        // The pool's ItemCoordinates logic guarantees that the per-slab indexing is in-bounds.
+        debug_assert!(
             index < CAPACITY,
             "entry {index} index out of bounds in slab of {}",
             type_name::<T>()
@@ -287,10 +291,9 @@ impl<T, const CAPACITY: usize> PinnedSlab<T, CAPACITY> {
         // Push the removed item's entry onto the free stack.
         self.next_free_index = index;
 
-        self.count = self
-            .count
-            .checked_sub(1)
-            .expect("we asserted above that the entry is occupied so count must be non-zero");
+        // We would have panicked above if the entry were not occupied,
+        // so we really did remove an item and this cannot underflow.
+        self.count = self.count.wrapping_sub(1);
     }
 
     /// Iterates through the items in the slab.
@@ -564,11 +567,8 @@ impl<'s, T, const CAPACITY: usize> PinnedSlabInserter<'s, T, CAPACITY> {
         // SAFETY: Items are always pinned - that is the point of this collection.
         let pinned_ref: Pin<&'v mut T> = unsafe { Pin::new_unchecked(init_mut) };
 
-        self.slab.count = self
-            .slab
-            .count
-            .checked_add(1)
-            .expect("guarded by capacity < usize::MAX in slab ctor");
+        // usize overflow implies we have filled all of virtual memory - never going to happen.
+        self.slab.count = self.slab.count.wrapping_add(1);
 
         pinned_ref
     }
@@ -609,6 +609,36 @@ impl<'s, T, const CAPACITY: usize> Iterator for PinnedSlabIterator<'s, T, CAPACI
         }
 
         None
+    }
+}
+
+/// Ensures that the virtual memory pages that are behind a pointer are mapped to physical pages.
+///
+/// The operating system normally maps virtual pages to physical pages on-demand. However, this
+/// has some caveats: it may happen on hot paths and inside critical sections, which is not
+/// desirable; furthermore, some operating system APIs (e.g. reading from a Windows socket)
+/// will switch to a slower logic path if provided virtual pages that are not yet mapped to
+/// physical pages. Therefore, it is beneficial to ensure memory is mapped to physical pages
+/// ahead of time if it is known to eventually be used.
+///
+/// We are operating in context of an object pool, so we can assume all its memory will be used,
+/// so we do this eagerly when extending pool capacity.
+///
+/// We implement this by writing to each page of memory in the pointer's range, so the memory
+/// is assumed to be uninitialized. Calling this on initialized memory would conceptually be
+/// pointless, anyway.
+#[cfg_attr(test, mutants::skip)] // Impractical to test, as it is merely an optimization that is rarely visible.
+fn ensure_virtual_pages_mapped_to_physical_pages<T, const COUNT: usize>(ptr: NonNull<T>) {
+    if size_of::<T>() < 4096 {
+        // If this is smaller than a typical page, then merely initializing the `Entry::Vacant`
+        // will be enough to touch every page and we can skip this optimization.
+        return;
+    }
+
+    // SAFETY: This is the slab pointer as given by the caller, it must be valid.
+    // Note that the count is in units of T, not in bytes.
+    unsafe {
+        ptr.write_bytes(0x3F, COUNT);
     }
 }
 
@@ -1130,5 +1160,13 @@ mod tests {
         let key = slab.insert(123);
         assert_eq!(*slab.get(key), 123);
         assert_eq!(slab.count, 1);
+    }
+
+    #[test]
+    fn large_item() {
+        let mut slab = PinnedSlab::<[u8; 10240], 123>::new(DropPolicy::MayDropItems);
+
+        let index = slab.insert([88u8; 10240]);
+        slab.remove(index);
     }
 }
