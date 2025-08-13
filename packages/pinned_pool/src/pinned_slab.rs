@@ -607,31 +607,10 @@ impl<'s, T, const CAPACITY: usize> Iterator for PinnedSlabIterator<'s, T, CAPACI
 /// pointless, anyway.
 #[cfg_attr(test, mutants::skip)] // Impractical to test, as it is merely an optimization that is rarely visible.
 fn ensure_virtual_pages_mapped_to_physical_pages<T, const COUNT: usize>(ptr: NonNull<T>) {
-    // This is the typical case. While in principle, one could also map memory with larger pages,
-    // that would be a special circumstance we do not need to worry about (for now). Future versions
-    // of this package may support huge pages for greater efficiency, though.
-    const PAGE_SIZE: usize = 4096;
-
-    if size_of::<T>() < PAGE_SIZE {
-        // The entries are so small that setting the entries to their default
-        // "Vacant" state will already touch all the memory. No need to do anything.
-        return;
-    }
-
-    // Overflow is impossible as it would mean our slab exceeds the size of virtual memory.
-    let page_count = (size_of::<T>().wrapping_mul(COUNT)).div_ceil(PAGE_SIZE);
-
-    let mut current_page = ptr.cast::<u8>();
-
-    for _ in 0..page_count {
-        // SAFETY: The math guarantees we are in-bounds and we are just writing a byte
-        // into uninitialized memory - always safe and sound and it will never be seen.
-        unsafe {
-            current_page.write(0xCF);
-        }
-
-        // SAFETY: The loop conditions will stop us before we go out of bounds.
-        current_page = unsafe { current_page.add(PAGE_SIZE) };
+    // SAFETY: This is the slab pointer as given by the caller, it must be valid.
+    // Note that the count is in units of T, not in bytes.
+    unsafe {
+        ptr.write_bytes(0x3F, COUNT);
     }
 }
 
