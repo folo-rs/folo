@@ -1166,7 +1166,7 @@ mod tests {
     fn large_item() {
         let mut slab = PinnedSlab::<[u8; 10240], 123>::new(DropPolicy::MayDropItems);
 
-        let index = slab.insert([88u8; 10240]);
+        let index = slab.insert([88_u8; 10240]);
         slab.remove(index);
     }
 }
