@@ -21,6 +21,9 @@ static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 type TestItem = usize;
 const TEST_VALUE: TestItem = 1024;
 
+type LargeTestItem = [u8; 10240];
+const LARGE_TEST_VALUE: LargeTestItem = [5; 10240];
+
 fn entrypoint(c: &mut Criterion) {
     let allocs = alloc_tracker::Session::new();
 
@@ -78,6 +81,64 @@ fn entrypoint(c: &mut Criterion) {
 
             for pool in &mut pools {
                 _ = black_box(pool.insert(black_box(TEST_VALUE)));
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("build_empty_large");
+    group.bench_function("build_empty_large", |b| {
+        b.iter_custom(|iters| {
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for _ in 0..iters {
+                drop(black_box(PinnedPool::<LargeTestItem>::new()));
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("insert_first_large");
+    group.bench_function("insert_first_large", |b| {
+        b.iter_custom(|iters| {
+            let mut pools = iter::repeat_with(PinnedPool::<LargeTestItem>::new)
+                .take(usize::try_from(iters).unwrap())
+                .collect::<Vec<_>>();
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for pool in &mut pools {
+                _ = black_box(pool.insert(black_box(LARGE_TEST_VALUE)));
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let allocs_op = allocs.operation("insert_second_large");
+    group.bench_function("insert_second_large", |b| {
+        b.iter_custom(|iters| {
+            let mut pools = iter::repeat_with(PinnedPool::<LargeTestItem>::new)
+                .take(usize::try_from(iters).unwrap())
+                .collect::<Vec<_>>();
+
+            // Pre-warm each pool with one item.
+            for pool in &mut pools {
+                _ = pool.insert(LARGE_TEST_VALUE);
+            }
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+
+            let start = Instant::now();
+
+            for pool in &mut pools {
+                _ = black_box(pool.insert(black_box(LARGE_TEST_VALUE)));
             }
 
             start.elapsed()

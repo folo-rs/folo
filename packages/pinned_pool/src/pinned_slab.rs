@@ -100,6 +100,8 @@ impl<T, const CAPACITY: usize> PinnedSlab<T, CAPACITY> {
             "we do not intend to handle allocation failure as a real possibility - OOM is panic",
         );
 
+        ensure_virtual_pages_mapped_to_physical_pages::<Entry<T>, CAPACITY>(ptr);
+
         // Initialize all slots to `Vacant` to start with.
         for index in 0..CAPACITY {
             // SAFETY: We ensure in `layout()` that there is enough space for all items up to our
@@ -585,6 +587,50 @@ impl<'s, T, const CAPACITY: usize> Iterator for PinnedSlabIterator<'s, T, CAPACI
         }
 
         None
+    }
+}
+
+/// Ensures that the virtual memory pages that are behind a pointer are mapped to physical pages.
+///
+/// The operating system normally maps virtual pages to physical pages on-demand. However, this
+/// has some caveats: it may happen on hot paths and inside critical sections, which is not
+/// desirable; furthermore, some operating system APIs (e.g. reading from a Windows socket)
+/// will switch to a slower logic path if provided virtual pages that are not yet mapped to
+/// physical pages. Therefore, it is beneficial to ensure memory is mapped to physical pages
+/// ahead of time if it is known to eventually be used.
+///
+/// We are operating in context of an object pool, so we can assume all its memory will be used,
+/// so we do this eagerly when extending pool capacity.
+///
+/// We implement this by writing to each page of memory in the pointer's range, so the memory
+/// is assumed to be uninitialized. Calling this on initialized memory would conceptually be
+/// pointless, anyway.
+#[cfg_attr(test, mutants::skip)] // Impractical to test, as it is merely an optimization that is rarely visible.
+fn ensure_virtual_pages_mapped_to_physical_pages<T, const COUNT: usize>(ptr: NonNull<T>) {
+    // This is the typical case. While in principle, one could also map memory with larger pages,
+    // that would be a special circumstance we do not need to worry about (for now). Future versions
+    // of this package may support huge pages for greater efficiency, though.
+    const PAGE_SIZE: usize = 4096;
+
+    if size_of::<T>() < PAGE_SIZE {
+        // The entries are so small that setting the entries to their default
+        // "Vacant" state will already touch all the memory. No need to do anything.
+        return;
+    }
+
+    let page_count = COUNT.div_ceil(PAGE_SIZE);
+
+    let mut current_page = ptr.cast::<u8>();
+
+    for _ in 0..page_count {
+        // SAFETY: The math guarantees we are in-bounds and we are just writing a byte
+        // into uninitialized memory - always safe and sound and it will never be seen.
+        unsafe {
+            current_page.write(0xCF);
+        }
+
+        // SAFETY: The loop conditions will stop us before we go out of bounds.
+        current_page = unsafe { current_page.add(PAGE_SIZE) };
     }
 }
 
