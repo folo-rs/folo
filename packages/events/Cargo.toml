@@ -2,7 +2,7 @@
 name = "events"
 description = "High-performance signaling primitives for concurrent environments"
 publish = true
-version = "0.3.4"
+version = "0.3.5"
 
 authors.workspace = true
 edition.workspace = true
