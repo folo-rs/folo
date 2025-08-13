@@ -618,7 +618,8 @@ fn ensure_virtual_pages_mapped_to_physical_pages<T, const COUNT: usize>(ptr: Non
         return;
     }
 
-    let page_count = COUNT.div_ceil(PAGE_SIZE);
+    // Overflow is impossible as it would mean our slab exceeds the size of virtual memory.
+    let page_count = (size_of::<T>().wrapping_mul(COUNT)).div_ceil(PAGE_SIZE);
 
     let mut current_page = ptr.cast::<u8>();
 
