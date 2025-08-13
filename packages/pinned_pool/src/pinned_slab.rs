@@ -523,14 +523,18 @@ impl<'s, T, const CAPACITY: usize> PinnedSlabInserter<'s, T, CAPACITY> {
             ),
         };
 
-        // PANIC SAFETY: If the user callback panics during initialization, we need to restore
+        // If the user callback panics during initialization, we need to restore
         // the entry to its vacant state to maintain slab consistency.
-        let cleanup_slab_ptr: *mut PinnedSlab<T, CAPACITY> = self.slab as *mut _;
+        let cleanup_slab_ptr: *mut PinnedSlab<T, CAPACITY> = self.slab;
         let cleanup_index = self.index;
-        let cleanup_guard = scopeguard::guard((), move |_| {
+        let cleanup_guard = scopeguard::guard((), move |()| {
             // Restore the entry to vacant state and fix the free list.
+            // SAFETY: We stored this pointer from self.slab in the same function scope,
+            // so it remains valid for the duration of this guard.
             let cleanup_slab = unsafe { &mut *cleanup_slab_ptr };
             let mut entry_ptr = cleanup_slab.entry_ptr(cleanup_index);
+            // SAFETY: entry_ptr was obtained from the slab and refers to a valid entry
+            // within the slab's storage.
             let entry = unsafe { entry_ptr.as_mut() };
             *entry = Entry::Vacant {
                 next_free_index: cleanup_slab.next_free_index,
@@ -1079,6 +1083,7 @@ mod tests {
         let initial_next_free = slab.next_free_index;
 
         // Try to insert with a panicking closure.
+        // SAFETY: The closure properly initializes the value before panicking.
         let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
             slab.begin_insert().insert_with_mut(|uninit| {
                 uninit.write(42);
@@ -1102,6 +1107,7 @@ mod tests {
         let mut slab = PinnedSlab::<i32, 3>::new(DropPolicy::MayDropItems);
 
         // Panic on first insert
+        // SAFETY: The closure properly initializes the value before panicking.
         let panic_result1 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
             slab.begin_insert().insert_with_mut(|uninit| {
                 uninit.write(42);
@@ -1111,6 +1117,7 @@ mod tests {
         assert!(panic_result1.is_err());
 
         // Panic on second insert
+        // SAFETY: The closure properly initializes the value before panicking.
         let panic_result2 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
             slab.begin_insert().insert_with_mut(|uninit| {
                 uninit.write(43);

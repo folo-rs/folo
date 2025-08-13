@@ -388,11 +388,11 @@ where
                 continue;
             }
 
-            // PANIC SAFETY: We must ensure that if initialization panics, we reset the state
+            // We must ensure that if initialization panics, we reset the state
             // and signal any waiting threads to prevent them from waiting forever.
             let cleanup_signal = Arc::clone(&attempt_signal);
             let cleanup_self = self; // Create a reference for the cleanup
-            let cleanup_guard = scopeguard::guard((), move |_| {
+            let cleanup_guard = scopeguard::guard((), move |()| {
                 // If we're still in panic mode when this guard executes, reset the
                 // initializing state to None and signal waiters so they can retry.
                 cleanup_self.value.store(None);
@@ -854,13 +854,18 @@ mod tests {
         static mut PANIC_ON_FIRST_CALL: bool = true;
 
         fn panicking_initializer() -> i32 {
-            unsafe {
-                if PANIC_ON_FIRST_CALL {
+            // SAFETY: We access a mutable static variable in test code.
+            // This is safe because tests are single-threaded with respect to this static.
+            let should_panic = unsafe { PANIC_ON_FIRST_CALL };
+            if should_panic {
+                // SAFETY: We modify a mutable static variable in test code.
+                // This is safe because tests are single-threaded with respect to this static.
+                unsafe {
                     PANIC_ON_FIRST_CALL = false;
-                    panic!("Initializer panicked!");
                 }
-                42
+                panic!("Initializer panicked!");
             }
+            42
         }
 
         let mut hardware_tracker = MockHardwareTrackerClient::new();
@@ -894,9 +899,7 @@ mod tests {
         let handle1 = thread::spawn(move || {
             barrier1.wait();
             // This thread will trigger the panicking initializer.
-            let result =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| local1.get_local()));
-            result
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| local1.get_local()))
         });
 
         let barrier2 = Arc::clone(&barrier);
@@ -913,7 +916,7 @@ mod tests {
         let result2 = handle2.join().expect("Thread 2 should not panic");
 
         // First thread should have caught the panic.
-        assert!(result1.is_err());
+        result1.unwrap_err();
         // Second thread should have succeeded.
         assert_eq!(result2, 42);
     }

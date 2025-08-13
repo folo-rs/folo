@@ -449,11 +449,11 @@ where
                 continue;
             }
 
-            // PANIC SAFETY: We must ensure that if cloning panics, we reset the state
+            // We must ensure that if cloning panics, we reset the state
             // and signal any waiting threads to prevent them from waiting forever.
             let cleanup_signal = Arc::clone(&attempt_signal);
             let cleanup_self = self; // Create a reference for the cleanup
-            let cleanup_guard = scopeguard::guard((), move |_| {
+            let cleanup_guard = scopeguard::guard((), move |()| {
                 // If we're still in panic mode when this guard executes, reset the
                 // initializing state to None and signal waiters so they can retry.
                 cleanup_self.value.store(None);
@@ -924,9 +924,7 @@ mod tests {
         impl Clone for PanickingClone {
             fn clone(&self) -> Self {
                 let count = self.panic_counter.fetch_add(1, Ordering::SeqCst);
-                if count == 0 {
-                    panic!("Clone panicked!");
-                }
+                assert!(count != 0, "Clone panicked!");
                 Self {
                     value: self.value,
                     panic_counter: Arc::clone(&self.panic_counter),
@@ -970,10 +968,9 @@ mod tests {
         let handle1 = thread::spawn(move || {
             barrier1.wait();
             // This thread will trigger the panicking clone.
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 local1.with_cached(|v| v.value)
-            }));
-            result
+            }))
         });
 
         let barrier2 = Arc::clone(&barrier);
@@ -990,7 +987,7 @@ mod tests {
         let result2 = handle2.join().expect("Thread 2 should not panic");
 
         // First thread should have caught the panic.
-        assert!(result1.is_err());
+        result1.unwrap_err();
         // Second thread should have succeeded.
         assert_eq!(result2, 42);
     }
