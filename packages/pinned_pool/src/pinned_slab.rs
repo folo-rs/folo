@@ -607,6 +607,12 @@ impl<'s, T, const CAPACITY: usize> Iterator for PinnedSlabIterator<'s, T, CAPACI
 /// pointless, anyway.
 #[cfg_attr(test, mutants::skip)] // Impractical to test, as it is merely an optimization that is rarely visible.
 fn ensure_virtual_pages_mapped_to_physical_pages<T, const COUNT: usize>(ptr: NonNull<T>) {
+    if size_of::<T>() < 4096 {
+        // If this is smaller than a typical page, then merely initializing the `Entry::Vacant`
+        // will be enough to touch every page and we can skip this optimization.
+        return;
+    }
+
     // SAFETY: This is the slab pointer as given by the caller, it must be valid.
     // Note that the count is in units of T, not in bytes.
     unsafe {
