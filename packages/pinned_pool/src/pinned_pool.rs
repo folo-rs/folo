@@ -822,12 +822,6 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
     ///
     /// The closure must initialize the `MaybeUninit<T>` before returning.
     ///
-    /// # Panics
-    ///
-    /// This method is panic-safe. If the provided closure panics during initialization,
-    /// the pool's internal state is properly restored, ensuring that subsequent insertions
-    /// will work correctly and no memory corruption occurs.
-    ///
     /// # Example
     ///
     /// ```rust
@@ -876,12 +870,6 @@ impl<'s, T> PinnedPoolInserter<'s, T> {
     /// # Safety
     ///
     /// The closure must initialize the `MaybeUninit<T>` before returning.
-    ///
-    /// # Panics
-    ///
-    /// This method is panic-safe. If the provided closure panics during initialization,
-    /// the pool's internal state is properly restored, ensuring that subsequent insertions
-    /// will work correctly and no memory corruption occurs.
     ///
     /// # Example
     ///

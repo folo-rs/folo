@@ -6,6 +6,8 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::{mem, thread};
 
+use scopeguard::ScopeGuard;
+
 use crate::DropPolicy;
 
 /// This is the backing storage of a `PinnedPool`. It is currently an implementation detail,
@@ -559,7 +561,7 @@ impl<'s, T, const CAPACITY: usize> PinnedSlabInserter<'s, T, CAPACITY> {
         };
 
         // Disarm the cleanup guard since initialization succeeded.
-        scopeguard::ScopeGuard::into_inner(cleanup_guard);
+        ScopeGuard::into_inner(cleanup_guard);
 
         // SAFETY: The value is guaranteed to be initialized because the caller's closure
         // was required to initialize it.
