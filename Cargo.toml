@@ -27,7 +27,7 @@ alloc_tracker = { version = "0.5.1", path = "packages/alloc_tracker" }
 all_the_time = { version = "0.4.4", path = "packages/all_the_time" }
 blind_pool = { version = "0.2.7", path = "packages/blind_pool" }
 cpulist = { version = "0.2.9", path = "packages/cpulist" }
-events = { version = "0.3.2", path = "packages/events" }
+events = { version = "0.3.3", path = "packages/events" }
 folo_ffi = { version = "0.1.6", path = "packages/folo_ffi" }
 folo_utils = { version = "0.1.3", path = "packages/folo_utils" }
 linked = { version = "0.2.18", path = "packages/linked" }
@@ -39,7 +39,7 @@ new_zealand = { version = "0.1.6", path = "packages/new_zealand" }
 opaque_pool = { version = "0.1.13", path = "packages/opaque_pool" }
 nm = { version = "0.1.18", path = "packages/nm" }
 par_bench = { version = "0.2.8", path = "packages/par_bench" }
-pinned_pool = { version = "0.1.15", path = "packages/pinned_pool" }
+pinned_pool = { version = "0.1.16", path = "packages/pinned_pool" }
 region_cached = { version = "0.1.32", path = "packages/region_cached" }
 region_local = { version = "0.1.32", path = "packages/region_local" }
 
