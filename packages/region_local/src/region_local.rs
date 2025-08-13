@@ -92,12 +92,6 @@ where
     /// Executes the provided function with a reference to the value stored
     /// in the current memory region.
     ///
-    /// # Panics
-    ///
-    /// This method is panic-safe. If the provided closure panics, any internal state
-    /// modifications are properly rolled back, ensuring that subsequent calls will work
-    /// correctly and other threads won't be left waiting indefinitely.
-    ///
     /// # Example
     ///
     /// ```
