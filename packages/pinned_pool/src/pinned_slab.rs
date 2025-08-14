@@ -1,10 +1,12 @@
 use core::panic;
 use std::alloc::{Layout, alloc, dealloc};
 use std::any::type_name;
-use std::mem::MaybeUninit;
+use std::mem::{MaybeUninit, size_of};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::{mem, thread};
+
+use scopeguard::ScopeGuard;
 
 use crate::DropPolicy;
 
@@ -526,6 +528,25 @@ impl<'s, T, const CAPACITY: usize> PinnedSlabInserter<'s, T, CAPACITY> {
             ),
         };
 
+        // If the user callback panics during initialization, we need to restore
+        // the entry to its vacant state to maintain slab consistency.
+        let cleanup_slab_ptr: *mut PinnedSlab<T, CAPACITY> = self.slab;
+        let cleanup_index = self.index;
+        let cleanup_guard = scopeguard::guard((), move |()| {
+            // Restore the entry to vacant state and fix the free list.
+            // SAFETY: We stored this pointer from self.slab in the same function scope,
+            // so it remains valid for the duration of this guard.
+            let cleanup_slab = unsafe { &mut *cleanup_slab_ptr };
+            let mut entry_ptr = cleanup_slab.entry_ptr(cleanup_index);
+            // SAFETY: entry_ptr was obtained from the slab and refers to a valid entry
+            // within the slab's storage.
+            let entry = unsafe { entry_ptr.as_mut() };
+            *entry = Entry::Vacant {
+                next_free_index: cleanup_slab.next_free_index,
+            };
+            cleanup_slab.next_free_index = cleanup_index;
+        });
+
         // Initialize the value using the closure.
         let value = match entry {
             Entry::Occupied { value } => {
@@ -538,6 +559,9 @@ impl<'s, T, const CAPACITY: usize> PinnedSlabInserter<'s, T, CAPACITY> {
                 type_name::<T>()
             ),
         };
+
+        // Disarm the cleanup guard since initialization succeeded.
+        ScopeGuard::into_inner(cleanup_guard);
 
         // SAFETY: The value is guaranteed to be initialized because the caller's closure
         // was required to initialize it.
@@ -1084,10 +1108,67 @@ mod tests {
     }
 
     #[test]
+    fn insert_with_panic_leaves_consistent_state() {
+        let mut slab = PinnedSlab::<i32, 3>::new(DropPolicy::MayDropItems);
+
+        let initial_count = slab.count;
+        let initial_next_free = slab.next_free_index;
+
+        // Try to insert with a panicking closure.
+        // SAFETY: The closure properly initializes the value before panicking.
+        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            slab.begin_insert().insert_with_mut(|uninit| {
+                uninit.write(42);
+                std::panic!("Panic during initialization!");
+            });
+        }));
+
+        assert!(panic_result.is_err());
+
+        // Slab should be in consistent state after panic.
+        assert_eq!(slab.count, initial_count);
+        assert_eq!(slab.next_free_index, initial_next_free);
+
+        // Should be able to insert normally after the panic.
+        let key = slab.insert(123);
+        assert_eq!(*slab.get(key), 123);
+    }
+
+    #[test]
+    fn insert_with_multiple_panics() {
+        let mut slab = PinnedSlab::<i32, 3>::new(DropPolicy::MayDropItems);
+
+        // Panic on first insert
+        // SAFETY: The closure properly initializes the value before panicking.
+        let panic_result1 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            slab.begin_insert().insert_with_mut(|uninit| {
+                uninit.write(42);
+                std::panic!("First panic!");
+            });
+        }));
+        assert!(panic_result1.is_err());
+
+        // Panic on second insert
+        // SAFETY: The closure properly initializes the value before panicking.
+        let panic_result2 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            slab.begin_insert().insert_with_mut(|uninit| {
+                uninit.write(43);
+                std::panic!("Second panic!");
+            });
+        }));
+        assert!(panic_result2.is_err());
+
+        // Should still be able to insert normally.
+        let key = slab.insert(123);
+        assert_eq!(*slab.get(key), 123);
+        assert_eq!(slab.count, 1);
+    }
+
+    #[test]
     fn large_item() {
         let mut slab = PinnedSlab::<[u8; 10240], 123>::new(DropPolicy::MayDropItems);
 
-        let index = slab.insert([88u8; 10240]);
+        let index = slab.insert([88_u8; 10240]);
         slab.remove(index);
     }
 }
