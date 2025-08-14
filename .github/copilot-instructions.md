@@ -470,15 +470,15 @@ mv src/old.rs src/new.rs; cargo fmt; cargo clippy --fix --allow-dirty --allow-st
 
 # Examples for README.md files
 
-In each package with a `README.md` file, there should be a corresponding `examples/readme.rs` file
-that contains the Rust code present in the example. This is important to verify that the example
-code actually works.
+In each package with a `README.md` file, there should be a corresponding
+`examples/package_name_readme.rs` file that contains the Rust code present in the example.
+This is important to verify that the example actually works.
 
-If the two are out of sync, use the `readme.rs` as the authoritative source and update the
-`README.md` file to match it.
+If the two are out of sync, use the `package_name_readme.rs` as the authoritative source
+and update the `README.md` file to match it.
 
-It is fine to disable Clippy rules in the `readme.rs` file, as it is not production code and
-often needs to take shortcuts to be short and simple.
+It is fine to disable Clippy rules in the `package_name_readme.rs` file, as it
+is not production code and often needs to take shortcuts to be short and simple.
 
 # Memory allocation is the root of all evil
 
