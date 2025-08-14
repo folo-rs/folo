@@ -1115,6 +1115,7 @@ dependencies = [
  "criterion",
  "mutants",
  "num-integer",
+ "scopeguard",
 ]
 
 [[package]]
@@ -1288,6 +1289,7 @@ dependencies = [
  "new_zealand",
  "par_bench",
  "rsevents",
+ "scopeguard",
  "simple-mermaid",
  "static_assertions",
  "tokio",
@@ -1308,6 +1310,7 @@ dependencies = [
  "new_zealand",
  "par_bench",
  "rsevents",
+ "scopeguard",
  "simple-mermaid",
  "static_assertions",
  "tokio",

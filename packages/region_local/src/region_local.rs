@@ -382,11 +382,25 @@ where
                 continue;
             }
 
+            // We must ensure that if initialization panics, we reset the state
+            // and signal any waiting threads to prevent them from waiting forever.
+            let cleanup_signal = Arc::clone(&attempt_signal);
+            let cleanup_self = self; // Create a reference for the cleanup
+            let cleanup_guard = scopeguard::guard((), move |()| {
+                // If we're still in panic mode when this guard executes, reset the
+                // initializing state to None and signal waiters so they can retry.
+                cleanup_self.value.store(None);
+                cleanup_signal.set();
+            });
+
             let new_value = RegionalValue::Ready(initializer());
             self.value.store(Some(Arc::new(new_value)));
 
             // We are done initializing. Notify all waiters that they can continue.
             attempt_signal.set();
+
+            // Disarm the cleanup guard since initialization succeeded.
+            scopeguard::ScopeGuard::into_inner(cleanup_guard);
 
             break;
         }
@@ -725,5 +739,180 @@ mod tests {
         assert_eq!(local.get_local(), 42);
         assert_eq!(local.get_local(), 42);
         assert_eq!(local.get_local(), 42);
+    }
+
+    #[test]
+    fn callback_panic_leaves_consistent_state() {
+        let mut hardware_tracker = MockHardwareTrackerClient::new();
+
+        hardware_tracker
+            .expect_is_thread_memory_region_pinned()
+            .return_const(false);
+
+        // First successful call to initialize.
+        hardware_tracker
+            .expect_current_memory_region_id()
+            .times(1)
+            .return_const(0 as MemoryRegionId);
+
+        // Second call where callback panics.
+        hardware_tracker
+            .expect_current_memory_region_id()
+            .times(1)
+            .return_const(0 as MemoryRegionId);
+
+        // Third call to verify state is still consistent.
+        hardware_tracker
+            .expect_current_memory_region_id()
+            .times(1)
+            .return_const(0 as MemoryRegionId);
+
+        let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
+
+        let mut hardware_info = MockHardwareInfoClient::new();
+
+        hardware_info
+            .expect_max_memory_region_count()
+            .return_const(10_usize);
+
+        let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
+
+        let local = RegionLocal::with_clients(|| 42, &hardware_info, hardware_tracker);
+
+        // First call succeeds and initializes the region.
+        assert_eq!(local.get_local(), 42);
+
+        // Second call with panicking closure.
+        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            local.with_local(|_| {
+                panic!("User callback panicked!");
+            })
+        }));
+        assert!(panic_result.is_err());
+
+        // Third call should still work and return the initialized value.
+        assert_eq!(local.get_local(), 42);
+    }
+
+    #[test]
+    fn callback_panic_during_initialization() {
+        let mut hardware_tracker = MockHardwareTrackerClient::new();
+
+        hardware_tracker
+            .expect_is_thread_memory_region_pinned()
+            .return_const(false);
+
+        // Call where callback panics during initialization.
+        hardware_tracker
+            .expect_current_memory_region_id()
+            .times(1)
+            .return_const(0 as MemoryRegionId);
+
+        // Second call to verify initialization can still proceed.
+        hardware_tracker
+            .expect_current_memory_region_id()
+            .times(1)
+            .return_const(0 as MemoryRegionId);
+
+        let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
+
+        let mut hardware_info = MockHardwareInfoClient::new();
+
+        hardware_info
+            .expect_max_memory_region_count()
+            .return_const(10_usize);
+
+        let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
+
+        let local = RegionLocal::with_clients(|| 42, &hardware_info, hardware_tracker);
+
+        // First call with panicking closure should fail but not break state.
+        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            local.with_local(|_| {
+                panic!("User callback panicked during initialization!");
+            })
+        }));
+        assert!(panic_result.is_err());
+
+        // Second call should successfully initialize and work.
+        assert_eq!(local.get_local(), 42);
+    }
+
+    #[test]
+    #[cfg(not(miri))] // Test uses thread::sleep which is not supported by Miri
+    fn initializer_panic_does_not_block_other_threads() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        // Since we need a function pointer for the initializer, we'll use a different approach.
+        // We'll create a type that panics during Drop, which will be called by the initializer.
+        static mut PANIC_ON_FIRST_CALL: bool = true;
+
+        fn panicking_initializer() -> i32 {
+            // SAFETY: We access a mutable static variable in test code.
+            // This is safe because tests are single-threaded with respect to this static.
+            let should_panic = unsafe { PANIC_ON_FIRST_CALL };
+            if should_panic {
+                // SAFETY: We modify a mutable static variable in test code.
+                // This is safe because tests are single-threaded with respect to this static.
+                unsafe {
+                    PANIC_ON_FIRST_CALL = false;
+                }
+                panic!("Initializer panicked!");
+            }
+            42
+        }
+
+        let mut hardware_tracker = MockHardwareTrackerClient::new();
+        hardware_tracker
+            .expect_is_thread_memory_region_pinned()
+            .return_const(false);
+
+        // Calls from both threads to the same region.
+        hardware_tracker
+            .expect_current_memory_region_id()
+            .times(2)
+            .return_const(0 as MemoryRegionId);
+
+        let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
+
+        let mut hardware_info = MockHardwareInfoClient::new();
+        hardware_info
+            .expect_max_memory_region_count()
+            .return_const(10_usize);
+
+        let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
+
+        let local =
+            RegionLocal::with_clients(panicking_initializer, &hardware_info, hardware_tracker);
+
+        let barrier = Arc::new(Barrier::new(2));
+        let local = Arc::new(local);
+
+        let barrier1 = Arc::clone(&barrier);
+        let local1 = Arc::clone(&local);
+        let handle1 = thread::spawn(move || {
+            barrier1.wait();
+            // This thread will trigger the panicking initializer.
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| local1.get_local()))
+        });
+
+        let barrier2 = Arc::clone(&barrier);
+        let local2 = Arc::clone(&local);
+        let handle2 = thread::spawn(move || {
+            barrier2.wait();
+            // This thread should succeed after the first one panics.
+            // Give the first thread a small head start.
+            thread::sleep(std::time::Duration::from_millis(50));
+            local2.get_local()
+        });
+
+        let result1 = handle1.join().expect("Thread 1 should not panic");
+        let result2 = handle2.join().expect("Thread 2 should not panic");
+
+        // First thread should have caught the panic.
+        result1.unwrap_err();
+        // Second thread should have succeeded.
+        assert_eq!(result2, 42);
     }
 }
