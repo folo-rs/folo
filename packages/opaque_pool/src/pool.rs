@@ -501,10 +501,6 @@ impl OpaquePool {
     /// # Panics
     ///
     /// Panics if the handle is not associated with this pool.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "intentionally consuming the handle"
-    )]
     pub fn remove<T>(&mut self, pooled: Pooled<T>) {
         assert!(
             pooled.pool_id == self.pool_id,
@@ -657,7 +653,7 @@ impl OpaquePool {
 /// // To remove and drop an item, any handle can be returned to the pool.
 /// pool.remove(pooled);
 /// ```
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct Pooled<T> {
     /// Ensures this handle can only be returned to the pool it came from.
     pool_id: u64,
@@ -735,6 +731,14 @@ impl<T> Pooled<T> {
             coordinates: self.coordinates,
             ptr: self.ptr.cast::<()>(),
         }
+    }
+}
+
+impl<T> Copy for Pooled<T> {}
+
+impl<T> Clone for Pooled<T> {
+    fn clone(&self) -> Self {
+        *self
     }
 }
 

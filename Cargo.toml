@@ -26,6 +26,7 @@ incremental = false
 alloc_tracker = { version = "0.5.1", path = "packages/alloc_tracker" }
 all_the_time = { version = "0.4.4", path = "packages/all_the_time" }
 blind_pool = { version = "0.2.7", path = "packages/blind_pool" }
+blind_pool_managed = { version = "0.1.0", path = "packages/blind_pool_managed" }
 cpulist = { version = "0.2.9", path = "packages/cpulist" }
 events = { version = "0.3.6", path = "packages/events" }
 folo_ffi = { version = "0.1.6", path = "packages/folo_ffi" }

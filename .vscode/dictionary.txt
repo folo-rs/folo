@@ -1,6 +1,7 @@
 affinitization
 affinitized
 affinitizing
+cloneable
 cpulist
 cpus
 Dataless

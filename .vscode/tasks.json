@@ -86,6 +86,8 @@
                 "all_the_time",
                 "alloc_tracker",
                 "benchmarks",
+                "blind_pool",
+                "blind_pool_managed",
                 "cargo-detect-package",
                 "cpulist",
                 "events",

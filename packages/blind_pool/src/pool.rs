@@ -375,7 +375,7 @@ impl Drop for BlindPool {
 /// // To remove the item from the pool, any handle can be used.
 /// pool.remove(pooled);
 /// ```
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct Pooled<T> {
     /// The memory layout of the stored item. This is used to identify which internal
     /// pool the item belongs to.
@@ -448,6 +448,14 @@ impl<T> Pooled<T> {
             layout: self.layout,
             pooled: self.pooled.erase(),
         }
+    }
+}
+
+impl<T> Copy for Pooled<T> {}
+
+impl<T> Clone for Pooled<T> {
+    fn clone(&self) -> Self {
+        *self
     }
 }
 
