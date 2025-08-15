@@ -3,7 +3,7 @@ use crate::{BlindPool, DropPolicy, LocalBlindPool, RawBlindPool};
 /// Builder for creating an instance of [`BlindPool`].
 ///
 /// This builder allows configuration of pool behavior before creation.
-/// By default, creates a thread-safe managed pool. Use `build_raw` for
+/// By default, creates a thread-safe blind pool. Use `build_raw` for
 /// manual resource management or `build_local` for single-threaded use.
 ///
 /// # Examples
@@ -11,10 +11,10 @@ use crate::{BlindPool, DropPolicy, LocalBlindPool, RawBlindPool};
 /// ```
 /// use blind_pool::{BlindPool, DropPolicy};
 ///
-/// // Default managed pool (thread-safe).
+/// // Default blind pool (thread-safe).
 /// let pool = BlindPool::builder().build();
 ///
-/// // Single-threaded managed pool.
+/// // Single-threaded blind pool.
 /// let pool = BlindPool::builder().build_local();
 ///
 /// // Raw pool for manual management.
@@ -55,7 +55,7 @@ impl BlindPoolBuilder {
         self
     }
 
-    /// Builds a thread-safe managed pool with the specified configuration.
+    /// Builds a thread-safe blind pool with the specified configuration.
     ///
     /// This is the default build method that creates a [`BlindPool`] with
     /// automatic resource management and thread safety.
@@ -66,15 +66,15 @@ impl BlindPoolBuilder {
     /// use blind_pool::BlindPool;
     ///
     /// let pool = BlindPool::builder().build();
-    /// let managed_item = pool.insert(42_u32);
-    /// assert_eq!(*managed_item, 42);
+    /// let item = pool.insert(42_u32);
+    /// assert_eq!(*item, 42);
     /// ```
     #[must_use]
     pub fn build(self) -> BlindPool {
         BlindPool::from(self.build_raw())
     }
 
-    /// Builds a single-threaded managed pool with the specified configuration.
+    /// Builds a single-threaded blind pool with the specified configuration.
     ///
     /// This creates a [`LocalBlindPool`] with automatic resource management
     /// but no thread safety overhead.
@@ -85,8 +85,8 @@ impl BlindPoolBuilder {
     /// use blind_pool::LocalBlindPool;
     ///
     /// let pool = LocalBlindPool::builder().build_local();
-    /// let managed_item = pool.insert(42_u32);
-    /// assert_eq!(*managed_item, 42);
+    /// let item = pool.insert(42_u32);
+    /// assert_eq!(*item, 42);
     /// ```
     #[must_use]
     pub fn build_local(self) -> LocalBlindPool {

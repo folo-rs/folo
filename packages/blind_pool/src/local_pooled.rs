@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use crate::{LocalBlindPool, RawPooled};
 
-/// A managed reference to a value stored in a [`LocalBlindPool`].
+/// A reference to a value stored in a [`LocalBlindPool`].
 ///
 /// This type provides automatic lifetime management for values in the pool.
 /// When the last [`LocalPooled`] instance for a value is dropped, the value
@@ -24,14 +24,14 @@ use crate::{LocalBlindPool, RawPooled};
 /// use blind_pool::LocalBlindPool;
 ///
 /// let pool = LocalBlindPool::new();
-/// let managed_value = pool.insert(42_u64);
+/// let value_handle = pool.insert(42_u64);
 ///
 /// // Access the value through dereferencing.
-/// assert_eq!(*managed_value, 42);
+/// assert_eq!(*value_handle, 42);
 ///
 /// // Clone to create additional references.
-/// let managed_clone = managed_value.clone();
-/// assert_eq!(*managed_clone, 42);
+/// let cloned_handle = value_handle.clone();
+/// assert_eq!(*cloned_handle, 42);
 /// ```
 pub struct LocalPooled<T> {
     /// The reference-counted inner data containing the actual pooled item and pool handle.
@@ -89,9 +89,9 @@ impl<T> LocalPooled<T> {
     /// use blind_pool::LocalBlindPool;
     ///
     /// let pool = LocalBlindPool::new();
-    /// let managed_value = pool.insert(42_u64);
+    /// let value_handle = pool.insert(42_u64);
     ///
-    /// let ptr = managed_value.ptr();
+    /// let ptr = value_handle.ptr();
     ///
     /// // SAFETY: The pointer is valid and contains the value we just inserted.
     /// let value = unsafe { ptr.read() };
@@ -123,10 +123,10 @@ impl<T> LocalPooled<T> {
     /// use blind_pool::LocalBlindPool;
     ///
     /// let pool = LocalBlindPool::new();
-    /// let managed_value = pool.insert(42_u64);
+    /// let value_handle = pool.insert(42_u64);
     ///
     /// // Erase type information.
-    /// let erased = managed_value.erase();
+    /// let erased = value_handle.erase();
     ///
     /// // Can still access the raw pointer.
     /// // SAFETY: We know this contains a u64.
@@ -175,15 +175,15 @@ impl<T> Clone for LocalPooled<T> {
     /// use blind_pool::LocalBlindPool;
     ///
     /// let pool = LocalBlindPool::new();
-    /// let managed_value = pool.insert(42_u64);
+    /// let value_handle = pool.insert(42_u64);
     ///
-    /// let cloned_handle = managed_value.clone();
+    /// let cloned_handle = value_handle.clone();
     ///
     /// // Both handles refer to the same value.
-    /// assert_eq!(*managed_value, *cloned_handle);
+    /// assert_eq!(*value_handle, *cloned_handle);
     ///
     /// // Value remains in pool until all handles are dropped.
-    /// drop(managed_value);
+    /// drop(value_handle);
     /// assert_eq!(*cloned_handle, 42); // Still accessible.
     /// ```
     fn clone(&self) -> Self {
@@ -198,7 +198,7 @@ impl<T> Deref for LocalPooled<T> {
 
     /// Provides direct access to the value stored in the pool.
     ///
-    /// This allows the managed handle to be used as if it were a reference to the stored value.
+    /// This allows the handle to be used as if it were a reference to the stored value.
     ///
     /// # Example
     ///
@@ -206,11 +206,11 @@ impl<T> Deref for LocalPooled<T> {
     /// use blind_pool::LocalBlindPool;
     ///
     /// let pool = LocalBlindPool::new();
-    /// let managed_string = pool.insert("hello".to_string());
+    /// let string_handle = pool.insert("hello".to_string());
     ///
     /// // Access string methods directly.
-    /// assert_eq!(managed_string.len(), 5);
-    /// assert!(managed_string.starts_with("he"));
+    /// assert_eq!(string_handle.len(), 5);
+    /// assert!(string_handle.starts_with("he"));
     /// ```
     fn deref(&self) -> &Self::Target {
         // SAFETY: The pointer is valid as long as this LocalPooled exists.

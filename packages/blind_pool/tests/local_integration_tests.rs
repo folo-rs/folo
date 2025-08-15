@@ -1,6 +1,6 @@
-//! Tests for the local (single-threaded) variants of managed blind pool.
+//! Tests for the local (single-threaded) variants of blind pool.
 //!
-//! These tests verify the correctness of `LocalManagedBlindPool` and `LocalManagedPooled<T>`
+//! These tests verify the correctness of `LocalBlindPool` and `LocalPooled<T>`
 //! including basic functionality, automatic cleanup, and various edge cases.
 
 use blind_pool::{LocalBlindPool, RawBlindPool};
@@ -9,11 +9,11 @@ use blind_pool::{LocalBlindPool, RawBlindPool};
 fn simple_insert_and_access() {
     let pool = LocalBlindPool::from(RawBlindPool::new());
 
-    let managed_u32 = pool.insert(42_u32);
-    let managed_string = pool.insert("hello".to_string());
+    let u32_handle = pool.insert(42_u32);
+    let string_handle = pool.insert("hello".to_string());
 
-    assert_eq!(*managed_u32, 42);
-    assert_eq!(*managed_string, "hello");
+    assert_eq!(*u32_handle, 42);
+    assert_eq!(*string_handle, "hello");
     assert_eq!(pool.len(), 2);
 }
 
@@ -22,7 +22,7 @@ fn automatic_cleanup_single_handle() {
     let pool = LocalBlindPool::from(RawBlindPool::new());
 
     {
-        let _managed_u32 = pool.insert(42_u32);
+        let _u32_handle = pool.insert(42_u32);
         assert_eq!(pool.len(), 1);
     }
 
@@ -35,13 +35,13 @@ fn automatic_cleanup_single_handle() {
 fn automatic_cleanup_multiple_handles() {
     let pool = LocalBlindPool::from(RawBlindPool::new());
 
-    let managed_u32 = pool.insert(42_u32);
-    let cloned_handle = managed_u32.clone();
+    let u32_handle = pool.insert(42_u32);
+    let cloned_handle = u32_handle.clone();
 
     assert_eq!(pool.len(), 1);
 
     // Drop first handle - item should remain
-    drop(managed_u32);
+    drop(u32_handle);
     assert_eq!(pool.len(), 1);
 
     // Drop second handle - item should be removed
@@ -53,16 +53,16 @@ fn automatic_cleanup_multiple_handles() {
 fn clone_handles() {
     let pool = LocalBlindPool::from(RawBlindPool::new());
 
-    let managed_value = pool.insert(42_u64);
-    let cloned_handle = managed_value.clone();
+    let value_handle = pool.insert(42_u64);
+    let cloned_handle = value_handle.clone();
 
     // Both handles should refer to the same value
-    assert_eq!(*managed_value, 42);
+    assert_eq!(*value_handle, 42);
     assert_eq!(*cloned_handle, 42);
 
     // Modification through one handle should be visible through the other
     // (Note: we can't actually modify since we only have shared references)
-    assert_eq!(*managed_value, *cloned_handle);
+    assert_eq!(*value_handle, *cloned_handle);
 }
 
 #[test]
@@ -70,11 +70,11 @@ fn clone_pool_handles() {
     let pool = LocalBlindPool::from(RawBlindPool::new());
     let pool_clone = pool.clone();
 
-    let managed_u32 = pool.insert(42_u32);
-    let managed_string = pool_clone.insert("test".to_string());
+    let u32_handle = pool.insert(42_u32);
+    let string_handle = pool_clone.insert("test".to_string());
 
-    assert_eq!(*managed_u32, 42);
-    assert_eq!(*managed_string, "test");
+    assert_eq!(*u32_handle, 42);
+    assert_eq!(*string_handle, "test");
     assert_eq!(pool.len(), 2);
     assert_eq!(pool_clone.len(), 2); // Should be the same pool
 }
@@ -83,36 +83,36 @@ fn clone_pool_handles() {
 fn string_methods_through_deref() {
     let pool = LocalBlindPool::from(RawBlindPool::new());
 
-    let managed_string = pool.insert("hello world".to_string());
+    let string_handle = pool.insert("hello world".to_string());
 
     // Test that we can call String methods directly
-    assert_eq!(managed_string.len(), 11);
-    assert!(managed_string.starts_with("hello"));
-    assert!(managed_string.ends_with("world"));
-    assert!(managed_string.contains("lo wo"));
+    assert_eq!(string_handle.len(), 11);
+    assert!(string_handle.starts_with("hello"));
+    assert!(string_handle.ends_with("world"));
+    assert!(string_handle.contains("lo wo"));
 }
 
 #[test]
 fn different_types_same_pool() {
     let pool = LocalBlindPool::from(RawBlindPool::new());
 
-    let managed_u32 = pool.insert(42_u32);
-    let managed_f64 = pool.insert(2.5_f64);
-    let managed_string = pool.insert("test".to_string());
+    let u32_handle = pool.insert(42_u32);
+    let f64_handle = pool.insert(2.5_f64);
+    let string_handle = pool.insert("test".to_string());
 
     assert_eq!(pool.len(), 3);
 
-    assert_eq!(*managed_u32, 42);
-    assert!(((*managed_f64) - 2.5).abs() < f64::EPSILON);
-    assert_eq!(*managed_string, "test");
+    assert_eq!(*u32_handle, 42);
+    assert!(((*f64_handle) - 2.5).abs() < f64::EPSILON);
+    assert_eq!(*string_handle, "test");
 }
 
 #[test]
 fn ptr_access() {
     let pool = LocalBlindPool::from(RawBlindPool::new());
 
-    let managed_value = pool.insert(42_u64);
-    let ptr = managed_value.ptr();
+    let value_handle = pool.insert(42_u64);
+    let ptr = value_handle.ptr();
 
     // SAFETY: The pointer is valid and contains the value we just inserted.
     let value = unsafe { ptr.read() };
@@ -123,8 +123,8 @@ fn ptr_access() {
 fn erase_type_information() {
     let pool = LocalBlindPool::from(RawBlindPool::new());
 
-    let managed_u64 = pool.insert(42_u64);
-    let erased = managed_u64.erase();
+    let u64_handle = pool.insert(42_u64);
+    let erased = u64_handle.erase();
 
     // Should still be able to access via pointer
     // SAFETY: We know this contains a u64.
@@ -143,11 +143,11 @@ fn erase_type_information() {
 fn erase_with_multiple_references_panics() {
     let pool = LocalBlindPool::from(RawBlindPool::new());
 
-    let managed_value = pool.insert(42_u64);
-    let _cloned_handle = managed_value.clone();
+    let value_handle = pool.insert(42_u64);
+    let _cloned_handle = value_handle.clone();
 
     // This should panic because there are multiple references
-    let _erased = managed_value.erase();
+    let _erased = value_handle.erase();
 }
 
 #[test]
@@ -155,12 +155,12 @@ fn drop_with_types_that_have_drop() {
     let pool = LocalBlindPool::from(RawBlindPool::new());
 
     // Vec has a non-trivial Drop implementation
-    let managed_vec = pool.insert(vec![1, 2, 3, 4, 5]);
+    let vec_handle = pool.insert(vec![1, 2, 3, 4, 5]);
 
-    assert_eq!(managed_vec.len(), 5);
+    assert_eq!(vec_handle.len(), 5);
     assert_eq!(pool.len(), 1);
 
-    drop(managed_vec);
+    drop(vec_handle);
     assert_eq!(pool.len(), 0);
 }
 
@@ -168,12 +168,12 @@ fn drop_with_types_that_have_drop() {
 fn works_with_single_byte_type() {
     let pool = LocalBlindPool::from(RawBlindPool::new());
 
-    let managed_u8 = pool.insert(255_u8);
+    let u8_handle = pool.insert(255_u8);
 
-    assert_eq!(*managed_u8, 255);
+    assert_eq!(*u8_handle, 255);
     assert_eq!(pool.len(), 1);
 
-    drop(managed_u8);
+    drop(u8_handle);
     assert_eq!(pool.len(), 0);
 }
 
@@ -203,35 +203,35 @@ fn large_number_of_items() {
     assert_eq!(pool.len(), 0);
 }
 
-// Test that LocalManagedPooled is NOT Send
+// Test that LocalPooled is NOT Send
 #[test]
-fn local_managed_pooled_is_not_send() {
-    // This test documents that LocalManagedPooled<T> is not Send.
+fn local_pooled_is_not_send() {
+    // This test documents that LocalPooled<T> is not Send.
     // The types use Rc internally which is not Send.
     let pool = LocalBlindPool::from(RawBlindPool::new());
-    let _managed = pool.insert(42_u32);
+    let _handle = pool.insert(42_u32);
 
     // The following would not compile:
     // std::thread::spawn(move || {
-    //     println!("{}", *_managed);
+    //     println!("{}", *_handle);
     // });
 }
 
-// Test that LocalManagedPooled is NOT Sync
+// Test that LocalPooled is NOT Sync
 #[test]
-fn local_managed_pooled_is_not_sync() {
-    // This test documents that LocalManagedPooled<T> is not Sync.
+fn local_pooled_is_not_sync() {
+    // This test documents that LocalPooled<T> is not Sync.
     // The types use RefCell internally which is not Sync.
     let pool = LocalBlindPool::from(RawBlindPool::new());
-    let _managed = pool.insert(42_u32);
+    let _handle = pool.insert(42_u32);
 
     // The following would not compile if we tried to share across threads.
 }
 
-// Test that LocalManagedBlindPool is NOT Send
+// Test that LocalBlindPool is NOT Send
 #[test]
-fn local_managed_pool_is_not_send() {
-    // This test documents that LocalManagedBlindPool is not Send.
+fn local_pool_is_not_send() {
+    // This test documents that LocalBlindPool is not Send.
     // The types use Rc internally which is not Send.
     let _pool = LocalBlindPool::from(RawBlindPool::new());
 
@@ -241,10 +241,10 @@ fn local_managed_pool_is_not_send() {
     // });
 }
 
-// Test that LocalManagedBlindPool is NOT Sync
+// Test that LocalBlindPool is NOT Sync
 #[test]
-fn local_managed_pool_is_not_sync() {
-    // This test documents that LocalManagedBlindPool is not Sync.
+fn local_pool_is_not_sync() {
+    // This test documents that LocalBlindPool is not Sync.
     // The types use RefCell internally which is not Sync.
     let _pool = LocalBlindPool::from(RawBlindPool::new());
 

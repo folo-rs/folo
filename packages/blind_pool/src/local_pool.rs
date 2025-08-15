@@ -28,8 +28,8 @@ use crate::{BlindPoolBuilder, LocalPooled, RawBlindPool, RawPooled};
 /// // Clone the pool handle for use in different parts of the code.
 /// let pool_clone = pool.clone();
 ///
-/// let managed_item = pool_clone.insert(42_u64);
-/// assert_eq!(*managed_item, 42);
+/// let item_handle = pool_clone.insert(42_u64);
+/// assert_eq!(*item_handle, 42);
 /// ```
 #[derive(Clone, Debug)]
 pub struct LocalBlindPool {
@@ -52,8 +52,8 @@ impl From<RawBlindPool> for LocalBlindPool {
     ///     .drop_policy(DropPolicy::MayDropItems)
     ///     .build_raw();
     ///
-    /// // Convert to local managed pool.
-    /// let managed_pool = LocalBlindPool::from(raw_pool);
+    /// // Convert to local pool.
+    /// let pool = LocalBlindPool::from(raw_pool);
     /// ```
     fn from(pool: RawBlindPool) -> Self {
         Self {
@@ -74,12 +74,12 @@ impl LocalBlindPool {
     ///
     /// let pool = LocalBlindPool::new();
     ///
-    /// let managed_u32 = pool.insert(42_u32);
-    /// let managed_string = pool.insert("hello".to_string());
+    /// let u32_handle = pool.insert(42_u32);
+    /// let string_handle = pool.insert("hello".to_string());
     ///
     /// // Access values through dereferencing.
-    /// assert_eq!(*managed_u32, 42);
-    /// assert_eq!(*managed_string, "hello");
+    /// assert_eq!(*u32_handle, 42);
+    /// assert_eq!(*string_handle, "hello");
     /// ```
     #[must_use]
     pub fn new() -> Self {
@@ -101,7 +101,7 @@ impl LocalBlindPool {
         BlindPoolBuilder::new()
     }
 
-    /// Inserts a value into the pool and returns a managed handle to access it.
+    /// Inserts a value into the pool and returns a handle to access it.
     ///
     /// The returned handle automatically manages the lifetime of the inserted value.
     /// When all handles to the value are dropped, the value is automatically removed
@@ -114,12 +114,12 @@ impl LocalBlindPool {
     ///
     /// let pool = LocalBlindPool::new();
     ///
-    /// let managed_u32 = pool.insert(42_u32);
-    /// let managed_string = pool.insert("hello".to_string());
+    /// let u32_handle = pool.insert(42_u32);
+    /// let string_handle = pool.insert("hello".to_string());
     ///
     /// // Access values through dereferencing.
-    /// assert_eq!(*managed_u32, 42);
-    /// assert_eq!(*managed_string, "hello");
+    /// assert_eq!(*u32_handle, 42);
+    /// assert_eq!(*string_handle, "hello");
     /// ```
     pub fn insert<T>(&self, value: T) -> LocalPooled<T> {
         let pooled = {

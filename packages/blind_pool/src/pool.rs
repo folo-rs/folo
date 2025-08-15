@@ -32,8 +32,8 @@ use crate::{BlindPoolBuilder, Pooled, RawBlindPool, RawPooled};
 /// let pool_clone = pool.clone();
 ///
 /// let handle = thread::spawn(move || {
-///     let managed_item = pool_clone.insert(42_u64);
-///     *managed_item
+///     let item_handle = pool_clone.insert(42_u64);
+///     *item_handle
 /// });
 ///
 /// let value = handle.join().unwrap();
@@ -60,8 +60,8 @@ impl From<RawBlindPool> for BlindPool {
     ///     .drop_policy(DropPolicy::MayDropItems)
     ///     .build_raw();
     ///
-    /// // Convert to managed pool.
-    /// let managed_pool = BlindPool::from(raw_pool);
+    /// // Convert to pool.
+    /// let pool = BlindPool::from(raw_pool);
     /// ```
     fn from(pool: RawBlindPool) -> Self {
         Self {
@@ -82,12 +82,12 @@ impl BlindPool {
     ///
     /// let pool = BlindPool::new();
     ///
-    /// let managed_u32 = pool.insert(42_u32);
-    /// let managed_string = pool.insert("hello".to_string());
+    /// let u32_handle = pool.insert(42_u32);
+    /// let string_handle = pool.insert("hello".to_string());
     ///
     /// // Access values through dereferencing.
-    /// assert_eq!(*managed_u32, 42);
-    /// assert_eq!(*managed_string, "hello");
+    /// assert_eq!(*u32_handle, 42);
+    /// assert_eq!(*string_handle, "hello");
     /// ```
     #[must_use]
     pub fn new() -> Self {
@@ -109,7 +109,7 @@ impl BlindPool {
         BlindPoolBuilder::new()
     }
 
-    /// Inserts a value into the pool and returns a managed handle to access it.
+    /// Inserts a value into the pool and returns a handle to access it.
     ///
     /// The returned handle automatically manages the lifetime of the inserted value.
     /// When all handles to the value are dropped, the value is automatically removed
@@ -122,12 +122,12 @@ impl BlindPool {
     ///
     /// let pool = BlindPool::new();
     ///
-    /// let managed_u32 = pool.insert(42_u32);
-    /// let managed_string = pool.insert("hello".to_string());
+    /// let u32_handle = pool.insert(42_u32);
+    /// let string_handle = pool.insert("hello".to_string());
     ///
     /// // Access values through dereferencing.
-    /// assert_eq!(*managed_u32, 42);
-    /// assert_eq!(*managed_string, "hello");
+    /// assert_eq!(*u32_handle, 42);
+    /// assert_eq!(*string_handle, "hello");
     /// ```
     pub fn insert<T>(&self, value: T) -> Pooled<T> {
         let pooled = {

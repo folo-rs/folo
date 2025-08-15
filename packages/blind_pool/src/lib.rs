@@ -1,7 +1,7 @@
 //! This package provides [`BlindPool`], a dynamically growing pool of objects that can store
 //! objects of any type.
 //!
-//! It offers automatic memory management through managed wrappers with stable memory addresses
+//! It offers automatic memory management with stable memory addresses
 //! and efficient typed insertion with automatic value dropping.
 //!
 //! # Type-agnostic memory management
@@ -12,7 +12,7 @@
 //! # Features
 //!
 //! - **Type-agnostic memory management**: Accepts any type.
-//! - **Automatic resource management**: Managed types handle cleanup automatically.
+//! - **Automatic resource management**: Types handle cleanup automatically.
 //! - **Thread-safe and single-threaded variants**: [`BlindPool`] for multi-threaded use,
 //!   [`LocalBlindPool`] for single-threaded performance.
 //! - **Stable addresses**: Memory addresses remain valid until explicitly removed.
@@ -27,16 +27,16 @@
 //! ```rust
 //! use blind_pool::BlindPool;
 //!
-//! // Create a thread-safe managed pool.
+//! // Create a thread-safe pool.
 //! let pool = BlindPool::new();
 //!
-//! // Insert values and get managed handles.
-//! let managed_u64 = pool.insert(42_u64);
-//! let managed_string = pool.insert("hello".to_string());
+//! // Insert values and get handles.
+//! let u64_handle = pool.insert(42_u64);
+//! let string_handle = pool.insert("hello".to_string());
 //!
 //! // Access values through dereferencing.
-//! assert_eq!(*managed_u64, 42);
-//! assert_eq!(*managed_string, "hello");
+//! assert_eq!(*u64_handle, 42);
+//! assert_eq!(*string_handle, "hello");
 //!
 //! // Values are automatically cleaned up when handles are dropped.
 //! ```
@@ -46,11 +46,11 @@
 //! ```rust
 //! use blind_pool::LocalBlindPool;
 //!
-//! // Create a single-threaded managed pool (more efficient).
+//! // Create a single-threaded pool (more efficient).
 //! let pool = LocalBlindPool::new();
 //!
-//! let managed_value = pool.insert(vec![1, 2, 3]);
-//! assert_eq!(*managed_value, vec![1, 2, 3]);
+//! let value_handle = pool.insert(vec![1, 2, 3]);
+//! assert_eq!(*value_handle, vec![1, 2, 3]);
 //! ```
 //!
 //! For manual resource management:
