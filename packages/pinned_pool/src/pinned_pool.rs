@@ -108,7 +108,7 @@ pub struct PinnedPool<T> {
 /// ```
 ///
 /// Keys may be reused by the pool after an item is removed.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Key {
     index_in_pool: usize,
 }
