@@ -13,6 +13,13 @@
 //! - **Type safety**: Maintains all the type safety guarantees of the underlying `BlindPool`
 //! - **No manual removal**: No need to explicitly remove items - they are cleaned up automatically
 //!
+//! # Variants
+//!
+//! This package provides two variants:
+//!
+//! - **Thread-safe**: [`ManagedBlindPool`] and [`ManagedPooled<T>`] for multi-threaded use
+//! - **Single-threaded**: [`LocalManagedBlindPool`] and [`LocalManagedPooled<T>`] for single-threaded use with better performance
+//!
 //! # Example
 //!
 //! ```rust
@@ -39,8 +46,12 @@
 //! ```
 
 mod constants;
+mod local_managed_pool;
+mod local_managed_pooled;
 mod managed_pool;
 mod managed_pooled;
 
+pub use local_managed_pool::*;
+pub use local_managed_pooled::*;
 pub use managed_pool::*;
 pub use managed_pooled::*;

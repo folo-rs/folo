@@ -1,12 +1,20 @@
 //! Example that demonstrates the exact usage shown in the README.md file.
 //!
-//! This shows how to use `ManagedBlindPool` for thread-safe memory pool management
-//! with automatic cleanup.
+//! This shows how to use both `ManagedBlindPool` (thread-safe) and `LocalManagedBlindPool`
+//! (single-threaded) for memory pool management with automatic cleanup.
 
 use blind_pool::BlindPool;
-use blind_pool_managed::ManagedBlindPool;
+use blind_pool_managed::{ManagedBlindPool, LocalManagedBlindPool};
 
 fn main() {
+    println!("=== Thread-safe ManagedBlindPool ===");
+    thread_safe_example();
+    
+    println!("\n=== Single-threaded LocalManagedBlindPool ===");
+    single_threaded_example();
+}
+
+fn thread_safe_example() {
     // Create a managed pool from a regular BlindPool.
     let pool = ManagedBlindPool::from(BlindPool::new());
 
@@ -44,6 +52,34 @@ fn main() {
     drop(managed_string);
     drop(cloned_handle);
     drop(managed_float);
+
+    println!("Pool length after cleanup: {}", pool.len());
+    println!("Pool is empty after cleanup: {}", pool.is_empty());
+}
+
+fn single_threaded_example() {
+    // Create a local managed pool (single-threaded, higher performance)
+    let pool = LocalManagedBlindPool::from(BlindPool::new());
+
+    // Insert values and get managed handles.
+    let managed_u32 = pool.insert(100_u32);
+    let managed_string = pool.insert("local".to_string());
+
+    // Access values through dereferencing.
+    println!("u32 value: {}", *managed_u32);
+    println!("string value: {}", *managed_string);
+
+    // Clone handles work the same way.
+    let cloned_handle = managed_u32.clone();
+    println!("Cloned handle value: {}", *cloned_handle);
+
+    // Pool statistics.
+    println!("Pool length: {}", pool.len());
+
+    // Automatic cleanup works the same way.
+    drop(managed_u32);
+    drop(cloned_handle);
+    drop(managed_string);
 
     println!("Pool length after cleanup: {}", pool.len());
     println!("Pool is empty after cleanup: {}", pool.is_empty());
