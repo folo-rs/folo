@@ -3,9 +3,7 @@ use std::ops::Deref;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
-use blind_pool::Pooled;
-
-use crate::LocalManagedBlindPool;
+use crate::{LocalBlindPool, RawPooled};
 
 /// A single-threaded managed handle to a value stored in a [`LocalManagedBlindPool`].
 ///
@@ -40,46 +38,46 @@ use crate::LocalManagedBlindPool;
 /// // The value is automatically removed when dropped.
 /// drop(managed_value);
 /// ```
-pub struct LocalManagedPooled<T> {
+pub struct LocalPooled<T> {
     /// The reference-counted inner data containing the actual pooled item and pool handle.
-    inner: Rc<LocalManagedPooledInner<T>>,
+    inner: Rc<LocalPooledInner<T>>,
 }
 
 /// Internal data structure that contains the actual pooled item and keeps the pool alive.
-struct LocalManagedPooledInner<T> {
+struct LocalPooledInner<T> {
     /// The handle to the actual item in the pool.
-    pooled: Pooled<T>,
+    pooled: RawPooled<T>,
 
     /// A handle to the pool that keeps it alive as long as this item exists.
-    pool: LocalManagedBlindPool,
+    pool: LocalBlindPool,
 }
 
-impl<T> LocalManagedPooledInner<T> {
+impl<T> LocalPooledInner<T> {
     /// Extracts the pooled value and pool handle without triggering cleanup.
     ///
-    /// This method consumes the inner structure and returns both the pooled value and 
-    /// pool handle while preventing the Drop implementation from running. This is used 
+    /// This method consumes the inner structure and returns both the pooled value and
+    /// pool handle while preventing the Drop implementation from running. This is used
     /// when transferring ownership of the pooled item without removing it from the pool.
-    fn into_parts(self) -> (Pooled<T>, LocalManagedBlindPool) {
+    fn into_parts(self) -> (RawPooled<T>, LocalBlindPool) {
         // SAFETY: We own `self` and are about to forget it, preventing Drop from running.
         // This allows us to move the fields out without triggering the destructor.
         let pooled = unsafe { std::ptr::read(std::ptr::addr_of!(self.pooled)) };
         // SAFETY: Same reasoning as above - we own the struct and are preventing Drop.
         let pool = unsafe { std::ptr::read(std::ptr::addr_of!(self.pool)) };
-        
+
         // Prevent Drop from running, which would remove the item from the pool
         std::mem::forget(self);
-        
+
         (pooled, pool)
     }
 }
 
-impl<T> LocalManagedPooled<T> {
+impl<T> LocalPooled<T> {
     /// Creates a new [`LocalManagedPooled<T>`] from a pooled item and pool handle.
     ///
     /// This is an internal constructor used by [`LocalManagedBlindPool::insert`].
-    pub(crate) fn new(pooled: Pooled<T>, pool: LocalManagedBlindPool) -> Self {
-        let inner = LocalManagedPooledInner { pooled, pool };
+    pub(crate) fn new(pooled: RawPooled<T>, pool: LocalBlindPool) -> Self {
+        let inner = LocalPooledInner { pooled, pool };
         Self {
             inner: Rc::new(inner),
         }
@@ -143,36 +141,36 @@ impl<T> LocalManagedPooled<T> {
     /// assert_eq!(value, 42);
     /// ```
     #[must_use]
-    pub fn erase(self) -> LocalManagedPooled<()> {
+    pub fn erase(self) -> LocalPooled<()> {
         // We need exclusive access to perform the erase operation.
         // This will panic if there are other references.
-        
+
         // Move out of self to avoid Drop running
         let this = ManuallyDrop::new(self);
-        
+
         // SAFETY: We own `this` and ManuallyDrop ensures it will not be auto-dropped.
         let inner_rc = unsafe { std::ptr::read(std::ptr::addr_of!(this.inner)) };
-        
+
         let inner = Rc::try_unwrap(inner_rc)
             .map_err(|_rc| "cannot erase LocalManagedPooled with multiple references")
             .unwrap();
-        
+
         // Extract the pooled value and pool handle without triggering the drop cleanup
         let (pooled, pool) = inner.into_parts();
-        
+
         let erased_pooled = pooled.erase();
-        
-        let erased_inner = LocalManagedPooledInner {
+
+        let erased_inner = LocalPooledInner {
             pooled: erased_pooled,
             pool,
         };
-        LocalManagedPooled {
+        LocalPooled {
             inner: Rc::new(erased_inner),
         }
     }
 }
 
-impl<T> Clone for LocalManagedPooled<T> {
+impl<T> Clone for LocalPooled<T> {
     /// Creates another handle to the same pooled value.
     ///
     /// This increases the reference count for the underlying value. The value will only be
@@ -203,7 +201,7 @@ impl<T> Clone for LocalManagedPooled<T> {
     }
 }
 
-impl<T> Deref for LocalManagedPooled<T> {
+impl<T> Deref for LocalPooled<T> {
     type Target = T;
 
     /// Provides direct access to the value stored in the pool.
@@ -230,7 +228,7 @@ impl<T> Deref for LocalManagedPooled<T> {
     }
 }
 
-impl<T> Drop for LocalManagedPooledInner<T> {
+impl<T> Drop for LocalPooledInner<T> {
     /// Automatically removes the item from the pool when the last reference is dropped.
     ///
     /// This ensures that resources are properly cleaned up without requiring manual intervention.
@@ -241,7 +239,7 @@ impl<T> Drop for LocalManagedPooledInner<T> {
     }
 }
 
-impl<T: std::fmt::Debug> std::fmt::Debug for LocalManagedPooled<T> {
+impl<T: std::fmt::Debug> std::fmt::Debug for LocalPooled<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalManagedPooled")
             .field("inner", &self.inner)
@@ -249,7 +247,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for LocalManagedPooled<T> {
     }
 }
 
-impl<T: std::fmt::Debug> std::fmt::Debug for LocalManagedPooledInner<T> {
+impl<T: std::fmt::Debug> std::fmt::Debug for LocalPooledInner<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalManagedPooledInner")
             .field("pooled", &self.pooled)

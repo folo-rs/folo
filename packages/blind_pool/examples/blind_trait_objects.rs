@@ -6,7 +6,7 @@
 //! * Converting those references to trait object references
 //! * Using trait methods on pooled items
 
-use blind_pool::BlindPool;
+use blind_pool::RawBlindPool;
 
 // Define a trait for our content.
 trait MediaContent {
@@ -83,7 +83,7 @@ fn main() {
     println!();
 
     // Create a blind pool to store media content.
-    let mut media_pool = BlindPool::new();
+    let mut media_pool = RawBlindPool::new();
 
     println!("Creating a multimedia library...");
     println!();

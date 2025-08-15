@@ -48,9 +48,19 @@
 //! ```
 
 mod builder;
+mod constants;
+mod local_pool;
+mod local_pooled;
 mod pool;
+mod pooled;
+mod raw;
 
 pub use builder::*;
-// Re-export DropPolicy from opaque_pool
+pub(crate) use constants::*;
+pub use local_pool::*;
+pub use local_pooled::*;
+// Re-export DropPolicy from opaque_pool simply because we do not need a different one.
 pub use opaque_pool::DropPolicy;
 pub use pool::*;
+pub use pooled::*;
+pub use raw::*;

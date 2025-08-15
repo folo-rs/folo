@@ -1,9 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use blind_pool::BlindPool;
-
-use crate::LocalManagedPooled;
+use crate::{LocalPooled, RawBlindPool, RawPooled};
 
 /// A single-threaded wrapper around [`BlindPool`] that provides automatic resource management
 /// and reference counting.
@@ -35,12 +33,12 @@ use crate::LocalManagedPooled;
 /// assert_eq!(*managed_item, 42);
 /// ```
 #[derive(Clone, Debug)]
-pub struct LocalManagedBlindPool {
+pub struct LocalBlindPool {
     /// The shared pool instance protected by a `RefCell` for single-threaded interior mutability.
-    inner: Rc<RefCell<BlindPool>>,
+    inner: Rc<RefCell<RawBlindPool>>,
 }
 
-impl From<BlindPool> for LocalManagedBlindPool {
+impl From<RawBlindPool> for LocalBlindPool {
     /// Creates a new [`LocalManagedBlindPool`] from an existing [`BlindPool`].
     ///
     /// The provided pool is consumed and wrapped in single-threaded reference counting.
@@ -59,14 +57,14 @@ impl From<BlindPool> for LocalManagedBlindPool {
     /// // Convert to local managed pool.
     /// let managed_pool = LocalManagedBlindPool::from(pool);
     /// ```
-    fn from(pool: BlindPool) -> Self {
+    fn from(pool: RawBlindPool) -> Self {
         Self {
             inner: Rc::new(RefCell::new(pool)),
         }
     }
 }
 
-impl LocalManagedBlindPool {
+impl LocalBlindPool {
     /// Inserts a value into the pool and returns a managed handle to access it.
     ///
     /// The returned handle automatically manages the lifetime of the inserted value.
@@ -88,13 +86,13 @@ impl LocalManagedBlindPool {
     /// assert_eq!(*managed_u32, 42);
     /// assert_eq!(*managed_string, "hello");
     /// ```
-    pub fn insert<T>(&self, value: T) -> LocalManagedPooled<T> {
+    pub fn insert<T>(&self, value: T) -> LocalPooled<T> {
         let pooled = {
             let mut pool = self.inner.borrow_mut();
             pool.insert(value)
         };
 
-        LocalManagedPooled::new(pooled, self.clone())
+        LocalPooled::new(pooled, self.clone())
     }
 
     /// Returns the total number of items currently stored in the pool.
@@ -148,7 +146,7 @@ impl LocalManagedBlindPool {
     ///
     /// This is an internal method used by [`LocalManagedPooled`] when it is dropped.
     /// It should not be called directly by user code.
-    pub(crate) fn remove<T>(&self, pooled: blind_pool::Pooled<T>) {
+    pub(crate) fn remove<T>(&self, pooled: RawPooled<T>) {
         let mut pool = self.inner.borrow_mut();
         pool.remove(pooled);
     }

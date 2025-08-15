@@ -3,9 +3,7 @@ use std::ops::Deref;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use blind_pool::Pooled;
-
-use crate::ManagedBlindPool;
+use crate::{BlindPool, RawPooled};
 
 /// A managed handle to a value stored in a [`ManagedBlindPool`].
 ///
@@ -41,46 +39,46 @@ use crate::ManagedBlindPool;
 /// // The value is automatically removed when dropped.
 /// drop(managed_value);
 /// ```
-pub struct ManagedPooled<T> {
+pub struct Pooled<T> {
     /// The reference-counted inner data containing the actual pooled item and pool handle.
-    inner: Arc<ManagedPooledInner<T>>,
+    inner: Arc<PooledInner<T>>,
 }
 
 /// Internal data structure that contains the actual pooled item and keeps the pool alive.
-struct ManagedPooledInner<T> {
+struct PooledInner<T> {
     /// The handle to the actual item in the pool.
-    pooled: Pooled<T>,
+    pooled: RawPooled<T>,
 
     /// A handle to the pool that keeps it alive as long as this item exists.
-    pool: ManagedBlindPool,
+    pool: BlindPool,
 }
 
-impl<T> ManagedPooledInner<T> {
+impl<T> PooledInner<T> {
     /// Extracts the pooled value and pool handle without triggering cleanup.
     ///
-    /// This method consumes the inner structure and returns both the pooled value and 
-    /// pool handle while preventing the Drop implementation from running. This is used 
+    /// This method consumes the inner structure and returns both the pooled value and
+    /// pool handle while preventing the Drop implementation from running. This is used
     /// when transferring ownership of the pooled item without removing it from the pool.
-    fn into_parts(self) -> (Pooled<T>, ManagedBlindPool) {
+    fn into_parts(self) -> (RawPooled<T>, BlindPool) {
         // SAFETY: We own `self` and are about to forget it, preventing Drop from running.
         // This allows us to move the fields out without triggering the destructor.
         let pooled = unsafe { std::ptr::read(std::ptr::addr_of!(self.pooled)) };
         // SAFETY: Same reasoning as above - we own the struct and are preventing Drop.
         let pool = unsafe { std::ptr::read(std::ptr::addr_of!(self.pool)) };
-        
+
         // Prevent Drop from running, which would remove the item from the pool
         std::mem::forget(self);
-        
+
         (pooled, pool)
     }
 }
 
-impl<T> ManagedPooled<T> {
+impl<T> Pooled<T> {
     /// Creates a new [`ManagedPooled<T>`] from a pooled item and pool handle.
     ///
     /// This is an internal constructor used by [`ManagedBlindPool::insert`].
-    pub(crate) fn new(pooled: Pooled<T>, pool: ManagedBlindPool) -> Self {
-        let inner = ManagedPooledInner { pooled, pool };
+    pub(crate) fn new(pooled: RawPooled<T>, pool: BlindPool) -> Self {
+        let inner = PooledInner { pooled, pool };
         Self {
             inner: Arc::new(inner),
         }
@@ -144,36 +142,36 @@ impl<T> ManagedPooled<T> {
     /// assert_eq!(value, 42);
     /// ```
     #[must_use]
-    pub fn erase(self) -> ManagedPooled<()> {
+    pub fn erase(self) -> Pooled<()> {
         // We need exclusive access to perform the erase operation.
         // This will panic if there are other references.
-        
+
         // Move out of self to avoid Drop running
         let this = ManuallyDrop::new(self);
-        
+
         // SAFETY: We own `this` and ManuallyDrop ensures it will not be auto-dropped.
         let inner_arc = unsafe { std::ptr::read(std::ptr::addr_of!(this.inner)) };
-        
+
         let inner = Arc::try_unwrap(inner_arc)
             .map_err(|_arc| "cannot erase ManagedPooled with multiple references")
             .unwrap();
-        
+
         // Extract the pooled value and pool handle without triggering the drop cleanup
         let (pooled, pool) = inner.into_parts();
-        
+
         let erased_pooled = pooled.erase();
-        
-        let erased_inner = ManagedPooledInner {
+
+        let erased_inner = PooledInner {
             pooled: erased_pooled,
             pool,
         };
-        ManagedPooled {
+        Pooled {
             inner: Arc::new(erased_inner),
         }
     }
 }
 
-impl<T> Clone for ManagedPooled<T> {
+impl<T> Clone for Pooled<T> {
     /// Creates another handle to the same pooled value.
     ///
     /// This increases the reference count for the underlying value. The value will only be
@@ -204,7 +202,7 @@ impl<T> Clone for ManagedPooled<T> {
     }
 }
 
-impl<T> Deref for ManagedPooled<T> {
+impl<T> Deref for Pooled<T> {
     type Target = T;
 
     /// Provides direct access to the value stored in the pool.
@@ -231,7 +229,7 @@ impl<T> Deref for ManagedPooled<T> {
     }
 }
 
-impl<T> Drop for ManagedPooledInner<T> {
+impl<T> Drop for PooledInner<T> {
     /// Automatically removes the item from the pool when the last reference is dropped.
     ///
     /// This ensures that resources are properly cleaned up without requiring manual intervention.
@@ -244,14 +242,14 @@ impl<T> Drop for ManagedPooledInner<T> {
 
 // SAFETY: ManagedPooled<T> can be Send if T is Send, because the Arc<ManagedPooledInner<T>>
 // is Send when T is Send, and the mutex in ManagedBlindPool provides thread safety.
-unsafe impl<T: Send> Send for ManagedPooled<T> {}
+unsafe impl<T: Send> Send for Pooled<T> {}
 
 // SAFETY: ManagedPooled<T> can be Sync if T is Sync, because multiple threads can safely
 // access the same ManagedPooled<T> instance if T is Sync. The deref operation is safe
 // for concurrent access when T is Sync, and other operations don't require exclusive access.
-unsafe impl<T: Sync> Sync for ManagedPooled<T> {}
+unsafe impl<T: Sync> Sync for Pooled<T> {}
 
-impl<T: std::fmt::Debug> std::fmt::Debug for ManagedPooled<T> {
+impl<T: std::fmt::Debug> std::fmt::Debug for Pooled<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ManagedPooled")
             .field("inner", &self.inner)
@@ -259,7 +257,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for ManagedPooled<T> {
     }
 }
 
-impl<T: std::fmt::Debug> std::fmt::Debug for ManagedPooledInner<T> {
+impl<T: std::fmt::Debug> std::fmt::Debug for PooledInner<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ManagedPooledInner")
             .field("pooled", &self.pooled)
@@ -269,7 +267,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for ManagedPooledInner<T> {
 }
 
 // SAFETY: ManagedPooledInner<T> can be Send if T is Send, following the same reasoning as ManagedPooled<T>.
-unsafe impl<T: Send> Send for ManagedPooledInner<T> {}
+unsafe impl<T: Send> Send for PooledInner<T> {}
 
 // SAFETY: ManagedPooledInner<T> can be Sync if T is Sync, following the same reasoning as ManagedPooled<T>.
-unsafe impl<T: Sync> Sync for ManagedPooledInner<T> {}
+unsafe impl<T: Sync> Sync for PooledInner<T> {}

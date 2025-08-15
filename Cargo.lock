@@ -194,15 +194,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "blind_pool_managed"
-version = "0.1.0"
-dependencies = [
- "blind_pool",
- "criterion",
- "mutants",
-]
-
-[[package]]
 name = "byteorder"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

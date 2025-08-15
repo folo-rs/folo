@@ -1,4 +1,4 @@
-use crate::{BlindPool, DropPolicy};
+use crate::{RawBlindPool, DropPolicy};
 
 /// Builder for creating an instance of [`BlindPool`].
 ///
@@ -57,7 +57,7 @@ impl BlindPoolBuilder {
     /// let pool = BlindPool::builder().build();
     /// ```
     #[must_use]
-    pub fn build(self) -> BlindPool {
-        BlindPool::new_inner(self.drop_policy)
+    pub fn build(self) -> RawBlindPool {
+        RawBlindPool::new_inner(self.drop_policy)
     }
 }

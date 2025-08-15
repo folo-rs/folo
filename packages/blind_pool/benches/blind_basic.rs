@@ -9,7 +9,7 @@ use std::iter;
 use std::time::Instant;
 
 use alloc_tracker::Allocator;
-use blind_pool::BlindPool;
+use blind_pool::RawBlindPool;
 use criterion::{Criterion, criterion_group, criterion_main};
 
 criterion_group!(benches, entrypoint);
@@ -44,7 +44,7 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for _ in 0..iters {
-                drop(black_box(BlindPool::new()));
+                drop(black_box(RawBlindPool::new()));
             }
 
             start.elapsed()
@@ -54,7 +54,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("insert_first");
     group.bench_function("insert_first", |b| {
         b.iter_custom(|iters| {
-            let mut pools = iter::repeat_with(BlindPool::new)
+            let mut pools = iter::repeat_with(RawBlindPool::new)
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 
@@ -73,7 +73,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("insert_second");
     group.bench_function("insert_second", |b| {
         b.iter_custom(|iters| {
-            let mut pools = iter::repeat_with(BlindPool::new)
+            let mut pools = iter::repeat_with(RawBlindPool::new)
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 
@@ -97,7 +97,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("insert_first_two_types_same_layout");
     group.bench_function("insert_first_two_types_same_layout", |b| {
         b.iter_custom(|iters| {
-            let mut pools = iter::repeat_with(BlindPool::new)
+            let mut pools = iter::repeat_with(RawBlindPool::new)
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 
@@ -120,7 +120,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("insert_second_two_types_same_layout");
     group.bench_function("insert_second_two_types_same_layout", |b| {
         b.iter_custom(|iters| {
-            let mut pools = iter::repeat_with(BlindPool::new)
+            let mut pools = iter::repeat_with(RawBlindPool::new)
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 
@@ -148,7 +148,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("insert_first_two_types_different_layout");
     group.bench_function("insert_first_two_types_different_layout", |b| {
         b.iter_custom(|iters| {
-            let mut pools = iter::repeat_with(BlindPool::new)
+            let mut pools = iter::repeat_with(RawBlindPool::new)
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 
@@ -168,7 +168,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("insert_second_two_types_different_layout");
     group.bench_function("insert_second_two_types_different_layout", |b| {
         b.iter_custom(|iters| {
-            let mut pools = iter::repeat_with(BlindPool::new)
+            let mut pools = iter::repeat_with(RawBlindPool::new)
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 
@@ -193,7 +193,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("read_one");
     group.bench_function("read_one", |b| {
         b.iter_custom(|iters| {
-            let mut pool = BlindPool::new();
+            let mut pool = RawBlindPool::new();
             let pooled = pool.insert(U64_TEST_VALUE);
 
             let _span = allocs_op.measure_thread().iterations(iters);
@@ -212,7 +212,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("len");
     group.bench_function("len", |b| {
         b.iter_custom(|iters| {
-            let mut pool = BlindPool::new();
+            let mut pool = RawBlindPool::new();
 
             // Pre-populate pool with 10k items.
             for _ in 0..10_000 {
@@ -234,7 +234,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("is_empty");
     group.bench_function("is_empty", |b| {
         b.iter_custom(|iters| {
-            let mut pool = BlindPool::new();
+            let mut pool = RawBlindPool::new();
 
             // Pre-populate pool with 10k items.
             for _ in 0..10_000 {
@@ -256,7 +256,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("capacity_of");
     group.bench_function("capacity_of", |b| {
         b.iter_custom(|iters| {
-            let mut pool = BlindPool::new();
+            let mut pool = RawBlindPool::new();
 
             // Pre-populate pool with 10k items.
             for _ in 0..10_000 {
@@ -278,7 +278,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("read_one_two_types_same_layout");
     group.bench_function("read_one_two_types_same_layout", |b| {
         b.iter_custom(|iters| {
-            let mut pool = BlindPool::new();
+            let mut pool = RawBlindPool::new();
             let pooled1 = pool.insert(U64_TEST_VALUE);
             let pooled2 = pool.insert(AlmostU64 {
                 value: 42,
@@ -303,7 +303,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("read_one_two_types_different_layout");
     group.bench_function("read_one_two_types_different_layout", |b| {
         b.iter_custom(|iters| {
-            let mut pool = BlindPool::new();
+            let mut pool = RawBlindPool::new();
             let pooled1 = pool.insert(U64_TEST_VALUE);
             let pooled2 = pool.insert(NOT_U64_TEST_VALUE);
 
@@ -325,7 +325,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("remove_one");
     group.bench_function("remove_one", |b| {
         b.iter_custom(|iters| {
-            let mut pools = iter::repeat_with(BlindPool::new)
+            let mut pools = iter::repeat_with(RawBlindPool::new)
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 
@@ -349,7 +349,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("remove_one_two_types_same_layout");
     group.bench_function("remove_one_two_types_same_layout", |b| {
         b.iter_custom(|iters| {
-            let mut pools = iter::repeat_with(BlindPool::new)
+            let mut pools = iter::repeat_with(RawBlindPool::new)
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 
@@ -381,7 +381,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("remove_one_two_types_different_layout");
     group.bench_function("remove_one_two_types_different_layout", |b| {
         b.iter_custom(|iters| {
-            let mut pools = iter::repeat_with(BlindPool::new)
+            let mut pools = iter::repeat_with(RawBlindPool::new)
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 
@@ -414,7 +414,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("insert_10k");
     group.bench_function("insert_10k", |b| {
         b.iter_custom(|iters| {
-            let mut pools = iter::repeat_with(BlindPool::new)
+            let mut pools = iter::repeat_with(RawBlindPool::new)
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 
@@ -437,7 +437,7 @@ fn entrypoint(c: &mut Criterion) {
         // We add 10 items, remove the first 5 and repeat this 1000 times.
         // This can stress the "seeking" and bookkeeping aspects of the pool.
         b.iter_custom(|iters| {
-            let mut pools = iter::repeat_with(BlindPool::new)
+            let mut pools = iter::repeat_with(RawBlindPool::new)
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 
@@ -477,7 +477,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("remove_10k");
     group.bench_function("remove_10k", |b| {
         b.iter_custom(|iters| {
-            let mut pools = iter::repeat_with(BlindPool::new)
+            let mut pools = iter::repeat_with(RawBlindPool::new)
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 

@@ -14,7 +14,7 @@ use std::iter;
 use std::time::Instant;
 
 use alloc_tracker::Allocator;
-use blind_pool::BlindPool;
+use blind_pool::RawBlindPool;
 use criterion::{Criterion, criterion_group, criterion_main};
 
 criterion_group!(benches, entrypoint);
@@ -41,7 +41,7 @@ macro_rules! generate_types {
         )*
 
         // Function to populate a pool with one item of each type
-        fn populate_pool_with_all_types(pool: &mut BlindPool) {
+        fn populate_pool_with_all_types(pool: &mut RawBlindPool) {
             $(
                 _ = pool.insert($name::with_value());
             )*
@@ -82,7 +82,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("insert_existing_layout");
     group.bench_function("insert_existing_layout", |b| {
         b.iter_custom(|iters| {
-            let mut pools = iter::repeat_with(BlindPool::new)
+            let mut pools = iter::repeat_with(RawBlindPool::new)
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 
@@ -121,7 +121,7 @@ fn entrypoint(c: &mut Criterion) {
                 }
             }
 
-            let mut pools = iter::repeat_with(BlindPool::new)
+            let mut pools = iter::repeat_with(RawBlindPool::new)
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 
@@ -149,7 +149,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("read_from_many_types");
     group.bench_function("read_from_many_types", |b| {
         b.iter_custom(|iters| {
-            let mut pool = BlindPool::new();
+            let mut pool = RawBlindPool::new();
 
             // Pre-populate pool with one item of each of the 100 types.
             populate_pool_with_all_types(&mut pool);
@@ -174,7 +174,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("len_many_types");
     group.bench_function("len_many_types", |b| {
         b.iter_custom(|iters| {
-            let mut pool = BlindPool::new();
+            let mut pool = RawBlindPool::new();
 
             // Pre-populate pool with one item of each of the 100 types.
             populate_pool_with_all_types(&mut pool);
@@ -195,7 +195,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("capacity_of_many_types");
     group.bench_function("capacity_of_many_types", |b| {
         b.iter_custom(|iters| {
-            let mut pool = BlindPool::new();
+            let mut pool = RawBlindPool::new();
 
             // Pre-populate pool with one item of each of the 100 types.
             populate_pool_with_all_types(&mut pool);
@@ -216,7 +216,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs_op = allocs.operation("remove_from_many_types");
     group.bench_function("remove_from_many_types", |b| {
         b.iter_custom(|iters| {
-            let mut pools = iter::repeat_with(BlindPool::new)
+            let mut pools = iter::repeat_with(RawBlindPool::new)
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 

@@ -3,14 +3,14 @@
 use std::f32::consts::PI;
 use std::f64::consts::E;
 
-use blind_pool::BlindPool;
+use blind_pool::RawBlindPool;
 
 fn main() {
     println!("BlindPool Example");
     println!("================");
 
     // Create a new blind pool that can store any type.
-    let mut pool = BlindPool::new();
+    let mut pool = RawBlindPool::new();
 
     println!();
     println!("Created empty BlindPool:");
