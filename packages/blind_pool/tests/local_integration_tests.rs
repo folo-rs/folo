@@ -139,7 +139,7 @@ fn erase_type_information() {
 }
 
 #[test]
-#[should_panic(expected = "cannot erase LocalManagedPooled with multiple references")]
+#[should_panic(expected = "cannot erase LocalPooled with multiple references")]
 fn erase_with_multiple_references_panics() {
     let pool = LocalBlindPool::from(RawBlindPool::new());
 

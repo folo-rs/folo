@@ -5,39 +5,29 @@ use std::sync::Arc;
 
 use crate::{BlindPool, RawPooled};
 
-/// A managed handle to a value stored in a [`ManagedBlindPool`].
+/// A managed reference to a value stored in a [`BlindPool`].
 ///
-/// This type provides automatic resource management through reference counting. When the last
-/// [`ManagedPooled<T>`] referring to a particular value is dropped, the value is automatically
-/// removed from the pool.
+/// This type provides automatic lifetime management for values in the pool.
+/// When the last [`Pooled`] instance for a value is dropped, the value
+/// is automatically removed from the pool.
 ///
-/// The handle also keeps the pool alive - as long as any [`ManagedPooled<T>`] instances exist,
-/// the underlying pool will not be deallocated.
-///
-/// # Thread Safety
-///
-/// This type inherits the thread safety properties of `T`:
-/// - If `T: Send`, then `ManagedPooled<T>: Send`
-/// - If `T: Sync`, then `ManagedPooled<T>: Sync`
+/// Multiple [`Pooled`] instances can reference the same value through
+/// cloning, implementing reference counting semantics.
 ///
 /// # Example
 ///
 /// ```rust
 /// use blind_pool::BlindPool;
-/// use blind_pool_managed::ManagedBlindPool;
 ///
-/// let pool = ManagedBlindPool::from(BlindPool::new());
-///
-/// let managed_value = pool.insert(42_u64);
+/// let pool = BlindPool::new();
+/// let managed_value = pool.insert(42_u32);
 ///
 /// // Access the value through dereferencing.
 /// assert_eq!(*managed_value, 42);
 ///
-/// // Get a raw pointer to the value.
-/// let ptr = managed_value.ptr();
-///
-/// // The value is automatically removed when dropped.
-/// drop(managed_value);
+/// // Clone to create additional references.
+/// let managed_clone = managed_value.clone();
+/// assert_eq!(*managed_clone, 42);
 /// ```
 pub struct Pooled<T> {
     /// The reference-counted inner data containing the actual pooled item and pool handle.
@@ -74,9 +64,9 @@ impl<T> PooledInner<T> {
 }
 
 impl<T> Pooled<T> {
-    /// Creates a new [`ManagedPooled<T>`] from a pooled item and pool handle.
+    /// Creates a new managed pooled value.
     ///
-    /// This is an internal constructor used by [`ManagedBlindPool::insert`].
+    /// This method is intended for internal use by [`BlindPool`].
     pub(crate) fn new(pooled: RawPooled<T>, pool: BlindPool) -> Self {
         let inner = PooledInner { pooled, pool };
         Self {
@@ -93,9 +83,8 @@ impl<T> Pooled<T> {
     ///
     /// ```rust
     /// use blind_pool::BlindPool;
-    /// use blind_pool_managed::ManagedBlindPool;
     ///
-    /// let pool = ManagedBlindPool::from(BlindPool::new());
+    /// let pool = BlindPool::new();
     /// let managed_value = pool.insert(42_u64);
     ///
     /// let ptr = managed_value.ptr();
@@ -110,8 +99,8 @@ impl<T> Pooled<T> {
         self.inner.pooled.ptr()
     }
 
-    /// Erases the type information from this [`ManagedPooled<T>`] handle,
-    /// returning a [`ManagedPooled<()>`].
+    /// Erases the type information from this [`Pooled<T>`] handle,
+    /// returning a [`Pooled<()>`].
     ///
     /// This is useful when you want to store handles of different types in the same collection
     /// or pass them to code that doesn't need to know the specific type.
@@ -121,16 +110,15 @@ impl<T> Pooled<T> {
     ///
     /// # Panics
     ///
-    /// Panics if there are multiple `ManagedPooled` handles referring to the same pooled item.
+    /// Panics if there are multiple `Pooled` handles referring to the same pooled item.
     /// Regular Rust references to the dereferenced value do not count as multiple handles.
     ///
     /// # Example
     ///
     /// ```rust
     /// use blind_pool::BlindPool;
-    /// use blind_pool_managed::ManagedBlindPool;
     ///
-    /// let pool = ManagedBlindPool::from(BlindPool::new());
+    /// let pool = BlindPool::new();
     /// let managed_value = pool.insert(42_u64);
     ///
     /// // Erase type information.
@@ -153,7 +141,7 @@ impl<T> Pooled<T> {
         let inner_arc = unsafe { std::ptr::read(std::ptr::addr_of!(this.inner)) };
 
         let inner = Arc::try_unwrap(inner_arc)
-            .map_err(|_arc| "cannot erase ManagedPooled with multiple references")
+            .map_err(|_arc| "cannot erase Pooled with multiple references")
             .unwrap();
 
         // Extract the pooled value and pool handle without triggering the drop cleanup
@@ -181,9 +169,8 @@ impl<T> Clone for Pooled<T> {
     ///
     /// ```rust
     /// use blind_pool::BlindPool;
-    /// use blind_pool_managed::ManagedBlindPool;
     ///
-    /// let pool = ManagedBlindPool::from(BlindPool::new());
+    /// let pool = BlindPool::new();
     /// let managed_value = pool.insert(42_u64);
     ///
     /// let cloned_handle = managed_value.clone();
@@ -213,9 +200,8 @@ impl<T> Deref for Pooled<T> {
     ///
     /// ```rust
     /// use blind_pool::BlindPool;
-    /// use blind_pool_managed::ManagedBlindPool;
     ///
-    /// let pool = ManagedBlindPool::from(BlindPool::new());
+    /// let pool = BlindPool::new();
     /// let managed_string = pool.insert("hello".to_string());
     ///
     /// // Access string methods directly.
@@ -223,7 +209,7 @@ impl<T> Deref for Pooled<T> {
     /// assert!(managed_string.starts_with("he"));
     /// ```
     fn deref(&self) -> &Self::Target {
-        // SAFETY: The pointer is valid as long as this ManagedPooled exists.
+        // SAFETY: The pointer is valid as long as this Pooled exists.
         // The Arc ensures that the underlying data remains alive.
         unsafe { self.inner.pooled.ptr().as_ref() }
     }
@@ -240,18 +226,18 @@ impl<T> Drop for PooledInner<T> {
     }
 }
 
-// SAFETY: ManagedPooled<T> can be Send if T is Send, because the Arc<ManagedPooledInner<T>>
-// is Send when T is Send, and the mutex in ManagedBlindPool provides thread safety.
+// SAFETY: Pooled<T> can be Send if T is Send, because the Arc<PooledInner<T>>
+// is Send when T is Send, and the mutex in BlindPool provides thread safety.
 unsafe impl<T: Send> Send for Pooled<T> {}
 
-// SAFETY: ManagedPooled<T> can be Sync if T is Sync, because multiple threads can safely
-// access the same ManagedPooled<T> instance if T is Sync. The deref operation is safe
+// SAFETY: Pooled<T> can be Sync if T is Sync, because multiple threads can safely
+// access the same Pooled<T> instance if T is Sync. The deref operation is safe
 // for concurrent access when T is Sync, and other operations don't require exclusive access.
 unsafe impl<T: Sync> Sync for Pooled<T> {}
 
 impl<T: std::fmt::Debug> std::fmt::Debug for Pooled<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ManagedPooled")
+        f.debug_struct("Pooled")
             .field("inner", &self.inner)
             .finish()
     }
@@ -259,15 +245,15 @@ impl<T: std::fmt::Debug> std::fmt::Debug for Pooled<T> {
 
 impl<T: std::fmt::Debug> std::fmt::Debug for PooledInner<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ManagedPooledInner")
+        f.debug_struct("PooledInner")
             .field("pooled", &self.pooled)
             .field("pool", &self.pool)
             .finish()
     }
 }
 
-// SAFETY: ManagedPooledInner<T> can be Send if T is Send, following the same reasoning as ManagedPooled<T>.
+// SAFETY: PooledInner<T> can be Send if T is Send, following the same reasoning as Pooled<T>.
 unsafe impl<T: Send> Send for PooledInner<T> {}
 
-// SAFETY: ManagedPooledInner<T> can be Sync if T is Sync, following the same reasoning as ManagedPooled<T>.
+// SAFETY: PooledInner<T> can be Sync if T is Sync, following the same reasoning as Pooled<T>.
 unsafe impl<T: Sync> Sync for PooledInner<T> {}

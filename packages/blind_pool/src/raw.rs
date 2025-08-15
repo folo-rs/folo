@@ -8,14 +8,14 @@ use crate::BlindPoolBuilder;
 
 /// A pinned object pool of unbounded size that accepts objects of any type.
 ///
-/// The pool returns a [`Pooled<T>`] for each inserted value, which acts as a super-powered
+/// The pool returns a `RawPooled<T>` for each inserted value, which acts as a super-powered
 /// pointer that can be copied and cloned freely. Each handle provides direct access to the
 /// inserted item via a pointer.
 ///
 /// # Out of band access
 ///
 /// The collection does not create or keep references to the memory blocks. The only way to access
-/// the contents of the collection is via unsafe code by using the pointer from a [`Pooled<T>`].
+/// the contents of the collection is via unsafe code by using the pointer from a `RawPooled<T>`.
 ///
 /// The collection does not create or maintain any `&` shared or `&mut` exclusive references to
 /// the items it contains, except when explicitly called to operate on an item (e.g. `remove()`
@@ -31,9 +31,9 @@ use crate::BlindPoolBuilder;
 /// # Example
 ///
 /// ```rust
-/// use blind_pool::BlindPool;
+/// use blind_pool::RawBlindPool;
 ///
-/// let mut pool = BlindPool::new();
+/// let mut pool = RawBlindPool::new();
 ///
 /// // Insert values of different types.
 /// let pooled_u32 = pool.insert(42_u32);
@@ -58,16 +58,16 @@ pub struct RawBlindPool {
 }
 
 impl RawBlindPool {
-    /// Creates a new [`BlindPool`] with default configuration.
+    /// Creates a new `RawBlindPool` with default configuration.
     ///
-    /// This is equivalent to [`BlindPool::builder().build()`][BlindPool::builder].
+    /// This is equivalent to [`RawBlindPool::builder().build_raw()`][RawBlindPool::builder].
     ///
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
+    /// use blind_pool::RawBlindPool;
     ///
-    /// let mut pool = BlindPool::new();
+    /// let mut pool = RawBlindPool::new();
     ///
     /// let pooled = pool.insert(42_u64);
     ///
@@ -78,26 +78,26 @@ impl RawBlindPool {
     #[must_use]
     #[inline]
     pub fn new() -> Self {
-        Self::builder().build()
+        Self::builder().build_raw()
     }
 
-    /// Creates a builder for configuring and constructing a [`BlindPool`].
+    /// Creates a builder for configuring and constructing a [`RawBlindPool`].
     ///
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::{BlindPool, DropPolicy};
+    /// use blind_pool::{RawBlindPool, DropPolicy};
     ///
-    /// let pool = BlindPool::builder()
+    /// let pool = RawBlindPool::builder()
     ///     .drop_policy(DropPolicy::MustNotDropItems)
-    ///     .build();
+    ///     .build_raw();
     /// ```
     #[inline]
     pub fn builder() -> BlindPoolBuilder {
         BlindPoolBuilder::new()
     }
 
-    /// Creates a new [`BlindPool`] with the specified configuration.
+    /// Creates a new `RawBlindPool` with the specified configuration.
     ///
     /// This method is used internally by the builder to construct the actual pool.
     #[must_use]
@@ -115,9 +115,9 @@ impl RawBlindPool {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
+    /// use blind_pool::RawBlindPool;
     ///
-    /// let mut pool = BlindPool::new();
+    /// let mut pool = RawBlindPool::new();
     ///
     /// // Insert different types into the same pool.
     /// let pooled_int = pool.insert(42_i32);
@@ -145,15 +145,15 @@ impl RawBlindPool {
 
     /// Removes a value from the pool and drops it.
     ///
-    /// The [`Pooled<T>`] handle is consumed and the memory is returned to the pool.
+    /// The `RawPooled<T>` handle is consumed and the memory is returned to the pool.
     /// The value is dropped.
     ///
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
+    /// use blind_pool::RawBlindPool;
     ///
-    /// let mut pool = BlindPool::new();
+    /// let mut pool = RawBlindPool::new();
     ///
     /// let pooled = pool.insert(42_u64);
     /// assert_eq!(pool.len(), 1);
@@ -174,9 +174,9 @@ impl RawBlindPool {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
+    /// use blind_pool::RawBlindPool;
     ///
-    /// let mut pool = BlindPool::new();
+    /// let mut pool = RawBlindPool::new();
     ///
     /// assert_eq!(pool.len(), 0);
     ///
@@ -199,9 +199,9 @@ impl RawBlindPool {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
+    /// use blind_pool::RawBlindPool;
     ///
-    /// let mut pool = BlindPool::new();
+    /// let mut pool = RawBlindPool::new();
     ///
     /// assert!(pool.is_empty());
     ///
@@ -226,9 +226,9 @@ impl RawBlindPool {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
+    /// use blind_pool::RawBlindPool;
     ///
-    /// let mut pool = BlindPool::new();
+    /// let mut pool = RawBlindPool::new();
     ///
     /// // Initially no capacity is allocated for any type.
     /// assert_eq!(pool.capacity_of::<u32>(), 0);
@@ -258,9 +258,9 @@ impl RawBlindPool {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
+    /// use blind_pool::RawBlindPool;
     ///
-    /// let mut pool = BlindPool::new();
+    /// let mut pool = RawBlindPool::new();
     ///
     /// // Reserve space for 10 u32 values specifically
     /// pool.reserve_for::<u32>(10);
@@ -291,9 +291,9 @@ impl RawBlindPool {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
+    /// use blind_pool::RawBlindPool;
     ///
-    /// let mut pool = BlindPool::new();
+    /// let mut pool = RawBlindPool::new();
     ///
     /// // Insert many items to allocate capacity.
     /// for i in 0..1000 {
@@ -341,7 +341,7 @@ impl Drop for RawBlindPool {
     }
 }
 
-/// A handle representing an item stored in a [`BlindPool`].
+/// A handle representing an item stored in a `RawBlindPool`.
 ///
 /// Acts as a super-powered pointer that can be copied and cloned freely. This provides
 /// access to the stored item and can be used to remove the item from the pool.
@@ -353,9 +353,9 @@ impl Drop for RawBlindPool {
 /// # Example
 ///
 /// ```rust
-/// use blind_pool::BlindPool;
+/// use blind_pool::RawBlindPool;
 ///
-/// let mut pool = BlindPool::new();
+/// let mut pool = RawBlindPool::new();
 ///
 /// let pooled = pool.insert(42_u64);
 ///
@@ -395,9 +395,9 @@ impl<T> RawPooled<T> {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
+    /// use blind_pool::RawBlindPool;
     ///
-    /// let mut pool = BlindPool::new();
+    /// let mut pool = RawBlindPool::new();
     ///
     /// let pooled = pool.insert(2.5159_f64);
     ///
@@ -412,8 +412,8 @@ impl<T> RawPooled<T> {
         self.pooled.ptr()
     }
 
-    /// Erases the type information from this [`Pooled<T>`] handle,
-    /// returning a [`Pooled<()>`].
+    /// Erases the type information from this `RawPooled<T>` handle,
+    /// returning a `RawPooled<()>`.
     ///
     /// This is useful when you want to store handles of different types in the same collection
     /// or pass them to code that doesn't need to know the specific type.
@@ -424,9 +424,9 @@ impl<T> RawPooled<T> {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
+    /// use blind_pool::RawBlindPool;
     ///
-    /// let mut pool = BlindPool::new();
+    /// let mut pool = RawBlindPool::new();
     ///
     /// let pooled = pool.insert(42_u64);
     ///
@@ -552,7 +552,7 @@ mod tests {
     fn builder_with_drop_policy() {
         let pool = RawBlindPool::builder()
             .drop_policy(DropPolicy::MustNotDropItems)
-            .build();
+            .build_raw();
 
         // Pool should not panic when dropped if empty.
         drop(pool);
@@ -563,7 +563,7 @@ mod tests {
     fn drop_policy_must_not_drop_panics_when_not_empty() {
         let mut pool = RawBlindPool::builder()
             .drop_policy(DropPolicy::MustNotDropItems)
-            .build();
+            .build_raw();
 
         let _pooled = pool.insert(42_u32);
 

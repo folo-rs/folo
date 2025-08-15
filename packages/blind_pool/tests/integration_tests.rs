@@ -101,7 +101,7 @@ fn erase_type_information() {
 }
 
 #[test]
-#[should_panic(expected = "cannot erase ManagedPooled with multiple references")]
+#[should_panic(expected = "cannot erase Pooled with multiple references")]
 fn erase_with_multiple_references_panics() {
     let pool = BlindPool::from(RawBlindPool::new());
 

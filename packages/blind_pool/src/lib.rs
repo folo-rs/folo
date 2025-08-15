@@ -1,17 +1,20 @@
 //! This package provides [`BlindPool`], a dynamically growing pool of objects that can store
 //! objects of any type.
 //!
-//! It offers stable memory addresses and efficient typed insertion with automatic value dropping.
+//! It offers automatic memory management through managed wrappers with stable memory addresses
+//! and efficient typed insertion with automatic value dropping.
 //!
 //! # Type-agnostic memory management
 //!
-//! The pool itself does not hold or create any `&` shared or `&mut` exclusive references to its
-//! contents, allowing the caller to decide who and when can obtain a reference to the inserted
-//! values. The caller is responsible for ensuring that Rust aliasing rules are respected.
+//! The pool can store objects of any type with automatic resource management. For advanced
+//! use cases requiring manual memory management, use [`RawBlindPool`] instead.
 //!
 //! # Features
 //!
 //! - **Type-agnostic memory management**: Accepts any type.
+//! - **Automatic resource management**: Managed types handle cleanup automatically.
+//! - **Thread-safe and single-threaded variants**: [`BlindPool`] for multi-threaded use,
+//!   [`LocalBlindPool`] for single-threaded performance.
 //! - **Stable addresses**: Memory addresses remain valid until explicitly removed.
 //! - **Automatic dropping**: Values are properly dropped when removed from the pool.
 //! - **Dynamic growth**: Pool capacity grows automatically as needed.
@@ -24,8 +27,39 @@
 //! ```rust
 //! use blind_pool::BlindPool;
 //!
-//! // Create a blind pool that can store any type.
-//! let mut pool = BlindPool::new();
+//! // Create a thread-safe managed pool.
+//! let pool = BlindPool::new();
+//!
+//! // Insert values and get managed handles.
+//! let managed_u64 = pool.insert(42_u64);
+//! let managed_string = pool.insert("hello".to_string());
+//!
+//! // Access values through dereferencing.
+//! assert_eq!(*managed_u64, 42);
+//! assert_eq!(*managed_string, "hello");
+//!
+//! // Values are automatically cleaned up when handles are dropped.
+//! ```
+//!
+//! For single-threaded use:
+//!
+//! ```rust
+//! use blind_pool::LocalBlindPool;
+//!
+//! // Create a single-threaded managed pool (more efficient).
+//! let pool = LocalBlindPool::new();
+//!
+//! let managed_value = pool.insert(vec![1, 2, 3]);
+//! assert_eq!(*managed_value, vec![1, 2, 3]);
+//! ```
+//!
+//! For manual resource management:
+//!
+//! ```rust
+//! use blind_pool::RawBlindPool;
+//!
+//! // Create a pool with manual resource management.
+//! let mut pool = RawBlindPool::new();
 //!
 //! // Insert values of different types into the same pool.
 //! let pooled_u64 = pool.insert(42_u64);
@@ -45,6 +79,11 @@
 //!
 //! assert_eq!(value_u64, 42);
 //! assert_eq!(value_i32, -123);
+//!
+//! // Manual cleanup required.
+//! pool.remove(pooled_u64);
+//! pool.remove(pooled_i32);
+//! pool.remove(pooled_f32);
 //! ```
 
 mod builder;
@@ -56,7 +95,6 @@ mod pooled;
 mod raw;
 
 pub use builder::*;
-pub(crate) use constants::*;
 pub use local_pool::*;
 pub use local_pooled::*;
 // Re-export DropPolicy from opaque_pool simply because we do not need a different one.

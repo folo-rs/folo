@@ -5,38 +5,33 @@ use std::rc::Rc;
 
 use crate::{LocalBlindPool, RawPooled};
 
-/// A single-threaded managed handle to a value stored in a [`LocalManagedBlindPool`].
+/// A managed reference to a value stored in a [`LocalBlindPool`].
 ///
-/// This type provides automatic resource management through reference counting. When the last
-/// [`LocalManagedPooled<T>`] referring to a particular value is dropped, the value is automatically
-/// removed from the pool.
+/// This type provides automatic lifetime management for values in the pool.
+/// When the last [`LocalPooled`] instance for a value is dropped, the value
+/// is automatically removed from the pool.
 ///
-/// The handle also keeps the pool alive - as long as any [`LocalManagedPooled<T>`] instances exist,
-/// the underlying pool will not be deallocated.
+/// Multiple [`LocalPooled`] instances can reference the same value through
+/// cloning, implementing reference counting semantics.
 ///
 /// # Single-threaded Design
 ///
 /// This type is designed for single-threaded use and is neither [`Send`] nor [`Sync`].
-/// For multi-threaded scenarios, use [`crate::ManagedPooled`] instead.
 ///
 /// # Example
 ///
 /// ```rust
-/// use blind_pool::BlindPool;
-/// use blind_pool_managed::LocalManagedBlindPool;
+/// use blind_pool::LocalBlindPool;
 ///
-/// let pool = LocalManagedBlindPool::from(BlindPool::new());
-///
+/// let pool = LocalBlindPool::new();
 /// let managed_value = pool.insert(42_u64);
 ///
 /// // Access the value through dereferencing.
 /// assert_eq!(*managed_value, 42);
 ///
-/// // Get a raw pointer to the value.
-/// let ptr = managed_value.ptr();
-///
-/// // The value is automatically removed when dropped.
-/// drop(managed_value);
+/// // Clone to create additional references.
+/// let managed_clone = managed_value.clone();
+/// assert_eq!(*managed_clone, 42);
 /// ```
 pub struct LocalPooled<T> {
     /// The reference-counted inner data containing the actual pooled item and pool handle.
@@ -73,9 +68,9 @@ impl<T> LocalPooledInner<T> {
 }
 
 impl<T> LocalPooled<T> {
-    /// Creates a new [`LocalManagedPooled<T>`] from a pooled item and pool handle.
+    /// Creates a new [`LocalPooled<T>`] from a pooled item and pool handle.
     ///
-    /// This is an internal constructor used by [`LocalManagedBlindPool::insert`].
+    /// This is an internal constructor used by [`LocalBlindPool::insert`].
     pub(crate) fn new(pooled: RawPooled<T>, pool: LocalBlindPool) -> Self {
         let inner = LocalPooledInner { pooled, pool };
         Self {
@@ -91,10 +86,9 @@ impl<T> LocalPooled<T> {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
-    /// use blind_pool_managed::LocalManagedBlindPool;
+    /// use blind_pool::LocalBlindPool;
     ///
-    /// let pool = LocalManagedBlindPool::from(BlindPool::new());
+    /// let pool = LocalBlindPool::new();
     /// let managed_value = pool.insert(42_u64);
     ///
     /// let ptr = managed_value.ptr();
@@ -109,8 +103,8 @@ impl<T> LocalPooled<T> {
         self.inner.pooled.ptr()
     }
 
-    /// Erases the type information from this [`LocalManagedPooled<T>`] handle,
-    /// returning a [`LocalManagedPooled<()>`].
+    /// Erases the type information from this [`LocalPooled<T>`] handle,
+    /// returning a [`LocalPooled<()>`].
     ///
     /// This is useful when you want to store handles of different types in the same collection
     /// or pass them to code that doesn't need to know the specific type.
@@ -120,16 +114,15 @@ impl<T> LocalPooled<T> {
     ///
     /// # Panics
     ///
-    /// Panics if there are multiple `LocalManagedPooled` handles referring to the same pooled item.
+    /// Panics if there are multiple `LocalPooled` handles referring to the same pooled item.
     /// Regular Rust references to the dereferenced value do not count as multiple handles.
     ///
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
-    /// use blind_pool_managed::LocalManagedBlindPool;
+    /// use blind_pool::LocalBlindPool;
     ///
-    /// let pool = LocalManagedBlindPool::from(BlindPool::new());
+    /// let pool = LocalBlindPool::new();
     /// let managed_value = pool.insert(42_u64);
     ///
     /// // Erase type information.
@@ -152,7 +145,7 @@ impl<T> LocalPooled<T> {
         let inner_rc = unsafe { std::ptr::read(std::ptr::addr_of!(this.inner)) };
 
         let inner = Rc::try_unwrap(inner_rc)
-            .map_err(|_rc| "cannot erase LocalManagedPooled with multiple references")
+            .map_err(|_rc| "cannot erase LocalPooled with multiple references")
             .unwrap();
 
         // Extract the pooled value and pool handle without triggering the drop cleanup
@@ -179,10 +172,9 @@ impl<T> Clone for LocalPooled<T> {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
-    /// use blind_pool_managed::LocalManagedBlindPool;
+    /// use blind_pool::LocalBlindPool;
     ///
-    /// let pool = LocalManagedBlindPool::from(BlindPool::new());
+    /// let pool = LocalBlindPool::new();
     /// let managed_value = pool.insert(42_u64);
     ///
     /// let cloned_handle = managed_value.clone();
@@ -211,10 +203,9 @@ impl<T> Deref for LocalPooled<T> {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
-    /// use blind_pool_managed::LocalManagedBlindPool;
+    /// use blind_pool::LocalBlindPool;
     ///
-    /// let pool = LocalManagedBlindPool::from(BlindPool::new());
+    /// let pool = LocalBlindPool::new();
     /// let managed_string = pool.insert("hello".to_string());
     ///
     /// // Access string methods directly.
@@ -222,7 +213,7 @@ impl<T> Deref for LocalPooled<T> {
     /// assert!(managed_string.starts_with("he"));
     /// ```
     fn deref(&self) -> &Self::Target {
-        // SAFETY: The pointer is valid as long as this LocalManagedPooled exists.
+        // SAFETY: The pointer is valid as long as this LocalPooled exists.
         // The Rc ensures that the underlying data remains alive.
         unsafe { self.inner.pooled.ptr().as_ref() }
     }
@@ -241,7 +232,7 @@ impl<T> Drop for LocalPooledInner<T> {
 
 impl<T: std::fmt::Debug> std::fmt::Debug for LocalPooled<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LocalManagedPooled")
+        f.debug_struct("LocalPooled")
             .field("inner", &self.inner)
             .finish()
     }
@@ -249,7 +240,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for LocalPooled<T> {
 
 impl<T: std::fmt::Debug> std::fmt::Debug for LocalPooledInner<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LocalManagedPooledInner")
+        f.debug_struct("LocalPooledInner")
             .field("pooled", &self.pooled)
             .field("pool", &self.pool)
             .finish()

@@ -1,12 +1,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::{LocalPooled, RawBlindPool, RawPooled};
+use crate::{BlindPoolBuilder, LocalPooled, RawBlindPool, RawPooled};
 
-/// A single-threaded wrapper around [`BlindPool`] that provides automatic resource management
+/// A single-threaded wrapper around [`RawBlindPool`] that provides automatic resource management
 /// and reference counting.
 ///
-/// This type acts as a cloneable handle to a shared [`BlindPool`] instance. Multiple handles
+/// This type acts as a cloneable handle to a shared [`RawBlindPool`] instance. Multiple handles
 /// can exist simultaneously, and the underlying pool remains alive as long as at least one
 /// handle exists.
 ///
@@ -16,15 +16,14 @@ use crate::{LocalPooled, RawBlindPool, RawPooled};
 /// # Single-threaded Design
 ///
 /// This type is designed for single-threaded use and is neither [`Send`] nor [`Sync`].
-/// For multi-threaded scenarios, use [`crate::ManagedBlindPool`] instead.
+/// For multi-threaded scenarios, use [`crate::BlindPool`] instead.
 ///
 /// # Example
 ///
 /// ```rust
-/// use blind_pool::BlindPool;
-/// use blind_pool_managed::LocalManagedBlindPool;
+/// use blind_pool::LocalBlindPool;
 ///
-/// let pool = LocalManagedBlindPool::from(BlindPool::new());
+/// let pool = LocalBlindPool::new();
 ///
 /// // Clone the pool handle for use in different parts of the code.
 /// let pool_clone = pool.clone();
@@ -39,23 +38,22 @@ pub struct LocalBlindPool {
 }
 
 impl From<RawBlindPool> for LocalBlindPool {
-    /// Creates a new [`LocalManagedBlindPool`] from an existing [`BlindPool`].
+    /// Creates a new [`LocalBlindPool`] from an existing raw pool.
     ///
     /// The provided pool is consumed and wrapped in single-threaded reference counting.
     ///
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::{BlindPool, DropPolicy};
-    /// use blind_pool_managed::LocalManagedBlindPool;
+    /// use blind_pool::{LocalBlindPool, RawBlindPool, DropPolicy};
     ///
-    /// // Create a configured pool.
-    /// let pool = BlindPool::builder()
+    /// // Create a configured raw pool.
+    /// let raw_pool = RawBlindPool::builder()
     ///     .drop_policy(DropPolicy::MayDropItems)
-    ///     .build();
+    ///     .build_raw();
     ///
     /// // Convert to local managed pool.
-    /// let managed_pool = LocalManagedBlindPool::from(pool);
+    /// let managed_pool = LocalBlindPool::from(raw_pool);
     /// ```
     fn from(pool: RawBlindPool) -> Self {
         Self {
@@ -65,6 +63,44 @@ impl From<RawBlindPool> for LocalBlindPool {
 }
 
 impl LocalBlindPool {
+    /// Creates a new [`LocalBlindPool`] with default configuration.
+    ///
+    /// This is the equivalent of creating a raw pool and wrapping it in single-threaded management.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::LocalBlindPool;
+    ///
+    /// let pool = LocalBlindPool::new();
+    ///
+    /// let managed_u32 = pool.insert(42_u32);
+    /// let managed_string = pool.insert("hello".to_string());
+    ///
+    /// // Access values through dereferencing.
+    /// assert_eq!(*managed_u32, 42);
+    /// assert_eq!(*managed_string, "hello");
+    /// ```
+    #[must_use]
+    pub fn new() -> Self {
+        Self::from(RawBlindPool::new())
+    }
+
+    /// Returns a builder for creating a [`LocalBlindPool`] with custom configuration.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::{LocalBlindPool, DropPolicy};
+    ///
+    /// let pool = LocalBlindPool::builder()
+    ///     .drop_policy(DropPolicy::MustNotDropItems)
+    ///     .build_local();
+    /// ```
+    pub fn builder() -> BlindPoolBuilder {
+        BlindPoolBuilder::new()
+    }
+
     /// Inserts a value into the pool and returns a managed handle to access it.
     ///
     /// The returned handle automatically manages the lifetime of the inserted value.
@@ -74,10 +110,9 @@ impl LocalBlindPool {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
-    /// use blind_pool_managed::LocalManagedBlindPool;
+    /// use blind_pool::LocalBlindPool;
     ///
-    /// let pool = LocalManagedBlindPool::from(BlindPool::new());
+    /// let pool = LocalBlindPool::new();
     ///
     /// let managed_u32 = pool.insert(42_u32);
     /// let managed_string = pool.insert("hello".to_string());
@@ -100,10 +135,9 @@ impl LocalBlindPool {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
-    /// use blind_pool_managed::LocalManagedBlindPool;
+    /// use blind_pool::LocalBlindPool;
     ///
-    /// let pool = LocalManagedBlindPool::from(BlindPool::new());
+    /// let pool = LocalBlindPool::new();
     ///
     /// assert_eq!(pool.len(), 0);
     ///
@@ -123,10 +157,9 @@ impl LocalBlindPool {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
-    /// use blind_pool_managed::LocalManagedBlindPool;
+    /// use blind_pool::LocalBlindPool;
     ///
-    /// let pool = LocalManagedBlindPool::from(BlindPool::new());
+    /// let pool = LocalBlindPool::new();
     ///
     /// assert!(pool.is_empty());
     ///
@@ -144,10 +177,16 @@ impl LocalBlindPool {
 
     /// Removes an item from the pool using its handle.
     ///
-    /// This is an internal method used by [`LocalManagedPooled`] when it is dropped.
+    /// This is an internal method used by [`LocalPooled`] when it is dropped.
     /// It should not be called directly by user code.
     pub(crate) fn remove<T>(&self, pooled: RawPooled<T>) {
         let mut pool = self.inner.borrow_mut();
         pool.remove(pooled);
+    }
+}
+
+impl Default for LocalBlindPool {
+    fn default() -> Self {
+        Self::new()
     }
 }
