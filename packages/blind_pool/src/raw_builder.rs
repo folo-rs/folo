@@ -21,7 +21,7 @@ use crate::{DropPolicy, RawBlindPool};
 ///     .drop_policy(DropPolicy::MustNotDropItems)
 ///     .build();
 /// ```
-/// 
+///
 /// # Thread safety
 ///
 /// The builder is thread-mobile ([`Send`]) and can be safely transferred between threads,
@@ -31,7 +31,7 @@ use crate::{DropPolicy, RawBlindPool};
 #[must_use]
 pub struct RawBlindPoolBuilder {
     drop_policy: DropPolicy,
-    
+
     // Prevents Sync while allowing Send - builders are thread-mobile but not thread-safe
     _not_sync: PhantomData<Cell<()>>,
 }

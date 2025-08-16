@@ -21,7 +21,7 @@ fn generate_pool_id() -> u64 {
 /// The pool returns a [`Pooled<T>`] for each inserted value, which acts as a super-powered
 /// pointer that can be copied and cloned freely. Each handle provides direct access to the
 /// inserted item via a pointer.
-/// 
+///
 /// # Out of band access
 ///
 /// The collection does not create or keep references to the memory blocks. The only way to access
@@ -657,9 +657,9 @@ impl OpaquePool {
 /// // To remove and drop an item, any handle can be returned to the pool.
 /// pool.remove(pooled);
 /// ```
-/// 
+///
 /// # Thread safety
-/// 
+///
 /// This type is thread-safe ([`Send`] + [`Sync`]) if and only if `T` implements [`Sync`].
 /// When `T` is [`Sync`], multiple threads can safely share handles to the same data.
 /// When `T` is not [`Sync`], the handle is single-threaded and cannot be moved between threads

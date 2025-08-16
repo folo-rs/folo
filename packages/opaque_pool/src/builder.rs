@@ -26,7 +26,7 @@ use crate::{DropPolicy, OpaquePool};
 /// // Using type-based layout.
 /// let pool = OpaquePool::builder().layout_of::<u64>().build();
 /// ```
-/// 
+///
 /// # Thread safety
 ///
 /// The builder is thread-mobile ([`Send`]) and can be safely transferred between threads,

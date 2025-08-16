@@ -1021,7 +1021,7 @@ mod tests {
             assert_impl_all!(RawPooled<u32>: Send, Sync); // u32 is Sync
             assert_impl_all!(RawPooled<String>: Send, Sync); // String is Sync
             assert_impl_all!(RawPooled<Vec<u8>>: Send, Sync); // Vec<u8> is Sync
-            
+
             // RawPooled<T> should be single-threaded when T is not Sync
             use std::rc::Rc;
             assert_not_impl_any!(RawPooled<Rc<u32>>: Send, Sync); // Rc is not Sync
