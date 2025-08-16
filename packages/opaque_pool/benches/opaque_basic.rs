@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use alloc_tracker::Allocator;
 use criterion::{Criterion, criterion_group, criterion_main};
-use opaque_pool::RawOpaquePool;
+use opaque_pool::OpaquePool;
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
@@ -37,7 +37,7 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for _ in 0..iters {
-                drop(black_box(RawOpaquePool::builder().layout(layout).build()));
+                drop(black_box(OpaquePool::builder().layout(layout).build()));
             }
 
             start.elapsed()
@@ -49,7 +49,7 @@ fn entrypoint(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let layout = Layout::new::<TestItem>();
 
-            let mut pools = iter::repeat_with(|| RawOpaquePool::builder().layout(layout).build())
+            let mut pools = iter::repeat_with(|| OpaquePool::builder().layout(layout).build())
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 
@@ -71,7 +71,7 @@ fn entrypoint(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let layout = Layout::new::<TestItem>();
 
-            let mut pools = iter::repeat_with(|| RawOpaquePool::builder().layout(layout).build())
+            let mut pools = iter::repeat_with(|| OpaquePool::builder().layout(layout).build())
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 
@@ -99,7 +99,7 @@ fn entrypoint(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let layout = Layout::new::<TestItem>();
 
-            let mut pool = RawOpaquePool::builder().layout(layout).build();
+            let mut pool = OpaquePool::builder().layout(layout).build();
 
             // SAFETY: The layout of TestItem matches the pool's layout.
             let pool_ticket = unsafe { pool.insert(TEST_VALUE) };
@@ -122,7 +122,7 @@ fn entrypoint(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let layout = Layout::new::<TestItem>();
 
-            let mut pool = RawOpaquePool::builder().layout(layout).build();
+            let mut pool = OpaquePool::builder().layout(layout).build();
 
             // Pre-populate pool with 10k items.
             for _ in 0..10_000 {
@@ -147,7 +147,7 @@ fn entrypoint(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let layout = Layout::new::<TestItem>();
 
-            let mut pool = RawOpaquePool::builder().layout(layout).build();
+            let mut pool = OpaquePool::builder().layout(layout).build();
 
             // Pre-populate pool with 10k items.
             for _ in 0..10_000 {
@@ -172,7 +172,7 @@ fn entrypoint(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let layout = Layout::new::<TestItem>();
 
-            let mut pool = RawOpaquePool::builder().layout(layout).build();
+            let mut pool = OpaquePool::builder().layout(layout).build();
 
             // Pre-populate pool with 10k items.
             for _ in 0..10_000 {
@@ -197,7 +197,7 @@ fn entrypoint(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let layout = Layout::new::<TestItem>();
 
-            let mut pools = iter::repeat_with(|| RawOpaquePool::builder().layout(layout).build())
+            let mut pools = iter::repeat_with(|| OpaquePool::builder().layout(layout).build())
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 
@@ -230,7 +230,7 @@ fn entrypoint(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let layout = Layout::new::<TestItem>();
 
-            let mut pools = iter::repeat_with(|| RawOpaquePool::builder().layout(layout).build())
+            let mut pools = iter::repeat_with(|| OpaquePool::builder().layout(layout).build())
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 
@@ -256,7 +256,7 @@ fn entrypoint(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let layout = Layout::new::<TestItem>();
 
-            let mut pools = iter::repeat_with(|| RawOpaquePool::builder().layout(layout).build())
+            let mut pools = iter::repeat_with(|| OpaquePool::builder().layout(layout).build())
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 
@@ -301,7 +301,7 @@ fn entrypoint(c: &mut Criterion) {
         b.iter_custom(|iters| {
             let layout = Layout::new::<TestItem>();
 
-            let mut pools = iter::repeat_with(|| RawOpaquePool::builder().layout(layout).build())
+            let mut pools = iter::repeat_with(|| OpaquePool::builder().layout(layout).build())
                 .take(usize::try_from(iters).unwrap())
                 .collect::<Vec<_>>();
 

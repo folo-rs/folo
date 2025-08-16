@@ -1,11 +1,11 @@
-//! Trait object usage with `RawOpaquePool`.
+//! Trait object usage with `OpaquePool`.
 //!
-//! This example demonstrates how to use trait objects with `RawOpaquePool`, showing:
+//! This example demonstrates how to use trait objects with `OpaquePool`, showing:
 //! * Creating references from raw pointers
 //! * Converting those references to trait object references
 //! * Using trait methods on pooled items
 
-use opaque_pool::RawOpaquePool;
+use opaque_pool::OpaquePool;
 
 // Define a trait for our example.
 trait Animal {
@@ -54,7 +54,7 @@ fn introduce_animal(animal: &dyn Animal) {
 }
 
 fn main() {
-    println!("RawOpaquePool Trait Object Example");
+    println!("OpaquePool Trait Object Example");
     println!("===============================");
     println!();
 
@@ -63,7 +63,7 @@ fn main() {
     println!("-------------------------------");
 
     // Create a pool for Dog types.
-    let mut dog_pool = RawOpaquePool::builder().layout_of::<Dog>().build();
+    let mut dog_pool = OpaquePool::builder().layout_of::<Dog>().build();
 
     // Insert a dog.
     let dog = Dog {
@@ -109,7 +109,7 @@ fn main() {
     println!("Example completed successfully!");
     println!();
     println!("Key insights:");
-    println!("- RawOpaquePool can work with trait objects by creating references from raw pointers");
+    println!("- OpaquePool can work with trait objects by creating references from raw pointers");
     println!("- The caller must track the concrete type of each pooled item");
     println!("- Trait object conversion happens at access time, not storage time");
 }

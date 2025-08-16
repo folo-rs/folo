@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use new_zealand::nz;
 
-use crate::{DropPolicy, RawOpaquePoolBuilder, OpaqueSlab};
+use crate::{DropPolicy, OpaquePoolBuilder, OpaqueSlab};
 
 /// Global counter for generating unique pool IDs.
 static POOL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -43,9 +43,9 @@ fn generate_pool_id() -> u64 {
 /// ```rust
 /// use std::alloc::Layout;
 ///
-/// use opaque_pool::RawOpaquePool;
+/// use opaque_pool::OpaquePool;
 ///
-/// let mut pool = RawOpaquePool::builder().layout_of::<u32>().build();
+/// let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 ///
 /// // Insert a value and get a handle.
 /// // SAFETY: u32 matches the layout used to create the pool.
@@ -60,7 +60,7 @@ fn generate_pool_id() -> u64 {
 /// pool.remove(pooled);
 /// ```
 #[derive(Debug)]
-pub struct RawOpaquePool {
+pub struct OpaquePool {
     /// We need to uniquely identify each pool to ensure that handles are not returned to the
     /// wrong pool. If the pool ID does not match when a handle is returned, we panic.
     pool_id: u64,
@@ -103,10 +103,10 @@ pub(crate) const DEFAULT_SLAB_CAPACITY: NonZero<usize> = nz!(128);
 #[cfg(miri)]
 pub(crate) const DEFAULT_SLAB_CAPACITY: NonZero<usize> = nz!(16);
 
-impl RawOpaquePool {
-    /// Creates a builder for configuring and constructing an [`RawOpaquePool`].
+impl OpaquePool {
+    /// Creates a builder for configuring and constructing an [`OpaquePool`].
     ///
-    /// This how you can create an [`RawOpaquePool`]. You must specify an item memory layout
+    /// This how you can create an [`OpaquePool`]. You must specify an item memory layout
     /// using either  `.layout()` or `.layout_of::<T>()` before calling `.build()`.
     ///
     /// # Example
@@ -114,25 +114,25 @@ impl RawOpaquePool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use opaque_pool::RawOpaquePool;
+    /// use opaque_pool::OpaquePool;
     ///
     /// // Create a pool for storing u64 values using explicit layout.
     /// let layout = Layout::new::<u64>();
-    /// let pool = RawOpaquePool::builder().layout(layout).build();
+    /// let pool = OpaquePool::builder().layout(layout).build();
     ///
     /// assert_eq!(pool.len(), 0);
     /// assert!(pool.is_empty());
     /// assert_eq!(pool.item_layout(), layout);
     ///
     /// // Create a pool for storing u32 values using type-based layout.
-    /// let pool = RawOpaquePool::builder().layout_of::<u32>().build();
+    /// let pool = OpaquePool::builder().layout_of::<u32>().build();
     /// ```
     #[inline]
-    pub fn builder() -> RawOpaquePoolBuilder {
-        RawOpaquePoolBuilder::new()
+    pub fn builder() -> OpaquePoolBuilder {
+        OpaquePoolBuilder::new()
     }
 
-    /// Creates a new [`RawOpaquePool`] with the specified configuration.
+    /// Creates a new [`OpaquePool`] with the specified configuration.
     ///
     /// This method is used internally by the builder to construct the actual pool.
     ///
@@ -143,7 +143,7 @@ impl RawOpaquePool {
     pub(crate) fn new_inner(item_layout: Layout, drop_policy: DropPolicy) -> Self {
         assert!(
             item_layout.size() > 0,
-            "RawOpaquePool must have non-zero item size"
+            "OpaquePool must have non-zero item size"
         );
 
         Self {
@@ -163,10 +163,10 @@ impl RawOpaquePool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use opaque_pool::RawOpaquePool;
+    /// use opaque_pool::OpaquePool;
     ///
     /// let layout = Layout::new::<u128>();
-    /// let pool = RawOpaquePool::builder().layout(layout).build();
+    /// let pool = OpaquePool::builder().layout(layout).build();
     ///
     /// assert_eq!(pool.item_layout(), layout);
     /// assert_eq!(pool.item_layout().size(), std::mem::size_of::<u128>());
@@ -184,9 +184,9 @@ impl RawOpaquePool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use opaque_pool::RawOpaquePool;
+    /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = RawOpaquePool::builder().layout_of::<i32>().build();
+    /// let mut pool = OpaquePool::builder().layout_of::<i32>().build();
     ///
     /// assert_eq!(pool.len(), 0);
     ///
@@ -220,9 +220,9 @@ impl RawOpaquePool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use opaque_pool::RawOpaquePool;
+    /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = RawOpaquePool::builder().layout_of::<u8>().build();
+    /// let mut pool = OpaquePool::builder().layout_of::<u8>().build();
     ///
     /// // New pool starts with zero capacity.
     /// assert_eq!(pool.capacity(), 0);
@@ -256,9 +256,9 @@ impl RawOpaquePool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use opaque_pool::RawOpaquePool;
+    /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = RawOpaquePool::builder().layout_of::<u16>().build();
+    /// let mut pool = OpaquePool::builder().layout_of::<u16>().build();
     ///
     /// assert!(pool.is_empty());
     ///
@@ -287,9 +287,9 @@ impl RawOpaquePool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use opaque_pool::RawOpaquePool;
+    /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = RawOpaquePool::builder().layout_of::<u32>().build();
+    /// let mut pool = OpaquePool::builder().layout_of::<u32>().build();
     ///
     /// // Reserve space for 10 more items
     /// pool.reserve(10);
@@ -339,9 +339,9 @@ impl RawOpaquePool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use opaque_pool::RawOpaquePool;
+    /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = RawOpaquePool::builder().layout_of::<u32>().build();
+    /// let mut pool = OpaquePool::builder().layout_of::<u32>().build();
     ///
     /// // Insert some items to create slabs
     /// // SAFETY: u32 matches the layout used to create the pool.
@@ -403,9 +403,9 @@ impl RawOpaquePool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use opaque_pool::RawOpaquePool;
+    /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = RawOpaquePool::builder().layout_of::<u64>().build();
+    /// let mut pool = OpaquePool::builder().layout_of::<u64>().build();
     ///
     /// // Insert a value.
     /// // SAFETY: u64 matches the layout used to create the pool.
@@ -483,9 +483,9 @@ impl RawOpaquePool {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use opaque_pool::RawOpaquePool;
+    /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = RawOpaquePool::builder().layout_of::<i32>().build();
+    /// let mut pool = OpaquePool::builder().layout_of::<i32>().build();
     ///
     /// // SAFETY: i32 matches the layout used to create the pool.
     /// let pooled = unsafe { pool.insert(42i32) };
@@ -609,7 +609,7 @@ impl RawOpaquePool {
     }
 }
 
-/// The result of inserting a value of type `T` into a [`RawOpaquePool`].
+/// The result of inserting a value of type `T` into a [`OpaquePool`].
 ///
 /// Acts as a super-powered pointer that can be copied and cloned freely. The handle serves
 /// both as the key and provides direct access to the stored value. You can return this to
@@ -630,9 +630,9 @@ impl RawOpaquePool {
 /// ```rust
 /// use std::alloc::Layout;
 ///
-/// use opaque_pool::RawOpaquePool;
+/// use opaque_pool::OpaquePool;
 ///
-/// let mut pool = RawOpaquePool::builder().layout_of::<i64>().build();
+/// let mut pool = OpaquePool::builder().layout_of::<i64>().build();
 ///
 /// // SAFETY: i64 matches the layout used to create the pool.
 /// let pooled = unsafe { pool.insert(-123i64) };
@@ -675,9 +675,9 @@ impl<T> Pooled<T> {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use opaque_pool::RawOpaquePool;
+    /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = RawOpaquePool::builder().layout_of::<f64>().build();
+    /// let mut pool = OpaquePool::builder().layout_of::<f64>().build();
     ///
     /// // SAFETY: f64 matches the layout used to create the pool.
     /// let pooled = unsafe { pool.insert(3.14159f64) };
@@ -705,9 +705,9 @@ impl<T> Pooled<T> {
     /// ```rust
     /// use std::alloc::Layout;
     ///
-    /// use opaque_pool::RawOpaquePool;
+    /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = RawOpaquePool::builder().layout_of::<u64>().build();
+    /// let mut pool = OpaquePool::builder().layout_of::<u64>().build();
     ///
     /// // SAFETY: u64 matches the layout used to create the pool.
     /// let pooled = unsafe { pool.insert(42u64) };
@@ -775,7 +775,7 @@ mod tests {
 
     #[test]
     fn smoke_test() {
-        let mut pool = RawOpaquePool::builder().layout_of::<u32>().build();
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
@@ -813,7 +813,7 @@ mod tests {
     #[should_panic]
     fn remove_nonexistent_panics() {
         let layout = Layout::new::<u32>();
-        let mut pool = RawOpaquePool::builder().layout(layout).build();
+        let mut pool = OpaquePool::builder().layout(layout).build();
 
         // Create a fake pooled with invalid coordinates.
         let fake_pooled: Pooled<u32> = Pooled {
@@ -830,7 +830,7 @@ mod tests {
 
     #[test]
     fn multi_slab_growth() {
-        let mut pool = RawOpaquePool::builder().layout_of::<u32>().build();
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 
         // Reserve more items than a single slab can hold to test growth.
         // We use 2 * DEFAULT_SLAB_CAPACITY + 1 to guarantee we need at least 3 slabs.
@@ -858,12 +858,12 @@ mod tests {
     #[should_panic]
     fn zero_size_layout_is_panic() {
         let layout = Layout::from_size_align(0, 1).unwrap();
-        drop(RawOpaquePool::builder().layout(layout).build());
+        drop(OpaquePool::builder().layout(layout).build());
     }
 
     #[test]
     fn drop_with_no_active_pooled_does_not_panic_if_policy_must_not_drop() {
-        let mut pool = RawOpaquePool::builder()
+        let mut pool = OpaquePool::builder()
             .layout_of::<u64>()
             .drop_policy(DropPolicy::MustNotDropItems)
             .build();
@@ -882,7 +882,7 @@ mod tests {
     #[should_panic]
     fn drop_with_active_pooled_panics_if_policy_must_not_drop() {
         let layout = Layout::new::<u64>();
-        let mut pool = RawOpaquePool::builder()
+        let mut pool = OpaquePool::builder()
             .layout(layout)
             .drop_policy(DropPolicy::MustNotDropItems)
             .build();
@@ -897,8 +897,8 @@ mod tests {
     #[should_panic]
     fn remove_pooled_from_different_pool_panics() {
         let layout = Layout::new::<u32>();
-        let mut pool1 = RawOpaquePool::builder().layout(layout).build();
-        let mut pool2 = RawOpaquePool::builder().layout(layout).build();
+        let mut pool1 = OpaquePool::builder().layout(layout).build();
+        let mut pool2 = OpaquePool::builder().layout(layout).build();
 
         // Insert into pool1 but try to remove from pool2.
         let pooled1 = unsafe { pool1.insert(42_u32) };
@@ -913,7 +913,7 @@ mod tests {
     #[test]
     fn pooled_erase_functionality() {
         let layout = Layout::new::<u32>();
-        let mut pool = RawOpaquePool::builder().layout(layout).build();
+        let mut pool = OpaquePool::builder().layout(layout).build();
 
         let pooled = unsafe { pool.insert(42_u32) };
 
@@ -944,7 +944,7 @@ mod tests {
 
         // All these types have the same layout as u64.
         let layout = Layout::new::<u64>();
-        let mut pool = RawOpaquePool::builder().layout(layout).build();
+        let mut pool = OpaquePool::builder().layout(layout).build();
 
         // Insert different types with the same layout.
         let pooled_u64 = unsafe { pool.insert(0xDEAD_BEEF_CAFE_BABE_u64) };
@@ -1008,7 +1008,7 @@ mod tests {
 
     #[test]
     fn fill_first_slab_before_allocating_second() {
-        let mut pool = RawOpaquePool::builder().layout_of::<u32>().build();
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 
         for _ in 0..DEFAULT_SLAB_CAPACITY.get() {
             _ = unsafe { pool.insert(1234_u32) };
@@ -1025,7 +1025,7 @@ mod tests {
 
     #[test]
     fn fill_hole_before_allocating_new_slab() {
-        let mut pool = RawOpaquePool::builder().layout_of::<u32>().build();
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 
         // Fill the first slab.
         let mut pooled_items = Vec::new();
@@ -1061,7 +1061,7 @@ mod tests {
         //
         // We create the holes in ascending order (first slab first, then second slab).
 
-        let mut pool = RawOpaquePool::builder().layout_of::<u32>().build();
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 
         // Fill the first slab.
         let mut first_slab_items = Vec::new();
@@ -1110,7 +1110,7 @@ mod tests {
         //
         // We create the holes in descending order (second slab first, then first slab).
 
-        let mut pool = RawOpaquePool::builder().layout_of::<u32>().build();
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 
         // Fill the first slab.
         let mut first_slab_items = Vec::new();
@@ -1154,7 +1154,7 @@ mod tests {
     #[test]
     fn shrink_to_fit_removes_empty_slabs() {
         let layout = Layout::new::<u32>();
-        let mut pool = RawOpaquePool::builder().layout(layout).build();
+        let mut pool = OpaquePool::builder().layout(layout).build();
 
         // Insert enough items to create multiple slabs
         let mut pooled_items = Vec::new();
@@ -1195,7 +1195,7 @@ mod tests {
     #[test]
     fn shrink_to_fit_all_empty_slabs() {
         let layout = Layout::new::<u32>();
-        let mut pool = RawOpaquePool::builder().layout(layout).build();
+        let mut pool = OpaquePool::builder().layout(layout).build();
 
         // Insert items to create slabs
         let mut pooled_items = Vec::new();
@@ -1226,7 +1226,7 @@ mod tests {
     #[allow(clippy::cast_possible_truncation, reason = "test values are small")]
     fn shrink_to_fit_no_empty_slabs() {
         let layout = Layout::new::<u32>();
-        let mut pool = RawOpaquePool::builder().layout(layout).build();
+        let mut pool = OpaquePool::builder().layout(layout).build();
 
         // Insert items to fill slabs completely
         let mut pooled_items = Vec::new();
@@ -1252,7 +1252,7 @@ mod tests {
     #[test]
     fn shrink_to_fit_empty_pool() {
         let layout = Layout::new::<u32>();
-        let mut pool = RawOpaquePool::builder().layout(layout).build();
+        let mut pool = OpaquePool::builder().layout(layout).build();
 
         // Pool starts empty
         assert_eq!(pool.capacity(), 0);
@@ -1266,7 +1266,7 @@ mod tests {
 
     #[test]
     fn shrink_then_grow_allocates_new_slab() {
-        let mut pool = RawOpaquePool::builder().layout_of::<u32>().build();
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 
         // Fill one complete slab
         let mut pooled_items = Vec::new();
@@ -1316,7 +1316,7 @@ mod tests {
 
     #[test]
     fn reserve_increases_capacity() {
-        let mut pool = RawOpaquePool::builder().layout_of::<u32>().build();
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 
         // Initially no capacity
         assert_eq!(pool.capacity(), 0);
@@ -1335,7 +1335,7 @@ mod tests {
 
     #[test]
     fn reserve_with_existing_items() {
-        let mut pool = RawOpaquePool::builder().layout_of::<u32>().build();
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 
         // Insert some items first
         let pooled1 = unsafe { pool.insert(1_u32) };
@@ -1358,7 +1358,7 @@ mod tests {
 
     #[test]
     fn reserve_zero_does_nothing() {
-        let mut pool = RawOpaquePool::builder().layout_of::<u32>().build();
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
         let initial_capacity = pool.capacity();
 
         pool.reserve(0);
@@ -1367,7 +1367,7 @@ mod tests {
 
     #[test]
     fn reserve_with_sufficient_capacity_does_nothing() {
-        let mut pool = RawOpaquePool::builder().layout_of::<u32>().build();
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 
         // Reserve initial capacity
         pool.reserve(10);
@@ -1380,7 +1380,7 @@ mod tests {
 
     #[test]
     fn reserve_large_capacity() {
-        let mut pool = RawOpaquePool::builder().layout_of::<u32>().build();
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 
         // Reserve capacity for multiple slabs
         let large_count = DEFAULT_SLAB_CAPACITY.get() * 3 + 50;
@@ -1409,7 +1409,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "capacity overflow")]
     fn reserve_overflow_panics() {
-        let mut pool = RawOpaquePool::builder().layout_of::<u32>().build();
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 
         // Insert one item to make len() = 1
         let _key = unsafe { pool.insert(42_u32) };
@@ -1438,7 +1438,7 @@ mod tests {
             }
         }
 
-        let mut pool = RawOpaquePool::builder().layout_of::<Product>().build();
+        let mut pool = OpaquePool::builder().layout_of::<Product>().build();
 
         // Insert a concrete type.
         let product = Product {
@@ -1482,7 +1482,7 @@ mod tests {
             }
         }
 
-        let mut pool = RawOpaquePool::builder().layout_of::<Counter>().build();
+        let mut pool = OpaquePool::builder().layout_of::<Counter>().build();
 
         let counter = Counter { value: 10 };
 

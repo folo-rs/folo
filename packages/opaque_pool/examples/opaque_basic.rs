@@ -1,15 +1,15 @@
-//! Basic usage example for `RawOpaquePool`.
+//! Basic usage example for `OpaquePool`.
 //!
-//! This example demonstrates how to use `RawOpaquePool` to manage type-erased memory
+//! This example demonstrates how to use `OpaquePool` to manage type-erased memory
 //! with dynamic capacity growth, including the copyable nature of pool handles.
 
-use opaque_pool::RawOpaquePool;
+use opaque_pool::OpaquePool;
 
 fn main() {
     // Create a pool for u32 values.
-    let mut pool = RawOpaquePool::builder().layout_of::<u32>().build();
+    let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 
-    println!("Created RawOpaquePool with capacity: {}", pool.capacity());
+    println!("Created OpaquePool with capacity: {}", pool.capacity());
 
     // Insert some values.
     // SAFETY: u32 matches the layout used to create the pool.
@@ -101,5 +101,5 @@ fn main() {
     pool.remove(pooled3);
 
     println!("All items cleaned up successfully!");
-    println!("RawOpaquePool example completed successfully!");
+    println!("OpaquePool example completed successfully!");
 }

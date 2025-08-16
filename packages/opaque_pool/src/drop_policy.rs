@@ -7,11 +7,11 @@
 /// ```
 /// use std::alloc::Layout;
 ///
-/// use opaque_pool::{DropPolicy, RawOpaquePool};
+/// use opaque_pool::{DropPolicy, OpaquePool};
 ///
 /// // The drop policy is set at pool creation time.
 /// let layout = Layout::new::<u32>();
-/// let pool = RawOpaquePool::builder()
+/// let pool = OpaquePool::builder()
 ///     .layout(layout)
 ///     .drop_policy(DropPolicy::MustNotDropItems)
 ///     .build();
