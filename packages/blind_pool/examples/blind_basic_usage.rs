@@ -72,7 +72,7 @@ fn main() {
     // Demonstrate raw pointer access for advanced use cases.
     println!();
     println!("Demonstrating raw pointer access:");
-    
+
     // SAFETY: The pointer is valid and contains the value we just inserted.
     let ptr_value = unsafe { handle_f64.ptr().read() };
     println!("  f64 value via ptr: {ptr_value}");
@@ -80,11 +80,11 @@ fn main() {
     // Demonstrate type erasure.
     println!();
     println!("Demonstrating type erasure...");
-    
+
     // Create a separate handle for erasure (can't erase when multiple references exist)
     let handle_for_erasure = pool.insert(999_u32);
     let erased_u32 = handle_for_erasure.erase(); // Erase type information
-    
+
     // Can still access raw pointer after type erasure.
     // SAFETY: We know this erased handle contains a u32.
     let val = unsafe { erased_u32.ptr().cast::<u32>().read() };
@@ -93,19 +93,19 @@ fn main() {
     // Demonstrate multithreading capabilities.
     println!();
     println!("Demonstrating thread safety...");
-    
+
     let pool_clone = pool.clone(); // Pool can be cloned and shared
     let handle_clone = handle_f32; // Handles can be sent across threads
-    
+
     let join_handle = std::thread::spawn(move || {
         // Access the value in another thread
         println!("  Accessed f32 from thread: {}", *handle_clone);
-        
+
         // Insert new value from thread
         let thread_handle = pool_clone.insert(99_i32);
         *thread_handle
     });
-    
+
     let thread_result = join_handle.join().unwrap();
     println!("  Value inserted from thread: {thread_result}");
 
@@ -113,19 +113,19 @@ fn main() {
     println!();
     println!("Demonstrating automatic cleanup...");
     println!("  Pool length before dropping handles: {}", pool.len());
-    
+
     // Drop some handles explicitly
     drop(handle_u64);
     drop(handle_bool);
     drop(erased_u32); // This was the handle for erasure demonstration
-    
+
     println!("  Pool length after dropping some handles: {}", pool.len());
-    
+
     // Remaining handles will be automatically cleaned up when they go out of scope
     println!();
     println!("Remaining handles will be automatically cleaned up when main() ends.");
     println!("This demonstrates the key advantage of BlindPool - no manual memory management!");
-    
+
     println!();
     println!("Example completed successfully!");
     println!();

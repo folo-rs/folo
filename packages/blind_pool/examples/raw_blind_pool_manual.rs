@@ -96,5 +96,9 @@ fn main() {
     println!("If you need the value after removal, read it first using ptr().read().");
     println!();
     println!("Example completed successfully!");
-    println!("Final pool state - Length: {}, Empty: {}", pool.len(), pool.is_empty());
+    println!(
+        "Final pool state - Length: {}, Empty: {}",
+        pool.len(),
+        pool.is_empty()
+    );
 }

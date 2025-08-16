@@ -66,11 +66,11 @@ fn main() {
     println!();
     println!("Demonstrating pool cloning...");
     let pool_clone = pool.clone();
-    
+
     // Insert into the cloned pool handle
     let handle_bool = pool_clone.insert(true);
     println!("  Inserted bool into cloned pool: {}", *handle_bool);
-    
+
     // Both pool handles see the same data
     println!("  Original pool length: {}", pool.len());
     println!("  Cloned pool length: {}", pool_clone.len());
@@ -78,7 +78,7 @@ fn main() {
     // Demonstrate raw pointer access.
     println!();
     println!("Demonstrating raw pointer access:");
-    
+
     // SAFETY: The pointer is valid and contains the value we just inserted.
     let ptr_value = unsafe { handle_f64.ptr().read() };
     println!("  f64 value via ptr: {ptr_value}");
@@ -86,11 +86,11 @@ fn main() {
     // Demonstrate type erasure.
     println!();
     println!("Demonstrating type erasure...");
-    
+
     // Create a separate handle for erasure (can't erase when multiple references exist)
     let handle_for_erasure = pool.insert(999_u32);
     let erased_u32 = handle_for_erasure.erase(); // Erase type information
-    
+
     // Can still access raw pointer after type erasure.
     // SAFETY: We know this erased handle contains a u32.
     let val = unsafe { erased_u32.ptr().cast::<u32>().read() };
@@ -100,30 +100,30 @@ fn main() {
     println!();
     println!("Demonstrating automatic cleanup...");
     println!("  Pool length before dropping handles: {}", pool.len());
-    
+
     // Drop some handles explicitly
     drop(handle_f64);
     drop(handle_bool);
     drop(erased_u32); // This was the handle for erasure demonstration
-    
+
     println!("  Pool length after dropping some handles: {}", pool.len());
 
     // Demonstrate working with collections efficiently.
     println!();
     println!("Demonstrating efficient collection operations...");
-    
+
     let mut collection_handles = Vec::new();
-    
+
     // Insert a collection of strings
     let words = ["hello", "world", "from", "local", "pool"];
     for word in &words {
         let handle = pool.insert(word.to_string());
         collection_handles.push(handle);
     }
-    
+
     println!("  Inserted {} words", words.len());
     println!("  Pool length: {}", pool.len());
-    
+
     // Process the collection
     let mut concatenated = String::new();
     for (i, handle) in collection_handles.iter().enumerate() {
@@ -132,9 +132,9 @@ fn main() {
         }
         concatenated.push_str(handle);
     }
-    
+
     println!("  Concatenated string: '{concatenated}'");
-    
+
     // Keep the handles for automatic cleanup
     println!("  Collection handles will be cleaned up automatically");
 
@@ -160,7 +160,11 @@ fn main() {
 
     println!();
     println!("Example completed successfully!");
-    println!("Final pool state - Length: {}, Empty: {}", pool.len(), pool.is_empty());
+    println!(
+        "Final pool state - Length: {}, Empty: {}",
+        pool.len(),
+        pool.is_empty()
+    );
     println!();
     println!("All handles will be automatically cleaned up when main() ends.");
 }

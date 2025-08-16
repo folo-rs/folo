@@ -501,7 +501,7 @@ impl OpaquePool {
     /// # Panics
     ///
     /// Panics if the handle is not associated with this pool.
-    pub fn remove<T>(&mut self, pooled: Pooled<T>) {
+    pub fn remove<T: ?Sized>(&mut self, pooled: Pooled<T>) {
         assert!(
             pooled.pool_id == self.pool_id,
             "attempted to remove a handle from a different pool (handle pool ID: {}, current pool ID: {})",
@@ -654,7 +654,8 @@ impl OpaquePool {
 /// pool.remove(pooled);
 /// ```
 #[derive(Debug)]
-pub struct Pooled<T> {
+#[non_exhaustive]
+pub struct Pooled<T: ?Sized> {
     /// Ensures this handle can only be returned to the pool it came from.
     pool_id: u64,
 
@@ -663,7 +664,42 @@ pub struct Pooled<T> {
     ptr: NonNull<T>,
 }
 
-impl<T> Pooled<T> {
+impl<T: ?Sized> Pooled<T> {
+    /// Creates a new pooled handle with the given components.
+    ///
+    /// This method is intended for internal use by the blind_pool crate to construct
+    /// pooled handles when performing type casts via the [`define_pooled_dyn_cast!`] macro.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that:
+    /// - The pointer is valid and points to an object of type T
+    /// - The pool_id matches the pool that contains the object
+    /// - The coordinates are valid for the pool
+    #[doc(hidden)]
+    #[must_use]
+    pub unsafe fn from_raw_parts(
+        pool_id: u64,
+        coordinates: ItemCoordinates,
+        ptr: NonNull<T>,
+    ) -> Self {
+        Self {
+            pool_id,
+            coordinates,
+            ptr,
+        }
+    }
+
+    /// Extracts the raw components of this pooled handle.
+    ///
+    /// This method is intended for internal use by the blind_pool crate to extract
+    /// components when performing type casts via the [`define_pooled_dyn_cast!`] macro.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn into_raw_parts(self) -> (u64, ItemCoordinates, NonNull<T>) {
+        (self.pool_id, self.coordinates, self.ptr)
+    }
+
     /// Returns a pointer to the inserted value.
     ///
     /// This is the only way to access the value stored in the pool. The owner of the handle has
@@ -734,18 +770,23 @@ impl<T> Pooled<T> {
     }
 }
 
-impl<T> Copy for Pooled<T> {}
+impl<T: ?Sized> Copy for Pooled<T> {}
 
-impl<T> Clone for Pooled<T> {
+impl<T: ?Sized> Clone for Pooled<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
+/// Internal coordinates for tracking items within the pool structure.
 #[derive(Clone, Copy, Debug)]
-struct ItemCoordinates {
-    slab_index: usize,
-    index_in_slab: usize,
+#[non_exhaustive]
+#[doc(hidden)]
+pub struct ItemCoordinates {
+    /// The index of the slab containing this item.
+    pub slab_index: usize,
+    /// The index within the slab where this item is stored.
+    pub index_in_slab: usize,
 }
 
 impl ItemCoordinates {

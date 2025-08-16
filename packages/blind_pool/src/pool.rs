@@ -191,7 +191,7 @@ impl BlindPool {
     ///
     /// This is an internal method used by [`Pooled`] when it is dropped.
     /// It should not be called directly by user code.
-    pub(crate) fn remove<T>(&self, pooled: RawPooled<T>) {
+    pub(crate) fn remove<T: ?Sized>(&self, pooled: RawPooled<T>) {
         let mut pool = self.inner.lock().expect(ERR_POISONED_LOCK);
         pool.remove(pooled);
     }

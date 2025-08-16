@@ -16,6 +16,7 @@ default = []
 [dependencies]
 foldhash = { workspace = true }
 opaque_pool = { workspace = true }
+paste = { workspace = true }
 
 [dev-dependencies]
 alloc_tracker = { path = "../alloc_tracker" }

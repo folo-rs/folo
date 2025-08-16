@@ -191,6 +191,7 @@ dependencies = [
  "foldhash",
  "mutants",
  "opaque_pool",
+ "paste",
 ]
 
 [[package]]
