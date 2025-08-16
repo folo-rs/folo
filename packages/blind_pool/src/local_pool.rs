@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::{BlindPoolBuilder, LocalPooled, RawBlindPool, RawPooled};
+use crate::{LocalBlindPoolBuilder, LocalPooled, RawBlindPool, RawPooled};
 
 /// A single-threaded wrapper around [`RawBlindPool`] that provides automatic resource management
 /// and reference counting.
@@ -95,10 +95,10 @@ impl LocalBlindPool {
     ///
     /// let pool = LocalBlindPool::builder()
     ///     .drop_policy(DropPolicy::MustNotDropItems)
-    ///     .build_local();
+    ///     .build();
     /// ```
-    pub fn builder() -> BlindPoolBuilder {
-        BlindPoolBuilder::new()
+    pub fn builder() -> LocalBlindPoolBuilder {
+        LocalBlindPoolBuilder::new()
     }
 
     /// Inserts a value into the pool and returns a handle to access it.

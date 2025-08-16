@@ -4,7 +4,7 @@ use std::ptr::NonNull;
 use foldhash::{HashMap, HashMapExt};
 use opaque_pool::{DropPolicy, OpaquePool, Pooled as OpaquePooled};
 
-use crate::BlindPoolBuilder;
+use crate::RawBlindPoolBuilder;
 
 /// A pinned object pool of unbounded size that accepts objects of any type.
 ///
@@ -78,7 +78,7 @@ impl RawBlindPool {
     #[must_use]
     #[inline]
     pub fn new() -> Self {
-        Self::builder().build_raw()
+        Self::builder().build()
     }
 
     /// Creates a builder for configuring and constructing a [`RawBlindPool`].
@@ -90,11 +90,11 @@ impl RawBlindPool {
     ///
     /// let pool = RawBlindPool::builder()
     ///     .drop_policy(DropPolicy::MustNotDropItems)
-    ///     .build_raw();
+    ///     .build();
     /// ```
     #[inline]
-    pub fn builder() -> BlindPoolBuilder {
-        BlindPoolBuilder::new()
+    pub fn builder() -> RawBlindPoolBuilder {
+        RawBlindPoolBuilder::new()
     }
 
     /// Creates a new `RawBlindPool` with the specified configuration.
@@ -609,7 +609,7 @@ mod tests {
     fn builder_with_drop_policy() {
         let pool = RawBlindPool::builder()
             .drop_policy(DropPolicy::MustNotDropItems)
-            .build_raw();
+            .build();
 
         // Pool should not panic when dropped if empty.
         drop(pool);
@@ -620,7 +620,7 @@ mod tests {
     fn drop_policy_must_not_drop_panics_when_not_empty() {
         let mut pool = RawBlindPool::builder()
             .drop_policy(DropPolicy::MustNotDropItems)
-            .build_raw();
+            .build();
 
         let _pooled = pool.insert(42_u32);
 
