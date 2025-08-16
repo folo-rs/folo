@@ -1,21 +1,25 @@
-//! Example demonstrating the usage of `BlindPool` for storing different types with copyable handles.
+//! Example demonstrating basic usage of `BlindPool` for storing different types.
+//!
+//! This example shows the recommended `BlindPool` API with automatic resource management.
+//! The pool handles cleanup automatically when handles are dropped, making it the easiest
+//! and safest option for most use cases.
 
 use std::f32::consts::PI;
 use std::f64::consts::E;
 
-use blind_pool::RawBlindPool;
+use blind_pool::BlindPool;
 
 fn main() {
-    println!("BlindPool Example");
-    println!("================");
+    println!("BlindPool Basic Usage Example");
+    println!("============================");
 
-    // Create a new blind pool that can store any type.
-    let mut pool = RawBlindPool::new();
+    // Create a new blind pool using the builder pattern (recommended).
+    let pool = BlindPool::builder().build();
 
     println!();
     println!("Created empty BlindPool:");
     println!("  Length: {}", pool.len());
-    println!("  u32 capacity: {}", pool.capacity_of::<u32>());
+    println!("  Is empty: {}", pool.is_empty());
 
     // Insert different types into the same pool.
     println!();
@@ -25,121 +29,110 @@ fn main() {
     let handle_f32 = pool.insert(PI);
     let handle_f64 = pool.insert(E);
     let handle_bool = pool.insert(true);
-    let handle_char = pool.insert('X');
+    let handle_string = pool.insert("Hello, BlindPool!".to_string());
 
     println!("  Inserted u32: 42");
     println!("  Inserted u64: 1234567890");
     println!("  Inserted f32: PI");
     println!("  Inserted f64: E");
     println!("  Inserted bool: true");
-    println!("  Inserted char: 'X'");
+    println!("  Inserted string: 'Hello, BlindPool!'");
 
     println!();
     println!("Pool status after insertions:");
     println!("  Length: {}", pool.len());
-    println!("  u32 capacity: {}", pool.capacity_of::<u32>());
-    println!("  f64 capacity: {}", pool.capacity_of::<f64>());
+    println!("  Is empty: {}", pool.is_empty());
 
-    // Demonstrate that handles act like super-powered pointers - they can be copied freely.
+    // Demonstrate automatic dereferencing.
     println!();
-    println!("Demonstrating copyable handles...");
-    let handle_u32_copy = handle_u32;
-    #[expect(
-        clippy::clone_on_copy,
-        reason = "demonstrating that Clone is available"
-    )]
-    let handle_f64_clone = handle_f64.clone();
+    println!("Accessing values through automatic dereferencing:");
+    println!("  u32 value: {}", *handle_u32);
+    println!("  u64 value: {}", *handle_u64);
+    println!("  f32 value: {}", *handle_f32);
+    println!("  f64 value: {}", *handle_f64);
+    println!("  bool value: {}", *handle_bool);
+    println!("  string value: '{}'", *handle_string);
+    println!("  string length: {}", handle_string.len()); // Direct method access
 
-    println!("  Created copies of u32 and f64 handles");
-
-    // Read values back from the pool using the handles.
+    // Demonstrate that handles can be copied and cloned freely.
     println!();
-    println!("Reading values back from the pool:");
+    println!("Demonstrating copyable and cloneable handles...");
+    let handle_u32_copy = handle_u32.clone(); // Clone to avoid move
+    let handle_string_clone = handle_string.clone(); // Clone
 
-    // SAFETY: All pointers are valid and contain the values we just inserted.
-    let val_u32_original = unsafe { handle_u32.ptr().read() };
-    // SAFETY: All pointers are valid and contain the values we just inserted.
-    let val_u32_copy = unsafe { handle_u32_copy.ptr().read() };
-    // SAFETY: All pointers are valid and contain the values we just inserted.
-    let val_u64 = unsafe { handle_u64.ptr().read() };
-    // SAFETY: All pointers are valid and contain the values we just inserted.
-    let val_f32 = unsafe { handle_f32.ptr().read() };
-    // SAFETY: All pointers are valid and contain the values we just inserted.
-    let val_f64_original = unsafe { handle_f64.ptr().read() };
-    // SAFETY: All pointers are valid and contain the values we just inserted.
-    let val_f64_clone = unsafe { handle_f64_clone.ptr().read() };
-    // SAFETY: All pointers are valid and contain the values we just inserted.
-    let val_bool = unsafe { handle_bool.ptr().read() };
-    // SAFETY: All pointers are valid and contain the values we just inserted.
-    let val_char = unsafe { handle_char.ptr().read() };
+    println!("  Original u32 handle: {}", *handle_u32);
+    println!("  Copied u32 handle: {}", *handle_u32_copy);
+    println!("  Original string handle: '{}'", *handle_string);
+    println!("  Cloned string handle: '{}'", *handle_string_clone);
 
-    println!("  u32 value (original): {val_u32_original}");
-    println!("  u32 value (copy): {val_u32_copy}");
-    println!("  u64 value: {val_u64}");
-    println!("  f32 value: {val_f32}");
-    println!("  f64 value (original): {val_f64_original}");
-    println!("  f64 value (clone): {val_f64_clone}");
-    println!("  bool value: {val_bool}");
-    println!("  char value: '{val_char}'");
+    // Show both values refer to the same data.
+    assert_eq!(*handle_u32, *handle_u32_copy);
+    assert_eq!(*handle_string, *handle_string_clone);
 
-    // All copies should refer to the same values.
-    assert_eq!(val_u32_original, val_u32_copy);
-    assert!((val_f64_original - val_f64_clone).abs() < f64::EPSILON);
+    // Demonstrate raw pointer access for advanced use cases.
+    println!();
+    println!("Demonstrating raw pointer access:");
+    
+    // SAFETY: The pointer is valid and contains the value we just inserted.
+    let ptr_value = unsafe { handle_f64.ptr().read() };
+    println!("  f64 value via ptr: {ptr_value}");
 
     // Demonstrate type erasure.
     println!();
     println!("Demonstrating type erasure...");
-    let erased_u32 = handle_u32.erase();
-    let erased_f64 = handle_f64.erase();
-
-    // Can still access raw pointers after type erasure.
-    // SAFETY: We know the types of these erased handles.
+    
+    // Create a separate handle for erasure (can't erase when multiple references exist)
+    let handle_for_erasure = pool.insert(999_u32);
+    let erased_u32 = handle_for_erasure.erase(); // Erase type information
+    
+    // Can still access raw pointer after type erasure.
+    // SAFETY: We know this erased handle contains a u32.
     let val = unsafe { erased_u32.ptr().cast::<u32>().read() };
     println!("  Erased u32 value: {val}");
 
-    // SAFETY: We know the types of these erased handles.
-    let val = unsafe { erased_f64.ptr().cast::<f64>().read() };
-    println!("  Erased f64 value: {val}");
-
-    // Remove some items from the pool.
+    // Demonstrate multithreading capabilities.
     println!();
-    println!("Removing some items...");
-    pool.remove(erased_u32); // Remove the erased u32
-    pool.remove(handle_u64);
-    pool.remove(erased_f64); // Remove the erased f64
+    println!("Demonstrating thread safety...");
+    
+    let pool_clone = pool.clone(); // Pool can be cloned and shared
+    let handle_clone = handle_f32; // Handles can be sent across threads
+    
+    let join_handle = std::thread::spawn(move || {
+        // Access the value in another thread
+        println!("  Accessed f32 from thread: {}", *handle_clone);
+        
+        // Insert new value from thread
+        let thread_handle = pool_clone.insert(99_i32);
+        *thread_handle
+    });
+    
+    let thread_result = join_handle.join().unwrap();
+    println!("  Value inserted from thread: {thread_result}");
 
-    println!("  Removed u32, u64, and f64");
-    println!("  Pool length now: {}", pool.len());
-
-    // Insert more items of existing types.
+    // Demonstrate automatic cleanup.
     println!();
-    println!("Inserting more items of existing types...");
-    let handle_f32_2 = pool.insert(2.5_f32);
-    let handle_bool_2 = pool.insert(false);
-
-    println!("  Inserted another f32: 2.5");
-    println!("  Inserted another bool: false");
-    println!("  Pool length now: {}", pool.len());
-
-    // Clean up remaining items.
+    println!("Demonstrating automatic cleanup...");
+    println!("  Pool length before dropping handles: {}", pool.len());
+    
+    // Drop some handles explicitly
+    drop(handle_u64);
+    drop(handle_bool);
+    drop(erased_u32); // This was the handle for erasure demonstration
+    
+    println!("  Pool length after dropping some handles: {}", pool.len());
+    
+    // Remaining handles will be automatically cleaned up when they go out of scope
     println!();
-    println!("Cleaning up remaining items...");
-    pool.remove(handle_f32);
-    pool.remove(handle_bool);
-    pool.remove(handle_char);
-    pool.remove(handle_f32_2);
-    pool.remove(handle_bool_2);
-
-    println!("  Pool is now empty: {}", pool.is_empty());
-
-    // Demonstrate shrink_to_fit.
-    println!();
-    println!("Calling shrink_to_fit to release unused capacity...");
-    let u32_capacity_before = pool.capacity_of::<u32>();
-    pool.shrink_to_fit();
-    let u32_capacity_after = pool.capacity_of::<u32>();
-    println!("  u32 capacity before shrink: {u32_capacity_before}");
-    println!("  u32 capacity after shrink: {u32_capacity_after}");
+    println!("Remaining handles will be automatically cleaned up when main() ends.");
+    println!("This demonstrates the key advantage of BlindPool - no manual memory management!");
+    
     println!();
     println!("Example completed successfully!");
+    println!();
+    println!("Key features demonstrated:");
+    println!("- Automatic resource management (no manual cleanup needed)");
+    println!("- Type safety with automatic dereferencing");
+    println!("- Thread safety (pool and handles can be shared across threads)");
+    println!("- Type erasure for advanced use cases");
+    println!("- Raw pointer access when needed");
 }

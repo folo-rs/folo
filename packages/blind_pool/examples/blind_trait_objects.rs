@@ -2,11 +2,12 @@
 //!
 //! This example demonstrates how to use trait objects with `BlindPool`, showing:
 //! * Storing a concrete type in the pool
-//! * Creating references from raw pointers
-//! * Converting those references to trait object references
+//! * **IMPORTANT**: Creating trait object references requires using `ptr().as_ref()` -
+//!   the deref trait cannot be used for trait object conversion
+//! * Converting references to trait object references
 //! * Using trait methods on pooled items
 
-use blind_pool::RawBlindPool;
+use blind_pool::BlindPool;
 
 // Define a trait for our content.
 trait MediaContent {
@@ -82,8 +83,9 @@ fn main() {
     println!("==============================");
     println!();
 
-    // Create a blind pool to store media content.
-    let mut media_pool = RawBlindPool::new();
+    // Create a blind pool using the builder pattern.
+    // BlindPool provides automatic resource management and is the recommended choice.
+    let media_pool = BlindPool::builder().build();
 
     println!("Creating a multimedia library...");
     println!();
@@ -99,10 +101,12 @@ fn main() {
     let song_handle = media_pool.insert(song);
 
     println!("Added song to the media pool");
-    println!("Song capacity: {}", media_pool.capacity_of::<Song>());
+    println!("Pool length: {}", media_pool.len());
     println!();
 
     // Example 1: Use media content via trait objects.
+    // CRITICAL: Must use ptr().as_ref() to create trait object references!
+    // The deref trait (*song_handle) cannot be used for trait object conversion.
     println!("Example 1: Playing media content");
     println!("--------------------------------");
 
@@ -114,6 +118,7 @@ fn main() {
     }
 
     // Example 2: Modify rating via mutable trait objects.
+    // Again, we must use ptr().as_mut() to create mutable trait object references.
     println!("Example 2: Updating rating");
     println!("-------------------------");
 
@@ -148,8 +153,9 @@ fn main() {
 
     println!();
 
-    // Clean up.
-    media_pool.remove(song_handle);
+    // Clean up happens automatically when the handle is dropped.
+    // With BlindPool, you get automatic resource management!
+    drop(song_handle);
 
     println!("Pool is now empty: {}", media_pool.is_empty());
 
@@ -157,8 +163,9 @@ fn main() {
     println!("Example completed successfully!");
     println!();
     println!("Key insights:");
-    println!("- BlindPool can store any type and convert to trait objects");
-    println!("- Trait objects work by creating references from raw pointers");
+    println!("- BlindPool provides automatic resource management (recommended)");
+    println!("- To create trait objects, you MUST use ptr().as_ref() or ptr().as_mut()");
+    println!("- The deref trait (*handle) cannot be used for trait object conversion");
     println!("- Multiple traits can be used via separate trait object references");
     println!("- The caller must track the concrete type of each pooled item");
 }

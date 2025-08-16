@@ -14,6 +14,38 @@ use crate::{BlindPool, RawPooled};
 /// Multiple [`Pooled`] instances can reference the same value through
 /// cloning, implementing reference counting semantics.
 ///
+/// # Trait Objects
+///
+/// **Important**: To downcast to a trait object, you must use [`ptr()`][Self::ptr]
+/// followed by [`as_ref()`][std::ptr::NonNull::as_ref] or [`as_mut()`][std::ptr::NonNull::as_mut].
+/// The [`Deref`] trait cannot be used for trait object conversion.
+///
+/// ```rust
+/// use blind_pool::BlindPool;
+///
+/// trait MyTrait {
+///     fn do_something(&self);
+/// }
+///
+/// struct MyStruct(u32);
+/// impl MyTrait for MyStruct {
+///     fn do_something(&self) {
+///         println!("Doing something with value: {}", self.0);
+///     }
+/// }
+///
+/// let pool = BlindPool::new();
+/// let handle = pool.insert(MyStruct(42));
+///
+/// // CORRECT: Use ptr().as_ref() for trait objects
+/// // SAFETY: The pointer is valid and contains the value we just inserted.
+/// let trait_ref: &dyn MyTrait = unsafe { handle.ptr().as_ref() };
+/// trait_ref.do_something();
+///
+/// // WRONG: This will not work for trait object conversion
+/// // let trait_ref: &dyn MyTrait = &*handle; // Compilation error!
+/// ```
+///
 /// # Example
 ///
 /// ```rust
