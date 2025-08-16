@@ -101,9 +101,21 @@ run-examples:
             Test-Path (Join-Path $_.FullName "main.rs") 
         }
         
+        # Examples that are expected to panic or fail and should be excluded from run-examples
+        $excluded_examples = @(
+            "panic_on_alloc_demo"  # This example intentionally panics to demonstrate functionality
+        )
+        
         # Process .rs files
         foreach ($example_file in $example_files) {
             $example_name = $example_file.BaseName
+            
+            # Skip excluded examples
+            if ($excluded_examples -contains $example_name) {
+                Write-Host "Skipping excluded example '$example_name' in package '$pkg'" -ForegroundColor DarkGray
+                continue
+            }
+            
             $total_count++
             
             Write-Host "Running example '$example_name' in package '$pkg'..." -ForegroundColor Cyan
@@ -152,6 +164,13 @@ run-examples:
         # Process subdirectory examples
         foreach ($example_subdir in $example_subdirs) {
             $example_name = $example_subdir.Name
+            
+            # Skip excluded examples
+            if ($excluded_examples -contains $example_name) {
+                Write-Host "Skipping excluded example '$example_name' in package '$pkg'" -ForegroundColor DarkGray
+                continue
+            }
+            
             $total_count++
             
             Write-Host "Running example '$example_name' in package '$pkg'..." -ForegroundColor Cyan

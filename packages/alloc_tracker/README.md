@@ -3,6 +3,8 @@ Memory allocation tracking utilities for benchmarks and performance analysis.
 This package provides utilities to track memory allocations during code execution,
 enabling analysis of allocation patterns in benchmarks and performance tests.
 
+## Basic usage
+
 ```rust
 use alloc_tracker::{Allocator, Session};
 
@@ -23,6 +25,30 @@ fn main() {
     session.print_to_stdout();
 
     // Session automatically cleans up when dropped
+}
+```
+
+## Debugging unexpected allocations
+
+The package also provides a panic-on-allocation feature to help track down unexpected
+allocations in performance-critical code:
+
+```rust
+use alloc_tracker::{panic_on_alloc, Allocator};
+
+#[global_allocator]
+static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+
+fn main() {
+    // Enable panic on allocation
+    panic_on_alloc(true);
+    
+    // Any allocation attempt will now panic with a descriptive message
+    // let _vec = vec![1, 2, 3]; // This would panic!
+    
+    // Disable to allow allocations again
+    panic_on_alloc(false);
+    let _vec = vec![1, 2, 3]; // This is safe
 }
 ```
 
