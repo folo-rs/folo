@@ -9,7 +9,7 @@
 //! ```
 //! pub trait SendUnitFuture: Future<Output = ()> + Send {}
 //!
-//! define_pooled_dyn_cast!(send_unit_future, SendUnitFuture);
+//! define_pooled_dyn_cast!(SendUnitFuture);
 //! ```
 
 use std::future::Future;
@@ -26,7 +26,7 @@ pub trait SendUnitFuture: Future<Output = ()> + Send {}
 impl<T> SendUnitFuture for T where T: Future<Output = ()> + Send {}
 
 // Define the cast operation for our trait alias
-define_pooled_dyn_cast!(unit_future, SendUnitFuture);
+define_pooled_dyn_cast!(SendUnitFuture);
 
 fn check_is_send_unit_future(_f: &dyn SendUnitFuture) {}
 
@@ -38,7 +38,7 @@ fn future_trait_alias_example() {
     });
 
     // Cast to trait object while preserving reference counting.
-    let future_pooled = pooled.cast_unit_future();
+    let future_pooled = pooled.cast_send_unit_future();
 
     // Verify we can use it as a Future by checking the type
     check_is_send_unit_future(&*future_pooled);
@@ -60,8 +60,8 @@ fn store_futures_in_struct() {
         println!("Task 2");
     });
 
-    let future1 = task1.cast_unit_future();
-    let future2 = task2.cast_unit_future();
+    let future1 = task1.cast_send_unit_future();
+    let future2 = task2.cast_send_unit_future();
 
     let task_manager = TaskManager {
         futures: vec![future1, future2],

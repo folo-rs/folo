@@ -4,7 +4,7 @@ use blind_pool::{BlindPool, LocalBlindPool, RawBlindPool, define_pooled_dyn_cast
 use std::fmt::Display;
 
 // Define the cast operation for Display
-define_pooled_dyn_cast!(display, Display);
+define_pooled_dyn_cast!(Display);
 
 #[test]
 fn pooled_cast_display() {

@@ -4,7 +4,7 @@ use blind_pool::{BlindPool, define_pooled_dyn_cast};
 use std::fmt::Display;
 
 // Define cast operation
-define_pooled_dyn_cast!(display, Display);
+define_pooled_dyn_cast!(Display);
 
 #[test]
 fn dynamic_cast_integration_test() {
