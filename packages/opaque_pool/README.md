@@ -5,11 +5,11 @@ The pool returns super-powered pointers (`Pooled<T>`) that can be copied and clo
 ```rust
 use std::alloc::Layout;
 
-use opaque_pool::OpaquePool;
+use opaque_pool::RawOpaquePool;
 
 // Create a pool for storing values that match the layout of `u64`.
 let layout = Layout::new::<u64>();
-let mut pool = OpaquePool::builder().layout(layout).build();
+let mut pool = RawOpaquePool::builder().layout(layout).build();
 
 // Insert values into the pool.
 // SAFETY: The layout of u64 matches the pool's item layout.

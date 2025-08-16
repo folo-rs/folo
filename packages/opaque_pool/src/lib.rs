@@ -1,4 +1,4 @@
-//! This crate provides [`OpaquePool`], a dynamically growing pool of objects that is largely
+//! This crate provides [`RawOpaquePool`], a dynamically growing pool of objects that is largely
 //! ignorant of the type of the items within, as long as they match a [`std::alloc::Layout`]
 //! defined at pool creation.
 //!
@@ -7,7 +7,7 @@
 //! # Type-erased value management
 //!
 //! The pool works with any type that matches the layout specified at creation time. Values are
-//! inserted using the unsafe [`OpaquePool::insert()`] method, which requires the caller to
+//! inserted using the unsafe [`RawOpaquePool::insert()`] method, which requires the caller to
 //! ensure the type matches the pool's layout. The pool automatically handles dropping of values
 //! when they are removed.
 //!
@@ -31,11 +31,11 @@
 //! ```rust
 //! use std::alloc::Layout;
 //!
-//! use opaque_pool::OpaquePool;
+//! use opaque_pool::RawOpaquePool;
 //!
 //! // Create a pool for storing values that match the layout of `u64`.
 //! let layout = Layout::new::<u64>();
-//! let mut pool = OpaquePool::builder().layout(layout).build();
+//! let mut pool = RawOpaquePool::builder().layout(layout).build();
 //!
 //! // Insert values into the pool.
 //! // SAFETY: The layout of u64 matches the pool's item layout.
@@ -69,11 +69,11 @@
 mod builder;
 mod drop_policy;
 mod dropper;
-mod pool;
+mod raw;
 mod slab;
 
 pub use builder::*;
 pub use drop_policy::*;
 pub(crate) use dropper::*;
-pub use pool::*;
+pub use raw::*;
 pub(crate) use slab::*;

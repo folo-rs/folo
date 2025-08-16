@@ -1,17 +1,17 @@
 //! Example that demonstrates the exact usage shown in the README.md file.
 //!
-//! This shows how to use `OpaquePool` for type-erased object management with copyable handles.
+//! This shows how to use `RawOpaquePool` for type-erased object management with copyable handles.
 
 use std::alloc::Layout;
 
-use opaque_pool::OpaquePool;
+use opaque_pool::RawOpaquePool;
 
 fn main() {
     println!("=== Opaque Pool README Example ===");
 
     // Create a pool for storing values that match the layout of `u64`.
     let layout = Layout::new::<u64>();
-    let mut pool = OpaquePool::builder().layout(layout).build();
+    let mut pool = RawOpaquePool::builder().layout(layout).build();
 
     // Insert values into the pool.
     // SAFETY: The layout of u64 matches the pool's item layout.

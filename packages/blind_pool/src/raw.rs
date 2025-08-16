@@ -2,7 +2,7 @@ use std::alloc::Layout;
 use std::ptr::NonNull;
 
 use foldhash::{HashMap, HashMapExt};
-use opaque_pool::{DropPolicy, OpaquePool, Pooled as OpaquePooled};
+use opaque_pool::{DropPolicy, RawOpaquePool, Pooled as RawOpaquePooled};
 
 use crate::BlindPoolBuilder;
 
@@ -51,7 +51,7 @@ use crate::BlindPoolBuilder;
 pub struct RawBlindPool {
     /// Internal pools, one for each unique memory layout encountered.
     /// We use foldhash for better performance with small hash tables.
-    pools: HashMap<Layout, OpaquePool>,
+    pools: HashMap<Layout, RawOpaquePool>,
 
     /// Drop policy that determines how the pool handles remaining items when dropped.
     drop_policy: DropPolicy,
@@ -131,7 +131,7 @@ impl RawBlindPool {
         let layout = Layout::new::<T>();
 
         let internal_pool = self.pools.entry(layout).or_insert_with(|| {
-            OpaquePool::builder()
+            RawOpaquePool::builder()
                 .layout_of::<T>()
                 .drop_policy(self.drop_policy)
                 .build()
@@ -189,7 +189,7 @@ impl RawBlindPool {
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        self.pools.values().map(OpaquePool::len).sum()
+        self.pools.values().map(RawOpaquePool::len).sum()
     }
 
     /// Whether the pool has no inserted values.
@@ -215,7 +215,7 @@ impl RawBlindPool {
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.pools.values().all(OpaquePool::is_empty)
+        self.pools.values().all(RawOpaquePool::is_empty)
     }
 
     /// Returns the capacity for items of type `T`.
@@ -243,7 +243,7 @@ impl RawBlindPool {
     #[inline]
     pub fn capacity_of<T>(&self) -> usize {
         let layout = Layout::new::<T>();
-        self.pools.get(&layout).map_or(0, OpaquePool::capacity)
+        self.pools.get(&layout).map_or(0, RawOpaquePool::capacity)
     }
 
     /// Reserves capacity for at least `additional` more items of type `T`.
@@ -275,7 +275,7 @@ impl RawBlindPool {
         let layout = Layout::new::<T>();
 
         let internal_pool = self.pools.entry(layout).or_insert_with(|| {
-            OpaquePool::builder()
+            RawOpaquePool::builder()
                 .layout_of::<T>()
                 .drop_policy(self.drop_policy)
                 .build()
@@ -382,7 +382,7 @@ pub struct RawPooled<T> {
     layout: Layout,
 
     /// The handle from the internal opaque pool.
-    pooled: OpaquePooled<T>,
+    pooled: RawOpaquePooled<T>,
 }
 
 impl<T> RawPooled<T> {

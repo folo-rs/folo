@@ -1,10 +1,10 @@
 use std::alloc::Layout;
 
-use crate::{DropPolicy, OpaquePool};
+use crate::{DropPolicy, RawOpaquePool};
 
-/// Builder for creating an instance of [`OpaquePool`].
+/// Builder for creating an instance of [`RawOpaquePool`].
 ///
-/// [`OpaquePool`] requires the item memory layout to be specified at construction time.
+/// [`RawOpaquePool`] requires the item memory layout to be specified at construction time.
 /// Use either `.layout()` to provide a specific layout or `.layout_of::<T>()` to generate
 /// a layout based on the provided type.
 ///
@@ -15,23 +15,23 @@ use crate::{DropPolicy, OpaquePool};
 /// ```
 /// use std::alloc::Layout;
 ///
-/// use opaque_pool::{DropPolicy, OpaquePool};
+/// use opaque_pool::{DropPolicy, RawOpaquePool};
 ///
 /// // Using a specific layout.
 /// let layout = Layout::new::<u32>();
-/// let pool = OpaquePool::builder().layout(layout).build();
+/// let pool = RawOpaquePool::builder().layout(layout).build();
 ///
 /// // Using type-based layout.
-/// let pool = OpaquePool::builder().layout_of::<u64>().build();
+/// let pool = RawOpaquePool::builder().layout_of::<u64>().build();
 /// ```
 #[derive(Debug)]
 #[must_use]
-pub struct OpaquePoolBuilder {
+pub struct RawOpaquePoolBuilder {
     item_layout: Option<Layout>,
     drop_policy: DropPolicy,
 }
 
-impl OpaquePoolBuilder {
+impl RawOpaquePoolBuilder {
     pub(crate) fn new() -> Self {
         Self {
             item_layout: None,
@@ -46,13 +46,13 @@ impl OpaquePoolBuilder {
     /// ```
     /// use std::alloc::Layout;
     ///
-    /// use opaque_pool::OpaquePool;
+    /// use opaque_pool::RawOpaquePool;
     ///
     /// let layout = Layout::new::<u32>();
-    /// let pool = OpaquePool::builder().layout(layout).build();
+    /// let pool = RawOpaquePool::builder().layout(layout).build();
     /// ```
     pub fn layout(mut self, layout: Layout) -> Self {
-        assert!(layout.size() > 0, "OpaquePool must have non-zero item size");
+        assert!(layout.size() > 0, "RawOpaquePool must have non-zero item size");
         self.item_layout = Some(layout);
         self
     }
@@ -64,13 +64,13 @@ impl OpaquePoolBuilder {
     /// # Examples
     ///
     /// ```
-    /// use opaque_pool::OpaquePool;
+    /// use opaque_pool::RawOpaquePool;
     ///
-    /// let pool = OpaquePool::builder().layout_of::<u64>().build();
+    /// let pool = RawOpaquePool::builder().layout_of::<u64>().build();
     /// ```
     pub fn layout_of<T>(mut self) -> Self {
         let layout = Layout::new::<T>();
-        assert!(layout.size() > 0, "OpaquePool must have non-zero item size");
+        assert!(layout.size() > 0, "RawOpaquePool must have non-zero item size");
         self.item_layout = Some(layout);
         self
     }
@@ -83,10 +83,10 @@ impl OpaquePoolBuilder {
     /// ```
     /// use std::alloc::Layout;
     ///
-    /// use opaque_pool::{DropPolicy, OpaquePool};
+    /// use opaque_pool::{DropPolicy, RawOpaquePool};
     ///
     /// let layout = Layout::new::<u32>();
-    /// let pool = OpaquePool::builder()
+    /// let pool = RawOpaquePool::builder()
     ///     .layout(layout)
     ///     .drop_policy(DropPolicy::MustNotDropItems)
     ///     .build();
@@ -108,16 +108,16 @@ impl OpaquePoolBuilder {
     /// ```
     /// use std::alloc::Layout;
     ///
-    /// use opaque_pool::OpaquePool;
+    /// use opaque_pool::RawOpaquePool;
     ///
     /// let layout = Layout::new::<u32>();
-    /// let pool = OpaquePool::builder().layout(layout).build();
+    /// let pool = RawOpaquePool::builder().layout(layout).build();
     /// ```
     #[must_use]
-    pub fn build(self) -> OpaquePool {
+    pub fn build(self) -> RawOpaquePool {
         let layout = self.item_layout.expect(
             "Layout must be set using .layout() or .layout_of::<T>() before calling .build()",
         );
-        OpaquePool::new_inner(layout, self.drop_policy)
+        RawOpaquePool::new_inner(layout, self.drop_policy)
     }
 }
