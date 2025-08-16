@@ -1,24 +1,34 @@
-//! Example demonstrating how to handle complex trait objects like Future.
+//! Example demonstrating how to handle trait objects with complex trait signatures.
 //!
-//! For traits with associated types that need specific values (like Future<Output = ()>),
-//! you can create a trait alias and cast to that.
+//! Due to macro and type system limitations, complex traits require casting to a
+//! trait alias that hides the specific trait signature.
+//!
+//! For example, you cannot define a dyn cast for something nontrivial like
+//! `Future<Output = ()> + Send` but you can do it if you first define a trait alias:
+//!
+//! ```
+//! pub trait SendUnitFuture: Future<Output = ()> + Send {}
+//!
+//! define_pooled_dyn_cast!(send_unit_future, SendUnitFuture);
+//! ```
+
+use std::future::Future;
 
 use blind_pool::{BlindPool, define_pooled_dyn_cast};
-use std::future::Future;
 
 /// A trait alias for futures that return unit ().
 ///
 /// This trait makes it possible to create trait objects for futures with a specific
 /// output type, which can then be stored in pooled collections.
-pub trait UnitFuture: Future<Output = ()> {}
+pub trait SendUnitFuture: Future<Output = ()> + Send {}
 
-// Implement the trait alias for any type that implements Future<Output = ()>
-impl<T> UnitFuture for T where T: Future<Output = ()> {}
+/// Implement the trait alias for any type that implements Future<Output = ()>
+impl<T> SendUnitFuture for T where T: Future<Output = ()> + Send {}
 
 // Define the cast operation for our trait alias
-define_pooled_dyn_cast!(unit_future, UnitFuture);
+define_pooled_dyn_cast!(unit_future, SendUnitFuture);
 
-fn check_is_unit_future(_f: &dyn UnitFuture) {}
+fn check_is_send_unit_future(_f: &dyn SendUnitFuture) {}
 
 #[test]
 fn future_trait_alias_example() {
@@ -31,14 +41,14 @@ fn future_trait_alias_example() {
     let future_pooled = pooled.cast_unit_future();
 
     // Verify we can use it as a Future by checking the type
-    check_is_unit_future(&*future_pooled);
+    check_is_send_unit_future(&*future_pooled);
 }
 
 #[test]
 fn store_futures_in_struct() {
     #[allow(dead_code, reason = "Test struct to verify compilation")]
     struct TaskManager {
-        futures: Vec<blind_pool::Pooled<dyn UnitFuture>>,
+        futures: Vec<blind_pool::Pooled<dyn SendUnitFuture>>,
     }
 
     let pool = BlindPool::new();
