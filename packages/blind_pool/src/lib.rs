@@ -89,19 +89,16 @@
 mod builder;
 mod cast;
 mod constants;
+mod local_builder;
 mod local_pool;
 mod local_pooled;
 mod pool;
 mod pooled;
 mod raw;
+mod raw_builder;
 
 pub use builder::*;
-#[allow(
-    unused_imports,
-    unreachable_pub,
-    reason = "Macro export needed for external users"
-)]
-pub use cast::*;
+pub use local_builder::*;
 pub use local_pool::*;
 pub use local_pooled::*;
 // Re-export DropPolicy from opaque_pool simply because we do not need a different one.
@@ -109,3 +106,4 @@ pub use opaque_pool::DropPolicy;
 pub use pool::*;
 pub use pooled::*;
 pub use raw::*;
+pub use raw_builder::*;
