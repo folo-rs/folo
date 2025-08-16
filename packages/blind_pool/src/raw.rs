@@ -48,6 +48,12 @@ use crate::RawBlindPoolBuilder;
 /// assert_eq!(value_u32, 42);
 /// assert_eq!(value_i64, -123);
 /// ```
+///
+/// # Thread safety
+///
+/// This type is thread-mobile ([`Send`]) but not thread-safe ([`Sync`]). It can be moved
+/// between threads but cannot be shared between threads simultaneously. For thread-safe
+/// pool operations, use [`BlindPool`][crate::BlindPool] instead.
 #[derive(Debug)]
 pub struct RawBlindPool {
     /// Internal pools, one for each unique memory layout encountered.
@@ -353,6 +359,13 @@ impl Drop for RawBlindPool {
 /// handles freely without affecting the underlying stored value. Multiple copies of the same
 /// handle all refer to the same stored value.
 ///
+/// # Thread mobility and safety
+///
+/// This type is thread-mobile ([`Send`]) but not thread-safe ([`Sync`]) regardless of the
+/// type `T` it contains. The handle can be safely moved between threads but cannot be
+/// shared between threads simultaneously. This prevents race conditions on the handle
+/// itself while still allowing transfer of ownership between threads.
+///
 /// # Example
 ///
 /// ```rust
@@ -523,6 +536,24 @@ impl<T: ?Sized> Clone for RawPooled<T> {
         *self
     }
 }
+
+// SAFETY: RawBlindPool can be Send because all its components are Send.
+// - HashMap<Layout, OpaquePool> is Send when OpaquePool is Send
+// - OpaquePool is Send (it contains Vec<OpaqueSlab> and OpaqueSlab is explicitly Send)
+// - Layout is Send (it's just size and alignment information)
+// - DropPolicy is Send (it's an enum with no data)
+// - AtomicU64 (used in pool ID generation) is Send
+unsafe impl Send for RawBlindPool {}
+
+// SAFETY: RawPooled<T> can be Send regardless of T because it acts like a raw pointer.
+// The NonNull<T> it contains points to memory managed by the pool, and the safety
+// of sending the handle between threads doesn't depend on T's Send-ness.
+// The actual data access still requires appropriate synchronization based on T.
+unsafe impl<T: ?Sized> Send for RawPooled<T> {}
+
+// Note: RawPooled<T> is intentionally NOT Sync to maintain thread-mobile semantics.
+// Handles cannot be shared between threads simultaneously, preventing race conditions
+// on the handle itself while still allowing transfer between threads.
 
 #[cfg(test)]
 mod tests {
@@ -972,5 +1003,49 @@ mod tests {
         }
 
         pool.remove(pooled_temp);
+    }
+
+    #[cfg(test)]
+    mod static_assertions {
+        use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+        use super::{RawBlindPool, RawPooled};
+        use crate::RawBlindPoolBuilder;
+
+        #[test]
+        fn thread_mobility_assertions() {
+            // RawBlindPool should be thread-mobile (Send) but not thread-safe (Sync)
+            assert_impl_all!(RawBlindPool: Send);
+            assert_not_impl_any!(RawBlindPool: Sync);
+
+            // RawBlindPoolBuilder should be thread-mobile (Send) but not thread-safe (Sync)
+            assert_impl_all!(RawBlindPoolBuilder: Send);
+            assert_not_impl_any!(RawBlindPoolBuilder: Sync);
+
+            // RawPooled<T> should be thread-mobile (Send) but not thread-safe (Sync)
+            // regardless of T's auto traits, as the handle itself is designed to be
+            // moved between threads but not shared simultaneously
+            assert_impl_all!(RawPooled<u32>: Send);
+            assert_not_impl_any!(RawPooled<u32>: Sync);
+            
+            assert_impl_all!(RawPooled<String>: Send);
+            assert_not_impl_any!(RawPooled<String>: Sync);
+            
+            assert_impl_all!(RawPooled<Vec<u8>>: Send);
+            assert_not_impl_any!(RawPooled<Vec<u8>>: Sync);
+            
+            // Even with non-Send/Sync types, RawPooled should be Send but not Sync
+            use std::rc::Rc;
+            assert_impl_all!(RawPooled<Rc<u32>>: Send);
+            assert_not_impl_any!(RawPooled<Rc<u32>>: Sync);
+
+            use std::cell::RefCell;
+            assert_impl_all!(RawPooled<RefCell<u32>>: Send);
+            assert_not_impl_any!(RawPooled<RefCell<u32>>: Sync);
+
+            // Type-erased handles should also be Send but not Sync
+            assert_impl_all!(RawPooled<()>: Send);
+            assert_not_impl_any!(RawPooled<()>: Sync);
+        }
     }
 }

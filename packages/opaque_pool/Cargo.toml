@@ -20,6 +20,7 @@ new_zealand = { workspace = true }
 alloc_tracker = { workspace = true }
 criterion = { workspace = true }
 mutants = { workspace = true }
+static_assertions = { workspace = true }
 
 [lints]
 workspace = true

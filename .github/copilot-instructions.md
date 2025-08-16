@@ -543,7 +543,7 @@ Do not use `version = "1.2.3"` or `workspace = true` when adding a package from 
 
 Use `static_assertions::assert_impl_all!` and `static_assertions::assert_not_impl_any!` to check
 for the presence or absence of auto traits where the API documentation makes claims about them,
-for example in terms of being thread-mobile (Send), thread-safe (Send + Sync)
+for example in terms of being thread-mobile (Send + !Sync), thread-safe (Send + Sync)
 or single-threaded (neither).
 
 If generic type parameters are involved, these assertions should use some randomly selected typical

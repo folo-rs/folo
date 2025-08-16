@@ -203,3 +203,38 @@ impl Default for BlindPool {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+    use super::BlindPool;
+    use crate::Pooled;
+
+    #[test]
+    fn thread_safety_assertions() {
+        // BlindPool should be thread-safe - it can be moved between threads and shared between threads
+        assert_impl_all!(BlindPool: Send, Sync);
+
+        // Pooled<T> should be Send if T is Send, because it uses Arc internally
+        // and the pool provides thread safety
+        assert_impl_all!(Pooled<u32>: Send);
+        assert_impl_all!(Pooled<String>: Send);
+        assert_impl_all!(Pooled<Vec<u8>>: Send);
+
+        // Pooled<T> should be Sync if T is Sync, because multiple threads can safely
+        // access the same Pooled<T> instance when T is Sync
+        assert_impl_all!(Pooled<u32>: Sync);
+        assert_impl_all!(Pooled<String>: Sync);
+        assert_impl_all!(Pooled<Vec<u8>>: Sync);
+
+        // Pooled<T> should NOT be Send/Sync if T is not Send/Sync
+        use std::rc::Rc;
+        assert_not_impl_any!(Pooled<Rc<u32>>: Send);
+        assert_not_impl_any!(Pooled<Rc<u32>>: Sync);
+
+        use std::cell::RefCell;
+        assert_impl_all!(Pooled<RefCell<u32>>: Send); // RefCell is Send but not Sync
+        assert_not_impl_any!(Pooled<RefCell<u32>>: Sync);
+    }
+}

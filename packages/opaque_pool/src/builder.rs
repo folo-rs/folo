@@ -1,4 +1,6 @@
 use std::alloc::Layout;
+use std::cell::Cell;
+use std::marker::PhantomData;
 
 use crate::{DropPolicy, OpaquePool};
 
@@ -9,6 +11,10 @@ use crate::{DropPolicy, OpaquePool};
 /// a layout based on the provided type.
 ///
 /// The layout is mandatory, whereas other settings are optional.
+///
+/// The builder is thread-mobile ([`Send`]) and can be safely transferred between threads,
+/// allowing pool configuration to happen on different threads than where the pool is used.
+/// However, it is not thread-safe ([`Sync`]) as it contains mutable configuration state.
 ///
 /// # Examples
 ///
@@ -29,6 +35,8 @@ use crate::{DropPolicy, OpaquePool};
 pub struct OpaquePoolBuilder {
     item_layout: Option<Layout>,
     drop_policy: DropPolicy,
+    // Prevents Sync while allowing Send - builders are thread-mobile but not thread-safe
+    _not_sync: PhantomData<Cell<()>>,
 }
 
 impl OpaquePoolBuilder {
@@ -36,6 +44,7 @@ impl OpaquePoolBuilder {
         Self {
             item_layout: None,
             drop_policy: DropPolicy::default(),
+            _not_sync: PhantomData,
         }
     }
 

@@ -1,3 +1,6 @@
+use std::cell::Cell;
+use std::marker::PhantomData;
+
 use crate::{BlindPool, DropPolicy, RawBlindPool};
 
 /// Builder for creating an instance of [`BlindPool`].
@@ -18,16 +21,25 @@ use crate::{BlindPool, DropPolicy, RawBlindPool};
 ///     .drop_policy(DropPolicy::MustNotDropItems)
 ///     .build();
 /// ```
+/// 
+/// # Thread safety
+///
+/// The builder is thread-mobile ([`Send`]) and can be safely transferred between threads,
+/// allowing pool configuration to happen on different threads than where the pool is used.
+/// However, it is not thread-safe ([`Sync`]) as it contains mutable configuration state.
 #[derive(Debug)]
 #[must_use]
 pub struct BlindPoolBuilder {
     drop_policy: DropPolicy,
+    // Prevents Sync while allowing Send - builders are thread-mobile but not thread-safe
+    _not_sync: PhantomData<Cell<()>>,
 }
 
 impl BlindPoolBuilder {
     pub(crate) fn new() -> Self {
         Self {
             drop_policy: DropPolicy::default(),
+            _not_sync: PhantomData,
         }
     }
 
@@ -67,5 +79,19 @@ impl BlindPoolBuilder {
     #[must_use]
     pub fn build(self) -> BlindPool {
         BlindPool::from(RawBlindPool::new_inner(self.drop_policy))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+    use super::BlindPoolBuilder;
+
+    #[test]
+    fn thread_mobility_assertions() {
+        // BlindPoolBuilder should be thread-mobile (Send) but not thread-safe (Sync)
+        assert_impl_all!(BlindPoolBuilder: Send);
+        assert_not_impl_any!(BlindPoolBuilder: Sync);
     }
 }

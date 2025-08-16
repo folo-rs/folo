@@ -21,7 +21,7 @@ fn generate_pool_id() -> u64 {
 /// The pool returns a [`Pooled<T>`] for each inserted value, which acts as a super-powered
 /// pointer that can be copied and cloned freely. Each handle provides direct access to the
 /// inserted item via a pointer.
-///
+/// 
 /// # Out of band access
 ///
 /// The collection does not create or keep references to the memory blocks. The only way to access
@@ -59,6 +59,10 @@ fn generate_pool_id() -> u64 {
 /// // Remove the value from the pool. This invalidates the pointer and drops the value.
 /// pool.remove(pooled);
 /// ```
+/// # Thread safety
+///
+/// The pool is thread-mobile ([`Send`]) and can be moved between threads, but it is not
+/// thread-safe ([`Sync`]) and cannot be shared between threads without additional synchronization.
 #[derive(Debug)]
 pub struct OpaquePool {
     /// We need to uniquely identify each pool to ensure that handles are not returned to the
@@ -653,6 +657,12 @@ impl OpaquePool {
 /// // To remove and drop an item, any handle can be returned to the pool.
 /// pool.remove(pooled);
 /// ```
+/// 
+/// # Thread safety
+/// 
+/// The handle is thread-mobile ([`Send`]) and can be moved between threads, but it is not
+/// thread-safe ([`Sync`]) and cannot be shared between threads without additional synchronization.
+/// This applies regardless of whether the stored type `T` is thread-safe.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct Pooled<T: ?Sized> {
@@ -798,6 +808,17 @@ impl ItemCoordinates {
         }
     }
 }
+
+// SAFETY: OpaquePool contains raw pointers but they are used purely for memory management
+// within the pool's owned allocations. The pool does not share these pointers with other
+// threads and does not rely on thread-local state. Moving the pool between threads is safe.
+unsafe impl Send for OpaquePool {}
+
+// SAFETY: Pooled<T> acts like a raw pointer handle and can be safely moved between threads.
+// The handle itself contains only data (pool ID, coordinates, and pointer) and can be
+// transferred between threads. Accessing the pointed-to data still requires unsafe code
+// and proper synchronization by the user.
+unsafe impl<T: ?Sized> Send for Pooled<T> {}
 
 #[cfg(test)]
 #[allow(
@@ -1549,5 +1570,28 @@ mod tests {
         }
 
         pool.remove(pooled);
+    }
+
+    #[cfg(test)]
+    mod static_assertions {
+        use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+        use super::{OpaquePool, Pooled};
+        use crate::OpaquePoolBuilder;
+
+        #[test]
+        fn thread_safety_assertions() {
+            // OpaquePool should be thread-mobile (Send) but not thread-safe (Sync)
+            assert_impl_all!(OpaquePool: Send);
+            assert_not_impl_any!(OpaquePool: Sync);
+
+            // OpaquePoolBuilder should be thread-mobile (Send) but not thread-safe (Sync)
+            assert_impl_all!(OpaquePoolBuilder: Send);
+            assert_not_impl_any!(OpaquePoolBuilder: Sync);
+
+            // Pooled<T> should be thread-mobile (Send) but not thread-safe (Sync)
+            assert_impl_all!(Pooled<()>: Send);
+            assert_not_impl_any!(Pooled<()>: Sync);
+        }
     }
 }

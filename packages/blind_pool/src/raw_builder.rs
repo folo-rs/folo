@@ -1,9 +1,16 @@
+use std::cell::Cell;
+use std::marker::PhantomData;
+
 use crate::{DropPolicy, RawBlindPool};
 
 /// Builder for creating an instance of [`RawBlindPool`].
 ///
 /// This builder allows configuration of pool behavior before creation.
 /// Creates a raw pool for manual resource management.
+///
+/// The builder is thread-mobile ([`Send`]) and can be safely transferred between threads,
+/// allowing pool configuration to happen on different threads than where the pool is used.
+/// However, it is not thread-safe ([`Sync`]) as it contains mutable configuration state.
 ///
 /// # Examples
 ///
@@ -22,12 +29,15 @@ use crate::{DropPolicy, RawBlindPool};
 #[must_use]
 pub struct RawBlindPoolBuilder {
     drop_policy: DropPolicy,
+    // Prevents Sync while allowing Send - builders are thread-mobile but not thread-safe
+    _not_sync: PhantomData<Cell<()>>,
 }
 
 impl RawBlindPoolBuilder {
     pub(crate) fn new() -> Self {
         Self {
             drop_policy: DropPolicy::default(),
+            _not_sync: PhantomData,
         }
     }
 

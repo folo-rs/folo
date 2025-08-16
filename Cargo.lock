@@ -192,6 +192,7 @@ dependencies = [
  "mutants",
  "opaque_pool",
  "paste",
+ "static_assertions",
 ]
 
 [[package]]
@@ -1044,6 +1045,7 @@ dependencies = [
  "criterion",
  "mutants",
  "new_zealand",
+ "static_assertions",
 ]
 
 [[package]]
