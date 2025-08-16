@@ -50,7 +50,7 @@ impl From<RawBlindPool> for LocalBlindPool {
     /// // Create a configured raw pool.
     /// let raw_pool = RawBlindPool::builder()
     ///     .drop_policy(DropPolicy::MayDropItems)
-    ///     .build_raw();
+    ///     .build();
     ///
     /// // Convert to local pool.
     /// let pool = LocalBlindPool::from(raw_pool);

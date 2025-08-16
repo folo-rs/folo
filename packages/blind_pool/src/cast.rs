@@ -58,7 +58,7 @@
 /// use std::future::Future;
 ///
 /// // Define a trait alias for complex bounds.
-/// trait UnitFuture: Future<Output = ()> + Send {}
+/// pub trait UnitFuture: Future<Output = ()> + Send {}
 /// impl<T> UnitFuture for T where T: Future<Output = ()> + Send {}
 ///
 /// // Define cast using the trait alias.

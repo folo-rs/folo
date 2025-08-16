@@ -1,39 +1,46 @@
-//! Trait object usage with `BlindPool`.
+//! Trait object usage with `BlindPool` using the macro-based approach.
 //!
-//! This example demonstrates how to use trait objects with `BlindPool`, showing:
-//! * Storing a concrete type in the pool
-//! * **IMPORTANT**: Creating trait object references requires using `ptr().as_ref()` -
-//!   the deref trait cannot be used for trait object conversion
-//! * Converting references to trait object references
-//! * Using trait methods on pooled items
+//! This example demonstrates the preferred way to work with trait objects:
+//! using the `define_pooled_dyn_cast!` macro for type-safe trait object conversion.
 
-use blind_pool::BlindPool;
+use blind_pool::{BlindPool, define_pooled_dyn_cast};
+use std::fmt::Display;
 
-// Define a trait for our content.
-trait MediaContent {
+// Enable casting to Display trait objects
+define_pooled_dyn_cast!(Display);
+
+/// A trait for content that can be played as media.
+pub trait MediaContent {
+    /// Play the media content and return a playback message.
     fn play(&self) -> String;
+
+    /// Get the duration of the content in seconds.
     fn duration_seconds(&self) -> u32;
+
+    /// Get the title of the content.
     fn title(&self) -> &str;
 }
 
-// Define another trait for content that can be rated.
-trait Ratable {
-    fn get_rating(&self) -> f32;
-    fn set_rating(&mut self, rating: f32);
-}
+// Enable casting to MediaContent trait objects
+define_pooled_dyn_cast!(MediaContent);
 
-// A media type.
+// A media type that implements both Display and MediaContent.
 #[derive(Debug)]
 struct Song {
     title: String,
     artist: String,
     duration_seconds: u32,
-    rating: f32,
+}
+
+impl Display for Song {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "'{}' by {}", self.title, self.artist)
+    }
 }
 
 impl MediaContent for Song {
     fn play(&self) -> String {
-        format!("🎵 Now playing: '{}' by {}", self.title, self.artist)
+        format!("🎵 Now playing: {self}")
     }
 
     fn duration_seconds(&self) -> u32 {
@@ -45,17 +52,12 @@ impl MediaContent for Song {
     }
 }
 
-impl Ratable for Song {
-    fn get_rating(&self) -> f32 {
-        self.rating
-    }
-
-    fn set_rating(&mut self, rating: f32) {
-        self.rating = rating.clamp(0.0, 5.0);
-    }
+// Function that works with Display trait objects.
+fn show_info(item: &dyn Display) {
+    println!("Info: {item}");
 }
 
-// Function that works with any MediaContent trait object.
+// Function that works with MediaContent trait objects.
 #[expect(
     clippy::integer_division,
     reason = "Time formatting requires integer division"
@@ -64,108 +66,63 @@ fn play_media(content: &dyn MediaContent) {
     println!("{}", content.play());
     let duration = content.duration_seconds();
     println!("Duration: {}:{:02}", duration / 60, duration % 60);
-    println!();
-}
-
-// Function that modifies rating via mutable trait objects.
-fn rate_content(content: &mut dyn Ratable, new_rating: f32) {
-    let old_rating = content.get_rating();
-    content.set_rating(new_rating);
-    println!(
-        "Rating updated: {:.1} → {:.1}",
-        old_rating,
-        content.get_rating()
-    );
+    println!("Title: {}", content.title());
 }
 
 fn main() {
-    println!("BlindPool Trait Object Example");
-    println!("==============================");
-    println!();
+    println!("BlindPool Trait Object Example (Macro-based)");
+    println!("============================================");
 
-    // Create a blind pool using the builder pattern.
-    // BlindPool provides automatic resource management and is the recommended choice.
-    let media_pool = BlindPool::builder().build();
+    // Create a pool.
+    let pool = BlindPool::new();
 
-    println!("Creating a multimedia library...");
-    println!();
-
-    // Insert a song into the pool.
+    // Insert different types that implement Display.
     let song = Song {
         title: "Bohemian Rhapsody".to_string(),
         artist: "Queen".to_string(),
-        duration_seconds: 354,
-        rating: 4.8,
+        duration_seconds: 355,
     };
+    let number = 42_u32;
+    let text = "Hello, World!".to_string();
 
-    let song_handle = media_pool.insert(song);
+    let song_handle = pool.insert(song);
+    let number_handle = pool.insert(number);
+    let text_handle = pool.insert(text);
 
-    println!("Added song to the media pool");
-    println!("Pool length: {}", media_pool.len());
-    println!();
+    println!("Inserted items into pool");
 
-    // Example 1: Use media content via trait objects.
-    // CRITICAL: Must use ptr().as_ref() to create trait object references!
-    // The deref trait (*song_handle) cannot be used for trait object conversion.
-    println!("Example 1: Playing media content");
-    println!("--------------------------------");
+    println!("\n=== Using Display trait objects ===");
+    // Cast to Display trait objects using the macro (requires exclusive ownership).
+    let song_display = song_handle.cast_display();
+    show_info(&*song_display);
 
-    // SAFETY: The pointer is valid and points to a Song that we inserted.
-    unsafe {
-        let song_ref: &Song = song_handle.ptr().as_ref();
-        let media: &dyn MediaContent = song_ref;
-        play_media(media);
-    }
+    let number_display = number_handle.cast_display();
+    show_info(&*number_display);
 
-    // Example 2: Modify rating via mutable trait objects.
-    // Again, we must use ptr().as_mut() to create mutable trait object references.
-    println!("Example 2: Updating rating");
-    println!("-------------------------");
+    let text_display = text_handle.cast_display();
+    show_info(&*text_display);
 
-    // SAFETY: The pointer is valid and points to a Song that we inserted.
-    unsafe {
-        let song_ref: &mut Song = song_handle.ptr().as_mut();
-        let ratable: &mut dyn Ratable = song_ref;
-        print!("Song rating: ");
-        rate_content(ratable, 5.0);
-    }
-
-    println!();
-
-    // Example 3: Using multiple trait objects on the same item.
-    println!("Example 3: Multiple trait objects");
-    println!("---------------------------------");
-
-    // SAFETY: The pointer is valid and points to a Song that we inserted.
-    unsafe {
-        let song_ref: &Song = song_handle.ptr().as_ref();
-        let media: &dyn MediaContent = song_ref;
-        println!("Title: {}", media.title());
-    }
-
-    // SAFETY: The pointer is valid and points to a Song that we inserted.
-    let rating = unsafe {
-        let song_ref: &Song = song_handle.ptr().as_ref();
-        let ratable: &dyn Ratable = song_ref;
-        ratable.get_rating()
+    println!("\n=== Using MediaContent trait objects ===");
+    // Need to re-insert the song to cast to MediaContent since we consumed it above.
+    let another_song = Song {
+        title: "We Will Rock You".to_string(),
+        artist: "Queen".to_string(),
+        duration_seconds: 122,
     };
-    println!("Rating: {rating:.1}/5.0");
+    let song_handle2 = pool.insert(another_song);
+    let song_media = song_handle2.cast_media_content();
+    play_media(&*song_media);
 
-    println!();
+    println!("\n=== Storing trait objects in collections ===");
+    let display_items: Vec<&dyn Display> = vec![
+        &*number_display,
+        &*text_display,
+    ];
 
-    // Clean up happens automatically when the handle is dropped.
-    // With BlindPool, you get automatic resource management!
-    drop(song_handle);
+    for (i, item) in display_items.iter().enumerate() {
+        println!("{i}: {item}");
+    }
 
-    println!("Pool is now empty: {}", media_pool.is_empty());
-
-    println!();
-    println!("Example completed successfully!");
-    println!();
-    println!("Key insights:");
-    println!("- BlindPool provides automatic resource management (recommended)");
-    println!("- To create trait objects, you MUST use ptr().as_ref() or ptr().as_mut()");
-    println!("- The deref trait (*handle) cannot be used for trait object conversion");
-    println!("- Multiple traits can be used via separate trait object references");
-    println!("- The caller must track the concrete type of each pooled item");
+    println!("\nPool length: {}", pool.len());
+    println!("All trait objects preserve reference counting!");
 }

@@ -58,7 +58,7 @@ impl From<RawBlindPool> for BlindPool {
     /// // Create a configured raw pool.
     /// let raw_pool = RawBlindPool::builder()
     ///     .drop_policy(DropPolicy::MayDropItems)
-    ///     .build_raw();
+    ///     .build();
     ///
     /// // Convert to pool.
     /// let pool = BlindPool::from(raw_pool);
