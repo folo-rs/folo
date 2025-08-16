@@ -55,7 +55,6 @@ pub fn panic_on_next_alloc(enabled: bool) {
 
 /// Checks if panic-on-next-allocation is enabled and panics if so, automatically resetting the flag.
 /// This is called before any allocation operation to implement the one-shot panic behavior.
-#[inline]
 fn check_and_panic_if_enabled() {
     // Check if we should panic on this allocation and reset flag if so
     #[expect(
@@ -69,7 +68,6 @@ fn check_and_panic_if_enabled() {
 
 /// Updates allocation tracking counters for the given size.
 /// This tracks both global and thread-local allocation statistics.
-#[inline]
 fn track_allocation(size: usize) {
     let size_u64 = size.try_into().expect("usize always fits into u64");
 
@@ -112,6 +110,7 @@ impl Allocator<std::alloc::System> {
     /// This is a convenience method for the common case of wanting to track
     /// allocations without changing the underlying allocation strategy.
     #[must_use]
+    #[inline]
     pub const fn system() -> Self {
         Self {
             inner: std::alloc::System,
@@ -125,6 +124,7 @@ impl<A: GlobalAlloc> Allocator<A> {
     /// The resulting allocator will have the same performance and behavior characteristics
     /// as the underlying allocator, with the addition of allocation tracking capabilities.
     #[must_use]
+    #[inline]
     pub const fn new(allocator: A) -> Self {
         Self { inner: allocator }
     }
@@ -133,6 +133,7 @@ impl<A: GlobalAlloc> Allocator<A> {
 // SAFETY: We delegate all allocation operations to the underlying allocator,
 // which already implements GlobalAlloc safely, while adding tracking functionality.
 unsafe impl<A: GlobalAlloc> GlobalAlloc for Allocator<A> {
+    #[inline]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         check_and_panic_if_enabled();
         track_allocation(layout.size());
@@ -141,11 +142,13 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Allocator<A> {
         unsafe { self.inner.alloc(layout) }
     }
 
+    #[inline]
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         // SAFETY: We forward the call to the underlying allocator which implements GlobalAlloc.
         unsafe { self.inner.dealloc(ptr, layout) }
     }
 
+    #[inline]
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         check_and_panic_if_enabled();
         track_allocation(layout.size());
@@ -154,6 +157,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Allocator<A> {
         unsafe { self.inner.alloc_zeroed(layout) }
     }
 
+    #[inline]
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         check_and_panic_if_enabled();
         track_allocation(new_size);
