@@ -28,11 +28,13 @@ fn main() {
     // Thread-safe sharing.
     let pool_clone = pool.clone();
     let number_clone = number;
-    
+
     std::thread::spawn(move || {
         println!("From thread: {}", *number_clone);
         let _from_thread = pool_clone.insert(99_i32);
-    }).join().unwrap();
+    })
+    .join()
+    .unwrap();
 
     println!("Pool length: {}", pool.len());
 

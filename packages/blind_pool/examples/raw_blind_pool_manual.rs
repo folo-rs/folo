@@ -23,7 +23,7 @@ fn main() {
     let text_ref = unsafe { text.ptr().as_ref() };
     // SAFETY: Pointer is valid and contains the value we just inserted.
     let list_ref = unsafe { list.ptr().as_ref() };
-    
+
     println!("Number: {number_val}");
     println!("Text: {text_ref}");
     println!("List: {list_ref:?}");

@@ -108,10 +108,7 @@ fn main() {
     play_media(&*song_media);
 
     println!("\n=== Storing trait objects in collections ===");
-    let display_items: Vec<&dyn Display> = vec![
-        &*number_display,
-        &*text_display,
-    ];
+    let display_items: Vec<&dyn Display> = vec![&*number_display, &*text_display];
 
     for (i, item) in display_items.iter().enumerate() {
         println!("{i}: {item}");

@@ -1,5 +1,6 @@
 use std::alloc::Layout;
 use std::ptr::NonNull;
+use std::thread;
 
 use foldhash::{HashMap, HashMapExt};
 use opaque_pool::{DropPolicy, OpaquePool, Pooled as OpaquePooled};
@@ -137,7 +138,8 @@ impl RawBlindPool {
                 .build()
         });
 
-        // SAFETY: T matches the layout used to create the internal pool.
+        // SAFETY: The internal pool was created with the same layout as T, ensuring
+        // that T's size and alignment requirements are satisfied by the pool's allocation strategy.
         let pooled = unsafe { internal_pool.insert(value) };
 
         RawPooled { layout, pooled }
@@ -250,7 +252,8 @@ impl RawBlindPool {
     ///
     /// The pool may reserve more space to speculatively avoid frequent reallocations.
     /// After calling `reserve_for`, the capacity for type `T` will be greater than or equal to
-    /// the current count of `T` items plus `additional`. Does nothing if capacity is already sufficient.
+    /// the current count of `T` items plus `additional`. Does nothing if capacity is already
+    /// sufficient.
     ///
     /// If no items of type `T` have been inserted yet, this creates an internal pool for type `T`
     /// and reserves the requested capacity.
@@ -332,7 +335,7 @@ impl Default for RawBlindPool {
 
 impl Drop for RawBlindPool {
     fn drop(&mut self) {
-        if matches!(self.drop_policy, DropPolicy::MustNotDropItems) && !std::thread::panicking() {
+        if matches!(self.drop_policy, DropPolicy::MustNotDropItems) && !thread::panicking() {
             assert!(
                 self.is_empty(),
                 "BlindPool dropped while still containing items (drop policy is MustNotDropItems)"
@@ -468,7 +471,8 @@ impl<T: ?Sized> RawPooled<T> {
     /// let value_handle = pool.insert(42_u64);
     ///
     /// // Cast to trait object.
-    /// let display_handle: blind_pool::RawPooled<dyn Display> = value_handle.cast_dyn_with_fn(|x| x as &dyn Display);
+    /// let display_handle: blind_pool::RawPooled<dyn Display> =
+    ///     value_handle.cast_dyn_with_fn(|x| x as &dyn Display);
     ///
     /// // Can access as Display trait object.
     /// // SAFETY: The pointer is valid and contains a u64 which implements Display.
@@ -483,21 +487,24 @@ impl<T: ?Sized> RawPooled<T> {
         F: FnOnce(&T) -> &U,
     {
         // Get a reference to perform the cast and obtain the trait object pointer
-        // SAFETY: The pointer is valid as we own this RawPooled.
+        // SAFETY: We own this RawPooled, guaranteeing exclusive access to a valid,
+        // initialized value of type T.
         let value_ref = unsafe { self.ptr().as_ref() };
 
         // Use the provided function to perform the cast - this ensures type safety
         let trait_ref: &U = cast_fn(value_ref);
         let trait_ptr: *const U = trait_ref;
-        // SAFETY: The reference is valid and we're just changing the constness to create a NonNull.
+        // SAFETY: The trait_ref is a valid reference that we just obtained, so the pointer
+        // is non-null and properly aligned.
         let trait_non_null = unsafe { NonNull::new_unchecked(trait_ptr.cast_mut()) };
 
         // Extract the components from the existing pooled handle
         let (pool_id, coordinates, _ptr) = self.pooled.into_raw_parts();
 
         // Create a new opaque pool handle with the trait object type
-        // SAFETY: We are transferring ownership from the original pooled handle to the new one
-        // with the same pool_id and coordinates but different pointer type.
+        // SAFETY: We extracted these components from a valid pooled handle, ensuring the
+        // pool_id and coordinates are valid for the same underlying allocation. The
+        // trait_non_null points to the same memory location.
         let trait_opaque_pooled =
             unsafe { opaque_pool::Pooled::from_raw_parts(pool_id, coordinates, trait_non_null) };
 
@@ -684,13 +691,15 @@ mod tests {
         // Current state: 1 u32 item, some f64 capacity
         let current_u32_count = 1; // We know we have 1 u32
 
-        // Reserve additional space for u32 specifically - should ensure capacity for current + additional
+        // Reserve additional space for u32 specifically - should ensure capacity for
+        // current + additional
         pool.reserve_for::<u32>(10);
         assert!(pool.capacity_of::<u32>() >= current_u32_count + 10);
 
         // f64 capacity should be unaffected by u32 reserve
         let f64_capacity_before = pool.capacity_of::<f64>();
-        pool.reserve_for::<u32>(5); // Reserve again - if already sufficient, capacity shouldn't increase
+        // Reserve again - if already sufficient, capacity shouldn't increase
+        pool.reserve_for::<u32>(5);
         let f64_capacity_after = pool.capacity_of::<f64>();
         assert_eq!(f64_capacity_before, f64_capacity_after);
 

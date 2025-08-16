@@ -112,7 +112,7 @@ fn erase_with_multiple_references_works() {
 
     // Both handles should still work
     assert_eq!(*cloned_handle, 42);
-    
+
     // SAFETY: We know this contains a u64.
     let value = unsafe { erased.ptr().cast::<u64>().read() };
     assert_eq!(value, 42);
@@ -120,7 +120,7 @@ fn erase_with_multiple_references_works() {
     // Clean up - drop all handles to remove from pool
     drop(cloned_handle);
     drop(erased);
-    
+
     assert_eq!(pool.len(), 0);
 }
 

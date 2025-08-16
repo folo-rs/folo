@@ -1,3 +1,4 @@
+use std::fmt;
 use std::ops::Deref;
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -66,7 +67,7 @@ pub struct Pooled<T: ?Sized> {
 }
 
 /// Internal data structure that manages the lifetime of a pooled item.
-/// 
+///
 /// This is always type-erased to `()` and shared among all typed views of the same item.
 /// It ensures that the item is removed from the pool exactly once when all references are dropped.
 #[doc(hidden)]
@@ -176,7 +177,7 @@ impl<T: ?Sized> Pooled<T> {
     ///
     /// // Both handles are valid and refer to the same item.
     /// assert_eq!(*cloned_handle, 42);
-    /// 
+    ///
     /// // Can still access the raw pointer.
     /// // SAFETY: We know this contains a u64.
     /// let value = unsafe { erased.ptr().cast::<u64>().read() };
@@ -186,8 +187,9 @@ impl<T: ?Sized> Pooled<T> {
     pub fn erase(self) -> Pooled<()> {
         // Create a new erased handle sharing the same lifetime manager
         let erased_pooled = self.inner.pooled.erase();
-        let erased_inner = PooledInner::with_shared_lifetime(erased_pooled, Arc::clone(&self.inner.lifetime));
-        
+        let erased_inner =
+            PooledInner::with_shared_lifetime(erased_pooled, Arc::clone(&self.inner.lifetime));
+
         Pooled {
             inner: Arc::new(erased_inner),
         }
@@ -216,7 +218,8 @@ impl<T: ?Sized> Pooled<T> {
     /// let cloned_handle = value_handle.clone();
     ///
     /// // Cast to trait object while keeping the original handle via clone.
-    /// let display_handle: blind_pool::Pooled<dyn Display> = value_handle.cast_dyn_with_fn(|x| x as &dyn Display);
+    /// let display_handle: blind_pool::Pooled<dyn Display> =
+    ///     value_handle.cast_dyn_with_fn(|x| x as &dyn Display);
     ///
     /// // Both handles are valid and refer to the same item.
     /// assert_eq!(*cloned_handle, 42);
@@ -231,8 +234,9 @@ impl<T: ?Sized> Pooled<T> {
     {
         // Cast the RawPooled to the trait object using the provided function
         let cast_pooled = self.inner.pooled.cast_dyn_with_fn(cast_fn);
-        let cast_inner = PooledInner::with_shared_lifetime(cast_pooled, Arc::clone(&self.inner.lifetime));
-        
+        let cast_inner =
+            PooledInner::with_shared_lifetime(cast_pooled, Arc::clone(&self.inner.lifetime));
+
         Pooled {
             inner: Arc::new(cast_inner),
         }
@@ -289,8 +293,8 @@ impl<T: ?Sized> Deref for Pooled<T> {
     /// assert!(string_handle.starts_with("he"));
     /// ```
     fn deref(&self) -> &Self::Target {
-        // SAFETY: The pointer is valid as long as this Pooled exists.
-        // The Arc ensures that the underlying data remains alive.
+        // SAFETY: The pooled handle is valid and contains initialized memory of type T.
+        // The Arc reference count ensures the underlying pool data remains alive during access.
         unsafe { self.inner.pooled.ptr().as_ref() }
     }
 }
@@ -315,16 +319,16 @@ unsafe impl<T: Send> Send for Pooled<T> {}
 // for concurrent access when T is Sync, and other operations don't require exclusive access.
 unsafe impl<T: Sync> Sync for Pooled<T> {}
 
-impl<T: std::fmt::Debug> std::fmt::Debug for Pooled<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T: fmt::Debug> fmt::Debug for Pooled<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Pooled")
             .field("inner", &self.inner)
             .finish()
     }
 }
 
-impl<T: std::fmt::Debug> std::fmt::Debug for PooledInner<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T: fmt::Debug> fmt::Debug for PooledInner<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PooledInner")
             .field("pooled", &self.pooled)
             .field("lifetime", &self.lifetime)
@@ -332,8 +336,8 @@ impl<T: std::fmt::Debug> std::fmt::Debug for PooledInner<T> {
     }
 }
 
-impl std::fmt::Debug for PooledRef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for PooledRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PooledRef")
             .field("pooled", &self.pooled)
             .field("pool", &self.pool)

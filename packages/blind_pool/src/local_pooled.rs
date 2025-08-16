@@ -1,3 +1,4 @@
+use std::fmt;
 use std::ops::Deref;
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -38,7 +39,7 @@ pub struct LocalPooled<T: ?Sized> {
 }
 
 /// Internal data structure that manages the lifetime of a locally pooled item.
-/// 
+///
 /// This is always type-erased to `()` and shared among all typed views of the same item.
 /// It ensures that the item is removed from the pool exactly once when all references are dropped.
 #[doc(hidden)]
@@ -149,7 +150,7 @@ impl<T: ?Sized> LocalPooled<T> {
     ///
     /// // Both handles are valid and refer to the same item.
     /// assert_eq!(*cloned_handle, 42);
-    /// 
+    ///
     /// // Can still access the raw pointer.
     /// // SAFETY: We know this contains a u64.
     /// let value = unsafe { erased.ptr().cast::<u64>().read() };
@@ -159,8 +160,9 @@ impl<T: ?Sized> LocalPooled<T> {
     pub fn erase(self) -> LocalPooled<()> {
         // Create a new erased handle sharing the same lifetime manager
         let erased_pooled = self.inner.pooled.erase();
-        let erased_inner = LocalPooledInner::with_shared_lifetime(erased_pooled, Rc::clone(&self.inner.lifetime));
-        
+        let erased_inner =
+            LocalPooledInner::with_shared_lifetime(erased_pooled, Rc::clone(&self.inner.lifetime));
+
         LocalPooled {
             inner: Rc::new(erased_inner),
         }
@@ -197,8 +199,9 @@ impl<T: ?Sized> LocalPooled<T> {
     {
         // Cast the RawPooled to the trait object using the provided function
         let cast_pooled = self.inner.pooled.cast_dyn_with_fn(cast_fn);
-        let cast_inner = LocalPooledInner::with_shared_lifetime(cast_pooled, Rc::clone(&self.inner.lifetime));
-        
+        let cast_inner =
+            LocalPooledInner::with_shared_lifetime(cast_pooled, Rc::clone(&self.inner.lifetime));
+
         LocalPooled {
             inner: Rc::new(cast_inner),
         }
@@ -255,8 +258,8 @@ impl<T: ?Sized> Deref for LocalPooled<T> {
     /// assert!(string_handle.starts_with("he"));
     /// ```
     fn deref(&self) -> &Self::Target {
-        // SAFETY: The pointer is valid as long as this LocalPooled exists.
-        // The Rc ensures that the underlying data remains alive.
+        // SAFETY: The pooled handle is valid and contains initialized memory of type T.
+        // The Rc reference count ensures the underlying pool data remains alive during this access.
         unsafe { self.inner.pooled.ptr().as_ref() }
     }
 }
@@ -272,16 +275,16 @@ impl Drop for LocalPooledRef {
     }
 }
 
-impl<T: std::fmt::Debug> std::fmt::Debug for LocalPooled<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T: fmt::Debug> fmt::Debug for LocalPooled<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalPooled")
             .field("inner", &self.inner)
             .finish()
     }
 }
 
-impl<T: std::fmt::Debug> std::fmt::Debug for LocalPooledInner<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T: fmt::Debug> fmt::Debug for LocalPooledInner<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalPooledInner")
             .field("pooled", &self.pooled)
             .field("lifetime", &self.lifetime)
@@ -289,8 +292,8 @@ impl<T: std::fmt::Debug> std::fmt::Debug for LocalPooledInner<T> {
     }
 }
 
-impl std::fmt::Debug for LocalPooledRef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for LocalPooledRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalPooledRef")
             .field("pooled", &self.pooled)
             .field("pool", &self.pool)
