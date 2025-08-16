@@ -3,8 +3,9 @@
 //! This demonstrates the main `BlindPool` type with its automatic cleanup and thread safety,
 //! plus the powerful trait object functionality that makes blind pools unique.
 
-use blind_pool::{BlindPool, define_pooled_dyn_cast};
 use std::fmt::Display;
+
+use blind_pool::{BlindPool, define_pooled_dyn_cast};
 
 // Enable casting to Display trait objects
 define_pooled_dyn_cast!(Display);

@@ -31,8 +31,9 @@
 /// Basic trait casting:
 ///
 /// ```rust
-/// use blind_pool::{BlindPool, define_pooled_dyn_cast};
 /// use std::fmt::Display;
+///
+/// use blind_pool::{BlindPool, define_pooled_dyn_cast};
 ///
 /// // Define the cast operation.
 /// define_pooled_dyn_cast!(Display);
@@ -48,14 +49,17 @@
 ///     value: blind_pool::Pooled<dyn Display>,
 /// }
 ///
-/// let foo = Foo { value: display_pooled };
+/// let foo = Foo {
+///     value: display_pooled,
+/// };
 /// ```
 ///
 /// Complex trait bounds using trait aliases:
 ///
 /// ```rust
-/// use blind_pool::{BlindPool, define_pooled_dyn_cast};
 /// use std::future::Future;
+///
+/// use blind_pool::{BlindPool, define_pooled_dyn_cast};
 ///
 /// // Define a trait alias for complex bounds.
 /// pub trait UnitFuture: Future<Output = ()> + Send {}

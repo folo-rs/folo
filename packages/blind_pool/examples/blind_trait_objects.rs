@@ -3,8 +3,9 @@
 //! This example demonstrates the preferred way to work with trait objects:
 //! using the `define_pooled_dyn_cast!` macro for type-safe trait object conversion.
 
-use blind_pool::{BlindPool, define_pooled_dyn_cast};
 use std::fmt::Display;
+
+use blind_pool::{BlindPool, define_pooled_dyn_cast};
 
 // Enable casting to Display trait objects
 define_pooled_dyn_cast!(Display);

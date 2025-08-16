@@ -87,7 +87,7 @@ impl RawBlindPool {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::{RawBlindPool, DropPolicy};
+    /// use blind_pool::{DropPolicy, RawBlindPool};
     ///
     /// let pool = RawBlindPool::builder()
     ///     .drop_policy(DropPolicy::MustNotDropItems)
@@ -464,8 +464,9 @@ impl<T: ?Sized> RawPooled<T> {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::RawBlindPool;
     /// use std::fmt::Display;
+    ///
+    /// use blind_pool::RawBlindPool;
     ///
     /// let mut pool = RawBlindPool::new();
     /// let value_handle = pool.insert(42_u64);

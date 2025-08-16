@@ -1,6 +1,5 @@
 use std::fmt;
 use std::ops::Deref;
-use std::ptr::NonNull;
 use std::sync::Arc;
 
 use crate::{BlindPool, RawPooled};
@@ -16,9 +15,7 @@ use crate::{BlindPool, RawPooled};
 ///
 /// # Trait Objects
 ///
-/// **Important**: To downcast to a trait object, you must use [`ptr()`][Self::ptr]
-/// followed by [`as_ref()`][std::ptr::NonNull::as_ref] or [`as_mut()`][std::ptr::NonNull::as_mut].
-/// The [`Deref`] trait cannot be used for trait object conversion.
+/// You can convert to trait objects using the standard dereferencing approach:
 ///
 /// ```rust
 /// use blind_pool::BlindPool;
@@ -37,13 +34,9 @@ use crate::{BlindPool, RawPooled};
 /// let pool = BlindPool::new();
 /// let handle = pool.insert(MyStruct(42));
 ///
-/// // CORRECT: Use ptr().as_ref() for trait objects
-/// // SAFETY: The pointer is valid and contains the value we just inserted.
-/// let trait_ref: &dyn MyTrait = unsafe { handle.ptr().as_ref() };
+/// // Convert to trait object using standard dereferencing
+/// let trait_ref: &dyn MyTrait = &*handle;
 /// trait_ref.do_something();
-///
-/// // WRONG: This will not work for trait object conversion
-/// // let trait_ref: &dyn MyTrait = &*handle; // Compilation error!
 /// ```
 ///
 /// # Example
@@ -128,31 +121,6 @@ impl<T: ?Sized> Pooled<T> {
         }
     }
 
-    /// Returns a pointer to the inserted value.
-    ///
-    /// This provides direct access to the value stored in the pool. The caller must ensure
-    /// that Rust's aliasing rules are respected when using this pointer.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use blind_pool::BlindPool;
-    ///
-    /// let pool = BlindPool::new();
-    /// let value_handle = pool.insert(42_u64);
-    ///
-    /// let ptr = value_handle.ptr();
-    ///
-    /// // SAFETY: The pointer is valid and contains the value we just inserted.
-    /// let value = unsafe { ptr.read() };
-    /// assert_eq!(value, 42);
-    /// ```
-    #[must_use]
-    #[inline]
-    pub fn ptr(&self) -> NonNull<T> {
-        self.inner.pooled.ptr()
-    }
-
     /// Erases the type information from this [`Pooled<T>`] handle,
     /// returning a [`Pooled<()>`].
     ///
@@ -178,10 +146,9 @@ impl<T: ?Sized> Pooled<T> {
     /// // Both handles are valid and refer to the same item.
     /// assert_eq!(*cloned_handle, 42);
     ///
-    /// // Can still access the raw pointer.
-    /// // SAFETY: We know this contains a u64.
-    /// let value = unsafe { erased.ptr().cast::<u64>().read() };
-    /// assert_eq!(value, 42);
+    /// // The erased handle shares the same reference count.
+    /// drop(erased);
+    /// assert_eq!(*cloned_handle, 42); // Still accessible via typed handle.
     /// ```
     #[must_use]
     pub fn erase(self) -> Pooled<()> {
@@ -210,8 +177,9 @@ impl<T: ?Sized> Pooled<T> {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::BlindPool;
     /// use std::fmt::Display;
+    ///
+    /// use blind_pool::BlindPool;
     ///
     /// let pool = BlindPool::new();
     /// let value_handle = pool.insert(42_u64);

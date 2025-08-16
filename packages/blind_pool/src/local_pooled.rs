@@ -1,6 +1,5 @@
 use std::fmt;
 use std::ops::Deref;
-use std::ptr::NonNull;
 use std::rc::Rc;
 
 use crate::{LocalBlindPool, RawPooled};
@@ -101,31 +100,6 @@ impl<T: ?Sized> LocalPooled<T> {
         }
     }
 
-    /// Returns a pointer to the inserted value.
-    ///
-    /// This provides direct access to the value stored in the pool. The caller must ensure
-    /// that Rust's aliasing rules are respected when using this pointer.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use blind_pool::LocalBlindPool;
-    ///
-    /// let pool = LocalBlindPool::new();
-    /// let value_handle = pool.insert(42_u64);
-    ///
-    /// let ptr = value_handle.ptr();
-    ///
-    /// // SAFETY: The pointer is valid and contains the value we just inserted.
-    /// let value = unsafe { ptr.read() };
-    /// assert_eq!(value, 42);
-    /// ```
-    #[must_use]
-    #[inline]
-    pub fn ptr(&self) -> NonNull<T> {
-        self.inner.pooled.ptr()
-    }
-
     /// Erases the type information from this [`LocalPooled<T>`] handle,
     /// returning a [`LocalPooled<()>`].
     ///
@@ -151,10 +125,9 @@ impl<T: ?Sized> LocalPooled<T> {
     /// // Both handles are valid and refer to the same item.
     /// assert_eq!(*cloned_handle, 42);
     ///
-    /// // Can still access the raw pointer.
-    /// // SAFETY: We know this contains a u64.
-    /// let value = unsafe { erased.ptr().cast::<u64>().read() };
-    /// assert_eq!(value, 42);
+    /// // The erased handle shares the same reference count.
+    /// drop(erased);
+    /// assert_eq!(*cloned_handle, 42); // Still accessible via typed handle.
     /// ```
     #[must_use]
     pub fn erase(self) -> LocalPooled<()> {

@@ -8,7 +8,7 @@ use crate::{DropPolicy, RawBlindPool};
 /// # Examples
 ///
 /// ```
-/// use blind_pool::{RawBlindPool, DropPolicy};
+/// use blind_pool::{DropPolicy, RawBlindPool};
 ///
 /// // Default raw blind pool.
 /// let mut pool = RawBlindPool::builder().build();
@@ -37,7 +37,7 @@ impl RawBlindPoolBuilder {
     /// # Examples
     ///
     /// ```
-    /// use blind_pool::{RawBlindPool, DropPolicy};
+    /// use blind_pool::{DropPolicy, RawBlindPool};
     ///
     /// let mut pool = RawBlindPool::builder()
     ///     .drop_policy(DropPolicy::MustNotDropItems)

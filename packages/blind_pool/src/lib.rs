@@ -4,24 +4,22 @@
 //! It offers automatic memory management with stable memory addresses
 //! and efficient typed insertion with automatic value dropping.
 //!
-//! # Type-agnostic memory management
-//!
-//! The pool can store objects of any type with automatic resource management. For advanced
-//! use cases requiring manual memory management, use [`RawBlindPool`] instead.
+//! [`LocalBlindPool`] is a single-threaded variant with reduced overhead and [`RawBlindPool`]
+//! offers manual lifetime management for the most performance-sensitive scenarios.
 //!
 //! # Features
 //!
-//! - **Type-agnostic memory management**: Accepts any type.
-//! - **Automatic resource management**: Types handle cleanup automatically.
+//! - **Type-agnostic memory management**: The pool accepts objects of any sized type.
+//! - **Automatic resource management**: Pooled objects are dropped automatically when no longer
+//!   referenced.
 //! - **Thread-safe and single-threaded variants**: [`BlindPool`] for multi-threaded use,
 //!   [`LocalBlindPool`] for single-threaded performance.
-//! - **Stable addresses**: Memory addresses remain valid until explicitly removed.
-//! - **Automatic dropping**: Values are properly dropped when removed from the pool.
-//! - **Dynamic growth**: Pool capacity grows automatically as needed.
+//! - **Always pinned**: Memory address remains valid for the entire lifetime of a pooled object.
+//! - **Dynamic growth**: Pool capacity grows automatically as needed, shrinks to fit on-demand.
 //! - **Efficient allocation**: Uses high density slabs to minimize allocation overhead.
 //! - **Stable Rust**: No unstable Rust features required.
 //! - **Optional leak detection**: Pool can be configured to panic on drop if values are
-//!   still present.
+//!   still present (primarily relevant for [`RawBlindPool`]).
 //!
 //! # Example
 //!

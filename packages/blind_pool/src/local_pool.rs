@@ -45,7 +45,7 @@ impl From<RawBlindPool> for LocalBlindPool {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::{LocalBlindPool, RawBlindPool, DropPolicy};
+    /// use blind_pool::{DropPolicy, LocalBlindPool, RawBlindPool};
     ///
     /// // Create a configured raw pool.
     /// let raw_pool = RawBlindPool::builder()
@@ -91,7 +91,7 @@ impl LocalBlindPool {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::{LocalBlindPool, DropPolicy};
+    /// use blind_pool::{DropPolicy, LocalBlindPool};
     ///
     /// let pool = LocalBlindPool::builder()
     ///     .drop_policy(DropPolicy::MustNotDropItems)

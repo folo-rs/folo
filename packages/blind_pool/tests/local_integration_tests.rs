@@ -112,11 +112,9 @@ fn ptr_access() {
     let pool = LocalBlindPool::from(RawBlindPool::new());
 
     let value_handle = pool.insert(42_u64);
-    let ptr = value_handle.ptr();
 
-    // SAFETY: The pointer is valid and contains the value we just inserted.
-    let value = unsafe { ptr.read() };
-    assert_eq!(value, 42);
+    // Access the value directly through dereferencing
+    assert_eq!(*value_handle, 42);
 }
 
 #[test]
@@ -124,17 +122,17 @@ fn erase_type_information() {
     let pool = LocalBlindPool::from(RawBlindPool::new());
 
     let u64_handle = pool.insert(42_u64);
+    let typed_clone = u64_handle.clone();
     let erased = u64_handle.erase();
 
-    // Should still be able to access via pointer
-    // SAFETY: We know this contains a u64.
-    let value = unsafe { erased.ptr().cast::<u64>().read() };
-    assert_eq!(value, 42);
+    // Verify the typed handle still works
+    assert_eq!(*typed_clone, 42);
 
     // Pool should still contain the item
     assert_eq!(pool.len(), 1);
 
     drop(erased);
+    drop(typed_clone);
     assert_eq!(pool.len(), 0);
 }
 
@@ -151,14 +149,11 @@ fn erase_with_multiple_references_works() {
     // Both handles should still work
     assert_eq!(*cloned_handle, 42);
 
-    // SAFETY: We know this contains a u64.
-    let value = unsafe { erased.ptr().cast::<u64>().read() };
-    assert_eq!(value, 42);
-
-    // Clean up - drop all handles to remove from pool
-    drop(cloned_handle);
+    // Verify the erased handle is valid by ensuring cleanup works properly
     drop(erased);
+    assert_eq!(*cloned_handle, 42); // Typed handle should still work
 
+    drop(cloned_handle);
     assert_eq!(pool.len(), 0);
 }
 
@@ -190,6 +185,7 @@ fn works_with_single_byte_type() {
 }
 
 #[test]
+#[cfg(not(miri))] // Miri is too slow when running tests with large data sets
 fn large_number_of_items() {
     let pool = LocalBlindPool::from(RawBlindPool::new());
 

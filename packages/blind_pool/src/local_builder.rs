@@ -8,7 +8,7 @@ use crate::{DropPolicy, LocalBlindPool, RawBlindPool};
 /// # Examples
 ///
 /// ```
-/// use blind_pool::{LocalBlindPool, DropPolicy};
+/// use blind_pool::{DropPolicy, LocalBlindPool};
 ///
 /// // Default single-threaded blind pool.
 /// let pool = LocalBlindPool::builder().build();
@@ -37,7 +37,7 @@ impl LocalBlindPoolBuilder {
     /// # Examples
     ///
     /// ```
-    /// use blind_pool::{LocalBlindPool, DropPolicy};
+    /// use blind_pool::{DropPolicy, LocalBlindPool};
     ///
     /// let pool = LocalBlindPool::builder()
     ///     .drop_policy(DropPolicy::MustNotDropItems)

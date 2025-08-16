@@ -1,7 +1,8 @@
 //! Tests for the pooled dynamic cast functionality.
 
-use blind_pool::{BlindPool, LocalBlindPool, RawBlindPool, define_pooled_dyn_cast};
 use std::fmt::Display;
+
+use blind_pool::{BlindPool, LocalBlindPool, RawBlindPool, define_pooled_dyn_cast};
 
 // Define the cast operation for Display
 define_pooled_dyn_cast!(Display);

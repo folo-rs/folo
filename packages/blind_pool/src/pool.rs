@@ -24,6 +24,7 @@ use crate::{BlindPoolBuilder, Pooled, RawBlindPool, RawPooled};
 ///
 /// ```rust
 /// use std::thread;
+///
 /// use blind_pool::BlindPool;
 ///
 /// let pool = BlindPool::new();
@@ -53,7 +54,7 @@ impl From<RawBlindPool> for BlindPool {
     /// # Example
     ///
     /// ```rust
-    /// use blind_pool::{BlindPool, RawBlindPool, DropPolicy};
+    /// use blind_pool::{BlindPool, DropPolicy, RawBlindPool};
     ///
     /// // Create a configured raw pool.
     /// let raw_pool = RawBlindPool::builder()
