@@ -660,9 +660,10 @@ impl OpaquePool {
 /// 
 /// # Thread safety
 /// 
-/// The handle is thread-mobile ([`Send`]) and can be moved between threads, but it is not
-/// thread-safe ([`Sync`]) and cannot be shared between threads without additional synchronization.
-/// This applies regardless of whether the stored type `T` is thread-safe.
+/// This type is thread-safe ([`Send`] + [`Sync`]) if and only if `T` implements [`Sync`].
+/// When `T` is [`Sync`], multiple threads can safely share handles to the same data.
+/// When `T` is not [`Sync`], the handle is single-threaded and cannot be moved between threads
+/// or shared between threads, preventing unsafe access to non-thread-safe data.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct Pooled<T: ?Sized> {
@@ -809,16 +810,18 @@ impl ItemCoordinates {
     }
 }
 
-// SAFETY: OpaquePool contains raw pointers but they are used purely for memory management
-// within the pool's owned allocations. The pool does not share these pointers with other
-// threads and does not rely on thread-local state. Moving the pool between threads is safe.
+// SAFETY: OpaquePool can exist on any thread, as it does not reference any thread-specific data.
+// If a !Send item is inserted, the returned handle can only be used on the same thread, so that
+// item is bound to a single thread even if the pool itself is not.
 unsafe impl Send for OpaquePool {}
 
-// SAFETY: Pooled<T> acts like a raw pointer handle and can be safely moved between threads.
-// The handle itself contains only data (pool ID, coordinates, and pointer) and can be
-// transferred between threads. Accessing the pointed-to data still requires unsafe code
-// and proper synchronization by the user.
-unsafe impl<T: ?Sized> Send for Pooled<T> {}
+// SAFETY: Pooled<T> is just a fancy reference, so its thread-safety is entirely driven by the
+// underlying type T and the presence of the `Sync` auto trait on it.
+unsafe impl<T: ?Sized + Sync> Send for Pooled<T> {}
+
+// SAFETY: Pooled<T> is just a fancy reference, so its thread-safety is entirely driven by the
+// underlying type T and the presence of the `Sync` auto trait on it.
+unsafe impl<T: ?Sized + Sync> Sync for Pooled<T> {}
 
 #[cfg(test)]
 #[allow(
@@ -1589,9 +1592,17 @@ mod tests {
             assert_impl_all!(OpaquePoolBuilder: Send);
             assert_not_impl_any!(OpaquePoolBuilder: Sync);
 
-            // Pooled<T> should be thread-mobile (Send) but not thread-safe (Sync)
-            assert_impl_all!(Pooled<()>: Send);
-            assert_not_impl_any!(Pooled<()>: Sync);
+            // Pooled<T> should be Send+Sync if T is Sync, single-threaded otherwise
+            assert_impl_all!(Pooled<()>: Send, Sync); // () is Sync
+            assert_impl_all!(Pooled<u32>: Send, Sync); // u32 is Sync
+            assert_impl_all!(Pooled<String>: Send, Sync); // String is Sync
+
+            // Pooled<T> should be single-threaded when T is not Sync
+            use std::rc::Rc;
+            assert_not_impl_any!(Pooled<Rc<u32>>: Send, Sync); // Rc is not Sync
+
+            use std::cell::RefCell;
+            assert_not_impl_any!(Pooled<RefCell<u32>>: Send, Sync); // RefCell is not Sync
         }
     }
 }

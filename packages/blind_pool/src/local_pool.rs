@@ -190,3 +190,24 @@ impl Default for LocalBlindPool {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use static_assertions::assert_not_impl_any;
+
+    use super::LocalBlindPool;
+    use crate::LocalBlindPoolBuilder;
+
+    #[test]
+    fn single_threaded_assertions() {
+        // LocalBlindPool should NOT be Send or Sync - it's single-threaded only
+        assert_not_impl_any!(LocalBlindPool: Send);
+        assert_not_impl_any!(LocalBlindPool: Sync);
+
+        // LocalBlindPoolBuilder should be thread-mobile (Send) but not thread-safe (Sync),
+        // even though the pool it creates is single-threaded
+        use static_assertions::assert_impl_all;
+        assert_impl_all!(LocalBlindPoolBuilder: Send);
+        assert_not_impl_any!(LocalBlindPoolBuilder: Sync);
+    }
+}

@@ -8,10 +8,6 @@ use crate::{DropPolicy, LocalBlindPool, RawBlindPool};
 /// This builder allows configuration of pool behavior before creation.
 /// Creates a single-threaded blind pool with automatic resource management.
 ///
-/// The builder is thread-mobile ([`Send`]) and can be safely transferred between threads,
-/// allowing pool configuration to happen on different threads than where the pool is used.
-/// However, it is not thread-safe ([`Sync`]) as it contains mutable configuration state.
-///
 /// # Examples
 ///
 /// ```
@@ -25,10 +21,17 @@ use crate::{DropPolicy, LocalBlindPool, RawBlindPool};
 ///     .drop_policy(DropPolicy::MustNotDropItems)
 ///     .build();
 /// ```
+/// 
+/// # Thread safety
+///
+/// The builder is thread-mobile ([`Send`]) and can be safely transferred between threads,
+/// allowing pool configuration to happen on different threads than where the pool is used.
+/// However, it is not thread-safe ([`Sync`]) as it contains mutable configuration state.
 #[derive(Debug)]
 #[must_use]
 pub struct LocalBlindPoolBuilder {
     drop_policy: DropPolicy,
+    
     // Prevents Sync while allowing Send - builders are thread-mobile but not thread-safe
     _not_sync: PhantomData<Cell<()>>,
 }

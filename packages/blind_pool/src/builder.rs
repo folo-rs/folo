@@ -31,6 +31,7 @@ use crate::{BlindPool, DropPolicy, RawBlindPool};
 #[must_use]
 pub struct BlindPoolBuilder {
     drop_policy: DropPolicy,
+    
     // Prevents Sync while allowing Send - builders are thread-mobile but not thread-safe
     _not_sync: PhantomData<Cell<()>>,
 }

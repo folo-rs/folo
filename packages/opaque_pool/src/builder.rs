@@ -12,10 +12,6 @@ use crate::{DropPolicy, OpaquePool};
 ///
 /// The layout is mandatory, whereas other settings are optional.
 ///
-/// The builder is thread-mobile ([`Send`]) and can be safely transferred between threads,
-/// allowing pool configuration to happen on different threads than where the pool is used.
-/// However, it is not thread-safe ([`Sync`]) as it contains mutable configuration state.
-///
 /// # Examples
 ///
 /// ```
@@ -30,11 +26,18 @@ use crate::{DropPolicy, OpaquePool};
 /// // Using type-based layout.
 /// let pool = OpaquePool::builder().layout_of::<u64>().build();
 /// ```
+/// 
+/// # Thread safety
+///
+/// The builder is thread-mobile ([`Send`]) and can be safely transferred between threads,
+/// allowing pool configuration to happen on different threads than where the pool is used.
+/// However, it is not thread-safe ([`Sync`]) as it contains mutable configuration state.
 #[derive(Debug)]
 #[must_use]
 pub struct OpaquePoolBuilder {
     item_layout: Option<Layout>,
     drop_policy: DropPolicy,
+
     // Prevents Sync while allowing Send - builders are thread-mobile but not thread-safe
     _not_sync: PhantomData<Cell<()>>,
 }

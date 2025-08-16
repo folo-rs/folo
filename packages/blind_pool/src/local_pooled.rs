@@ -276,3 +276,31 @@ impl fmt::Debug for LocalPooledRef {
 
 // Explicitly ensure these types are NOT Send or Sync
 // by not implementing those traits.
+
+#[cfg(test)]
+mod tests {
+    use static_assertions::assert_not_impl_any;
+
+    use super::LocalPooled;
+
+    #[test]
+    fn single_threaded_assertions() {
+        // LocalPooled<T> should NOT be Send or Sync regardless of T's Send/Sync status
+        // because it uses Rc internally which is not Send/Sync
+        assert_not_impl_any!(LocalPooled<u32>: Send);
+        assert_not_impl_any!(LocalPooled<u32>: Sync);
+        assert_not_impl_any!(LocalPooled<String>: Send);
+        assert_not_impl_any!(LocalPooled<String>: Sync);
+        assert_not_impl_any!(LocalPooled<Vec<u8>>: Send);
+        assert_not_impl_any!(LocalPooled<Vec<u8>>: Sync);
+
+        // Even with non-Send/non-Sync types, LocalPooled should still not be Send/Sync
+        use std::rc::Rc;
+        assert_not_impl_any!(LocalPooled<Rc<u32>>: Send);
+        assert_not_impl_any!(LocalPooled<Rc<u32>>: Sync);
+
+        use std::cell::RefCell;
+        assert_not_impl_any!(LocalPooled<RefCell<u32>>: Send);
+        assert_not_impl_any!(LocalPooled<RefCell<u32>>: Sync);
+    }
+}
