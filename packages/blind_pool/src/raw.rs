@@ -60,7 +60,7 @@ pub struct RawBlindPool {
 impl RawBlindPool {
     /// Creates a new `RawBlindPool` with default configuration.
     ///
-    /// This is equivalent to [`RawBlindPool::builder().build_raw()`][RawBlindPool::builder].
+    /// For custom configuration, use [`RawBlindPool::builder()`][RawBlindPool::builder].
     ///
     /// # Example
     ///

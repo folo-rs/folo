@@ -60,6 +60,9 @@ impl BlindPoolBuilder {
     /// This is the default build method that creates a [`BlindPool`] with
     /// automatic resource management and thread safety.
     ///
+    /// For simple cases, prefer [`BlindPool::new()`] which is equivalent to
+    /// `BlindPool::builder().build()`.
+    ///
     /// # Examples
     ///
     /// ```

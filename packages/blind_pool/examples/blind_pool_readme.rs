@@ -1,24 +1,28 @@
-//! Concise example demonstrating all three blind pool variants.
+//! `BlindPool` README example showcasing key features.
 //!
-//! This shows `BlindPool` (automatic, thread-safe), `LocalBlindPool` (automatic, single-threaded),
-//! and `RawBlindPool` (manual management) with the essential features of each.
+//! This demonstrates the main `BlindPool` type with its automatic cleanup and thread safety,
+//! plus the powerful trait object functionality that makes blind pools unique.
 
-use blind_pool::{BlindPool, LocalBlindPool, RawBlindPool};
+use blind_pool::{BlindPool, define_pooled_dyn_cast};
+use std::fmt::Display;
+
+// Enable casting to Display trait objects
+define_pooled_dyn_cast!(Display);
 
 fn main() {
-    println!("=== BlindPool (Recommended) ===");
-    automatic_thread_safe();
+    println!("=== BlindPool: Basic Usage ===");
+    basic_usage();
 
-    println!("\n=== LocalBlindPool (Single-threaded) ===");
-    automatic_local();
+    println!("\n=== BlindPool: Trait Objects ===");
+    trait_object_usage();
 
-    println!("\n=== RawBlindPool (Manual) ===");
-    manual_management();
+    println!("\n=== Other Variants ===");
+    other_variants();
 }
 
-fn automatic_thread_safe() {
+fn basic_usage() {
     // Create pool with automatic cleanup and thread safety.
-    let pool = BlindPool::builder().build();
+    let pool = BlindPool::new();
 
     // Insert different types, get handles with automatic dereferencing.
     let u32_handle = pool.insert(42_u32);
@@ -27,37 +31,38 @@ fn automatic_thread_safe() {
     println!("Values: {} and '{}'", *u32_handle, *string_handle);
 
     // Clone handles freely - values stay alive.
-    let cloned = u32_handle.clone();
-    println!("Cloned handle: {}", *cloned);
-
-    // Raw pointer access when needed.
-    // SAFETY: Pointer is valid for inserted value.
-    let raw_value = unsafe { u32_handle.ptr().read() };
-    println!("Raw access: {raw_value}");
+    let cloned = u32_handle;
+    println!("Moved handle: {}", *cloned);
 
     // Automatic cleanup when handles are dropped.
 }
 
-fn automatic_local() {
-    // Single-threaded version with lower overhead.
-    let pool = LocalBlindPool::builder().build_local();
+fn trait_object_usage() {
+    let pool = BlindPool::new();
 
-    let handle = pool.insert(vec![1, 2, 3]);
-    println!("Vector length: {}", handle.len());
+    // Insert different types that implement Display
+    let int_handle = pool.insert(123_i32);
+    let float_handle = pool.insert(45.67_f64);
+    let string_handle = pool.insert("world".to_string());
 
-    // Same automatic cleanup, just not thread-safe.
+    // Cast to trait objects while preserving reference counting
+    let int_display = int_handle.cast_display();
+    let float_display = float_handle.cast_display();
+    let string_display = string_handle.cast_display();
+
+    // Use them uniformly through the trait
+    print_values(&[&*int_display, &*float_display, &*string_display]);
 }
 
-fn manual_management() {
-    // Manual control over cleanup timing.
-    let mut pool = RawBlindPool::builder().build_raw();
+fn print_values(values: &[&dyn Display]) {
+    println!("Displaying values:");
+    for (i, value) in values.iter().enumerate() {
+        println!("  {i}: {value}");
+    }
+}
 
-    let handle = pool.insert(99_u64);
-
-    // SAFETY: Pointer valid for inserted value.
-    let value = unsafe { handle.ptr().read() };
-    println!("Manual value: {value}");
-
-    // Must manually remove from pool.
-    pool.remove(handle);
+fn other_variants() {
+    println!("Also available:");
+    println!("  - LocalBlindPool::new() for single-threaded usage");
+    println!("  - RawBlindPool::new() for manual memory management");
 }

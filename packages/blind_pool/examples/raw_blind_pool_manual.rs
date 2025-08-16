@@ -10,8 +10,8 @@ fn main() {
     println!("RawBlindPool Manual Management Example");
     println!("=====================================");
 
-    // Create a new raw blind pool using the builder pattern.
-    let mut pool = RawBlindPool::builder().build_raw();
+    // Create a new raw blind pool.
+    let mut pool = RawBlindPool::new();
 
     println!();
     println!("Created empty RawBlindPool:");

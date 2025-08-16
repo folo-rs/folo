@@ -12,8 +12,8 @@ fn main() {
     println!("LocalBlindPool Single-Threaded Example");
     println!("======================================");
 
-    // Create a new local blind pool using the builder pattern.
-    let pool = LocalBlindPool::builder().build_local();
+    // Create a new local blind pool.
+    let pool = LocalBlindPool::new();
 
     println!();
     println!("Created empty LocalBlindPool:");
