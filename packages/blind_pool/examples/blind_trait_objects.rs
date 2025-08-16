@@ -92,8 +92,8 @@ fn main() {
     println!("Inserted items into pool");
 
     println!("\n=== Using Display trait objects ===");
-    // Cast to Display trait objects using the macro (requires exclusive ownership).
-    let song_display = song_handle.cast_display();
+    // Cast to Display trait objects using the macro.
+    let song_display = song_handle.clone().cast_display();
     show_info(&*song_display);
 
     let number_display = number_handle.cast_display();
@@ -103,14 +103,8 @@ fn main() {
     show_info(&*text_display);
 
     println!("\n=== Using MediaContent trait objects ===");
-    // Need to re-insert the song to cast to MediaContent since we consumed it above.
-    let another_song = Song {
-        title: "We Will Rock You".to_string(),
-        artist: "Queen".to_string(),
-        duration_seconds: 122,
-    };
-    let song_handle2 = pool.insert(another_song);
-    let song_media = song_handle2.cast_media_content();
+    // We can clone the handle and cast it to different trait objects.
+    let song_media = song_handle.cast_media_content();
     play_media(&*song_media);
 
     println!("\n=== Storing trait objects in collections ===");
