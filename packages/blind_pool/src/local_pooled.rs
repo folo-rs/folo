@@ -1,4 +1,3 @@
-use std::mem::ManuallyDrop;
 use std::ops::Deref;
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -38,14 +37,27 @@ pub struct LocalPooled<T: ?Sized> {
     inner: Rc<LocalPooledInner<T>>,
 }
 
-/// Internal data structure that contains the actual pooled item and keeps the pool alive.
-#[non_exhaustive]
-pub struct LocalPooledInner<T: ?Sized> {
-    /// The handle to the actual item in the pool.
-    pooled: RawPooled<T>,
+/// Internal data structure that manages the lifetime of a locally pooled item.
+/// 
+/// This is always type-erased to `()` and shared among all typed views of the same item.
+/// It ensures that the item is removed from the pool exactly once when all references are dropped.
+#[doc(hidden)]
+pub struct LocalPooledRef {
+    /// The type-erased handle to the actual item in the pool.
+    pooled: RawPooled<()>,
 
     /// A handle to the pool that keeps it alive as long as this item exists.
     pool: LocalBlindPool,
+}
+
+/// Internal data structure that contains the typed access to the locally pooled item.
+#[non_exhaustive]
+pub struct LocalPooledInner<T: ?Sized> {
+    /// The typed handle to the actual item in the pool.
+    pooled: RawPooled<T>,
+
+    /// A shared reference to the lifetime manager.
+    lifetime: Rc<LocalPooledRef>,
 }
 
 impl<T: ?Sized> LocalPooledInner<T> {
@@ -56,28 +68,21 @@ impl<T: ?Sized> LocalPooledInner<T> {
     #[must_use]
     #[doc(hidden)]
     pub fn new(pooled: RawPooled<T>, pool: LocalBlindPool) -> Self {
-        Self { pooled, pool }
+        let lifetime = Rc::new(LocalPooledRef {
+            pooled: pooled.erase(),
+            pool,
+        });
+        Self { pooled, lifetime }
     }
 
-    /// Extracts the pooled value and pool handle without triggering cleanup.
+    /// Creates a new LocalPooledInner sharing the lifetime with an existing one.
     ///
-    /// This method consumes the inner structure and returns both the pooled value and
-    /// pool handle while preventing the Drop implementation from running. This is used
-    /// when transferring ownership of the pooled item without removing it from the pool
-    /// during type casting operations via the [`define_pooled_dyn_cast!`] macro.
-    #[must_use]
+    /// This is used for type casting operations where we want to create a new typed view
+    /// while sharing the same lifetime management.
     #[doc(hidden)]
-    pub fn into_parts(self) -> (RawPooled<T>, LocalBlindPool) {
-        // SAFETY: We own `self` and are about to forget it, preventing Drop from running.
-        // This allows us to move the fields out without triggering the destructor.
-        let pooled = unsafe { std::ptr::read(std::ptr::addr_of!(self.pooled)) };
-        // SAFETY: Same reasoning as above - we own the struct and are preventing Drop.
-        let pool = unsafe { std::ptr::read(std::ptr::addr_of!(self.pool)) };
-
-        // Prevent Drop from running, which would remove the item from the pool
-        std::mem::forget(self);
-
-        (pooled, pool)
+    #[must_use]
+    pub fn with_shared_lifetime(pooled: RawPooled<T>, lifetime: Rc<LocalPooledRef>) -> Self {
+        Self { pooled, lifetime }
     }
 }
 
@@ -126,13 +131,9 @@ impl<T: ?Sized> LocalPooled<T> {
     /// This is useful when you want to store handles of different types in the same collection
     /// or pass them to code that doesn't need to know the specific type.
     ///
-    /// The handle remains functionally equivalent and will still automatically remove the item
-    /// from the pool when dropped. The only change is the removal of the type information.
-    ///
-    /// # Panics
-    ///
-    /// Panics if there are multiple `LocalPooled` handles referring to the same pooled item.
-    /// Regular Rust references to the dereferenced value do not count as multiple handles.
+    /// The returned handle shares the same underlying reference count as the original handle.
+    /// Multiple handles (both typed and type-erased) can coexist for the same pooled item,
+    /// and the item will only be removed from the pool when all handles are dropped.
     ///
     /// # Example
     ///
@@ -141,10 +142,14 @@ impl<T: ?Sized> LocalPooled<T> {
     ///
     /// let pool = LocalBlindPool::new();
     /// let value_handle = pool.insert(42_u64);
+    /// let cloned_handle = value_handle.clone();
     ///
-    /// // Erase type information.
+    /// // Erase type information while keeping the original handle via clone.
     /// let erased = value_handle.erase();
     ///
+    /// // Both handles are valid and refer to the same item.
+    /// assert_eq!(*cloned_handle, 42);
+    /// 
     /// // Can still access the raw pointer.
     /// // SAFETY: We know this contains a u64.
     /// let value = unsafe { erased.ptr().cast::<u64>().read() };
@@ -152,25 +157,10 @@ impl<T: ?Sized> LocalPooled<T> {
     /// ```
     #[must_use]
     pub fn erase(self) -> LocalPooled<()> {
-        // We need exclusive access to perform the erase operation.
-        // This will panic if there are other references.
-
-        // Move out of self to avoid Drop running
-        let this = ManuallyDrop::new(self);
-
-        // SAFETY: We own `this` and ManuallyDrop ensures it will not be auto-dropped.
-        let inner_rc = unsafe { std::ptr::read(std::ptr::addr_of!(this.inner)) };
-
-        let inner = Rc::try_unwrap(inner_rc)
-            .map_err(|_rc| "cannot erase LocalPooled with multiple references")
-            .unwrap();
-
-        // Extract the pooled value and pool handle without triggering the drop cleanup
-        let (pooled, pool) = inner.into_parts();
-
-        let erased_pooled = pooled.erase();
-
-        let erased_inner = LocalPooledInner::new(erased_pooled, pool);
+        // Create a new erased handle sharing the same lifetime manager
+        let erased_pooled = self.inner.pooled.erase();
+        let erased_inner = LocalPooledInner::with_shared_lifetime(erased_pooled, Rc::clone(&self.inner.lifetime));
+        
         LocalPooled {
             inner: Rc::new(erased_inner),
         }
@@ -189,31 +179,26 @@ impl<T: ?Sized> LocalPooled<T> {
     /// Panics if there are multiple `LocalPooled` handles referring to the same pooled item.
     /// Regular Rust references to the dereferenced value do not count as multiple handles.
     #[must_use]
+    /// Casts this [`LocalPooled<T>`] to a trait object type.
+    ///
+    /// This method converts a pooled value from a concrete type to a trait object
+    /// while preserving the reference counting and pool management semantics.
+    ///
+    /// The returned handle shares the same underlying reference count as the original handle.
+    /// Multiple handles (both concrete type and trait object) can coexist for the same pooled item,
+    /// and the item will only be removed from the pool when all handles are dropped.
+    ///
+    /// This method is primarily intended for use by the [`define_pooled_dyn_cast!`] macro.
+    /// For most use cases, prefer the type-safe cast methods generated by that macro.
     #[doc(hidden)]
     pub fn cast_dyn_with_fn<U: ?Sized, F>(self, cast_fn: F) -> LocalPooled<U>
     where
         F: FnOnce(&T) -> &U,
     {
-        // We need exclusive access to perform the cast operation.
-        // This will panic if there are other references.
-
-        // Move out of self to avoid Drop running
-        let this = ManuallyDrop::new(self);
-
-        // SAFETY: We own `this` and ManuallyDrop ensures it will not be auto-dropped.
-        let inner_rc = unsafe { std::ptr::read(std::ptr::addr_of!(this.inner)) };
-
-        let inner = Rc::try_unwrap(inner_rc)
-            .map_err(|_rc| "cannot cast LocalPooled with multiple references")
-            .unwrap();
-
-        // Extract the pooled value and pool handle without triggering the drop cleanup
-        let (pooled, pool) = inner.into_parts();
-
         // Cast the RawPooled to the trait object using the provided function
-        let cast_pooled = pooled.cast_dyn_with_fn(cast_fn);
-
-        let cast_inner = LocalPooledInner::new(cast_pooled, pool);
+        let cast_pooled = self.inner.pooled.cast_dyn_with_fn(cast_fn);
+        let cast_inner = LocalPooledInner::with_shared_lifetime(cast_pooled, Rc::clone(&self.inner.lifetime));
+        
         LocalPooled {
             inner: Rc::new(cast_inner),
         }
@@ -276,13 +261,13 @@ impl<T: ?Sized> Deref for LocalPooled<T> {
     }
 }
 
-impl<T: ?Sized> Drop for LocalPooledInner<T> {
+impl Drop for LocalPooledRef {
     /// Automatically removes the item from the pool when the last reference is dropped.
     ///
     /// This ensures that resources are properly cleaned up without requiring manual intervention.
     fn drop(&mut self) {
         // We are guaranteed to be the only one executing this drop because Rc ensures
-        // that Drop on the Inner is only called once when the last reference is released.
+        // that Drop on the LocalPooledRef is only called once when the last reference is released.
         self.pool.remove(self.pooled);
     }
 }
@@ -298,6 +283,15 @@ impl<T: std::fmt::Debug> std::fmt::Debug for LocalPooled<T> {
 impl<T: std::fmt::Debug> std::fmt::Debug for LocalPooledInner<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalPooledInner")
+            .field("pooled", &self.pooled)
+            .field("lifetime", &self.lifetime)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for LocalPooledRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalPooledRef")
             .field("pooled", &self.pooled)
             .field("pool", &self.pool)
             .finish()

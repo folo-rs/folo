@@ -101,15 +101,27 @@ fn erase_type_information() {
 }
 
 #[test]
-#[should_panic(expected = "cannot erase Pooled with multiple references")]
-fn erase_with_multiple_references_panics() {
+fn erase_with_multiple_references_works() {
     let pool = BlindPool::from(RawBlindPool::new());
 
     let value_handle = pool.insert(42_u64);
-    let _cloned_handle = value_handle.clone();
+    let cloned_handle = value_handle.clone();
 
-    // This should panic because there are multiple references
-    let _erased = value_handle.erase();
+    // This should now work without panicking
+    let erased = value_handle.erase();
+
+    // Both handles should still work
+    assert_eq!(*cloned_handle, 42);
+    
+    // SAFETY: We know this contains a u64.
+    let value = unsafe { erased.ptr().cast::<u64>().read() };
+    assert_eq!(value, 42);
+
+    // Clean up - drop all handles to remove from pool
+    drop(cloned_handle);
+    drop(erased);
+    
+    assert_eq!(pool.len(), 0);
 }
 
 #[test]
