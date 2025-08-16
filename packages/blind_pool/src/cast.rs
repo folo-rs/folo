@@ -1,23 +1,21 @@
-//! Provides macro for defining dynamic cast operations on pooled types.
-//!
-//! The [`define_pooled_dyn_cast!`] macro generates extension traits that allow casting
-//! pooled values to trait objects while preserving reference counting semantics.
-
-/// Defines a dynamic cast operation for pooled types.
+/// Defines a dynamic cast method that extends pooled item handles, allowing casting
+/// of the reference to a trait object.
 ///
-/// This macro generates an extension trait that provides a method to cast a pooled value
+/// This macro generates a trait that provides a method to cast a pooled value
 /// from an unknown concrete type to a trait object, while preserving the reference counting
-/// and pool management semantics.
+/// and pool management semantics, returning a handle that dereferences to the trait object
+/// instead of the original concrete type.
 ///
-/// The generated cast method allows conversion from `Pooled<T>` to `Pooled<dyn TraitAlias>`
-/// (and similarly for `LocalPooled` and `RawPooled`) where `T` implements the trait alias.
+/// The generated cast method allows conversion from `Pooled<T>` to `Pooled<dyn Trait>`
+/// (and similarly for `LocalPooled` and `RawPooled`) where `T` implements the trait.
 ///
 /// # Parameters
 ///
-/// - `trait_alias`: The trait alias name (e.g., `Display`, `SendUnitFuture`). The method name
+/// - `trait_alias`: The trait name (e.g., `Display`, `SendUnitFuture`). The method name
 ///   is automatically derived by converting this to `snake_case` with a `cast_` prefix.
 ///
-/// For complex trait bounds, define a trait alias first, then use this macro with the alias name.
+/// For complex trait bounds, define a trait alias first, to simplify the trait to a single name,
+/// then use this macro with the trait alias name.
 ///
 /// # Generated Items
 ///
