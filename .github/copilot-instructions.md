@@ -548,3 +548,14 @@ or single-threaded (neither).
 
 If generic type parameters are involved, these assertions should use some randomly selected typical
 types that may be encountered in user code.
+
+# Macros may need public-private visibility
+
+For purpose of accessing members of types or modules from published macros, it is permissible to
+make logically private items public. This must be accompanied by two adjustments:
+
+* The item must be marked with `#[doc(hidden)]` to prevent it from being included in the
+  public API documentation. This is our signal that it is not an officially supported public API.
+* The path to the item must include the keyword "private". The preferred forms are:
+  - For types, use a `private` module, e.g. `foo::private::Bar`.
+  - For methods, use a `__private_` prefix, e.g. `Bar::__private_reset_counters()`.

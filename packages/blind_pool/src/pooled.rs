@@ -63,8 +63,7 @@ pub struct Pooled<T: ?Sized> {
 ///
 /// This is always type-erased to `()` and shared among all typed views of the same item.
 /// It ensures that the item is removed from the pool exactly once when all references are dropped.
-#[doc(hidden)]
-pub struct PooledRef {
+pub(crate) struct PooledRef {
     /// The type-erased handle to the actual item in the pool.
     pooled: RawPooled<()>,
 
@@ -82,13 +81,12 @@ pub struct PooledInner<T: ?Sized> {
 }
 
 impl<T: ?Sized> PooledInner<T> {
-    /// Creates a new PooledInner with the given components.
+    /// Creates a new `PooledInner` with the given components.
     ///
     /// This method is intended for internal use when reconstructing pooled values
     /// after type casting operations via the [`define_pooled_dyn_cast!`] macro.
-    #[doc(hidden)]
     #[must_use]
-    pub fn new(pooled: RawPooled<T>, pool: BlindPool) -> Self {
+    pub(crate) fn new(pooled: RawPooled<T>, pool: BlindPool) -> Self {
         let lifetime = Arc::new(PooledRef {
             pooled: pooled.erase(),
             pool,
@@ -96,13 +94,12 @@ impl<T: ?Sized> PooledInner<T> {
         Self { pooled, lifetime }
     }
 
-    /// Creates a new PooledInner sharing the lifetime with an existing one.
+    /// Creates a new `PooledInner` sharing the lifetime with an existing one.
     ///
     /// This is used for type casting operations where we want to create a new typed view
     /// while sharing the same lifetime management.
-    #[doc(hidden)]
     #[must_use]
-    pub fn with_shared_lifetime(pooled: RawPooled<T>, lifetime: Arc<PooledRef>) -> Self {
+    pub(crate) fn with_shared_lifetime(pooled: RawPooled<T>, lifetime: Arc<PooledRef>) -> Self {
         Self { pooled, lifetime }
     }
 }
@@ -112,9 +109,8 @@ impl<T: ?Sized> Pooled<T> {
     ///
     /// This method is intended for internal use by [`BlindPool`] and for
     /// reconstructing pooled values after type casting via the [`define_pooled_dyn_cast!`] macro.
-    #[doc(hidden)]
     #[must_use]
-    pub fn new(pooled: RawPooled<T>, pool: BlindPool) -> Self {
+    pub(crate) fn new(pooled: RawPooled<T>, pool: BlindPool) -> Self {
         let inner = PooledInner::new(pooled, pool);
         Self {
             inner: Arc::new(inner),
@@ -187,7 +183,7 @@ impl<T: ?Sized> Pooled<T> {
     ///
     /// // Cast to trait object while keeping the original handle via clone.
     /// let display_handle: blind_pool::Pooled<dyn Display> =
-    ///     value_handle.cast_dyn_with_fn(|x| x as &dyn Display);
+    ///     value_handle.__private_cast_dyn_with_fn(|x| x as &dyn Display);
     ///
     /// // Both handles are valid and refer to the same item.
     /// assert_eq!(*cloned_handle, 42);
@@ -196,12 +192,12 @@ impl<T: ?Sized> Pooled<T> {
     /// ```
     #[must_use]
     #[doc(hidden)]
-    pub fn cast_dyn_with_fn<U: ?Sized, F>(self, cast_fn: F) -> Pooled<U>
+    pub fn __private_cast_dyn_with_fn<U: ?Sized, F>(self, cast_fn: F) -> Pooled<U>
     where
         F: FnOnce(&T) -> &U,
     {
         // Cast the RawPooled to the trait object using the provided function
-        let cast_pooled = self.inner.pooled.cast_dyn_with_fn(cast_fn);
+        let cast_pooled = self.inner.pooled.__private_cast_dyn_with_fn(cast_fn);
         let cast_inner =
             PooledInner::with_shared_lifetime(cast_pooled, Arc::clone(&self.inner.lifetime));
 

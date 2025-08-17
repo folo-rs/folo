@@ -486,7 +486,7 @@ impl<T: ?Sized> RawPooled<T> {
     ///
     /// // Cast to trait object.
     /// let display_handle: blind_pool::RawPooled<dyn Display> =
-    ///     value_handle.cast_dyn_with_fn(|x| x as &dyn Display);
+    ///     value_handle.__private_cast_dyn_with_fn(|x| x as &dyn Display);
     ///
     /// // Can access as Display trait object.
     /// // SAFETY: The pointer is valid and contains a u64 which implements Display.
@@ -496,7 +496,7 @@ impl<T: ?Sized> RawPooled<T> {
     #[must_use]
     #[inline]
     #[doc(hidden)]
-    pub fn cast_dyn_with_fn<U: ?Sized, F>(self, cast_fn: F) -> RawPooled<U>
+    pub fn __private_cast_dyn_with_fn<U: ?Sized, F>(self, cast_fn: F) -> RawPooled<U>
     where
         F: FnOnce(&T) -> &U,
     {

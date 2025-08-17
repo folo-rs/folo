@@ -107,7 +107,7 @@ macro_rules! define_pooled_dyn_cast {
                 type Output = $crate::Pooled<dyn $trait_name>;
 
                 fn [<cast_ $trait_name:snake>](self) -> Self::Output {
-                    self.cast_dyn_with_fn(|x| x as &dyn $trait_name)
+                    self.__private_cast_dyn_with_fn(|x| x as &dyn $trait_name)
                 }
             }
 
@@ -118,7 +118,7 @@ macro_rules! define_pooled_dyn_cast {
                 type Output = $crate::LocalPooled<dyn $trait_name>;
 
                 fn [<cast_ $trait_name:snake>](self) -> Self::Output {
-                    self.cast_dyn_with_fn(|x| x as &dyn $trait_name)
+                    self.__private_cast_dyn_with_fn(|x| x as &dyn $trait_name)
                 }
             }
 
@@ -129,7 +129,7 @@ macro_rules! define_pooled_dyn_cast {
                 type Output = $crate::RawPooled<dyn $trait_name>;
 
                 fn [<cast_ $trait_name:snake>](self) -> Self::Output {
-                    self.cast_dyn_with_fn(|x| x as &dyn $trait_name)
+                    self.__private_cast_dyn_with_fn(|x| x as &dyn $trait_name)
                 }
             }
         }
