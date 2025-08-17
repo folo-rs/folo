@@ -177,12 +177,11 @@ impl OpaqueSlab {
 
         // Initialize all slots to `Vacant` to start with.
         for index in 0_usize..capacity.get() {
-            let offset = index
-                .checked_mul(layout_info.combined_entry_layout.size())
-                .expect("index offset calculation cannot overflow for reasonable index values");
+            // Cannot overflow because that would imply our capacity extends beyond virtual memory.
+            let offset = index.wrapping_mul(layout_info.combined_entry_layout.size());
 
             // SAFETY: We allocated memory for capacity.get() entries above, and index is bounded
-            // by the loop condition (index < capacity.get()), ensuring we stay within allocated bounds.
+            // by the loop condition (index < capacity.get()), ensuring we stay within bounds.
             let entry_meta_ptr = unsafe { first_entry_ptr.as_ptr().cast::<u8>().add(offset) };
 
             // SAFETY: The combined_entry_layout was created with Layout::pad_to_align(), which ensures
@@ -200,9 +199,9 @@ impl OpaqueSlab {
                 ptr::write(
                     entry_meta_ptr,
                     EntryMeta::Vacant {
-                        next_free_index: index.checked_add(1_usize).expect(
-                            "requires the container to be larger than virtual memory - impossible",
-                        ),
+                        // Cannot overflow, as that would imply the slab
+                        // is longer than virtual memory.
+                        next_free_index: index.wrapping_add(1),
                     },
                 );
             }
@@ -255,18 +254,12 @@ impl OpaqueSlab {
         );
 
         // Guarded by bounds check above, so we are guaranteed that the pointer is valid.
-        // The arithmetic is checked to prevent overflow.
-        let offset = index
-            .checked_mul(self.layout_info.combined_entry_layout.size())
-            .expect("offset calculation cannot overflow for valid index values as that would exceed virtual memory limits");
+        // This cannot overflow because that would imply the slab extends beyond virtual memory.
+        let offset = index.wrapping_mul(self.layout_info.combined_entry_layout.size());
 
         // SAFETY: first_entry_meta_ptr is valid from our allocation in new(), offset is within
         // bounds due to the index bounds check above, and byte_add preserves pointer validity.
-        let entry_meta_ptr = unsafe { self.first_entry_meta_ptr.as_ptr().byte_add(offset) };
-
-        // SAFETY: entry_meta_ptr is valid and non-null due to the allocation and offset
-        // calculations above.
-        unsafe { NonNull::new_unchecked(entry_meta_ptr) }
+        unsafe { self.first_entry_meta_ptr.byte_add(offset) }
     }
 
     fn item_ptr<T>(&self, index: usize) -> NonNull<T> {
@@ -274,15 +267,11 @@ impl OpaqueSlab {
 
         // SAFETY: entry_meta_ptr is valid from entry_meta_ptr() and item_offset was calculated
         // correctly by SlabLayoutInfo::calculate() to point to the item portion of the entry.
-        let item_ptr = unsafe {
+        unsafe {
             entry_meta_ptr
-                .as_ptr()
                 .byte_add(self.layout_info.item_offset)
-        };
-
-        // SAFETY: item_ptr is valid and non-null due to the valid entry_meta_ptr and correct
-        // item_offset calculation above.
-        unsafe { NonNull::new_unchecked(item_ptr.cast::<T>()) }
+                .cast::<T>()
+        }
     }
 
     /// Inserts a value into the slab and returns an object that provides both the item's index
@@ -356,10 +345,8 @@ impl OpaqueSlab {
             ),
         };
 
-        self.count = self
-            .count
-            .checked_add(1)
-            .expect("count cannot overflow because it is bounded by capacity which is bounded by usize::MAX");
+        // Cannot overflow because it is bounded by slab capacity.
+        self.count = self.count.wrapping_add(1);
 
         SlabItem {
             index,
@@ -398,10 +385,8 @@ impl OpaqueSlab {
         // Push the released item's entry onto the free stack.
         self.next_free_index = index;
 
-        self.count = self
-            .count
-            .checked_sub(1)
-            .expect("we asserted above that the entry is occupied so count must be non-zero");
+        // Cannot overflow because we asserted above the removed entry was occupied.
+        self.count = self.count.wrapping_sub(1);
     }
 
     #[cfg_attr(test, mutants::skip)] // This is essentially test logic, mutation is meaningless.

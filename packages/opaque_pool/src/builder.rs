@@ -43,6 +43,7 @@ pub struct OpaquePoolBuilder {
 }
 
 impl OpaquePoolBuilder {
+    #[inline]
     pub(crate) fn new() -> Self {
         Self {
             item_layout: None,
@@ -63,6 +64,7 @@ impl OpaquePoolBuilder {
     /// let layout = Layout::new::<u32>();
     /// let pool = OpaquePool::builder().layout(layout).build();
     /// ```
+    #[inline]
     pub fn layout(mut self, layout: Layout) -> Self {
         assert!(layout.size() > 0, "OpaquePool must have non-zero item size");
         self.item_layout = Some(layout);
@@ -80,6 +82,7 @@ impl OpaquePoolBuilder {
     ///
     /// let pool = OpaquePool::builder().layout_of::<u64>().build();
     /// ```
+    #[inline]
     pub fn layout_of<T>(mut self) -> Self {
         let layout = Layout::new::<T>();
         assert!(layout.size() > 0, "OpaquePool must have non-zero item size");
@@ -103,6 +106,7 @@ impl OpaquePoolBuilder {
     ///     .drop_policy(DropPolicy::MustNotDropItems)
     ///     .build();
     /// ```
+    #[inline]
     pub fn drop_policy(mut self, policy: DropPolicy) -> Self {
         self.drop_policy = policy;
         self
@@ -126,6 +130,7 @@ impl OpaquePoolBuilder {
     /// let pool = OpaquePool::builder().layout(layout).build();
     /// ```
     #[must_use]
+    #[inline]
     pub fn build(self) -> OpaquePool {
         let layout = self.item_layout.expect(
             "Layout must be set using .layout() or .layout_of::<T>() before calling .build()",
