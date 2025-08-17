@@ -104,7 +104,7 @@ fn main() {
     println!();
 
     // Clean up.
-    dog_pool.remove(pooled_dog);
+    dog_pool.remove(&pooled_dog);
 
     println!("Example completed successfully!");
     println!();

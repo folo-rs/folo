@@ -147,7 +147,10 @@ impl RawBlindPool {
         // that T's size and alignment requirements are satisfied by the pool's allocation strategy.
         let pooled = unsafe { internal_pool.insert(value) };
 
-        RawPooled { layout, pooled }
+        RawPooled {
+            layout,
+            inner: pooled,
+        }
     }
 
     /// Removes a value from the pool and drops it.
@@ -175,7 +178,7 @@ impl RawBlindPool {
     #[inline]
     pub fn remove<T: ?Sized>(&mut self, pooled: RawPooled<T>) {
         if let Some(internal_pool) = self.pools.get_mut(&pooled.layout) {
-            internal_pool.remove(pooled.pooled);
+            internal_pool.remove(&pooled.inner);
         } else {
             panic!("provided handle does not belong to this pool");
         }
@@ -402,7 +405,7 @@ pub struct RawPooled<T: ?Sized> {
     layout: Layout,
 
     /// The handle from the internal opaque pool.
-    pooled: OpaquePooled<T>,
+    inner: OpaquePooled<T>,
 }
 
 impl<T: ?Sized> RawPooled<T> {
@@ -429,7 +432,7 @@ impl<T: ?Sized> RawPooled<T> {
     #[must_use]
     #[inline]
     pub fn ptr(&self) -> NonNull<T> {
-        self.pooled.ptr()
+        self.inner.ptr()
     }
 
     /// Erases the type information from this `RawPooled<T>` handle,
@@ -466,7 +469,7 @@ impl<T: ?Sized> RawPooled<T> {
     pub fn erase(self) -> RawPooled<()> {
         RawPooled {
             layout: self.layout,
-            pooled: self.pooled.erase(),
+            inner: self.inner.erase(),
         }
     }
 
@@ -524,18 +527,18 @@ impl<T: ?Sized> RawPooled<T> {
         let new_ptr = NonNull::from(new_ref);
 
         // Extract the components from the existing pooled handle.
-        let (pool_id, coordinates, _ptr) = self.pooled.into_raw_parts();
+        let (pool_id, coordinates, _ptr) = self.inner.into_raw_parts();
 
         // Create a new opaque pool handle with the trait object type
         // SAFETY: We extracted these components from a valid pooled handle, ensuring the
         // pool_id and coordinates are valid for the same underlying allocation. The
         // new_ptr points to the same memory location.
-        let trait_opaque_pooled =
+        let inner_pooled_new =
             unsafe { opaque_pool::Pooled::from_raw_parts(pool_id, coordinates, new_ptr) };
 
         RawPooled {
             layout: self.layout,
-            pooled: trait_opaque_pooled,
+            inner: inner_pooled_new,
         }
     }
 }

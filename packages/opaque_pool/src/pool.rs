@@ -243,12 +243,8 @@ impl OpaquePool {
     #[must_use]
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.slabs
-            .len()
-            .checked_mul(DEFAULT_SLAB_CAPACITY.get())
-            .expect(
-                "overflow here would imply capacity is greater than virtual memory - impossible",
-            )
+        // Overflow here would imply capacity is greater than virtual memory - impossible.
+        self.slabs.len().wrapping_mul(DEFAULT_SLAB_CAPACITY.get())
     }
 
     /// Whether the pool has no inserted values.
@@ -311,7 +307,7 @@ impl OpaquePool {
         let required_capacity = self
             .len()
             .checked_add(additional)
-            .expect("capacity overflow: requested capacity exceeds maximum possible value");
+            .expect("requested capacity exceeds size of virtual memory");
 
         if self.capacity() >= required_capacity {
             return;
@@ -441,30 +437,29 @@ impl OpaquePool {
     pub unsafe fn insert<T>(&mut self, value: T) -> Pooled<T> {
         let slab_index = self.index_of_slab_with_vacant_slot();
 
-        let slab = self
-            .slabs
-            .get_mut(slab_index)
-            .expect("we just verified that there is a slab with a vacant slot at this index");
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "we just received knowledge that there is a slab with a vacant slot at this index"
+        )]
+        let slab = &mut self.slabs[slab_index];
 
         // We invalidate the "slab with vacant slot" cache here if this is the last vacant slot.
-        let predicted_slab_filled_slots = slab
-            .len()
-            .checked_add(1)
-            .expect("we cannot overflow because there is at least one free slot, so it means there must be room to increment");
+        //
+        // We cannot overflow because there is at least one free slot,
+        // which means there must be room to increment.
+        let predicted_slab_filled_slots = slab.len().wrapping_add(1);
 
         if predicted_slab_filled_slots == DEFAULT_SLAB_CAPACITY.get() {
             self.slab_with_vacant_slot_index = None;
         }
 
-        // SAFETY: The caller ensures T's layout matches the pool's layout.
+        // SAFETY: Forwarding guarantee from caller that T's layout matches the pool's layout.
         let pooled = unsafe { slab.insert(value) };
         let coordinates = ItemCoordinates::from_parts(slab_index, pooled.index());
 
         // Update our tracked length since we just inserted an item.
-        self.length = self
-            .length
-            .checked_add(1)
-            .expect("length overflow: pool cannot contain more items than usize::MAX");
+        // This can never overflow since that would mean the pool is greater than virtual memory.
+        self.length = self.length.wrapping_add(1);
 
         // The pool itself does not care about the type T but for the convenience of the caller
         // we imbue the Pooled with the type information, to reduce required casting by caller.
@@ -477,9 +472,7 @@ impl OpaquePool {
 
     /// Removes a value previously inserted into the pool.
     ///
-    /// The [`Pooled<T>`] is consumed by this operation and cannot be used afterward.
     /// The value is dropped and the memory becomes available for future insertions.
-    ///
     /// There is no way to remove an item from the pool without dropping it.
     ///
     /// # Example
@@ -496,7 +489,7 @@ impl OpaquePool {
     /// assert_eq!(pool.len(), 1);
     ///
     /// // Remove the value.
-    /// pool.remove(pooled);
+    /// pool.remove(&pooled);
     ///
     /// assert_eq!(pool.len(), 0);
     /// assert!(pool.is_empty());
@@ -504,8 +497,8 @@ impl OpaquePool {
     ///
     /// # Panics
     ///
-    /// Panics if the handle is not associated with this pool.
-    pub fn remove<T: ?Sized>(&mut self, pooled: Pooled<T>) {
+    /// Panics if the handle is not associated with an existing item in this pool.
+    pub fn remove<T: ?Sized>(&mut self, pooled: &Pooled<T>) {
         assert!(
             pooled.pool_id == self.pool_id,
             "attempted to remove a handle from a different pool (handle pool ID: {}, current pool ID: {})",
@@ -518,17 +511,15 @@ impl OpaquePool {
         let slab = self
             .slabs
             .get_mut(coordinates.slab_index)
-            .expect("a slab cannot be removed without first removing all items in it");
+            .expect("the Pooled handle did not point to an existing item in the pool");
 
         // In principle, we could return the value here if `T: Unpin` but there is no need
         // for this functionality at present, so we do not implement it to reduce complexity.
         slab.remove(coordinates.index_in_slab);
 
         // Update our tracked length since we just removed an item.
-        self.length = self
-            .length
-            .checked_sub(1)
-            .expect("length underflow: cannot remove more items than exist in pool");
+        // This cannot wrap around because we just removed an item, so the value must be at least 1.
+        self.length = self.length.wrapping_sub(1);
 
         // There is now a vacant slot in this slab! We may want to remember this for fast insertions.
         // We try to remember the lowest index of a slab with a vacant slot, so we
@@ -545,10 +536,8 @@ impl OpaquePool {
             self.drop_policy,
         ));
 
-        self.slabs
-            .len()
-            .checked_sub(1)
-            .expect("we just pushed a slab, so this cannot overflow because len >= 1")
+        // This can never wrap around because we just added a slab, so len() is at least 1.
+        self.slabs.len().wrapping_sub(1)
     }
 
     #[must_use]
@@ -665,7 +654,6 @@ impl OpaquePool {
 /// When `T` is not [`Sync`], the handle is single-threaded and cannot be moved between threads
 /// or shared between threads, preventing unsafe access to non-thread-safe data.
 #[derive(Debug)]
-#[non_exhaustive]
 pub struct Pooled<T: ?Sized> {
     /// Ensures this handle can only be returned to the pool it came from.
     pool_id: u64,
@@ -836,7 +824,10 @@ unsafe impl<T: ?Sized + Sync> Sync for Pooled<T> {}
 mod tests {
     use std::alloc::Layout;
 
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
     use super::*;
+    use crate::OpaquePoolBuilder;
 
     #[test]
     fn smoke_test() {
@@ -859,7 +850,7 @@ mod tests {
             assert_eq!(pooled_c.ptr().read(), 44);
         }
 
-        pool.remove(pooled_b);
+        pool.remove(&pooled_b);
 
         let pooled_d = unsafe { pool.insert(45_u32) };
 
@@ -869,8 +860,8 @@ mod tests {
             assert_eq!(pooled_d.ptr().read(), 45);
         }
 
-        pool.remove(pooled_a);
-        pool.remove(pooled_d);
+        pool.remove(&pooled_a);
+        pool.remove(&pooled_d);
         // We do not remove pooled_c, leaving that up to the pool to clean up.
     }
 
@@ -890,7 +881,7 @@ mod tests {
             ptr: NonNull::dangling(),
         };
 
-        pool.remove(fake_pooled);
+        pool.remove(&fake_pooled);
     }
 
     #[test]
@@ -935,7 +926,7 @@ mod tests {
 
         // Insert and then remove immediately.
         let pooled = unsafe { pool.insert(42_u64) };
-        pool.remove(pooled);
+        pool.remove(&pooled);
 
         assert!(pool.is_empty());
 
@@ -972,7 +963,7 @@ mod tests {
         // The removal should still fail - having an item there is not enough.
         _ = unsafe { pool2.insert(42_u32) };
 
-        pool2.remove(pooled1); // Should panic.
+        pool2.remove(&pooled1); // Should panic.
     }
 
     #[test]
@@ -996,7 +987,7 @@ mod tests {
         }
 
         // Should be able to remove the erased handle.
-        pool.remove(erased);
+        pool.remove(&erased);
     }
 
     #[test]
@@ -1056,8 +1047,8 @@ mod tests {
         }
 
         // Remove items in different order to test that handles work correctly.
-        pool.remove(pooled_f64);
-        pool.remove(pooled_u64);
+        pool.remove(&pooled_f64);
+        pool.remove(&pooled_u64);
         assert_eq!(pool.len(), 2);
 
         // Verify remaining items are still accessible.
@@ -1066,8 +1057,8 @@ mod tests {
             assert_eq!(pooled_wrapped.ptr().read().0, 0x1234_5678_90AB_CDEF);
         }
 
-        pool.remove(pooled_wrapped);
-        pool.remove(pooled_i64);
+        pool.remove(&pooled_wrapped);
+        pool.remove(&pooled_i64);
         assert!(pool.is_empty());
     }
 
@@ -1100,7 +1091,7 @@ mod tests {
 
         // Remove the first item to create a hole.
         let first_item = pooled_items.remove(0);
-        pool.remove(first_item);
+        pool.remove(&first_item);
 
         // This will fill the hole instead of allocating a new slab.
         let pooled_filled = unsafe { pool.insert(5678_u32) };
@@ -1113,9 +1104,9 @@ mod tests {
 
         // Clean up remaining items.
         for item in pooled_items {
-            pool.remove(item);
+            pool.remove(&item);
         }
-        pool.remove(pooled_filled);
+        pool.remove(&pooled_filled);
     }
 
     #[test]
@@ -1142,11 +1133,11 @@ mod tests {
 
         // Remove the first item in the first slab to create a hole.
         let first_slab_first_item = first_slab_items.remove(0);
-        pool.remove(first_slab_first_item);
+        pool.remove(&first_slab_first_item);
 
         // Remove the first item in the second slab to create a hole.
         let second_slab_first_item = second_slab_items.remove(0);
-        pool.remove(second_slab_first_item);
+        pool.remove(&second_slab_first_item);
 
         // This will fill the hole in the first slab instead of allocating a new slab.
         let pooled_filled = unsafe { pool.insert(91011_u32) };
@@ -1159,12 +1150,12 @@ mod tests {
 
         // Clean up remaining items.
         for item in first_slab_items {
-            pool.remove(item);
+            pool.remove(&item);
         }
         for item in second_slab_items {
-            pool.remove(item);
+            pool.remove(&item);
         }
-        pool.remove(pooled_filled);
+        pool.remove(&pooled_filled);
     }
 
     #[test]
@@ -1191,11 +1182,11 @@ mod tests {
 
         // Remove the first item in the second slab to create a hole.
         let second_slab_first_item = second_slab_items.remove(0);
-        pool.remove(second_slab_first_item);
+        pool.remove(&second_slab_first_item);
 
         // Remove the first item in the first slab to create a hole.
         let first_slab_first_item = first_slab_items.remove(0);
-        pool.remove(first_slab_first_item);
+        pool.remove(&first_slab_first_item);
 
         // This will fill the hole in the first slab instead of allocating a new slab.
         let pooled_filled = unsafe { pool.insert(91011_u32) };
@@ -1208,12 +1199,12 @@ mod tests {
 
         // Clean up remaining items.
         for item in first_slab_items {
-            pool.remove(item);
+            pool.remove(&item);
         }
         for item in second_slab_items {
-            pool.remove(item);
+            pool.remove(&item);
         }
-        pool.remove(pooled_filled);
+        pool.remove(&pooled_filled);
     }
 
     #[test]
@@ -1233,7 +1224,7 @@ mod tests {
         // Remove all items from the last two slabs, keeping the first slab full
         let remaining_items: Vec<_> = pooled_items.drain(DEFAULT_SLAB_CAPACITY.get()..).collect();
         for item in remaining_items {
-            pool.remove(item);
+            pool.remove(&item);
         }
 
         // Capacity should still be 3 slabs
@@ -1273,7 +1264,7 @@ mod tests {
 
         // Remove all items
         for item in pooled_items {
-            pool.remove(item);
+            pool.remove(&item);
         }
 
         // Capacity should still be 2 slabs
@@ -1347,7 +1338,7 @@ mod tests {
         assert_eq!(pool.capacity(), DEFAULT_SLAB_CAPACITY.get() * 2);
 
         // Remove the overflow item (making the second slab empty)
-        pool.remove(overflow_item);
+        pool.remove(&overflow_item);
 
         // Shrink to fit should remove the empty second slab
         pool.shrink_to_fit();
@@ -1374,9 +1365,9 @@ mod tests {
 
         // Clean up
         for item in pooled_items {
-            pool.remove(item);
+            pool.remove(&item);
         }
-        pool.remove(new_item);
+        pool.remove(&new_item);
     }
 
     #[test]
@@ -1395,7 +1386,7 @@ mod tests {
         let pooled = unsafe { pool.insert(42_u32) };
         assert_eq!(pool.capacity(), initial_capacity);
 
-        pool.remove(pooled);
+        pool.remove(&pooled);
     }
 
     #[test]
@@ -1417,8 +1408,8 @@ mod tests {
             assert_eq!(pooled2.ptr().read(), 2);
         }
 
-        pool.remove(pooled1);
-        pool.remove(pooled2);
+        pool.remove(&pooled1);
+        pool.remove(&pooled2);
     }
 
     #[test]
@@ -1467,7 +1458,7 @@ mod tests {
 
         // Clean up
         for pooled in pooled_items {
-            pool.remove(pooled);
+            pool.remove(&pooled);
         }
     }
 
@@ -1522,7 +1513,7 @@ mod tests {
             assert_eq!(trait_obj.describe(), "Product: Widget ($19.99)");
         }
 
-        pool.remove(pooled);
+        pool.remove(&pooled);
     }
 
     #[test]
@@ -1572,37 +1563,29 @@ mod tests {
             assert_eq!(counter_ref.value, 15);
         }
 
-        pool.remove(pooled);
+        pool.remove(&pooled);
     }
 
-    #[cfg(test)]
-    mod static_assertions {
-        use static_assertions::{assert_impl_all, assert_not_impl_any};
+    #[test]
+    fn thread_safety_assertions() {
+        // OpaquePool should be thread-mobile (Send) but not thread-safe (Sync)
+        assert_impl_all!(OpaquePool: Send);
+        assert_not_impl_any!(OpaquePool: Sync);
 
-        use super::{OpaquePool, Pooled};
-        use crate::OpaquePoolBuilder;
+        // OpaquePoolBuilder should be thread-mobile (Send) but not thread-safe (Sync)
+        assert_impl_all!(OpaquePoolBuilder: Send);
+        assert_not_impl_any!(OpaquePoolBuilder: Sync);
 
-        #[test]
-        fn thread_safety_assertions() {
-            // OpaquePool should be thread-mobile (Send) but not thread-safe (Sync)
-            assert_impl_all!(OpaquePool: Send);
-            assert_not_impl_any!(OpaquePool: Sync);
+        // Pooled<T> should be Send+Sync if T is Sync, single-threaded otherwise
+        assert_impl_all!(Pooled<()>: Send, Sync); // () is Sync
+        assert_impl_all!(Pooled<u32>: Send, Sync); // u32 is Sync
+        assert_impl_all!(Pooled<String>: Send, Sync); // String is Sync
 
-            // OpaquePoolBuilder should be thread-mobile (Send) but not thread-safe (Sync)
-            assert_impl_all!(OpaquePoolBuilder: Send);
-            assert_not_impl_any!(OpaquePoolBuilder: Sync);
+        // Pooled<T> should be single-threaded when T is not Sync
+        use std::rc::Rc;
+        assert_not_impl_any!(Pooled<Rc<u32>>: Send, Sync); // Rc is not Sync
 
-            // Pooled<T> should be Send+Sync if T is Sync, single-threaded otherwise
-            assert_impl_all!(Pooled<()>: Send, Sync); // () is Sync
-            assert_impl_all!(Pooled<u32>: Send, Sync); // u32 is Sync
-            assert_impl_all!(Pooled<String>: Send, Sync); // String is Sync
-
-            // Pooled<T> should be single-threaded when T is not Sync
-            use std::rc::Rc;
-            assert_not_impl_any!(Pooled<Rc<u32>>: Send, Sync); // Rc is not Sync
-
-            use std::cell::RefCell;
-            assert_not_impl_any!(Pooled<RefCell<u32>>: Send, Sync); // RefCell is not Sync
-        }
+        use std::cell::RefCell;
+        assert_not_impl_any!(Pooled<RefCell<u32>>: Send, Sync); // RefCell is not Sync
     }
 }

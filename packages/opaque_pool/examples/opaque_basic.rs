@@ -60,7 +60,7 @@ fn main() {
     );
 
     // Remove one item using any of the handles.
-    pool.remove(pooled2);
+    pool.remove(&pooled2);
     println!("Removed item");
 
     // The pool automatically grows as needed.
@@ -93,12 +93,12 @@ fn main() {
 
     // Clean up the remaining pooled items.
     for pooled in pooled_items {
-        pool.remove(pooled);
+        pool.remove(&pooled);
     }
 
     // Also clean up the first and third items we still have (using any of the copies).
-    pool.remove(pooled1); // Could also use pooled1_copy or pooled1_clone
-    pool.remove(pooled3);
+    pool.remove(&pooled1); // Could also use pooled1_copy or pooled1_clone
+    pool.remove(&pooled3);
 
     println!("All items cleaned up successfully!");
     println!("OpaquePool example completed successfully!");
