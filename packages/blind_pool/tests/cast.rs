@@ -37,7 +37,9 @@ fn raw_pooled_cast_display() {
     let pooled = pool.insert(42_u32);
 
     // Cast to trait object.
-    let display_pooled = pooled.cast_display();
+    // SAFETY: We must guarantee the item is still in the pool (yep) and
+    // that no concurrent `&mut` exclusive references exist (yep yep).
+    let display_pooled = unsafe { pooled.cast_display() };
 
     // Verify we can access the trait object
     // SAFETY: The pointer is valid and contains the value we just inserted.

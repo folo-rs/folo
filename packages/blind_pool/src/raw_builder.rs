@@ -56,6 +56,7 @@ impl RawBlindPoolBuilder {
     ///     .drop_policy(DropPolicy::MustNotDropItems)
     ///     .build();
     /// ```
+    #[inline]
     pub fn drop_policy(mut self, policy: DropPolicy) -> Self {
         self.drop_policy = policy;
         self
@@ -81,6 +82,7 @@ impl RawBlindPoolBuilder {
     /// pool.remove(pooled_item);
     /// ```
     #[must_use]
+    #[inline]
     pub fn build(self) -> RawBlindPool {
         RawBlindPool::new_inner(self.drop_policy)
     }

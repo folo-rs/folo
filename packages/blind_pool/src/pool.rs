@@ -92,6 +92,8 @@ impl BlindPool {
     /// assert_eq!(*u32_handle, 42);
     /// assert_eq!(*string_handle, "hello");
     /// ```
+    #[inline]
+    #[must_use]
     pub fn insert<T>(&self, value: T) -> Pooled<T> {
         let pooled = {
             let mut pool = self.inner.lock().expect(ERR_POISONED_LOCK);
@@ -120,6 +122,7 @@ impl BlindPool {
     /// assert_eq!(pool.len(), 2);
     /// ```
     #[must_use]
+    #[inline]
     pub fn len(&self) -> usize {
         let pool = self.inner.lock().expect(ERR_POISONED_LOCK);
         pool.len()
@@ -145,6 +148,7 @@ impl BlindPool {
     /// assert!(pool.is_empty());
     /// ```
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         let pool = self.inner.lock().expect(ERR_POISONED_LOCK);
         pool.is_empty()
@@ -153,7 +157,7 @@ impl BlindPool {
     /// Removes an item from the pool using its handle.
     ///
     /// This is an internal method used by [`Pooled`] when it is dropped.
-    /// It should not be called directly by user code.
+    #[inline]
     pub(crate) fn remove<T: ?Sized>(&self, pooled: RawPooled<T>) {
         let mut pool = self.inner.lock().expect(ERR_POISONED_LOCK);
         pool.remove(pooled);
