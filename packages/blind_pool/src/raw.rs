@@ -490,6 +490,9 @@ impl<T: ?Sized> RawPooled<T> {
     /// valid to create a shared reference to it (i.e. no concurrent `&mut` exclusive
     /// references exist.)
     ///
+    /// The caller must guarantee that the callback input and output references
+    /// point to the same object.
+    ///
     /// # Example
     ///
     /// ```rust
@@ -502,7 +505,7 @@ impl<T: ?Sized> RawPooled<T> {
     ///
     /// // Cast to trait object.
     /// let display_handle: blind_pool::RawPooled<dyn Display> =
-    ///     value_handle.__private_cast_dyn_with_fn(|x| x as &dyn Display);
+    ///     unsafe { value_handle.__private_cast_dyn_with_fn(|x| x as &dyn Display) };
     ///
     /// // Can access as Display trait object.
     /// // SAFETY: The pointer is valid and contains a u64 which implements Display.
@@ -516,25 +519,8 @@ impl<T: ?Sized> RawPooled<T> {
     where
         F: FnOnce(&T) -> &U,
     {
-        // Get a reference to perform the cast and obtain the trait object pointer.
         // SAFETY: Forwarding safety requirements to the caller.
-        let value_ref = unsafe { self.ptr().as_ref() };
-
-        // Use the provided function to perform the cast - this ensures type safety.
-        let new_ref: &U = cast_fn(value_ref);
-
-        // Now we need a pointer to stuff into a new RawPooled.
-        let new_ptr = NonNull::from(new_ref);
-
-        // Extract the components from the existing pooled handle.
-        let (pool_id, coordinates, _ptr) = self.inner.into_raw_parts();
-
-        // Create a new opaque pool handle with the trait object type
-        // SAFETY: We extracted these components from a valid pooled handle, ensuring the
-        // pool_id and coordinates are valid for the same underlying allocation. The
-        // new_ptr points to the same memory location.
-        let inner_pooled_new =
-            unsafe { opaque_pool::Pooled::from_raw_parts(pool_id, coordinates, new_ptr) };
+        let inner_pooled_new = unsafe { self.inner.__private_cast_dyn_with_fn(cast_fn) };
 
         RawPooled {
             layout: self.layout,

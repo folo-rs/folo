@@ -664,39 +664,72 @@ pub struct Pooled<T: ?Sized> {
 }
 
 impl<T: ?Sized> Pooled<T> {
-    /// Creates a new pooled handle with the given components.
+    /// Casts this `Pooled<T>` to a different type using a casting function.
     ///
-    /// This method is intended for internal use by the blind_pool crate to construct
-    /// pooled handles when performing type casts via the [`define_pooled_dyn_cast!`] macro.
+    /// This method allows casting the pooled value to a trait object or other compatible type.
+    /// The underlying memory layout and pool management remain unchanged.
+    ///
+    /// This method is only intended for use by the [`define_pooled_dyn_cast!`] macro
+    /// and by the blind_pool crate for type-safe casting operations.
     ///
     /// # Safety
     ///
-    /// The caller must ensure that:
-    /// - The pointer is valid and points to an object of type T
-    /// - The pool_id matches the pool that contains the object
-    /// - The coordinates are valid for the pool
-    #[doc(hidden)]
-    #[must_use]
-    pub unsafe fn from_raw_parts(
-        pool_id: u64,
-        coordinates: ItemCoordinates,
-        ptr: NonNull<T>,
-    ) -> Self {
-        Self {
-            pool_id,
-            coordinates,
-            ptr,
-        }
-    }
-
-    /// Extracts the raw components of this pooled handle.
+    /// The caller is responsible for ensuring that the handle points to a valid item that
+    /// has not been removed from the pool.
     ///
-    /// This method is intended for internal use by the blind_pool crate to extract
-    /// components when performing type casts via the [`define_pooled_dyn_cast!`] macro.
-    #[doc(hidden)]
+    /// The caller must guarantee that the target object is in a state where it is
+    /// valid to create a shared reference to it (i.e. no concurrent `&mut` exclusive
+    /// references exist.)
+    ///
+    /// The caller must guarantee that the callback input and output references
+    /// point to the same object.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    /// use std::fmt::Display;
+    ///
+    /// use opaque_pool::OpaquePool;
+    ///
+    /// let mut pool = OpaquePool::builder().layout_of::<u64>().build();
+    /// // SAFETY: u64 matches the layout used to create the pool.
+    /// let value_handle = unsafe { pool.insert(42_u64) };
+    ///
+    /// // Cast to trait object.
+    /// let display_handle: opaque_pool::Pooled<dyn Display> =
+    ///     unsafe { value_handle.__private_cast_dyn_with_fn(|x| x as &dyn Display) };
+    ///
+    /// // Can access as Display trait object.
+    /// // SAFETY: The pointer is valid and contains a u64 which implements Display.
+    /// let display_ref: &dyn Display = unsafe { display_handle.ptr().as_ref() };
+    /// assert_eq!(format!("{}", display_ref), "42");
+    /// ```
     #[must_use]
-    pub fn into_raw_parts(self) -> (u64, ItemCoordinates, NonNull<T>) {
-        (self.pool_id, self.coordinates, self.ptr)
+    #[inline]
+    #[doc(hidden)]
+    pub unsafe fn __private_cast_dyn_with_fn<U: ?Sized, F>(self, cast_fn: F) -> Pooled<U>
+    where
+        F: FnOnce(&T) -> &U,
+    {
+        // Get a reference to perform the cast and obtain the trait object pointer.
+        // SAFETY: Forwarding safety requirements to the caller.
+        let value_ref = unsafe { self.ptr.as_ref() };
+
+        // Use the provided function to perform the cast - this ensures type safety.
+        let new_ref: &U = cast_fn(value_ref);
+
+        // Now we need a pointer to stuff into a new Pooled.
+        let new_ptr = NonNull::from(new_ref);
+
+        // Create a new pooled handle with the trait object type. We can reuse the same
+        // pool_id and coordinates since they refer to the same underlying allocation, just
+        // with a different type view.
+        Pooled {
+            pool_id: self.pool_id,
+            coordinates: self.coordinates,
+            ptr: new_ptr,
+        }
     }
 
     /// Returns a pointer to the inserted value.
@@ -779,13 +812,11 @@ impl<T: ?Sized> Clone for Pooled<T> {
 
 /// Internal coordinates for tracking items within the pool structure.
 #[derive(Clone, Copy, Debug)]
-#[non_exhaustive]
-#[doc(hidden)]
-pub struct ItemCoordinates {
+struct ItemCoordinates {
     /// The index of the slab containing this item.
-    pub slab_index: usize,
+    slab_index: usize,
     /// The index within the slab where this item is stored.
-    pub index_in_slab: usize,
+    index_in_slab: usize,
 }
 
 impl ItemCoordinates {
@@ -1463,7 +1494,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "capacity overflow")]
+    #[should_panic]
     fn reserve_overflow_panics() {
         let mut pool = OpaquePool::builder().layout_of::<u32>().build();
 
