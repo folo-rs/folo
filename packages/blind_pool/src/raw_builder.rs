@@ -85,3 +85,73 @@ impl RawBlindPoolBuilder {
         RawBlindPool::new_inner(self.drop_policy)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+    use super::RawBlindPoolBuilder;
+    use crate::DropPolicy;
+
+    #[test]
+    fn thread_mobility_assertions() {
+        // RawBlindPoolBuilder should be thread-mobile (Send) but not thread-safe (Sync)
+        assert_impl_all!(RawBlindPoolBuilder: Send);
+        assert_not_impl_any!(RawBlindPoolBuilder: Sync);
+    }
+
+    #[test]
+    fn builder_default_configuration() {
+        let builder = RawBlindPoolBuilder::new();
+        let mut pool = builder.build();
+
+        // Should work with default configuration
+        let handle = pool.insert(42_u32);
+
+        // SAFETY: The pointer is valid and contains the value we just inserted.
+        let value = unsafe { handle.ptr().read() };
+        assert_eq!(value, 42);
+        assert_eq!(pool.len(), 1);
+
+        pool.remove(handle);
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn builder_with_drop_policy_allow() {
+        let mut pool = RawBlindPoolBuilder::new()
+            .drop_policy(DropPolicy::MayDropItems)
+            .build();
+
+        // Should work normally
+        let handle = pool.insert(42_u32);
+
+        // SAFETY: The pointer is valid and contains the value we just inserted.
+        let value = unsafe { handle.ptr().read() };
+        assert_eq!(value, 42);
+
+        // Pool should be droppable even with items (doesn't panic)
+        drop(pool); // Deliberately not removing the item
+    }
+
+    #[test]
+    fn builder_with_drop_policy_must_not_drop() {
+        let mut pool = RawBlindPoolBuilder::new()
+            .drop_policy(DropPolicy::MustNotDropItems)
+            .build();
+
+        // Should work normally
+        let handle = pool.insert(42_u32);
+
+        // SAFETY: The pointer is valid and contains the value we just inserted.
+        let value = unsafe { handle.ptr().read() };
+        assert_eq!(value, 42);
+
+        // Clean up properly - required for MustNotDropItems
+        pool.remove(handle);
+        assert_eq!(pool.len(), 0);
+
+        // Pool should be droppable when empty
+        drop(pool);
+    }
+}

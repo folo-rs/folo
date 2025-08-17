@@ -83,3 +83,63 @@ impl LocalBlindPoolBuilder {
         LocalBlindPool::from(RawBlindPool::new_inner(self.drop_policy))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+    use super::LocalBlindPoolBuilder;
+    use crate::DropPolicy;
+
+    #[test]
+    fn thread_mobility_assertions() {
+        // LocalBlindPoolBuilder should be thread-mobile (Send) but not thread-safe (Sync),
+        // even though the pool it creates is single-threaded
+        assert_impl_all!(LocalBlindPoolBuilder: Send);
+        assert_not_impl_any!(LocalBlindPoolBuilder: Sync);
+    }
+
+    #[test]
+    fn builder_default_configuration() {
+        let builder = LocalBlindPoolBuilder::new();
+        let pool = builder.build();
+
+        // Should work with default configuration
+        let handle = pool.insert(42_u32);
+        assert_eq!(*handle, 42);
+        assert_eq!(pool.len(), 1);
+    }
+
+    #[test]
+    fn builder_with_drop_policy_allow() {
+        let pool = LocalBlindPoolBuilder::new()
+            .drop_policy(DropPolicy::MayDropItems)
+            .build();
+
+        // Should work normally
+        let handle = pool.insert(42_u32);
+        assert_eq!(*handle, 42);
+
+        // Pool should be droppable even with items (doesn't panic)
+        drop(handle);
+        drop(pool);
+    }
+
+    #[test]
+    fn builder_with_drop_policy_must_not_drop() {
+        let pool = LocalBlindPoolBuilder::new()
+            .drop_policy(DropPolicy::MustNotDropItems)
+            .build();
+
+        // Should work normally
+        let handle = pool.insert(42_u32);
+        assert_eq!(*handle, 42);
+
+        // Clean up properly
+        drop(handle);
+        assert_eq!(pool.len(), 0);
+
+        // Pool should be droppable when empty
+        drop(pool);
+    }
+}

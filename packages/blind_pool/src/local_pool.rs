@@ -196,7 +196,7 @@ mod tests {
     use static_assertions::assert_not_impl_any;
 
     use super::LocalBlindPool;
-    use crate::{LocalBlindPoolBuilder, RawBlindPool};
+    use crate::LocalBlindPoolBuilder;
 
     #[test]
     fn single_threaded_assertions() {
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn simple_insert_and_access() {
-        let pool = LocalBlindPool::from(RawBlindPool::new());
+        let pool = LocalBlindPool::new();
 
         let u32_handle = pool.insert(42_u32);
         let string_handle = pool.insert("hello".to_string());
@@ -225,7 +225,7 @@ mod tests {
 
     #[test]
     fn clone_pool_handles() {
-        let pool = LocalBlindPool::from(RawBlindPool::new());
+        let pool = LocalBlindPool::new();
         let pool_clone = pool.clone();
 
         let u32_handle = pool.insert(42_u32);
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn different_types_same_pool() {
-        let pool = LocalBlindPool::from(RawBlindPool::new());
+        let pool = LocalBlindPool::new();
 
         let u32_handle = pool.insert(42_u32);
         let f64_handle = pool.insert(2.5_f64);
@@ -255,7 +255,7 @@ mod tests {
     #[test]
     #[cfg(not(miri))] // Miri is too slow when running tests with large data sets
     fn large_number_of_items() {
-        let pool = LocalBlindPool::from(RawBlindPool::new());
+        let pool = LocalBlindPool::new();
 
         let mut handles = Vec::new();
 

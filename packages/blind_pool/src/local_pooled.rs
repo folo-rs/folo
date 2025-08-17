@@ -282,6 +282,7 @@ mod tests {
     use static_assertions::assert_not_impl_any;
 
     use super::LocalPooled;
+    use crate::LocalBlindPool;
 
     #[test]
     fn single_threaded_assertions() {
@@ -306,9 +307,7 @@ mod tests {
 
     #[test]
     fn automatic_cleanup_single_handle() {
-        use crate::{LocalBlindPool, RawBlindPool};
-
-        let pool = LocalBlindPool::from(RawBlindPool::new());
+        let pool = LocalBlindPool::new();
 
         {
             let _u32_handle = pool.insert(42_u32);
@@ -322,9 +321,7 @@ mod tests {
 
     #[test]
     fn automatic_cleanup_multiple_handles() {
-        use crate::{LocalBlindPool, RawBlindPool};
-
-        let pool = LocalBlindPool::from(RawBlindPool::new());
+        let pool = LocalBlindPool::new();
 
         let u32_handle = pool.insert(42_u32);
         let cloned_handle = u32_handle.clone();
@@ -342,9 +339,7 @@ mod tests {
 
     #[test]
     fn clone_handles() {
-        use crate::{LocalBlindPool, RawBlindPool};
-
-        let pool = LocalBlindPool::from(RawBlindPool::new());
+        let pool = LocalBlindPool::new();
 
         let value_handle = pool.insert(42_u64);
         let cloned_handle = value_handle.clone();
@@ -360,9 +355,7 @@ mod tests {
 
     #[test]
     fn string_methods_through_deref() {
-        use crate::{LocalBlindPool, RawBlindPool};
-
-        let pool = LocalBlindPool::from(RawBlindPool::new());
+        let pool = LocalBlindPool::new();
 
         let string_handle = pool.insert("hello world".to_string());
 
@@ -375,9 +368,7 @@ mod tests {
 
     #[test]
     fn ptr_access() {
-        use crate::{LocalBlindPool, RawBlindPool};
-
-        let pool = LocalBlindPool::from(RawBlindPool::new());
+        let pool = LocalBlindPool::new();
 
         let value_handle = pool.insert(42_u64);
 
@@ -387,9 +378,7 @@ mod tests {
 
     #[test]
     fn erase_type_information() {
-        use crate::{LocalBlindPool, RawBlindPool};
-
-        let pool = LocalBlindPool::from(RawBlindPool::new());
+        let pool = LocalBlindPool::new();
 
         let u64_handle = pool.insert(42_u64);
         let typed_clone = u64_handle.clone();
@@ -408,9 +397,7 @@ mod tests {
 
     #[test]
     fn erase_with_multiple_references_works() {
-        use crate::{LocalBlindPool, RawBlindPool};
-
-        let pool = LocalBlindPool::from(RawBlindPool::new());
+        let pool = LocalBlindPool::new();
 
         let value_handle = pool.insert(42_u64);
         let cloned_handle = value_handle.clone();
@@ -431,9 +418,7 @@ mod tests {
 
     #[test]
     fn drop_with_types_that_have_drop() {
-        use crate::{LocalBlindPool, RawBlindPool};
-
-        let pool = LocalBlindPool::from(RawBlindPool::new());
+        let pool = LocalBlindPool::new();
 
         // Vec has a non-trivial Drop implementation
         let vec_handle = pool.insert(vec![1, 2, 3, 4, 5]);
@@ -447,9 +432,7 @@ mod tests {
 
     #[test]
     fn works_with_single_byte_type() {
-        use crate::{LocalBlindPool, RawBlindPool};
-
-        let pool = LocalBlindPool::from(RawBlindPool::new());
+        let pool = LocalBlindPool::new();
 
         let u8_handle = pool.insert(255_u8);
 
