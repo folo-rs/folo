@@ -13,6 +13,17 @@ use crate::{BlindPool, RawPooled};
 /// Multiple [`Pooled`] instances can reference the same value through
 /// cloning, implementing reference counting semantics.
 ///
+/// # Thread Safety
+///
+/// [`Pooled<T>`] implements thread safety traits conditionally based on the stored type `T`:
+///
+/// - **Send**: [`Pooled<T>`] is [`Send`] if and only if `T` is [`Send`]. This allows moving
+///   pooled values between threads when the contained type can be safely transferred.
+///
+/// - **Sync**: [`Pooled<T>`] is [`Sync`] if and only if `T` is [`Sync`]. This allows sharing
+///   the same [`Pooled<T>`] instance between multiple threads when the contained type supports
+///   concurrent access.
+///
 /// # Trait Objects
 ///
 /// You can convert to trait objects using the standard dereferencing approach:
@@ -449,5 +460,27 @@ mod tests {
         assert!(string_handle.starts_with("hello"));
         assert!(string_handle.ends_with("world"));
         assert_eq!(string_handle.chars().count(), 11);
+    }
+
+    #[test]
+    fn static_assertions() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+        // Pooled<T> should be Send if and only if T is Send
+        assert_impl_all!(super::Pooled<u32>: Send);
+        assert_impl_all!(super::Pooled<String>: Send);
+        assert_impl_all!(super::Pooled<Vec<u8>>: Send);
+        assert_impl_all!(super::Pooled<RefCell<u32>>: Send); // RefCell is Send but not Sync
+        assert_not_impl_any!(super::Pooled<Rc<u32>>: Send); // Rc is neither Send nor Sync
+
+        // Pooled<T> should be Sync if and only if T is Sync
+        assert_impl_all!(super::Pooled<u32>: Sync);
+        assert_impl_all!(super::Pooled<String>: Sync);
+        assert_impl_all!(super::Pooled<Vec<u8>>: Sync);
+        assert_not_impl_any!(super::Pooled<RefCell<u32>>: Sync); // RefCell is not Sync
+        assert_not_impl_any!(super::Pooled<Rc<u32>>: Sync); // Rc is not Sync
     }
 }
