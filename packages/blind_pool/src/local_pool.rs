@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::{LocalBlindPoolBuilder, LocalPooled, RawBlindPool, RawPooled};
+use crate::{LocalPooled, RawBlindPool, RawPooled};
 
 /// A single-threaded wrapper around [`RawBlindPool`] that provides automatic resource management
 /// and reference counting.
@@ -37,31 +37,6 @@ pub struct LocalBlindPool {
     inner: Rc<RefCell<RawBlindPool>>,
 }
 
-impl From<RawBlindPool> for LocalBlindPool {
-    /// Creates a new [`LocalBlindPool`] from an existing raw pool.
-    ///
-    /// The provided pool is consumed and wrapped in single-threaded reference counting.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use blind_pool::{DropPolicy, LocalBlindPool, RawBlindPool};
-    ///
-    /// // Create a configured raw pool.
-    /// let raw_pool = RawBlindPool::builder()
-    ///     .drop_policy(DropPolicy::MayDropItems)
-    ///     .build();
-    ///
-    /// // Convert to local pool.
-    /// let pool = LocalBlindPool::from(raw_pool);
-    /// ```
-    fn from(pool: RawBlindPool) -> Self {
-        Self {
-            inner: Rc::new(RefCell::new(pool)),
-        }
-    }
-}
-
 impl LocalBlindPool {
     /// Creates a new [`LocalBlindPool`] with default configuration.
     ///
@@ -83,22 +58,9 @@ impl LocalBlindPool {
     /// ```
     #[must_use]
     pub fn new() -> Self {
-        Self::from(RawBlindPool::new())
-    }
-
-    /// Returns a builder for creating a [`LocalBlindPool`] with custom configuration.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use blind_pool::{DropPolicy, LocalBlindPool};
-    ///
-    /// let pool = LocalBlindPool::builder()
-    ///     .drop_policy(DropPolicy::MustNotDropItems)
-    ///     .build();
-    /// ```
-    pub fn builder() -> LocalBlindPoolBuilder {
-        LocalBlindPoolBuilder::new()
+        Self {
+            inner: Rc::new(RefCell::new(RawBlindPool::new())),
+        }
     }
 
     /// Inserts a value into the pool and returns a handle to access it.
@@ -196,19 +158,12 @@ mod tests {
     use static_assertions::assert_not_impl_any;
 
     use super::LocalBlindPool;
-    use crate::LocalBlindPoolBuilder;
 
     #[test]
     fn single_threaded_assertions() {
         // LocalBlindPool should NOT be Send or Sync - it's single-threaded only
         assert_not_impl_any!(LocalBlindPool: Send);
         assert_not_impl_any!(LocalBlindPool: Sync);
-
-        // LocalBlindPoolBuilder should be thread-mobile (Send) but not thread-safe (Sync),
-        // even though the pool it creates is single-threaded
-        use static_assertions::assert_impl_all;
-        assert_impl_all!(LocalBlindPoolBuilder: Send);
-        assert_not_impl_any!(LocalBlindPoolBuilder: Sync);
     }
 
     #[test]
@@ -277,5 +232,31 @@ mod tests {
 
         // Pool should be empty
         assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn auxiliary_functions() {
+        let pool = LocalBlindPool::new();
+
+        // Test empty pool
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+
+        // Add some items
+        let handle1 = pool.insert(42_u32);
+        let handle2 = pool.insert("test".to_string());
+
+        assert_eq!(pool.len(), 2);
+        assert!(!pool.is_empty());
+
+        // Drop one item
+        drop(handle1);
+        assert_eq!(pool.len(), 1);
+        assert!(!pool.is_empty());
+
+        // Drop remaining item
+        drop(handle2);
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
     }
 }

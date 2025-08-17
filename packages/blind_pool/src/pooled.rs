@@ -327,11 +327,11 @@ unsafe impl<T: Sync> Sync for PooledInner<T> {}
 
 #[cfg(test)]
 mod tests {
-    use crate::{BlindPool, RawBlindPool};
+    use crate::BlindPool;
 
     #[test]
     fn clone_handles() {
-        let pool = BlindPool::from(RawBlindPool::new());
+        let pool = BlindPool::new();
 
         let value_handle = pool.insert(42_u64);
         let cloned_handle = value_handle.clone();
@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn automatic_cleanup_single_handle() {
-        let pool = BlindPool::from(RawBlindPool::new());
+        let pool = BlindPool::new();
 
         {
             let _value_handle = pool.insert(42_u64);
@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn automatic_cleanup_multiple_handles() {
-        let pool = BlindPool::from(RawBlindPool::new());
+        let pool = BlindPool::new();
 
         let value_handle1 = pool.insert(42_u64);
         let value_handle2 = value_handle1.clone();
@@ -378,7 +378,7 @@ mod tests {
 
     #[test]
     fn ptr_access() {
-        let pool = BlindPool::from(RawBlindPool::new());
+        let pool = BlindPool::new();
 
         let value_handle = pool.insert(42_u64);
 
@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn erase_type_information() {
-        let pool = BlindPool::from(RawBlindPool::new());
+        let pool = BlindPool::new();
 
         let value_handle = pool.insert(42_u64);
         let typed_clone = value_handle.clone();
@@ -405,7 +405,7 @@ mod tests {
 
     #[test]
     fn erase_with_multiple_references_works() {
-        let pool = BlindPool::from(RawBlindPool::new());
+        let pool = BlindPool::new();
 
         let value_handle = pool.insert(42_u64);
         let cloned_handle = value_handle.clone();
@@ -426,7 +426,7 @@ mod tests {
 
     #[test]
     fn drop_with_types_that_have_drop() {
-        let pool = BlindPool::from(RawBlindPool::new());
+        let pool = BlindPool::new();
 
         // Test with String and Vec - types that implement Drop
         let string_handle = pool.insert("hello".to_string());
@@ -444,7 +444,7 @@ mod tests {
 
     #[test]
     fn works_with_single_byte_type() {
-        let pool = BlindPool::from(RawBlindPool::new());
+        let pool = BlindPool::new();
 
         let byte_handle = pool.insert(42_u8);
         assert_eq!(*byte_handle, 42);
@@ -456,7 +456,7 @@ mod tests {
 
     #[test]
     fn string_methods_through_deref() {
-        let pool = BlindPool::from(RawBlindPool::new());
+        let pool = BlindPool::new();
 
         let string_handle = pool.insert("hello world".to_string());
 

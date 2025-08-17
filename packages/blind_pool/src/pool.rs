@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::constants::ERR_POISONED_LOCK;
-use crate::{BlindPoolBuilder, Pooled, RawBlindPool, RawPooled};
+use crate::{Pooled, RawBlindPool, RawPooled};
 
 /// A thread-safe wrapper around [`RawBlindPool`] that provides automatic resource management
 /// and reference counting.
@@ -46,31 +46,6 @@ pub struct BlindPool {
     inner: Arc<Mutex<RawBlindPool>>,
 }
 
-impl From<RawBlindPool> for BlindPool {
-    /// Creates a new [`BlindPool`] from an existing raw pool.
-    ///
-    /// The provided pool is consumed and wrapped in thread-safe reference counting.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use blind_pool::{BlindPool, DropPolicy, RawBlindPool};
-    ///
-    /// // Create a configured raw pool.
-    /// let raw_pool = RawBlindPool::builder()
-    ///     .drop_policy(DropPolicy::MayDropItems)
-    ///     .build();
-    ///
-    /// // Convert to pool.
-    /// let pool = BlindPool::from(raw_pool);
-    /// ```
-    fn from(pool: RawBlindPool) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(pool)),
-        }
-    }
-}
-
 impl BlindPool {
     /// Creates a new [`BlindPool`] with default configuration.
     ///
@@ -92,22 +67,9 @@ impl BlindPool {
     /// ```
     #[must_use]
     pub fn new() -> Self {
-        Self::from(RawBlindPool::new())
-    }
-
-    /// Returns a builder for creating a [`BlindPool`] with custom configuration.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use blind_pool::{BlindPool, DropPolicy};
-    ///
-    /// let pool = BlindPool::builder()
-    ///     .drop_policy(DropPolicy::MustNotDropItems)
-    ///     .build();
-    /// ```
-    pub fn builder() -> BlindPoolBuilder {
-        BlindPoolBuilder::new()
+        Self {
+            inner: Arc::new(Mutex::new(RawBlindPool::new())),
+        }
     }
 
     /// Inserts a value into the pool and returns a handle to access it.
@@ -212,7 +174,7 @@ mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::BlindPool;
-    use crate::{Pooled, RawBlindPool};
+    use crate::Pooled;
 
     #[test]
     fn thread_safety_assertions() {
@@ -243,7 +205,7 @@ mod tests {
 
     #[test]
     fn simple_insert_and_access() {
-        let pool = BlindPool::from(RawBlindPool::new());
+        let pool = BlindPool::new();
 
         let u32_handle = pool.insert(42_u32);
         let string_handle = pool.insert("hello".to_string());
@@ -259,7 +221,7 @@ mod tests {
 
     #[test]
     fn clone_pool_handles() {
-        let pool1 = BlindPool::from(RawBlindPool::new());
+        let pool1 = BlindPool::new();
         let pool2 = pool1.clone();
 
         // Both pools refer to the same underlying pool
@@ -276,7 +238,7 @@ mod tests {
 
     #[test]
     fn different_types_same_pool() {
-        let pool = BlindPool::from(RawBlindPool::new());
+        let pool = BlindPool::new();
 
         let u32_handle = pool.insert(42_u32);
         let f64_handle = pool.insert(2.5_f64);
@@ -291,7 +253,7 @@ mod tests {
 
     #[test]
     fn thread_safety_basic() {
-        let pool = BlindPool::from(RawBlindPool::new());
+        let pool = BlindPool::new();
 
         let handle = thread::spawn(move || {
             let item_handle = pool.insert(42_u64);
@@ -304,7 +266,7 @@ mod tests {
 
     #[test]
     fn thread_safety_shared_handles() {
-        let pool = BlindPool::from(RawBlindPool::new());
+        let pool = BlindPool::new();
 
         let value_handle = pool.insert(Arc::new(42_u64));
         let cloned_handle = value_handle.clone();
@@ -321,7 +283,7 @@ mod tests {
     #[test]
     #[cfg(not(miri))] // Miri is too slow when running tests with large data sets
     fn large_number_of_items() {
-        let pool = BlindPool::from(RawBlindPool::new());
+        let pool = BlindPool::new();
 
         let mut handles = Vec::new();
 
@@ -340,5 +302,31 @@ mod tests {
         // Drop all handles
         handles.clear();
         assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn auxiliary_functions() {
+        let pool = BlindPool::new();
+
+        // Test empty pool
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+
+        // Add some items
+        let handle1 = pool.insert(42_u32);
+        let handle2 = pool.insert("test".to_string());
+
+        assert_eq!(pool.len(), 2);
+        assert!(!pool.is_empty());
+
+        // Drop one item
+        drop(handle1);
+        assert_eq!(pool.len(), 1);
+        assert!(!pool.is_empty());
+
+        // Drop remaining item
+        drop(handle2);
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
     }
 }

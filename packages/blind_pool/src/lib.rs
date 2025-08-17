@@ -85,10 +85,8 @@
 //! pool.remove(pooled_f32);
 //! ```
 
-mod builder;
 mod cast;
 mod constants;
-mod local_builder;
 mod local_pool;
 mod local_pooled;
 mod pool;
@@ -96,8 +94,6 @@ mod pooled;
 mod raw;
 mod raw_builder;
 
-pub use builder::*;
-pub use local_builder::*;
 pub use local_pool::*;
 pub use local_pooled::*;
 // Re-export DropPolicy from opaque_pool simply because we do not need a different one.
