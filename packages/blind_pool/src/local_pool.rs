@@ -196,7 +196,7 @@ mod tests {
     use static_assertions::assert_not_impl_any;
 
     use super::LocalBlindPool;
-    use crate::LocalBlindPoolBuilder;
+    use crate::{LocalBlindPoolBuilder, RawBlindPool};
 
     #[test]
     fn single_threaded_assertions() {
@@ -209,5 +209,73 @@ mod tests {
         use static_assertions::assert_impl_all;
         assert_impl_all!(LocalBlindPoolBuilder: Send);
         assert_not_impl_any!(LocalBlindPoolBuilder: Sync);
+    }
+
+    #[test]
+    fn simple_insert_and_access() {
+        let pool = LocalBlindPool::from(RawBlindPool::new());
+
+        let u32_handle = pool.insert(42_u32);
+        let string_handle = pool.insert("hello".to_string());
+
+        assert_eq!(*u32_handle, 42);
+        assert_eq!(*string_handle, "hello");
+        assert_eq!(pool.len(), 2);
+    }
+
+    #[test]
+    fn clone_pool_handles() {
+        let pool = LocalBlindPool::from(RawBlindPool::new());
+        let pool_clone = pool.clone();
+
+        let u32_handle = pool.insert(42_u32);
+        let string_handle = pool_clone.insert("test".to_string());
+
+        assert_eq!(*u32_handle, 42);
+        assert_eq!(*string_handle, "test");
+        assert_eq!(pool.len(), 2);
+        assert_eq!(pool_clone.len(), 2); // Should be the same pool
+    }
+
+    #[test]
+    fn different_types_same_pool() {
+        let pool = LocalBlindPool::from(RawBlindPool::new());
+
+        let u32_handle = pool.insert(42_u32);
+        let f64_handle = pool.insert(2.5_f64);
+        let string_handle = pool.insert("test".to_string());
+
+        assert_eq!(pool.len(), 3);
+
+        assert_eq!(*u32_handle, 42);
+        assert!(((*f64_handle) - 2.5).abs() < f64::EPSILON);
+        assert_eq!(*string_handle, "test");
+    }
+
+    #[test]
+    #[cfg(not(miri))] // Miri is too slow when running tests with large data sets
+    fn large_number_of_items() {
+        let pool = LocalBlindPool::from(RawBlindPool::new());
+
+        let mut handles = Vec::new();
+
+        // Insert 1000 items
+        for i in 0..1000 {
+            let handle = pool.insert(i);
+            handles.push(handle);
+        }
+
+        assert_eq!(pool.len(), 1000);
+
+        // Verify all values are correct
+        for (i, handle) in handles.iter().enumerate() {
+            assert_eq!(**handle, i);
+        }
+
+        // Drop all handles
+        drop(handles);
+
+        // Pool should be empty
+        assert_eq!(pool.len(), 0);
     }
 }

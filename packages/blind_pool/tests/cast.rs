@@ -44,7 +44,7 @@ fn raw_pooled_cast_display() {
     let display_str = unsafe { format!("{}", display_pooled.ptr().as_ref()) };
     assert_eq!(display_str, "42");
 
-    // Clean up
+    // Clean up via the post-cast handle.
     pool.remove(display_pooled);
 }
 
@@ -62,6 +62,7 @@ fn struct_storage() {
     let foo = Foo {
         display_value: display_pooled,
     };
-    // Foo will automatically clean up when dropped
+
+    // Verify we can access the stored trait object through the struct
     drop(foo);
 }

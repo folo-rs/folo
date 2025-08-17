@@ -324,3 +324,146 @@ unsafe impl<T: Send> Send for PooledInner<T> {}
 
 // SAFETY: PooledInner<T> can be Sync if T is Sync, following the same reasoning as Pooled<T>.
 unsafe impl<T: Sync> Sync for PooledInner<T> {}
+
+#[cfg(test)]
+mod tests {
+    use crate::{BlindPool, RawBlindPool};
+
+    #[test]
+    fn clone_handles() {
+        let pool = BlindPool::from(RawBlindPool::new());
+
+        let value_handle = pool.insert(42_u64);
+        let cloned_handle = value_handle.clone();
+
+        // Both handles refer to the same value
+        assert_eq!(*value_handle, 42);
+        assert_eq!(*cloned_handle, 42);
+
+        // Pool still has one item (not two)
+        assert_eq!(pool.len(), 1);
+    }
+
+    #[test]
+    fn automatic_cleanup_single_handle() {
+        let pool = BlindPool::from(RawBlindPool::new());
+
+        {
+            let _value_handle = pool.insert(42_u64);
+            assert_eq!(pool.len(), 1);
+        } // value_handle is dropped here
+
+        // Value should be automatically removed
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn automatic_cleanup_multiple_handles() {
+        let pool = BlindPool::from(RawBlindPool::new());
+
+        let value_handle1 = pool.insert(42_u64);
+        let value_handle2 = value_handle1.clone();
+
+        assert_eq!(pool.len(), 1);
+
+        // Drop first handle
+        drop(value_handle1);
+        assert_eq!(pool.len(), 1); // Still alive because of second handle
+
+        // Drop second handle
+        drop(value_handle2);
+        assert_eq!(pool.len(), 0); // Now removed
+    }
+
+    #[test]
+    fn ptr_access() {
+        let pool = BlindPool::from(RawBlindPool::new());
+
+        let value_handle = pool.insert(42_u64);
+
+        // Access the value directly through dereferencing
+        assert_eq!(*value_handle, 42);
+    }
+
+    #[test]
+    fn erase_type_information() {
+        let pool = BlindPool::from(RawBlindPool::new());
+
+        let value_handle = pool.insert(42_u64);
+        let typed_clone = value_handle.clone();
+        let erased = value_handle.erase();
+
+        // Verify the typed handle still works
+        assert_eq!(*typed_clone, 42);
+
+        // Automatic cleanup should still work - both handles refer to the same data
+        drop(erased);
+        drop(typed_clone);
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn erase_with_multiple_references_works() {
+        let pool = BlindPool::from(RawBlindPool::new());
+
+        let value_handle = pool.insert(42_u64);
+        let cloned_handle = value_handle.clone();
+
+        // This should now work without panicking
+        let erased = value_handle.erase();
+
+        // Both handles should still work
+        assert_eq!(*cloned_handle, 42);
+
+        // Verify the erased handle is valid by ensuring cleanup works properly
+        drop(erased);
+        assert_eq!(*cloned_handle, 42); // Typed handle should still work
+
+        drop(cloned_handle);
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn drop_with_types_that_have_drop() {
+        let pool = BlindPool::from(RawBlindPool::new());
+
+        // Test with String and Vec - types that implement Drop
+        let string_handle = pool.insert("hello".to_string());
+        let vec_handle = pool.insert(vec![1, 2, 3, 4, 5]);
+
+        assert_eq!(pool.len(), 2);
+        assert_eq!(*string_handle, "hello");
+        assert_eq!(*vec_handle, vec![1, 2, 3, 4, 5]);
+
+        drop(string_handle);
+        drop(vec_handle);
+
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn works_with_single_byte_type() {
+        let pool = BlindPool::from(RawBlindPool::new());
+
+        let byte_handle = pool.insert(42_u8);
+        assert_eq!(*byte_handle, 42);
+        assert_eq!(pool.len(), 1);
+
+        drop(byte_handle);
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn string_methods_through_deref() {
+        let pool = BlindPool::from(RawBlindPool::new());
+
+        let string_handle = pool.insert("hello world".to_string());
+
+        // Test that we can call String methods directly
+        assert_eq!(string_handle.len(), 11);
+        assert!(string_handle.starts_with("hello"));
+        assert!(string_handle.ends_with("world"));
+        assert_eq!(string_handle.chars().count(), 11);
+    }
+}
