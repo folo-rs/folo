@@ -2,7 +2,7 @@
 name = "opaque_pool"
 description = "A pinned object pool that contains any type of object as long as it has a compatible memory layout"
 publish = true
-version = "0.2.2"
+version = "0.2.3"
 
 authors.workspace = true
 edition.workspace = true
