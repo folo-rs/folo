@@ -18,12 +18,23 @@ use crate::{DropPolicy, PinnedPool};
 /// ```
 ///
 /// [1]: PinnedPool::new
-#[derive(Debug)]
 #[must_use]
 pub struct PinnedPoolBuilder<T> {
     drop_policy: DropPolicy,
 
     _item: PhantomData<T>,
+}
+
+impl<T> std::fmt::Debug for PinnedPoolBuilder<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PinnedPoolBuilder")
+            .field(
+                "item_type",
+                &std::format_args!("{}", std::any::type_name::<T>()),
+            )
+            .field("drop_policy", &self.drop_policy)
+            .finish()
+    }
 }
 
 impl<T> PinnedPoolBuilder<T> {

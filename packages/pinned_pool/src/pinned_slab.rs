@@ -53,7 +53,6 @@ use crate::DropPolicy;
 /// [7]: PinnedSlabInserter::index
 /// [8]: PinnedSlabInserter::insert_with
 /// [9]: PinnedSlabInserter::insert_with_mut
-#[derive(Debug)]
 pub(crate) struct PinnedSlab<T, const CAPACITY: usize> {
     first_entry_ptr: NonNull<Entry<T>>,
 
@@ -69,6 +68,18 @@ pub(crate) struct PinnedSlab<T, const CAPACITY: usize> {
     count: usize,
 
     drop_policy: DropPolicy,
+}
+
+impl<T, const CAPACITY: usize> std::fmt::Debug for PinnedSlab<T, CAPACITY> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PinnedSlab")
+            .field("item_type", &format_args!("{}", type_name::<T>()))
+            .field("capacity", &CAPACITY)
+            .field("count", &self.count)
+            .field("next_free_index", &self.next_free_index)
+            .field("drop_policy", &self.drop_policy)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug)]
@@ -439,12 +450,21 @@ impl<T, const CAPACITY: usize> Drop for PinnedSlab<T, CAPACITY> {
 // about it, so as long as T itself can move between threads, the slab can do so, too.
 unsafe impl<T: Send, const CAPACITY: usize> Send for PinnedSlab<T, CAPACITY> {}
 
-#[derive(Debug)]
 pub(crate) struct PinnedSlabInserter<'s, T, const CAPACITY: usize> {
     slab: &'s mut PinnedSlab<T, CAPACITY>,
 
     /// Index at which the item will be inserted.
     index: usize,
+}
+
+impl<T, const CAPACITY: usize> std::fmt::Debug for PinnedSlabInserter<'_, T, CAPACITY> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PinnedSlabInserter")
+            .field("item_type", &format_args!("{}", type_name::<T>()))
+            .field("capacity", &CAPACITY)
+            .field("index", &self.index)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'s, T, const CAPACITY: usize> PinnedSlabInserter<'s, T, CAPACITY> {
@@ -576,11 +596,20 @@ impl<'s, T, const CAPACITY: usize> PinnedSlabInserter<'s, T, CAPACITY> {
     }
 }
 
-#[derive(Debug)]
 #[must_use]
 pub(crate) struct PinnedSlabIterator<'s, T, const CAPACITY: usize> {
     slab: &'s PinnedSlab<T, CAPACITY>,
     current_index: usize,
+}
+
+impl<T, const CAPACITY: usize> std::fmt::Debug for PinnedSlabIterator<'_, T, CAPACITY> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PinnedSlabIterator")
+            .field("item_type", &format_args!("{}", type_name::<T>()))
+            .field("capacity", &CAPACITY)
+            .field("current_index", &self.current_index)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'s, T, const CAPACITY: usize> PinnedSlabIterator<'s, T, CAPACITY> {

@@ -14,6 +14,7 @@ use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
+use std::{any, fmt};
 use std::{ptr, task};
 
 use pinned_pool::{Key, PinnedPool};
@@ -52,12 +53,19 @@ use crate::{Disconnected, LocalOnceEvent, ReflectiveT, Sealed};
 /// assert_eq!(value2, 100);
 /// // Same event reused - no additional allocation overhead
 /// ```
-#[derive(Debug)]
 pub struct LocalOnceEventPool<T> {
     pool: RefCell<PinnedPool<LocalOnceEvent<T>>>,
 
     // It is invalid to move this type once it has been pinned.
     _requires_pinning: PhantomPinned,
+}
+
+impl<T> fmt::Debug for LocalOnceEventPool<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocalOnceEventPool")
+            .field("item_type", &format_args!("{}", any::type_name::<T>()))
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T> LocalOnceEventPool<T> {
@@ -379,9 +387,17 @@ pub trait LocalPoolRef<T>: Deref<Target = LocalOnceEventPool<T>> + ReflectiveT +
 /// An event pool referenced via `&` shared reference.
 ///
 /// Only used in type names. Instances are created internally by [`LocalOnceEventPool`].
-#[derive(Copy, Debug)]
+#[derive(Copy)]
 pub struct RefLocalPool<'a, T> {
     pool: &'a LocalOnceEventPool<T>,
+}
+
+impl<T> fmt::Debug for RefLocalPool<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RefLocalPool")
+            .field("item_type", &format_args!("{}", any::type_name::<T>()))
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T> Sealed for RefLocalPool<'_, T> {}
@@ -405,9 +421,16 @@ impl<T> ReflectiveT for RefLocalPool<'_, T> {
 /// An event pool referenced via `Rc` shared reference.
 ///
 /// Only used in type names. Instances are created internally by [`LocalOnceEventPool`].
-#[derive(Debug)]
 pub struct RcLocalPool<T> {
     pool: Rc<LocalOnceEventPool<T>>,
+}
+
+impl<T> fmt::Debug for RcLocalPool<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RcLocalPool")
+            .field("item_type", &format_args!("{}", any::type_name::<T>()))
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T> Sealed for RcLocalPool<T> {}
@@ -433,9 +456,17 @@ impl<T> ReflectiveT for RcLocalPool<T> {
 /// An event pool referenced via raw pointer.
 ///
 /// Only used in type names. Instances are created internally by [`LocalOnceEventPool`].
-#[derive(Copy, Debug)]
+#[derive(Copy)]
 pub struct PtrLocalPool<T> {
     pool: NonNull<LocalOnceEventPool<T>>,
+}
+
+impl<T> fmt::Debug for PtrLocalPool<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PtrLocalPool")
+            .field("item_type", &format_args!("{}", any::type_name::<T>()))
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T> Sealed for PtrLocalPool<T> {}
@@ -464,7 +495,6 @@ impl<T> ReflectiveT for PtrLocalPool<T> {
 /// the event is automatically returned to the pool.
 ///
 /// This is the single-threaded variant that cannot be sent across threads.
-#[derive(Debug)]
 pub struct PooledLocalOnceSender<P>
 where
     P: LocalPoolRef<<P as ReflectiveT>::T>,
@@ -477,6 +507,18 @@ where
 
     pool_ref: P,
     key: Key,
+}
+
+impl<P> fmt::Debug for PooledLocalOnceSender<P>
+where
+    P: LocalPoolRef<<P as ReflectiveT>::T>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PooledLocalOnceSender")
+            .field("item_type", &format_args!("{}", any::type_name::<P::T>()))
+            .field("key", &self.key)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<P> PooledLocalOnceSender<P>
@@ -552,7 +594,6 @@ where
 /// the event is automatically returned to the pool.
 ///
 /// This is the single-threaded variant that cannot be sent across threads.
-#[derive(Debug)]
 pub struct PooledLocalOnceReceiver<P>
 where
     P: LocalPoolRef<<P as ReflectiveT>::T>,
@@ -565,6 +606,18 @@ where
 
     pool_ref: P,
     key: Key,
+}
+
+impl<P> fmt::Debug for PooledLocalOnceReceiver<P>
+where
+    P: LocalPoolRef<<P as ReflectiveT>::T>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PooledLocalOnceReceiver")
+            .field("item_type", &format_args!("{}", any::type_name::<P::T>()))
+            .field("key", &self.key)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<P> PooledLocalOnceReceiver<P>

@@ -273,13 +273,21 @@ where
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct GenerationValue<T> {
     generation: u64,
     value: T,
 }
 
-#[derive(Debug)]
+impl<T> std::fmt::Debug for GenerationValue<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GenerationValue")
+            .field("generation", &self.generation)
+            .field("value", &format_args!("<{}>", std::any::type_name::<T>()))
+            .finish()
+    }
+}
+
 struct GlobalState<T>
 where
     T: Clone + Send + Sync + 'static,
@@ -299,6 +307,25 @@ where
     // Accessing this can be skipped for threads that are pinned in one specific memory region,
     // as they then have direct access to the `Arc<RegionalState>`, which is the fastest path.
     regional_states: Box<[OnceLock<Arc<RegionalState<T>>>]>,
+}
+
+impl<T> std::fmt::Debug for GlobalState<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GlobalState")
+            .field(
+                "latest_value",
+                &format_args!("<GenerationValue<{}>>", std::any::type_name::<T>()),
+            )
+            .field("next_generation", &self.next_generation)
+            .field(
+                "regional_states",
+                &format_args!("<{} regional states>", self.regional_states.len()),
+            )
+            .finish()
+    }
 }
 
 impl<T> GlobalState<T>

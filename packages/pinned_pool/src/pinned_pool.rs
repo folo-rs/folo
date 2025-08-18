@@ -749,11 +749,19 @@ impl<T> Default for PinnedPool<T> {
 /// [`PinnedPool::begin_insert()`]: PinnedPool::begin_insert
 ///
 /// [1]: PinnedPool::insert
-#[derive(Debug)]
 pub struct PinnedPoolInserter<'s, T> {
     slab_inserter: PinnedSlabInserter<'s, T, SLAB_CAPACITY>,
     slab_index: usize,
     pool_length: &'s mut usize,
+}
+
+impl<T> fmt::Debug for PinnedPoolInserter<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PinnedPoolInserter")
+            .field("item_type", &format_args!("{}", std::any::type_name::<T>()))
+            .field("slab_index", &self.slab_index)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'s, T> PinnedPoolInserter<'s, T> {
@@ -998,13 +1006,21 @@ impl<const SLAB_CAPACITY: usize> ItemCoordinates<SLAB_CAPACITY> {
 }
 
 /// Iterates through all the items in the pool.
-#[derive(Debug)]
 #[must_use]
 pub struct PinnedPoolIterator<'a, T> {
     pool: &'a PinnedPool<T>,
     slab_iterator: Option<PinnedSlabIterator<'a, T, SLAB_CAPACITY>>,
 
     current_slab_index: usize,
+}
+
+impl<T> fmt::Debug for PinnedPoolIterator<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PinnedPoolIterator")
+            .field("item_type", &format_args!("{}", std::any::type_name::<T>()))
+            .field("current_slab_index", &self.current_slab_index)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a, T> PinnedPoolIterator<'a, T> {

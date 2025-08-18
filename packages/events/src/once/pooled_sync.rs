@@ -14,6 +14,7 @@ use std::pin::Pin;
 use std::ptr::{self, NonNull};
 use std::sync::{Arc, Mutex};
 use std::task;
+use std::{any, fmt};
 
 use pinned_pool::{Key, PinnedPool};
 
@@ -51,7 +52,6 @@ use crate::{Disconnected, ERR_POISONED_LOCK, OnceEvent, ReflectiveTSend, Sealed}
 /// // Same event reused - no additional allocation overhead
 /// # });
 /// ```
-#[derive(Debug)]
 pub struct OnceEventPool<T>
 where
     T: Send,
@@ -60,6 +60,17 @@ where
 
     // It is invalid to move this type once it has been pinned.
     _requires_pinning: PhantomPinned,
+}
+
+impl<T> fmt::Debug for OnceEventPool<T>
+where
+    T: Send,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OnceEventPool")
+            .field("item_type", &format_args!("{}", any::type_name::<T>()))
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T> OnceEventPool<T>
@@ -385,12 +396,23 @@ where
 /// An event pool referenced via `&` shared reference.
 ///
 /// Only used in type names. Instances are created internally by [`OnceEventPool`].
-#[derive(Copy, Debug)]
+#[derive(Copy)]
 pub struct RefPool<'a, T>
 where
     T: Send,
 {
     pool: &'a OnceEventPool<T>,
+}
+
+impl<T> fmt::Debug for RefPool<'_, T>
+where
+    T: Send,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RefPool")
+            .field("item_type", &format_args!("{}", any::type_name::<T>()))
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T> Sealed for RefPool<'_, T> where T: Send {}
@@ -420,12 +442,22 @@ impl<T: Send> ReflectiveTSend for RefPool<'_, T> {
 /// An event pool referenced via `Arc` shared reference.
 ///
 /// Only used in type names. Instances are created internally by [`OnceEventPool`].
-#[derive(Debug)]
 pub struct ArcPool<T>
 where
     T: Send,
 {
     pool: Arc<OnceEventPool<T>>,
+}
+
+impl<T> fmt::Debug for ArcPool<T>
+where
+    T: Send,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ArcPool")
+            .field("item_type", &format_args!("{}", any::type_name::<T>()))
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T> Sealed for ArcPool<T> where T: Send {}
@@ -457,12 +489,23 @@ impl<T: Send> ReflectiveTSend for ArcPool<T> {
 /// An event pool referenced via raw pointer.
 ///
 /// Only used in type names. Instances are created internally by [`OnceEventPool`].
-#[derive(Copy, Debug)]
+#[derive(Copy)]
 pub struct PtrPool<T>
 where
     T: Send,
 {
     pool: NonNull<OnceEventPool<T>>,
+}
+
+impl<T> fmt::Debug for PtrPool<T>
+where
+    T: Send,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PtrPool")
+            .field("item_type", &format_args!("{}", any::type_name::<T>()))
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T> Sealed for PtrPool<T> where T: Send {}
@@ -500,7 +543,6 @@ unsafe impl<T> Send for PtrPool<T> where T: Send {}
 /// The outer type parameter determines the mechanism by which the endpoint is bound to the event
 /// pool. Different binding mechanisms offer different performance characteristics and resource
 /// management patterns.
-#[derive(Debug)]
 pub struct PooledOnceSender<P>
 where
     P: PoolRef<<P as ReflectiveTSend>::T>,
@@ -513,6 +555,18 @@ where
 
     pool_ref: P,
     key: Key,
+}
+
+impl<P> fmt::Debug for PooledOnceSender<P>
+where
+    P: PoolRef<<P as ReflectiveTSend>::T>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PooledOnceSender")
+            .field("item_type", &format_args!("{}", any::type_name::<P::T>()))
+            .field("key", &self.key)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<P> PooledOnceSender<P>
@@ -600,7 +654,6 @@ unsafe impl<P> Send for PooledOnceSender<P> where P: PoolRef<<P as ReflectiveTSe
 /// The outer type parameter determines the mechanism by which the endpoint is bound to the event
 /// pool. Different binding mechanisms offer different performance characteristics and resource
 /// management patterns.
-#[derive(Debug)]
 pub struct PooledOnceReceiver<P>
 where
     P: PoolRef<<P as ReflectiveTSend>::T>,
@@ -613,6 +666,18 @@ where
 
     pool_ref: P,
     key: Key,
+}
+
+impl<P> fmt::Debug for PooledOnceReceiver<P>
+where
+    P: PoolRef<<P as ReflectiveTSend>::T>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PooledOnceReceiver")
+            .field("item_type", &format_args!("{}", any::type_name::<P::T>()))
+            .field("key", &self.key)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<P> PooledOnceReceiver<P>
