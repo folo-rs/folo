@@ -1,5 +1,6 @@
 use std::alloc::Layout;
 use std::fmt;
+use std::mem::MaybeUninit;
 use std::num::NonZero;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -436,6 +437,76 @@ impl OpaquePool {
     /// [`remove()`]: Self::remove
     #[must_use]
     pub unsafe fn insert<T>(&mut self, value: T) -> Pooled<T> {
+        // Implement insert() in terms of insert_with() to reduce logic duplication.
+        // SAFETY: Forwarding safety requirements to the caller.
+        unsafe {
+            self.insert_with(|uninit: &mut MaybeUninit<T>| {
+                uninit.write(value);
+            })
+        }
+    }
+
+    /// Inserts a value into the pool using in-place initialization and returns a handle to it.
+    ///
+    /// This allows the caller to initialize the item in-place using a closure that receives
+    /// a `&mut MaybeUninit<T>`. This can be more efficient than constructing the value
+    /// separately and then moving it into the pool, especially for large or complex types.
+    ///
+    /// The returned [`Pooled<T>`] provides direct access to the memory via [`Pooled::ptr()`].
+    /// Accessing this pointer from unsafe code is the only way to use the inserted value.
+    ///
+    /// The [`Pooled<T>`] may be returned to the pool via [`remove()`] to free the memory and
+    /// drop the value. Behavior of the pool if dropped when non-empty is determined
+    /// by the pool's [drop policy][DropPolicy].
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    /// use std::mem::MaybeUninit;
+    ///
+    /// use opaque_pool::OpaquePool;
+    ///
+    /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
+    ///
+    /// // Insert a value using in-place initialization.
+    /// // SAFETY: String matches the layout used to create the pool, and we properly initialize the value.
+    /// let pooled = unsafe {
+    ///     pool.insert_with(|uninit: &mut MaybeUninit<String>| {
+    ///         uninit.write(String::from("Hello, World!"));
+    ///     })
+    /// };
+    ///
+    /// // Read data back.
+    /// // SAFETY: The pointer is valid for String reads/writes and we have exclusive access.
+    /// let value = unsafe { pooled.ptr().read() };
+    /// assert_eq!(value, "Hello, World!");
+    ///
+    /// // Clean up.
+    /// pool.remove(&pooled);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, panics if the layout of `T` does not match the pool's item layout.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that:
+    /// - The layout of `T` matches the pool's item layout.
+    /// - The closure properly initializes the `MaybeUninit<T>` before returning.
+    ///
+    /// In debug builds, the layout requirement is checked with an assertion.
+    ///
+    /// [`remove()`]: Self::remove
+    #[must_use]
+    pub unsafe fn insert_with<T>(&mut self, f: impl FnOnce(&mut MaybeUninit<T>)) -> Pooled<T> {
+        debug_assert_eq!(
+            Layout::new::<T>(),
+            self.item_layout,
+            "T layout does not match pool's item layout"
+        );
+
         let slab_index = self.index_of_slab_with_vacant_slot();
 
         #[expect(
@@ -454,8 +525,9 @@ impl OpaquePool {
             self.slab_with_vacant_slot_index = None;
         }
 
-        // SAFETY: Forwarding guarantee from caller that T's layout matches the pool's layout.
-        let pooled = unsafe { slab.insert(value) };
+        // SAFETY: Forwarding guarantee from caller that T's layout matches the pool's layout
+        // and that the closure properly initializes the value.
+        let pooled = unsafe { slab.insert_with(f) };
         let coordinates = ItemCoordinates::from_parts(slab_index, pooled.index());
 
         // Update our tracked length since we just inserted an item.
@@ -1629,5 +1701,27 @@ mod tests {
 
         use std::cell::RefCell;
         assert_not_impl_any!(Pooled<RefCell<u32>>: Send, Sync); // RefCell is not Sync
+    }
+
+    #[test]
+    fn insert_with_simple_test() {
+        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
+
+        // SAFETY: u32 matches the layout and we properly initialize the value.
+        let pooled = unsafe {
+            pool.insert_with(|uninit: &mut MaybeUninit<u32>| {
+                uninit.write(42);
+            })
+        };
+
+        // Verify the value was properly initialized.
+        unsafe {
+            let value = pooled.ptr().read();
+            assert_eq!(value, 42);
+        }
+
+        assert_eq!(pool.len(), 1);
+        pool.remove(&pooled);
+        assert_eq!(pool.len(), 0);
     }
 }

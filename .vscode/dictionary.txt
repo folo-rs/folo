@@ -22,6 +22,7 @@ nonoverlapping
 nsec
 oneshot
 pointee
+repr
 Symcrypt
 taskset
 threadpool

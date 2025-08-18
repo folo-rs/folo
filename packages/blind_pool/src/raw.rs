@@ -1,4 +1,5 @@
 use std::alloc::Layout;
+use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 use std::{fmt, thread};
 
@@ -145,6 +146,64 @@ impl RawBlindPool {
         // SAFETY: The internal pool was created with the same layout as T, ensuring
         // that T's size and alignment requirements are satisfied by the pool's allocation strategy.
         let pooled = unsafe { internal_pool.insert(value) };
+
+        RawPooled {
+            layout,
+            inner: pooled,
+        }
+    }
+
+    /// Inserts a value into the pool using in-place initialization and returns a handle to it.
+    ///
+    /// This allows the caller to initialize the item in-place using a closure that receives
+    /// a `&mut MaybeUninit<T>`. This can be more efficient than constructing the value
+    /// separately and then moving it into the pool, especially for large or complex types.
+    ///
+    /// The pool stores the initialized value and provides a handle for later access or removal.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::mem::MaybeUninit;
+    ///
+    /// use blind_pool::RawBlindPool;
+    ///
+    /// let mut pool = RawBlindPool::new();
+    ///
+    /// // SAFETY: We properly initialize the value in the closure.
+    /// let pooled = unsafe {
+    ///     pool.insert_with(|uninit: &mut MaybeUninit<String>| {
+    ///         uninit.write(String::from("Hello, World!"));
+    ///     })
+    /// };
+    ///
+    /// // Read the value back.
+    /// // SAFETY: The pointer is valid and contains the initialized String.
+    /// let value = unsafe { pooled.ptr().read() };
+    /// assert_eq!(value, "Hello, World!");
+    ///
+    /// // Clean up.
+    /// pool.remove(&pooled);
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// The closure must properly initialize the `MaybeUninit<T>` before returning.
+    #[inline]
+    pub unsafe fn insert_with<T>(&mut self, f: impl FnOnce(&mut MaybeUninit<T>)) -> RawPooled<T> {
+        let layout = Layout::new::<T>();
+
+        let internal_pool = self.pools.entry(layout).or_insert_with(|| {
+            OpaquePool::builder()
+                .layout_of::<T>()
+                .drop_policy(self.drop_policy)
+                .build()
+        });
+
+        // SAFETY: The internal pool was created with the same layout as T, ensuring
+        // that T's size and alignment requirements are satisfied by the pool's allocation strategy.
+        // We forward the safety requirements to the caller.
+        let pooled = unsafe { internal_pool.insert_with(f) };
 
         RawPooled {
             layout,
@@ -1049,5 +1108,28 @@ mod tests {
             // Type-erased handles should be Send and Sync (() is Sync)
             assert_impl_all!(RawPooled<()>: Send, Sync);
         }
+    }
+
+    #[test]
+    fn insert_with_basic_functionality() {
+        let mut pool = RawBlindPool::new();
+
+        // SAFETY: We properly initialize the u32 value.
+        let pooled = unsafe {
+            pool.insert_with(|uninit: &mut MaybeUninit<u32>| {
+                uninit.write(42);
+            })
+        };
+
+        // Verify the value was properly initialized.
+        // SAFETY: The pointer is valid and points to the u32 value we just initialized.
+        unsafe {
+            let value = pooled.ptr().read();
+            assert_eq!(value, 42);
+        }
+
+        assert_eq!(pool.len(), 1);
+        pool.remove(&pooled);
+        assert_eq!(pool.len(), 0);
     }
 }

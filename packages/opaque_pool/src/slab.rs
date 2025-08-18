@@ -1,4 +1,5 @@
 use std::alloc::{Layout, alloc, dealloc};
+use std::mem::MaybeUninit;
 use std::num::NonZero;
 use std::ptr::NonNull;
 use std::{mem, ptr, thread};
@@ -287,8 +288,41 @@ impl OpaqueSlab {
     ///
     /// The caller must ensure that the layout of `T` matches the slab's item layout.
     /// In debug builds, this is checked with an assertion.
+    #[cfg(test)]
     #[must_use]
     pub(crate) unsafe fn insert<T>(&mut self, value: T) -> SlabItem<T> {
+        // Implement insert() in terms of insert_with() to reduce logic duplication.
+        // SAFETY: Forwarding safety requirements to the caller.
+        unsafe {
+            self.insert_with(|uninit: &mut MaybeUninit<T>| {
+                uninit.write(value);
+            })
+        }
+    }
+
+    /// Inserts a value into the slab using in-place initialization and returns a handle to it.
+    ///
+    /// This allows the caller to initialize the item in-place using a closure that receives
+    /// a `&mut MaybeUninit<T>`. This can be more efficient than constructing the value
+    /// separately and then moving it into the slab, especially for large or complex types.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the slab is full or if the layout of `T` does not match the slab's item layout
+    /// (in debug builds only).
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that:
+    /// - The layout of `T` matches the slab's item layout.
+    /// - The closure properly initializes the `MaybeUninit<T>` before returning.
+    ///
+    /// In debug builds, the layout requirement is checked with an assertion.
+    #[must_use]
+    pub(crate) unsafe fn insert_with<T>(
+        &mut self,
+        f: impl FnOnce(&mut MaybeUninit<T>),
+    ) -> SlabItem<T> {
         #[cfg(debug_assertions)]
         {
             assert_eq!(
@@ -299,9 +333,6 @@ impl OpaqueSlab {
                 Layout::new::<T>()
             );
         }
-
-        #[cfg(debug_assertions)]
-        self.integrity_check();
 
         assert!(
             !self.is_full(),
@@ -321,15 +352,16 @@ impl OpaqueSlab {
         // Get the item pointer where we'll write the value.
         let item_ptr = self.item_ptr::<T>(index);
 
-        // SAFETY: The caller's safety contract guarantees T's layout matches our item_layout.
-        // item_ptr points to valid, properly aligned memory for type T within our allocated
-        // block, and we own this memory exclusively.
+        // Create a MaybeUninit wrapper around the memory location and call the initialization function.
+        // SAFETY: item_ptr points to valid, properly aligned memory for type T within our allocated
+        // block, and we own this memory exclusively. The caller guarantees proper initialization.
         unsafe {
-            item_ptr.write(value);
+            let mut uninit_ptr = item_ptr.cast::<MaybeUninit<T>>();
+            f(uninit_ptr.as_mut());
         }
 
-        // Create a dropper for the value we just wrote.
-        // SAFETY: pointer is valid and properly initialized, and we ensure the dropper
+        // Create a dropper for the value we just initialized.
+        // SAFETY: pointer is valid and properly initialized by the closure, and we ensure the dropper
         // will be called before the memory is deallocated or reused.
         let dropper = unsafe { Dropper::new(item_ptr) };
 
@@ -339,14 +371,20 @@ impl OpaqueSlab {
 
         self.next_free_index = match previous_entry {
             EntryMeta::Vacant { next_free_index } => next_free_index,
-            EntryMeta::Occupied { .. } => panic!(
-                "entry {index} was not vacant when we tried to insert into it in slab of capacity {}",
-                self.capacity.get()
-            ),
+            EntryMeta::Occupied { .. } => {
+                panic!(
+                    "insert_with({index}) entry was already occupied in slab of capacity {}",
+                    self.capacity.get()
+                );
+            }
         };
 
-        // Cannot overflow because it is bounded by slab capacity.
+        // Increment the count since we successfully inserted an item.
+        // Cannot overflow because we would hit capacity limits or virtual memory limits first.
         self.count = self.count.wrapping_add(1);
+
+        #[cfg(debug_assertions)]
+        self.integrity_check();
 
         SlabItem {
             index,

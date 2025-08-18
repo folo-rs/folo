@@ -557,6 +557,49 @@ impl<T> PinnedPool<T> {
         key
     }
 
+    /// Inserts an item using in-place initialization and returns the key.
+    ///
+    /// This allows the caller to initialize the item in-place using a closure that receives
+    /// a `&mut MaybeUninit<T>`. This can be more efficient than constructing the value
+    /// separately and then moving it into the pool, especially for large or complex types.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::mem::MaybeUninit;
+    ///
+    /// use pinned_pool::PinnedPool;
+    ///
+    /// let mut pool = PinnedPool::<String>::new();
+    ///
+    /// // SAFETY: We properly initialize the value in the closure.
+    /// let key = unsafe {
+    ///     pool.insert_with(|uninit: &mut MaybeUninit<String>| {
+    ///         uninit.write(String::from("Hello, World!"));
+    ///     })
+    /// };
+    ///
+    /// // Access the item using the key.
+    /// let item = pool.get(key);
+    /// assert_eq!(&*item, "Hello, World!");
+    /// # pool.remove(key);
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// The closure must initialize the `MaybeUninit<T>` before returning.
+    #[must_use]
+    #[inline]
+    pub unsafe fn insert_with(&mut self, f: impl FnOnce(&mut MaybeUninit<T>)) -> Key {
+        let inserter = self.begin_insert();
+        let key = inserter.key();
+        // SAFETY: Forwarding safety requirements to caller.
+        unsafe {
+            inserter.insert_with(f);
+        }
+        key
+    }
+
     /// Removes an item from the pool by its key.
     ///
     /// After an item is removed, any pointers to it become invalid and must not be used.
@@ -2015,5 +2058,24 @@ mod tests {
 
         assert_eq!(items1, items2);
         assert_eq!(items1, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn insert_with_convenience_method() {
+        let mut pool = PinnedPool::<String>::new();
+
+        // SAFETY: We properly initialize the value in the closure.
+        let key = unsafe {
+            pool.insert_with(|uninit: &mut MaybeUninit<String>| {
+                uninit.write(String::from("Hello from insert_with!"));
+            })
+        };
+
+        // Access the item using the key.
+        let item = pool.get(key);
+        assert_eq!(&*item, "Hello from insert_with!");
+
+        pool.remove(key);
+        assert!(pool.is_empty());
     }
 }

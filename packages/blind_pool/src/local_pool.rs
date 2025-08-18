@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::mem::MaybeUninit;
 use std::rc::Rc;
 
 use crate::{LocalPooled, RawBlindPool, RawPooled};
@@ -89,6 +90,51 @@ impl LocalBlindPool {
         let pooled = {
             let mut pool = self.inner.borrow_mut();
             pool.insert(value)
+        };
+
+        LocalPooled::new(pooled, self.clone())
+    }
+
+    /// Inserts a value into the pool using in-place initialization and returns a handle to it.
+    ///
+    /// This allows the caller to initialize the item in-place using a closure that receives
+    /// a `&mut MaybeUninit<T>`. This can be more efficient than constructing the value
+    /// separately and then moving it into the pool, especially for large or complex types.
+    ///
+    /// The returned handle automatically manages the lifetime of the inserted value.
+    /// When all handles to the value are dropped, the value is automatically removed
+    /// from the pool.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::mem::MaybeUninit;
+    ///
+    /// use blind_pool::LocalBlindPool;
+    ///
+    /// let pool = LocalBlindPool::new();
+    ///
+    /// // SAFETY: We properly initialize the value in the closure.
+    /// let handle = unsafe {
+    ///     pool.insert_with(|uninit: &mut MaybeUninit<String>| {
+    ///         uninit.write(String::from("Hello, World!"));
+    ///     })
+    /// };
+    ///
+    /// // Access value through dereferencing.
+    /// assert_eq!(*handle, "Hello, World!");
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// The closure must properly initialize the `MaybeUninit<T>` before returning.
+    #[inline]
+    #[must_use]
+    pub unsafe fn insert_with<T>(&self, f: impl FnOnce(&mut MaybeUninit<T>)) -> LocalPooled<T> {
+        let pooled = {
+            let mut pool = self.inner.borrow_mut();
+            // SAFETY: Forwarding safety requirements to caller.
+            unsafe { pool.insert_with(f) }
         };
 
         LocalPooled::new(pooled, self.clone())
