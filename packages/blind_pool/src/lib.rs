@@ -102,3 +102,7 @@ pub use pool::*;
 pub use pooled::*;
 pub use raw::*;
 pub use raw_builder::*;
+
+// Re-export so we can use it without the consumer needing a reference.
+#[doc(hidden)]
+pub use paste::paste as __private_paste;
