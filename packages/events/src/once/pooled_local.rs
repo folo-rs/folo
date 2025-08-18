@@ -571,25 +571,99 @@ impl<P> PooledLocalOnceReceiver<P>
 where
     P: LocalPoolRef<<P as ReflectiveT>::T>,
 {
-    /// Drops the inner state, releasing the event back to the pool.
+    /// Consumes the receiver and transforms it into the received value, if the value is available.
+    ///
+    /// This method provides an alternative to awaiting the receiver when you want to check for
+    /// an immediately available value without blocking. It returns `Some(value)` if a value has
+    /// already been sent, or `None` if no value is currently available.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the value has already been received via `Future::poll()`.
+    ///
+    /// # Examples
+    ///
+    /// ## Basic usage with reference-based pool
+    ///
+    /// ```rust
+    /// use events::LocalOnceEventPool;
+    ///
+    /// let pool = LocalOnceEventPool::<String>::new();
+    /// let (sender, receiver) = pool.bind_by_ref();
+    /// sender.send("Hello from pool".to_string());
+    ///
+    /// // Value is immediately available
+    /// let value = receiver.into_value();
+    /// assert_eq!(value, Some("Hello from pool".to_string()));
+    /// // Event is automatically returned to pool for reuse
+    /// ```
+    ///
+    /// ## No value available
+    ///
+    /// ```rust
+    /// use events::LocalOnceEventPool;
+    ///
+    /// let pool = LocalOnceEventPool::<i32>::new();
+    /// let (_sender, receiver) = pool.bind_by_ref();
+    ///
+    /// // No value sent yet
+    /// let value = receiver.into_value();
+    /// assert_eq!(value, None);
+    /// // Event is still returned to pool
+    /// ```
+    ///
+    /// ## Using with Rc-based pool binding
+    ///
+    /// ```rust
+    /// use std::rc::Rc;
+    ///
+    /// use events::LocalOnceEventPool;
+    ///
+    /// let pool = Rc::new(LocalOnceEventPool::<String>::new());
+    /// let (sender, receiver) = pool.bind_by_rc();
+    /// sender.send("Hello".to_string());
+    ///
+    /// let value = receiver.into_value();
+    /// assert_eq!(value, Some("Hello".to_string()));
+    /// ```
+    pub fn into_value(mut self) -> Option<<P as ReflectiveT>::T> {
+        self.drop_inner()
+    }
+
+    /// Drops the inner state, releasing the event back to the pool, returning the value (if any).
+    ///
     /// May also be used from contexts where the receiver itself is not yet consumed.
-    fn drop_inner(&mut self) {
+    fn drop_inner(&mut self) -> Option<<P as ReflectiveT>::T> {
         let Some(event) = self.event else {
             // Already pseudo-consumed the receiver as part of the Future impl.
-            return;
+            return None;
         };
 
         // SAFETY: See comments on field.
         let event = unsafe { event.as_ref() };
 
-        let disconnect_result = event.receiver_dropped_early();
+        let final_poll_result = event.final_poll();
 
         // Regardless of whether we were the last reference holder or not, we are no longer
         // allowed to reference the event as we are releasing our reference.
         self.event = None;
 
-        if disconnect_result == Err(Disconnected) {
-            self.pool_ref.pool.borrow_mut().remove(self.key);
+        match final_poll_result {
+            Ok(Some(value)) => {
+                // The sender has disconnected and sent a value, so we need to clean up.
+                self.pool_ref.pool.borrow_mut().remove(self.key);
+                Some(value)
+            }
+            Ok(None) => {
+                // Nothing for us to do - the sender was still connected and had not
+                // sent any value, so it will perform the cleanup on its own.
+                None
+            }
+            Err(Disconnected) => {
+                // The sender has already disconnected, so we need to clean up the event.
+                self.pool_ref.pool.borrow_mut().remove(self.key);
+                None
+            }
         }
     }
 }
@@ -997,6 +1071,142 @@ mod tests {
         });
 
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn pooled_local_receiver_into_value_with_sent_value() {
+        with_watchdog(|| {
+            let pool = Rc::new(LocalOnceEventPool::<String>::new());
+            let (sender, receiver) = pool.bind_by_rc();
+            sender.send("test value".to_string());
+
+            let result = receiver.into_value();
+            assert_eq!(result, Some("test value".to_string()));
+        });
+    }
+
+    #[test]
+    fn pooled_local_receiver_into_value_no_value_sent() {
+        with_watchdog(|| {
+            let pool = Rc::new(LocalOnceEventPool::<i32>::new());
+            let (_sender, receiver) = pool.bind_by_rc();
+
+            let result = receiver.into_value();
+            assert_eq!(result, None);
+        });
+    }
+
+    #[test]
+    fn pooled_local_receiver_into_value_sender_disconnected() {
+        with_watchdog(|| {
+            let pool = Rc::new(LocalOnceEventPool::<String>::new());
+            let (sender, receiver) = pool.bind_by_rc();
+            drop(sender); // Disconnect without sending
+
+            let result = receiver.into_value();
+            assert_eq!(result, None);
+        });
+    }
+
+    #[test]
+    fn pooled_local_receiver_into_value_with_ref_pool() {
+        with_watchdog(|| {
+            let pool = LocalOnceEventPool::<i32>::new();
+            let (sender, receiver) = pool.bind_by_ref();
+            sender.send(42);
+
+            let result = receiver.into_value();
+            assert_eq!(result, Some(42));
+        });
+    }
+
+    #[test]
+    fn pooled_local_receiver_into_value_with_rc_pool() {
+        with_watchdog(|| {
+            let pool = Rc::new(LocalOnceEventPool::<String>::new());
+            let (sender, receiver) = pool.bind_by_rc();
+            sender.send("rc test".to_string());
+
+            let result = receiver.into_value();
+            assert_eq!(result, Some("rc test".to_string()));
+        });
+    }
+
+    #[test]
+    fn pooled_local_receiver_into_value_with_ptr_pool() {
+        with_watchdog(|| {
+            let pool = Box::pin(LocalOnceEventPool::<i32>::new());
+            // SAFETY: Pool is pinned and outlives the sender/receiver.
+            let (sender, receiver) = unsafe { pool.as_ref().bind_by_ptr() };
+            sender.send(999);
+
+            let result = receiver.into_value();
+            assert_eq!(result, Some(999));
+        });
+    }
+
+    #[test]
+    fn pooled_local_receiver_into_value_returns_none_after_poll() {
+        with_watchdog(|| {
+            futures::executor::block_on(async {
+                let pool = Rc::new(LocalOnceEventPool::<i32>::new());
+                let (sender, mut receiver) = pool.bind_by_rc();
+                sender.send(42);
+
+                // Poll the receiver first
+                let waker = noop_waker_ref();
+                let mut context = task::Context::from_waker(waker);
+                let poll_result = Pin::new(&mut receiver).poll(&mut context);
+                assert_eq!(poll_result, task::Poll::Ready(Ok(42)));
+
+                // This should return None since the receiver was already consumed
+                let value = receiver.into_value();
+                assert_eq!(value, None);
+            });
+        });
+    }
+
+    #[test]
+    fn pooled_local_receiver_into_value_pool_reuse() {
+        with_watchdog(|| {
+            let pool = Rc::new(LocalOnceEventPool::<i32>::new());
+
+            // First usage
+            let (sender1, receiver1) = pool.bind_by_rc();
+            sender1.send(123);
+            let result1 = receiver1.into_value();
+            assert_eq!(result1, Some(123));
+
+            // Second usage - should reuse the event from the pool
+            let (sender2, receiver2) = pool.bind_by_rc();
+            sender2.send(456);
+            let result2 = receiver2.into_value();
+            assert_eq!(result2, Some(456));
+        });
+    }
+
+    #[test]
+    fn pooled_local_receiver_into_value_multiple_event_types() {
+        with_watchdog(|| {
+            // Test with different value types
+            let pool1 = Rc::new(LocalOnceEventPool::<()>::new());
+            let (sender1, receiver1) = pool1.bind_by_rc();
+            sender1.send(());
+            assert_eq!(receiver1.into_value(), Some(()));
+
+            let pool2 = Rc::new(LocalOnceEventPool::<Vec<i32>>::new());
+            let (sender2, receiver2) = pool2.bind_by_rc();
+            sender2.send(vec![1, 2, 3]);
+            assert_eq!(receiver2.into_value(), Some(vec![1, 2, 3]));
+
+            let pool3 = Rc::new(LocalOnceEventPool::<Option<String>>::new());
+            let (sender3, receiver3) = pool3.bind_by_rc();
+            sender3.send(Some("nested option".to_string()));
+            assert_eq!(
+                receiver3.into_value(),
+                Some(Some("nested option".to_string()))
+            );
+        });
     }
 
     #[test]

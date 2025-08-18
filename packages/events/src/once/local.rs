@@ -828,10 +828,16 @@ impl<T> LocalOnceEvent<T> {
         }
     }
 
-    /// Marks the event as having been disconnected early from the receiver side.
+    /// Attempts to obtain the value from the event, if one has been sent, while indicating
+    /// that no further polls will be performed by the receiver.
     ///
-    /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
-    pub(crate) fn receiver_dropped_early(&self) -> Result<(), Disconnected> {
+    /// Returns `Ok(None)` if the sender has not yet sent a value. In this case, the sender will
+    /// eventually clean up the event.
+    ///
+    /// Returns `Ok(Some(value))` if the sender sender has already sent a value.
+    /// Returns `Err` if the sender has already disconnected without sending a value.
+    /// In both of these cases, the receiver must clean up the event now.
+    pub(crate) fn final_poll(&self) -> Result<Option<T>, Disconnected> {
         let previous_state = self.state.get();
 
         // We can immediately set this because this is a single-threaded event, so there cannot
@@ -841,7 +847,7 @@ impl<T> LocalOnceEvent<T> {
         match previous_state {
             EVENT_BOUND => {
                 // The sender had not yet set any value. It will clean up the event later.
-                Ok(())
+                Ok(None)
             }
             EVENT_SET => {
                 // The sender has already set a value but we disconnected before we received it.
@@ -857,15 +863,13 @@ impl<T> LocalOnceEvent<T> {
                         .expect("UnsafeCell pointer is never null")
                 };
 
-                // We drop the value and consider the cell uninitialized.
+                // We extract the value and consider the cell uninitialized.
                 //
                 // SAFETY: We were in EVENT_SET which guarantees there is a value in there.
-                unsafe {
-                    value_cell.assume_init_drop();
-                }
+                let value = unsafe { value_cell.assume_init_read() };
 
                 // The receiver will clean up.
-                Err(Disconnected)
+                Ok(Some(value))
             }
             EVENT_AWAITING => {
                 // We had previously started listening for the value but have not received one,
@@ -890,7 +894,7 @@ impl<T> LocalOnceEvent<T> {
                 }
 
                 // The sender will clean up the event later.
-                Ok(())
+                Ok(None)
             }
             EVENT_DISCONNECTED => {
                 // The receiver is the last endpoint remaining, so it will clean up.
@@ -1182,6 +1186,82 @@ where
             event_ref: Some(event_ref),
         }
     }
+
+    /// Consumes the receiver and transforms it into the received value, if the value is available.
+    ///
+    /// This method provides an alternative to awaiting the receiver when you want to check for
+    /// an immediately available value without blocking. It returns `Some(value)` if a value has
+    /// already been sent, or `None` if no value is currently available.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the value has already been received via `Future::poll()`.
+    ///
+    /// # Examples
+    ///
+    /// ## Basic usage with immediate value
+    ///
+    /// ```rust
+    /// use events::LocalOnceEvent;
+    ///
+    /// let (sender, receiver) = LocalOnceEvent::<String>::new_managed();
+    /// sender.send("Hello".to_string());
+    ///
+    /// // Value is immediately available
+    /// let value = receiver.into_value();
+    /// assert_eq!(value, Some("Hello".to_string()));
+    /// ```
+    ///
+    /// ## No value available
+    ///
+    /// ```rust
+    /// use events::LocalOnceEvent;
+    ///
+    /// let (_sender, receiver) = LocalOnceEvent::<i32>::new_managed();
+    ///
+    /// // No value sent yet
+    /// let value = receiver.into_value();
+    /// assert_eq!(value, None);
+    /// ```
+    ///
+    /// ## Sender disconnected without sending
+    ///
+    /// ```rust
+    /// use events::LocalOnceEvent;
+    ///
+    /// let (sender, receiver) = LocalOnceEvent::<String>::new_managed();
+    /// drop(sender); // Disconnect without sending
+    ///
+    /// let value = receiver.into_value();
+    /// assert_eq!(value, None);
+    /// ```
+    pub fn into_value(self) -> Option<E::T> {
+        // This fn is a drop() implementation of sorts, so no need to run regular drop().
+        let mut this = ManuallyDrop::new(self);
+
+        let event_ref = this
+            .event_ref
+            .take()
+            .expect("LocalOnceReceiver polled after completion");
+
+        match event_ref.final_poll() {
+            Ok(Some(value)) => {
+                // The sender has disconnected and sent a value, so we need to clean up.
+                event_ref.release_event();
+                Some(value)
+            }
+            Ok(None) => {
+                // Nothing for us to do - the sender was still connected and had not
+                // sent any value, so it will perform the cleanup on its own.
+                None
+            }
+            Err(Disconnected) => {
+                // The sender has already disconnected, so we need to clean up the event.
+                event_ref.release_event();
+                None
+            }
+        }
+    }
 }
 
 impl<E> Future for LocalOnceReceiver<E>
@@ -1195,7 +1275,7 @@ where
         let event_ref = self
             .event_ref
             .as_ref()
-            .expect("LocalOnceReceiver  polled after completion");
+            .expect("LocalOnceReceiver polled after completion");
 
         let inner_poll_result = event_ref.poll(cx.waker());
 
@@ -1209,6 +1289,7 @@ where
 
             // SAFETY: We are not moving anything, merely updating a field.
             let this = unsafe { self.get_unchecked_mut() };
+            // This makes `drop()` a no-op.
             this.event_ref = None;
         }
 
@@ -1222,9 +1303,15 @@ where
 {
     fn drop(&mut self) {
         if let Some(event_ref) = self.event_ref.take() {
-            if event_ref.receiver_dropped_early() == Err(Disconnected) {
-                // The sender has already disconnected, so we need to clean up the event.
-                event_ref.release_event();
+            match event_ref.final_poll() {
+                Ok(None) => {
+                    // Nothing for us to do - the sender was still connected and had not
+                    // sent any value, so it will perform the cleanup on its own.
+                }
+                _ => {
+                    // The sender has already disconnected, so we need to clean up the event.
+                    event_ref.release_event();
+                }
             }
         }
     }
@@ -1695,6 +1782,119 @@ mod tests {
                     event_storage2_ref.assume_init_drop();
                 }
             });
+        });
+    }
+
+    #[test]
+    fn local_receiver_into_value_with_sent_value() {
+        with_watchdog(|| {
+            let (sender, receiver) = LocalOnceEvent::<String>::new_managed();
+            sender.send("test value".to_string());
+
+            let result = receiver.into_value();
+            assert_eq!(result, Some("test value".to_string()));
+        });
+    }
+
+    #[test]
+    fn local_receiver_into_value_no_value_sent() {
+        with_watchdog(|| {
+            let (_sender, receiver) = LocalOnceEvent::<i32>::new_managed();
+
+            let result = receiver.into_value();
+            assert_eq!(result, None);
+        });
+    }
+
+    #[test]
+    fn local_receiver_into_value_sender_disconnected() {
+        with_watchdog(|| {
+            let (sender, receiver) = LocalOnceEvent::<String>::new_managed();
+            drop(sender); // Disconnect without sending
+
+            let result = receiver.into_value();
+            assert_eq!(result, None);
+        });
+    }
+
+    #[test]
+    fn local_receiver_into_value_with_ref_event() {
+        with_watchdog(|| {
+            let event = LocalOnceEvent::<i32>::new();
+            let (sender, receiver) = event.bind_by_ref();
+            sender.send(42);
+
+            let result = receiver.into_value();
+            assert_eq!(result, Some(42));
+        });
+    }
+
+    #[test]
+    fn local_receiver_into_value_with_rc_event() {
+        with_watchdog(|| {
+            let event = Rc::new(LocalOnceEvent::<String>::new());
+            let (sender, receiver) = event.bind_by_rc();
+            sender.send("rc test".to_string());
+
+            let result = receiver.into_value();
+            assert_eq!(result, Some("rc test".to_string()));
+        });
+    }
+
+    #[test]
+    fn local_receiver_into_value_with_ptr_event() {
+        with_watchdog(|| {
+            let event = Box::pin(LocalOnceEvent::<i32>::new());
+            // SAFETY: Event is pinned and outlives the sender/receiver.
+            let (sender, receiver) = unsafe { event.as_ref().bind_by_ptr() };
+            sender.send(999);
+
+            let result = receiver.into_value();
+            assert_eq!(result, Some(999));
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "LocalOnceReceiver polled after completion")]
+    fn local_receiver_into_value_panics_after_poll() {
+        with_watchdog(|| {
+            futures::executor::block_on(async {
+                let (sender, mut receiver) = LocalOnceEvent::<i32>::new_managed();
+                sender.send(42);
+
+                // Poll the receiver first
+                let waker = noop_waker_ref();
+                let mut context = task::Context::from_waker(waker);
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "testing poll result ignored"
+                )]
+                let _ = Pin::new(&mut receiver).poll(&mut context);
+
+                // This should panic
+                let _ = receiver.into_value();
+            });
+        });
+    }
+
+    #[test]
+    fn local_receiver_into_value_multiple_event_types() {
+        with_watchdog(|| {
+            // Test with different value types
+            let (sender1, receiver1) = LocalOnceEvent::<()>::new_managed();
+            sender1.send(());
+            assert_eq!(receiver1.into_value(), Some(()));
+
+            let (sender2, receiver2) = LocalOnceEvent::<Vec<i32>>::new_managed();
+            sender2.send(vec![1, 2, 3]);
+            assert_eq!(receiver2.into_value(), Some(vec![1, 2, 3]));
+
+            let (sender3, receiver3) = LocalOnceEvent::<Option<String>>::new_managed();
+            sender3.send(Some("nested option".to_string()));
+            assert_eq!(
+                receiver3.into_value(),
+                Some(Some("nested option".to_string()))
+            );
         });
     }
 

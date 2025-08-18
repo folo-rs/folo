@@ -619,29 +619,109 @@ impl<P> PooledOnceReceiver<P>
 where
     P: PoolRef<<P as ReflectiveTSend>::T>,
 {
-    /// Drops the inner state, releasing the event back to the pool.
+    /// Consumes the receiver and transforms it into the received value, if the value is available.
+    ///
+    /// This method provides an alternative to awaiting the receiver when you want to check for
+    /// an immediately available value without blocking. It returns `Some(value)` if a value has
+    /// already been sent, or `None` if no value is currently available.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the value has already been received via `Future::poll()`.
+    ///
+    /// # Examples
+    ///
+    /// ## Basic usage with Arc-based pool
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use events::OnceEventPool;
+    ///
+    /// let pool = Arc::new(OnceEventPool::<String>::new());
+    /// let (sender, receiver) = pool.bind_by_arc();
+    /// sender.send("Hello from pool".to_string());
+    ///
+    /// // Value is immediately available
+    /// let value = receiver.into_value();
+    /// assert_eq!(value, Some("Hello from pool".to_string()));
+    /// // Event is automatically returned to pool for reuse
+    /// ```
+    ///
+    /// ## No value available
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use events::OnceEventPool;
+    ///
+    /// let pool = Arc::new(OnceEventPool::<i32>::new());
+    /// let (_sender, receiver) = pool.bind_by_arc();
+    ///
+    /// // No value sent yet
+    /// let value = receiver.into_value();
+    /// assert_eq!(value, None);
+    /// // Event is still returned to pool
+    /// ```
+    ///
+    /// ## Using with reference-based pool binding
+    ///
+    /// ```rust
+    /// use events::OnceEventPool;
+    ///
+    /// let pool = OnceEventPool::<String>::new();
+    /// let (sender, receiver) = pool.bind_by_ref();
+    /// sender.send("Hello".to_string());
+    ///
+    /// let value = receiver.into_value();
+    /// assert_eq!(value, Some("Hello".to_string()));
+    /// ```
+    pub fn into_value(mut self) -> Option<<P as ReflectiveTSend>::T> {
+        self.drop_inner()
+    }
+
+    /// Drops the inner state, releasing the event back to the pool, returning the value (if any).
+    ///
     /// May also be used from contexts where the receiver itself is not yet consumed.
-    fn drop_inner(&mut self) {
+    fn drop_inner(&mut self) -> Option<<P as ReflectiveTSend>::T> {
         let Some(event) = self.event else {
             // Already pseudo-consumed the receiver as part of the Future impl.
-            return;
+            return None;
         };
 
         // SAFETY: See comments on field.
         let event = unsafe { event.as_ref() };
 
-        let disconnect_result = event.receiver_dropped_early();
+        let final_poll_result = event.final_poll();
 
         // Regardless of whether we were the last reference holder or not, we are no longer
         // allowed to reference the event as we are releasing our reference.
         self.event = None;
 
-        if disconnect_result == Err(Disconnected) {
-            self.pool_ref
-                .pool
-                .lock()
-                .expect(ERR_POISONED_LOCK)
-                .remove(self.key);
+        match final_poll_result {
+            Ok(Some(value)) => {
+                // The sender has disconnected and sent a value, so we need to clean up.
+                self.pool_ref
+                    .pool
+                    .lock()
+                    .expect(ERR_POISONED_LOCK)
+                    .remove(self.key);
+                Some(value)
+            }
+            Ok(None) => {
+                // Nothing for us to do - the sender was still connected and had not
+                // sent any value, so it will perform the cleanup on its own.
+                None
+            }
+            Err(Disconnected) => {
+                // The sender has already disconnected, so we need to clean up the event.
+                self.pool_ref
+                    .pool
+                    .lock()
+                    .expect(ERR_POISONED_LOCK)
+                    .remove(self.key);
+                None
+            }
         }
     }
 }
@@ -1306,6 +1386,142 @@ mod tests {
         });
 
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn pooled_receiver_into_value_with_sent_value() {
+        with_watchdog(|| {
+            let pool = Arc::new(OnceEventPool::<String>::new());
+            let (sender, receiver) = pool.bind_by_arc();
+            sender.send("test value".to_string());
+
+            let result = receiver.into_value();
+            assert_eq!(result, Some("test value".to_string()));
+        });
+    }
+
+    #[test]
+    fn pooled_receiver_into_value_no_value_sent() {
+        with_watchdog(|| {
+            let pool = Arc::new(OnceEventPool::<i32>::new());
+            let (_sender, receiver) = pool.bind_by_arc();
+
+            let result = receiver.into_value();
+            assert_eq!(result, None);
+        });
+    }
+
+    #[test]
+    fn pooled_receiver_into_value_sender_disconnected() {
+        with_watchdog(|| {
+            let pool = Arc::new(OnceEventPool::<String>::new());
+            let (sender, receiver) = pool.bind_by_arc();
+            drop(sender); // Disconnect without sending
+
+            let result = receiver.into_value();
+            assert_eq!(result, None);
+        });
+    }
+
+    #[test]
+    fn pooled_receiver_into_value_with_ref_pool() {
+        with_watchdog(|| {
+            let pool = OnceEventPool::<i32>::new();
+            let (sender, receiver) = pool.bind_by_ref();
+            sender.send(42);
+
+            let result = receiver.into_value();
+            assert_eq!(result, Some(42));
+        });
+    }
+
+    #[test]
+    fn pooled_receiver_into_value_with_arc_pool() {
+        with_watchdog(|| {
+            let pool = Arc::new(OnceEventPool::<String>::new());
+            let (sender, receiver) = pool.bind_by_arc();
+            sender.send("arc test".to_string());
+
+            let result = receiver.into_value();
+            assert_eq!(result, Some("arc test".to_string()));
+        });
+    }
+
+    #[test]
+    fn pooled_receiver_into_value_with_ptr_pool() {
+        with_watchdog(|| {
+            let pool = Box::pin(OnceEventPool::<i32>::new());
+            // SAFETY: Pool is pinned and outlives the sender/receiver.
+            let (sender, receiver) = unsafe { pool.as_ref().bind_by_ptr() };
+            sender.send(999);
+
+            let result = receiver.into_value();
+            assert_eq!(result, Some(999));
+        });
+    }
+
+    #[test]
+    fn pooled_receiver_into_value_returns_none_after_poll() {
+        with_watchdog(|| {
+            futures::executor::block_on(async {
+                let pool = Arc::new(OnceEventPool::<i32>::new());
+                let (sender, mut receiver) = pool.bind_by_arc();
+                sender.send(42);
+
+                // Poll the receiver first
+                let waker = noop_waker_ref();
+                let mut context = task::Context::from_waker(waker);
+                let poll_result = Pin::new(&mut receiver).poll(&mut context);
+                assert_eq!(poll_result, task::Poll::Ready(Ok(42)));
+
+                // This should return None since the receiver was already consumed
+                let value = receiver.into_value();
+                assert_eq!(value, None);
+            });
+        });
+    }
+
+    #[test]
+    fn pooled_receiver_into_value_pool_reuse() {
+        with_watchdog(|| {
+            let pool = Arc::new(OnceEventPool::<i32>::new());
+
+            // First usage
+            let (sender1, receiver1) = pool.bind_by_arc();
+            sender1.send(123);
+            let result1 = receiver1.into_value();
+            assert_eq!(result1, Some(123));
+
+            // Second usage - should reuse the event from the pool
+            let (sender2, receiver2) = pool.bind_by_arc();
+            sender2.send(456);
+            let result2 = receiver2.into_value();
+            assert_eq!(result2, Some(456));
+        });
+    }
+
+    #[test]
+    fn pooled_receiver_into_value_multiple_event_types() {
+        with_watchdog(|| {
+            // Test with different value types
+            let pool1 = Arc::new(OnceEventPool::<()>::new());
+            let (sender1, receiver1) = pool1.bind_by_arc();
+            sender1.send(());
+            assert_eq!(receiver1.into_value(), Some(()));
+
+            let pool2 = Arc::new(OnceEventPool::<Vec<i32>>::new());
+            let (sender2, receiver2) = pool2.bind_by_arc();
+            sender2.send(vec![1, 2, 3]);
+            assert_eq!(receiver2.into_value(), Some(vec![1, 2, 3]));
+
+            let pool3 = Arc::new(OnceEventPool::<Option<String>>::new());
+            let (sender3, receiver3) = pool3.bind_by_arc();
+            sender3.send(Some("nested option".to_string()));
+            assert_eq!(
+                receiver3.into_value(),
+                Some(Some("nested option".to_string()))
+            );
+        });
     }
 
     #[test]
