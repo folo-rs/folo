@@ -31,9 +31,9 @@ fn main() {
     println!("Pool length: {}", pool.len());
 
     // CRITICAL: Must manually remove all items or you get memory leaks!
-    pool.remove(number);
-    pool.remove(text);
-    pool.remove(list);
+    pool.remove(&number);
+    pool.remove(&text);
+    pool.remove(&list);
 
     println!("Pool after cleanup: {}", pool.len());
 

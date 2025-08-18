@@ -176,7 +176,7 @@ impl RawBlindPool {
     /// assert_eq!(pool.len(), 0);
     /// ```
     #[inline]
-    pub fn remove<T: ?Sized>(&mut self, pooled: RawPooled<T>) {
+    pub fn remove<T: ?Sized>(&mut self, pooled: &RawPooled<T>) {
         if let Some(internal_pool) = self.pools.get_mut(&pooled.layout) {
             internal_pool.remove(&pooled.inner);
         } else {
@@ -558,7 +558,7 @@ mod tests {
     fn simple_insert_remove() {
         let mut pool = RawBlindPool::new();
         let pooled = pool.insert(42_u32);
-        pool.remove(pooled);
+        pool.remove(&pooled);
     }
 
     #[test]
@@ -566,8 +566,8 @@ mod tests {
         let mut pool = RawBlindPool::new();
         let pooled1 = pool.insert(42_u32);
         let pooled2 = pool.insert(43_u32);
-        pool.remove(pooled1);
-        pool.remove(pooled2);
+        pool.remove(&pooled1);
+        pool.remove(&pooled2);
     }
 
     #[test]
@@ -575,8 +575,8 @@ mod tests {
         let mut pool = RawBlindPool::new();
         let pooled1 = pool.insert(42_u32);
         let pooled2 = pool.insert(43_u64);
-        pool.remove(pooled1);
-        pool.remove(pooled2);
+        pool.remove(&pooled1);
+        pool.remove(&pooled2);
     }
 
     #[test]
@@ -603,9 +603,9 @@ mod tests {
         assert_eq!(u64_val, 43);
         assert!((f32_val - 2.5).abs() < f32::EPSILON);
 
-        pool.remove(pooled_u32);
-        pool.remove(pooled_u64);
-        pool.remove(pooled_f32);
+        pool.remove(&pooled_u32);
+        pool.remove(&pooled_u64);
+        pool.remove(&pooled_f32);
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
@@ -632,9 +632,9 @@ mod tests {
         assert_eq!(i32_val, -42);
         assert!((f32_val - 2.5).abs() < f32::EPSILON);
 
-        pool.remove(pooled_u32);
-        pool.remove(pooled_i32);
-        pool.remove(pooled_f32);
+        pool.remove(&pooled_u32);
+        pool.remove(&pooled_i32);
+        pool.remove(&pooled_f32);
 
         assert!(pool.is_empty());
     }
@@ -677,8 +677,8 @@ mod tests {
         assert_eq!(pool.len(), 3);
 
         // Remove some but not all items (we leave the array).
-        pool.remove(pooled_u8);
-        pool.remove(pooled_u64);
+        pool.remove(&pooled_u8);
+        pool.remove(&pooled_u64);
 
         assert_eq!(pool.pools.len(), 3); // Internal pools still exist before shrinking.
 
@@ -704,7 +704,7 @@ mod tests {
         let pooled = pool.insert(42_u32);
         assert!(pool.capacity_of::<u32>() >= 10); // Should still have the reserved capacity
 
-        pool.remove(pooled);
+        pool.remove(&pooled);
     }
 
     #[test]
@@ -740,8 +740,8 @@ mod tests {
             assert!((pooled2.ptr().read() - 2.5).abs() < f64::EPSILON);
         }
 
-        pool.remove(pooled1);
-        pool.remove(pooled2);
+        pool.remove(&pooled1);
+        pool.remove(&pooled2);
     }
 
     #[test]
@@ -758,7 +758,7 @@ mod tests {
         pool.reserve_for::<u32>(0);
         assert_eq!(pool.capacity_of::<u32>(), initial_capacity);
 
-        pool.remove(pooled);
+        pool.remove(&pooled);
     }
 
     #[test]
@@ -779,7 +779,7 @@ mod tests {
         pool.reserve_for::<u32>(3);
         assert_eq!(pool.capacity_of::<u32>(), capacity_after_reserve);
 
-        pool.remove(pooled);
+        pool.remove(&pooled);
     }
 
     #[test]
@@ -796,7 +796,7 @@ mod tests {
         let pooled = pool.insert(42_u32);
         assert_eq!(pool.capacity_of::<u32>(), initial_capacity);
 
-        pool.remove(pooled);
+        pool.remove(&pooled);
     }
 
     #[test]
@@ -827,9 +827,9 @@ mod tests {
         assert_eq!(pool.capacity_of::<f64>(), f64_capacity_before);
         assert_eq!(pool.capacity_of::<u8>(), u8_capacity_before);
 
-        pool.remove(pooled_u32);
-        pool.remove(pooled_f64);
-        pool.remove(pooled_u8);
+        pool.remove(&pooled_u32);
+        pool.remove(&pooled_f64);
+        pool.remove(&pooled_u8);
     }
 
     #[test]
@@ -858,8 +858,8 @@ mod tests {
         let i32_capacity = pool.capacity_of::<i32>();
         assert_eq!(u32_capacity, i32_capacity);
 
-        pool.remove(pooled_u32);
-        pool.remove(pooled_f64);
+        pool.remove(&pooled_u32);
+        pool.remove(&pooled_f64);
     }
 
     #[test]
@@ -886,7 +886,7 @@ mod tests {
         let value = unsafe { erased.ptr().cast::<u64>().read() };
         assert_eq!(value, 42);
 
-        pool.remove(erased);
+        pool.remove(&erased);
         assert!(pool.is_empty());
     }
 
@@ -898,13 +898,13 @@ mod tests {
         let test_string = "Hello, World!".to_string();
         let pooled_string = pool.insert(test_string);
 
-        pool.remove(pooled_string);
+        pool.remove(&pooled_string);
 
         // Test with Vec - another type that implements Drop
         let test_vec = vec![1, 2, 3, 4, 5];
         let pooled_vec = pool.insert(test_vec);
 
-        pool.remove(pooled_vec);
+        pool.remove(&pooled_vec);
 
         assert!(pool.is_empty());
     }
@@ -949,7 +949,7 @@ mod tests {
             );
         }
 
-        pool.remove(pooled_book);
+        pool.remove(&pooled_book);
     }
 
     #[test]
@@ -997,7 +997,7 @@ mod tests {
             assert!((temp_ref.celsius - 50.0).abs() < f64::EPSILON);
         }
 
-        pool.remove(pooled_temp);
+        pool.remove(&pooled_temp);
     }
 
     #[cfg(test)]

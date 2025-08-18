@@ -233,7 +233,7 @@ impl Drop for LocalPooledRef {
     fn drop(&mut self) {
         // We are guaranteed to be the only one executing this drop because Rc ensures
         // that Drop on the LocalPooledRef is only called once when the last reference is released.
-        self.pool.remove(self.pooled);
+        self.pool.remove(&self.pooled);
     }
 }
 

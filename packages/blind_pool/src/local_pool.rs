@@ -145,7 +145,7 @@ impl LocalBlindPool {
     ///
     /// This is an internal method used by [`LocalPooled`] when it is dropped.
     #[inline]
-    pub(crate) fn remove<T: ?Sized>(&self, pooled: RawPooled<T>) {
+    pub(crate) fn remove<T: ?Sized>(&self, pooled: &RawPooled<T>) {
         let mut pool = self.inner.borrow_mut();
         pool.remove(pooled);
     }

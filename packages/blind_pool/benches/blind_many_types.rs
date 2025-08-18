@@ -235,7 +235,7 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for (pool, pooled) in pools.iter_mut().zip(pooled_items) {
-                pool.remove(pooled);
+                pool.remove(&pooled);
             }
 
             start.elapsed()

@@ -269,7 +269,7 @@ impl Drop for PooledRef {
     fn drop(&mut self) {
         // We are guaranteed to be the only one executing this drop because Arc ensures
         // that Drop on the PooledRef is only called once when the last reference is released.
-        self.pool.remove(self.pooled);
+        self.pool.remove(&self.pooled);
     }
 }
 

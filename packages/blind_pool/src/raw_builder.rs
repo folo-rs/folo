@@ -115,7 +115,7 @@ mod tests {
         assert_eq!(value, 42);
         assert_eq!(pool.len(), 1);
 
-        pool.remove(handle);
+        pool.remove(&handle);
         assert_eq!(pool.len(), 0);
     }
 
@@ -150,7 +150,7 @@ mod tests {
         assert_eq!(value, 42);
 
         // Clean up properly - required for MustNotDropItems
-        pool.remove(handle);
+        pool.remove(&handle);
         assert_eq!(pool.len(), 0);
 
         // Pool should be droppable when empty
