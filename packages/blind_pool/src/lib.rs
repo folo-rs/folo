@@ -98,11 +98,10 @@ pub use local_pool::*;
 pub use local_pooled::*;
 // Re-export DropPolicy from opaque_pool simply because we do not need a different one.
 pub use opaque_pool::DropPolicy;
+// Re-export so we can use it without the consumer needing a reference.
+#[doc(hidden)]
+pub use paste::paste as __private_paste;
 pub use pool::*;
 pub use pooled::*;
 pub use raw::*;
 pub use raw_builder::*;
-
-// Re-export so we can use it without the consumer needing a reference.
-#[doc(hidden)]
-pub use paste::paste as __private_paste;

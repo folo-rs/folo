@@ -1,3 +1,4 @@
+use std::fmt;
 use std::mem::{MaybeUninit, size_of};
 use std::pin::Pin;
 
@@ -50,7 +51,6 @@ use crate::{DropPolicy, PinnedPoolBuilder, PinnedSlab, PinnedSlabInserter, Pinne
 /// [7]: PinnedPoolInserter::key
 /// [8]: PinnedPoolInserter::insert_with
 /// [9]: PinnedPoolInserter::insert_with_mut
-#[derive(Debug)]
 pub struct PinnedPool<T> {
     /// The slabs that provide the storage of the pool.
     /// We use a Vec here to allow for dynamic capacity growth.
@@ -681,6 +681,21 @@ impl<T> PinnedPool<T> {
         for slab in &self.slabs {
             slab.integrity_check();
         }
+    }
+}
+
+impl<T> fmt::Debug for PinnedPool<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PinnedPool")
+            .field("type_name", &std::any::type_name::<T>())
+            .field("slabs", &self.slabs.len())
+            .field("drop_policy", &self.drop_policy)
+            .field(
+                "slab_with_vacant_slot_index",
+                &self.slab_with_vacant_slot_index,
+            )
+            .field("length", &self.length)
+            .finish()
     }
 }
 

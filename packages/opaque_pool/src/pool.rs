@@ -1,4 +1,5 @@
 use std::alloc::Layout;
+use std::fmt;
 use std::num::NonZero;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -653,7 +654,6 @@ impl OpaquePool {
 /// When `T` is [`Sync`], multiple threads can safely share handles to the same data.
 /// When `T` is not [`Sync`], the handle is single-threaded and cannot be moved between threads
 /// or shared between threads, preventing unsafe access to non-thread-safe data.
-#[derive(Debug)]
 pub struct Pooled<T: ?Sized> {
     /// Ensures this handle can only be returned to the pool it came from.
     pool_id: u64,
@@ -826,6 +826,17 @@ impl ItemCoordinates {
             slab_index: slab,
             index_in_slab,
         }
+    }
+}
+
+impl<T: ?Sized> fmt::Debug for Pooled<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Pooled")
+            .field("type_name", &std::any::type_name::<T>())
+            .field("pool_id", &self.pool_id)
+            .field("coordinates", &self.coordinates)
+            .field("ptr", &self.ptr)
+            .finish()
     }
 }
 

@@ -237,18 +237,20 @@ impl Drop for LocalPooledRef {
     }
 }
 
-impl<T: fmt::Debug> fmt::Debug for LocalPooled<T> {
+impl<T: ?Sized> fmt::Debug for LocalPooled<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalPooled")
-            .field("inner", &self.inner)
+            .field("type_name", &std::any::type_name::<T>())
+            .field("ptr", &self.inner.pooled.ptr())
             .finish()
     }
 }
 
-impl<T: fmt::Debug> fmt::Debug for LocalPooledInner<T> {
+impl<T: ?Sized> fmt::Debug for LocalPooledInner<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalPooledInner")
-            .field("pooled", &self.pooled)
+            .field("type_name", &std::any::type_name::<T>())
+            .field("ptr", &self.pooled.ptr())
             .field("lifetime", &self.lifetime)
             .finish()
     }

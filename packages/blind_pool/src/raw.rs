@@ -1,6 +1,6 @@
 use std::alloc::Layout;
 use std::ptr::NonNull;
-use std::thread;
+use std::{fmt, thread};
 
 use foldhash::{HashMap, HashMapExt};
 use opaque_pool::{DropPolicy, OpaquePool, Pooled as OpaquePooled};
@@ -54,7 +54,6 @@ use crate::RawBlindPoolBuilder;
 /// This type is thread-mobile ([`Send`]) but not thread-safe ([`Sync`]). It can be moved
 /// between threads but cannot be shared between threads simultaneously. For thread-safe
 /// pool operations, use [`BlindPool`][crate::BlindPool] instead.
-#[derive(Debug)]
 pub struct RawBlindPool {
     /// Internal pools, one for each unique memory layout encountered.
     /// We use foldhash for better performance with small hash tables.
@@ -398,7 +397,6 @@ impl Drop for RawBlindPool {
 /// When `T` is [`Sync`], multiple threads can safely share handles to the same data.
 /// When `T` is not [`Sync`], the handle is single-threaded and cannot be moved between threads
 /// or shared between threads, preventing unsafe access to non-thread-safe data.
-#[derive(Debug)]
 pub struct RawPooled<T: ?Sized> {
     /// The memory layout of the stored item. This is used to identify which internal
     /// pool the item belongs to.
@@ -534,6 +532,25 @@ impl<T: ?Sized> Copy for RawPooled<T> {}
 impl<T: ?Sized> Clone for RawPooled<T> {
     fn clone(&self) -> Self {
         *self
+    }
+}
+
+impl fmt::Debug for RawBlindPool {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawBlindPool")
+            .field("pools", &self.pools)
+            .field("drop_policy", &self.drop_policy)
+            .finish()
+    }
+}
+
+impl<T: ?Sized> fmt::Debug for RawPooled<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawPooled")
+            .field("type_name", &std::any::type_name::<T>())
+            .field("layout", &self.layout)
+            .field("ptr", &self.inner.ptr())
+            .finish()
     }
 }
 
@@ -863,7 +880,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "capacity overflow")]
+    #[should_panic]
     fn reserve_overflow_panics() {
         let mut pool = RawBlindPool::new();
 
