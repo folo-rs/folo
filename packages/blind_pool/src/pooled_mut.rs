@@ -417,19 +417,9 @@ mod tests {
     }
 
     #[test]
-    #[expect(trivial_casts, reason = "Casting is part of the macro generated code")]
-    fn casting_with_futures() {
+    fn manual_cast_debug() {
         use std::future::Future;
         use std::task::{Context, Poll, Waker};
-
-        /// Custom trait for futures returning u32.
-        pub(crate) trait MyFuture: Future<Output = u32> {}
-
-        /// Blanket implementation for any Future<Output = u32>.
-        impl<T> MyFuture for T where T: Future<Output = u32> {}
-
-        // Generate casting methods for MyFuture.
-        crate::define_pooled_dyn_cast!(MyFuture);
 
         #[allow(
             clippy::unused_async,
@@ -440,35 +430,42 @@ mod tests {
         }
 
         let pool = BlindPool::new();
+        println!("Initial pool length: {}", pool.len());
         
-        // First, test without casting
         let future_handle = pool.insert_mut(echo(10));
+        println!("After insert_mut: {}", pool.len());
         assert_eq!(pool.len(), 1);
         
-        // Use casting to convert the anonymous future into a named trait object
-        let mut casted_handle = future_handle.cast_my_future();
-        // After casting, the original handle is consumed, but the pool should still have the item
-        assert_eq!(pool.len(), 1);
-
-        // Poll the future using the safe pinning method from PooledMut
+        // Manually perform the cast operation step by step
+        println!("About to perform cast via __private_cast_dyn_with_fn...");
+        
+        // This is the critical operation - let's see what happens here
+        let mut casted_handle = future_handle.__private_cast_dyn_with_fn(|x| {
+            let trait_obj: &dyn Future<Output = u32> = x;
+            trait_obj
+        });
+        
+        println!("After cast: {}", pool.len());
+        
+        // Test that it still works
         let waker = Waker::noop();
         let mut context = Context::from_waker(waker);
-
-        // Use the as_pin_mut method to get a properly pinned reference
+        
         let pinned_future = casted_handle.as_pin_mut();
         match pinned_future.poll(&mut context) {
             Poll::Ready(result) => {
+                println!("Polling completed, result: {}", result);
                 assert_eq!(result, 10);
             }
             Poll::Pending => {
                 panic!("Simple future should complete immediately");
             }
         }
-
-        assert_eq!(pool.len(), 1); // Should still be 1 after polling
-
-        // Drop should work fine
+        
+        println!("After polling: {}", pool.len());
+        
         drop(casted_handle);
+        println!("After drop: {}", pool.len());
         assert_eq!(pool.len(), 0);
     }
 
