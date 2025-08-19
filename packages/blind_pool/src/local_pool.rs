@@ -29,8 +29,8 @@ use crate::{LocalPooled, RawBlindPool, RawPooled};
 /// // Clone the pool handle for use in different parts of the code.
 /// let pool_clone = pool.clone();
 ///
-/// let item_handle = pool_clone.insert(42_u64);
-/// assert_eq!(*item_handle, 42);
+/// let item_handle = pool_clone.insert("Test".to_string());
+/// assert_eq!(*item_handle, "Test".to_string());
 /// ```
 #[derive(Clone, Debug)]
 pub struct LocalBlindPool {
@@ -50,12 +50,12 @@ impl LocalBlindPool {
     ///
     /// let pool = LocalBlindPool::new();
     ///
-    /// let u32_handle = pool.insert(42_u32);
-    /// let string_handle = pool.insert("hello".to_string());
+    /// let string1_handle = pool.insert("Test".to_string());
+    /// let string2_handle = pool.insert("hello".to_string());
     ///
     /// // Access values through dereferencing.
-    /// assert_eq!(*u32_handle, 42);
-    /// assert_eq!(*string_handle, "hello");
+    /// assert_eq!(*string1_handle, "Test".to_string());
+    /// assert_eq!(*string2_handle, "hello");
     /// ```
     #[must_use]
     pub fn new() -> Self {
@@ -77,12 +77,12 @@ impl LocalBlindPool {
     ///
     /// let pool = LocalBlindPool::new();
     ///
-    /// let u32_handle = pool.insert(42_u32);
-    /// let string_handle = pool.insert("hello".to_string());
+    /// let string1_handle = pool.insert("Test".to_string());
+    /// let string2_handle = pool.insert("hello".to_string());
     ///
     /// // Access values through dereferencing.
-    /// assert_eq!(*u32_handle, 42);
-    /// assert_eq!(*string_handle, "hello");
+    /// assert_eq!(*string1_handle, "Test".to_string());
+    /// assert_eq!(*string2_handle, "hello");
     /// ```
     #[inline]
     #[must_use]
@@ -151,7 +151,7 @@ impl LocalBlindPool {
     ///
     /// assert_eq!(pool.len(), 0);
     ///
-    /// let _item1 = pool.insert(42_u32);
+    /// let _item1 = pool.insert("Hello".to_string());
     /// let _item2 = pool.insert("hello".to_string());
     ///
     /// assert_eq!(pool.len(), 2);
@@ -174,7 +174,7 @@ impl LocalBlindPool {
     ///
     /// assert!(pool.is_empty());
     ///
-    /// let item = pool.insert(42_u32);
+    /// let item = pool.insert("Test".to_string());
     /// assert!(!pool.is_empty());
     ///
     /// drop(item);

@@ -76,7 +76,7 @@ impl RawBlindPoolBuilder {
     /// use blind_pool::RawBlindPool;
     ///
     /// let mut pool = RawBlindPool::builder().build();
-    /// let pooled_item = pool.insert(42_u32);
+    /// let pooled_item = pool.insert("Test".to_string());
     ///
     /// // Manual cleanup required.
     /// pool.remove(&pooled_item);

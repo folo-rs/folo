@@ -60,8 +60,8 @@
 //! // Remove values from the pool. The values are automatically dropped.
 //! // The pool treats all items as pinned, so the removed value is not returned
 //! // because that would violate the promise of pinning the objects.
-//! pool.remove(pooled1);
-//! pool.remove(pooled2);
+//! pool.remove(&pooled1);
+//! pool.remove(&pooled2);
 //!
 //! assert!(pool.is_empty());
 //! ```

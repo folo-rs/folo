@@ -44,7 +44,7 @@
 /// define_pooled_dyn_cast!(Display);
 ///
 /// let pool = BlindPool::new();
-/// let pooled = pool.insert(42_u32);
+/// let pooled = pool.insert("Test".to_string());
 ///
 /// // Cast to trait object while preserving reference counting.
 /// let display_pooled = pooled.cast_display();

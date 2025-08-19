@@ -38,16 +38,16 @@ use crate::RawBlindPoolBuilder;
 /// let mut pool = RawBlindPool::new();
 ///
 /// // Insert values of different types.
-/// let pooled_u32 = pool.insert(42_u32);
-/// let pooled_i64 = pool.insert(-123_i64);
+/// let pooled_string1 = pool.insert("Hello".to_string());
+/// let pooled_string2 = pool.insert("World".to_string());
 ///
 /// // Read from the memory.
 /// // SAFETY: The pointers are valid and the memory contains the values we just inserted.
-/// let value_u32 = unsafe { *pooled_u32.ptr().as_ref() };
-/// let value_i64 = unsafe { *pooled_i64.ptr().as_ref() };
+/// let value_string1 = unsafe { pooled_string1.ptr().as_ref() };
+/// let value_string2 = unsafe { pooled_string2.ptr().as_ref() };
 ///
-/// assert_eq!(value_u32, 42);
-/// assert_eq!(value_i64, -123);
+/// assert_eq!(value_string1, "Hello");
+/// assert_eq!(value_string2, "World");
 /// ```
 ///
 /// # Thread safety
@@ -76,11 +76,11 @@ impl RawBlindPool {
     ///
     /// let mut pool = RawBlindPool::new();
     ///
-    /// let pooled = pool.insert(42_u64);
+    /// let pooled = pool.insert("Test".to_string());
     ///
     /// // SAFETY: The pointer is valid and contains the value we just inserted.
-    /// let value = unsafe { *pooled.ptr().as_ref() };
-    /// assert_eq!(value, 42);
+    /// let value = unsafe { pooled.ptr().as_ref() };
+    /// assert_eq!(value.as_str(), "Test");
     /// ```
     #[must_use]
     pub fn new() -> Self {
@@ -125,7 +125,7 @@ impl RawBlindPool {
     /// let mut pool = RawBlindPool::new();
     ///
     /// // Insert different types into the same pool.
-    /// let pooled_int = pool.insert(42_i32);
+    /// let pooled_string = pool.insert("Hello".to_string());
     /// let pooled_float = pool.insert(2.5_f64);
     /// let pooled_string = pool.insert("hello".to_string());
     ///
@@ -227,7 +227,7 @@ impl RawBlindPool {
     ///
     /// let mut pool = RawBlindPool::new();
     ///
-    /// let pooled = pool.insert(42_u64);
+    /// let pooled = pool.insert("Test".to_string());
     /// assert_eq!(pool.len(), 1);
     ///
     /// pool.remove(&pooled);
@@ -253,8 +253,8 @@ impl RawBlindPool {
     ///
     /// assert_eq!(pool.len(), 0);
     ///
-    /// let _a = pool.insert(42_u32);
-    /// let _b = pool.insert("hello".to_string());
+    /// let _a = pool.insert("Hello".to_string());
+    /// let _b = pool.insert("world".to_string());
     /// let _c = pool.insert(2.5_f64);
     ///
     /// assert_eq!(pool.len(), 3);
@@ -278,7 +278,7 @@ impl RawBlindPool {
     ///
     /// assert!(pool.is_empty());
     ///
-    /// let pooled = pool.insert(42_u16);
+    /// let pooled = pool.insert("Test".to_string());
     ///
     /// assert!(!pool.is_empty());
     ///
@@ -307,9 +307,9 @@ impl RawBlindPool {
     /// assert_eq!(pool.capacity_of::<u32>(), 0);
     /// assert_eq!(pool.capacity_of::<f64>(), 0);
     ///
-    /// // Inserting a u32 allocates capacity for u32 but not f64.
-    /// let _pooled = pool.insert(42_u32);
-    /// assert!(pool.capacity_of::<u32>() > 0);
+    /// // Inserting a String allocates capacity for String but not f64.
+    /// let _pooled = pool.insert("Test".to_string());
+    /// assert!(pool.capacity_of::<String>() > 0);
     /// assert_eq!(pool.capacity_of::<f64>(), 0);
     /// ```
     #[must_use]
@@ -341,9 +341,9 @@ impl RawBlindPool {
     /// assert!(pool.capacity_of::<u32>() >= 10);
     /// assert_eq!(pool.capacity_of::<f64>(), 0); // Other types unaffected
     ///
-    /// // Insert u32 values - should not need to allocate more capacity
-    /// let pooled = pool.insert(42_u32);
-    /// assert!(pool.capacity_of::<u32>() >= 10);
+    /// // Insert String values - should not need to allocate more capacity
+    /// let pooled = pool.insert("Test".to_string());
+    /// assert!(pool.capacity_of::<String>() >= 10);
     /// ```
     pub fn reserve_for<T>(&mut self, additional: usize) {
         let layout = Layout::new::<T>();
@@ -431,7 +431,7 @@ impl Drop for RawBlindPool {
 ///
 /// let mut pool = RawBlindPool::new();
 ///
-/// let pooled = pool.insert(42_u64);
+/// let pooled = pool.insert("Hello".to_string());
 ///
 /// // The handle acts like a super-powered pointer - it can be copied freely.
 /// let pooled_copy = pooled;
@@ -439,12 +439,12 @@ impl Drop for RawBlindPool {
 ///
 /// // All copies refer to the same stored value.
 /// // SAFETY: All pointers are valid and point to the same value.
-/// let value1 = unsafe { *pooled.ptr().as_ref() };
-/// let value2 = unsafe { *pooled_copy.ptr().as_ref() };
-/// let value3 = unsafe { *pooled_clone.ptr().as_ref() };
-/// assert_eq!(value1, 42);
-/// assert_eq!(value2, 42);
-/// assert_eq!(value3, 42);
+/// let value1 = unsafe { pooled.ptr().as_ref() };
+/// let value2 = unsafe { pooled_copy.ptr().as_ref() };
+/// let value3 = unsafe { pooled_clone.ptr().as_ref() };
+/// assert_eq!(value1, "Hello");
+/// assert_eq!(value2, "Hello");
+/// assert_eq!(value3, "Hello");
 ///
 /// // To remove the item from the pool, any handle can be used.
 /// pool.remove(&pooled);
@@ -508,15 +508,15 @@ impl<T: ?Sized> RawPooled<T> {
     ///
     /// let mut pool = RawBlindPool::new();
     ///
-    /// let pooled = pool.insert(42_u64);
+    /// let pooled = pool.insert("Test".to_string());
     ///
     /// // Erase type information.
     /// let erased = pooled.erase();
     ///
     /// // Can still access the raw pointer.
-    /// // SAFETY: We know this contains a u64.
-    /// let value = unsafe { *erased.ptr().cast::<u64>().as_ref() };
-    /// assert_eq!(value, 42);
+    /// // SAFETY: We know this contains a String.
+    /// let value = unsafe { erased.ptr().cast::<String>().as_ref() };
+    /// assert_eq!(value.as_str(), "Test");
     ///
     /// // Can still remove the item.
     /// pool.remove(&erased);
@@ -558,16 +558,16 @@ impl<T: ?Sized> RawPooled<T> {
     /// use blind_pool::RawBlindPool;
     ///
     /// let mut pool = RawBlindPool::new();
-    /// let value_handle = pool.insert(42_u64);
+    /// let value_handle = pool.insert("Test".to_string());
     ///
     /// // Cast to trait object.
     /// let display_handle: blind_pool::RawPooled<dyn Display> =
     ///     unsafe { value_handle.__private_cast_dyn_with_fn(|x| x as &dyn Display) };
     ///
     /// // Can access as Display trait object.
-    /// // SAFETY: The pointer is valid and contains a u64 which implements Display.
+    /// // SAFETY: The pointer is valid and contains a String which implements Display.
     /// let display_ref: &dyn Display = unsafe { display_handle.ptr().as_ref() };
-    /// assert_eq!(format!("{}", display_ref), "42");
+    /// assert_eq!(format!("{}", display_ref), "Test");
     /// ```
     #[must_use]
     #[inline]

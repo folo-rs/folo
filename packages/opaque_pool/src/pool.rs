@@ -47,19 +47,19 @@ fn generate_pool_id() -> u64 {
 ///
 /// use opaque_pool::OpaquePool;
 ///
-/// let mut pool = OpaquePool::builder().layout_of::<u32>().build();
+/// let mut pool = OpaquePool::builder().layout_of::<String>().build();
 ///
 /// // Insert a value and get a handle.
-/// // SAFETY: u32 matches the layout used to create the pool.
-/// let pooled = unsafe { pool.insert(42u32) };
+/// // SAFETY: String matches the layout used to create the pool.
+/// let pooled = unsafe { pool.insert("Hello, World!".to_string()) };
 ///
 /// // Read from the memory.
 /// // SAFETY: The pointer is valid and the memory contains the value we just inserted.
-/// let value = unsafe { pooled.ptr().read() };
-/// assert_eq!(value, 42);
+/// let value = unsafe { pooled.ptr().as_ref() };
+/// assert_eq!(value, "Hello, World!");
 ///
 /// // Remove the value from the pool. This invalidates the pointer and drops the value.
-/// pool.remove(pooled);
+/// pool.remove(&pooled);
 /// ```
 /// # Thread safety
 ///
@@ -192,19 +192,19 @@ impl OpaquePool {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = OpaquePool::builder().layout_of::<i32>().build();
+    /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
     ///
     /// assert_eq!(pool.len(), 0);
     ///
-    /// // SAFETY: i32 matches the layout used to create the pool.
-    /// let pooled1 = unsafe { pool.insert(1i32) };
+    /// // SAFETY: String matches the layout used to create the pool.
+    /// let pooled1 = unsafe { pool.insert("First".to_string()) };
     /// assert_eq!(pool.len(), 1);
     ///
-    /// // SAFETY: i32 matches the layout used to create the pool.
-    /// let pooled2 = unsafe { pool.insert(2i32) };
+    /// // SAFETY: String matches the layout used to create the pool.
+    /// let pooled2 = unsafe { pool.insert("Second".to_string()) };
     /// assert_eq!(pool.len(), 2);
     ///
-    /// pool.remove(pooled1);
+    /// pool.remove(&pooled1);
     /// assert_eq!(pool.len(), 1);
     /// ```
     #[must_use]
@@ -228,14 +228,14 @@ impl OpaquePool {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = OpaquePool::builder().layout_of::<u8>().build();
+    /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
     ///
     /// // New pool starts with zero capacity.
     /// assert_eq!(pool.capacity(), 0);
     ///
     /// // Inserting values may increase capacity.
-    /// // SAFETY: u8 matches the layout used to create the pool.
-    /// let pooled = unsafe { pool.insert(42u8) };
+    /// // SAFETY: String matches the layout used to create the pool.
+    /// let pooled = unsafe { pool.insert("Test".to_string()) };
     ///
     /// assert!(pool.capacity() > 0);
     /// assert!(pool.capacity() >= pool.len());
@@ -260,16 +260,16 @@ impl OpaquePool {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = OpaquePool::builder().layout_of::<u16>().build();
+    /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
     ///
     /// assert!(pool.is_empty());
     ///
     /// // SAFETY: u16 matches the layout used to create the pool.
-    /// let pooled = unsafe { pool.insert(42u16) };
+    /// let pooled = unsafe { pool.insert("Test".to_string()) };
     ///
     /// assert!(!pool.is_empty());
     ///
-    /// pool.remove(pooled);
+    /// pool.remove(&pooled);
     /// assert!(pool.is_empty());
     /// ```
     #[must_use]
@@ -291,14 +291,14 @@ impl OpaquePool {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = OpaquePool::builder().layout_of::<u32>().build();
+    /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
     ///
     /// // Reserve space for 10 more items
     /// pool.reserve(10);
     /// assert!(pool.capacity() >= 10);
     ///
-    /// // SAFETY: u32 matches the layout used to create the pool.
-    /// let pooled = unsafe { pool.insert(42u32) };
+    /// // SAFETY: String matches the layout used to create the pool.
+    /// let pooled = unsafe { pool.insert("Test".to_string()) };
     ///
     /// // Reserve additional space on top of existing items
     /// pool.reserve(5);
@@ -343,18 +343,18 @@ impl OpaquePool {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = OpaquePool::builder().layout_of::<u32>().build();
+    /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
     ///
     /// // Insert some items to create slabs
-    /// // SAFETY: u32 matches the layout used to create the pool.
-    /// let pooled1 = unsafe { pool.insert(1u32) };
-    /// // SAFETY: u32 matches the layout used to create the pool.
-    /// let pooled2 = unsafe { pool.insert(2u32) };
+    /// // SAFETY: String matches the layout used to create the pool.
+    /// let pooled1 = unsafe { pool.insert("First".to_string()) };
+    /// // SAFETY: String matches the layout used to create the pool.
+    /// let pooled2 = unsafe { pool.insert("Second".to_string()) };
     /// let initial_capacity = pool.capacity();
     ///
     /// // Remove all items
-    /// pool.remove(pooled1);
-    /// pool.remove(pooled2);
+    /// pool.remove(&pooled1);
+    /// pool.remove(&pooled2);
     ///
     /// // Capacity remains the same until we shrink
     /// assert_eq!(pool.capacity(), initial_capacity);
@@ -407,21 +407,21 @@ impl OpaquePool {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = OpaquePool::builder().layout_of::<u64>().build();
+    /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
     ///
     /// // Insert a value.
-    /// // SAFETY: u64 matches the layout used to create the pool.
-    /// let pooled = unsafe { pool.insert(0xDEADBEEF_CAFEBABEu64) };
+    /// // SAFETY: String matches the layout used to create the pool.
+    /// let pooled = unsafe { pool.insert("Hello, World!".to_string()) };
     ///
     /// // Read data back.
-    /// // SAFETY: The pointer is valid for u64 reads/writes and we have exclusive access.
-    /// let value = unsafe { pooled.ptr().read() };
-    /// assert_eq!(value, 0xDEADBEEF_CAFEBABE);
+    /// // SAFETY: The pointer is valid for String reads/writes and we have exclusive access.
+    /// let value = unsafe { pooled.ptr().as_ref() };
+    /// assert_eq!(value, "Hello, World!");
     ///
     /// // Write a new value into the item.
-    /// // SAFETY: The pointer is valid for u64 reads/writes and we have exclusive access.
+    /// // SAFETY: The pointer is valid for String reads/writes and we have exclusive access.
     /// unsafe {
-    ///     pooled.ptr().write(0xBEEFCAFE_DEADBEEFu64);
+    ///     pooled.ptr().write("Updated message".to_string());
     /// }
     /// ```
     ///
@@ -479,7 +479,7 @@ impl OpaquePool {
     ///
     /// // Read data back.
     /// // SAFETY: The pointer is valid for String reads/writes and we have exclusive access.
-    /// let value = unsafe { pooled.ptr().read() };
+    /// let value = unsafe { pooled.ptr().as_ref() };
     /// assert_eq!(value, "Hello, World!");
     ///
     /// // Clean up.
@@ -555,10 +555,10 @@ impl OpaquePool {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = OpaquePool::builder().layout_of::<i32>().build();
+    /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
     ///
-    /// // SAFETY: i32 matches the layout used to create the pool.
-    /// let pooled = unsafe { pool.insert(42i32) };
+    /// // SAFETY: String matches the layout used to create the pool.
+    /// let pooled = unsafe { pool.insert("Test".to_string()) };
     /// assert_eq!(pool.len(), 1);
     ///
     /// // Remove the value.
@@ -698,10 +698,10 @@ impl OpaquePool {
 ///
 /// use opaque_pool::OpaquePool;
 ///
-/// let mut pool = OpaquePool::builder().layout_of::<i64>().build();
+/// let mut pool = OpaquePool::builder().layout_of::<String>().build();
 ///
-/// // SAFETY: i64 matches the layout used to create the pool.
-/// let pooled = unsafe { pool.insert(-123i64) };
+/// // SAFETY: String matches the layout used to create the pool.
+/// let pooled = unsafe { pool.insert("Hello".to_string()) };
 ///
 /// // The handle acts like a super-powered pointer - it can be copied freely.
 /// let pooled_copy = pooled;
@@ -709,15 +709,15 @@ impl OpaquePool {
 ///
 /// // All copies refer to the same stored value.
 /// // SAFETY: All pointers are valid and point to the same value.
-/// let value1 = unsafe { pooled.ptr().read() };
-/// let value2 = unsafe { pooled_copy.ptr().read() };
-/// let value3 = unsafe { pooled_clone.ptr().read() };
-/// assert_eq!(value1, -123);
-/// assert_eq!(value2, -123);
-/// assert_eq!(value3, -123);
+/// let value1 = unsafe { pooled.ptr().as_ref() };
+/// let value2 = unsafe { pooled_copy.ptr().as_ref() };
+/// let value3 = unsafe { pooled_clone.ptr().as_ref() };
+/// assert_eq!(value1, "Hello");
+/// assert_eq!(value2, "Hello");
+/// assert_eq!(value3, "Hello");
 ///
 /// // To remove and drop an item, any handle can be returned to the pool.
-/// pool.remove(pooled);
+/// pool.remove(&pooled);
 /// ```
 ///
 /// # Thread safety
@@ -764,18 +764,18 @@ impl<T: ?Sized> Pooled<T> {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = OpaquePool::builder().layout_of::<u64>().build();
-    /// // SAFETY: u64 matches the layout used to create the pool.
-    /// let value_handle = unsafe { pool.insert(42_u64) };
+    /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
+    /// // SAFETY: String matches the layout used to create the pool.
+    /// let value_handle = unsafe { pool.insert("Test".to_string()) };
     ///
     /// // Cast to trait object.
     /// let display_handle: opaque_pool::Pooled<dyn Display> =
     ///     unsafe { value_handle.__private_cast_dyn_with_fn(|x| x as &dyn Display) };
     ///
     /// // Can access as Display trait object.
-    /// // SAFETY: The pointer is valid and contains a u64 which implements Display.
+    /// // SAFETY: The pointer is valid and contains a String which implements Display.
     /// let display_ref: &dyn Display = unsafe { display_handle.ptr().as_ref() };
-    /// assert_eq!(format!("{}", display_ref), "42");
+    /// assert_eq!(format!("{}", display_ref), "Test");
     /// ```
     #[must_use]
     #[inline]
@@ -817,14 +817,14 @@ impl<T: ?Sized> Pooled<T> {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = OpaquePool::builder().layout_of::<f64>().build();
+    /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
     ///
-    /// // SAFETY: f64 matches the layout used to create the pool.
-    /// let pooled = unsafe { pool.insert(3.14159f64) };
+    /// // SAFETY: String matches the layout used to create the pool.
+    /// let pooled = unsafe { pool.insert("Hello".to_string()) };
     ///
     /// // Read data back from the memory.
-    /// let value = unsafe { pooled.ptr().read() };
-    /// assert_eq!(value, 3.14159);
+    /// let value = unsafe { pooled.ptr().as_ref() };
+    /// assert_eq!(value, "Hello");
     /// ```
     #[must_use]
     #[inline]
@@ -847,21 +847,21 @@ impl<T: ?Sized> Pooled<T> {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = OpaquePool::builder().layout_of::<u64>().build();
+    /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
     ///
-    /// // SAFETY: u64 matches the layout used to create the pool.
-    /// let pooled = unsafe { pool.insert(42u64) };
+    /// // SAFETY: String matches the layout used to create the pool.
+    /// let pooled = unsafe { pool.insert("Test".to_string()) };
     ///
     /// // Erase type information.
     /// let erased = pooled.erase();
     ///
     /// // Can still access the raw pointer.
-    /// // SAFETY: We know this contains a u64.
-    /// let value = unsafe { erased.ptr().cast::<u64>().read() };
-    /// assert_eq!(value, 42);
+    /// // SAFETY: We know this contains a String.
+    /// let value = unsafe { erased.ptr().cast::<String>().as_ref() };
+    /// assert_eq!(value.as_str(), "Test");
     ///
     /// // Can still remove the item.
-    /// pool.remove(erased);
+    /// pool.remove(&erased);
     /// ```
     #[must_use]
     #[inline]
@@ -945,33 +945,33 @@ mod tests {
 
     #[test]
     fn smoke_test() {
-        let mut pool = OpaquePool::builder().layout_of::<u32>().build();
+        let mut pool = OpaquePool::builder().layout_of::<String>().build();
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
 
-        let pooled_a = unsafe { pool.insert(42_u32) };
-        let pooled_b = unsafe { pool.insert(43_u32) };
-        let pooled_c = unsafe { pool.insert(44_u32) };
+        let pooled_a = unsafe { pool.insert("Hello".to_string()) };
+        let pooled_b = unsafe { pool.insert("World".to_string()) };
+        let pooled_c = unsafe { pool.insert("Test".to_string()) };
 
         assert_eq!(pool.len(), 3);
         assert!(!pool.is_empty());
         assert!(pool.capacity() >= 3);
 
         unsafe {
-            assert_eq!(pooled_a.ptr().read(), 42);
-            assert_eq!(pooled_b.ptr().read(), 43);
-            assert_eq!(pooled_c.ptr().read(), 44);
+            assert_eq!(pooled_a.ptr().as_ref(), "Hello");
+            assert_eq!(pooled_b.ptr().as_ref(), "World");
+            assert_eq!(pooled_c.ptr().as_ref(), "Test");
         }
 
         pool.remove(&pooled_b);
 
-        let pooled_d = unsafe { pool.insert(45_u32) };
+        let pooled_d = unsafe { pool.insert("Updated".to_string()) };
 
         unsafe {
-            assert_eq!(pooled_a.ptr().read(), 42);
-            assert_eq!(pooled_c.ptr().read(), 44);
-            assert_eq!(pooled_d.ptr().read(), 45);
+            assert_eq!(pooled_a.ptr().as_ref(), "Hello");
+            assert_eq!(pooled_c.ptr().as_ref(), "Test");
+            assert_eq!(pooled_d.ptr().as_ref(), "Updated");
         }
 
         pool.remove(&pooled_a);
@@ -1082,14 +1082,14 @@ mod tests {
 
     #[test]
     fn pooled_erase_functionality() {
-        let layout = Layout::new::<u32>();
+        let layout = Layout::new::<String>();
         let mut pool = OpaquePool::builder().layout(layout).build();
 
-        let pooled = unsafe { pool.insert(42_u32) };
+        let pooled = unsafe { pool.insert("Test".to_string()) };
 
         // Test that the typed pointer works.
         unsafe {
-            assert_eq!(pooled.ptr().read(), 42);
+            assert_eq!(pooled.ptr().as_ref(), "Test");
         }
 
         // Erase the type information.
@@ -1097,7 +1097,7 @@ mod tests {
 
         // Should still be able to access the value through the erased pointer.
         unsafe {
-            assert_eq!(erased.ptr().cast::<u32>().read(), 42);
+            assert_eq!(erased.ptr().cast::<String>().as_ref(), "Test");
         }
 
         // Should be able to remove the erased handle.

@@ -34,12 +34,12 @@ use crate::{Pooled, RawBlindPool, RawPooled};
 /// let pool_clone = pool.clone();
 ///
 /// let handle = thread::spawn(move || {
-///     let item_handle = pool_clone.insert(42_u64);
-///     *item_handle
+///     let item_handle = pool_clone.insert("Test".to_string());
+///     item_handle.clone()
 /// });
 ///
 /// let value = handle.join().unwrap();
-/// assert_eq!(value, 42);
+/// assert_eq!(*value, "Test".to_string());
 /// ```
 #[derive(Clone, Debug)]
 pub struct BlindPool {
@@ -59,12 +59,12 @@ impl BlindPool {
     ///
     /// let pool = BlindPool::new();
     ///
-    /// let u32_handle = pool.insert(42_u32);
-    /// let string_handle = pool.insert("hello".to_string());
+    /// let string1_handle = pool.insert("Test".to_string());
+    /// let string2_handle = pool.insert("hello".to_string());
     ///
     /// // Access values through dereferencing.
-    /// assert_eq!(*u32_handle, 42);
-    /// assert_eq!(*string_handle, "hello");
+    /// assert_eq!(*string1_handle, "Test".to_string());
+    /// assert_eq!(*string2_handle, "hello");
     /// ```
     #[must_use]
     pub fn new() -> Self {
@@ -86,12 +86,12 @@ impl BlindPool {
     ///
     /// let pool = BlindPool::new();
     ///
-    /// let u32_handle = pool.insert(42_u32);
-    /// let string_handle = pool.insert("hello".to_string());
+    /// let string1_handle = pool.insert("Test".to_string());
+    /// let string2_handle = pool.insert("hello".to_string());
     ///
     /// // Access values through dereferencing.
-    /// assert_eq!(*u32_handle, 42);
-    /// assert_eq!(*string_handle, "hello");
+    /// assert_eq!(*string1_handle, "Test".to_string());
+    /// assert_eq!(*string2_handle, "hello");
     /// ```
     #[inline]
     #[must_use]
@@ -162,7 +162,7 @@ impl BlindPool {
     ///
     /// assert_eq!(pool.len(), 0);
     ///
-    /// let _item1 = pool.insert(42_u32);
+    /// let _item1 = pool.insert("Hello".to_string());
     /// let _item2 = pool.insert("hello".to_string());
     ///
     /// assert_eq!(pool.len(), 2);
@@ -187,7 +187,7 @@ impl BlindPool {
     ///
     /// assert!(pool.is_empty());
     ///
-    /// let item = pool.insert(42_u32);
+    /// let item = pool.insert("Test".to_string());
     /// assert!(!pool.is_empty());
     ///
     /// drop(item);

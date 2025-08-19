@@ -56,14 +56,14 @@ use crate::{BlindPool, RawPooled};
 /// use blind_pool::BlindPool;
 ///
 /// let pool = BlindPool::new();
-/// let value_handle = pool.insert(42_u32);
+/// let value_handle = pool.insert("Test".to_string());
 ///
 /// // Access the value through dereferencing.
-/// assert_eq!(*value_handle, 42);
+/// assert_eq!(*value_handle, "Test".to_string());
 ///
 /// // Clone to create additional references.
 /// let cloned_handle = value_handle.clone();
-/// assert_eq!(*cloned_handle, 42);
+/// assert_eq!(*cloned_handle, "Test".to_string());
 /// ```
 pub struct Pooled<T: ?Sized> {
     /// The reference-counted inner data containing the actual pooled item and pool handle.
@@ -144,18 +144,18 @@ impl<T: ?Sized> Pooled<T> {
     /// use blind_pool::BlindPool;
     ///
     /// let pool = BlindPool::new();
-    /// let value_handle = pool.insert(42_u64);
+    /// let value_handle = pool.insert("Test".to_string());
     /// let cloned_handle = value_handle.clone();
     ///
     /// // Erase type information while keeping the original handle via clone.
     /// let erased = value_handle.erase();
     ///
     /// // Both handles are valid and refer to the same item.
-    /// assert_eq!(*cloned_handle, 42);
+    /// assert_eq!(*cloned_handle, "Test".to_string());
     ///
     /// // The erased handle shares the same reference count.
     /// drop(erased);
-    /// assert_eq!(*cloned_handle, 42); // Still accessible via typed handle.
+    /// assert_eq!(*cloned_handle, "Test".to_string()); // Still accessible via typed handle.
     /// ```
     #[must_use]
     #[inline]
@@ -182,14 +182,14 @@ impl<T: ?Sized> Pooled<T> {
     /// use blind_pool::BlindPool;
     ///
     /// let pool = BlindPool::new();
-    /// let value_handle = pool.insert(42_u64);
+    /// let value_handle = pool.insert("Test".to_string());
     ///
     /// // Get the pointer to the stored value.
     /// let ptr = value_handle.ptr();
     ///
     /// // SAFETY: The pointer is valid as long as value_handle exists.
-    /// let value = unsafe { ptr.read() };
-    /// assert_eq!(value, 42);
+    /// let value = unsafe { ptr.as_ref() };
+    /// assert_eq!(value, "Test");
     /// ```
     #[must_use]
     #[inline]
@@ -241,7 +241,7 @@ impl<T: ?Sized> Clone for Pooled<T> {
     /// use blind_pool::BlindPool;
     ///
     /// let pool = BlindPool::new();
-    /// let value_handle = pool.insert(42_u64);
+    /// let value_handle = pool.insert("Test".to_string());
     ///
     /// let cloned_handle = value_handle.clone();
     ///
@@ -250,7 +250,7 @@ impl<T: ?Sized> Clone for Pooled<T> {
     ///
     /// // Value remains in pool until all handles are dropped.
     /// drop(value_handle);
-    /// assert_eq!(*cloned_handle, 42); // Still accessible.
+    /// assert_eq!(*cloned_handle, "Test".to_string()); // Still accessible.
     /// ```
     #[inline]
     fn clone(&self) -> Self {
