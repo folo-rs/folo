@@ -519,5 +519,16 @@ mod tests {
         assert_impl_all!(Pooled<Vec<u8>>: Sync);
         assert_not_impl_any!(Pooled<RefCell<u32>>: Sync); // RefCell is not Sync
         assert_not_impl_any!(Pooled<Rc<u32>>: Sync); // Rc is not Sync
+
+        // Pooled<T> should always be Unpin regardless of T
+        assert_impl_all!(Pooled<u32>: Unpin);
+        assert_impl_all!(Pooled<String>: Unpin);
+        assert_impl_all!(Pooled<Vec<u8>>: Unpin);
+        assert_impl_all!(Pooled<RefCell<u32>>: Unpin);
+        assert_impl_all!(Pooled<Rc<u32>>: Unpin);
+
+        // Even with non-Unpin types, Pooled should still be Unpin
+        use std::marker::PhantomPinned;
+        assert_impl_all!(Pooled<PhantomPinned>: Unpin);
     }
 }
