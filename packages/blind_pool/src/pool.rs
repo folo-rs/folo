@@ -249,7 +249,7 @@ mod tests {
         assert_not_impl_any!(Pooled<Rc<u32>>: Sync);
 
         use std::cell::RefCell;
-        assert_impl_all!(Pooled<RefCell<u32>>: Send); // RefCell is Send but not Sync
+        assert_not_impl_any!(Pooled<RefCell<u32>>: Send); // RefCell is not Sync
         assert_not_impl_any!(Pooled<RefCell<u32>>: Sync);
     }
 

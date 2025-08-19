@@ -17,11 +17,11 @@ use crate::{BlindPool, RawPooled};
 ///
 /// [`Pooled<T>`] implements thread safety traits conditionally based on the stored type `T`:
 ///
-/// - **Send**: [`Pooled<T>`] is [`Send`] if and only if `T` is [`Send`]. This allows moving
-///   pooled values between threads when the contained type can be safely transferred.
+/// - **Send**: [`Pooled<T>`] is [`Send`] if and only if `T` is [`Sync`]. This allows moving
+///   pooled references between threads when the referenced type supports concurrent access.
 ///
 /// - **Sync**: [`Pooled<T>`] is [`Sync`] if and only if `T` is [`Sync`]. This allows sharing
-///   the same [`Pooled<T>`] instance between multiple threads when the contained type supports
+///   the same [`Pooled<T>`] instance between multiple threads when the referenced type supports
 ///   concurrent access.
 ///
 /// # Trait Objects
@@ -300,9 +300,10 @@ impl Drop for PooledRef {
     }
 }
 
-// SAFETY: Pooled<T> can be Send if T is Send, because the Arc<PooledInner<T>>
-// is Send when T is Send, and the mutex in BlindPool provides thread safety.
-unsafe impl<T: Send> Send for Pooled<T> {}
+// SAFETY: Pooled<T> can be Send if T is Sync, because multiple threads could
+// access the same referenced data when the Pooled<T> is moved between threads.
+// The Arc<PooledInner<T>> is Send when T is Sync, and the mutex in BlindPool provides thread safety.
+unsafe impl<T: Sync> Send for Pooled<T> {}
 
 // SAFETY: Pooled<T> can be Sync if T is Sync, because multiple threads can safely
 // access the same Pooled<T> instance if T is Sync. The deref operation is safe
@@ -343,8 +344,8 @@ unsafe impl Send for PooledRef {}
 // SAFETY: PooledRef can be Sync because both RawPooled<()> and BlindPool are Sync.
 unsafe impl Sync for PooledRef {}
 
-// SAFETY: PooledInner<T> can be Send if T is Send, following the same reasoning as Pooled<T>.
-unsafe impl<T: Send> Send for PooledInner<T> {}
+// SAFETY: PooledInner<T> can be Send if T is Sync, following the same reasoning as Pooled<T>.
+unsafe impl<T: Sync> Send for PooledInner<T> {}
 
 // SAFETY: PooledInner<T> can be Sync if T is Sync, following the same reasoning as Pooled<T>.
 unsafe impl<T: Sync> Sync for PooledInner<T> {}
@@ -504,12 +505,12 @@ mod tests {
 
         use static_assertions::{assert_impl_all, assert_not_impl_any};
 
-        // Pooled<T> should be Send if and only if T is Send
+        // Pooled<T> should be Send if and only if T is Sync
         assert_impl_all!(super::Pooled<u32>: Send);
         assert_impl_all!(super::Pooled<String>: Send);
         assert_impl_all!(super::Pooled<Vec<u8>>: Send);
-        assert_impl_all!(super::Pooled<RefCell<u32>>: Send); // RefCell is Send but not Sync
-        assert_not_impl_any!(super::Pooled<Rc<u32>>: Send); // Rc is neither Send nor Sync
+        assert_not_impl_any!(super::Pooled<RefCell<u32>>: Send); // RefCell is not Sync
+        assert_not_impl_any!(super::Pooled<Rc<u32>>: Send); // Rc is not Sync
 
         // Pooled<T> should be Sync if and only if T is Sync
         assert_impl_all!(super::Pooled<u32>: Sync);
