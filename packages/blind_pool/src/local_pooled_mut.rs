@@ -69,8 +69,12 @@ impl<T: ?Sized> LocalPooledMut<T> {
         // extracting its fields. This is safe because we're transferring ownership
         // to the new handle.
         let this = std::mem::ManuallyDrop::new(self);
-        let pooled = unsafe { std::ptr::read(&this.inner.pooled) };
-        let pool = unsafe { std::ptr::read(&this.inner.pool) };
+        // SAFETY: We are reading from ManuallyDrop wrapped value to transfer ownership.
+        // The field is guaranteed to be initialized and we prevent Drop from running.
+        let pooled = unsafe { std::ptr::read(&raw const this.inner.pooled) };
+        // SAFETY: We are reading from ManuallyDrop wrapped value to transfer ownership.
+        // The field is guaranteed to be initialized and we prevent Drop from running.
+        let pool = unsafe { std::ptr::read(&raw const this.inner.pool) };
 
         // Cast the RawPooled to the trait object using the provided function
         // SAFETY: The lifetime management logic of this pool guarantees that the target item is
