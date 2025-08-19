@@ -11,7 +11,10 @@ use blind_pool::BlindPool;
 
 /// A simple async function that returns its input value.
 /// This simulates a future that might be returned from an actual async operation.
-#[allow(clippy::unused_async, reason = "Intentionally async to demonstrate future handling even though no await is used")]
+#[allow(
+    clippy::unused_async,
+    reason = "Intentionally async to demonstrate future handling even though no await is used"
+)]
 async fn echo(val: u32) -> u32 {
     // Simulate some async work (even if it completes immediately)
     val
