@@ -346,11 +346,14 @@ mod tests {
 
     #[test]
     fn double_remove_bug_reproduction() {
-        use std::future::Future;
         use std::task::{Context, Poll, Waker};
 
-        fn echo(val: u32) -> impl Future<Output = u32> {
-            async move { val }
+        #[allow(
+            clippy::unused_async,
+            reason = "Need async fn to create Future for testing"
+        )]
+        async fn echo(val: u32) -> u32 {
+            val
         }
 
         let pool = BlindPool::new();
@@ -377,12 +380,15 @@ mod tests {
 
     #[test]
     fn detailed_future_test() {
-        use std::future::Future;
         use std::task::{Context, Poll, Waker};
 
         // A simple async function that should complete immediately
-        fn echo(val: u32) -> impl Future<Output = u32> {
-            async move { val }
+        #[allow(
+            clippy::unused_async,
+            reason = "Need async fn to create Future for testing"
+        )]
+        async fn echo(val: u32) -> u32 {
+            val
         }
 
         let pool = BlindPool::new();
@@ -412,11 +418,14 @@ mod tests {
 
     #[test]
     fn casting_with_futures() {
-        use std::future::Future;
         use std::task::{Context, Poll, Waker};
 
-        fn echo(val: u32) -> impl Future<Output = u32> {
-            async move { val }
+        #[allow(
+            clippy::unused_async,
+            reason = "Need async fn to create Future for testing"
+        )]
+        async fn echo(val: u32) -> u32 {
+            val
         }
 
         let pool = BlindPool::new();
@@ -446,7 +455,7 @@ mod tests {
     fn explicit_double_drop_test() {
         // Try to create a scenario where something might be dropped twice
         let pool = BlindPool::new();
-        let handle = pool.insert_mut(42u32);
+        let handle = pool.insert_mut(42_u32);
 
         // Ensure the pool has the item
         assert_eq!(pool.len(), 1);
