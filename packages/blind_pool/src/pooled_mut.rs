@@ -21,8 +21,8 @@ use crate::{BlindPool, RawPooled};
 /// - **Send**: [`PooledMut<T>`] is [`Send`] if and only if `T` is [`Send`]. This allows moving
 ///   pooled mutable references between threads when the referenced type can be moved between threads.
 ///
-/// - **Sync**: [`PooledMut<T>`] does NOT implement [`Sync`] because it provides exclusive mutable 
-///   access via [`DerefMut`]. Allowing multiple threads to share references to the same 
+/// - **Sync**: [`PooledMut<T>`] does NOT implement [`Sync`] because it provides exclusive mutable
+///   access via [`DerefMut`]. Allowing multiple threads to share references to the same
 ///   [`PooledMut<T>`] instance would violate Rust's borrowing rules and lead to data races.
 ///
 /// # Example
@@ -75,11 +75,11 @@ impl<T: ?Sized> PooledMut<T> {
     {
         // Use ManuallyDrop to prevent the Drop implementation from running
         let manual_drop_self = ManuallyDrop::new(self);
-        
-        // Extract references to the inner components 
+
+        // Extract references to the inner components
         let pooled = manual_drop_self.inner.pooled;
         let pool = manual_drop_self.inner.pool.clone();
-        
+
         // Perform the cast using the existing method
         // SAFETY: The lifetime management logic of this pool guarantees that the target item is
         // still alive in the pool for as long as any handle exists, which it clearly does.
@@ -92,7 +92,7 @@ impl<T: ?Sized> PooledMut<T> {
                 pool,
             },
         }
-        
+
         // Note: manual_drop_self is never dropped, so the original handle doesn't
         // try to remove the item from the pool
     }
@@ -429,7 +429,12 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(miri))]
     #[expect(trivial_casts, reason = "Casting is part of the macro generated code")]
+    #[allow(
+        dead_code,
+        reason = "Macro-generated trait only used for casting in this test"
+    )]
     fn casting_with_futures() {
         use std::future::Future;
         use std::task::{Context, Poll, Waker};
@@ -452,7 +457,7 @@ mod tests {
         }
 
         let pool = BlindPool::new();
-        
+
         // Use casting to convert the anonymous future into a named trait object
         let mut future_handle = pool.insert_mut(echo(10)).cast_my_future();
 

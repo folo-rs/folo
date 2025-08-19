@@ -7,9 +7,13 @@
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
-use blind_pool::{define_pooled_dyn_cast, BlindPool};
+use blind_pool::{BlindPool, define_pooled_dyn_cast};
 
 /// A simple async function that returns its input value.
+#[allow(
+    clippy::unused_async,
+    reason = "Need async fn to create Future for testing"
+)]
 async fn echo(val: u32) -> u32 {
     val
 }
@@ -18,7 +22,7 @@ async fn echo(val: u32) -> u32 {
 /// This demonstrates how to create a named interface for anonymous futures.
 pub(crate) trait MyFuture: Future<Output = u32> {}
 
-/// Blanket implementation - any Future<Output = u32> implements MyFuture.
+/// Blanket implementation - any Future<Output = u32> implements `MyFuture`.
 impl<T> MyFuture for T where T: Future<Output = u32> {}
 
 // Generate the casting methods for our custom trait.
