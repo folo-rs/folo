@@ -226,11 +226,11 @@ mod tests {
 
         // Test Deref
         assert_eq!(handle.len(), 3);
-        assert_eq!(handle[0], 1);
+        assert_eq!(*handle.first().expect("vec should not be empty"), 1);
 
         // Test DerefMut
         handle.push(4);
-        handle[0] = 10;
+        *handle.get_mut(0).expect("index 0 should exist") = 10;
 
         assert_eq!(*handle, vec![10, 2, 3, 4]);
     }

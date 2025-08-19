@@ -30,8 +30,8 @@ impl Future for CountdownFuture {
         if self.remaining_polls == 0 {
             Poll::Ready("Countdown completed!".to_string())
         } else {
-            println!("Countdown: {} polls remaining", self.remaining_polls);
-            self.remaining_polls -= 1;
+            println!("Countdown: {remaining_polls} polls remaining", remaining_polls = self.remaining_polls);
+            self.remaining_polls = self.remaining_polls.saturating_sub(1);
             Poll::Pending
         }
     }
@@ -70,7 +70,7 @@ fn main() {
 
         match pinned_future.poll(&mut context) {
             Poll::Ready(result) => {
-                println!("Future completed with result: {}", result);
+                println!("Future completed with result: {result}");
                 break;
             }
             Poll::Pending => {
@@ -89,6 +89,7 @@ fn main() {
     // Demonstrate that we can also use insert_with_mut for in-place construction
     println!("\nDemonstrating insert_with_mut...");
 
+    // SAFETY: We properly initialize the future in the closure.
     let mut future_handle2 = unsafe {
         pool.insert_with_mut(|uninit| {
             uninit.write(CountdownFuture::new(2));
@@ -103,7 +104,7 @@ fn main() {
         let pinned_future = Pin::new(&mut *future_handle2);
         match pinned_future.poll(&mut context2) {
             Poll::Ready(result) => {
-                println!("Second future completed: {}", result);
+                println!("Second future completed: {result}");
                 break;
             }
             Poll::Pending => {
@@ -120,6 +121,7 @@ fn main() {
     // We can cast to a trait object for dynamic dispatch
     // Note: We use Pin::new_unchecked here because we know the future won't move
     let future_ref: &mut dyn Future<Output = String> = &mut *future_handle3;
+    // SAFETY: We know the future is pinned and won't move because it's stored in the pool.
     let pinned_trait_future = unsafe { Pin::new_unchecked(future_ref) };
 
     let waker3 = Waker::from(std::sync::Arc::new(DummyWaker));
@@ -127,16 +129,17 @@ fn main() {
 
     match pinned_trait_future.poll(&mut context3) {
         Poll::Ready(result) => {
-            println!("Trait object future completed: {}", result);
+            println!("Trait object future completed: {result}");
         }
         Poll::Pending => {
             println!("Trait object future pending - polling again...");
             // Since it returned pending, let's poll once more
             let future_ref2: &mut dyn Future<Output = String> = &mut *future_handle3;
+            // SAFETY: We know the future is pinned and won't move because it's stored in the pool.
             let pinned_trait_future2 = unsafe { Pin::new_unchecked(future_ref2) };
             match pinned_trait_future2.poll(&mut context3) {
                 Poll::Ready(result) => {
-                    println!("Trait object future completed on second poll: {}", result);
+                    println!("Trait object future completed on second poll: {result}");
                 }
                 Poll::Pending => {
                     println!("Trait object future still pending");
