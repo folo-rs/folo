@@ -352,6 +352,7 @@ unsafe impl<T: Sync> Sync for PooledInner<T> {}
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::BlindPool;
 
     #[test]
@@ -506,17 +507,17 @@ mod tests {
         use static_assertions::{assert_impl_all, assert_not_impl_any};
 
         // Pooled<T> should be Send if and only if T is Sync
-        assert_impl_all!(super::Pooled<u32>: Send);
-        assert_impl_all!(super::Pooled<String>: Send);
-        assert_impl_all!(super::Pooled<Vec<u8>>: Send);
-        assert_not_impl_any!(super::Pooled<RefCell<u32>>: Send); // RefCell is not Sync
-        assert_not_impl_any!(super::Pooled<Rc<u32>>: Send); // Rc is not Sync
+        assert_impl_all!(Pooled<u32>: Send);
+        assert_impl_all!(Pooled<String>: Send);
+        assert_impl_all!(Pooled<Vec<u8>>: Send);
+        assert_not_impl_any!(Pooled<RefCell<u32>>: Send); // RefCell is not Sync
+        assert_not_impl_any!(Pooled<Rc<u32>>: Send); // Rc is not Sync
 
         // Pooled<T> should be Sync if and only if T is Sync
-        assert_impl_all!(super::Pooled<u32>: Sync);
-        assert_impl_all!(super::Pooled<String>: Sync);
-        assert_impl_all!(super::Pooled<Vec<u8>>: Sync);
-        assert_not_impl_any!(super::Pooled<RefCell<u32>>: Sync); // RefCell is not Sync
-        assert_not_impl_any!(super::Pooled<Rc<u32>>: Sync); // Rc is not Sync
+        assert_impl_all!(Pooled<u32>: Sync);
+        assert_impl_all!(Pooled<String>: Sync);
+        assert_impl_all!(Pooled<Vec<u8>>: Sync);
+        assert_not_impl_any!(Pooled<RefCell<u32>>: Sync); // RefCell is not Sync
+        assert_not_impl_any!(Pooled<Rc<u32>>: Sync); // Rc is not Sync
     }
 }
