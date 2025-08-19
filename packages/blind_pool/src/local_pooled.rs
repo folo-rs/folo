@@ -318,6 +318,18 @@ mod tests {
         use std::cell::RefCell;
         assert_not_impl_any!(LocalPooled<RefCell<u32>>: Send);
         assert_not_impl_any!(LocalPooled<RefCell<u32>>: Sync);
+
+        // LocalPooled<T> should always be Unpin regardless of T
+        use static_assertions::assert_impl_all;
+        assert_impl_all!(LocalPooled<u32>: Unpin);
+        assert_impl_all!(LocalPooled<String>: Unpin);
+        assert_impl_all!(LocalPooled<Vec<u8>>: Unpin);
+        assert_impl_all!(LocalPooled<RefCell<u32>>: Unpin);
+        assert_impl_all!(LocalPooled<Rc<u32>>: Unpin);
+
+        // Even with non-Unpin types, LocalPooled should still be Unpin
+        use std::marker::PhantomPinned;
+        assert_impl_all!(LocalPooled<PhantomPinned>: Unpin);
     }
 
     #[test]

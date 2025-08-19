@@ -1107,6 +1107,21 @@ mod tests {
 
             // Type-erased handles should be Send and Sync (() is Sync)
             assert_impl_all!(RawPooled<()>: Send, Sync);
+
+            // RawBlindPool and RawPooled<T> should always be Unpin regardless of T
+            assert_impl_all!(RawBlindPool: Unpin);
+            assert_impl_all!(RawBlindPoolBuilder: Unpin);
+
+            assert_impl_all!(RawPooled<u32>: Unpin);
+            assert_impl_all!(RawPooled<String>: Unpin);
+            assert_impl_all!(RawPooled<Vec<u8>>: Unpin);
+            assert_impl_all!(RawPooled<Rc<u32>>: Unpin);
+            assert_impl_all!(RawPooled<RefCell<u32>>: Unpin);
+            assert_impl_all!(RawPooled<()>: Unpin);
+
+            // Even with non-Unpin types, RawPooled should still be Unpin
+            use std::marker::PhantomPinned;
+            assert_impl_all!(RawPooled<PhantomPinned>: Unpin);
         }
     }
 
