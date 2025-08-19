@@ -17,8 +17,8 @@ use crate::{BlindPool, RawPooled};
 ///
 /// [`PooledMut<T>`] implements thread safety traits conditionally based on the stored type `T`:
 ///
-/// - **Send**: [`PooledMut<T>`] is [`Send`] if and only if `T` is [`Send`]. This allows moving
-///   pooled mutable references between threads when the referenced type supports it.
+/// - **Send**: [`PooledMut<T>`] is [`Send`] if and only if `T` is [`Sync`]. This allows moving
+///   pooled mutable references between threads when the referenced type supports concurrent access.
 ///
 /// - **Sync**: [`PooledMut<T>`] is [`Sync`] if and only if `T` is [`Sync`]. This allows sharing
 ///   the same [`PooledMut<T>`] instance between multiple threads when the referenced type supports
@@ -200,14 +200,20 @@ impl<T: ?Sized> Drop for PooledMut<T> {
     }
 }
 
-// SAFETY: PooledMut<T> can be Send if T is Send, because we have exclusive ownership
-// of the T and can safely move it between threads if T supports that.
-unsafe impl<T: Send> Send for PooledMut<T> {}
+// SAFETY: PooledMut<T> can be Send if T is Sync, because multiple threads could
+// access the same referenced data when the PooledMut<T> is moved between threads.
+// We provide exclusive mutable access, but T must still be Sync for thread safety.
+unsafe impl<T: Sync> Send for PooledMut<T> {}
 
-// SAFETY: PooledMut<T> can be Sync if T is Sync, because if T is Sync, then shared
-// references to PooledMut<T> can safely exist across threads. The mutex in BlindPool
-// provides thread safety for pool operations.
+// SAFETY: PooledMut<T> can be Sync if T is Sync, because multiple threads can safely
+// access the same PooledMut<T> instance if T is Sync. Even though we provide exclusive
+// mutable access, sharing the PooledMut itself requires T to be Sync.
 unsafe impl<T: Sync> Sync for PooledMut<T> {}
+
+// PooledMut<T> implements Unpin because the underlying data is fixed in memory.
+// Values in the pool are always pinned and never move once inserted, so the wrapper
+// type itself can implement Unpin safely.
+impl<T: ?Sized> Unpin for PooledMut<T> {}
 
 impl<T: ?Sized> fmt::Debug for PooledMut<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -237,7 +243,7 @@ mod tests {
 
     #[test]
     fn thread_safety_assertions() {
-        // PooledMut<T> should be Send/Sync based on T's Send/Sync status
+        // PooledMut<T> should be Send/Sync based on T's Sync status (matching Pooled<T>)
         assert_impl_all!(PooledMut<u32>: Send, Sync);
         assert_impl_all!(PooledMut<String>: Send, Sync);
         assert_impl_all!(PooledMut<Vec<u8>>: Send, Sync);
@@ -247,15 +253,20 @@ mod tests {
         assert_not_impl_any!(PooledMut<String>: Clone);
         assert_not_impl_any!(PooledMut<Vec<u8>>: Clone);
 
-        // With non-Send/non-Sync types, PooledMut should also not be Send/Sync
+        // With non-Sync types, PooledMut should also not be Send/Sync
         use std::rc::Rc;
-        assert_not_impl_any!(PooledMut<Rc<u32>>: Send); // Rc is not Send
+        assert_not_impl_any!(PooledMut<Rc<u32>>: Send); // Rc is not Sync
         assert_not_impl_any!(PooledMut<Rc<u32>>: Sync); // Rc is not Sync
 
         // RefCell<T> is Send if T is Send, but not Sync
         use std::cell::RefCell;
-        assert_impl_all!(PooledMut<RefCell<u32>>: Send); // RefCell<u32> is Send
+        assert_not_impl_any!(PooledMut<RefCell<u32>>: Send); // RefCell is not Sync
         assert_not_impl_any!(PooledMut<RefCell<u32>>: Sync); // RefCell is not Sync
+
+        // PooledMut should implement Unpin
+        assert_impl_all!(PooledMut<u32>: Unpin);
+        assert_impl_all!(PooledMut<String>: Unpin);
+        assert_impl_all!(PooledMut<Vec<u8>>: Unpin);
     }
 
     #[test]

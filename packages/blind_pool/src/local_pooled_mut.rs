@@ -193,6 +193,11 @@ impl<T: ?Sized> Drop for LocalPooledMut<T> {
     }
 }
 
+// LocalPooledMut<T> implements Unpin because the underlying data is fixed in memory.
+// Values in the pool are always pinned and never move once inserted, so the wrapper
+// type itself can implement Unpin safely.
+impl<T: ?Sized> Unpin for LocalPooledMut<T> {}
+
 impl<T: ?Sized> fmt::Debug for LocalPooledMut<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalPooledMut")
@@ -214,7 +219,7 @@ impl<T: ?Sized> fmt::Debug for LocalPooledMutInner<T> {
 
 #[cfg(test)]
 mod tests {
-    use static_assertions::assert_not_impl_any;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::LocalPooledMut;
     use crate::LocalBlindPool;
@@ -242,6 +247,11 @@ mod tests {
         use std::cell::RefCell;
         assert_not_impl_any!(LocalPooledMut<RefCell<u32>>: Send);
         assert_not_impl_any!(LocalPooledMut<RefCell<u32>>: Sync);
+
+        // LocalPooledMut should implement Unpin
+        assert_impl_all!(LocalPooledMut<u32>: Unpin);
+        assert_impl_all!(LocalPooledMut<String>: Unpin);
+        assert_impl_all!(LocalPooledMut<Vec<u8>>: Unpin);
     }
 
     #[test]
