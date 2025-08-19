@@ -1,0 +1,266 @@
+use std::fmt;
+use std::ops::{Deref, DerefMut};
+
+use crate::{LocalBlindPool, RawPooled};
+
+/// A mutable reference to a value stored in a [`LocalBlindPool`].
+///
+/// This type provides automatic lifetime management for values in the pool with exclusive access.
+/// When the [`LocalPooledMut`] instance is dropped, the value is automatically removed from the pool.
+///
+/// Unlike [`LocalPooled<T>`], this type does not implement [`Clone`] and provides exclusive access
+/// through [`DerefMut`], making it suitable for scenarios where mutable access is required
+/// and shared ownership is not needed.
+///
+/// # Single-threaded Design
+///
+/// This type is designed for single-threaded use and is neither [`Send`] nor [`Sync`].
+///
+/// # Example
+///
+/// ```rust
+/// use blind_pool::LocalBlindPool;
+///
+/// let pool = LocalBlindPool::new();
+/// let mut value_handle = pool.insert_mut("Test".to_string());
+///
+/// // Mutably access the value.
+/// value_handle.push_str(" - Modified");
+/// assert_eq!(*value_handle, "Test - Modified");
+///
+/// // Value is automatically cleaned up when handle is dropped.
+/// ```
+pub struct LocalPooledMut<T: ?Sized> {
+    /// The inner data containing the actual pooled item and pool handle.
+    inner: LocalPooledMutInner<T>,
+}
+
+/// Internal data structure that manages the lifetime of a mutably pooled item.
+struct LocalPooledMutInner<T: ?Sized> {
+    /// The typed handle to the actual item in the pool.
+    pooled: RawPooled<T>,
+
+    /// A handle to the pool that keeps it alive as long as this item exists.
+    pool: LocalBlindPool,
+}
+
+impl<T: ?Sized> LocalPooledMut<T> {
+    /// Creates a new [`LocalPooledMut<T>`] from a pooled item and pool handle.
+    ///
+    /// This is an internal constructor used by [`LocalBlindPool::insert_mut`] and
+    /// [`LocalBlindPool::insert_with_mut`].
+    #[must_use]
+    pub(crate) fn new(pooled: RawPooled<T>, pool: LocalBlindPool) -> Self {
+        let inner = LocalPooledMutInner { pooled, pool };
+        Self { inner }
+    }
+
+    /// Provides access to the internal raw pooled handle for type casting operations.
+    ///
+    /// This method is used internally by the casting macro system and should not be
+    /// used directly by user code.
+    #[doc(hidden)]
+    pub fn __private_cast_dyn_with_fn<U: ?Sized, F>(self, cast_fn: F) -> LocalPooledMut<U>
+    where
+        F: FnOnce(&T) -> &U,
+    {
+        // Cast the RawPooled to the trait object using the provided function
+        // SAFETY: The lifetime management logic of this pool guarantees that the target item is
+        // still alive in the pool for as long as any handle exists, which it clearly does.
+        let cast_pooled = unsafe { self.inner.pooled.__private_cast_dyn_with_fn(cast_fn) };
+
+        LocalPooledMut {
+            inner: LocalPooledMutInner {
+                pooled: cast_pooled,
+                pool: self.inner.pool.clone(),
+            },
+        }
+    }
+}
+
+impl<T: ?Sized> Deref for LocalPooledMut<T> {
+    type Target = T;
+
+    /// Provides direct access to the value stored in the pool.
+    ///
+    /// This allows the handle to be used as if it were a reference to the stored value.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::LocalBlindPool;
+    ///
+    /// let pool = LocalBlindPool::new();
+    /// let string_handle = pool.insert_mut("hello".to_string());
+    ///
+    /// // Access string methods directly.
+    /// assert_eq!(string_handle.len(), 5);
+    /// assert!(string_handle.starts_with("he"));
+    /// ```
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: The pooled handle is valid and contains initialized memory of type T.
+        // The owned inner ensures the underlying pool data remains alive during access.
+        unsafe { self.inner.pooled.ptr().as_ref() }
+    }
+}
+
+impl<T: ?Sized> DerefMut for LocalPooledMut<T> {
+    /// Provides direct mutable access to the value stored in the pool.
+    ///
+    /// This allows the handle to be used as if it were a mutable reference to the stored value.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::LocalBlindPool;
+    ///
+    /// let pool = LocalBlindPool::new();
+    /// let mut string_handle = pool.insert_mut("hello".to_string());
+    ///
+    /// // Mutate the string directly.
+    /// string_handle.push_str(" world");
+    /// assert_eq!(*string_handle, "hello world");
+    /// ```
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        // SAFETY: The pooled handle is valid and contains initialized memory of type T.
+        // We have exclusive ownership through LocalPooledMut, so no other references can exist.
+        unsafe { self.inner.pooled.ptr().as_mut() }
+    }
+}
+
+impl<T: ?Sized> Drop for LocalPooledMut<T> {
+    /// Automatically removes the item from the pool when the handle is dropped.
+    ///
+    /// This ensures that resources are properly cleaned up without requiring manual intervention.
+    #[inline]
+    fn drop(&mut self) {
+        // We have exclusive ownership, so we can safely remove the item from the pool.
+        self.inner.pool.remove(&self.inner.pooled.erase());
+    }
+}
+
+impl<T: ?Sized> fmt::Debug for LocalPooledMut<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocalPooledMut")
+            .field("type_name", &std::any::type_name::<T>())
+            .field("ptr", &self.inner.pooled.ptr())
+            .finish()
+    }
+}
+
+impl<T: ?Sized> fmt::Debug for LocalPooledMutInner<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocalPooledMutInner")
+            .field("type_name", &std::any::type_name::<T>())
+            .field("ptr", &self.pooled.ptr())
+            .field("pool", &self.pool)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use static_assertions::assert_not_impl_any;
+
+    use super::LocalPooledMut;
+    use crate::LocalBlindPool;
+
+    #[test]
+    fn single_threaded_assertions() {
+        // LocalPooledMut<T> should NOT be Send or Sync regardless of T's Send/Sync status
+        assert_not_impl_any!(LocalPooledMut<u32>: Send);
+        assert_not_impl_any!(LocalPooledMut<u32>: Sync);
+        assert_not_impl_any!(LocalPooledMut<String>: Send);
+        assert_not_impl_any!(LocalPooledMut<String>: Sync);
+        assert_not_impl_any!(LocalPooledMut<Vec<u8>>: Send);
+        assert_not_impl_any!(LocalPooledMut<Vec<u8>>: Sync);
+
+        // LocalPooledMut should NOT be Clone
+        assert_not_impl_any!(LocalPooledMut<u32>: Clone);
+        assert_not_impl_any!(LocalPooledMut<String>: Clone);
+        assert_not_impl_any!(LocalPooledMut<Vec<u8>>: Clone);
+
+        // Even with non-Send/non-Sync types, LocalPooledMut should still not be Send/Sync
+        use std::rc::Rc;
+        assert_not_impl_any!(LocalPooledMut<Rc<u32>>: Send);
+        assert_not_impl_any!(LocalPooledMut<Rc<u32>>: Sync);
+
+        use std::cell::RefCell;
+        assert_not_impl_any!(LocalPooledMut<RefCell<u32>>: Send);
+        assert_not_impl_any!(LocalPooledMut<RefCell<u32>>: Sync);
+    }
+
+    #[test]
+    fn automatic_cleanup() {
+        let pool = LocalBlindPool::new();
+
+        {
+            let _handle = pool.insert_mut(42_u32);
+            assert_eq!(pool.len(), 1);
+        }
+
+        // Item should be automatically removed after drop
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn mutable_access() {
+        let pool = LocalBlindPool::new();
+        let mut handle = pool.insert_mut("hello".to_string());
+
+        // Test mutable access
+        handle.push_str(" world");
+        assert_eq!(*handle, "hello world");
+
+        // Test that the modification persists
+        assert_eq!(handle.len(), 11);
+    }
+
+    #[test]
+    fn deref_and_deref_mut_work() {
+        let pool = LocalBlindPool::new();
+        let mut handle = pool.insert_mut(vec![1, 2, 3]);
+
+        // Test Deref
+        assert_eq!(handle.len(), 3);
+        assert_eq!(handle[0], 1);
+
+        // Test DerefMut
+        handle.push(4);
+        handle[0] = 10;
+
+        assert_eq!(*handle, vec![10, 2, 3, 4]);
+    }
+
+    #[test]
+    fn works_with_drop_types() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct DropTracker {
+            dropped: Arc<AtomicBool>,
+        }
+
+        impl Drop for DropTracker {
+            fn drop(&mut self) {
+                self.dropped.store(true, Ordering::Relaxed);
+            }
+        }
+
+        let pool = LocalBlindPool::new();
+        let dropped = Arc::new(AtomicBool::new(false));
+
+        {
+            let _handle = pool.insert_mut(DropTracker {
+                dropped: Arc::clone(&dropped),
+            });
+            assert!(!dropped.load(Ordering::Relaxed));
+        }
+
+        // Item's Drop should have been called when pool handle was dropped
+        assert!(dropped.load(Ordering::Relaxed));
+    }
+}

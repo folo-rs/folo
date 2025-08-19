@@ -2,7 +2,7 @@ use std::mem::MaybeUninit;
 use std::sync::{Arc, Mutex};
 
 use crate::constants::ERR_POISONED_LOCK;
-use crate::{Pooled, RawBlindPool, RawPooled};
+use crate::{Pooled, PooledMut, RawBlindPool, RawPooled};
 
 /// A thread-safe wrapper around [`RawBlindPool`] that provides automatic resource management
 /// and reference counting.
@@ -147,6 +147,91 @@ impl BlindPool {
         };
 
         Pooled::new(pooled, self.clone())
+    }
+
+    /// Inserts a value into the pool and returns a mutable handle to access it.
+    ///
+    /// Unlike [`insert()`], this method returns a [`PooledMut<T>`] that provides exclusive
+    /// mutable access to the value and does not implement [`Clone`]. This is suitable for
+    /// scenarios where you need to modify the value and don't require shared ownership.
+    ///
+    /// The returned handle automatically manages the lifetime of the inserted value.
+    /// When the handle is dropped, the value is automatically removed from the pool.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::BlindPool;
+    ///
+    /// let pool = BlindPool::new();
+    ///
+    /// let mut string_handle = pool.insert_mut("Test".to_string());
+    ///
+    /// // Mutate the value directly.
+    /// string_handle.push_str(" - Modified");
+    /// assert_eq!(*string_handle, "Test - Modified");
+    /// ```
+    ///
+    /// [`insert()`]: Self::insert
+    #[inline]
+    #[must_use]
+    pub fn insert_mut<T>(&self, value: T) -> PooledMut<T> {
+        let pooled = {
+            let mut pool = self.inner.lock().expect(ERR_POISONED_LOCK);
+            pool.insert(value)
+        };
+
+        PooledMut::new(pooled, self.clone())
+    }
+
+    /// Inserts a value into the pool using in-place initialization and returns a mutable handle to it.
+    ///
+    /// This allows the caller to initialize the item in-place using a closure that receives
+    /// a `&mut MaybeUninit<T>`. This can be more efficient than constructing the value
+    /// separately and then moving it into the pool, especially for large or complex types.
+    ///
+    /// Unlike [`insert_with()`], this method returns a [`PooledMut<T>`] that provides exclusive
+    /// mutable access to the value and does not implement [`Clone`].
+    ///
+    /// The returned handle automatically manages the lifetime of the inserted value.
+    /// When the handle is dropped, the value is automatically removed from the pool.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::mem::MaybeUninit;
+    ///
+    /// use blind_pool::BlindPool;
+    ///
+    /// let pool = BlindPool::new();
+    ///
+    /// // SAFETY: We properly initialize the value in the closure.
+    /// let mut handle = unsafe {
+    ///     pool.insert_with_mut(|uninit: &mut MaybeUninit<String>| {
+    ///         uninit.write(String::from("Hello, World!"));
+    ///     })
+    /// };
+    ///
+    /// // Mutate the value directly.
+    /// handle.push_str(" - Modified");
+    /// assert_eq!(*handle, "Hello, World! - Modified");
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// The closure must properly initialize the `MaybeUninit<T>` before returning.
+    ///
+    /// [`insert_with()`]: Self::insert_with
+    #[inline]
+    #[must_use]
+    pub unsafe fn insert_with_mut<T>(&self, f: impl FnOnce(&mut MaybeUninit<T>)) -> PooledMut<T> {
+        let pooled = {
+            let mut pool = self.inner.lock().expect(ERR_POISONED_LOCK);
+            // SAFETY: Forwarding safety requirements to caller.
+            unsafe { pool.insert_with(f) }
+        };
+
+        PooledMut::new(pooled, self.clone())
     }
 
     /// Returns the total number of items currently stored in the pool.
@@ -378,5 +463,66 @@ mod tests {
         drop(handle2);
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn insert_mut_basic_functionality() {
+        let pool = BlindPool::new();
+
+        let mut handle = pool.insert_mut("hello".to_string());
+
+        // Test that we can mutate the value
+        handle.push_str(" world");
+        assert_eq!(*handle, "hello world");
+
+        // Test that pool length is correct
+        assert_eq!(pool.len(), 1);
+
+        // Test automatic cleanup
+        drop(handle);
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn insert_with_mut_basic_functionality() {
+        use std::mem::MaybeUninit;
+
+        let pool = BlindPool::new();
+
+        // SAFETY: We properly initialize the String in the closure.
+        let mut handle = unsafe {
+            pool.insert_with_mut(|uninit: &mut MaybeUninit<String>| {
+                uninit.write(String::from("Hello"));
+            })
+        };
+
+        // Test that we can mutate the value
+        handle.push_str(", World!");
+        assert_eq!(*handle, "Hello, World!");
+
+        // Test that pool length is correct
+        assert_eq!(pool.len(), 1);
+
+        // Test automatic cleanup
+        drop(handle);
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn insert_mut_different_from_insert() {
+        let pool = BlindPool::new();
+
+        // Test that both methods can be used simultaneously
+        let _shared_handle = pool.insert("shared".to_string());
+        let mut mut_handle = pool.insert_mut("mutable".to_string());
+
+        assert_eq!(pool.len(), 2);
+
+        // Modify only the mutable one
+        mut_handle.push_str(" - modified");
+        assert_eq!(*mut_handle, "mutable - modified");
+
+        drop(mut_handle);
+        assert_eq!(pool.len(), 1); // Only mutable handle dropped
     }
 }
