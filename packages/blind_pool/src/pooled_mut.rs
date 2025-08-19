@@ -71,7 +71,7 @@ impl<T: ?Sized> PooledMut<T> {
     #[doc(hidden)]
     pub fn __private_cast_dyn_with_fn<U: ?Sized, F>(self, cast_fn: F) -> PooledMut<U>
     where
-        F: FnOnce(&T) -> &U,
+        F: FnOnce(&mut T) -> &mut U,
     {
         // Use ManuallyDrop to prevent the Drop implementation from running
         let manual_drop_self = ManuallyDrop::new(self);
@@ -80,10 +80,10 @@ impl<T: ?Sized> PooledMut<T> {
         let pooled = manual_drop_self.inner.pooled;
         let pool = manual_drop_self.inner.pool.clone();
 
-        // Perform the cast using the existing method
+        // Perform the cast using the mutable method to maintain exclusive access
         // SAFETY: The lifetime management logic of this pool guarantees that the target item is
         // still alive in the pool for as long as any handle exists, which it clearly does.
-        let cast_pooled = unsafe { pooled.__private_cast_dyn_with_fn(cast_fn) };
+        let cast_pooled = unsafe { pooled.__private_cast_dyn_with_fn_mut(cast_fn) };
 
         // Create the new PooledMut - this becomes the only owner
         PooledMut {
@@ -454,16 +454,11 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(miri))]
     #[allow(
         dead_code,
         reason = "Macro-generated trait only used for casting in this test"
     )]
     fn casting_with_futures() {
-        // NOTE: This test is excluded from Miri because the trait object casting system
-        // involves complex borrowing patterns that Miri's stacked borrows model flags
-        // as potentially unsafe, even though the ManuallyDrop approach ensures correct
-        // ownership semantics in practice.
         use std::future::Future;
         use std::task::{Context, Poll, Waker};
 

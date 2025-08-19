@@ -584,6 +584,43 @@ impl<T: ?Sized> RawPooled<T> {
             inner: inner_pooled_new,
         }
     }
+
+    /// Converts this raw pooled handle to a trait object using a mutable reference cast.
+    ///
+    /// This method allows casting from `RawPooled<T>` to `RawPooled<dyn Trait>` where `T`
+    /// implements the trait, while maintaining exclusive access semantics. The resulting
+    /// handle maintains all the same semantics, but dereferences to the trait object
+    /// instead of the concrete type.
+    ///
+    /// This is intended for use by `PooledMut<T>` and `LocalPooledMut<T>` to maintain
+    /// proper borrowing semantics during trait object casting.
+    ///
+    /// # Safety
+    ///
+    /// The caller is responsible for ensuring that the raw pooled object
+    /// handle points to an item that is still present in the pool.
+    ///
+    /// The caller must guarantee that the target object is in a state where it is
+    /// valid to create an exclusive reference to it (i.e. no concurrent `&` shared
+    /// or `&mut` exclusive references exist).
+    ///
+    /// The caller must guarantee that the callback input and output references
+    /// point to the same object.
+    #[must_use]
+    #[inline]
+    #[doc(hidden)]
+    pub unsafe fn __private_cast_dyn_with_fn_mut<U: ?Sized, F>(self, cast_fn: F) -> RawPooled<U>
+    where
+        F: FnOnce(&mut T) -> &mut U,
+    {
+        // SAFETY: Forwarding safety requirements to the caller.
+        let inner_pooled_new = unsafe { self.inner.__private_cast_dyn_with_fn_mut(cast_fn) };
+
+        RawPooled {
+            layout: self.layout,
+            inner: inner_pooled_new,
+        }
+    }
 }
 
 impl<T: ?Sized> Copy for RawPooled<T> {}

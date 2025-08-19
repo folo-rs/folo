@@ -165,7 +165,7 @@ macro_rules! define_pooled_dyn_cast {
 
                 #[allow(trivial_casts, reason = "Casting is part of the macro generated code")]
                 fn [<cast_ $trait_name:snake>](self) -> Self::Output {
-                    self.__private_cast_dyn_with_fn(|x| x as &dyn $trait_name)
+                    self.__private_cast_dyn_with_fn(|x| x as &mut dyn $trait_name)
                 }
             }
 
@@ -177,7 +177,7 @@ macro_rules! define_pooled_dyn_cast {
 
                 #[allow(trivial_casts, reason = "Casting is part of the macro generated code")]
                 fn [<cast_ $trait_name:snake>](self) -> Self::Output {
-                    self.__private_cast_dyn_with_fn(|x| x as &dyn $trait_name)
+                    self.__private_cast_dyn_with_fn(|x| x as &mut dyn $trait_name)
                 }
             }
 
@@ -296,7 +296,7 @@ macro_rules! define_pooled_dyn_cast {
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,
                 {
-                    self.__private_cast_dyn_with_fn(|x| x as &dyn $trait_name<$($type_param),+>)
+                    self.__private_cast_dyn_with_fn(|x| x as &mut dyn $trait_name<$($type_param),+>)
                 }
             }
 
@@ -311,7 +311,7 @@ macro_rules! define_pooled_dyn_cast {
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,
                 {
-                    self.__private_cast_dyn_with_fn(|x| x as &dyn $trait_name<$($type_param),+>)
+                    self.__private_cast_dyn_with_fn(|x| x as &mut dyn $trait_name<$($type_param),+>)
                 }
             }
 

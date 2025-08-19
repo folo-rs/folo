@@ -804,6 +804,55 @@ impl<T: ?Sized> Pooled<T> {
         }
     }
 
+    /// Converts this pooled item handle to a trait object using a mutable reference cast.
+    ///
+    /// This method is intended for use by `PooledMut<T>` types that need to maintain exclusive
+    /// access during casting operations. It takes a casting function that works with mutable
+    /// references instead of shared references.
+    ///
+    /// The method exists alongside the shared reference version to maintain proper borrowing
+    /// semantics for different handle types - `Pooled<T>` uses shared references while
+    /// `PooledMut<T>` uses exclusive references.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the handle belongs to the same pool that this
+    /// item was inserted into and that the item pointed to by this handle
+    /// has not been removed from the pool.
+    ///
+    /// The caller must guarantee that the target object is in a state where it is
+    /// valid to create an exclusive reference to it (i.e. no concurrent `&` shared
+    /// or `&mut` exclusive references exist).
+    ///
+    /// The caller must guarantee that the callback input and output references
+    /// point to the same object.
+    #[must_use]
+    #[inline]
+    #[doc(hidden)]
+    pub unsafe fn __private_cast_dyn_with_fn_mut<U: ?Sized, F>(mut self, cast_fn: F) -> Pooled<U>
+    where
+        F: FnOnce(&mut T) -> &mut U,
+    {
+        // Get a mutable reference to perform the cast and obtain the trait object pointer.
+        // SAFETY: Forwarding safety requirements to the caller.
+        let value_ref = unsafe { self.ptr.as_mut() };
+
+        // Use the provided function to perform the cast - this ensures type safety.
+        let new_ref: &mut U = cast_fn(value_ref);
+
+        // Now we need a pointer to stuff into a new Pooled.
+        let new_ptr = NonNull::from(new_ref);
+
+        // Create a new pooled handle with the trait object type. We can reuse the same
+        // pool_id and coordinates since they refer to the same underlying allocation, just
+        // with a different type view.
+        Pooled {
+            pool_id: self.pool_id,
+            coordinates: self.coordinates,
+            ptr: new_ptr,
+        }
+    }
+
     /// Returns a pointer to the inserted value.
     ///
     /// This is the only way to access the value stored in the pool. The owner of the handle has
