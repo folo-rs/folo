@@ -80,7 +80,7 @@ oneshot = { version = "0.1", default-features = false, features = [
     "std",
     "async",
 ] }
-paste = { version = "1.0", default-features = false }
+pastey = { version = "0.1.1", default-features = false }
 proc-macro2 = { version = "1.0", default-features = false }
 quote = { version = "1.0", default-features = false }
 rand = { version = "0.9", default-features = false, features = ["std"] }

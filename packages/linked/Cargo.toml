@@ -16,7 +16,7 @@ default = []
 [dependencies]
 hash_hasher = { workspace = true }
 linked_macros = { workspace = true }
-paste = { workspace = true }
+pastey = { workspace = true }
 simple-mermaid = { workspace = true }
 
 [dev-dependencies]
