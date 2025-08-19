@@ -1,5 +1,4 @@
 use std::fmt;
-use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 
@@ -66,28 +65,25 @@ impl<T: ?Sized> LocalPooledMut<T> {
     where
         F: FnOnce(&mut T) -> &mut U,
     {
-        // Use ManuallyDrop to prevent the Drop implementation from running
-        let manual_drop_self = ManuallyDrop::new(self);
+        // We need to prevent the Drop from running on the original handle while still
+        // extracting its fields. This is safe because we're transferring ownership
+        // to the new handle.
+        let this = std::mem::ManuallyDrop::new(self);
+        let pooled = unsafe { std::ptr::read(&this.inner.pooled) };
+        let pool = unsafe { std::ptr::read(&this.inner.pool) };
 
-        // Extract references to the inner components
-        let pooled = manual_drop_self.inner.pooled;
-        let pool = manual_drop_self.inner.pool.clone();
-
-        // Perform the cast using the mutable method to maintain exclusive access
+        // Cast the RawPooled to the trait object using the provided function
         // SAFETY: The lifetime management logic of this pool guarantees that the target item is
         // still alive in the pool for as long as any handle exists, which it clearly does.
         let cast_pooled = unsafe { pooled.__private_cast_dyn_with_fn_mut(cast_fn) };
 
-        // Create the new LocalPooledMut - this becomes the only owner
+        // Create the new LocalPooledMut with the cast handle and the same pool
         LocalPooledMut {
             inner: LocalPooledMutInner {
                 pooled: cast_pooled,
                 pool,
             },
         }
-
-        // Note: manual_drop_self is never dropped, so the original handle doesn't
-        // try to remove the item from the pool
     }
 
     /// Returns a pinned reference to the value stored in the pool.
@@ -366,8 +362,9 @@ mod tests {
 
         let pool = LocalBlindPool::new();
 
-        // Use casting to convert the anonymous future into a named trait object
-        let mut future_handle = pool.insert_mut(echo(10)).cast_my_future();
+        // Create the future handle first, then cast it (separate operations)
+        let original_handle = pool.insert_mut(echo(10));
+        let mut future_handle = original_handle.cast_my_future();
 
         // After casting, the pool should still have the item
         assert_eq!(pool.len(), 1);
