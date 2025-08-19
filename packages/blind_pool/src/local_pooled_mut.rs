@@ -1,5 +1,6 @@
 use std::fmt;
 use std::ops::{Deref, DerefMut};
+use std::pin::Pin;
 
 use crate::{LocalBlindPool, RawPooled};
 
@@ -75,6 +76,57 @@ impl<T: ?Sized> LocalPooledMut<T> {
                 pool: self.inner.pool.clone(),
             },
         }
+    }
+
+    /// Returns a pinned reference to the value stored in the pool.
+    ///
+    /// Since values in the pool are always pinned (they never move once inserted),
+    /// this method provides safe access to `Pin<&T>` without requiring unsafe code.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::pin::Pin;
+    /// use blind_pool::LocalBlindPool;
+    ///
+    /// let pool = LocalBlindPool::new();
+    /// let handle = pool.insert_mut("hello".to_string());
+    ///
+    /// let pinned: Pin<&String> = handle.as_pin();
+    /// assert_eq!(pinned.len(), 5);
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn as_pin(&self) -> Pin<&T> {
+        // SAFETY: Values in the pool are always pinned - they never move once inserted.
+        // The pool ensures stable addresses for the lifetime of the pooled object.
+        unsafe { Pin::new_unchecked(&**self) }
+    }
+
+    /// Returns a pinned mutable reference to the value stored in the pool.
+    ///
+    /// Since values in the pool are always pinned (they never move once inserted),
+    /// this method provides safe access to `Pin<&mut T>` without requiring unsafe code.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::pin::Pin;
+    /// use blind_pool::LocalBlindPool;
+    ///
+    /// let pool = LocalBlindPool::new();
+    /// let mut handle = pool.insert_mut("hello".to_string());
+    ///
+    /// let mut pinned: Pin<&mut String> = handle.as_pin_mut();
+    /// // Can use Pin methods or deref to &mut String
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn as_pin_mut(&mut self) -> Pin<&mut T> {
+        // SAFETY: Values in the pool are always pinned - they never move once inserted.
+        // The pool ensures stable addresses for the lifetime of the pooled object.
+        // We have exclusive access through &mut self, so this is safe.
+        unsafe { Pin::new_unchecked(&mut **self) }
     }
 }
 

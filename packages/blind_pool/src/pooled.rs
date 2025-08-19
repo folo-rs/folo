@@ -1,5 +1,6 @@
 use std::fmt;
 use std::ops::Deref;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::{BlindPool, RawPooled};
@@ -195,6 +196,31 @@ impl<T: ?Sized> Pooled<T> {
     #[inline]
     pub fn ptr(&self) -> std::ptr::NonNull<T> {
         self.inner.pooled.ptr()
+    }
+
+    /// Returns a pinned reference to the value stored in the pool.
+    ///
+    /// Since values in the pool are always pinned (they never move once inserted),
+    /// this method provides safe access to `Pin<&T>` without requiring unsafe code.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::pin::Pin;
+    /// use blind_pool::BlindPool;
+    ///
+    /// let pool = BlindPool::new();
+    /// let handle = pool.insert("hello".to_string());
+    ///
+    /// let pinned: Pin<&String> = handle.as_pin();
+    /// assert_eq!(pinned.len(), 5);
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn as_pin(&self) -> Pin<&T> {
+        // SAFETY: Values in the pool are always pinned - they never move once inserted.
+        // The pool ensures stable addresses for the lifetime of the pooled object.
+        unsafe { Pin::new_unchecked(&**self) }
     }
 
     /// Casts this [`Pooled<T>`] to a trait object type.
