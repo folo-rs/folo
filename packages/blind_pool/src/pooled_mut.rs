@@ -430,7 +430,6 @@ mod tests {
 
     #[test]
     #[cfg(not(miri))]
-    #[expect(trivial_casts, reason = "Casting is part of the macro generated code")]
     #[allow(
         dead_code,
         reason = "Macro-generated trait only used for casting in this test"

@@ -139,6 +139,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output = $crate::Pooled<dyn $trait_name>;
 
+                #[allow(trivial_casts, reason = "Casting is part of the macro generated code")]
                 fn [<cast_ $trait_name:snake>](self) -> Self::Output {
                     self.__private_cast_dyn_with_fn(|x| x as &dyn $trait_name)
                 }
@@ -150,6 +151,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output = $crate::LocalPooled<dyn $trait_name>;
 
+                #[allow(trivial_casts, reason = "Casting is part of the macro generated code")]
                 fn [<cast_ $trait_name:snake>](self) -> Self::Output {
                     self.__private_cast_dyn_with_fn(|x| x as &dyn $trait_name)
                 }
@@ -161,6 +163,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output = $crate::PooledMut<dyn $trait_name>;
 
+                #[allow(trivial_casts, reason = "Casting is part of the macro generated code")]
                 fn [<cast_ $trait_name:snake>](self) -> Self::Output {
                     self.__private_cast_dyn_with_fn(|x| x as &dyn $trait_name)
                 }
@@ -172,6 +175,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output = $crate::LocalPooledMut<dyn $trait_name>;
 
+                #[allow(trivial_casts, reason = "Casting is part of the macro generated code")]
                 fn [<cast_ $trait_name:snake>](self) -> Self::Output {
                     self.__private_cast_dyn_with_fn(|x| x as &dyn $trait_name)
                 }
@@ -211,6 +215,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output = $crate::RawPooled<dyn $trait_name>;
 
+                #[allow(trivial_casts, reason = "Casting is part of the macro generated code")]
                 unsafe fn [<cast_ $trait_name:snake>](self) -> Self::Output {
                     // SAFETY: Forwarding safety guarantees from the caller.
                     unsafe {
@@ -256,6 +261,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output<$($type_param),+> = $crate::Pooled<dyn $trait_name<$($type_param),+>>;
 
+                #[allow(trivial_casts, reason = "Casting is part of the macro generated code")]
                 fn [<cast_ $trait_name:snake>]<$($type_param),+>(self) -> Self::Output<$($type_param),+>
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,
@@ -270,6 +276,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output<$($type_param),+> = $crate::LocalPooled<dyn $trait_name<$($type_param),+>>;
 
+                #[allow(trivial_casts, reason = "Casting is part of the macro generated code")]
                 fn [<cast_ $trait_name:snake>]<$($type_param),+>(self) -> Self::Output<$($type_param),+>
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,
@@ -284,6 +291,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output<$($type_param),+> = $crate::PooledMut<dyn $trait_name<$($type_param),+>>;
 
+                #[allow(trivial_casts, reason = "Casting is part of the macro generated code")]
                 fn [<cast_ $trait_name:snake>]<$($type_param),+>(self) -> Self::Output<$($type_param),+>
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,
@@ -298,6 +306,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output<$($type_param),+> = $crate::LocalPooledMut<dyn $trait_name<$($type_param),+>>;
 
+                #[allow(trivial_casts, reason = "Casting is part of the macro generated code")]
                 fn [<cast_ $trait_name:snake>]<$($type_param),+>(self) -> Self::Output<$($type_param),+>
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,
@@ -347,6 +356,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output<$($type_param),+> = $crate::RawPooled<dyn $trait_name<$($type_param),+>>;
 
+                #[allow(trivial_casts, reason = "Casting is part of the macro generated code")]
                 unsafe fn [<cast_ $trait_name:snake>]<$($type_param),+>(self) -> Self::Output<$($type_param),+>
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,
