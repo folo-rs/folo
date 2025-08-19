@@ -17,12 +17,12 @@ use crate::{BlindPool, RawPooled};
 ///
 /// [`PooledMut<T>`] implements thread safety traits conditionally based on the stored type `T`:
 ///
-/// - **Send**: [`PooledMut<T>`] is [`Send`] if and only if `T` is [`Sync`]. This allows moving
-///   pooled mutable references between threads when the referenced type supports concurrent access.
+/// - **Send**: [`PooledMut<T>`] is [`Send`] if and only if `T` is [`Send`]. This allows moving
+///   pooled mutable references between threads when the referenced type can be moved between threads.
 ///
-/// - **Sync**: [`PooledMut<T>`] is [`Sync`] if and only if `T` is [`Sync`]. This allows sharing
-///   the same [`PooledMut<T>`] instance between multiple threads when the referenced type supports
-///   concurrent access.
+/// - **Sync**: [`PooledMut<T>`] does NOT implement [`Sync`] because it provides exclusive mutable 
+///   access via [`DerefMut`]. Allowing multiple threads to share references to the same 
+///   [`PooledMut<T>`] instance would violate Rust's borrowing rules and lead to data races.
 ///
 /// # Example
 ///
@@ -417,8 +417,19 @@ mod tests {
     }
 
     #[test]
+    #[expect(trivial_casts, reason = "Casting is part of the macro generated code")]
     fn casting_with_futures() {
+        use std::future::Future;
         use std::task::{Context, Poll, Waker};
+
+        /// Custom trait for futures returning u32.
+        pub(crate) trait MyFuture: Future<Output = u32> {}
+
+        /// Blanket implementation for any Future<Output = u32>.
+        impl<T> MyFuture for T where T: Future<Output = u32> {}
+
+        // Generate casting methods for MyFuture.
+        crate::define_pooled_dyn_cast!(MyFuture);
 
         #[allow(
             clippy::unused_async,
@@ -429,14 +440,22 @@ mod tests {
         }
 
         let pool = BlindPool::new();
-        let mut future_handle = pool.insert_mut(echo(10));
+        
+        // First, test without casting
+        let future_handle = pool.insert_mut(echo(10));
+        assert_eq!(pool.len(), 1);
+        
+        // Use casting to convert the anonymous future into a named trait object
+        let mut casted_handle = future_handle.cast_my_future();
+        // After casting, the original handle is consumed, but the pool should still have the item
+        assert_eq!(pool.len(), 1);
 
         // Poll the future using the safe pinning method from PooledMut
         let waker = Waker::noop();
         let mut context = Context::from_waker(waker);
 
         // Use the as_pin_mut method to get a properly pinned reference
-        let pinned_future = future_handle.as_pin_mut();
+        let pinned_future = casted_handle.as_pin_mut();
         match pinned_future.poll(&mut context) {
             Poll::Ready(result) => {
                 assert_eq!(result, 10);
@@ -446,8 +465,10 @@ mod tests {
             }
         }
 
+        assert_eq!(pool.len(), 1); // Should still be 1 after polling
+
         // Drop should work fine
-        drop(future_handle);
+        drop(casted_handle);
         assert_eq!(pool.len(), 0);
     }
 
