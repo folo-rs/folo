@@ -89,13 +89,16 @@ mod cast;
 mod constants;
 mod local_pool;
 mod local_pooled;
+mod local_pooled_mut;
 mod pool;
 mod pooled;
+mod pooled_mut;
 mod raw;
 mod raw_builder;
 
 pub use local_pool::*;
 pub use local_pooled::*;
+pub use local_pooled_mut::*;
 // Re-export DropPolicy from opaque_pool simply because we do not need a different one.
 pub use opaque_pool::DropPolicy;
 // Re-export so we can use it without the consumer needing a reference.
@@ -103,5 +106,6 @@ pub use opaque_pool::DropPolicy;
 pub use pastey::paste as __private_paste;
 pub use pool::*;
 pub use pooled::*;
+pub use pooled_mut::*;
 pub use raw::*;
 pub use raw_builder::*;
