@@ -79,7 +79,7 @@ impl RawBlindPoolBuilder {
     /// let pooled_item = pool.insert(42_u32);
     ///
     /// // Manual cleanup required.
-    /// pool.remove(pooled_item);
+    /// pool.remove(&pooled_item);
     /// ```
     #[must_use]
     #[inline]

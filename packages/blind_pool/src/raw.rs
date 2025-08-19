@@ -43,8 +43,8 @@ use crate::RawBlindPoolBuilder;
 ///
 /// // Read from the memory.
 /// // SAFETY: The pointers are valid and the memory contains the values we just inserted.
-/// let value_u32 = unsafe { pooled_u32.ptr().read() };
-/// let value_i64 = unsafe { pooled_i64.ptr().read() };
+/// let value_u32 = unsafe { *pooled_u32.ptr().as_ref() };
+/// let value_i64 = unsafe { *pooled_i64.ptr().as_ref() };
 ///
 /// assert_eq!(value_u32, 42);
 /// assert_eq!(value_i64, -123);
@@ -79,7 +79,7 @@ impl RawBlindPool {
     /// let pooled = pool.insert(42_u64);
     ///
     /// // SAFETY: The pointer is valid and contains the value we just inserted.
-    /// let value = unsafe { pooled.ptr().read() };
+    /// let value = unsafe { *pooled.ptr().as_ref() };
     /// assert_eq!(value, 42);
     /// ```
     #[must_use]
@@ -179,7 +179,7 @@ impl RawBlindPool {
     ///
     /// // Read the value back.
     /// // SAFETY: The pointer is valid and contains the initialized String.
-    /// let value = unsafe { pooled.ptr().read() };
+    /// let value = unsafe { pooled.ptr().as_ref() };
     /// assert_eq!(value, "Hello, World!");
     ///
     /// // Clean up.
@@ -230,7 +230,7 @@ impl RawBlindPool {
     /// let pooled = pool.insert(42_u64);
     /// assert_eq!(pool.len(), 1);
     ///
-    /// pool.remove(pooled);
+    /// pool.remove(&pooled);
     /// assert_eq!(pool.len(), 0);
     /// ```
     #[inline]
@@ -282,7 +282,7 @@ impl RawBlindPool {
     ///
     /// assert!(!pool.is_empty());
     ///
-    /// pool.remove(pooled);
+    /// pool.remove(&pooled);
     /// assert!(pool.is_empty());
     /// ```
     #[must_use]
@@ -439,15 +439,15 @@ impl Drop for RawBlindPool {
 ///
 /// // All copies refer to the same stored value.
 /// // SAFETY: All pointers are valid and point to the same value.
-/// let value1 = unsafe { pooled.ptr().read() };
-/// let value2 = unsafe { pooled_copy.ptr().read() };
-/// let value3 = unsafe { pooled_clone.ptr().read() };
+/// let value1 = unsafe { *pooled.ptr().as_ref() };
+/// let value2 = unsafe { *pooled_copy.ptr().as_ref() };
+/// let value3 = unsafe { *pooled_clone.ptr().as_ref() };
 /// assert_eq!(value1, 42);
 /// assert_eq!(value2, 42);
 /// assert_eq!(value3, 42);
 ///
 /// // To remove the item from the pool, any handle can be used.
-/// pool.remove(pooled);
+/// pool.remove(&pooled);
 /// ```
 ///
 /// # Thread safety
@@ -483,7 +483,7 @@ impl<T: ?Sized> RawPooled<T> {
     ///
     /// // Read data back from the memory.
     /// // SAFETY: The pointer is valid and the memory contains the value we just inserted.
-    /// let value = unsafe { pooled.ptr().read() };
+    /// let value = unsafe { *pooled.ptr().as_ref() };
     /// assert_eq!(value, 2.5159);
     /// ```
     #[must_use]
@@ -515,11 +515,11 @@ impl<T: ?Sized> RawPooled<T> {
     ///
     /// // Can still access the raw pointer.
     /// // SAFETY: We know this contains a u64.
-    /// let value = unsafe { erased.ptr().cast::<u64>().read() };
+    /// let value = unsafe { *erased.ptr().cast::<u64>().as_ref() };
     /// assert_eq!(value, 42);
     ///
     /// // Can still remove the item.
-    /// pool.remove(erased);
+    /// pool.remove(&erased);
     /// ```
     #[must_use]
     #[inline]

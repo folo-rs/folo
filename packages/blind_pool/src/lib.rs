@@ -68,21 +68,21 @@
 //! // Read data back from the pooled items.
 //! let value_u64 = unsafe {
 //!     // SAFETY: The pointer is valid and the value was just inserted.
-//!     pooled_u64.ptr().read()
+//!     *pooled_u64.ptr().as_ref()
 //! };
 //!
 //! let value_i32 = unsafe {
 //!     // SAFETY: The pointer is valid and the value was just inserted.
-//!     pooled_i32.ptr().read()
+//!     *pooled_i32.ptr().as_ref()
 //! };
 //!
 //! assert_eq!(value_u64, 42);
 //! assert_eq!(value_i32, -123);
 //!
 //! // Manual cleanup required.
-//! pool.remove(pooled_u64);
-//! pool.remove(pooled_i32);
-//! pool.remove(pooled_f32);
+//! pool.remove(&pooled_u64);
+//! pool.remove(&pooled_i32);
+//! pool.remove(&pooled_f32);
 //! ```
 
 mod cast;
