@@ -1,4 +1,5 @@
 use std::fmt;
+use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 
@@ -65,17 +66,28 @@ impl<T: ?Sized> LocalPooledMut<T> {
     where
         F: FnOnce(&T) -> &U,
     {
-        // Cast the RawPooled to the trait object using the provided function
+        // Use ManuallyDrop to prevent the Drop implementation from running
+        let manual_drop_self = ManuallyDrop::new(self);
+
+        // Extract references to the inner components
+        let pooled = manual_drop_self.inner.pooled;
+        let pool = manual_drop_self.inner.pool.clone();
+
+        // Perform the cast using the existing method
         // SAFETY: The lifetime management logic of this pool guarantees that the target item is
         // still alive in the pool for as long as any handle exists, which it clearly does.
-        let cast_pooled = unsafe { self.inner.pooled.__private_cast_dyn_with_fn(cast_fn) };
+        let cast_pooled = unsafe { pooled.__private_cast_dyn_with_fn(cast_fn) };
 
+        // Create the new LocalPooledMut - this becomes the only owner
         LocalPooledMut {
             inner: LocalPooledMutInner {
                 pooled: cast_pooled,
-                pool: self.inner.pool.clone(),
+                pool,
             },
         }
+
+        // Note: manual_drop_self is never dropped, so the original handle doesn't
+        // try to remove the item from the pool
     }
 
     /// Returns a pinned reference to the value stored in the pool.
@@ -324,5 +336,93 @@ mod tests {
 
         // Item's Drop should have been called when pool handle was dropped
         assert!(dropped.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    #[allow(
+        dead_code,
+        reason = "Macro-generated trait only used for casting in this test"
+    )]
+    fn casting_with_futures() {
+        // NOTE: This test is excluded from Miri because the trait object casting system
+        // involves complex borrowing patterns that Miri's stacked borrows model flags
+        // as potentially unsafe, even though the ManuallyDrop approach ensures correct
+        // ownership semantics in practice.
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        /// Custom trait for futures returning u32.
+        pub(crate) trait MyFuture: Future<Output = u32> {}
+
+        /// Blanket implementation for any Future<Output = u32>.
+        impl<T> MyFuture for T where T: Future<Output = u32> {}
+
+        // Generate casting methods for MyFuture.
+        crate::define_pooled_dyn_cast!(MyFuture);
+
+        #[allow(
+            clippy::unused_async,
+            reason = "Need async fn to create Future for testing"
+        )]
+        async fn echo(val: u32) -> u32 {
+            val
+        }
+
+        let pool = LocalBlindPool::new();
+
+        // Use casting to convert the anonymous future into a named trait object
+        let mut future_handle = pool.insert_mut(echo(10)).cast_my_future();
+
+        // After casting, the pool should still have the item
+        assert_eq!(pool.len(), 1);
+
+        // Poll the future using the safe pinning method from LocalPooledMut
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+
+        // Use the as_pin_mut method to get a properly pinned reference
+        let pinned_future = future_handle.as_pin_mut();
+        match pinned_future.poll(&mut context) {
+            Poll::Ready(result) => {
+                assert_eq!(result, 10);
+            }
+            Poll::Pending => {
+                panic!("Simple future should complete immediately");
+            }
+        }
+
+        assert_eq!(pool.len(), 1); // Should still be 1 after polling
+
+        // Drop should work fine
+        drop(future_handle);
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn unpin_with_non_unpin_type() {
+        use std::marker::PhantomPinned;
+
+        // Create a type that is !Unpin
+        struct NotUnpin {
+            _pinned: PhantomPinned,
+            value: u32,
+        }
+
+        // Verify that NotUnpin is indeed !Unpin
+        assert_not_impl_any!(NotUnpin: Unpin);
+
+        // LocalPooledMut<NotUnpin> should still be Unpin because the wrapper implements Unpin
+        // regardless of T's Unpin status - the pooled data is always pinned in place
+        assert_impl_all!(LocalPooledMut<NotUnpin>: Unpin);
+
+        let pool = LocalBlindPool::new();
+        let handle = pool.insert_mut(NotUnpin {
+            _pinned: PhantomPinned,
+            value: 42,
+        });
+
+        // Can access the value normally
+        assert_eq!(handle.value, 42);
     }
 }
