@@ -138,6 +138,33 @@ impl<T: ?Sized> LocalPooled<T> {
         }
     }
 
+    /// Returns a pointer to the stored value.
+    ///
+    /// This provides direct access to the underlying pointer while maintaining the safety
+    /// guarantees of the pooled reference. The pointer remains valid as long as any
+    /// [`LocalPooled<T>`] handle exists for the same value.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::LocalBlindPool;
+    ///
+    /// let pool = LocalBlindPool::new();
+    /// let value_handle = pool.insert(42_u64);
+    ///
+    /// // Get the pointer to the stored value.
+    /// let ptr = value_handle.ptr();
+    ///
+    /// // SAFETY: The pointer is valid as long as value_handle exists.
+    /// let value = unsafe { ptr.read() };
+    /// assert_eq!(value, 42);
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn ptr(&self) -> std::ptr::NonNull<T> {
+        self.inner.pooled.ptr()
+    }
+
     /// Casts this [`LocalPooled<T>`] to a trait object type.
     ///
     /// This method converts a pooled value from a concrete type to a trait object
@@ -362,6 +389,12 @@ mod tests {
 
         // Access the value directly through dereferencing
         assert_eq!(*value_handle, 42);
+
+        // Access the value through the ptr() method
+        let ptr = value_handle.ptr();
+        // SAFETY: The pointer is valid as long as value_handle exists.
+        let value = unsafe { ptr.read() };
+        assert_eq!(value, 42);
     }
 
     #[test]
