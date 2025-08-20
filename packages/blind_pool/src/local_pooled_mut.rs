@@ -2,7 +2,7 @@ use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 
-use crate::{LocalBlindPool, RawPooled};
+use crate::{LocalBlindPool, LocalPooled, RawPooled};
 
 /// A mutable reference to a value stored in a [`LocalBlindPool`].
 ///
@@ -139,6 +139,57 @@ impl<T: ?Sized> LocalPooledMut<T> {
         // The pool ensures stable addresses for the lifetime of the pooled object.
         // We have exclusive access through &mut self, so this is safe.
         unsafe { Pin::new_unchecked(&mut **self) }
+    }
+
+    /// Converts this exclusive [`LocalPooledMut<T>`] handle into a shared [`LocalPooled<T>`] handle.
+    ///
+    /// This operation consumes the [`LocalPooledMut<T>`] and returns a [`LocalPooled<T>`] that allows
+    /// multiple shared references to the same pooled value. Once converted, you can no longer
+    /// obtain exclusive (mutable) references to the value, but you can create multiple
+    /// shared references through cloning.
+    ///
+    /// The returned [`LocalPooled<T>`] maintains the same lifetime management semantics -
+    /// the value will be automatically removed from the pool when all references
+    /// (including the returned [`LocalPooled<T>`]) are dropped.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::LocalBlindPool;
+    ///
+    /// let pool = LocalBlindPool::new();
+    /// let mut exclusive_handle = pool.insert_mut("Test".to_string());
+    ///
+    /// // Modify the value while we have exclusive access.
+    /// exclusive_handle.push_str(" - Modified");
+    /// assert_eq!(*exclusive_handle, "Test - Modified");
+    ///
+    /// // Convert to shared access.
+    /// let shared_handle = exclusive_handle.into_shared();
+    ///
+    /// // Now we can create multiple shared references.
+    /// let cloned_handle = shared_handle.clone();
+    /// assert_eq!(*shared_handle, "Test - Modified");
+    /// assert_eq!(*cloned_handle, "Test - Modified");
+    ///
+    /// // Value is automatically cleaned up when all handles are dropped.
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn into_shared(self) -> LocalPooled<T> {
+        // We need to prevent the Drop from running on the original handle while still
+        // extracting its fields. This is safe because we're transferring ownership
+        // to the new shared handle.
+        let this = std::mem::ManuallyDrop::new(self);
+        // SAFETY: We are reading from ManuallyDrop wrapped value to transfer ownership.
+        // The fields are guaranteed to be initialized and we prevent Drop from running.
+        let pooled = unsafe { std::ptr::read(&raw const this.inner.pooled) };
+        // SAFETY: We are reading from ManuallyDrop wrapped value to transfer ownership.
+        // The field is guaranteed to be initialized and we prevent Drop from running.
+        let pool = unsafe { std::ptr::read(&raw const this.inner.pool) };
+
+        // Create the new shared handle with the same pooled item and pool
+        LocalPooled::new(pooled, pool)
     }
 }
 
@@ -420,5 +471,56 @@ mod tests {
 
         // Can access the value normally
         assert_eq!(handle.value, 42);
+    }
+
+    #[test]
+    fn into_shared_conversion() {
+        let pool = LocalBlindPool::new();
+        let mut exclusive_handle = pool.insert_mut("Test".to_string());
+
+        // Modify the value while we have exclusive access
+        exclusive_handle.push_str(" - Modified");
+        assert_eq!(*exclusive_handle, "Test - Modified");
+        assert_eq!(pool.len(), 1);
+
+        // Convert to shared access
+        let shared_handle = exclusive_handle.into_shared();
+        assert_eq!(*shared_handle, "Test - Modified");
+        assert_eq!(pool.len(), 1); // Should still be 1 item
+
+        // Now we can create multiple shared references
+        let cloned_handle = shared_handle.clone();
+        assert_eq!(*shared_handle, "Test - Modified");
+        assert_eq!(*cloned_handle, "Test - Modified");
+        assert_eq!(pool.len(), 1); // Still 1 item
+
+        // Value is automatically cleaned up when all handles are dropped
+        drop(shared_handle);
+        assert_eq!(pool.len(), 1); // Still alive due to cloned_handle
+        assert_eq!(*cloned_handle, "Test - Modified"); // Still accessible
+
+        drop(cloned_handle);
+        assert_eq!(pool.len(), 0); // Now cleaned up
+    }
+
+    #[test]
+    fn into_shared_with_different_types() {
+        let pool = LocalBlindPool::new();
+
+        // Test with a Vec
+        let mut vec_handle = pool.insert_mut(vec![1, 2, 3]);
+        vec_handle.push(4);
+        let shared_vec = vec_handle.into_shared();
+        assert_eq!(*shared_vec, vec![1, 2, 3, 4]);
+
+        // Test with a u64
+        let mut_handle = pool.insert_mut(42_u64);
+        let shared_u64 = mut_handle.into_shared();
+        assert_eq!(*shared_u64, 42);
+
+        assert_eq!(pool.len(), 2);
+        drop(shared_vec);
+        drop(shared_u64);
+        assert_eq!(pool.len(), 0);
     }
 }
