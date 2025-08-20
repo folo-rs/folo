@@ -99,6 +99,7 @@ impl<T: ?Sized> LocalPooledMut<T> {
     ///
     /// ```rust
     /// use std::pin::Pin;
+    ///
     /// use blind_pool::LocalBlindPool;
     ///
     /// let pool = LocalBlindPool::new();
@@ -124,6 +125,7 @@ impl<T: ?Sized> LocalPooledMut<T> {
     ///
     /// ```rust
     /// use std::pin::Pin;
+    ///
     /// use blind_pool::LocalBlindPool;
     ///
     /// let pool = LocalBlindPool::new();

@@ -13,8 +13,7 @@ use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::{self, NonNull};
 use std::sync::{Arc, Mutex};
-use std::task;
-use std::{any, fmt};
+use std::{any, fmt, task};
 
 use pinned_pool::{Key, PinnedPool};
 

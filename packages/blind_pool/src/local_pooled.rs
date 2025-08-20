@@ -175,6 +175,7 @@ impl<T: ?Sized> LocalPooled<T> {
     ///
     /// ```rust
     /// use std::pin::Pin;
+    ///
     /// use blind_pool::LocalBlindPool;
     ///
     /// let pool = LocalBlindPool::new();

@@ -106,6 +106,7 @@ impl<T: ?Sized> PooledMut<T> {
     ///
     /// ```rust
     /// use std::pin::Pin;
+    ///
     /// use blind_pool::BlindPool;
     ///
     /// let pool = BlindPool::new();
@@ -131,6 +132,7 @@ impl<T: ?Sized> PooledMut<T> {
     ///
     /// ```rust
     /// use std::pin::Pin;
+    ///
     /// use blind_pool::BlindPool;
     ///
     /// let pool = BlindPool::new();

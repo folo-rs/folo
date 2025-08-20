@@ -207,6 +207,7 @@ impl<T: ?Sized> Pooled<T> {
     ///
     /// ```rust
     /// use std::pin::Pin;
+    ///
     /// use blind_pool::BlindPool;
     ///
     /// let pool = BlindPool::new();

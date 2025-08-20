@@ -14,8 +14,7 @@ use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
-use std::{any, fmt};
-use std::{ptr, task};
+use std::{any, fmt, ptr, task};
 
 use pinned_pool::{Key, PinnedPool};
 
