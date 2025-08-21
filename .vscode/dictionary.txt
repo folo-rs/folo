@@ -29,5 +29,6 @@ Symcrypt
 taskset
 threadpool
 timespec
+trybuild
 Uninit
 withf

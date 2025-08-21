@@ -1,3 +1,5 @@
+#![cfg(not(miri))] // Miri and trybuild do not go together.
+
 //! UI tests for compile-time error checking.
 //!
 //! This module contains a single test function that runs all UI tests sequentially.
