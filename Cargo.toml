@@ -46,6 +46,7 @@ region_local = { version = "0.1.34", path = "packages/region_local" }
 # Internal packages we do not publish.
 benchmarks = { path = "packages/benchmarks" }
 testing = { path = "packages/testing" }
+ui_tests = { path = "packages/ui_tests" }
 
 # The packages we consume. We only enable "std" features here, the rest in individual packages.
 arc-swap = { version = "1.7", default-features = false }

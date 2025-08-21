@@ -1,0 +1,15 @@
+error[E0597]: `value` does not live long enough
+  --> tests/ui/blind_pool/compile_fail/blind_pool_insert_with_non_static_fail.rs:8:21
+   |
+7  |       let value = 42;
+   |           ----- binding `value` declared here
+8  |       let reference = &value; // This is not 'static
+   |                       ^^^^^^ borrowed value does not live long enough
+...
+12 | /         pool.insert_with(|uninit: &mut MaybeUninit<&i32>| {
+13 | |             uninit.write(reference);
+14 | |         })
+   | |__________- argument requires that `value` is borrowed for `'static`
+15 |       };
+16 |   }
+   |   - `value` dropped here while still borrowed
