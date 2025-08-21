@@ -431,8 +431,14 @@ impl OpaquePool {
     ///
     /// # Safety
     ///
-    /// The caller must ensure that the layout of `T` matches the pool's item layout.
-    /// In debug builds, this is checked with an assertion.
+    /// The caller must ensure that:
+    /// - The layout of `T` matches the pool's item layout.
+    /// - If `T` contains any references or other lifetime-dependent data, those lifetimes
+    ///   are valid for the entire duration that the value may remain in the pool. Since
+    ///   access to pool contents is only possible through unsafe code, the caller is
+    ///   responsible for ensuring that no use-after-free conditions occur.
+    ///
+    /// In debug builds, the layout requirement is checked with an assertion.
     ///
     /// [`remove()`]: Self::remove
     #[must_use]
@@ -495,6 +501,10 @@ impl OpaquePool {
     /// The caller must ensure that:
     /// - The layout of `T` matches the pool's item layout.
     /// - The closure properly initializes the `MaybeUninit<T>` before returning.
+    /// - If `T` contains any references or other lifetime-dependent data, those lifetimes
+    ///   are valid for the entire duration that the value may remain in the pool. Since
+    ///   access to pool contents is only possible through unsafe code, the caller is
+    ///   responsible for ensuring that no use-after-free conditions occur.
     ///
     /// In debug builds, the layout requirement is checked with an assertion.
     ///

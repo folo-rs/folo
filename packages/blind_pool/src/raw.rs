@@ -117,6 +117,11 @@ impl RawBlindPool {
     ///
     /// The pool stores the value and provides a handle for later access or removal.
     ///
+    /// The caller must ensure that if `T` contains any references or other lifetime-dependent
+    /// data, those lifetimes are valid for the entire duration that the value may remain in
+    /// the pool. Since access to pool contents is only possible through unsafe code, the caller
+    /// is responsible for ensuring that no use-after-free conditions occur.
+    ///
     /// # Example
     ///
     /// ```rust
@@ -188,7 +193,12 @@ impl RawBlindPool {
     ///
     /// # Safety
     ///
-    /// The closure must properly initialize the `MaybeUninit<T>` before returning.
+    /// The caller must ensure that:
+    /// - The closure properly initializes the `MaybeUninit<T>` before returning.
+    /// - If `T` contains any references or other lifetime-dependent data, those lifetimes
+    ///   are valid for the entire duration that the value may remain in the pool. Since
+    ///   access to pool contents is only possible through unsafe code, the caller is
+    ///   responsible for ensuring that no use-after-free conditions occur.
     #[inline]
     pub unsafe fn insert_with<T>(&mut self, f: impl FnOnce(&mut MaybeUninit<T>)) -> RawPooled<T> {
         let layout = Layout::new::<T>();

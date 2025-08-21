@@ -86,7 +86,7 @@ impl LocalBlindPool {
     /// ```
     #[inline]
     #[must_use]
-    pub fn insert<T>(&self, value: T) -> LocalPooled<T> {
+    pub fn insert<T: 'static>(&self, value: T) -> LocalPooled<T> {
         let pooled = {
             let mut pool = self.inner.borrow_mut();
             pool.insert(value)
@@ -130,7 +130,10 @@ impl LocalBlindPool {
     /// The closure must properly initialize the `MaybeUninit<T>` before returning.
     #[inline]
     #[must_use]
-    pub unsafe fn insert_with<T>(&self, f: impl FnOnce(&mut MaybeUninit<T>)) -> LocalPooled<T> {
+    pub unsafe fn insert_with<T: 'static>(
+        &self,
+        f: impl FnOnce(&mut MaybeUninit<T>),
+    ) -> LocalPooled<T> {
         let pooled = {
             let mut pool = self.inner.borrow_mut();
             // SAFETY: Forwarding safety requirements to caller.
@@ -166,7 +169,7 @@ impl LocalBlindPool {
     /// [`insert()`]: Self::insert
     #[inline]
     #[must_use]
-    pub fn insert_mut<T>(&self, value: T) -> LocalPooledMut<T> {
+    pub fn insert_mut<T: 'static>(&self, value: T) -> LocalPooledMut<T> {
         let pooled = {
             let mut pool = self.inner.borrow_mut();
             pool.insert(value)
@@ -215,7 +218,7 @@ impl LocalBlindPool {
     /// [`insert_with()`]: Self::insert_with
     #[inline]
     #[must_use]
-    pub unsafe fn insert_with_mut<T>(
+    pub unsafe fn insert_with_mut<T: 'static>(
         &self,
         f: impl FnOnce(&mut MaybeUninit<T>),
     ) -> LocalPooledMut<T> {
