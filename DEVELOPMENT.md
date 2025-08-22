@@ -44,7 +44,7 @@ Validation:
 Prerequisites:
 
 * Ubuntu 24 installed in WSL
-* `sudo apt install -y git git-lfs build-essential cmake gcc make curl`
+* `sudo apt install -y git git-lfs build-essential cmake gcc make curl libssl-dev`
 * Git LFS setup: `git lfs install`
 * [PowerShell 7](https://learn.microsoft.com/en-us/powershell/scripting/install/install-ubuntu?view=powershell-7.5):
   ```bash
