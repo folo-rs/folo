@@ -429,7 +429,7 @@ dependencies = [
 
 [[package]]
 name = "events"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -457,7 +457,7 @@ dependencies = [
 
 [[package]]
 name = "fast_time"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "criterion",
  "libc",
@@ -871,7 +871,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus"
-version = "0.3.17"
+version = "0.3.18"
 dependencies = [
  "cpulist",
  "criterion",
@@ -896,7 +896,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_benchmarking"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "cpulist",
  "criterion",
@@ -1072,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -1301,7 +1301,7 @@ checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
 
 [[package]]
 name = "region_cached"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1322,7 +1322,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "0.1.34"
+version = "0.1.35"
 dependencies = [
  "arc-swap",
  "axum",
