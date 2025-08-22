@@ -302,3 +302,6 @@ use_self = "warn"
 useless_let_if_seq = "warn"
 verbose_bit_mask = "warn"
 while_float = "warn"
+
+[workspace.metadata.cargo-udeps.ignore]
+development = ["mutants", "static_assertions"]

@@ -36,6 +36,8 @@ hack:
 [group('quality')]
 machete:
     cargo machete --skip-target-dir
+    cargo +nightly udeps
+    cargo +nightly udeps --all-targets
 
 # Separate file because it is a giant script.
 import 'just_quality_mutants.just'

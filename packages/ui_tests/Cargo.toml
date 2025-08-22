@@ -14,3 +14,7 @@ workspace = true
 [dev-dependencies]
 blind_pool = { workspace = true }
 trybuild = "1.0"
+
+[package.metadata.cargo-udeps.ignore]
+# udeps fails to "look through" trybuild tests, so we need to exclude all our dependencies here.
+development = ["blind_pool"]

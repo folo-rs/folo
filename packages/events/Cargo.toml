@@ -14,15 +14,14 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
-futures = { workspace = true }
 pinned_pool = { workspace = true }
 
 [dev-dependencies]
 all_the_time = { path = "../all_the_time" }
 alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
+futures = { workspace = true }
 many_cpus = { path = "../many_cpus" }
-many_cpus_benchmarking = { path = "../many_cpus_benchmarking" }
 new_zealand = { path = "../new_zealand" }
 oneshot = { workspace = true }
 par_bench = { path = "../par_bench", features = ["criterion", "alloc_tracker", "all_the_time"] }

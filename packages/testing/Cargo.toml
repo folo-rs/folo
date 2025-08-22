@@ -17,17 +17,17 @@ doc = false
 default = []
 
 [dependencies]
-# Required for the watchdog functionality
-# No additional dependencies needed - using std only
 
 [target.'cfg(windows)'.dependencies]
 deranged = { workspace = true, features = ["macros"] }
-new_zealand = { workspace = true }
 windows = { workspace = true, features = [
     "Win32_System_JobObjects",
     "Win32_System_Threading",
     "Win32_Security",
 ] }
+
+[target.'cfg(windows)'.dev-dependencies]
+new_zealand = { workspace = true }
 
 [dev-dependencies]
 mutants = { workspace = true }

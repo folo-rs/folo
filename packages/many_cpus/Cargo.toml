@@ -24,7 +24,6 @@ nonempty = { workspace = true }
 rand = { workspace = true, features = ["thread_rng"] }
 
 [target.'cfg(unix)'.dependencies]
-cpulist = { workspace = true }
 libc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
@@ -43,7 +42,6 @@ criterion = { workspace = true }
 mockall = { workspace = true }
 mutants = { workspace = true }
 par_bench = { path = "../par_bench", features = ["criterion"] }
-scopeguard = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
 
