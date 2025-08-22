@@ -14,7 +14,6 @@ rust-version.workspace = true
 doc = false
 
 [dev-dependencies]
-linked = { path = "../linked" }
 many_cpus = { path = "../many_cpus" }
 many_cpus_benchmarking = { path = "../many_cpus_benchmarking" }
 
@@ -25,6 +24,7 @@ http = { workspace = true }
 scc = { workspace = true }
 
 [target.'cfg(windows)'.dev-dependencies]
+linked = { path = "../linked" }
 windows = { workspace = true, features = ["Win32_System_Memory"] }
 
 [[bench]]
