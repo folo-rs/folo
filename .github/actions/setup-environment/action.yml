@@ -11,7 +11,7 @@ runs:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo apt update
-        sudo apt install -y git git-lfs build-essential cmake gcc make curl libssl-dev
+        sudo apt install -y git git-lfs build-essential cmake gcc make curl libssl-dev pkg-config
         # Set up Git LFS
         git lfs install
     
