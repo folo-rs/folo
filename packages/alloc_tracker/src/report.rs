@@ -360,7 +360,7 @@ mod tests {
         let session = Session::new();
         {
             let operation = session.operation("test");
-            let _span = operation.measure_process();
+            let _span = operation.measure_thread();
             // Simulate allocation
             TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
         } // Span drops here, releasing the mutable borrow
@@ -382,7 +382,7 @@ mod tests {
         let session = Session::new();
         {
             let operation = session.operation("test");
-            let _span = operation.measure_process();
+            let _span = operation.measure_thread();
             TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
         } // Span drops here
 
@@ -403,13 +403,13 @@ mod tests {
 
         {
             let op1 = session1.operation("test1");
-            let _span1 = op1.measure_process();
+            let _span1 = op1.measure_thread();
             TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
         } // Span drops here
 
         {
             let op2 = session2.operation("test2");
-            let _span2 = op2.measure_process();
+            let _span2 = op2.measure_thread();
             TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
         } // Span drops here
 
@@ -429,13 +429,13 @@ mod tests {
 
         {
             let op1 = session1.operation("test");
-            let _span1 = op1.measure_process();
+            let _span1 = op1.measure_thread();
             TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
         } // Span drops here
 
         {
             let op2 = session2.operation("test");
-            let _span2 = op2.measure_process();
+            let _span2 = op2.measure_thread();
             TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
         } // Span drops here
 
