@@ -111,9 +111,9 @@ impl<T: ?Sized> LocalPooledMut<T> {
     #[must_use]
     #[inline]
     pub fn as_pin(&self) -> Pin<&T> {
-        // SAFETY: Values in the pool are always pinned - they never move once inserted.
-        // The pool ensures stable addresses for the lifetime of the pooled object.
-        unsafe { Pin::new_unchecked(&**self) }
+        // Delegate to the underlying opaque_pool Pooled<T> as_pin implementation.
+        // This is safe and efficient since opaque_pool now provides safe as_pin.
+        self.inner.pooled.opaque_handle().as_pin()
     }
 
     /// Returns a pinned mutable reference to the value stored in the pool.
@@ -137,10 +137,13 @@ impl<T: ?Sized> LocalPooledMut<T> {
     #[must_use]
     #[inline]
     pub fn as_pin_mut(&mut self) -> Pin<&mut T> {
+        // We cannot delegate as_pin_mut to opaque_pool because our pooled handle is shared,
+        // but we provide exclusive access through LocalPooledMut's ownership semantics.
+        // SAFETY: The pointer is valid and points to initialized memory of type T.
+        let ptr = unsafe { self.inner.pooled.ptr().as_mut() };
         // SAFETY: Values in the pool are always pinned - they never move once inserted.
-        // The pool ensures stable addresses for the lifetime of the pooled object.
         // We have exclusive access through &mut self, so this is safe.
-        unsafe { Pin::new_unchecked(&mut **self) }
+        unsafe { Pin::new_unchecked(ptr) }
     }
 
     /// Converts this exclusive [`LocalPooledMut<T>`] handle into a shared [`LocalPooled<T>`] handle.
@@ -195,6 +198,58 @@ impl<T: ?Sized> LocalPooledMut<T> {
     }
 }
 
+impl<T: Unpin> LocalPooledMut<T> {
+    /// Moves the value out of the pool, returning it to the caller and consuming the [`LocalPooledMut<T>`].
+    ///
+    /// This method extracts the value from the pool and transfers ownership to the caller.
+    /// The item is removed from the pool, but the value is not dropped - instead, it is
+    /// returned to the caller who becomes responsible for its lifetime management.
+    ///
+    /// This method is only available for types that implement [`Unpin`], as moving a value
+    /// out of the pool would break the pinning guarantee for `!Unpin` types.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::LocalBlindPool;
+    ///
+    /// let pool = LocalBlindPool::new();
+    /// let mut pooled_string = pool.insert_mut("Hello".to_string());
+    ///
+    /// // Modify the value while it is in the pool.
+    /// pooled_string.push_str(" World");
+    /// assert_eq!(*pooled_string, "Hello World");
+    /// assert_eq!(pool.len(), 1);
+    ///
+    /// // Extract the value from the pool.
+    /// let extracted_string = pooled_string.into_inner();
+    /// assert_eq!(extracted_string, "Hello World");
+    /// assert_eq!(pool.len(), 0); // Pool is now empty.
+    ///
+    /// // The caller now owns the value and is responsible for its lifetime.
+    /// println!("Extracted: {}", extracted_string);
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn into_inner(self) -> T {
+        // We need to prevent the Drop from running on the original handle while still
+        // extracting the pooled item information.
+        let this = std::mem::ManuallyDrop::new(self);
+
+        // SAFETY: We are reading from ManuallyDrop wrapped value to access fields.
+        // The fields are guaranteed to be initialized and we prevent Drop from running.
+        let pooled = unsafe { std::ptr::read(&raw const this.inner.pooled) };
+        // SAFETY: We are reading from ManuallyDrop wrapped value to access fields.
+        // The field is guaranteed to be initialized and we prevent Drop from running.
+        let pool = unsafe { std::ptr::read(&raw const this.inner.pool) };
+
+        // Remove the item from the pool and move the value out.
+        // SAFETY: T: Unpin is guaranteed by the impl constraint, and this pooled handle
+        // is consumed by this operation, ensuring it cannot be used again.
+        unsafe { pool.remove_unpin(&pooled) }
+    }
+}
+
 impl<T: ?Sized> Deref for LocalPooledMut<T> {
     type Target = T;
 
@@ -216,9 +271,9 @@ impl<T: ?Sized> Deref for LocalPooledMut<T> {
     /// ```
     #[inline]
     fn deref(&self) -> &Self::Target {
-        // SAFETY: The pooled handle is valid and contains initialized memory of type T.
-        // The owned inner ensures the underlying pool data remains alive during access.
-        unsafe { self.inner.pooled.ptr().as_ref() }
+        // Delegate to the underlying opaque_pool Pooled<T> Deref implementation.
+        // This is safe and efficient since opaque_pool now provides safe Deref.
+        self.inner.pooled.opaque_handle()
     }
 }
 
@@ -254,7 +309,10 @@ impl<T: ?Sized> Drop for LocalPooledMut<T> {
     #[inline]
     fn drop(&mut self) {
         // We have exclusive ownership, so we can safely remove the item from the pool.
-        self.inner.pool.remove(&self.inner.pooled.erase());
+        // SAFETY: This pooled handle is being consumed by Drop, ensuring it cannot be used again.
+        unsafe {
+            self.inner.pool.remove(&self.inner.pooled.erase());
+        }
     }
 }
 
@@ -524,5 +582,139 @@ mod tests {
         drop(shared_vec);
         drop(shared_u64);
         assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn into_inner_basic() {
+        let pool = LocalBlindPool::new();
+        let mut handle = pool.insert_mut("Test".to_string());
+
+        // Modify the value while it is in the pool
+        handle.push_str(" - Modified");
+        assert_eq!(*handle, "Test - Modified");
+        assert_eq!(pool.len(), 1);
+
+        // Extract the value from the pool
+        let extracted = handle.into_inner();
+        assert_eq!(extracted, "Test - Modified");
+        assert_eq!(pool.len(), 0); // Pool should be empty now
+    }
+
+    #[test]
+    fn into_inner_with_different_types() {
+        #[derive(Debug, Eq, PartialEq)]
+        struct TestStruct {
+            value: i32,
+            text: String,
+        }
+
+        let pool = LocalBlindPool::new();
+
+        // Test with a Vec (which is Unpin)
+        let mut vec_handle = pool.insert_mut(vec![1, 2, 3]);
+        vec_handle.push(4);
+        let extracted_vec = vec_handle.into_inner();
+        assert_eq!(extracted_vec, vec![1, 2, 3, 4]);
+
+        // Test with a u64 (which is Unpin)
+        let u64_handle = pool.insert_mut(42_u64);
+        let extracted_u64 = u64_handle.into_inner();
+        assert_eq!(extracted_u64, 42);
+
+        // Test with a custom struct (which is Unpin by default)
+        let struct_handle = pool.insert_mut(TestStruct {
+            value: 100,
+            text: "hello".to_string(),
+        });
+        let extracted_struct = struct_handle.into_inner();
+        assert_eq!(
+            extracted_struct,
+            TestStruct {
+                value: 100,
+                text: "hello".to_string(),
+            }
+        );
+
+        assert_eq!(pool.len(), 0); // All items should be extracted
+    }
+
+    #[test]
+    fn into_inner_preserves_value_ownership() {
+        let pool = LocalBlindPool::new();
+        let handle = pool.insert_mut("Hello World".to_string());
+
+        // Extract the value
+        let extracted = handle.into_inner();
+
+        // Verify the extracted value is fully owned and can be modified
+        let mut owned_string = extracted;
+        owned_string.push_str(" - Owned");
+        assert_eq!(owned_string, "Hello World - Owned");
+
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn into_inner_with_drop_types() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct DropTracker {
+            dropped: Arc<AtomicBool>,
+        }
+
+        impl Drop for DropTracker {
+            fn drop(&mut self) {
+                self.dropped.store(true, Ordering::Relaxed);
+            }
+        }
+
+        let pool = LocalBlindPool::new();
+        let dropped = Arc::new(AtomicBool::new(false));
+
+        let handle = pool.insert_mut(DropTracker {
+            dropped: Arc::clone(&dropped),
+        });
+
+        // Value should not be dropped yet
+        assert!(!dropped.load(Ordering::Relaxed));
+
+        // Extract the value - this should not drop it
+        let extracted = handle.into_inner();
+        assert!(!dropped.load(Ordering::Relaxed));
+
+        assert_eq!(pool.len(), 0); // Pool should be empty
+
+        // Value should only be dropped when we drop the extracted value
+        drop(extracted);
+        assert!(dropped.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn into_inner_pool_count_updates() {
+        let pool = LocalBlindPool::new();
+
+        // Insert multiple items
+        let handle1 = pool.insert_mut("First".to_string());
+        let handle2 = pool.insert_mut("Second".to_string());
+        let handle3 = pool.insert_mut("Third".to_string());
+
+        assert_eq!(pool.len(), 3);
+
+        // Extract one item
+        let extracted1 = handle1.into_inner();
+        assert_eq!(extracted1, "First");
+        assert_eq!(pool.len(), 2);
+
+        // Extract another item
+        let extracted2 = handle2.into_inner();
+        assert_eq!(extracted2, "Second");
+        assert_eq!(pool.len(), 1);
+
+        // Extract the last item
+        let extracted3 = handle3.into_inner();
+        assert_eq!(extracted3, "Third");
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
     }
 }

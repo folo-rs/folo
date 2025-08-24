@@ -51,7 +51,10 @@ fn raw_pooled_cast_generic_future() {
     let typed_future_pooled: blind_pool::RawPooled<dyn SomeFuture<f64>> = future_pooled;
 
     // Clean up via the post-cast handle.
-    pool.remove(&typed_future_pooled);
+    // SAFETY: This pooled handle is being consumed and cannot be used again.
+    unsafe {
+        pool.remove(&typed_future_pooled);
+    }
 }
 
 #[test]

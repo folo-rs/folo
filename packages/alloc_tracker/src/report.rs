@@ -336,11 +336,8 @@ impl fmt::Display for Report {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic;
-
     use super::*;
-    use crate::Session;
-    use crate::allocator::TOTAL_BYTES_ALLOCATED;
+    use crate::{Session, THREAD_BYTES_ALLOCATED};
 
     #[test]
     fn new_report_is_empty() {
@@ -362,7 +359,7 @@ mod tests {
             let operation = session.operation("test");
             let _span = operation.measure_thread();
             // Simulate allocation
-            TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
+            THREAD_BYTES_ALLOCATED.set(THREAD_BYTES_ALLOCATED.get() + 100);
         } // Span drops here, releasing the mutable borrow
 
         let report = session.to_report();
@@ -383,7 +380,7 @@ mod tests {
         {
             let operation = session.operation("test");
             let _span = operation.measure_thread();
-            TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
+            THREAD_BYTES_ALLOCATED.set(THREAD_BYTES_ALLOCATED.get() + 100);
         } // Span drops here
 
         let report1 = Report::new();
@@ -404,13 +401,13 @@ mod tests {
         {
             let op1 = session1.operation("test1");
             let _span1 = op1.measure_thread();
-            TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
+            THREAD_BYTES_ALLOCATED.set(THREAD_BYTES_ALLOCATED.get() + 100);
         } // Span drops here
 
         {
             let op2 = session2.operation("test2");
             let _span2 = op2.measure_thread();
-            TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
+            THREAD_BYTES_ALLOCATED.set(THREAD_BYTES_ALLOCATED.get() + 200);
         } // Span drops here
 
         let report1 = session1.to_report();
@@ -430,13 +427,13 @@ mod tests {
         {
             let op1 = session1.operation("test");
             let _span1 = op1.measure_thread();
-            TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
+            THREAD_BYTES_ALLOCATED.set(THREAD_BYTES_ALLOCATED.get() + 100);
         } // Span drops here
 
         {
             let op2 = session2.operation("test");
             let _span2 = op2.measure_thread();
-            TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
+            THREAD_BYTES_ALLOCATED.set(THREAD_BYTES_ALLOCATED.get() + 200);
         } // Span drops here
 
         let report1 = session1.to_report();
@@ -454,8 +451,8 @@ mod tests {
         let session = Session::new();
         {
             let operation = session.operation("test");
-            let _span = operation.measure_process();
-            TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
+            let _span = operation.measure_thread();
+            THREAD_BYTES_ALLOCATED.set(THREAD_BYTES_ALLOCATED.get() + 100);
         } // Span drops here
 
         let report1 = session.to_report();

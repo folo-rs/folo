@@ -21,37 +21,39 @@ fn main() {
 
     println!("Inserted 3 items");
 
-    // Demonstrate that handles act like super-powered pointers - they can be copied freely.
-    let pooled1_copy = pooled1;
+    // Access values directly through Deref - much cleaner than unsafe pointer operations!
+    let value1 = *pooled1;
+    let value2 = *pooled2;
+    let value3 = *pooled3;
+
+    println!("Value 1: {value1:#x}");
+    println!("Value 2: {value2:#x}");
+    println!("Value 3: {value3:#x}");
+
+    // Convert the first item to shared for demonstration of copyable handles
+    let pooled1_shared = pooled1.into_shared();
+    let pooled1_copy = pooled1_shared;
     #[expect(
         clippy::clone_on_copy,
         reason = "demonstrating that Clone is available"
     )]
-    let pooled1_clone = pooled1.clone();
+    let pooled1_clone = pooled1_shared.clone();
 
     println!("Created copies of the first handle");
 
-    // Read values back through the handles - all copies refer to the same stored value.
-    // SAFETY: The pointers are valid and the memory contains the values we just inserted.
-    let value1_original = unsafe { pooled1.ptr().cast::<u32>().read() };
-    // SAFETY: The pointers are valid and the memory contains the values we just inserted.
-    let value1_copy = unsafe { pooled1_copy.ptr().cast::<u32>().read() };
-    // SAFETY: The pointers are valid and the memory contains the values we just inserted.
-    let value1_clone = unsafe { pooled1_clone.ptr().cast::<u32>().read() };
-    // SAFETY: The pointers are valid and the memory contains the values we just inserted.
-    let value2 = unsafe { pooled2.ptr().cast::<u32>().read() };
-    // SAFETY: The pointers are valid and the memory contains the values we just inserted.
-    let value3 = unsafe { pooled3.ptr().cast::<u32>().read() };
+    // Read values back through the shared handles - all copies refer to the same stored value.
+    let value1_original = *pooled1_shared;
+    let value1_copy = *pooled1_copy;
+    let value1_clone = *pooled1_clone;
 
     println!("Value 1 (original): {value1_original:#x}");
     println!("Value 1 (copy): {value1_copy:#x}");
     println!("Value 1 (clone): {value1_clone:#x}");
-    println!("Value 2: {value2:#x}");
-    println!("Value 3: {value3:#x}");
 
     // All copies should refer to the same value.
     assert_eq!(value1_original, value1_copy);
     assert_eq!(value1_original, value1_clone);
+    assert_eq!(value1_original, 0xdeadbeef_u32);
 
     println!(
         "Pool now has {} items with capacity {}",
@@ -59,8 +61,8 @@ fn main() {
         pool.capacity()
     );
 
-    // Remove one item using any of the handles.
-    pool.remove(&pooled2);
+    // Remove one item using the exclusive handle (safer than shared removal).
+    pool.remove_mut(pooled2);
     println!("Removed item");
 
     // The pool automatically grows as needed.
@@ -77,29 +79,17 @@ fn main() {
         pool.capacity()
     );
 
-    // Verify some values.
+    // Verify some values using clean Deref syntax.
     #[allow(
         clippy::cast_possible_truncation,
         reason = "test uses small values that fit in u32"
     )]
     for (i, pooled) in pooled_items.iter().take(5).enumerate() {
-        // SAFETY: The pointers are valid and the memory contains the values we just inserted.
-        unsafe {
-            let value = pooled.ptr().cast::<u32>().read();
-            println!("Pooled item contains value: {value}");
-            assert_eq!(value, i as u32);
-        }
+        let value = **pooled; // Deref the pooled item directly
+        println!("Pooled item contains value: {value}");
+        assert_eq!(value, i as u32);
     }
 
-    // Clean up the remaining pooled items.
-    for pooled in pooled_items {
-        pool.remove(&pooled);
-    }
-
-    // Also clean up the first and third items we still have (using any of the copies).
-    pool.remove(&pooled1); // Could also use pooled1_copy or pooled1_clone
-    pool.remove(&pooled3);
-
-    println!("All items cleaned up successfully!");
+    println!("All items will be automatically cleaned up when pool is dropped");
     println!("OpaquePool example completed successfully!");
 }

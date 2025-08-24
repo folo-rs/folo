@@ -79,7 +79,7 @@ impl RawBlindPoolBuilder {
     /// let pooled_item = pool.insert("Test".to_string());
     ///
     /// // Manual cleanup required.
-    /// pool.remove(&pooled_item);
+    /// unsafe { pool.remove(&pooled_item) };
     /// ```
     #[must_use]
     #[inline]
@@ -115,7 +115,10 @@ mod tests {
         assert_eq!(value, 42);
         assert_eq!(pool.len(), 1);
 
-        pool.remove(&handle);
+        // SAFETY: This pooled handle is being consumed and cannot be used again.
+        unsafe {
+            pool.remove(&handle);
+        }
         assert_eq!(pool.len(), 0);
     }
 
@@ -150,7 +153,10 @@ mod tests {
         assert_eq!(value, 42);
 
         // Clean up properly - required for MustNotDropItems
-        pool.remove(&handle);
+        // SAFETY: This pooled handle is being consumed and cannot be used again.
+        unsafe {
+            pool.remove(&handle);
+        }
         assert_eq!(pool.len(), 0);
 
         // Pool should be droppable when empty

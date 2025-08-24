@@ -447,6 +447,17 @@ is most convenient.
 Examples are production code. Use proper patterns and practices - examples are not tests, where
 looser rules can be allowed.
 
+# Inline examples separate scenarios into separate code blocks
+
+If you create inline (doctest) examples that showcase multiple scenarios/variations, separate each
+variant into its own code block with a short individual description instead of showing examples of
+multiple scenarios in one code block.
+
+# Stand-alone examples separate scenarios into functions
+
+If you create stand-alone example files that showcase multiple scenarios/variations, separate each
+variant into its own function instead of having everything in a giant `main()` function.
+
 # Replacing text in code files
 
 Prefer applying diffs over generating regex-replace commands for the terminal.
@@ -559,3 +570,16 @@ make logically private items public. This must be accompanied by two adjustments
 * The path to the item must include the keyword "private". The preferred forms are:
   - For types, use a `private` module, e.g. `foo::private::Bar`.
   - For methods, use a `__private_` prefix, e.g. `Bar::__private_reset_counters()`.
+
+# UI tests
+
+UI tests all go in a workspace-scoped `ui_tests` package due to technical limitations. Follow
+inline documentation in this package to understand more.
+
+Package dependencies of UI tests must be excluded from `udeps` scanner logic via `Cargo.toml` in
+`ui_tests`. See existing examples in this file.
+
+# Do not check for specific panic or error messages
+
+Tests that use `#[should_panic]` or use `Display` output of error types must not check for specific
+panic or error messages - these messages are not an API contract and may change at any time.

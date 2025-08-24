@@ -19,15 +19,13 @@ fn main() {
     // SAFETY: The layout of u64 matches the pool's item layout.
     let _pooled2 = unsafe { pool.insert(123_u64) };
 
-    // The handles act like super-powered pointers - they can be copied freely.
-    let pooled1_copy = pooled1;
+    // The handles start as exclusive (PooledMut), convert to shared for copying.
+    let pooled1_shared = pooled1.into_shared();
+    let pooled1_copy = pooled1_shared;
 
-    // Read data back from the pooled items.
-    // SAFETY: The pointer is valid and the value was just inserted.
-    let value1 = unsafe { pooled1.ptr().read() };
-
-    // SAFETY: Both handles refer to the same stored value.
-    let value1_copy = unsafe { pooled1_copy.ptr().read() };
+    // Read data back from the pooled items using Deref.
+    let value1 = *pooled1_shared;
+    let value1_copy = *pooled1_copy;
 
     assert_eq!(value1, value1_copy);
 

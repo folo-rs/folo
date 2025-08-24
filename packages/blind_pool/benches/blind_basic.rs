@@ -339,7 +339,10 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for (pool, pooled) in pools.iter_mut().zip(pooled_items) {
-                pool.remove(&pooled);
+                // SAFETY: We know `pooled` came from this pool.
+                unsafe {
+                    pool.remove(&pooled);
+                }
             }
 
             start.elapsed()
@@ -370,8 +373,14 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for (pool, (pooled1, pooled2)) in pools.iter_mut().zip(pooled_pairs) {
-                pool.remove(&pooled1);
-                pool.remove(&pooled2);
+                // SAFETY: We know `pooled1` came from this pool.
+                unsafe {
+                    pool.remove(&pooled1);
+                }
+                // SAFETY: We know `pooled2` came from this pool.
+                unsafe {
+                    pool.remove(&pooled2);
+                }
             }
 
             start.elapsed()
@@ -399,8 +408,14 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for (pool, (pooled1, pooled2)) in pools.iter_mut().zip(pooled_pairs) {
-                pool.remove(&pooled1);
-                pool.remove(&pooled2);
+                // SAFETY: We know `pooled1` came from this pool.
+                unsafe {
+                    pool.remove(&pooled1);
+                }
+                // SAFETY: We know `pooled2` came from this pool.
+                unsafe {
+                    pool.remove(&pooled2);
+                }
             }
 
             start.elapsed()
@@ -465,7 +480,10 @@ fn entrypoint(c: &mut Criterion) {
                     // Remove the first 5.
                     #[expect(clippy::iter_with_drain, reason = "to avoid moving the value")]
                     for pooled in to_remove.drain(..) {
-                        pool.remove(&pooled);
+                        // SAFETY: We know `pooled` came from this pool.
+                        unsafe {
+                            pool.remove(&pooled);
+                        }
                     }
                 }
             }
@@ -496,7 +514,10 @@ fn entrypoint(c: &mut Criterion) {
 
             for (pool, pooled_set) in pools.iter_mut().zip(&pooled_sets) {
                 for pooled in pooled_set {
-                    pool.remove(pooled);
+                    // SAFETY: We know `pooled` came from this pool.
+                    unsafe {
+                        pool.remove(pooled);
+                    }
                 }
             }
 

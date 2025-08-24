@@ -185,9 +185,6 @@ impl OpaqueSlab {
             // by the loop condition (index < capacity.get()), ensuring we stay within bounds.
             let entry_meta_ptr = unsafe { first_entry_ptr.as_ptr().cast::<u8>().add(offset) };
 
-            // SAFETY: The combined_entry_layout was created with Layout::pad_to_align(), which ensures
-            // the entry size is a multiple of EntryMeta's alignment, guaranteeing proper alignment
-            // for all array elements when accessed with the calculated offset.
             #[expect(
                 clippy::cast_ptr_alignment,
                 reason = "Layout::pad_to_align() ensures proper alignment between array elements"
@@ -425,6 +422,69 @@ impl OpaqueSlab {
 
         // Cannot overflow because we asserted above the removed entry was occupied.
         self.count = self.count.wrapping_sub(1);
+    }
+
+    /// Removes a value from the slab and returns it.
+    ///
+    /// This method moves the value out of the slab and returns ownership to the caller.
+    /// The memory slot is marked as vacant and becomes available for future insertions.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the index is out of bounds or is not associated with an inserted value.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the value at `index` is actually of type `T`.
+    pub(crate) unsafe fn remove_unpin<T: Unpin>(&mut self, index: usize) -> T {
+        #[cfg(debug_assertions)]
+        {
+            assert_eq!(
+                Layout::new::<T>(),
+                self.item_layout,
+                "type layout mismatch: expected layout {:?}, got layout {:?}",
+                self.item_layout,
+                Layout::new::<T>()
+            );
+        }
+
+        let next_free_index = self.next_free_index;
+        let item_ptr = self.item_ptr::<T>(index);
+
+        {
+            let entry_meta = self.entry_meta_mut(index);
+
+            // Ensure the entry was occupied and replace it with Vacant.
+            // We deliberately ignore the dropper to avoid dropping the value.
+            let was_occupied = match mem::replace(entry_meta, EntryMeta::Vacant { next_free_index })
+            {
+                EntryMeta::Vacant { .. } => false,
+                EntryMeta::Occupied { _dropper } => {
+                    // Prevent the dropper from running by forgetting it.
+                    mem::forget(_dropper);
+                    true
+                }
+            };
+
+            assert!(
+                was_occupied,
+                "remove_unpin({index}) entry was vacant in slab of capacity {}",
+                self.capacity.get()
+            );
+        }
+
+        // Read the value from memory before updating the slab state.
+        // SAFETY: The pointer is valid and contains an initialized value of type T.
+        // We have exclusive access through &mut self, and we've verified the entry was occupied.
+        let value = unsafe { item_ptr.read() };
+
+        // Push the released item's entry onto the free stack.
+        self.next_free_index = index;
+
+        // Cannot overflow because we asserted above the removed entry was occupied.
+        self.count = self.count.wrapping_sub(1);
+
+        value
     }
 
     #[cfg_attr(test, mutants::skip)] // This is essentially test logic, mutation is meaningless.

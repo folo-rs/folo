@@ -214,7 +214,7 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for (pool, ticket) in pools.iter_mut().zip(pool_tickets) {
-                pool.remove(&ticket);
+                pool.remove_mut(ticket);
             }
 
             start.elapsed()
@@ -287,7 +287,7 @@ fn entrypoint(c: &mut Criterion) {
                     // Remove the first 5.
                     #[expect(clippy::iter_with_drain, reason = "to avoid moving the value")]
                     for pooled in to_remove.drain(..) {
-                        pool.remove(&pooled);
+                        pool.remove_mut(pooled);
                     }
                 }
             }
@@ -321,9 +321,9 @@ fn entrypoint(c: &mut Criterion) {
 
             let start = Instant::now();
 
-            for (pool, ticket_set) in pools.iter_mut().zip(&pool_ticket_sets) {
+            for (pool, ticket_set) in pools.iter_mut().zip(pool_ticket_sets) {
                 for ticket in ticket_set {
-                    pool.remove(ticket);
+                    pool.remove_mut(ticket);
                 }
             }
 

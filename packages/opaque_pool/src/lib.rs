@@ -1,79 +1,128 @@
-//! This crate provides [`OpaquePool`], a dynamically growing pool of objects that is largely
-//! ignorant of the type of the items within, as long as they match a [`std::alloc::Layout`]
-//! defined at pool creation.
+//! A type-erased, pinned object pool with stable memory addresses and efficient typed access.
 //!
-//! It offers stable memory addresses and efficient typed insertion with automatic value dropping.
+//! This crate provides [`OpaquePool`], a dynamically growing pool that can store objects of any
+//! type as long as they match a [`std::alloc::Layout`] defined at pool creation. The pool provides
+//! stable memory addresses, automatic value dropping, and two handle types for different usage
+//! patterns.
 //!
-//! # Type-erased value management
+//! # Key Features
 //!
-//! The pool works with any type that matches the layout specified at creation time. Values are
-//! inserted using the unsafe [`OpaquePool::insert()`] method, which requires the caller to
-//! ensure the type matches the pool's layout. The pool automatically handles dropping of values
-//! when they are removed.
+//! - **Type-erased storage**: Works with any type matching the pool's [`std::alloc::Layout`]
+//! - **Stable memory addresses**: Items never move once inserted (always pinned)
+//! - **Two handle types**: [`PooledMut<T>`] for exclusive access, [`Pooled<T>`] for shared access
+//! - **Safe removal patterns**: [`PooledMut<T>`] prevents double-use
+//! - **Automatic value dropping**: Values are properly dropped when removed or pool is dropped
+//! - **Dynamic growth**: Pool capacity expands automatically as needed
+//! - **Memory efficiency**: High-density slab allocation minimizes overhead
+//! - **Trait object support**: Built-in support for casting to trait objects
+//! - **Pinning support**: Safe [`std::pin::Pin<&T>`] and [`std::pin::Pin<&mut T>`] access to pooled values
+//! - **Flexible drop policies**: Configure behavior when pool is dropped with remaining items
+//! - **Thread mobility**: Pool can be moved between threads (but not shared without synchronization)
 //!
-//! The pool itself does not hold or create any `&` shared or `&mut` exclusive references to its
-//! contents, allowing the caller to decide who and when can obtain a reference to the inserted
-//! values. The caller is responsible for ensuring that Rust aliasing rules are respected.
+//! # Handle Types
 //!
-//! # Features
+//! ## [`PooledMut<T>`] - Exclusive Access
 //!
-//! - **Type-erased memory management**: Works with any memory layout via [`std::alloc::Layout`].
-//! - **Stable addresses**: Memory addresses remain valid until explicitly removed.
-//! - **Automatic dropping**: Values are properly dropped when removed from the pool.
-//! - **Layout safety**: Debug builds verify that inserted types match the pool's layout.
-//! - **Dynamic growth**: Pool capacity grows automatically as needed.
-//! - **Efficient allocation**: Uses high density slabs to minimize allocation overhead.
-//! - **Stable Rust**: No unstable Rust features required.
-//! - **Optional leak detection**: Pool can be configured to panic on drop if values are still present.
+//! Returned by insertion methods, provides exclusive ownership and prevents accidental double-use:
+//! - Cannot be copied or cloned
+//! - Safe removal methods that consume the handle
+//! - Can be converted to [`Pooled<T>`] for sharing via [`into_shared()`](PooledMut::into_shared)
+//! - Implements [`std::ops::Deref`] and [`std::ops::DerefMut`] for direct value access
 //!
-//! # Example
+//! ## [`Pooled<T>`] - Shared Access
+//!
+//! Created from [`PooledMut<T>`] or returned by some methods, allows multiple references:
+//! - Can be copied and cloned freely
+//! - Multiple handles can refer to the same pooled value
+//! - Removal requires `unsafe` code to prevent use-after-free
+//! - Implements [`std::ops::Deref`] for direct shared value access
+//!
+//! The pool itself never holds references to its contents, allowing you to control
+//! aliasing and ensure Rust's borrowing rules are respected.
+//!
+//! # Examples
+//!
+//! ## Basic Usage with Exclusive Handles
+//!
+//! ```rust
+//! use opaque_pool::OpaquePool;
+//!
+//! // Create a pool for String values
+//! let mut pool = OpaquePool::builder().layout_of::<String>().build();
+//!
+//! // Insert a value and get an exclusive handle
+//! // SAFETY: String matches the layout used to create the pool
+//! let item = unsafe { pool.insert("Hello, World!".to_string()) };
+//!
+//! // Access the value safely through Deref
+//! assert_eq!(&*item, "Hello, World!");
+//! assert_eq!(item.len(), 13);
+//!
+//! // Remove the value (consumes the handle, preventing reuse)
+//! pool.remove_mut(item);
+//! ```
+//!
+//! ## Shared Access Pattern
+//!
+//! ```rust
+//! use opaque_pool::OpaquePool;
+//!
+//! let mut pool = OpaquePool::builder().layout_of::<String>().build();
+//!
+//! // SAFETY: String matches the layout used to create the pool
+//! let item = unsafe { pool.insert("Shared".to_string()) };
+//!
+//! // Convert to shared handle for copying
+//! let shared = item.into_shared();
+//! let shared_copy = shared; // Can copy freely
+//!
+//! // Access the value
+//! assert_eq!(&*shared_copy, "Shared");
+//!
+//! // Removal requires unsafe (caller ensures no other copies are used)
+//! // SAFETY: No other copies of the handle will be used after this call
+//! unsafe { pool.remove(&shared_copy) };
+//! ```
+//!
+//! ## Working with Different Types (Same Layout)
 //!
 //! ```rust
 //! use std::alloc::Layout;
 //!
 //! use opaque_pool::OpaquePool;
 //!
-//! // Create a pool for storing values that match the layout of `u64`.
+//! // Create a pool for u64-sized values
 //! let layout = Layout::new::<u64>();
 //! let mut pool = OpaquePool::builder().layout(layout).build();
 //!
-//! // Insert values into the pool.
-//! // SAFETY: The layout of u64 matches the pool's item layout.
-//! let pooled1 = unsafe { pool.insert(42_u64) };
-//! // SAFETY: The layout of u64 matches the pool's item layout.
-//! let pooled2 = unsafe { pool.insert(123_u64) };
+//! // Insert different types with the same layout
+//! // SAFETY: u64 matches the pool's layout
+//! let num = unsafe { pool.insert(42_u64) };
+//! // SAFETY: i64 has the same layout as u64
+//! let signed = unsafe { pool.insert(-123_i64) };
 //!
-//! // Read data back from the pooled items.
-//! let value1 = unsafe {
-//!     // SAFETY: The pointer is valid and the value was just inserted.
-//!     pooled1.ptr().read()
-//! };
+//! // Access the values using modern Deref patterns
+//! assert_eq!(*num, 42);
+//! assert_eq!(*signed, -123);
 //!
-//! let value2 = unsafe {
-//!     // SAFETY: The pointer is valid and the value was just inserted.
-//!     pooled2.ptr().read()
-//! };
-//!
-//! assert_eq!(value1, 42);
-//! assert_eq!(value2, 123);
-//!
-//! // Remove values from the pool. The values are automatically dropped.
-//! // The pool treats all items as pinned, so the removed value is not returned
-//! // because that would violate the promise of pinning the objects.
-//! pool.remove(&pooled1);
-//! pool.remove(&pooled2);
-//!
-//! assert!(pool.is_empty());
+//! pool.remove_mut(num);
+//! pool.remove_mut(signed);
 //! ```
 
 mod builder;
+mod coordinates;
 mod drop_policy;
 mod dropper;
 mod pool;
+mod pooled;
+mod pooled_mut;
 mod slab;
 
 pub use builder::*;
+pub(crate) use coordinates::*;
 pub use drop_policy::*;
 pub(crate) use dropper::*;
-pub use pool::*;
+pub use pool::OpaquePool;
+pub use pooled::Pooled;
+pub use pooled_mut::PooledMut;
 pub(crate) use slab::*;

@@ -1,13 +1,13 @@
 use std::alloc::Layout;
-use std::fmt;
 use std::mem::MaybeUninit;
 use std::num::NonZero;
+#[cfg(test)]
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use new_zealand::nz;
 
-use crate::{DropPolicy, OpaquePoolBuilder, OpaqueSlab};
+use crate::{DropPolicy, ItemCoordinates, OpaquePoolBuilder, OpaqueSlab, Pooled, PooledMut};
 
 /// Global counter for generating unique pool IDs.
 static POOL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -17,54 +17,83 @@ fn generate_pool_id() -> u64 {
     POOL_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-/// A pinned object pool of unbounded size that accepts objects of different types as long
-/// as they match a specific memory layout.
+/// A type-erased object pool with stable memory addresses and dual handle system.
 ///
-/// The pool returns a [`Pooled<T>`] for each inserted value, which acts as a super-powered
-/// pointer that can be copied and cloned freely. Each handle provides direct access to the
-/// inserted item via a pointer.
+/// `OpaquePool` stores objects of any type that matches a [`std::alloc::Layout`] specified at
+/// pool creation time. All stored values remain at stable memory addresses throughout their
+/// lifetime, making it safe to create pointers and pinned references to them.
 ///
-/// # Out of band access
+/// The pool provides two handle types for different access patterns:
+/// - [`PooledMut<T>`]: Exclusive handles for safe removal that prevent double-use
+/// - [`Pooled<T>`]: Shared handles that can be copied freely for multiple references
 ///
-/// The collection does not create or keep references to the memory blocks. The only way to access
-/// the contents of the collection is via unsafe code by using the pointer from a [`Pooled<T>`].
+/// # Key Features
 ///
-/// The collection does not create or maintain any `&` shared or `&mut` exclusive references to
-/// the items it contains, except when explicitly called to operate on an item (e.g. `remove()`
-/// implies exclusive access).
+/// - **Type erasure**: Store different types with the same layout in one pool
+/// - **Stable addresses**: Values never move once inserted, enabling safe pointer usage
+/// - **Dual handle system**: Choose between exclusive safety or shared flexibility
+/// - **Builder pattern**: Flexible configuration via [`OpaquePool::builder()`]
+/// - **Dynamic growth**: Automatic capacity expansion with manual shrinking available
+/// - **Drop policies**: Configurable behavior when dropping pools with remaining items
+/// - **Layout verification**: Debug builds verify type compatibility automatically
+/// - **Deref support**: Direct value access through [`std::ops::Deref`] and [`std::ops::DerefMut`]
+/// - **Pinning support**: Safe [`std::pin::Pin`] access to stored values
 ///
-/// # Resource usage
+/// # Memory Management
 ///
-/// The collection automatically grows as items are added. To reduce memory usage after items have
-/// been removed, use the [`shrink_to_fit()`][1] method to release unused capacity.
+/// The pool manages memory through high-density slab allocation, automatically growing as
+/// needed. Use [`shrink_to_fit()`](Self::shrink_to_fit) to release unused capacity after
+/// removing items. The pool never holds references to its contents, allowing you to control
+/// aliasing and maintain Rust's borrowing rules.
 ///
-/// [1]: Self::shrink_to_fit
+/// # Examples
 ///
-/// # Example
+/// Basic usage with exclusive handles:
 ///
 /// ```rust
-/// use std::alloc::Layout;
-///
 /// use opaque_pool::OpaquePool;
 ///
 /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
 ///
-/// // Insert a value and get a handle.
-/// // SAFETY: String matches the layout used to create the pool.
-/// let pooled = unsafe { pool.insert("Hello, World!".to_string()) };
+/// // Insert a value and get an exclusive handle
+/// // SAFETY: String matches the layout used to create the pool
+/// let item = unsafe { pool.insert("Hello, World!".to_string()) };
 ///
-/// // Read from the memory.
-/// // SAFETY: The pointer is valid and the memory contains the value we just inserted.
-/// let value = unsafe { pooled.ptr().as_ref() };
-/// assert_eq!(value, "Hello, World!");
+/// // Access the value directly through Deref
+/// assert_eq!(&*item, "Hello, World!");
+/// assert_eq!(item.len(), 13);
 ///
-/// // Remove the value from the pool. This invalidates the pointer and drops the value.
-/// pool.remove(&pooled);
+/// // Remove safely - the handle is consumed, preventing reuse
+/// pool.remove_mut(item);
 /// ```
-/// # Thread safety
+///
+/// Shared access pattern:
+///
+/// ```rust
+/// use opaque_pool::OpaquePool;
+///
+/// let mut pool = OpaquePool::builder().layout_of::<u64>().build();
+///
+/// // SAFETY: u64 matches the layout used to create the pool
+/// let item = unsafe { pool.insert(42_u64) };
+///
+/// // Convert to shared handle for copying
+/// let shared = item.into_shared();
+/// let shared_copy = shared; // Can copy freely
+///
+/// // Access the value
+/// assert_eq!(*shared_copy, 42);
+///
+/// // Removal requires unsafe (caller ensures no other copies are used)
+/// // SAFETY: No other copies of the handle will be used after this call
+/// unsafe { pool.remove(&shared_copy) };
+/// ```
+///
+/// # Thread Safety
 ///
 /// The pool is thread-mobile ([`Send`]) and can be moved between threads, but it is not
 /// thread-safe ([`Sync`]) and cannot be shared between threads without additional synchronization.
+/// Handles inherit the thread safety properties of their contained type `T`.
 #[derive(Debug)]
 pub struct OpaquePool {
     /// We need to uniquely identify each pool to ensure that handles are not returned to the
@@ -204,14 +233,17 @@ impl OpaquePool {
     /// let pooled2 = unsafe { pool.insert("Second".to_string()) };
     /// assert_eq!(pool.len(), 2);
     ///
-    /// pool.remove(&pooled1);
+    /// pool.remove_mut(pooled1);
     /// assert_eq!(pool.len(), 1);
     /// ```
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Can be mutated to infinitely growing memory use and/or infinite loop.
     #[inline]
     pub fn len(&self) -> usize {
-        debug_assert_eq!(self.length, self.slabs.iter().map(OpaqueSlab::len).sum());
+        debug_assert_eq!(
+            self.length,
+            self.slabs.iter().map(OpaqueSlab::len).sum::<usize>()
+        );
 
         self.length
     }
@@ -264,12 +296,12 @@ impl OpaquePool {
     ///
     /// assert!(pool.is_empty());
     ///
-    /// // SAFETY: u16 matches the layout used to create the pool.
+    /// // SAFETY: String matches the layout used to create the pool.
     /// let pooled = unsafe { pool.insert("Test".to_string()) };
     ///
     /// assert!(!pool.is_empty());
     ///
-    /// pool.remove(&pooled);
+    /// pool.remove_mut(pooled);
     /// assert!(pool.is_empty());
     /// ```
     #[must_use]
@@ -353,8 +385,8 @@ impl OpaquePool {
     /// let initial_capacity = pool.capacity();
     ///
     /// // Remove all items
-    /// pool.remove(&pooled1);
-    /// pool.remove(&pooled2);
+    /// pool.remove_mut(pooled1);
+    /// pool.remove_mut(pooled2);
     ///
     /// // Capacity remains the same until we shrink
     /// assert_eq!(pool.capacity(), initial_capacity);
@@ -409,20 +441,16 @@ impl OpaquePool {
     ///
     /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
     ///
-    /// // Insert a value.
     /// // SAFETY: String matches the layout used to create the pool.
-    /// let pooled = unsafe { pool.insert("Hello, World!".to_string()) };
+    /// let item = unsafe { pool.insert("Hello, World!".to_string()) };
     ///
     /// // Read data back.
     /// // SAFETY: The pointer is valid for String reads/writes and we have exclusive access.
-    /// let value = unsafe { pooled.ptr().as_ref() };
+    /// let value = unsafe { item.ptr().as_ref() };
     /// assert_eq!(value, "Hello, World!");
     ///
-    /// // Write a new value into the item.
-    /// // SAFETY: The pointer is valid for String reads/writes and we have exclusive access.
-    /// unsafe {
-    ///     pooled.ptr().write("Updated message".to_string());
-    /// }
+    /// // Removal does not require unsafe code if using the original handle.
+    /// pool.remove_mut(item);
     /// ```
     ///
     /// # Panics
@@ -442,7 +470,7 @@ impl OpaquePool {
     ///
     /// [`remove()`]: Self::remove
     #[must_use]
-    pub unsafe fn insert<T>(&mut self, value: T) -> Pooled<T> {
+    pub unsafe fn insert<T>(&mut self, value: T) -> PooledMut<T> {
         // Implement insert() in terms of insert_with() to reduce logic duplication.
         // SAFETY: Forwarding safety requirements to the caller.
         unsafe {
@@ -452,20 +480,25 @@ impl OpaquePool {
         }
     }
 
-    /// Inserts a value into the pool using in-place initialization and returns a handle to it.
+    /// Inserts a value into the pool using in-place initialization and returns an exclusive handle to it.
     ///
-    /// This allows the caller to initialize the item in-place using a closure that receives
-    /// a `&mut MaybeUninit<T>`. This can be more efficient than constructing the value
-    /// separately and then moving it into the pool, especially for large or complex types.
+    /// This method is designed for partial object initialization scenarios where only some fields
+    /// of a struct need to be initialized, while others remain as `MaybeUninit`. This can provide
+    /// significant performance benefits by avoiding unnecessary memory writes to uninitialized fields.
     ///
-    /// The returned [`Pooled<T>`] provides direct access to the memory via [`Pooled::ptr()`].
+    /// **This method is not generally faster than [`insert()`](Self::insert) for fully-initialized types.**
+    /// Use it only when you need to create objects with some fields intentionally left uninitialized.
+    ///
+    /// The returned [`PooledMut<T>`] provides direct access to the memory via [`PooledMut::ptr()`].
     /// Accessing this pointer from unsafe code is the only way to use the inserted value.
     ///
-    /// The [`Pooled<T>`] may be returned to the pool via [`remove()`] to free the memory and
-    /// drop the value. Behavior of the pool if dropped when non-empty is determined
-    /// by the pool's [drop policy][DropPolicy].
+    /// The [`PooledMut<T>`] may be returned to the pool via [`remove_mut()`](OpaquePool::remove_mut) or
+    /// [`remove_unpin_mut()`](OpaquePool::remove_unpin_mut) to free the memory. These operations consume the handle,
+    /// making reuse impossible and eliminating double-free risks.
     ///
-    /// # Example
+    /// To get a copyable [`Pooled<T>`] handle for sharing, use [`PooledMut::into_shared()`].
+    ///
+    /// # Example: Partial initialization
     ///
     /// ```rust
     /// use std::alloc::Layout;
@@ -473,23 +506,38 @@ impl OpaquePool {
     ///
     /// use opaque_pool::OpaquePool;
     ///
-    /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
+    /// // A struct with some fields that start uninitialized by design
+    /// struct PartialData {
+    ///     // This field is always initialized
+    ///     id: u32,
+    ///     // This field starts uninitialized and will be filled later
+    ///     buffer: MaybeUninit<[u8; 1024]>,
+    /// }
     ///
-    /// // Insert a value using in-place initialization.
-    /// // SAFETY: String matches the layout used to create the pool, and we properly initialize the value.
-    /// let pooled = unsafe {
-    ///     pool.insert_with(|uninit: &mut MaybeUninit<String>| {
-    ///         uninit.write(String::from("Hello, World!"));
+    /// let mut pool = OpaquePool::builder().layout_of::<PartialData>().build();
+    ///
+    /// // Using insert_with() to initialize only the `id` field, leaving `buffer` uninitialized.
+    /// // This avoids writing 1024 bytes of uninitialized data that would happen with insert().
+    /// // SAFETY: PartialData matches the layout used to create the pool.
+    /// let item = unsafe {
+    ///     pool.insert_with(|uninit: &mut MaybeUninit<PartialData>| {
+    ///         let ptr = uninit.as_mut_ptr();
+    ///         // Only initialize the `id` field, leaving `buffer` as MaybeUninit
+    ///         unsafe {
+    ///             std::ptr::addr_of_mut!((*ptr).id).write(42);
+    ///             // Note: We intentionally do NOT initialize `buffer`
+    ///         }
     ///     })
     /// };
     ///
-    /// // Read data back.
-    /// // SAFETY: The pointer is valid for String reads/writes and we have exclusive access.
-    /// let value = unsafe { pooled.ptr().as_ref() };
-    /// assert_eq!(value, "Hello, World!");
+    /// // Later, when we need to use the buffer, we can initialize it:
+    /// // SAFETY: The pointer is valid and we have exclusive access.
+    /// unsafe {
+    ///     let data = item.ptr().as_mut();
+    ///     data.buffer.write([0u8; 1024]);
+    /// }
     ///
-    /// // Clean up.
-    /// pool.remove(&pooled);
+    /// pool.remove_mut(item);
     /// ```
     ///
     /// # Panics
@@ -510,7 +558,7 @@ impl OpaquePool {
     ///
     /// [`remove()`]: Self::remove
     #[must_use]
-    pub unsafe fn insert_with<T>(&mut self, f: impl FnOnce(&mut MaybeUninit<T>)) -> Pooled<T> {
+    pub unsafe fn insert_with<T>(&mut self, f: impl FnOnce(&mut MaybeUninit<T>)) -> PooledMut<T> {
         debug_assert_eq!(
             Layout::new::<T>(),
             self.item_layout,
@@ -545,18 +593,17 @@ impl OpaquePool {
         self.length = self.length.wrapping_add(1);
 
         // The pool itself does not care about the type T but for the convenience of the caller
-        // we imbue the Pooled with the type information, to reduce required casting by caller.
-        Pooled {
-            pool_id: self.pool_id,
-            coordinates,
-            ptr: pooled.ptr().cast::<T>(),
-        }
+        // we imbue the PooledMut with the type information, to reduce required casting by caller.
+        PooledMut::new(self.pool_id, coordinates, pooled.ptr().cast::<T>())
     }
 
     /// Removes a value previously inserted into the pool.
     ///
     /// The value is dropped and the memory becomes available for future insertions.
     /// There is no way to remove an item from the pool without dropping it.
+    ///
+    /// **Note**: Consider using [`Self::remove_mut()`] or [`Self::remove_unpin_mut()`] with [`PooledMut<T>`]
+    /// handles instead, which provide safer removal without requiring `unsafe` code.
     ///
     /// # Example
     ///
@@ -568,20 +615,31 @@ impl OpaquePool {
     /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
     ///
     /// // SAFETY: String matches the layout used to create the pool.
-    /// let pooled = unsafe { pool.insert("Test".to_string()) };
+    /// let pooled = unsafe { pool.insert("Test".to_string()) }.into_shared();
     /// assert_eq!(pool.len(), 1);
     ///
     /// // Remove the value.
-    /// pool.remove(&pooled);
+    /// // SAFETY: pooled (and any of its copies) has not been used to remove an item before.
+    /// unsafe { pool.remove(&pooled) };
     ///
     /// assert_eq!(pool.len(), 0);
     /// assert!(pool.is_empty());
+    ///
+    /// // For safer removal, consider:
+    /// // let pooled_mut = unsafe { pool.insert("Test".to_string()) };
+    /// // pool.remove_mut(pooled_mut); // Safe, consumes the handle
     /// ```
     ///
     /// # Panics
     ///
     /// Panics if the handle is not associated with an existing item in this pool.
-    pub fn remove<T: ?Sized>(&mut self, pooled: &Pooled<T>) {
+    ///
+    /// # Safety
+    ///
+    /// A `Pooled<T>` handle can only be used to remove an item from the pool once.
+    /// Using the same handle (or any of its copies) to remove an item multiple times
+    /// will result in undefined behavior due to double-free or use-after-free issues.
+    pub unsafe fn remove<T: ?Sized>(&mut self, pooled: &Pooled<T>) {
         assert!(
             pooled.pool_id == self.pool_id,
             "attempted to remove a handle from a different pool (handle pool ID: {}, current pool ID: {})",
@@ -593,12 +651,12 @@ impl OpaquePool {
 
         let slab = self
             .slabs
-            .get_mut(coordinates.slab_index)
+            .get_mut(coordinates.slab_index())
             .expect("the Pooled handle did not point to an existing item in the pool");
 
         // In principle, we could return the value here if `T: Unpin` but there is no need
         // for this functionality at present, so we do not implement it to reduce complexity.
-        slab.remove(coordinates.index_in_slab);
+        slab.remove(coordinates.index_in_slab());
 
         // Update our tracked length since we just removed an item.
         // This cannot wrap around because we just removed an item, so the value must be at least 1.
@@ -607,7 +665,231 @@ impl OpaquePool {
         // There is now a vacant slot in this slab! We may want to remember this for fast insertions.
         // We try to remember the lowest index of a slab with a vacant slot, so we
         // fill the collection from the start (to enable easier shrinking later).
-        self.update_vacant_slot_cache(coordinates.slab_index);
+        self.update_vacant_slot_cache(coordinates.slab_index());
+    }
+
+    /// Removes a value from the pool and returns it, without dropping it.
+    ///
+    /// This method moves the value out of the pool and returns ownership to the caller.
+    /// The pool slot is marked as vacant and becomes available for future insertions.
+    ///
+    /// **Note**: Consider using [`Self::remove_unpin_mut()`] with [`PooledMut<T>`] handles instead,
+    /// which provides safer removal without requiring `unsafe` code.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    ///
+    /// use opaque_pool::OpaquePool;
+    ///
+    /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
+    ///
+    /// // SAFETY: String matches the layout used to create the pool.
+    /// let pooled = unsafe { pool.insert("Test".to_string()) }.into_shared();
+    /// assert_eq!(pool.len(), 1);
+    ///
+    /// // Remove and extract the value.
+    /// // SAFETY: pooled (and any of its copies) has not been used to remove an item before.
+    /// let extracted = unsafe { pool.remove_unpin(&pooled) };
+    /// assert_eq!(extracted, "Test");
+    ///
+    /// assert_eq!(pool.len(), 0);
+    /// assert!(pool.is_empty());
+    ///
+    /// // For safer removal, consider:
+    /// // let pooled_mut = unsafe { pool.insert("Test".to_string()) };
+    /// // let extracted = pool.remove_unpin_mut(pooled_mut); // Safe, consumes the handle
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the pooled handle has not been used for removal before.
+    /// Using the same pooled handle multiple times may result in undefined behavior.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the handle is not associated with an existing item in this pool.
+    /// Panics if the handle has been type-erased to a zero-sized type.
+    pub unsafe fn remove_unpin<T: Unpin>(&mut self, pooled: &Pooled<T>) -> T {
+        assert!(
+            size_of::<T>() > 0,
+            "cannot remove type-erased pooled items (zero-sized types not supported)"
+        );
+
+        assert!(
+            pooled.pool_id == self.pool_id,
+            "attempted to remove a handle from a different pool (handle pool ID: {}, current pool ID: {})",
+            pooled.pool_id,
+            self.pool_id
+        );
+
+        let coordinates = pooled.coordinates;
+
+        let slab = self
+            .slabs
+            .get_mut(coordinates.slab_index())
+            .expect("the Pooled handle did not point to an existing item in the pool");
+
+        // SAFETY: The Pooled<T> guarantees the type T is correct for this pool slot.
+        let value = unsafe { slab.remove_unpin::<T>(coordinates.index_in_slab()) };
+
+        // Update our tracked length since we just removed an item.
+        // This cannot wrap around because we just removed an item, so the value must be at least 1.
+        self.length = self.length.wrapping_sub(1);
+
+        // There is now a vacant slot in this slab! We may want to remember this for fast insertions.
+        // We try to remember the lowest index of a slab with a vacant slot, so we
+        // fill the collection from the start (to enable easier shrinking later).
+        self.update_vacant_slot_cache(coordinates.slab_index());
+
+        value
+    }
+
+    /// Removes a value previously inserted into the pool using an exclusive handle.
+    ///
+    /// This method provides safe removal without requiring `unsafe` code, since the
+    /// [`PooledMut<T>`] handle can only be used once. The handle is consumed by this operation,
+    /// making reuse impossible and eliminating double-free risks.
+    ///
+    /// The value is dropped and the memory becomes available for future insertions.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    ///
+    /// use opaque_pool::OpaquePool;
+    ///
+    /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
+    ///
+    /// // SAFETY: String matches the layout used to create the pool.
+    /// let item = unsafe { pool.insert("Test".to_string()) };
+    /// assert_eq!(pool.len(), 1);
+    ///
+    /// // Remove the value safely.
+    /// pool.remove_mut(item);
+    ///
+    /// assert_eq!(pool.len(), 0);
+    /// assert!(pool.is_empty());
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the handle is not associated with an existing item in this pool.
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "PooledMut must be consumed to prevent reuse"
+    )]
+    pub fn remove_mut<T: ?Sized>(&mut self, pooled_mut: PooledMut<T>) {
+        let PooledMut {
+            pool_id,
+            coordinates,
+            ..
+        } = pooled_mut;
+
+        assert!(
+            pool_id == self.pool_id,
+            "attempted to remove a handle from a different pool (handle pool ID: {}, current pool ID: {})",
+            pool_id,
+            self.pool_id
+        );
+
+        let slab = self
+            .slabs
+            .get_mut(coordinates.slab_index())
+            .expect("the PooledMut handle did not point to an existing item in the pool");
+
+        // In principle, we could return the value here if `T: Unpin` but there is no need
+        // for this functionality at present, so we do not implement it to reduce complexity.
+        slab.remove(coordinates.index_in_slab());
+
+        // Update our tracked length since we just removed an item.
+        // This cannot wrap around because we just removed an item, so the value must be at least 1.
+        self.length = self.length.wrapping_sub(1);
+
+        // There is now a vacant slot in this slab! We may want to remember this for fast insertions.
+        // We try to remember the lowest index of a slab with a vacant slot, so we
+        // fill the collection from the start (to enable easier shrinking later).
+        self.update_vacant_slot_cache(coordinates.slab_index());
+    }
+
+    /// Removes a value from the pool using an exclusive handle and returns it, without dropping it.
+    ///
+    /// This method provides safe removal and extraction without requiring `unsafe` code, since the
+    /// [`PooledMut<T>`] handle can only be used once. The handle is consumed by this operation,
+    /// making reuse impossible and eliminating double-free risks.
+    ///
+    /// The value is moved out of the pool and returned to the caller.
+    /// The pool slot is marked as vacant and becomes available for future insertions.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    ///
+    /// use opaque_pool::OpaquePool;
+    ///
+    /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
+    ///
+    /// // SAFETY: String matches the layout used to create the pool.
+    /// let item = unsafe { pool.insert("Test".to_string()) };
+    /// assert_eq!(pool.len(), 1);
+    ///
+    /// // Remove and extract the value safely.
+    /// let extracted = pool.remove_unpin_mut(item);
+    /// assert_eq!(extracted, "Test");
+    ///
+    /// assert_eq!(pool.len(), 0);
+    /// assert!(pool.is_empty());
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the handle is not associated with an existing item in this pool.
+    /// Panics if the handle has been type-erased to a zero-sized type.
+    #[must_use]
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "PooledMut must be consumed to prevent reuse"
+    )]
+    pub fn remove_unpin_mut<T: Unpin>(&mut self, pooled_mut: PooledMut<T>) -> T {
+        assert!(
+            size_of::<T>() > 0,
+            "cannot remove type-erased pooled items (zero-sized types not supported)"
+        );
+
+        let PooledMut {
+            pool_id,
+            coordinates,
+            ..
+        } = pooled_mut;
+
+        assert!(
+            pool_id == self.pool_id,
+            "attempted to remove a handle from a different pool (handle pool ID: {}, current pool ID: {})",
+            pool_id,
+            self.pool_id
+        );
+
+        let slab = self
+            .slabs
+            .get_mut(coordinates.slab_index())
+            .expect("the PooledMut handle did not point to an existing item in the pool");
+
+        // SAFETY: The PooledMut<T> guarantees the type T is correct for this pool slot.
+        let value = unsafe { slab.remove_unpin::<T>(coordinates.index_in_slab()) };
+
+        // Update our tracked length since we just removed an item.
+        // This cannot wrap around because we just removed an item, so the value must be at least 1.
+        self.length = self.length.wrapping_sub(1);
+
+        // There is now a vacant slot in this slab! We may want to remember this for fast insertions.
+        // We try to remember the lowest index of a slab with a vacant slot, so we
+        // fill the collection from the start (to enable easier shrinking later).
+        self.update_vacant_slot_cache(coordinates.slab_index());
+
+        value
     }
 
     /// Adds a new slab to the pool and returns its index.
@@ -685,305 +967,6 @@ impl OpaquePool {
     }
 }
 
-/// The result of inserting a value of type `T` into a [`OpaquePool`].
-///
-/// Acts as a super-powered pointer that can be copied and cloned freely. The handle serves
-/// both as the key and provides direct access to the stored value. You can return this to
-/// the pool to remove the value from the pool and drop it. Depending on the pool's
-/// [drop policy][DropPolicy], the pool may panic if it is dropped while still containing items.
-///
-/// Being `Copy` and `Clone`, this type behaves like a regular pointer - you can duplicate
-/// handles freely without affecting the underlying stored value. Multiple copies of the same
-/// handle all refer to the same stored value.
-///
-/// The generic parameter `T` provides type-safe access to the stored value through
-/// [`ptr()`](Pooled::ptr). If you need to erase the type information, use
-/// [`erase()`](Pooled::erase) to convert the instance to a `Pooled<()>`, which is
-/// functionally equivalent.
-///
-/// # Example
-///
-/// ```rust
-/// use std::alloc::Layout;
-///
-/// use opaque_pool::OpaquePool;
-///
-/// let mut pool = OpaquePool::builder().layout_of::<String>().build();
-///
-/// // SAFETY: String matches the layout used to create the pool.
-/// let pooled = unsafe { pool.insert("Hello".to_string()) };
-///
-/// // The handle acts like a super-powered pointer - it can be copied freely.
-/// let pooled_copy = pooled;
-/// let pooled_clone = pooled.clone();
-///
-/// // All copies refer to the same stored value.
-/// // SAFETY: All pointers are valid and point to the same value.
-/// let value1 = unsafe { pooled.ptr().as_ref() };
-/// let value2 = unsafe { pooled_copy.ptr().as_ref() };
-/// let value3 = unsafe { pooled_clone.ptr().as_ref() };
-/// assert_eq!(value1, "Hello");
-/// assert_eq!(value2, "Hello");
-/// assert_eq!(value3, "Hello");
-///
-/// // To remove and drop an item, any handle can be returned to the pool.
-/// pool.remove(&pooled);
-/// ```
-///
-/// # Thread safety
-///
-/// This type is thread-safe ([`Send`] + [`Sync`]) if and only if `T` implements [`Sync`].
-/// When `T` is [`Sync`], multiple threads can safely share handles to the same data.
-/// When `T` is not [`Sync`], the handle is single-threaded and cannot be moved between threads
-/// or shared between threads, preventing unsafe access to non-thread-safe data.
-pub struct Pooled<T: ?Sized> {
-    /// Ensures this handle can only be returned to the pool it came from.
-    pool_id: u64,
-
-    coordinates: ItemCoordinates,
-
-    ptr: NonNull<T>,
-}
-
-impl<T: ?Sized> Pooled<T> {
-    /// Casts this `Pooled<T>` to a different type using a casting function.
-    ///
-    /// This method allows casting the pooled value to a trait object or other compatible type.
-    /// The underlying memory layout and pool management remain unchanged.
-    ///
-    /// This method is only intended for use by the [`define_pooled_dyn_cast!`] macro
-    /// and by the blind_pool crate for type-safe casting operations.
-    ///
-    /// # Safety
-    ///
-    /// The caller is responsible for ensuring that the handle points to a valid item that
-    /// has not been removed from the pool.
-    ///
-    /// The caller must guarantee that the target object is in a state where it is
-    /// valid to create a shared reference to it (i.e. no concurrent `&mut` exclusive
-    /// references exist.)
-    ///
-    /// The caller must guarantee that the callback input and output references
-    /// point to the same object.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use std::alloc::Layout;
-    /// use std::fmt::Display;
-    ///
-    /// use opaque_pool::OpaquePool;
-    ///
-    /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
-    /// // SAFETY: String matches the layout used to create the pool.
-    /// let value_handle = unsafe { pool.insert("Test".to_string()) };
-    ///
-    /// // Cast to trait object.
-    /// let display_handle: opaque_pool::Pooled<dyn Display> =
-    ///     unsafe { value_handle.__private_cast_dyn_with_fn(|x| x as &dyn Display) };
-    ///
-    /// // Can access as Display trait object.
-    /// // SAFETY: The pointer is valid and contains a String which implements Display.
-    /// let display_ref: &dyn Display = unsafe { display_handle.ptr().as_ref() };
-    /// assert_eq!(format!("{}", display_ref), "Test");
-    /// ```
-    #[must_use]
-    #[inline]
-    #[doc(hidden)]
-    pub unsafe fn __private_cast_dyn_with_fn<U: ?Sized, F>(self, cast_fn: F) -> Pooled<U>
-    where
-        F: FnOnce(&T) -> &U,
-    {
-        // Get a reference to perform the cast and obtain the trait object pointer.
-        // SAFETY: Forwarding safety requirements to the caller.
-        let value_ref = unsafe { self.ptr.as_ref() };
-
-        // Use the provided function to perform the cast - this ensures type safety.
-        let new_ref: &U = cast_fn(value_ref);
-
-        // Now we need a pointer to stuff into a new Pooled.
-        let new_ptr = NonNull::from(new_ref);
-
-        // Create a new pooled handle with the trait object type. We can reuse the same
-        // pool_id and coordinates since they refer to the same underlying allocation, just
-        // with a different type view.
-        Pooled {
-            pool_id: self.pool_id,
-            coordinates: self.coordinates,
-            ptr: new_ptr,
-        }
-    }
-
-    /// Converts this pooled item handle to a trait object using a mutable reference cast.
-    ///
-    /// This method is intended for use by `PooledMut<T>` types that need to maintain exclusive
-    /// access during casting operations. It takes a casting function that works with mutable
-    /// references instead of shared references.
-    ///
-    /// The method exists alongside the shared reference version to maintain proper borrowing
-    /// semantics for different handle types - `Pooled<T>` uses shared references while
-    /// `PooledMut<T>` uses exclusive references.
-    ///
-    /// # Safety
-    ///
-    /// The caller must guarantee that the handle belongs to the same pool that this
-    /// item was inserted into and that the item pointed to by this handle
-    /// has not been removed from the pool.
-    ///
-    /// The caller must guarantee that the target object is in a state where it is
-    /// valid to create an exclusive reference to it (i.e. no concurrent `&` shared
-    /// or `&mut` exclusive references exist).
-    ///
-    /// The caller must guarantee that the callback input and output references
-    /// point to the same object.
-    #[must_use]
-    #[inline]
-    #[doc(hidden)]
-    pub unsafe fn __private_cast_dyn_with_fn_mut<U: ?Sized, F>(mut self, cast_fn: F) -> Pooled<U>
-    where
-        F: FnOnce(&mut T) -> &mut U,
-    {
-        // Get a mutable reference to perform the cast and obtain the trait object pointer.
-        // SAFETY: Forwarding safety requirements to the caller.
-        let value_ref = unsafe { self.ptr.as_mut() };
-
-        // Use the provided function to perform the cast - this ensures type safety.
-        let new_ref: &mut U = cast_fn(value_ref);
-
-        // Now we need a pointer to stuff into a new Pooled.
-        let new_ptr = NonNull::from(new_ref);
-
-        // Create a new pooled handle with the trait object type. We can reuse the same
-        // pool_id and coordinates since they refer to the same underlying allocation, just
-        // with a different type view.
-        Pooled {
-            pool_id: self.pool_id,
-            coordinates: self.coordinates,
-            ptr: new_ptr,
-        }
-    }
-
-    /// Returns a pointer to the inserted value.
-    ///
-    /// This is the only way to access the value stored in the pool. The owner of the handle has
-    /// exclusive access to the value and may both read and write and may create both `&` shared
-    /// and `&mut` exclusive references to the item.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use std::alloc::Layout;
-    ///
-    /// use opaque_pool::OpaquePool;
-    ///
-    /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
-    ///
-    /// // SAFETY: String matches the layout used to create the pool.
-    /// let pooled = unsafe { pool.insert("Hello".to_string()) };
-    ///
-    /// // Read data back from the memory.
-    /// let value = unsafe { pooled.ptr().as_ref() };
-    /// assert_eq!(value, "Hello");
-    /// ```
-    #[must_use]
-    #[inline]
-    pub fn ptr(&self) -> NonNull<T> {
-        self.ptr
-    }
-
-    /// Erases the type information from this [`Pooled<T>`] handle, returning a [`Pooled<()>`].
-    ///
-    /// This is useful when you want to store handles of different types in the same collection
-    /// or pass them to code that doesn't need to know the specific type.
-    ///
-    /// The handle remains functionally equivalent and can still be used to remove the item
-    /// from the pool and drop it. The only change is the removal of the type information.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use std::alloc::Layout;
-    ///
-    /// use opaque_pool::OpaquePool;
-    ///
-    /// let mut pool = OpaquePool::builder().layout_of::<String>().build();
-    ///
-    /// // SAFETY: String matches the layout used to create the pool.
-    /// let pooled = unsafe { pool.insert("Test".to_string()) };
-    ///
-    /// // Erase type information.
-    /// let erased = pooled.erase();
-    ///
-    /// // Can still access the raw pointer.
-    /// // SAFETY: We know this contains a String.
-    /// let value = unsafe { erased.ptr().cast::<String>().as_ref() };
-    /// assert_eq!(value.as_str(), "Test");
-    ///
-    /// // Can still remove the item.
-    /// pool.remove(&erased);
-    /// ```
-    #[must_use]
-    #[inline]
-    pub fn erase(self) -> Pooled<()> {
-        Pooled {
-            pool_id: self.pool_id,
-            coordinates: self.coordinates,
-            ptr: self.ptr.cast::<()>(),
-        }
-    }
-}
-
-impl<T: ?Sized> Copy for Pooled<T> {}
-
-impl<T: ?Sized> Clone for Pooled<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-/// Internal coordinates for tracking items within the pool structure.
-#[derive(Clone, Copy, Debug)]
-struct ItemCoordinates {
-    /// The index of the slab containing this item.
-    slab_index: usize,
-    /// The index within the slab where this item is stored.
-    index_in_slab: usize,
-}
-
-impl ItemCoordinates {
-    #[must_use]
-    fn from_parts(slab: usize, index_in_slab: usize) -> Self {
-        Self {
-            slab_index: slab,
-            index_in_slab,
-        }
-    }
-}
-
-impl<T: ?Sized> fmt::Debug for Pooled<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Pooled")
-            .field("type_name", &std::any::type_name::<T>())
-            .field("pool_id", &self.pool_id)
-            .field("coordinates", &self.coordinates)
-            .field("ptr", &self.ptr)
-            .finish()
-    }
-}
-
-// SAFETY: OpaquePool can exist on any thread, as it does not reference any thread-specific data.
-// If a !Send item is inserted, the returned handle can only be used on the same thread, so that
-// item is bound to a single thread even if the pool itself is not.
-unsafe impl Send for OpaquePool {}
-
-// SAFETY: Pooled<T> is just a fancy reference, so its thread-safety is entirely driven by the
-// underlying type T and the presence of the `Sync` auto trait on it.
-unsafe impl<T: ?Sized + Sync> Send for Pooled<T> {}
-
-// SAFETY: Pooled<T> is just a fancy reference, so its thread-safety is entirely driven by the
-// underlying type T and the presence of the `Sync` auto trait on it.
-unsafe impl<T: ?Sized + Sync> Sync for Pooled<T> {}
-
 #[cfg(test)]
 #[allow(
     clippy::undocumented_unsafe_blocks,
@@ -1023,7 +1006,7 @@ mod tests {
             assert_eq!(pooled_c.ptr().as_ref(), "Test");
         }
 
-        pool.remove(&pooled_b);
+        pool.remove_mut(pooled_b);
 
         let pooled_d = unsafe { pool.insert("Updated".to_string()) };
 
@@ -1033,8 +1016,9 @@ mod tests {
             assert_eq!(pooled_d.ptr().as_ref(), "Updated");
         }
 
-        pool.remove(&pooled_a);
-        pool.remove(&pooled_d);
+        pool.remove_mut(pooled_a);
+        let extracted = pool.remove_unpin_mut(pooled_d);
+        assert_eq!(extracted, "Updated");
         // We do not remove pooled_c, leaving that up to the pool to clean up.
     }
 
@@ -1047,14 +1031,13 @@ mod tests {
         // Create a fake pooled with invalid coordinates.
         let fake_pooled: Pooled<u32> = Pooled {
             pool_id: pool.pool_id, // Use correct pool ID but invalid coordinates
-            coordinates: ItemCoordinates {
-                slab_index: 0,
-                index_in_slab: 0,
-            },
+            coordinates: ItemCoordinates::from_parts(0, 0),
             ptr: NonNull::dangling(),
         };
 
-        pool.remove(&fake_pooled);
+        unsafe {
+            pool.remove(&fake_pooled);
+        }
     }
 
     #[test]
@@ -1098,8 +1081,8 @@ mod tests {
             .build();
 
         // Insert and then remove immediately.
-        let pooled = unsafe { pool.insert(42_u64) };
-        pool.remove(&pooled);
+        let pooled_mut = unsafe { pool.insert(42_u64) };
+        pool.remove_mut(pooled_mut);
 
         assert!(pool.is_empty());
 
@@ -1130,13 +1113,14 @@ mod tests {
         let mut pool2 = OpaquePool::builder().layout(layout).build();
 
         // Insert into pool1 but try to remove from pool2.
-        let pooled1 = unsafe { pool1.insert(42_u32) };
+        let pooled_mut1 = unsafe { pool1.insert(42_u32) };
 
         // We also insert to pool2 to ensure there is something to remove in there.
         // The removal should still fail - having an item there is not enough.
         _ = unsafe { pool2.insert(42_u32) };
 
-        pool2.remove(&pooled1); // Should panic.
+        // Try to remove pooled_mut1 from pool2, should panic.
+        pool2.remove_mut(pooled_mut1); // Should panic.
     }
 
     #[test]
@@ -1144,15 +1128,15 @@ mod tests {
         let layout = Layout::new::<String>();
         let mut pool = OpaquePool::builder().layout(layout).build();
 
-        let pooled = unsafe { pool.insert("Test".to_string()) };
+        let pooled_mut = unsafe { pool.insert("Test".to_string()) };
 
         // Test that the typed pointer works.
         unsafe {
-            assert_eq!(pooled.ptr().as_ref(), "Test");
+            assert_eq!(pooled_mut.ptr().as_ref(), "Test");
         }
 
         // Erase the type information.
-        let erased = pooled.erase();
+        let erased = pooled_mut.erase();
 
         // Should still be able to access the value through the erased pointer.
         unsafe {
@@ -1160,7 +1144,7 @@ mod tests {
         }
 
         // Should be able to remove the erased handle.
-        pool.remove(&erased);
+        pool.remove_mut(erased);
     }
 
     #[test]
@@ -1220,8 +1204,8 @@ mod tests {
         }
 
         // Remove items in different order to test that handles work correctly.
-        pool.remove(&pooled_f64);
-        pool.remove(&pooled_u64);
+        pool.remove_mut(pooled_f64);
+        pool.remove_mut(pooled_u64);
         assert_eq!(pool.len(), 2);
 
         // Verify remaining items are still accessible.
@@ -1230,8 +1214,8 @@ mod tests {
             assert_eq!(pooled_wrapped.ptr().read().0, 0x1234_5678_90AB_CDEF);
         }
 
-        pool.remove(&pooled_wrapped);
-        pool.remove(&pooled_i64);
+        pool.remove_mut(pooled_wrapped);
+        pool.remove_mut(pooled_i64);
         assert!(pool.is_empty());
     }
 
@@ -1264,22 +1248,22 @@ mod tests {
 
         // Remove the first item to create a hole.
         let first_item = pooled_items.remove(0);
-        pool.remove(&first_item);
+        pool.remove_mut(first_item);
 
         // This will fill the hole instead of allocating a new slab.
         let pooled_filled = unsafe { pool.insert(5678_u32) };
 
-        assert_eq!(pooled_filled.coordinates.slab_index, 0);
-        assert_eq!(pooled_filled.coordinates.index_in_slab, 0);
+        assert_eq!(pooled_filled.coordinates.slab_index(), 0);
+        assert_eq!(pooled_filled.coordinates.index_in_slab(), 0);
         unsafe {
             assert_eq!(pooled_filled.ptr().read(), 5678);
         }
 
         // Clean up remaining items.
         for item in pooled_items {
-            pool.remove(&item);
+            pool.remove_mut(item);
         }
-        pool.remove(&pooled_filled);
+        pool.remove_mut(pooled_filled);
     }
 
     #[test]
@@ -1306,29 +1290,29 @@ mod tests {
 
         // Remove the first item in the first slab to create a hole.
         let first_slab_first_item = first_slab_items.remove(0);
-        pool.remove(&first_slab_first_item);
+        pool.remove_mut(first_slab_first_item);
 
         // Remove the first item in the second slab to create a hole.
         let second_slab_first_item = second_slab_items.remove(0);
-        pool.remove(&second_slab_first_item);
+        pool.remove_mut(second_slab_first_item);
 
         // This will fill the hole in the first slab instead of allocating a new slab.
         let pooled_filled = unsafe { pool.insert(91011_u32) };
 
-        assert_eq!(pooled_filled.coordinates.slab_index, 0);
-        assert_eq!(pooled_filled.coordinates.index_in_slab, 0);
+        assert_eq!(pooled_filled.coordinates.slab_index(), 0);
+        assert_eq!(pooled_filled.coordinates.index_in_slab(), 0);
         unsafe {
             assert_eq!(pooled_filled.ptr().read(), 91011);
         }
 
         // Clean up remaining items.
         for item in first_slab_items {
-            pool.remove(&item);
+            pool.remove_mut(item);
         }
         for item in second_slab_items {
-            pool.remove(&item);
+            pool.remove_mut(item);
         }
-        pool.remove(&pooled_filled);
+        pool.remove_mut(pooled_filled);
     }
 
     #[test]
@@ -1355,29 +1339,29 @@ mod tests {
 
         // Remove the first item in the second slab to create a hole.
         let second_slab_first_item = second_slab_items.remove(0);
-        pool.remove(&second_slab_first_item);
+        pool.remove_mut(second_slab_first_item);
 
         // Remove the first item in the first slab to create a hole.
         let first_slab_first_item = first_slab_items.remove(0);
-        pool.remove(&first_slab_first_item);
+        pool.remove_mut(first_slab_first_item);
 
         // This will fill the hole in the first slab instead of allocating a new slab.
         let pooled_filled = unsafe { pool.insert(91011_u32) };
 
-        assert_eq!(pooled_filled.coordinates.slab_index, 0);
-        assert_eq!(pooled_filled.coordinates.index_in_slab, 0);
+        assert_eq!(pooled_filled.coordinates.slab_index(), 0);
+        assert_eq!(pooled_filled.coordinates.index_in_slab(), 0);
         unsafe {
             assert_eq!(pooled_filled.ptr().read(), 91011);
         }
 
         // Clean up remaining items.
         for item in first_slab_items {
-            pool.remove(&item);
+            pool.remove_mut(item);
         }
         for item in second_slab_items {
-            pool.remove(&item);
+            pool.remove_mut(item);
         }
-        pool.remove(&pooled_filled);
+        pool.remove_mut(pooled_filled);
     }
 
     #[test]
@@ -1397,7 +1381,7 @@ mod tests {
         // Remove all items from the last two slabs, keeping the first slab full
         let remaining_items: Vec<_> = pooled_items.drain(DEFAULT_SLAB_CAPACITY.get()..).collect();
         for item in remaining_items {
-            pool.remove(&item);
+            pool.remove_mut(item);
         }
 
         // Capacity should still be 3 slabs
@@ -1437,7 +1421,7 @@ mod tests {
 
         // Remove all items
         for item in pooled_items {
-            pool.remove(&item);
+            pool.remove_mut(item);
         }
 
         // Capacity should still be 2 slabs
@@ -1511,7 +1495,7 @@ mod tests {
         assert_eq!(pool.capacity(), DEFAULT_SLAB_CAPACITY.get() * 2);
 
         // Remove the overflow item (making the second slab empty)
-        pool.remove(&overflow_item);
+        pool.remove_mut(overflow_item);
 
         // Shrink to fit should remove the empty second slab
         pool.shrink_to_fit();
@@ -1529,7 +1513,7 @@ mod tests {
         assert_eq!(pool.capacity(), DEFAULT_SLAB_CAPACITY.get() * 2);
 
         // Verify the new item went to the second slab
-        assert_eq!(new_item.coordinates.slab_index, 1);
+        assert_eq!(new_item.coordinates.slab_index(), 1);
 
         // Verify the new item is accessible
         unsafe {
@@ -1538,9 +1522,9 @@ mod tests {
 
         // Clean up
         for item in pooled_items {
-            pool.remove(&item);
+            pool.remove_mut(item);
         }
-        pool.remove(&new_item);
+        pool.remove_mut(new_item);
     }
 
     #[test]
@@ -1559,7 +1543,7 @@ mod tests {
         let pooled = unsafe { pool.insert(42_u32) };
         assert_eq!(pool.capacity(), initial_capacity);
 
-        pool.remove(&pooled);
+        pool.remove_mut(pooled);
     }
 
     #[test]
@@ -1581,8 +1565,8 @@ mod tests {
             assert_eq!(pooled2.ptr().read(), 2);
         }
 
-        pool.remove(&pooled1);
-        pool.remove(&pooled2);
+        pool.remove_mut(pooled1);
+        pool.remove_mut(pooled2);
     }
 
     #[test]
@@ -1631,7 +1615,7 @@ mod tests {
 
         // Clean up
         for pooled in pooled_items {
-            pool.remove(&pooled);
+            pool.remove_mut(pooled);
         }
     }
 
@@ -1686,7 +1670,7 @@ mod tests {
             assert_eq!(trait_obj.describe(), "Product: Widget ($19.99)");
         }
 
-        pool.remove(&pooled);
+        pool.remove_mut(pooled);
     }
 
     #[test]
@@ -1736,7 +1720,7 @@ mod tests {
             assert_eq!(counter_ref.value, 15);
         }
 
-        pool.remove(&pooled);
+        pool.remove_mut(pooled);
     }
 
     #[test]
@@ -1760,6 +1744,19 @@ mod tests {
 
         use std::cell::RefCell;
         assert_not_impl_any!(Pooled<RefCell<u32>>: Send, Sync); // RefCell is not Sync
+
+        // PooledMut<T> should have the same thread safety properties as Pooled<T>
+        assert_impl_all!(PooledMut<()>: Send, Sync); // () is Sync
+        assert_impl_all!(PooledMut<u32>: Send, Sync); // u32 is Sync
+        assert_impl_all!(PooledMut<String>: Send, Sync); // String is Sync
+
+        // PooledMut<T> should be single-threaded when T is not Sync
+        assert_not_impl_any!(PooledMut<Rc<u32>>: Send, Sync); // Rc is not Sync
+        assert_not_impl_any!(PooledMut<RefCell<u32>>: Send, Sync); // RefCell is not Sync
+
+        // PooledMut<T> must not be Copy or Clone
+        assert_not_impl_any!(PooledMut<String>: Copy, Clone);
+        assert_not_impl_any!(PooledMut<u32>: Copy, Clone);
     }
 
     #[test]
@@ -1780,7 +1777,8 @@ mod tests {
         }
 
         assert_eq!(pool.len(), 1);
-        pool.remove(&pooled);
+        let extracted = pool.remove_unpin_mut(pooled);
+        assert_eq!(extracted, 42);
         assert_eq!(pool.len(), 0);
     }
 }

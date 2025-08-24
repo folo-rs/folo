@@ -291,10 +291,33 @@ impl BlindPool {
     /// Removes an item from the pool using its handle.
     ///
     /// This is an internal method used by [`Pooled`] when it is dropped.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the pooled handle has not been used for removal before.
+    /// Using the same pooled handle multiple times may result in undefined behavior.
     #[inline]
-    pub(crate) fn remove<T: ?Sized>(&self, pooled: &RawPooled<T>) {
+    pub(crate) unsafe fn remove<T: ?Sized>(&self, pooled: &RawPooled<T>) {
         let mut pool = self.inner.lock().expect(ERR_POISONED_LOCK);
-        pool.remove(pooled);
+        // SAFETY: The caller guarantees that this pooled handle has not been used before.
+        unsafe {
+            pool.remove(pooled);
+        }
+    }
+
+    /// Removes an item from the pool and returns it, without dropping it.
+    ///
+    /// This is an internal method used by [`PooledMut::into_inner`].
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the pooled handle has not been used for removal before.
+    /// Using the same pooled handle multiple times may result in undefined behavior.
+    #[inline]
+    pub(crate) unsafe fn remove_unpin<T: Unpin>(&self, pooled: &RawPooled<T>) -> T {
+        let mut pool = self.inner.lock().expect(ERR_POISONED_LOCK);
+        // SAFETY: The caller guarantees that this pooled handle has not been used before.
+        unsafe { pool.remove_unpin(pooled) }
     }
 }
 

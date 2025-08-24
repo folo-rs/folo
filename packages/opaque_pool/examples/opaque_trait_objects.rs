@@ -53,12 +53,8 @@ fn introduce_animal(animal: &dyn Animal) {
     println!("Animal name: {}", animal.name());
 }
 
-fn main() {
-    println!("OpaquePool Trait Object Example");
-    println!("===============================");
-    println!();
-
-    // Example 1: Using trait objects with concrete types.
+/// Demonstrates using trait objects with concrete types.
+fn demonstrate_animal_trait_objects() {
     println!("Example 1: Animal trait objects");
     println!("-------------------------------");
 
@@ -77,34 +73,46 @@ fn main() {
     println!("Inserted dog into pool");
 
     // Use the dog as a trait object.
-    // SAFETY: The pointer is valid and points to a Dog that we just inserted.
-    unsafe {
-        let dog_ref: &Dog = pooled_dog.ptr().as_ref();
-        let animal_trait: &dyn Animal = dog_ref;
-        introduce_animal(animal_trait);
-    }
+    let dog_ref: &Dog = &pooled_dog;
+    let animal_trait: &dyn Animal = dog_ref;
+    introduce_animal(animal_trait);
 
     println!();
+}
 
-    // Example 2: Mutable trait objects.
+/// Demonstrates mutable trait objects for training animals.
+fn demonstrate_mutable_trait_objects() {
     println!("Example 2: Mutable trait objects");
     println!("--------------------------------");
 
-    // Train the dog using mutable trait objects.
-    // SAFETY: The pointer is valid and points to a Dog that we just inserted.
-    unsafe {
-        let dog_ref: &mut Dog = pooled_dog.ptr().as_mut();
-        let trainable: &mut dyn Trainable = dog_ref;
+    let mut dog_pool = OpaquePool::builder().layout_of::<Dog>().build();
 
-        println!("Before training: {}", trainable.show_training());
-        trainable.train("sit");
-        println!("After training: {}", trainable.show_training());
-    }
+    let dog = Dog {
+        name: "Rex".to_string(),
+        breed: "German Shepherd".to_string(),
+    };
+
+    // SAFETY: Dog matches the layout used to create the dog_pool.
+    let mut pooled_dog = unsafe { dog_pool.insert(dog) };
+
+    // Train the dog using mutable trait objects.
+    let dog_ref: &mut Dog = &mut pooled_dog;
+    let trainable: &mut dyn Trainable = dog_ref;
+
+    println!("Before training: {}", trainable.show_training());
+    trainable.train("sit");
+    println!("After training: {}", trainable.show_training());
 
     println!();
+}
 
-    // Clean up.
-    dog_pool.remove(&pooled_dog);
+fn main() {
+    println!("OpaquePool Trait Object Example");
+    println!("===============================");
+    println!();
+
+    demonstrate_animal_trait_objects();
+    demonstrate_mutable_trait_objects();
 
     println!("Example completed successfully!");
     println!();

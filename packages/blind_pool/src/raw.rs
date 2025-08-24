@@ -4,7 +4,7 @@ use std::ptr::NonNull;
 use std::{fmt, thread};
 
 use foldhash::{HashMap, HashMapExt};
-use opaque_pool::{DropPolicy, OpaquePool, Pooled as OpaquePooled};
+use opaque_pool::{DropPolicy, OpaquePool, Pooled as OpaquePooled, PooledMut};
 
 use crate::RawBlindPoolBuilder;
 
@@ -38,8 +38,8 @@ use crate::RawBlindPoolBuilder;
 /// let mut pool = RawBlindPool::new();
 ///
 /// // Insert values of different types.
-/// let pooled_string1 = pool.insert("Hello".to_string());
-/// let pooled_string2 = pool.insert("World".to_string());
+/// let _pooled_string1 = pool.insert("Hello".to_string());
+/// let _pooled_string2 = pool.insert("World".to_string());
 ///
 /// // Read from the memory.
 /// // SAFETY: The pointers are valid and the memory contains the values we just inserted.
@@ -76,7 +76,7 @@ impl RawBlindPool {
     ///
     /// let mut pool = RawBlindPool::new();
     ///
-    /// let pooled = pool.insert("Test".to_string());
+    /// let _pooled = pool.insert("Test".to_string());
     ///
     /// // SAFETY: The pointer is valid and contains the value we just inserted.
     /// let value = unsafe { pooled.ptr().as_ref() };
@@ -130,9 +130,9 @@ impl RawBlindPool {
     /// let mut pool = RawBlindPool::new();
     ///
     /// // Insert different types into the same pool.
-    /// let pooled_string = pool.insert("Hello".to_string());
-    /// let pooled_float = pool.insert(2.5_f64);
-    /// let pooled_string = pool.insert("hello".to_string());
+    /// let _pooled_string = pool.insert("Hello".to_string());
+    /// let _pooled_float = pool.insert(2.5_f64);
+    /// let _pooled_string = pool.insert("hello".to_string());
     ///
     /// // All values are stored in the same BlindPool.
     /// assert_eq!(pool.len(), 3);
@@ -150,7 +150,7 @@ impl RawBlindPool {
 
         // SAFETY: The internal pool was created with the same layout as T, ensuring
         // that T's size and alignment requirements are satisfied by the pool's allocation strategy.
-        let pooled = unsafe { internal_pool.insert(value) };
+        let pooled = unsafe { internal_pool.insert(value) }.into_shared();
 
         RawPooled {
             layout,
@@ -188,7 +188,7 @@ impl RawBlindPool {
     /// assert_eq!(value, "Hello, World!");
     ///
     /// // Clean up.
-    /// pool.remove(&pooled);
+    /// unsafe { pool.remove(&_pooled) };
     /// ```
     ///
     /// # Safety
@@ -213,11 +213,115 @@ impl RawBlindPool {
         // SAFETY: The internal pool was created with the same layout as T, ensuring
         // that T's size and alignment requirements are satisfied by the pool's allocation strategy.
         // We forward the safety requirements to the caller.
-        let pooled = unsafe { internal_pool.insert_with(f) };
+        let pooled = unsafe { internal_pool.insert_with(f) }.into_shared();
 
         RawPooled {
             layout,
             inner: pooled,
+        }
+    }
+
+    /// Inserts a value into the pool and returns an exclusive handle to it.
+    ///
+    /// Unlike [`insert()`], this method returns a [`RawPooledMut<T>`] that provides exclusive
+    /// ownership guarantees. The handle cannot be copied or cloned, ensuring that only one
+    /// handle can exist for each pool item. This enables safe removal methods that consume
+    /// the handle, preventing double-use bugs.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::RawBlindPool;
+    ///
+    /// let mut pool = RawBlindPool::new();
+    ///
+    /// // Insert with exclusive ownership.
+    /// let pooled_mut = pool.insert_mut("Test".to_string());
+    ///
+    /// // Safe removal that consumes the handle.
+    /// let extracted = pool.remove_unpin_mut(pooled_mut);
+    /// assert_eq!(extracted, "Test");
+    /// ```
+    ///
+    /// [`insert()`]: Self::insert
+    #[inline]
+    pub fn insert_mut<T>(&mut self, value: T) -> RawPooledMut<T> {
+        let layout = Layout::new::<T>();
+
+        let internal_pool = self.pools.entry(layout).or_insert_with(|| {
+            OpaquePool::builder()
+                .layout_of::<T>()
+                .drop_policy(self.drop_policy)
+                .build()
+        });
+
+        // SAFETY: The internal pool was created with the same layout as T, ensuring
+        // that T's size and alignment requirements are satisfied by the pool's allocation strategy.
+        let pooled_mut = unsafe { internal_pool.insert(value) };
+
+        RawPooledMut {
+            layout,
+            inner: pooled_mut,
+        }
+    }
+
+    /// Inserts a value into the pool using in-place initialization and returns an exclusive handle.
+    ///
+    /// This is similar to [`insert_with()`] but returns a [`RawPooledMut<T>`] that provides
+    /// exclusive ownership guarantees. The handle cannot be copied or cloned, ensuring that
+    /// only one handle can exist for each pool item.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::mem::MaybeUninit;
+    ///
+    /// use blind_pool::RawBlindPool;
+    ///
+    /// let mut pool = RawBlindPool::new();
+    ///
+    /// // SAFETY: We properly initialize the value in the closure.
+    /// let pooled_mut = unsafe {
+    ///     pool.insert_with_mut(|uninit: &mut MaybeUninit<String>| {
+    ///         uninit.write(String::from("Hello, World!"));
+    ///     })
+    /// };
+    ///
+    /// // Safe removal that consumes the handle.
+    /// let extracted = pool.remove_unpin_mut(pooled_mut);
+    /// assert_eq!(extracted, "Hello, World!");
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that:
+    /// - The closure properly initializes the `MaybeUninit<T>` before returning.
+    /// - If `T` contains any references or other lifetime-dependent data, those lifetimes
+    ///   are valid for the entire duration that the value may remain in the pool.
+    ///
+    /// [`insert_with()`]: Self::insert_with
+    #[inline]
+    pub unsafe fn insert_with_mut<T>(
+        &mut self,
+        f: impl FnOnce(&mut MaybeUninit<T>),
+    ) -> RawPooledMut<T> {
+        let layout = Layout::new::<T>();
+
+        let internal_pool = self.pools.entry(layout).or_insert_with(|| {
+            OpaquePool::builder()
+                .layout_of::<T>()
+                .drop_policy(self.drop_policy)
+                .build()
+        });
+
+        // SAFETY: The internal pool was created with the same layout as T, ensuring
+        // that T's size and alignment requirements are satisfied by the pool's allocation strategy.
+        // We forward the safety requirements to the caller.
+        let pooled_mut = unsafe { internal_pool.insert_with(f) };
+
+        RawPooledMut {
+            layout,
+            inner: pooled_mut,
         }
     }
 
@@ -237,19 +341,127 @@ impl RawBlindPool {
     ///
     /// let mut pool = RawBlindPool::new();
     ///
-    /// let pooled = pool.insert("Test".to_string());
+    /// let _pooled = pool.insert("Test".to_string());
     /// assert_eq!(pool.len(), 1);
     ///
-    /// pool.remove(&pooled);
+    /// unsafe { pool.remove(&_pooled) };
     /// assert_eq!(pool.len(), 0);
     /// ```
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the pooled handle has not been used for removal before.
+    /// Using the same pooled handle multiple times may result in undefined behavior.
     #[inline]
-    pub fn remove<T: ?Sized>(&mut self, pooled: &RawPooled<T>) {
+    pub unsafe fn remove<T: ?Sized>(&mut self, pooled: &RawPooled<T>) {
         if let Some(internal_pool) = self.pools.get_mut(&pooled.layout) {
-            internal_pool.remove(&pooled.inner);
+            // SAFETY: The caller guarantees that this pooled handle has not been used before.
+            unsafe {
+                internal_pool.remove(&pooled.inner);
+            }
         } else {
             panic!("provided handle does not belong to this pool");
         }
+    }
+
+    /// Removes a value from the pool and returns it.
+    ///
+    /// The `RawPooled<T>` handle is consumed and the memory is returned to the pool.
+    /// The value is moved out and returned to the caller.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the provided handle does not belong to this pool.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::RawBlindPool;
+    ///
+    /// let mut pool = RawBlindPool::new();
+    ///
+    /// let _pooled = pool.insert("Test".to_string());
+    /// assert_eq!(pool.len(), 1);
+    ///
+    /// let extracted = unsafe { pool.remove_unpin(&_pooled) };
+    /// assert_eq!(extracted, "Test");
+    /// assert_eq!(pool.len(), 0);
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the pooled handle has not been used for removal before.
+    #[inline]
+    pub unsafe fn remove_unpin<T: Unpin>(&mut self, pooled: &RawPooled<T>) -> T {
+        self.pools.get_mut(&pooled.layout).map_or_else(
+            || panic!("provided handle does not belong to this pool"),
+            // SAFETY: The caller guarantees that this pooled handle has not been used before.
+            |internal_pool| unsafe { internal_pool.remove_unpin(&pooled.inner) },
+        )
+    }
+
+    /// Removes a value from the pool using an exclusive handle and drops it.
+    ///
+    /// The `RawPooledMut<T>` handle is consumed and the memory is returned to the pool.
+    /// The value is dropped. This is safe because the exclusive handle guarantees that
+    /// it cannot be used multiple times.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the provided handle does not belong to this pool.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::RawBlindPool;
+    ///
+    /// let mut pool = RawBlindPool::new();
+    ///
+    /// let pooled_mut = pool.insert_mut("Test".to_string());
+    /// assert_eq!(pool.len(), 1);
+    ///
+    /// pool.remove_mut(pooled_mut); // Safe - no double-use possible
+    /// assert_eq!(pool.len(), 0);
+    /// ```
+    #[inline]
+    pub fn remove_mut<T: ?Sized>(&mut self, pooled_mut: RawPooledMut<T>) {
+        if let Some(internal_pool) = self.pools.get_mut(&pooled_mut.layout) {
+            internal_pool.remove_mut(pooled_mut.inner);
+        } else {
+            panic!("provided handle does not belong to this pool");
+        }
+    }
+
+    /// Removes a value from the pool using an exclusive handle and returns it.
+    ///
+    /// The `RawPooledMut<T>` handle is consumed and the memory is returned to the pool.
+    /// The value is moved out and returned to the caller. This is safe because the
+    /// exclusive handle guarantees that it cannot be used multiple times.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the provided handle does not belong to this pool.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::RawBlindPool;
+    ///
+    /// let mut pool = RawBlindPool::new();
+    ///
+    /// let pooled_mut = pool.insert_mut("Test".to_string());
+    /// assert_eq!(pool.len(), 1);
+    ///
+    /// let extracted = pool.remove_unpin_mut(pooled_mut); // Safe - no double-use possible
+    /// assert_eq!(extracted, "Test");
+    /// assert_eq!(pool.len(), 0);
+    /// ```
+    #[inline]
+    pub fn remove_unpin_mut<T: Unpin>(&mut self, pooled_mut: RawPooledMut<T>) -> T {
+        self.pools.get_mut(&pooled_mut.layout).map_or_else(
+            || panic!("provided handle does not belong to this pool"),
+            |internal_pool| internal_pool.remove_unpin_mut(pooled_mut.inner),
+        )
     }
 
     /// Returns the total number of items stored in the pool.
@@ -288,11 +500,11 @@ impl RawBlindPool {
     ///
     /// assert!(pool.is_empty());
     ///
-    /// let pooled = pool.insert("Test".to_string());
+    /// let _pooled = pool.insert("Test".to_string());
     ///
     /// assert!(!pool.is_empty());
     ///
-    /// pool.remove(&pooled);
+    /// unsafe { pool.remove(&_pooled) };
     /// assert!(pool.is_empty());
     /// ```
     #[must_use]
@@ -352,7 +564,7 @@ impl RawBlindPool {
     /// assert_eq!(pool.capacity_of::<f64>(), 0); // Other types unaffected
     ///
     /// // Insert String values - should not need to allocate more capacity
-    /// let pooled = pool.insert("Test".to_string());
+    /// let _pooled = pool.insert("Test".to_string());
     /// assert!(pool.capacity_of::<String>() >= 10);
     /// ```
     pub fn reserve_for<T>(&mut self, additional: usize) {
@@ -441,7 +653,7 @@ impl Drop for RawBlindPool {
 ///
 /// let mut pool = RawBlindPool::new();
 ///
-/// let pooled = pool.insert("Hello".to_string());
+/// let _pooled = pool.insert("Hello".to_string());
 ///
 /// // The handle acts like a super-powered pointer - it can be copied freely.
 /// let pooled_copy = pooled;
@@ -457,7 +669,7 @@ impl Drop for RawBlindPool {
 /// assert_eq!(value3, "Hello");
 ///
 /// // To remove the item from the pool, any handle can be used.
-/// pool.remove(&pooled);
+/// unsafe { pool.remove(&_pooled) };
 /// ```
 ///
 /// # Thread safety
@@ -489,7 +701,7 @@ impl<T: ?Sized> RawPooled<T> {
     ///
     /// let mut pool = RawBlindPool::new();
     ///
-    /// let pooled = pool.insert(2.5159_f64);
+    /// let _pooled = pool.insert(2.5159_f64);
     ///
     /// // Read data back from the memory.
     /// // SAFETY: The pointer is valid and the memory contains the value we just inserted.
@@ -518,7 +730,7 @@ impl<T: ?Sized> RawPooled<T> {
     ///
     /// let mut pool = RawBlindPool::new();
     ///
-    /// let pooled = pool.insert("Test".to_string());
+    /// let _pooled = pool.insert("Test".to_string());
     ///
     /// // Erase type information.
     /// let erased = pooled.erase();
@@ -529,7 +741,7 @@ impl<T: ?Sized> RawPooled<T> {
     /// assert_eq!(value.as_str(), "Test");
     ///
     /// // Can still remove the item.
-    /// pool.remove(&erased);
+    /// unsafe { pool.remove(&erased) };
     /// ```
     #[must_use]
     #[inline]
@@ -631,6 +843,16 @@ impl<T: ?Sized> RawPooled<T> {
             inner: inner_pooled_new,
         }
     }
+
+    /// Returns a reference to the underlying opaque pool handle.
+    ///
+    /// This method is intended for internal use by the higher-level pooled types
+    /// to leverage the new convenience methods (Deref, `as_pin`) in `opaque_pool`.
+    #[must_use]
+    #[inline]
+    pub(crate) fn opaque_handle(&self) -> &OpaquePooled<T> {
+        &self.inner
+    }
 }
 
 impl<T: ?Sized> Copy for RawPooled<T> {}
@@ -673,6 +895,143 @@ unsafe impl<T: ?Sized + Sync> Send for RawPooled<T> {}
 // underlying type T and the presence of the `Sync` auto trait on it.
 unsafe impl<T: ?Sized + Sync> Sync for RawPooled<T> {}
 
+/// A handle to a value stored in a [`RawBlindPool`] with exclusive ownership guarantees.
+///
+/// Unlike [`RawPooled<T>`], this handle cannot be copied or cloned, ensuring that only one
+/// handle can exist for each pool item. This enables safe removal methods that consume the
+/// handle, preventing double-use bugs that could lead to undefined behavior.
+///
+/// The handle provides access to the stored value via a pointer, similar to [`RawPooled<T>`],
+/// but with the additional safety guarantee of exclusive ownership.
+///
+/// # Thread safety
+///
+/// When `T` is [`Sync`], the handle is thread-safe and can be freely moved and shared between
+/// threads, providing safe concurrent access to the underlying data.
+///
+/// When `T` is not [`Sync`], the handle is single-threaded and cannot be moved between threads
+/// or shared between threads, preventing unsafe access to non-thread-safe data.
+pub struct RawPooledMut<T: ?Sized> {
+    /// The memory layout of the stored item. This is used to identify which internal
+    /// pool the item belongs to.
+    layout: Layout,
+
+    /// The exclusive handle from the internal opaque pool.
+    inner: PooledMut<T>,
+}
+
+impl<T: ?Sized> RawPooledMut<T> {
+    /// Returns a pointer to the inserted value.
+    ///
+    /// This is the only way to access the value stored in the pool. The owner of the handle has
+    /// exclusive access to the value and may both read and write and may create both `&` shared
+    /// and `&mut` exclusive references to the item.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::RawBlindPool;
+    ///
+    /// let mut pool = RawBlindPool::new();
+    ///
+    /// let pooled_mut = pool.insert_mut(2.5159_f64);
+    ///
+    /// // Read data back from the memory.
+    /// // SAFETY: The pointer is valid and the memory contains the value we just inserted.
+    /// let value = unsafe { *pooled_mut.ptr().as_ref() };
+    /// assert_eq!(value, 2.5159);
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn ptr(&self) -> NonNull<T> {
+        self.inner.ptr()
+    }
+
+    /// Erases the type information from this `RawPooledMut<T>` handle,
+    /// returning a `RawPooledMut<()>`.
+    ///
+    /// This is useful when you want to store handles of different types in the same collection
+    /// or pass them to code that doesn't need to know the specific type.
+    ///
+    /// The handle remains functionally equivalent and can still be used to remove the item
+    /// from the pool safely. The only change is the removal of the type information.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::RawBlindPool;
+    ///
+    /// let mut pool = RawBlindPool::new();
+    /// let pooled_mut = pool.insert_mut("Test".to_string());
+    ///
+    /// // Erase the type information.
+    /// let erased = pooled_mut.erase();
+    ///
+    /// // Can still be removed safely.
+    /// pool.remove_mut(erased);
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn erase(self) -> RawPooledMut<()> {
+        RawPooledMut {
+            layout: self.layout,
+            inner: self.inner.erase(),
+        }
+    }
+
+    /// Converts this exclusive handle to a shared handle.
+    ///
+    /// This consumes the `RawPooledMut<T>` and returns a `RawPooled<T>` that can be copied
+    /// and cloned. Use this when you no longer need the exclusive ownership guarantees
+    /// and want to share the handle.
+    ///
+    /// Note that after calling this method, you lose the safety guarantees of exclusive
+    /// ownership and must use unsafe removal methods.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::RawBlindPool;
+    ///
+    /// let mut pool = RawBlindPool::new();
+    /// let pooled_mut = pool.insert_mut("Test".to_string());
+    ///
+    /// // Convert to shared handle.
+    /// let shared = pooled_mut.into_shared();
+    ///
+    /// // Can now copy the handle.
+    /// let shared_copy = shared;
+    ///
+    /// // But removal requires unsafe code again.
+    /// unsafe { pool.remove(&shared_copy) };
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn into_shared(self) -> RawPooled<T> {
+        RawPooled {
+            layout: self.layout,
+            inner: self.inner.into_shared(),
+        }
+    }
+}
+
+impl<T: ?Sized> fmt::Debug for RawPooledMut<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawPooledMut")
+            .field("layout", &self.layout)
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
+// SAFETY: RawPooledMut<T> is just a fancy reference with exclusive ownership, so its thread-safety
+// is entirely driven by the underlying type T and the presence of the `Sync` auto trait on it.
+unsafe impl<T: ?Sized + Sync> Send for RawPooledMut<T> {}
+
+// SAFETY: RawPooledMut<T> is just a fancy reference with exclusive ownership, so its thread-safety
+// is entirely driven by the underlying type T and the presence of the `Sync` auto trait on it.
+unsafe impl<T: ?Sized + Sync> Sync for RawPooledMut<T> {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -680,26 +1039,41 @@ mod tests {
     #[test]
     fn simple_insert_remove() {
         let mut pool = RawBlindPool::new();
-        let pooled = pool.insert(42_u32);
-        pool.remove(&pooled);
+        let _pooled = pool.insert(42_u32);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&_pooled);
+        }
     }
 
     #[test]
     fn two_items_same_type() {
         let mut pool = RawBlindPool::new();
-        let pooled1 = pool.insert(42_u32);
-        let pooled2 = pool.insert(43_u32);
-        pool.remove(&pooled1);
-        pool.remove(&pooled2);
+        let _pooled1 = pool.insert(42_u32);
+        let _pooled2 = pool.insert(43_u32);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&_pooled1);
+        }
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&_pooled2);
+        }
     }
 
     #[test]
     fn two_items_different_types() {
         let mut pool = RawBlindPool::new();
-        let pooled1 = pool.insert(42_u32);
-        let pooled2 = pool.insert(43_u64);
-        pool.remove(&pooled1);
-        pool.remove(&pooled2);
+        let _pooled1 = pool.insert(42_u32);
+        let _pooled2 = pool.insert(43_u64);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&_pooled1);
+        }
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&_pooled2);
+        }
     }
 
     #[test]
@@ -726,9 +1100,18 @@ mod tests {
         assert_eq!(u64_val, 43);
         assert!((f32_val - 2.5).abs() < f32::EPSILON);
 
-        pool.remove(&pooled_u32);
-        pool.remove(&pooled_u64);
-        pool.remove(&pooled_f32);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&pooled_u32);
+        }
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&pooled_u64);
+        }
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&pooled_f32);
+        }
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
@@ -755,9 +1138,18 @@ mod tests {
         assert_eq!(i32_val, -42);
         assert!((f32_val - 2.5).abs() < f32::EPSILON);
 
-        pool.remove(&pooled_u32);
-        pool.remove(&pooled_i32);
-        pool.remove(&pooled_f32);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&pooled_u32);
+        }
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&pooled_i32);
+        }
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&pooled_f32);
+        }
 
         assert!(pool.is_empty());
     }
@@ -800,8 +1192,14 @@ mod tests {
         assert_eq!(pool.len(), 3);
 
         // Remove some but not all items (we leave the array).
-        pool.remove(&pooled_u8);
-        pool.remove(&pooled_u64);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&pooled_u8);
+        }
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&pooled_u64);
+        }
 
         assert_eq!(pool.pools.len(), 3); // Internal pools still exist before shrinking.
 
@@ -824,10 +1222,10 @@ mod tests {
         assert!(pool.capacity_of::<u32>() >= 10);
 
         // Insert an item - should use the reserved capacity
-        let pooled = pool.insert(42_u32);
+        let _pooled = pool.insert(42_u32);
         assert!(pool.capacity_of::<u32>() >= 10); // Should still have the reserved capacity
 
-        pool.remove(&pooled);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.`n        unsafe { pool.remove(&_pooled); }
     }
 
     #[test]
@@ -863,8 +1261,8 @@ mod tests {
             assert!((pooled2.ptr().read() - 2.5).abs() < f64::EPSILON);
         }
 
-        pool.remove(&pooled1);
-        pool.remove(&pooled2);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.`n        unsafe { pool.remove(&_pooled1); }
+        // SAFETY: This pooled handle was just created and has never been used for removal before.`n        unsafe { pool.remove(&_pooled2); }
     }
 
     #[test]
@@ -876,12 +1274,12 @@ mod tests {
         assert_eq!(pool.capacity_of::<u32>(), 0);
 
         // Insert an item and reserve zero
-        let pooled = pool.insert(42_u32);
+        let _pooled = pool.insert(42_u32);
         let initial_capacity = pool.capacity_of::<u32>();
         pool.reserve_for::<u32>(0);
         assert_eq!(pool.capacity_of::<u32>(), initial_capacity);
 
-        pool.remove(&pooled);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.`n        unsafe { pool.remove(&_pooled); }
     }
 
     #[test]
@@ -898,11 +1296,11 @@ mod tests {
         assert_eq!(pool.capacity_of::<u32>(), capacity_after_reserve);
 
         // Insert an item and reserve less than current capacity
-        let pooled = pool.insert(42_u32);
+        let _pooled = pool.insert(42_u32);
         pool.reserve_for::<u32>(3);
         assert_eq!(pool.capacity_of::<u32>(), capacity_after_reserve);
 
-        pool.remove(&pooled);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.`n        unsafe { pool.remove(&_pooled); }
     }
 
     #[test]
@@ -916,10 +1314,10 @@ mod tests {
 
         // Insert an item - should use the reserved capacity
         let initial_capacity = pool.capacity_of::<u32>();
-        let pooled = pool.insert(42_u32);
+        let _pooled = pool.insert(42_u32);
         assert_eq!(pool.capacity_of::<u32>(), initial_capacity);
 
-        pool.remove(&pooled);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.`n        unsafe { pool.remove(&_pooled); }
     }
 
     #[test]
@@ -937,9 +1335,9 @@ mod tests {
         assert!(pool.capacity_of::<u8>() >= 25);
 
         // Insert items and verify capacities remain independent
-        let pooled_u32 = pool.insert(42_u32);
-        let pooled_f64 = pool.insert(2.71_f64); // e approximation instead of pi
-        let pooled_u8 = pool.insert(255_u8);
+        let _pooled_u32 = pool.insert(42_u32);
+        let _pooled_f64 = pool.insert(2.71_f64); // e approximation instead of pi
+        let _pooled_u8 = pool.insert(255_u8);
 
         // Reserve more for one type - others should be unaffected
         let f64_capacity_before = pool.capacity_of::<f64>();
@@ -950,9 +1348,9 @@ mod tests {
         assert_eq!(pool.capacity_of::<f64>(), f64_capacity_before);
         assert_eq!(pool.capacity_of::<u8>(), u8_capacity_before);
 
-        pool.remove(&pooled_u32);
-        pool.remove(&pooled_f64);
-        pool.remove(&pooled_u8);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.`n        unsafe { pool.remove(&_pooled_u32); }
+        // SAFETY: This pooled handle was just created and has never been used for removal before.`n        unsafe { pool.remove(&_pooled_f64); }
+        // SAFETY: This pooled handle was just created and has never been used for removal before.`n        unsafe { pool.remove(&_pooled_u8); }
     }
 
     #[test]
@@ -965,13 +1363,13 @@ mod tests {
         assert_eq!(pool.capacity_of::<String>(), 0);
 
         // Insert u32 - should allocate capacity for u32 only
-        let pooled_u32 = pool.insert(42_u32);
+        let _pooled_u32 = pool.insert(42_u32);
         assert!(pool.capacity_of::<u32>() > 0);
         assert_eq!(pool.capacity_of::<f64>(), 0);
         assert_eq!(pool.capacity_of::<String>(), 0);
 
         // Insert f64 - should allocate capacity for f64 only
-        let pooled_f64 = pool.insert(2.71_f64); // e approximation
+        let _pooled_f64 = pool.insert(2.71_f64); // e approximation
         assert!(pool.capacity_of::<u32>() > 0);
         assert!(pool.capacity_of::<f64>() > 0);
         assert_eq!(pool.capacity_of::<String>(), 0);
@@ -981,8 +1379,8 @@ mod tests {
         let i32_capacity = pool.capacity_of::<i32>();
         assert_eq!(u32_capacity, i32_capacity);
 
-        pool.remove(&pooled_u32);
-        pool.remove(&pooled_f64);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.`n        unsafe { pool.remove(&_pooled_u32); }
+        // SAFETY: This pooled handle was just created and has never been used for removal before.`n        unsafe { pool.remove(&_pooled_f64); }
     }
 
     #[test]
@@ -1009,7 +1407,10 @@ mod tests {
         let value = unsafe { erased.ptr().cast::<u64>().read() };
         assert_eq!(value, 42);
 
-        pool.remove(&erased);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&erased);
+        }
         assert!(pool.is_empty());
     }
 
@@ -1021,13 +1422,19 @@ mod tests {
         let test_string = "Hello, World!".to_string();
         let pooled_string = pool.insert(test_string);
 
-        pool.remove(&pooled_string);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&pooled_string);
+        }
 
         // Test with Vec - another type that implements Drop
         let test_vec = vec![1, 2, 3, 4, 5];
         let pooled_vec = pool.insert(test_vec);
 
-        pool.remove(&pooled_vec);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&pooled_vec);
+        }
 
         assert!(pool.is_empty());
     }
@@ -1072,7 +1479,7 @@ mod tests {
             );
         }
 
-        pool.remove(&pooled_book);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.`n        unsafe { pool.remove(&_pooled_book); }
     }
 
     #[test]
@@ -1120,7 +1527,7 @@ mod tests {
             assert!((temp_ref.celsius - 50.0).abs() < f64::EPSILON);
         }
 
-        pool.remove(&pooled_temp);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.`n        unsafe { pool.remove(&_pooled_temp); }
     }
 
     #[cfg(test)]
@@ -1191,7 +1598,10 @@ mod tests {
         }
 
         assert_eq!(pool.len(), 1);
-        pool.remove(&pooled);
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&pooled);
+        }
         assert_eq!(pool.len(), 0);
     }
 }

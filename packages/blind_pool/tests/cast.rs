@@ -47,7 +47,10 @@ fn raw_pooled_cast_display() {
     assert_eq!(display_str, "42");
 
     // Clean up via the post-cast handle.
-    pool.remove(&display_pooled);
+    // SAFETY: This pooled handle is being consumed and cannot be used again.
+    unsafe {
+        pool.remove(&display_pooled);
+    }
 }
 
 #[test]

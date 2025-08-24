@@ -28,3 +28,7 @@ workspace = true
 [[bench]]
 name = "opaque_basic"
 harness = false
+
+[[bench]]
+name = "insert_with"
+harness = false

@@ -80,9 +80,9 @@
 //! assert_eq!(value_i32, -123);
 //!
 //! // Manual cleanup required.
-//! pool.remove(&pooled_u64);
-//! pool.remove(&pooled_i32);
-//! pool.remove(&pooled_f32);
+//! unsafe { pool.remove(&pooled_u64) };
+//! unsafe { pool.remove(&pooled_i32) };
+//! unsafe { pool.remove(&pooled_f32) };
 //! ```
 
 mod cast;

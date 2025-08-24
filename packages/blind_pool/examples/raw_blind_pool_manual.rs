@@ -31,9 +31,18 @@ fn main() {
     println!("Pool length: {}", pool.len());
 
     // CRITICAL: Must manually remove all items or you get memory leaks!
-    pool.remove(&number);
-    pool.remove(&text);
-    pool.remove(&list);
+    // SAFETY: We know `number` came from this pool.
+    unsafe {
+        pool.remove(&number);
+    }
+    // SAFETY: We know `text` came from this pool.
+    unsafe {
+        pool.remove(&text);
+    }
+    // SAFETY: We know `list` came from this pool.
+    unsafe {
+        pool.remove(&list);
+    }
 
     println!("Pool after cleanup: {}", pool.len());
 

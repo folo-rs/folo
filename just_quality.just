@@ -57,7 +57,6 @@ validate-linux:
 # Performs validation on the current platform, whatever that may be.
 [group('quality')]
 validate-local:
-    just package={{ package }} machete
     just package={{ package }} format-check
     just package={{ package }} check dev
     just package={{ package }} clippy dev
@@ -66,6 +65,7 @@ validate-local:
     just package={{ package }} test-benches
     just package={{ package }} docs
     just package={{ package }} miri
+    just package={{ package }} machete
     just package={{ package }} check release
     just package={{ package }} clippy release
     just package={{ package }} build release

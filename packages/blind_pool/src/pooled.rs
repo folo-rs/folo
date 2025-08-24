@@ -219,9 +219,8 @@ impl<T: ?Sized> Pooled<T> {
     #[must_use]
     #[inline]
     pub fn as_pin(&self) -> Pin<&T> {
-        // SAFETY: Values in the pool are always pinned - they never move once inserted.
-        // The pool ensures stable addresses for the lifetime of the pooled object.
-        unsafe { Pin::new_unchecked(&**self) }
+        // Delegate to the underlying opaque_pool Pooled<T> as_pin implementation.
+        self.inner.pooled.opaque_handle().as_pin()
     }
 
     /// Casts this [`Pooled<T>`] to a trait object type.
@@ -308,10 +307,8 @@ impl<T: ?Sized> Deref for Pooled<T> {
     /// ```
     #[inline]
     fn deref(&self) -> &Self::Target {
-        // SAFETY: The pooled handle is valid and contains initialized memory of type T.
-        // The Arc reference count ensures the underlying pool data remains alive during access.
-        // We only ever hand out shared references, so no exclusive reference can exist.
-        unsafe { self.inner.pooled.ptr().as_ref() }
+        // Delegate to the underlying opaque_pool Pooled<T> Deref implementation.
+        self.inner.pooled.opaque_handle()
     }
 }
 
@@ -323,7 +320,10 @@ impl Drop for PooledRef {
     fn drop(&mut self) {
         // We are guaranteed to be the only one executing this drop because Arc ensures
         // that Drop on the PooledRef is only called once when the last reference is released.
-        self.pool.remove(&self.pooled);
+        // SAFETY: This pooled handle is being consumed by Drop, ensuring it cannot be used again.
+        unsafe {
+            self.pool.remove(&self.pooled);
+        }
     }
 }
 
