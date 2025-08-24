@@ -294,6 +294,96 @@ impl BlindPool {
         pool.is_empty()
     }
 
+    /// Returns the capacity for items of type `T`.
+    ///
+    /// This is the number of items of type `T` that can be stored without allocating more memory.
+    /// If no items of type `T` have been inserted yet, returns 0.
+    ///
+    /// This operation may block if another thread is currently accessing the pool.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::BlindPool;
+    ///
+    /// let pool = BlindPool::new();
+    ///
+    /// // Initially no capacity is allocated for any type.
+    /// assert_eq!(pool.capacity_of::<u32>(), 0);
+    /// assert_eq!(pool.capacity_of::<f64>(), 0);
+    ///
+    /// // Inserting a String allocates capacity for String but not f64.
+    /// let _item = pool.insert("Test".to_string());
+    /// assert!(pool.capacity_of::<String>() > 0);
+    /// assert_eq!(pool.capacity_of::<f64>(), 0);
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn capacity_of<T>(&self) -> usize {
+        let pool = self.inner.lock().expect(ERR_POISONED_LOCK);
+        pool.capacity_of::<T>()
+    }
+
+    /// Reserves capacity for at least `additional` more items of type `T`.
+    ///
+    /// The pool may reserve more space to speculatively avoid frequent reallocations.
+    /// After calling `reserve_for`, the capacity for type `T` will be greater than or equal to
+    /// the current count of `T` items plus `additional`. Does nothing if capacity is already
+    /// sufficient.
+    ///
+    /// If no items of type `T` have been inserted yet, this creates an internal pool for type `T`
+    /// and reserves the requested capacity.
+    ///
+    /// This operation may block if another thread is currently accessing the pool.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::BlindPool;
+    ///
+    /// let pool = BlindPool::new();
+    ///
+    /// // Reserve space for 10 u32 values specifically.
+    /// pool.reserve_for::<u32>(10);
+    /// assert!(pool.capacity_of::<u32>() >= 10);
+    /// assert_eq!(pool.capacity_of::<f64>(), 0); // Other types unaffected.
+    ///
+    /// // Insert values - should not need to allocate more capacity.
+    /// let _item = pool.insert(42_u32);
+    /// assert!(pool.capacity_of::<u32>() >= 10);
+    /// ```
+    pub fn reserve_for<T>(&self, additional: usize) {
+        let mut pool = self.inner.lock().expect(ERR_POISONED_LOCK);
+        pool.reserve_for::<T>(additional);
+    }
+
+    /// Shrinks the capacity of the pool to fit its current size.
+    ///
+    /// This can help reduce memory usage after items have been removed from the pool.
+    ///
+    /// This operation may block if another thread is currently accessing the pool.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::BlindPool;
+    ///
+    /// let pool = BlindPool::new();
+    ///
+    /// // Insert many items to allocate capacity.
+    /// let handles: Vec<_> = (0..100).map(|i| pool.insert(i)).collect();
+    ///
+    /// // Remove all items.
+    /// drop(handles);
+    ///
+    /// // Shrink to fit the current size.
+    /// pool.shrink_to_fit();
+    /// ```
+    pub fn shrink_to_fit(&self) {
+        let mut pool = self.inner.lock().expect(ERR_POISONED_LOCK);
+        pool.shrink_to_fit();
+    }
+
     /// Removes an item from the pool using its handle.
     ///
     /// This is an internal method used by [`Pooled`] when it is dropped.
@@ -556,5 +646,92 @@ mod tests {
 
         drop(mut_handle);
         assert_eq!(pool.len(), 1); // Only mutable handle dropped
+    }
+
+    #[test]
+    fn capacity_management() {
+        let pool = BlindPool::new();
+
+        // Initially no capacity for any type
+        assert_eq!(pool.capacity_of::<u32>(), 0);
+        assert_eq!(pool.capacity_of::<f64>(), 0);
+
+        // Reserve capacity for u32
+        pool.reserve_for::<u32>(10);
+        assert!(pool.capacity_of::<u32>() >= 10);
+        assert_eq!(pool.capacity_of::<f64>(), 0); // Other types unaffected
+
+        // Insert items - should use reserved capacity
+        let _item1 = pool.insert(42_u32);
+        let _item2 = pool.insert(43_u32);
+        assert!(pool.capacity_of::<u32>() >= 10);
+
+        // Insert different type - should get its own capacity
+        let _item3 = pool.insert(2.5_f64);
+        assert!(pool.capacity_of::<f64>() > 0);
+        assert!(pool.capacity_of::<u32>() >= 10); // u32 capacity unchanged
+
+        // Drop all items
+        drop((_item1, _item2, _item3));
+        assert_eq!(pool.len(), 0);
+
+        // Capacity should still exist
+        assert!(pool.capacity_of::<u32>() >= 10);
+        assert!(pool.capacity_of::<f64>() > 0);
+
+        // Shrink to fit
+        pool.shrink_to_fit();
+        // After shrink_to_fit, empty pools should be removed
+        assert_eq!(pool.capacity_of::<u32>(), 0);
+        assert_eq!(pool.capacity_of::<f64>(), 0);
+    }
+
+    #[test]
+    fn reserve_zero_does_nothing() {
+        let pool = BlindPool::new();
+
+        // Reserve zero for a type that doesn't exist yet
+        pool.reserve_for::<u32>(0);
+        assert_eq!(pool.capacity_of::<u32>(), 0);
+
+        // Insert an item and reserve zero
+        let _item = pool.insert(42_u32);
+        let initial_capacity = pool.capacity_of::<u32>();
+        pool.reserve_for::<u32>(0);
+        assert_eq!(pool.capacity_of::<u32>(), initial_capacity);
+    }
+
+    #[test]
+    fn reserve_with_sufficient_capacity_does_nothing() {
+        let pool = BlindPool::new();
+
+        // Reserve initial capacity
+        pool.reserve_for::<u32>(10);
+        let capacity_after_reserve = pool.capacity_of::<u32>();
+        assert!(capacity_after_reserve >= 10);
+
+        // Try to reserve less than what we already have
+        pool.reserve_for::<u32>(5);
+        assert_eq!(pool.capacity_of::<u32>(), capacity_after_reserve);
+    }
+
+    #[test]
+    fn thread_safety_with_capacity_management() {
+        let pool = BlindPool::new();
+        let pool_clone = pool.clone();
+
+        let handle = thread::spawn(move || {
+            // Reserve capacity in thread
+            pool_clone.reserve_for::<u32>(5);
+            pool_clone.insert(42_u32)
+        });
+
+        let item = handle.join().unwrap();
+        assert_eq!(*item, 42);
+        assert!(pool.capacity_of::<u32>() >= 5);
+
+        // Test shrink_to_fit from main thread
+        drop(item);
+        pool.shrink_to_fit();
     }
 }
