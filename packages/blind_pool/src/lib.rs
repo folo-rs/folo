@@ -95,6 +95,8 @@ mod pooled;
 mod pooled_mut;
 mod raw;
 mod raw_builder;
+mod raw_pooled;
+mod raw_pooled_mut;
 
 pub use local_pool::*;
 pub use local_pooled::*;
@@ -109,3 +111,5 @@ pub use pooled::*;
 pub use pooled_mut::*;
 pub use raw::*;
 pub use raw_builder::*;
+pub use raw_pooled::*;
+pub use raw_pooled_mut::*;
