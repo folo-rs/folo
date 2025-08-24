@@ -144,13 +144,12 @@ impl<T: ?Sized> PooledMut<T> {
     #[must_use]
     #[inline]
     pub fn as_pin_mut(&mut self) -> Pin<&mut T> {
-        // We cannot delegate as_pin_mut to opaque_pool because our pooled handle is shared,
-        // but we provide exclusive access through PooledMut's ownership semantics.
-        // SAFETY: The pointer is valid and points to initialized memory of type T.
-        let ptr = unsafe { self.inner.pooled.ptr().as_mut() };
+        // SAFETY: We have exclusive access through PooledMut and the pooled handle contains
+        // a valid value. We can safely create a mutable reference to convert the shared 
+        // RawPooled to provide mutable access for our exclusive PooledMut.
+        let mutable_ref = unsafe { self.inner.pooled.ptr().as_mut() };
         // SAFETY: Values in the pool are always pinned - they never move once inserted.
-        // We have exclusive access through &mut self, so this is safe.
-        unsafe { Pin::new_unchecked(ptr) }
+        unsafe { Pin::new_unchecked(mutable_ref) }
     }
 
     /// Converts this exclusive [`PooledMut<T>`] handle into a shared [`Pooled<T>`] handle.

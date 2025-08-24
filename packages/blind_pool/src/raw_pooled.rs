@@ -29,10 +29,9 @@ use opaque_pool::Pooled as OpaquePooled;
 /// let pooled_clone = pooled.clone();
 ///
 /// // All copies refer to the same stored value.
-/// // SAFETY: All pointers are valid and point to the same value.
-/// let value1 = unsafe { pooled.ptr().as_ref() };
-/// let value2 = unsafe { pooled_copy.ptr().as_ref() };
-/// let value3 = unsafe { pooled_clone.ptr().as_ref() };
+/// let value1 = &*pooled;       // Safe deref access
+/// let value2 = &*pooled_copy;  // Safe deref access
+/// let value3 = &*pooled_clone; // Safe deref access
 /// assert_eq!(value1, "Hello");
 /// assert_eq!(value2, "Hello");
 /// assert_eq!(value3, "Hello");
@@ -73,8 +72,7 @@ impl<T: ?Sized> RawPooled<T> {
     /// let pooled = pool.insert(2.5159_f64);
     ///
     /// // Read data back from the memory.
-    /// // SAFETY: The pointer is valid and the memory contains the value we just inserted.
-    /// let value = unsafe { *pooled.ptr().as_ref() };
+    /// let value = *pooled; // Safe deref access
     /// assert_eq!(value, 2.5159);
     /// ```
     #[must_use]
@@ -104,7 +102,7 @@ impl<T: ?Sized> RawPooled<T> {
     /// // Erase type information.
     /// let erased = pooled.erase();
     ///
-    /// // Can still access the raw pointer.
+    /// // Can still access the value safely.
     /// // SAFETY: We know this contains a String.
     /// let value = unsafe { erased.ptr().cast::<String>().as_ref() };
     /// assert_eq!(value.as_str(), "Test");
@@ -155,9 +153,8 @@ impl<T: ?Sized> RawPooled<T> {
     /// let display_handle: blind_pool::RawPooled<dyn Display> =
     ///     unsafe { value_handle.__private_cast_dyn_with_fn(|x| x as &dyn Display) };
     ///
-    /// // Can access as Display trait object.
-    /// // SAFETY: The pointer is valid and contains a String which implements Display.
-    /// let display_ref: &dyn Display = unsafe { display_handle.ptr().as_ref() };
+    /// // Can access as Display trait object safely.
+    /// let display_ref: &dyn Display = &*display_handle;
     /// assert_eq!(format!("{}", display_ref), "Test");
     /// ```
     #[must_use]
@@ -318,8 +315,7 @@ mod tests {
         let mut pool = RawBlindPool::new();
         let pooled = pool.insert(42_u32);
 
-        // SAFETY: The pointer is valid and contains the value we just inserted.
-        let value = unsafe { pooled.ptr().read() };
+        let value = *pooled; // Safe deref access
         assert_eq!(value, 42);
 
         // SAFETY: This pooled handle was just created and has never been used for removal before.
@@ -359,12 +355,9 @@ mod tests {
         let cloned = pooled.clone();
 
         // All handles should work
-        // SAFETY: All pointers are valid and point to the same value.
-        let val1 = unsafe { pooled.ptr().as_ref() };
-        // SAFETY: All pointers are valid and point to the same value.
-        let val2 = unsafe { copied.ptr().as_ref() };
-        // SAFETY: All pointers are valid and point to the same value.
-        let val3 = unsafe { cloned.ptr().as_ref() };
+        let val1 = &*pooled;
+        let val2 = &*copied;
+        let val3 = &*cloned;
 
         assert_eq!(val1, "Hello");
         assert_eq!(val2, "Hello");
@@ -439,10 +432,9 @@ mod tests {
         let int_handle = pool.insert(42_i32);
         let float_handle = pool.insert(2.71_f64); // e approximation
 
-        // SAFETY: Pointers are valid and contain the values we just inserted.
-        let int_val = unsafe { int_handle.ptr().read() };
-        // SAFETY: Pointers are valid and contain the values we just inserted.
-        let float_val = unsafe { float_handle.ptr().read() };
+        // Use safe deref access for reading values.
+        let int_val = *int_handle;
+        let float_val = *float_handle;
 
         assert_eq!(int_val, 42);
         assert!((float_val - 2.71).abs() < f64::EPSILON);
@@ -451,10 +443,8 @@ mod tests {
         let vec_handle = pool.insert(vec![1, 2, 3]);
         let string_handle = pool.insert("Test".to_string());
 
-        // SAFETY: Pointers are valid and contain the values we just inserted.
-        let vec_val = unsafe { vec_handle.ptr().as_ref() };
-        // SAFETY: Pointers are valid and contain the values we just inserted.
-        let string_val = unsafe { string_handle.ptr().as_ref() };
+        let vec_val = &*vec_handle;
+        let string_val = &*string_handle;
 
         assert_eq!(vec_val, &[1, 2, 3]);
         assert_eq!(string_val, "Test");
@@ -506,8 +496,7 @@ mod tests {
         };
 
         // The cast should work - we can test Display formatting
-        // SAFETY: The pointer is valid and contains a u64 which implements Display.
-        let display_ref = unsafe { cast_pooled.ptr().as_ref() };
+        let display_ref = &*cast_pooled;
         assert_eq!(format!("{display_ref}"), "42");
 
         // SAFETY: This pooled handle was just created and has never been used for removal before.
@@ -523,14 +512,11 @@ mod tests {
         let handle2 = handle1; // Copy the handle
 
         // Both handles should access the same memory
-        // SAFETY: Both pointers are valid and point to the same value.
-        let val1 = unsafe { handle1.ptr().as_ref() };
-        // SAFETY: Both pointers are valid and point to the same value.
-        let val2 = unsafe { handle2.ptr().as_ref() };
+        let val1 = &*handle1;
+        let val2 = &*handle2;
 
         assert_eq!(val1, "Shared");
         assert_eq!(val2, "Shared");
-        // SAFETY: Both pointers are valid and point to the same value.
         assert_eq!(handle1.ptr(), handle2.ptr()); // Same pointer
 
         // SAFETY: This pooled handle was just created and has never been used for removal before.

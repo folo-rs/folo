@@ -40,10 +40,9 @@ use crate::{RawBlindPoolBuilder, RawPooled, RawPooledMut};
 /// let pooled_string1 = pool.insert("Hello".to_string());
 /// let pooled_string2 = pool.insert("World".to_string());
 ///
-/// // Read from the memory.
-/// // SAFETY: The pointers are valid and the memory contains the values we just inserted.
-/// let value_string1 = unsafe { pooled_string1.ptr().as_ref() };
-/// let value_string2 = unsafe { pooled_string2.ptr().as_ref() };
+/// // Read from the memory using safe deref access.
+/// let value_string1 = &*pooled_string1;
+/// let value_string2 = &*pooled_string2;
 ///
 /// assert_eq!(value_string1, "Hello");
 /// assert_eq!(value_string2, "World");
@@ -77,8 +76,7 @@ impl RawBlindPool {
     ///
     /// let pooled = pool.insert("Test".to_string());
     ///
-    /// // SAFETY: The pointer is valid and contains the value we just inserted.
-    /// let value = unsafe { pooled.ptr().as_ref() };
+    /// let value = &*pooled; // Safe deref access
     /// assert_eq!(value.as_str(), "Test");
     /// ```
     #[must_use]
@@ -187,9 +185,8 @@ impl RawBlindPool {
     ///     })
     /// };
     ///
-    /// // Read the value back.
-    /// // SAFETY: The pointer is valid and contains the initialized Vec.
-    /// let value = unsafe { pooled.ptr().as_ref() };
+    /// // Read the value back using safe deref access.
+    /// let value = &*pooled;
     /// assert_eq!(value.len(), 100);
     ///
     /// // Clean up.
@@ -718,12 +715,10 @@ mod tests {
         assert_eq!(pool.len(), 3);
         assert!(!pool.is_empty());
 
-        // SAFETY: The pointers are valid and contain the values we just inserted.
-        let u32_val = unsafe { pooled_u32.ptr().read() };
-        // SAFETY: The pointers are valid and contain the values we just inserted.
-        let u64_val = unsafe { pooled_u64.ptr().read() };
-        // SAFETY: The pointers are valid and contain the values we just inserted.
-        let f32_val = unsafe { pooled_f32.ptr().read() };
+        // Use safe deref access for reading values.
+        let u32_val = *pooled_u32;
+        let u64_val = *pooled_u64;
+        let f32_val = *pooled_f32;
         assert_eq!(u32_val, 42);
         assert_eq!(u64_val, 43);
         assert!((f32_val - 2.5).abs() < f32::EPSILON);
@@ -756,12 +751,10 @@ mod tests {
 
         assert_eq!(pool.len(), 3);
 
-        // SAFETY: The pointers are valid and contain the values we just inserted.
-        let u32_val = unsafe { pooled_u32.ptr().read() };
-        // SAFETY: The pointers are valid and contain the values we just inserted.
-        let i32_val = unsafe { pooled_i32.ptr().read() };
-        // SAFETY: The pointers are valid and contain the values we just inserted.
-        let f32_val = unsafe { pooled_f32.ptr().read() };
+        // Use safe deref access for reading values.
+        let u32_val = *pooled_u32;
+        let i32_val = *pooled_i32;
+        let f32_val = *pooled_f32;
         assert_eq!(u32_val, 42);
         assert_eq!(i32_val, -42);
         assert!((f32_val - 2.5).abs() < f32::EPSILON);
@@ -1079,15 +1072,12 @@ mod tests {
         let pooled_book = pool.insert(book);
 
         // Use item as trait object.
-        // SAFETY: The pointer is valid and points to a Book that we just inserted.
-        unsafe {
-            let book_ref: &Book = pooled_book.ptr().as_ref();
-            let printable: &dyn Printable = book_ref;
-            assert_eq!(
-                printable.print_info(),
-                "Book: 'The Rust Programming Language' (552 pages)"
-            );
-        }
+        // Use safe deref access for trait object casting.
+        let printable: &dyn Printable = &*pooled_book;
+        assert_eq!(
+            printable.print_info(),
+            "Book: 'The Rust Programming Language' (552 pages)"
+        );
 
         // SAFETY: This pooled handle was just created and has never been used for removal before.`n        unsafe { pool.remove(&_pooled_book); }
     }
@@ -1130,12 +1120,8 @@ mod tests {
             assert!((modifiable.get_value() - 50.0).abs() < f64::EPSILON);
         }
 
-        // Verify changes persisted.
-        // SAFETY: The pointer is valid and points to the object we modified.
-        unsafe {
-            let temp_ref: &Temperature = pooled_temp.ptr().as_ref();
-            assert!((temp_ref.celsius - 50.0).abs() < f64::EPSILON);
-        }
+        // Verify changes persisted using safe deref access.
+        assert!((pooled_temp.celsius - 50.0).abs() < f64::EPSILON);
 
         // SAFETY: This pooled handle was just created and has never been used for removal before.`n        unsafe { pool.remove(&_pooled_temp); }
     }

@@ -50,8 +50,7 @@ impl<T: ?Sized> RawPooledMut<T> {
     /// let pooled_mut = pool.insert_mut(2.5159_f64);
     ///
     /// // Read data back from the memory.
-    /// // SAFETY: The pointer is valid and the memory contains the value we just inserted.
-    /// let value = unsafe { *pooled_mut.ptr().as_ref() };
+    /// let value = *pooled_mut; // Safe deref access
     /// assert_eq!(value, 2.5159);
     /// ```
     #[must_use]
@@ -254,8 +253,7 @@ mod tests {
         let mut pool = RawBlindPool::new();
         let pooled_mut = pool.insert_mut(42_u32);
 
-        // SAFETY: The pointer is valid and contains the value we just inserted.
-        let value = unsafe { pooled_mut.ptr().read() };
+        let value = *pooled_mut; // Safe deref access
         assert_eq!(value, 42);
 
         pool.remove_mut(pooled_mut);
@@ -272,8 +270,7 @@ mod tests {
             ptr.write(84);
         }
 
-        // SAFETY: The pointer is valid and contains the modified value.
-        let value = unsafe { pooled_mut.ptr().read() };
+        let value = *pooled_mut; // Safe deref access
         assert_eq!(value, 84);
 
         pool.remove_mut(pooled_mut);

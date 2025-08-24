@@ -110,8 +110,7 @@ mod tests {
         // Should work with default configuration
         let handle = pool.insert(42_u32);
 
-        // SAFETY: The pointer is valid and contains the value we just inserted.
-        let value = unsafe { handle.ptr().read() };
+        let value = *handle; // Safe deref access
         assert_eq!(value, 42);
         assert_eq!(pool.len(), 1);
 
@@ -131,8 +130,7 @@ mod tests {
         // Should work normally
         let handle = pool.insert(42_u32);
 
-        // SAFETY: The pointer is valid and contains the value we just inserted.
-        let value = unsafe { handle.ptr().read() };
+        let value = *handle; // Safe deref access
         assert_eq!(value, 42);
 
         // Pool should be droppable even with items (doesn't panic)
@@ -148,8 +146,7 @@ mod tests {
         // Should work normally
         let handle = pool.insert(42_u32);
 
-        // SAFETY: The pointer is valid and contains the value we just inserted.
-        let value = unsafe { handle.ptr().read() };
+        let value = *handle; // Safe deref access
         assert_eq!(value, 42);
 
         // Clean up properly - required for MustNotDropItems

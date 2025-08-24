@@ -66,15 +66,8 @@
 //! let pooled_f32 = pool.insert(3.14_f32);
 //!
 //! // Read data back from the pooled items.
-//! let value_u64 = unsafe {
-//!     // SAFETY: The pointer is valid and the value was just inserted.
-//!     *pooled_u64.ptr().as_ref()
-//! };
-//!
-//! let value_i32 = unsafe {
-//!     // SAFETY: The pointer is valid and the value was just inserted.
-//!     *pooled_i32.ptr().as_ref()
-//! };
+//! let value_u64 = *pooled_u64; // Safe deref access
+//! let value_i32 = *pooled_i32; // Safe deref access
 //!
 //! assert_eq!(value_u64, 42);
 //! assert_eq!(value_i32, -123);
