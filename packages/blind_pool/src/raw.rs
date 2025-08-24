@@ -38,8 +38,8 @@ use crate::RawBlindPoolBuilder;
 /// let mut pool = RawBlindPool::new();
 ///
 /// // Insert values of different types.
-/// let _pooled_string1 = pool.insert("Hello".to_string());
-/// let _pooled_string2 = pool.insert("World".to_string());
+/// let pooled_string1 = pool.insert("Hello".to_string());
+/// let pooled_string2 = pool.insert("World".to_string());
 ///
 /// // Read from the memory.
 /// // SAFETY: The pointers are valid and the memory contains the values we just inserted.
@@ -76,7 +76,7 @@ impl RawBlindPool {
     ///
     /// let mut pool = RawBlindPool::new();
     ///
-    /// let _pooled = pool.insert("Test".to_string());
+    /// let pooled = pool.insert("Test".to_string());
     ///
     /// // SAFETY: The pointer is valid and contains the value we just inserted.
     /// let value = unsafe { pooled.ptr().as_ref() };
@@ -160,11 +160,14 @@ impl RawBlindPool {
 
     /// Inserts a value into the pool using in-place initialization and returns a handle to it.
     ///
-    /// This allows the caller to initialize the item in-place using a closure that receives
-    /// a `&mut MaybeUninit<T>`. This can be more efficient than constructing the value
-    /// separately and then moving it into the pool, especially for large or complex types.
+    /// This method is designed for partial object initialization, where you want to construct
+    /// an object directly in its final memory location. This can provide significant
+    /// performance benefits compared to [`insert()`] by avoiding temporary allocations
+    /// and unnecessary moves, especially for large or complex types.
     ///
     /// The pool stores the initialized value and provides a handle for later access or removal.
+    ///
+    /// [`insert()`]: Self::insert
     ///
     /// # Example
     ///
@@ -175,20 +178,23 @@ impl RawBlindPool {
     ///
     /// let mut pool = RawBlindPool::new();
     ///
+    /// // Partial initialization - build complex object directly in pool memory.
     /// // SAFETY: We properly initialize the value in the closure.
     /// let pooled = unsafe {
-    ///     pool.insert_with(|uninit: &mut MaybeUninit<String>| {
-    ///         uninit.write(String::from("Hello, World!"));
+    ///     pool.insert_with(|uninit: &mut MaybeUninit<Vec<u64>>| {
+    ///         let mut vec = Vec::with_capacity(1000);
+    ///         vec.extend(0..100);
+    ///         uninit.write(vec);
     ///     })
     /// };
     ///
     /// // Read the value back.
-    /// // SAFETY: The pointer is valid and contains the initialized String.
+    /// // SAFETY: The pointer is valid and contains the initialized Vec.
     /// let value = unsafe { pooled.ptr().as_ref() };
-    /// assert_eq!(value, "Hello, World!");
+    /// assert_eq!(value.len(), 100);
     ///
     /// // Clean up.
-    /// unsafe { pool.remove(&_pooled) };
+    /// unsafe { pool.remove(&pooled) };
     /// ```
     ///
     /// # Safety
@@ -267,9 +273,10 @@ impl RawBlindPool {
 
     /// Inserts a value into the pool using in-place initialization and returns an exclusive handle.
     ///
-    /// This is similar to [`insert_with()`] but returns a [`RawPooledMut<T>`] that provides
-    /// exclusive ownership guarantees. The handle cannot be copied or cloned, ensuring that
-    /// only one handle can exist for each pool item.
+    /// This method is designed for partial object initialization with exclusive ownership.
+    /// It returns a [`RawPooledMut<T>`] that provides exclusive ownership guarantees.
+    /// The handle cannot be copied or cloned, ensuring that only one handle can exist
+    /// for each pool item.
     ///
     /// # Example
     ///
@@ -280,16 +287,19 @@ impl RawBlindPool {
     ///
     /// let mut pool = RawBlindPool::new();
     ///
+    /// // Partial initialization with exclusive ownership.
     /// // SAFETY: We properly initialize the value in the closure.
     /// let pooled_mut = unsafe {
-    ///     pool.insert_with_mut(|uninit: &mut MaybeUninit<String>| {
-    ///         uninit.write(String::from("Hello, World!"));
+    ///     pool.insert_with_mut(|uninit: &mut MaybeUninit<Vec<u64>>| {
+    ///         let mut vec = Vec::with_capacity(1000);
+    ///         vec.extend(0..100);
+    ///         uninit.write(vec);
     ///     })
     /// };
     ///
     /// // Safe removal that consumes the handle.
     /// let extracted = pool.remove_unpin_mut(pooled_mut);
-    /// assert_eq!(extracted, "Hello, World!");
+    /// assert_eq!(extracted.len(), 100);
     /// ```
     ///
     /// # Safety
@@ -653,7 +663,7 @@ impl Drop for RawBlindPool {
 ///
 /// let mut pool = RawBlindPool::new();
 ///
-/// let _pooled = pool.insert("Hello".to_string());
+/// let pooled = pool.insert("Hello".to_string());
 ///
 /// // The handle acts like a super-powered pointer - it can be copied freely.
 /// let pooled_copy = pooled;
@@ -669,7 +679,7 @@ impl Drop for RawBlindPool {
 /// assert_eq!(value3, "Hello");
 ///
 /// // To remove the item from the pool, any handle can be used.
-/// unsafe { pool.remove(&_pooled) };
+/// unsafe { pool.remove(&pooled) };
 /// ```
 ///
 /// # Thread safety
@@ -701,7 +711,7 @@ impl<T: ?Sized> RawPooled<T> {
     ///
     /// let mut pool = RawBlindPool::new();
     ///
-    /// let _pooled = pool.insert(2.5159_f64);
+    /// let pooled = pool.insert(2.5159_f64);
     ///
     /// // Read data back from the memory.
     /// // SAFETY: The pointer is valid and the memory contains the value we just inserted.
@@ -730,7 +740,7 @@ impl<T: ?Sized> RawPooled<T> {
     ///
     /// let mut pool = RawBlindPool::new();
     ///
-    /// let _pooled = pool.insert("Test".to_string());
+    /// let pooled = pool.insert("Test".to_string());
     ///
     /// // Erase type information.
     /// let erased = pooled.erase();

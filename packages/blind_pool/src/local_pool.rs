@@ -97,9 +97,12 @@ impl LocalBlindPool {
 
     /// Inserts a value into the pool using in-place initialization and returns a handle to it.
     ///
-    /// This allows the caller to initialize the item in-place using a closure that receives
-    /// a `&mut MaybeUninit<T>`. This can be more efficient than constructing the value
-    /// separately and then moving it into the pool, especially for large or complex types.
+    /// This method is designed for partial object initialization, where you want to construct
+    /// an object directly in its final memory location. This can provide significant
+    /// performance benefits compared to [`insert()`] by avoiding temporary allocations
+    /// and unnecessary moves, especially for large or complex types.
+    ///
+    /// [`insert()`]: Self::insert
     ///
     /// The returned handle automatically manages the lifetime of the inserted value.
     /// When all handles to the value are dropped, the value is automatically removed
@@ -114,15 +117,18 @@ impl LocalBlindPool {
     ///
     /// let pool = LocalBlindPool::new();
     ///
+    /// // Partial initialization - build complex object directly in pool memory.
     /// // SAFETY: We properly initialize the value in the closure.
     /// let handle = unsafe {
-    ///     pool.insert_with(|uninit: &mut MaybeUninit<String>| {
-    ///         uninit.write(String::from("Hello, World!"));
+    ///     pool.insert_with(|uninit: &mut MaybeUninit<Vec<u64>>| {
+    ///         let mut vec = Vec::with_capacity(1000);
+    ///         vec.extend(0..100);
+    ///         uninit.write(vec);
     ///     })
     /// };
     ///
     /// // Access value through dereferencing.
-    /// assert_eq!(*handle, "Hello, World!");
+    /// assert_eq!(handle.len(), 100);
     /// ```
     ///
     /// # Safety

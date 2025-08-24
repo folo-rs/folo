@@ -34,3 +34,7 @@ harness = false
 [[bench]]
 name = "blind_many_types"
 harness = false
+
+[[bench]]
+name = "insert_with"
+harness = false
