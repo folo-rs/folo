@@ -29,8 +29,8 @@ use opaque_pool::Pooled as OpaquePooled;
 /// let pooled_clone = pooled.clone();
 ///
 /// // All copies refer to the same stored value.
-/// let value1 = &*pooled;       // Safe deref access
-/// let value2 = &*pooled_copy;  // Safe deref access
+/// let value1 = &*pooled; // Safe deref access
+/// let value2 = &*pooled_copy; // Safe deref access
 /// let value3 = &*pooled_clone; // Safe deref access
 /// assert_eq!(value1, "Hello");
 /// assert_eq!(value2, "Hello");

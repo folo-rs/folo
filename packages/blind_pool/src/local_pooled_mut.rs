@@ -138,7 +138,7 @@ impl<T: ?Sized> LocalPooledMut<T> {
     #[inline]
     pub fn as_pin_mut(&mut self) -> Pin<&mut T> {
         // SAFETY: We have exclusive access through LocalPooledMut and the pooled handle contains
-        // a valid value. We can safely create a mutable reference to convert the shared 
+        // a valid value. We can safely create a mutable reference to convert the shared
         // RawPooled to provide mutable access for our exclusive LocalPooledMut.
         let mutable_ref = unsafe { self.inner.pooled.ptr().as_mut() };
         // SAFETY: Values in the pool are always pinned - they never move once inserted.
