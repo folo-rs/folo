@@ -23,9 +23,9 @@ incremental = false
 
 [workspace.dependencies]
 # The packages we publish.
-alloc_tracker = { version = "0.5.2", path = "packages/alloc_tracker" }
+alloc_tracker = { version = "0.5.3", path = "packages/alloc_tracker" }
 all_the_time = { version = "0.4.4", path = "packages/all_the_time" }
-blind_pool = { version = "0.3.8", path = "packages/blind_pool" }
+blind_pool = { version = "0.4.0", path = "packages/blind_pool" }
 cpulist = { version = "0.2.9", path = "packages/cpulist" }
 events = { version = "0.3.11", path = "packages/events" }
 folo_ffi = { version = "0.1.6", path = "packages/folo_ffi" }
@@ -36,9 +36,9 @@ linked_macros_impl = { version = "0.2.19", path = "packages/linked_macros_impl" 
 many_cpus = { version = "0.3.18", path = "packages/many_cpus" }
 many_cpus_benchmarking = { version = "0.1.29", path = "packages/many_cpus_benchmarking" }
 new_zealand = { version = "0.1.6", path = "packages/new_zealand" }
-opaque_pool = { version = "0.2.6", path = "packages/opaque_pool" }
+opaque_pool = { version = "0.3.0", path = "packages/opaque_pool" }
 nm = { version = "0.1.18", path = "packages/nm" }
-par_bench = { version = "0.2.10", path = "packages/par_bench" }
+par_bench = { version = "0.2.11", path = "packages/par_bench" }
 pinned_pool = { version = "0.1.22", path = "packages/pinned_pool" }
 region_cached = { version = "0.1.36", path = "packages/region_cached" }
 region_local = { version = "0.1.35", path = "packages/region_local" }
