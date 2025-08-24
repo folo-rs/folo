@@ -1,5 +1,7 @@
 use std::alloc::Layout;
 use std::mem::MaybeUninit;
+use std::ops::{Deref, DerefMut};
+use std::pin::Pin;
 use std::ptr::NonNull;
 use std::{fmt, thread};
 
@@ -854,6 +856,30 @@ impl<T: ?Sized> RawPooled<T> {
         }
     }
 
+    /// Returns a pinned reference to the value stored in the pool.
+    ///
+    /// Since values in the pool are always pinned (they never move once inserted),
+    /// this method provides safe access to `Pin<&T>` without requiring unsafe code.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::pin::Pin;
+    ///
+    /// use blind_pool::RawBlindPool;
+    ///
+    /// let mut pool = RawBlindPool::new();
+    /// let handle = pool.insert("hello".to_string()).into_shared();
+    ///
+    /// let pinned: Pin<&String> = handle.as_pin();
+    /// assert_eq!(pinned.len(), 5);
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn as_pin(&self) -> Pin<&T> {
+        self.inner.as_pin()
+    }
+
     /// Returns a reference to the underlying opaque pool handle.
     ///
     /// This method is intended for internal use by the higher-level pooled types
@@ -862,6 +888,33 @@ impl<T: ?Sized> RawPooled<T> {
     #[inline]
     pub(crate) fn opaque_handle(&self) -> &OpaquePooled<T> {
         &self.inner
+    }
+}
+
+impl<T: ?Sized> Deref for RawPooled<T> {
+    type Target = T;
+
+    /// Provides direct access to the value stored in the pool.
+    ///
+    /// This allows the handle to be used as if it were a reference to the stored value.
+    /// Since `RawPooled<T>` provides shared access, this returns a shared reference.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::RawBlindPool;
+    ///
+    /// let mut pool = RawBlindPool::new();
+    /// let string_handle = pool.insert("hello".to_string()).into_shared();
+    ///
+    /// // Access string methods directly.
+    /// assert_eq!(string_handle.len(), 5);
+    /// assert!(string_handle.starts_with("he"));
+    /// ```
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: The inner handle is valid and contains initialized memory of type T.
+        unsafe { self.inner.ptr().as_ref() }
     }
 }
 
@@ -989,6 +1042,54 @@ impl<T: ?Sized> RawPooledMut<T> {
         }
     }
 
+    /// Returns a pinned reference to the value stored in the pool.
+    ///
+    /// Since values in the pool are always pinned (they never move once inserted),
+    /// this method provides safe access to `Pin<&T>` without requiring unsafe code.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::pin::Pin;
+    ///
+    /// use blind_pool::RawBlindPool;
+    ///
+    /// let mut pool = RawBlindPool::new();
+    /// let handle = pool.insert_mut("hello".to_string());
+    ///
+    /// let pinned: Pin<&String> = handle.as_pin();
+    /// assert_eq!(pinned.len(), 5);
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn as_pin(&self) -> Pin<&T> {
+        self.inner.as_pin()
+    }
+
+    /// Returns a pinned mutable reference to the value stored in the pool.
+    ///
+    /// Since values in the pool are always pinned (they never move once inserted),
+    /// this method provides safe access to `Pin<&mut T>` without requiring unsafe code.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::pin::Pin;
+    ///
+    /// use blind_pool::RawBlindPool;
+    ///
+    /// let mut pool = RawBlindPool::new();
+    /// let mut handle = pool.insert_mut("hello".to_string());
+    ///
+    /// let mut pinned: Pin<&mut String> = handle.as_pin_mut();
+    /// // Can use Pin methods or deref to &mut String
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn as_pin_mut(&mut self) -> Pin<&mut T> {
+        self.inner.as_pin_mut()
+    }
+
     /// Converts this exclusive handle to a shared handle.
     ///
     /// This consumes the `RawPooledMut<T>` and returns a `RawPooled<T>` that can be copied
@@ -1022,6 +1123,57 @@ impl<T: ?Sized> RawPooledMut<T> {
             layout: self.layout,
             inner: self.inner.into_shared(),
         }
+    }
+}
+
+impl<T: ?Sized> Deref for RawPooledMut<T> {
+    type Target = T;
+
+    /// Provides direct access to the value stored in the pool.
+    ///
+    /// This allows the handle to be used as if it were a reference to the stored value.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::RawBlindPool;
+    ///
+    /// let mut pool = RawBlindPool::new();
+    /// let string_handle = pool.insert_mut("hello".to_string());
+    ///
+    /// // Access string methods directly.
+    /// assert_eq!(string_handle.len(), 5);
+    /// assert!(string_handle.starts_with("he"));
+    /// ```
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: The inner handle is valid and contains initialized memory of type T.
+        unsafe { self.inner.ptr().as_ref() }
+    }
+}
+
+impl<T: ?Sized> DerefMut for RawPooledMut<T> {
+    /// Provides direct mutable access to the value stored in the pool.
+    ///
+    /// This allows the handle to be used as if it were a mutable reference to the stored value.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blind_pool::RawBlindPool;
+    ///
+    /// let mut pool = RawBlindPool::new();
+    /// let mut string_handle = pool.insert_mut("hello".to_string());
+    ///
+    /// // Mutate the string directly.
+    /// string_handle.push_str(" world");
+    /// assert_eq!(*string_handle, "hello world");
+    /// ```
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        // SAFETY: The inner handle is valid and contains initialized memory of type T.
+        // We have exclusive access through PooledMut, so mutable access is safe.
+        unsafe { self.inner.ptr().as_mut() }
     }
 }
 
@@ -1613,5 +1765,86 @@ mod tests {
             pool.remove(&pooled);
         }
         assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn deref_functionality() {
+        let mut pool = RawBlindPool::new();
+
+        // Test RawPooledMut Deref and DerefMut
+        let mut pooled_mut = pool.insert_mut("Hello".to_string());
+
+        // Test Deref - should be able to access the value directly
+        assert_eq!(&*pooled_mut, "Hello");
+        assert_eq!(pooled_mut.len(), 5);
+        assert!(pooled_mut.starts_with("He"));
+
+        // Test DerefMut - should be able to mutate the value directly
+        pooled_mut.push_str(", World!");
+        assert_eq!(&*pooled_mut, "Hello, World!");
+
+        // Convert to shared handle and test Deref
+        let shared = pooled_mut.into_shared();
+        assert_eq!(&*shared, "Hello, World!");
+        assert_eq!(shared.len(), 13);
+
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&shared);
+        }
+    }
+
+    #[test]
+    fn pinning_functionality() {
+        let mut pool = RawBlindPool::new();
+
+        // Test with RawPooledMut
+        let mut pooled_mut = pool.insert_mut("Pin test".to_string());
+
+        // Test as_pin() method
+        let pinned_ref = pooled_mut.as_pin();
+        assert_eq!(&**pinned_ref, "Pin test");
+
+        // Test as_pin_mut() method
+        let pinned_mut = pooled_mut.as_pin_mut();
+        pinned_mut.get_mut().push_str(" - modified");
+
+        // Verify the mutation worked
+        assert_eq!(&*pooled_mut, "Pin test - modified");
+
+        // Convert to shared and test as_pin()
+        let shared = pooled_mut.into_shared();
+        let pinned_shared = shared.as_pin();
+        assert_eq!(&**pinned_shared, "Pin test - modified");
+
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&shared);
+        }
+    }
+
+    #[test]
+    fn deref_coercion_works() {
+        // Test that deref coercion works - we can pass RawPooledMut<String> where &str is expected
+        fn take_str_ref(s: &str) -> usize {
+            s.len()
+        }
+
+        let mut pool = RawBlindPool::new();
+
+        let pooled_mut = pool.insert_mut("Coercion test".to_string());
+
+        let len = take_str_ref(&pooled_mut);
+        assert_eq!(len, 13);
+
+        // Same test with shared handle
+        let shared = pooled_mut.into_shared();
+        let len2 = take_str_ref(&shared);
+        assert_eq!(len2, 13);
+
+        // SAFETY: This pooled handle was just created and has never been used for removal before.
+        unsafe {
+            pool.remove(&shared);
+        }
     }
 }
