@@ -21,7 +21,10 @@ fn demonstrate_blind_pool() {
 
     // Initially no capacity for any type
     println!("Initial capacity for u32: {}", pool.capacity_of::<u32>());
-    println!("Initial capacity for String: {}", pool.capacity_of::<String>());
+    println!(
+        "Initial capacity for String: {}",
+        pool.capacity_of::<String>()
+    );
 
     // Reserve capacity before inserting
     pool.reserve_for::<u32>(50);
@@ -32,24 +35,37 @@ fn demonstrate_blind_pool() {
     for i in 0..10 {
         handles.push(pool.insert(i));
     }
-    println!("After inserting 10 u32s: capacity={}, len={}", 
-             pool.capacity_of::<u32>(), pool.len());
+    println!(
+        "After inserting 10 u32s: capacity={}, len={}",
+        pool.capacity_of::<u32>(),
+        pool.len()
+    );
 
     // Insert different type
     let _string_handle = pool.insert("Hello".to_string());
-    println!("After inserting String: u32_capacity={}, string_capacity={}, len={}", 
-             pool.capacity_of::<u32>(), pool.capacity_of::<String>(), pool.len());
+    println!(
+        "After inserting String: u32_capacity={}, string_capacity={}, len={}",
+        pool.capacity_of::<u32>(),
+        pool.capacity_of::<String>(),
+        pool.len()
+    );
 
     // Drop all handles to empty the pool
     drop(handles);
     drop(_string_handle);
-    println!("After dropping all handles: len={}, u32_capacity={}", 
-             pool.len(), pool.capacity_of::<u32>());
+    println!(
+        "After dropping all handles: len={}, u32_capacity={}",
+        pool.len(),
+        pool.capacity_of::<u32>()
+    );
 
     // Shrink to fit
     pool.shrink_to_fit();
-    println!("After shrink_to_fit: u32_capacity={}, string_capacity={}", 
-             pool.capacity_of::<u32>(), pool.capacity_of::<String>());
+    println!(
+        "After shrink_to_fit: u32_capacity={}, string_capacity={}",
+        pool.capacity_of::<u32>(),
+        pool.capacity_of::<String>()
+    );
 }
 
 fn demonstrate_local_blind_pool() {
@@ -64,13 +80,19 @@ fn demonstrate_local_blind_pool() {
     for i in 0..5 {
         handles.push(pool.insert(f64::from(i) * 1.5));
     }
-    println!("After inserting 5 f64s: capacity={}, len={}", 
-             pool.capacity_of::<f64>(), pool.len());
+    println!(
+        "After inserting 5 f64s: capacity={}, len={}",
+        pool.capacity_of::<f64>(),
+        pool.len()
+    );
 
     drop(handles);
     pool.shrink_to_fit();
-    println!("After cleanup and shrink: capacity={}, len={}", 
-             pool.capacity_of::<f64>(), pool.len());
+    println!(
+        "After cleanup and shrink: capacity={}, len={}",
+        pool.capacity_of::<f64>(),
+        pool.len()
+    );
 }
 
 fn demonstrate_raw_blind_pool() {
@@ -85,8 +107,11 @@ fn demonstrate_raw_blind_pool() {
     for i in 0_i32..20 {
         handles.push(pool.insert(i.saturating_mul(2)));
     }
-    println!("After inserting 20 i32s: capacity={}, len={}", 
-             pool.capacity_of::<i32>(), pool.len());
+    println!(
+        "After inserting 20 i32s: capacity={}, len={}",
+        pool.capacity_of::<i32>(),
+        pool.len()
+    );
 
     // Manual cleanup required
     for handle in handles {
@@ -95,10 +120,16 @@ fn demonstrate_raw_blind_pool() {
             pool.remove(&handle);
         }
     }
-    println!("After manual cleanup: capacity={}, len={}", 
-             pool.capacity_of::<i32>(), pool.len());
+    println!(
+        "After manual cleanup: capacity={}, len={}",
+        pool.capacity_of::<i32>(),
+        pool.len()
+    );
 
     pool.shrink_to_fit();
-    println!("After shrink_to_fit: capacity={}, len={}", 
-             pool.capacity_of::<i32>(), pool.len());
+    println!(
+        "After shrink_to_fit: capacity={}, len={}",
+        pool.capacity_of::<i32>(),
+        pool.len()
+    );
 }
