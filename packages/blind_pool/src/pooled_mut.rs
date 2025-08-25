@@ -332,11 +332,6 @@ unsafe impl<T: ?Sized + Send> Send for PooledMut<T> {}
 // via DerefMut. Allowing multiple threads to share references to the same
 // PooledMut<T> instance would violate Rust's borrowing rules and lead to data races.
 
-// PooledMut<T> implements Unpin because the underlying data is fixed in memory.
-// Values in the pool are always pinned and never move once inserted, so the wrapper
-// type itself can implement Unpin safely.
-impl<T: ?Sized> Unpin for PooledMut<T> {}
-
 impl<T: ?Sized> fmt::Debug for PooledMut<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PooledMut")
