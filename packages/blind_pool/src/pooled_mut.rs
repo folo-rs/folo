@@ -326,7 +326,7 @@ impl<T: ?Sized> Drop for PooledMut<T> {
 
 // SAFETY: PooledMut<T> can be Send if T is Send, because we can move the exclusive
 // mutable access between threads when T can be moved between threads.
-unsafe impl<T: Send> Send for PooledMut<T> {}
+unsafe impl<T: ?Sized + Send> Send for PooledMut<T> {}
 
 // Note: PooledMut<T> does NOT implement Sync because it provides mutable access
 // via DerefMut. Allowing multiple threads to share references to the same

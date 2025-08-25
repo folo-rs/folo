@@ -330,12 +330,12 @@ impl Drop for PooledRef {
 // SAFETY: Pooled<T> can be Send if T is Sync, because multiple threads could
 // access the same referenced data when the Pooled<T> is moved between threads.
 // The Arc<PooledInner<T>> is Send when T is Sync, and the mutex in BlindPool provides thread safety.
-unsafe impl<T: Sync> Send for Pooled<T> {}
+unsafe impl<T: ?Sized + Sync> Send for Pooled<T> {}
 
 // SAFETY: Pooled<T> can be Sync if T is Sync, because multiple threads can safely
 // access the same Pooled<T> instance if T is Sync. The deref operation is safe
 // for concurrent access when T is Sync, and other operations don't require exclusive access.
-unsafe impl<T: Sync> Sync for Pooled<T> {}
+unsafe impl<T: ?Sized + Sync> Sync for Pooled<T> {}
 
 impl<T: ?Sized> fmt::Debug for Pooled<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -372,10 +372,10 @@ unsafe impl Send for PooledRef {}
 unsafe impl Sync for PooledRef {}
 
 // SAFETY: PooledInner<T> can be Send if T is Sync, following the same reasoning as Pooled<T>.
-unsafe impl<T: Sync> Send for PooledInner<T> {}
+unsafe impl<T: ?Sized + Sync> Send for PooledInner<T> {}
 
 // SAFETY: PooledInner<T> can be Sync if T is Sync, following the same reasoning as Pooled<T>.
-unsafe impl<T: Sync> Sync for PooledInner<T> {}
+unsafe impl<T: ?Sized + Sync> Sync for PooledInner<T> {}
 
 #[cfg(test)]
 mod tests {
