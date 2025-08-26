@@ -2,8 +2,16 @@
 //!
 //! This shows how to use the `alloc_tracker` package for tracking memory allocations
 //! and debugging unexpected allocations.
+//!
+//! To run the `panic_on_next_alloc` functionality, enable the feature:
+//! ```bash
+//! cargo run --example alloc_tracker_readme --features panic_on_next_alloc
+//! ```
 
+#[cfg(feature = "panic_on_next_alloc")]
 use alloc_tracker::{Allocator, Session, panic_on_next_alloc};
+#[cfg(not(feature = "panic_on_next_alloc"))]
+use alloc_tracker::{Allocator, Session};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
@@ -25,14 +33,24 @@ fn main() {
 
     // Session automatically cleans up when dropped
 
-    // Debugging unexpected allocations
-    // Enable panic on next allocation
-    panic_on_next_alloc(true);
+    // Debugging unexpected allocations (only with feature enabled)
+    #[cfg(feature = "panic_on_next_alloc")]
+    {
+        // Enable panic on next allocation
+        panic_on_next_alloc(true);
 
-    // Any allocation attempt will now panic with a descriptive message
-    // let _vec = vec![1, 2, 3]; // This would panic and auto-reset the flag!
+        // Any allocation attempt will now panic with a descriptive message
+        // let _vec = vec![1, 2, 3]; // This would panic and auto-reset the flag!
 
-    // Disable to allow allocations again
-    panic_on_next_alloc(false);
-    let _vec = vec![1, 2, 3]; // This is safe
+        // Disable to allow allocations again
+        panic_on_next_alloc(false);
+        let _vec = vec![1, 2, 3]; // This is safe
+    }
+
+    #[cfg(not(feature = "panic_on_next_alloc"))]
+    {
+        println!("To test panic_on_next_alloc functionality, run with:");
+        println!("cargo run --example alloc_tracker_readme --features panic_on_next_alloc");
+        let _vec = vec![1, 2, 3]; // Regular allocation without panic functionality
+    }
 }

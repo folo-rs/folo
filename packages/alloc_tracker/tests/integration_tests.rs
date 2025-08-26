@@ -8,7 +8,9 @@
 use std::hint::black_box;
 use std::thread;
 
-use alloc_tracker::{Allocator, Session, panic_on_next_alloc};
+#[cfg(feature = "panic_on_next_alloc")]
+use alloc_tracker::panic_on_next_alloc;
+use alloc_tracker::{Allocator, Session};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
@@ -259,6 +261,7 @@ fn report_mean_with_known_allocations() {
 }
 
 #[test]
+#[cfg(feature = "panic_on_next_alloc")]
 fn panic_on_next_alloc_can_be_controlled() {
     // This test verifies the API works but doesn't test the panic behavior
     // as that would terminate the test process
@@ -285,6 +288,7 @@ fn panic_on_next_alloc_can_be_controlled() {
 }
 
 #[test]
+#[cfg(feature = "panic_on_next_alloc")]
 fn panic_on_next_alloc_resets_automatically() {
     use std::panic;
 

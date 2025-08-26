@@ -3,7 +3,9 @@
 use std::alloc::{GlobalAlloc, Layout};
 use std::cell::Cell;
 use std::fmt;
-use std::sync::atomic::{self, AtomicBool, AtomicU64};
+#[cfg(feature = "panic_on_next_alloc")]
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{self, AtomicU64};
 
 // The tracking allocator works with static data all over the place, so this is how it be.
 // This is global state - we could theoretically optimize via thread-local counter but that
@@ -12,6 +14,7 @@ pub(crate) static TOTAL_BYTES_ALLOCATED: AtomicU64 = AtomicU64::new(0);
 
 /// Global flag to control whether the next memory allocation should panic.
 /// When set to true, the next allocation attempt will panic and then reset the flag to false.
+#[cfg(feature = "panic_on_next_alloc")]
 static PANIC_ON_NEXT_ALLOCATION: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
@@ -25,6 +28,8 @@ thread_local! {
 /// When enabled, the next attempt to allocate memory will panic with a descriptive message
 /// and then automatically reset the flag to false. This "one-shot" behavior is useful for
 /// tracking down unexpected allocations in performance-critical code sections.
+///
+/// This function is only available when the `panic_on_next_alloc` feature is enabled.
 ///
 /// # Arguments
 ///
@@ -49,12 +54,14 @@ thread_local! {
 ///     // let _another_vec = vec![4, 5, 6]; // This would work
 /// }
 /// ```
+#[cfg(feature = "panic_on_next_alloc")]
 pub fn panic_on_next_alloc(enabled: bool) {
     PANIC_ON_NEXT_ALLOCATION.store(enabled, atomic::Ordering::Relaxed);
 }
 
 /// Checks if panic-on-next-allocation is enabled and panics if so, automatically resetting the flag.
 /// This is called before any allocation operation to implement the one-shot panic behavior.
+#[cfg(feature = "panic_on_next_alloc")]
 fn check_and_panic_if_enabled() {
     // Check if we should panic on this allocation and reset flag if so
     #[expect(
@@ -64,6 +71,12 @@ fn check_and_panic_if_enabled() {
     if PANIC_ON_NEXT_ALLOCATION.swap(false, atomic::Ordering::Relaxed) {
         panic!("Memory allocation attempted while panic-on-next-allocation was enabled");
     }
+}
+
+/// No-op version when panic_on_next_alloc feature is disabled.
+#[cfg(not(feature = "panic_on_next_alloc"))]
+#[inline]
+fn check_and_panic_if_enabled() {
 }
 
 /// Updates allocation tracking counters for the given size.
@@ -175,6 +188,7 @@ mod tests {
     static_assertions::assert_impl_all!(Allocator<std::alloc::System>: Send, Sync);
 
     #[test]
+    #[cfg(feature = "panic_on_next_alloc")]
     fn panic_on_next_alloc_can_be_enabled_and_disabled() {
         // Default state should be disabled
         assert!(!PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));

@@ -10,6 +10,10 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+panic_on_next_alloc = []
+
 [dependencies]
 
 [dev-dependencies]

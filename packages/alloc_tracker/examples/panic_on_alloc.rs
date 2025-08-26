@@ -2,12 +2,21 @@
 //!
 //! This example shows how to use the `panic_on_next_alloc` function to detect
 //! unexpected allocations in performance-critical code sections.
+//!
+//! To run this example, enable the `panic_on_next_alloc` feature:
+//! ```bash
+//! cargo run --example panic_on_alloc --features panic_on_next_alloc
+//! ```
 
+#[cfg(feature = "panic_on_next_alloc")]
 use alloc_tracker::{Allocator, panic_on_next_alloc};
+#[cfg(not(feature = "panic_on_next_alloc"))]
+use alloc_tracker::Allocator;
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
+#[cfg(feature = "panic_on_next_alloc")]
 fn main() {
     println!("Demonstrating panic-on-next-allocation functionality...");
 
@@ -63,4 +72,10 @@ fn main() {
     // panic_on_next_alloc(true);
     // let _this_will_panic = vec![1, 2, 3]; // This would panic
     // let _this_would_work = vec![4, 5, 6]; // This would work (flag auto-reset)
+}
+
+#[cfg(not(feature = "panic_on_next_alloc"))]
+fn main() {
+    println!("This example requires the 'panic_on_next_alloc' feature to be enabled.");
+    println!("Run with: cargo run --example panic_on_alloc --features panic_on_next_alloc");
 }
