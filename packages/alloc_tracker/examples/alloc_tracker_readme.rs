@@ -1,7 +1,8 @@
 //! Example that demonstrates the exact usage shown in the README.md file.
 //!
 //! This shows how to use the `alloc_tracker` package for tracking memory allocations
-//! and debugging unexpected allocations.
+//! and debugging unexpected allocations. The enhanced tracker now shows both
+//! the number of bytes allocated and the count of allocations.
 //!
 //! To run the `panic_on_next_alloc` functionality, enable the feature:
 //! ```bash
@@ -18,7 +19,7 @@ static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 #[expect(clippy::useless_vec, reason = "example needs to show allocation")]
 fn main() {
-    // Basic allocation tracking
+    // Basic allocation tracking - now shows both bytes and allocation count
     let session = Session::new();
 
     // Track a single operation
@@ -28,7 +29,16 @@ fn main() {
         let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
     }
 
-    // Print results
+    // Track an operation with multiple allocations to demonstrate allocation counting
+    {
+        let operation = session.operation("multiple_allocations");
+        let _span = operation.measure_process();
+        let _vec1 = vec![1, 2, 3]; // First allocation
+        let _vec2 = vec![4, 5]; // Second allocation
+        let _string = String::from("Hello"); // Third allocation
+    }
+
+    // Print results - now shows both mean bytes and mean allocation count
     session.print_to_stdout();
 
     // Session automatically cleans up when dropped

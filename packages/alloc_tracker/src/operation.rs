@@ -8,8 +8,9 @@ use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 /// A measurement handle for tracking mean memory allocation per operation across multiple iterations.
 ///
 /// This utility is particularly useful for benchmarking scenarios where you want
-/// to understand the mean memory footprint of repeated operations. Operations
-/// share data with their parent session via reference counting, and data is
+/// to understand the mean memory footprint and allocation behavior of repeated operations.
+/// It tracks both the number of bytes allocated and the count of allocations.
+/// Operations share data with their parent session via reference counting, and data is
 /// merged when the operation is dropped.
 ///
 /// Multiple operations with the same name can be created concurrently.
@@ -214,7 +215,7 @@ mod tests {
         // Directly test the metrics
         {
             let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
-            metrics.add_iterations(100, 1);
+            metrics.add_iterations(100, 1, 1);
         }
 
         assert_eq!(operation.mean(), 100);
@@ -229,12 +230,12 @@ mod tests {
         // Directly test the metrics
         {
             let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
-            metrics.add_iterations(100, 1);
-            metrics.add_iterations(200, 1);
-            metrics.add_iterations(300, 1);
+            metrics.add_iterations(100, 1, 1); // 100 bytes, 1 allocation, 1 iteration
+            metrics.add_iterations(200, 2, 1); // 200 bytes, 2 allocations, 1 iteration  
+            metrics.add_iterations(300, 3, 1); // 300 bytes, 3 allocations, 1 iteration
         }
 
-        assert_eq!(operation.mean(), 200); // (100 + 200 + 300) / 3
+        assert_eq!(operation.mean(), 200); // (100 + 200 + 300) / (1 + 1 + 1) = 600 / 3 = 200
         assert_eq!(operation.total_iterations(), 3);
         assert_eq!(operation.total_bytes_allocated(), 600);
     }
@@ -246,8 +247,8 @@ mod tests {
         // Directly test the metrics
         {
             let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
-            metrics.add_iterations(0, 1);
-            metrics.add_iterations(0, 1);
+            metrics.add_iterations(0, 0, 1);
+            metrics.add_iterations(0, 0, 1);
         }
 
         assert_eq!(operation.mean(), 0);
@@ -368,7 +369,7 @@ mod tests {
             // Directly test the metrics
             {
                 let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
-                metrics.add_iterations(100, 5);
+                metrics.add_iterations(100, 2, 5);
             }
             // operation is dropped here, merging data into session
         }
@@ -380,7 +381,7 @@ mod tests {
         // Verify the session shows the data was merged
         let session_display = format!("{session}");
         println!("Actual session display: '{session_display}'");
-        assert!(session_display.contains("| test      |  100 |")); // 500 bytes / 5 iterations = 100
+        assert!(session_display.contains("| test      |        100 |          2 |")); // 500 bytes / 5 iterations = 100, 10 allocations / 5 iterations = 2
     }
 
     #[test]
@@ -393,12 +394,12 @@ mod tests {
         // Directly manipulate the metrics
         {
             let mut metrics = op1.metrics.lock().expect(ERR_POISONED_LOCK);
-            metrics.add_iterations(100, 2); // 200 bytes, 2 iterations
-            metrics.add_iterations(200, 3); // 600 bytes, 3 iterations
+            metrics.add_iterations(100, 1, 2); // 200 bytes, 2 allocations, 2 iterations
+            metrics.add_iterations(200, 2, 3); // 600 bytes, 6 allocations, 3 iterations
         }
 
         // Both operations share the same data immediately since they have the same name
-        // Total: 800 bytes, 5 iterations = 160 bytes mean
+        // Total: 200 + 600 = 800 bytes, 2 + 3 = 5 iterations, mean = 800 / 5 = 160 bytes
         assert_eq!(op1.mean(), 160);
         assert_eq!(op2.mean(), 160);
 
@@ -406,9 +407,9 @@ mod tests {
         drop(op1);
         drop(op2);
 
-        // Session should show merged results: 800 bytes, 5 iterations = 160 bytes mean
+        // Session should show merged results: 800 bytes, 5 iterations = 160 bytes mean, 8 allocations / 5 iterations = 1.6 ≈ 1 (integer division)
         let session_display = format!("{session}");
-        assert!(session_display.contains("| test      |  160 |"));
+        assert!(session_display.contains("| test      |        160 |          1 |"));
     }
 
     static_assertions::assert_impl_all!(Operation: Send, Sync);

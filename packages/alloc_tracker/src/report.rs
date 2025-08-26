@@ -71,8 +71,10 @@ pub struct Report {
 
 /// Memory allocation statistics for a single operation in a report.
 #[derive(Clone, Debug)]
+#[expect(clippy::struct_field_names, reason = "field names are descriptive and clear")]
 pub struct ReportOperation {
     total_bytes_allocated: u64,
+    total_allocations_count: u64,
     total_iterations: u64,
 }
 
@@ -98,6 +100,7 @@ impl Report {
                     name.clone(),
                     ReportOperation {
                         total_bytes_allocated: op_data.total_bytes_allocated,
+                        total_allocations_count: op_data.total_allocations_count,
                         total_iterations: op_data.total_iterations,
                     },
                 )
@@ -159,6 +162,11 @@ impl Report {
                         .total_bytes_allocated
                         .checked_add(b_op.total_bytes_allocated)
                         .expect("merging bytes allocated overflows u64 - this indicates an unrealistic scenario");
+
+                    a_op.total_allocations_count = a_op
+                        .total_allocations_count
+                        .checked_add(b_op.total_allocations_count)
+                        .expect("merging allocations count overflows u64 - this indicates an unrealistic scenario");
 
                     a_op.total_iterations = a_op
                         .total_iterations
@@ -237,6 +245,12 @@ impl ReportOperation {
         self.total_bytes_allocated
     }
 
+    /// Returns the total number of allocations across all iterations for this operation.
+    #[must_use]
+    pub fn total_allocations_count(&self) -> u64 {
+        self.total_allocations_count
+    }
+
     /// Returns the total number of iterations recorded for this operation.
     #[must_use]
     pub fn total_iterations(&self) -> u64 {
@@ -244,24 +258,41 @@ impl ReportOperation {
     }
 
     /// Calculates the mean bytes allocated per iteration.
-    #[expect(clippy::integer_division, reason = "we accept loss of precision")]
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "division by zero excluded via if-else"
-    )]
+    #[expect(clippy::integer_division, reason = "we accept loss of precision for mean calculation")]
+    #[expect(clippy::arithmetic_side_effects, reason = "division by zero is guarded by if-else")]
     #[must_use]
-    pub fn mean(&self) -> u64 {
+    pub fn mean_bytes(&self) -> u64 {
         if self.total_iterations == 0 {
             0
         } else {
             self.total_bytes_allocated / self.total_iterations
         }
     }
+
+    /// Calculates the mean number of allocations per iteration.
+    #[expect(clippy::integer_division, reason = "we accept loss of precision for mean calculation")]
+    #[expect(clippy::arithmetic_side_effects, reason = "division by zero is guarded by if-else")]
+    #[must_use]
+    pub fn mean_allocations(&self) -> u64 {
+        if self.total_iterations == 0 {
+            0
+        } else {
+            self.total_allocations_count / self.total_iterations
+        }
+    }
+
+    /// Calculates the mean bytes allocated per iteration.
+    /// 
+    /// This is an alias for [`mean_bytes`](Self::mean_bytes) to maintain backward compatibility.
+    #[must_use]
+    pub fn mean(&self) -> u64 {
+        self.mean_bytes()
+    }
 }
 
 impl fmt::Display for ReportOperation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} bytes (mean)", self.mean())
+        write!(f, "{} bytes (mean)", self.mean_bytes())
     }
 }
 
@@ -271,14 +302,14 @@ impl fmt::Display for Report {
         {
             writeln!(f, "No allocation statistics captured.")?;
         } else {
-            writeln!(f, "Allocation statistics (bytes):")?;
+            writeln!(f, "Allocation statistics:")?;
             writeln!(f)?;
 
             // Sort operations by name for consistent output
             let mut sorted_ops: Vec<_> = self.operations.iter().collect();
             sorted_ops.sort_by_key(|(name, _)| *name);
 
-            // Calculate the maximum width needed for the operation name column
+            // Calculate column widths
             let max_name_width = sorted_ops
                 .iter()
                 .map(|(name, _)| name.len())
@@ -286,47 +317,64 @@ impl fmt::Display for Report {
                 .unwrap_or(0)
                 .max("Operation".len());
 
-            // Calculate the maximum width needed for the mean column
-            let max_mean_width = sorted_ops
+            let max_bytes_width = sorted_ops
                 .iter()
-                .map(|(_, operation)| operation.mean().to_string().len())
+                .map(|(_, operation)| operation.mean_bytes().to_string().len())
                 .max()
                 .unwrap_or(0)
-                .max("Mean".len());
+                .max("Mean bytes".len());
+
+            let max_count_width = sorted_ops
+                .iter()
+                .map(|(_, operation)| operation.mean_allocations().to_string().len())
+                .max()
+                .unwrap_or(0)
+                .max("Mean count".len());
 
             // Print table header
             writeln!(
                 f,
-                "| {:<name_width$} | {:>mean_width$} |",
+                "| {:<name_width$} | {:>bytes_width$} | {:>count_width$} |",
                 "Operation",
-                "Mean",
+                "Mean bytes",
+                "Mean count",
                 name_width = max_name_width,
-                mean_width = max_mean_width
+                bytes_width = max_bytes_width,
+                count_width = max_count_width
             )?;
+
+            // Print separator
             let separator_name_width = max_name_width
                 .checked_add(2)
                 .expect("operation name width fits in memory, adding 2 cannot overflow");
-            let separator_mean_width = max_mean_width
+            let separator_bytes_width = max_bytes_width
                 .checked_add(2)
-                .expect("mean width fits in memory, adding 2 cannot overflow");
+                .expect("bytes width fits in memory, adding 2 cannot overflow");
+            let separator_count_width = max_count_width
+                .checked_add(2)
+                .expect("count width fits in memory, adding 2 cannot overflow");
             writeln!(
                 f,
-                "|{:-<name_width$}|{:-<mean_width$}|",
+                "|{:-<name_width$}|{:-<bytes_width$}|{:-<count_width$}|",
+                "",
                 "",
                 "",
                 name_width = separator_name_width,
-                mean_width = separator_mean_width
+                bytes_width = separator_bytes_width,
+                count_width = separator_count_width
             )?;
 
             // Print table rows
             for (name, operation) in sorted_ops {
                 writeln!(
                     f,
-                    "| {:<name_width$} | {:>mean_width$} |",
+                    "| {:<name_width$} | {:>bytes_width$} | {:>count_width$} |",
                     name,
-                    operation.mean(),
+                    operation.mean_bytes(),
+                    operation.mean_allocations(),
                     name_width = max_name_width,
-                    mean_width = max_mean_width
+                    bytes_width = max_bytes_width,
+                    count_width = max_count_width
                 )?;
             }
         }
@@ -337,7 +385,7 @@ impl fmt::Display for Report {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Session, THREAD_BYTES_ALLOCATED};
+    use crate::{Session, THREAD_ALLOCATIONS_COUNT, THREAD_BYTES_ALLOCATED};
 
     #[test]
     fn new_report_is_empty() {
@@ -359,7 +407,8 @@ mod tests {
             let operation = session.operation("test");
             let _span = operation.measure_thread();
             // Simulate allocation
-            THREAD_BYTES_ALLOCATED.set(THREAD_BYTES_ALLOCATED.get() + 100);
+            THREAD_BYTES_ALLOCATED.with(|c| c.set(c.get().wrapping_add(100)));
+            THREAD_ALLOCATIONS_COUNT.with(|c| c.set(c.get().wrapping_add(1)));
         } // Span drops here, releasing the mutable borrow
 
         let report = session.to_report();
@@ -380,7 +429,8 @@ mod tests {
         {
             let operation = session.operation("test");
             let _span = operation.measure_thread();
-            THREAD_BYTES_ALLOCATED.set(THREAD_BYTES_ALLOCATED.get() + 100);
+            THREAD_BYTES_ALLOCATED.with(|c| c.set(c.get().wrapping_add(100)));
+            THREAD_ALLOCATIONS_COUNT.with(|c| c.set(c.get().wrapping_add(1)));
         } // Span drops here
 
         let report1 = Report::new();
@@ -401,13 +451,15 @@ mod tests {
         {
             let op1 = session1.operation("test1");
             let _span1 = op1.measure_thread();
-            THREAD_BYTES_ALLOCATED.set(THREAD_BYTES_ALLOCATED.get() + 100);
+            THREAD_BYTES_ALLOCATED.with(|c| c.set(c.get().wrapping_add(100)));
+            THREAD_ALLOCATIONS_COUNT.with(|c| c.set(c.get().wrapping_add(1)));
         } // Span drops here
 
         {
             let op2 = session2.operation("test2");
             let _span2 = op2.measure_thread();
-            THREAD_BYTES_ALLOCATED.set(THREAD_BYTES_ALLOCATED.get() + 200);
+            THREAD_BYTES_ALLOCATED.with(|c| c.set(c.get().wrapping_add(200)));
+            THREAD_ALLOCATIONS_COUNT.with(|c| c.set(c.get().wrapping_add(2)));
         } // Span drops here
 
         let report1 = session1.to_report();
@@ -427,13 +479,15 @@ mod tests {
         {
             let op1 = session1.operation("test");
             let _span1 = op1.measure_thread();
-            THREAD_BYTES_ALLOCATED.set(THREAD_BYTES_ALLOCATED.get() + 100);
+            THREAD_BYTES_ALLOCATED.with(|c| c.set(c.get().wrapping_add(100)));
+            THREAD_ALLOCATIONS_COUNT.with(|c| c.set(c.get().wrapping_add(1)));
         } // Span drops here
 
         {
             let op2 = session2.operation("test");
             let _span2 = op2.measure_thread();
-            THREAD_BYTES_ALLOCATED.set(THREAD_BYTES_ALLOCATED.get() + 200);
+            THREAD_BYTES_ALLOCATED.with(|c| c.set(c.get().wrapping_add(200)));
+            THREAD_ALLOCATIONS_COUNT.with(|c| c.set(c.get().wrapping_add(2)));
         } // Span drops here
 
         let report1 = session1.to_report();
@@ -444,6 +498,7 @@ mod tests {
         let merged_op = merged.operations.get("test").unwrap();
         assert_eq!(merged_op.total_iterations, 2); // 1 + 1
         assert_eq!(merged_op.total_bytes_allocated, 300); // 100 + 200
+        assert_eq!(merged_op.total_allocations_count, 3); // 1 + 2
     }
 
     #[test]
@@ -452,7 +507,8 @@ mod tests {
         {
             let operation = session.operation("test");
             let _span = operation.measure_thread();
-            THREAD_BYTES_ALLOCATED.set(THREAD_BYTES_ALLOCATED.get() + 100);
+            THREAD_BYTES_ALLOCATED.with(|c| c.set(c.get().wrapping_add(100)));
+            THREAD_ALLOCATIONS_COUNT.with(|c| c.set(c.get().wrapping_add(1)));
         } // Span drops here
 
         let report1 = session.to_report();

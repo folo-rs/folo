@@ -3,7 +3,7 @@
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
-use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics, THREAD_BYTES_ALLOCATED};
+use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics, THREAD_ALLOCATIONS_COUNT, THREAD_BYTES_ALLOCATED};
 
 /// A tracked span of code that tracks allocations on this thread between creation and drop.
 ///
@@ -30,6 +30,7 @@ use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics, THREAD_BYTES_ALLOCAT
 pub struct ThreadSpan {
     metrics: Arc<Mutex<OperationMetrics>>,
     start_bytes: u64,
+    start_count: u64,
     iterations: u64,
 
     _single_threaded: PhantomData<*const ()>,
@@ -40,10 +41,12 @@ impl ThreadSpan {
         assert!(iterations != 0);
 
         let start_bytes = THREAD_BYTES_ALLOCATED.with(std::cell::Cell::get);
+        let start_count = THREAD_ALLOCATIONS_COUNT.with(std::cell::Cell::get);
 
         Self {
             metrics: operation.metrics(),
             start_bytes,
+            start_count,
             iterations,
             _single_threaded: PhantomData,
         }
@@ -82,31 +85,41 @@ impl ThreadSpan {
         self
     }
 
-    /// Calculates the allocation delta since this span was created.
+    /// Calculates the allocation deltas since this span was created.
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // The != 1 fork is broadly applicable, so mutations fail. Intentional.
-    fn to_delta(&self) -> u64 {
+    fn to_deltas(&self) -> (u64, u64) {
         let current_bytes = THREAD_BYTES_ALLOCATED.with(std::cell::Cell::get);
-        let total_delta = current_bytes
+        let current_count = THREAD_ALLOCATIONS_COUNT.with(std::cell::Cell::get);
+        
+        let total_bytes_delta = current_bytes
             .checked_sub(self.start_bytes)
             .expect("thread bytes allocated could not possibly decrease");
+        
+        let total_count_delta = current_count
+            .checked_sub(self.start_count)
+            .expect("thread allocations count could not possibly decrease");
 
         if self.iterations > 1 {
             // Divide total allocation by iterations to get per-iteration allocation
-            total_delta
+            let bytes_delta = total_bytes_delta
                 .checked_div(self.iterations)
-                .expect("guarded by if condition")
+                .expect("guarded by if condition");
+            let count_delta = total_count_delta
+                .checked_div(self.iterations)
+                .expect("guarded by if condition");
+            (bytes_delta, count_delta)
         } else {
-            total_delta
+            (total_bytes_delta, total_count_delta)
         }
     }
 }
 
 impl Drop for ThreadSpan {
     fn drop(&mut self) {
-        let delta = self.to_delta();
+        let (bytes_delta, count_delta) = self.to_deltas();
         let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
-        data.add_iterations(delta, self.iterations);
+        data.add_iterations(bytes_delta, count_delta, self.iterations);
     }
 }
 

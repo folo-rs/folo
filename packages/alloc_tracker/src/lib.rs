@@ -2,6 +2,7 @@
 //!
 //! This package provides utilities to track memory allocations during code execution,
 //! enabling analysis of allocation patterns in benchmarks and performance tests.
+//! The tracker reports both the number of bytes allocated and the count of allocations.
 //!
 //! The core functionality includes:
 //! - [`Allocator`] - A Rust memory allocator wrapper that enables allocation tracking

@@ -12,6 +12,9 @@ use std::sync::atomic::{self, AtomicU64};
 // might only matter in extremely allocation-heavy scenarios which are not a priority (yet?).
 pub(crate) static TOTAL_BYTES_ALLOCATED: AtomicU64 = AtomicU64::new(0);
 
+/// Global counter for tracking the total number of allocations across all threads.
+pub(crate) static TOTAL_ALLOCATIONS_COUNT: AtomicU64 = AtomicU64::new(0);
+
 /// Global flag to control whether the next memory allocation should panic.
 /// When set to true, the next allocation attempt will panic and then reset the flag to false.
 #[cfg(feature = "panic_on_next_alloc")]
@@ -21,6 +24,10 @@ thread_local! {
     /// Thread-local counter for tracking allocations within the current thread.
     /// This allows for thread-specific allocation tracking when using measure_thread().
     pub(crate) static THREAD_BYTES_ALLOCATED: Cell<u64> = const { Cell::new(0) };
+
+    /// Thread-local counter for tracking the number of allocations within the current thread.
+    /// This allows for thread-specific allocation count tracking when using measure_thread().
+    pub(crate) static THREAD_ALLOCATIONS_COUNT: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Controls whether the next memory allocation should panic.
@@ -73,21 +80,26 @@ fn check_and_panic_if_enabled() {
     }
 }
 
-/// No-op version when panic_on_next_alloc feature is disabled.
+/// No-op version when `panic_on_next_alloc` feature is disabled.
 #[cfg(not(feature = "panic_on_next_alloc"))]
 #[inline]
 fn check_and_panic_if_enabled() {
 }
 
 /// Updates allocation tracking counters for the given size.
-/// This tracks both global and thread-local allocation statistics.
+/// This tracks both global and thread-local allocation statistics for both bytes and count.
 fn track_allocation(size: usize) {
     let size_u64 = size.try_into().expect("usize always fits into u64");
 
     TOTAL_BYTES_ALLOCATED.fetch_add(size_u64, atomic::Ordering::Relaxed);
+    TOTAL_ALLOCATIONS_COUNT.fetch_add(1, atomic::Ordering::Relaxed);
 
     THREAD_BYTES_ALLOCATED.with(|counter| {
         counter.set(counter.get().wrapping_add(size_u64));
+    });
+
+    THREAD_ALLOCATIONS_COUNT.with(|counter| {
+        counter.set(counter.get().wrapping_add(1));
     });
 }
 
