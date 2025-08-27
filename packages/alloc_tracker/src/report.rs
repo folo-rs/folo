@@ -532,6 +532,49 @@ mod tests {
         assert_eq!(report1.operations.len(), report2.operations.len());
     }
 
+    #[test]
+    fn report_operation_total_allocations_count_zero() {
+        let operation = ReportOperation {
+            total_bytes_allocated: 0,
+            total_allocations_count: 0,
+            total_iterations: 1,
+        };
+
+        assert_eq!(operation.total_allocations_count(), 0);
+    }
+
+    #[test]
+    fn report_operation_total_allocations_count_multiple() {
+        let operation = ReportOperation {
+            total_bytes_allocated: 500,
+            total_allocations_count: 25,
+            total_iterations: 5,
+        };
+
+        assert_eq!(operation.total_allocations_count(), 25);
+    }
+
+    #[test]
+    fn report_operation_total_allocations_count_consistency_with_session() {
+        let session = Session::new();
+        {
+            let operation = session.operation("test_consistency");
+            let _span = operation.measure_thread();
+            // Simulate 3 allocations
+            THREAD_BYTES_ALLOCATED.with(|c| c.set(c.get().wrapping_add(300)));
+            THREAD_ALLOCATIONS_COUNT.with(|c| c.set(c.get().wrapping_add(3)));
+        } // Span drops here
+
+        let report = session.to_report();
+        let operations: Vec<_> = report.operations().collect();
+        assert_eq!(operations.len(), 1);
+
+        let (_name, report_op) = operations.first().unwrap();
+        assert_eq!(report_op.total_allocations_count(), 3);
+        assert_eq!(report_op.total_bytes_allocated(), 300);
+        assert_eq!(report_op.total_iterations(), 1);
+    }
+
     // Static assertions for thread safety
     static_assertions::assert_impl_all!(Report: Send, Sync);
     static_assertions::assert_impl_all!(ReportOperation: Send, Sync);
