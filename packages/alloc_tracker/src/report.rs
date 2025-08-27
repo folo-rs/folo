@@ -71,7 +71,10 @@ pub struct Report {
 
 /// Memory allocation statistics for a single operation in a report.
 #[derive(Clone, Debug)]
-#[expect(clippy::struct_field_names, reason = "field names are descriptive and clear")]
+#[expect(
+    clippy::struct_field_names,
+    reason = "field names are descriptive and clear"
+)]
 pub struct ReportOperation {
     total_bytes_allocated: u64,
     total_allocations_count: u64,
@@ -258,8 +261,14 @@ impl ReportOperation {
     }
 
     /// Calculates the mean bytes allocated per iteration.
-    #[expect(clippy::integer_division, reason = "we accept loss of precision for mean calculation")]
-    #[expect(clippy::arithmetic_side_effects, reason = "division by zero is guarded by if-else")]
+    #[expect(
+        clippy::integer_division,
+        reason = "we accept loss of precision for mean calculation"
+    )]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "division by zero is guarded by if-else"
+    )]
     #[must_use]
     pub fn mean_bytes(&self) -> u64 {
         if self.total_iterations == 0 {
@@ -270,8 +279,14 @@ impl ReportOperation {
     }
 
     /// Calculates the mean number of allocations per iteration.
-    #[expect(clippy::integer_division, reason = "we accept loss of precision for mean calculation")]
-    #[expect(clippy::arithmetic_side_effects, reason = "division by zero is guarded by if-else")]
+    #[expect(
+        clippy::integer_division,
+        reason = "we accept loss of precision for mean calculation"
+    )]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "division by zero is guarded by if-else"
+    )]
     #[must_use]
     pub fn mean_allocations(&self) -> u64 {
         if self.total_iterations == 0 {
@@ -282,7 +297,7 @@ impl ReportOperation {
     }
 
     /// Calculates the mean bytes allocated per iteration.
-    /// 
+    ///
     /// This is an alias for [`mean_bytes`](Self::mean_bytes) to maintain backward compatibility.
     #[must_use]
     pub fn mean(&self) -> u64 {

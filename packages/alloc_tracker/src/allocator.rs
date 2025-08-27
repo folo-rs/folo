@@ -83,8 +83,7 @@ fn check_and_panic_if_enabled() {
 /// No-op version when `panic_on_next_alloc` feature is disabled.
 #[cfg(not(feature = "panic_on_next_alloc"))]
 #[inline]
-fn check_and_panic_if_enabled() {
-}
+fn check_and_panic_if_enabled() {}
 
 /// Updates allocation tracking counters for the given size.
 /// This tracks both global and thread-local allocation statistics for both bytes and count.

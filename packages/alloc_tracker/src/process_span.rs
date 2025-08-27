@@ -5,7 +5,9 @@ use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics, TOTAL_ALLOCATIONS_COUNT, TOTAL_BYTES_ALLOCATED};
+use crate::{
+    ERR_POISONED_LOCK, Operation, OperationMetrics, TOTAL_ALLOCATIONS_COUNT, TOTAL_BYTES_ALLOCATED,
+};
 
 /// A tracked span of code that tracks process-wide allocations between creation and drop.
 ///
@@ -92,11 +94,11 @@ impl ProcessSpan {
     fn to_deltas(&self) -> (u64, u64) {
         let current_bytes = TOTAL_BYTES_ALLOCATED.load(Ordering::Relaxed);
         let current_count = TOTAL_ALLOCATIONS_COUNT.load(Ordering::Relaxed);
-        
+
         let total_bytes_delta = current_bytes
             .checked_sub(self.start_bytes)
             .expect("total bytes allocated could not possibly decrease");
-        
+
         let total_count_delta = current_count
             .checked_sub(self.start_count)
             .expect("total allocations count could not possibly decrease");

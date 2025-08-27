@@ -1,6 +1,9 @@
 /// Metrics tracked for each operation in the session.
 #[derive(Clone, Debug, Default)]
-#[expect(clippy::struct_field_names, reason = "field names are descriptive and clear")]
+#[expect(
+    clippy::struct_field_names,
+    reason = "field names are descriptive and clear"
+)]
 pub(crate) struct OperationMetrics {
     pub(crate) total_bytes_allocated: u64,
     pub(crate) total_allocations_count: u64,
@@ -29,7 +32,9 @@ impl OperationMetrics {
         self.total_allocations_count = self
             .total_allocations_count
             .checked_add(total_count)
-            .expect("total allocations count overflows u64 - this indicates an unrealistic scenario");
+            .expect(
+                "total allocations count overflows u64 - this indicates an unrealistic scenario",
+            );
 
         self.total_iterations = self.total_iterations.checked_add(iterations).expect(
             "total iterations count overflows u64 - this indicates an unrealistic scenario",

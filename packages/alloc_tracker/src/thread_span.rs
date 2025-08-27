@@ -3,7 +3,10 @@
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
-use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics, THREAD_ALLOCATIONS_COUNT, THREAD_BYTES_ALLOCATED};
+use crate::{
+    ERR_POISONED_LOCK, Operation, OperationMetrics, THREAD_ALLOCATIONS_COUNT,
+    THREAD_BYTES_ALLOCATED,
+};
 
 /// A tracked span of code that tracks allocations on this thread between creation and drop.
 ///
@@ -91,11 +94,11 @@ impl ThreadSpan {
     fn to_deltas(&self) -> (u64, u64) {
         let current_bytes = THREAD_BYTES_ALLOCATED.with(std::cell::Cell::get);
         let current_count = THREAD_ALLOCATIONS_COUNT.with(std::cell::Cell::get);
-        
+
         let total_bytes_delta = current_bytes
             .checked_sub(self.start_bytes)
             .expect("thread bytes allocated could not possibly decrease");
-        
+
         let total_count_delta = current_count
             .checked_sub(self.start_count)
             .expect("thread allocations count could not possibly decrease");

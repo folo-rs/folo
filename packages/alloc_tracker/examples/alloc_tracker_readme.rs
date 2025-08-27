@@ -9,10 +9,10 @@
 //! cargo run --example alloc_tracker_readme --features panic_on_next_alloc
 //! ```
 
-#[cfg(feature = "panic_on_next_alloc")]
-use alloc_tracker::{Allocator, Session, panic_on_next_alloc};
 #[cfg(not(feature = "panic_on_next_alloc"))]
 use alloc_tracker::{Allocator, Session};
+#[cfg(feature = "panic_on_next_alloc")]
+use alloc_tracker::{Allocator, Session, panic_on_next_alloc};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
