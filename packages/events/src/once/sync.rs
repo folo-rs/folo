@@ -1042,10 +1042,12 @@ where
     /// Returns `Err` if the sender has already disconnected without sending a value.
     /// In both of these cases, the receiver must clean up the event now.
     pub(crate) fn final_poll(&self) -> Result<Option<T>, Disconnected> {
-        // We use Relaxed because we use fences to synchronize below.
+        // We use Release because we are releasing the synchronization block of the event.
+        // We may re-acquire it below if it looks like we need to do further work but unless
+        // we do, this is the last interaction between us and the event.
         let previous_state = self
             .state
-            .swap(EVENT_DISCONNECTED, atomic::Ordering::Relaxed);
+            .swap(EVENT_DISCONNECTED, atomic::Ordering::Release);
 
         match previous_state {
             EVENT_BOUND => {
