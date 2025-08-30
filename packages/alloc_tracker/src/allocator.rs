@@ -92,7 +92,7 @@ pub(crate) fn get_or_init_thread_counters() -> &'static PerThreadCounters {
 }
 
 /// Aggregate totals across all registered threads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AllocationTotals {
     pub bytes: u64,
     pub count: u64,

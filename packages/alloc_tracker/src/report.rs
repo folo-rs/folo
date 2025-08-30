@@ -400,7 +400,8 @@ impl fmt::Display for Report {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{allocator::register_fake_allocation, Session};
+    use crate::Session;
+    use crate::allocator::register_fake_allocation;
 
     #[test]
     fn new_report_is_empty() {
