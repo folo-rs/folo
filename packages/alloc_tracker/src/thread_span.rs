@@ -3,10 +3,8 @@
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
-use crate::{
-    ERR_POISONED_LOCK, Operation, OperationMetrics, THREAD_ALLOCATIONS_COUNT,
-    THREAD_BYTES_ALLOCATED,
-};
+use crate::allocator::get_or_init_thread_counters;
+use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 
 /// A tracked span of code that tracks allocations on this thread between creation and drop.
 ///
@@ -43,8 +41,9 @@ impl ThreadSpan {
     pub(crate) fn new(operation: &Operation, iterations: u64) -> Self {
         assert!(iterations != 0);
 
-        let start_bytes = THREAD_BYTES_ALLOCATED.with(std::cell::Cell::get);
-        let start_count = THREAD_ALLOCATIONS_COUNT.with(std::cell::Cell::get);
+        let counters = get_or_init_thread_counters();
+        let start_bytes = counters.bytes();
+        let start_count = counters.count();
 
         Self {
             metrics: operation.metrics(),
@@ -92,8 +91,9 @@ impl ThreadSpan {
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // The != 1 fork is broadly applicable, so mutations fail. Intentional.
     fn to_deltas(&self) -> (u64, u64) {
-        let current_bytes = THREAD_BYTES_ALLOCATED.with(std::cell::Cell::get);
-        let current_count = THREAD_ALLOCATIONS_COUNT.with(std::cell::Cell::get);
+        let counters = get_or_init_thread_counters();
+        let current_bytes = counters.bytes();
+        let current_count = counters.count();
 
         let total_bytes_delta = current_bytes
             .checked_sub(self.start_bytes)

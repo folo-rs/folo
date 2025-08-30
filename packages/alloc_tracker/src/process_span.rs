@@ -2,12 +2,9 @@
 
 use std::cell::Cell;
 use std::marker::PhantomData;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use crate::{
-    ERR_POISONED_LOCK, Operation, OperationMetrics, TOTAL_ALLOCATIONS_COUNT, TOTAL_BYTES_ALLOCATED,
-};
+use crate::{allocator::{allocation_totals, AllocationTotals}, ERR_POISONED_LOCK, Operation, OperationMetrics};
 
 /// A tracked span of code that tracks process-wide allocations between creation and drop.
 ///
@@ -43,8 +40,7 @@ impl ProcessSpan {
     pub(crate) fn new(operation: &Operation, iterations: u64) -> Self {
         assert!(iterations != 0);
 
-        let start_bytes = TOTAL_BYTES_ALLOCATED.load(Ordering::Relaxed);
-        let start_count = TOTAL_ALLOCATIONS_COUNT.load(Ordering::Relaxed);
+    let AllocationTotals { bytes: start_bytes, count: start_count } = allocation_totals();
 
         Self {
             metrics: operation.metrics(),
@@ -92,8 +88,7 @@ impl ProcessSpan {
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // The != 1 fork is broadly applicable, so mutations fail. Intentional.
     fn to_deltas(&self) -> (u64, u64) {
-        let current_bytes = TOTAL_BYTES_ALLOCATED.load(Ordering::Relaxed);
-        let current_count = TOTAL_ALLOCATIONS_COUNT.load(Ordering::Relaxed);
+    let AllocationTotals { bytes: current_bytes, count: current_count } = allocation_totals();
 
         let total_bytes_delta = current_bytes
             .checked_sub(self.start_bytes)

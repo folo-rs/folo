@@ -312,3 +312,62 @@ fn panic_on_next_alloc_resets_automatically() {
     )]
     let _allowed_allocation = vec![4, 5, 6];
 }
+
+#[test]
+fn process_report_includes_allocations_from_multiple_threads() {
+    const THREAD_A_ALLOCS: usize = 40;
+    const THREAD_B_ALLOCS: usize = 25;
+    const SIZE_A: usize = 128; // bytes per allocation in thread A
+    const SIZE_B: usize = 256; // bytes per allocation in thread B
+
+    let session = Session::new();
+    {
+        let op = session.operation("two_thread_process");
+        let _span = op.measure_process();
+
+        let handle_a = thread::spawn(|| {
+            let mut total = 0usize;
+            for _ in 0..THREAD_A_ALLOCS {
+                let v = vec![0u8; SIZE_A];
+                total += v.len();
+                black_box(&v);
+            }
+            total
+        });
+
+        let handle_b = thread::spawn(|| {
+            let mut total = 0usize;
+            for _ in 0..THREAD_B_ALLOCS {
+                let v = vec![1u8; SIZE_B];
+                black_box(&v);
+                total += v.len();
+            }
+            total
+        });
+
+        // Also allocate on the main thread so we can distinguish process span > sum of one thread.
+        let main_alloc = vec![2u8; 64];
+        black_box(&main_alloc);
+
+        let a_bytes = handle_a.join().expect("thread A joined");
+        let b_bytes = handle_b.join().expect("thread B joined");
+
+        // Basic sanity: ensure we actually performed the expected sizes.
+        assert_eq!(a_bytes, THREAD_A_ALLOCS * SIZE_A);
+        assert_eq!(b_bytes, THREAD_B_ALLOCS * SIZE_B);
+    }
+
+    let report = session.to_report();
+    let operations: Vec<_> = report.operations().collect();
+    assert_eq!(operations.len(), 1, "expected exactly one operation in report");
+    let (_name, op) = operations.first().unwrap();
+    let total = op.total_bytes_allocated();
+
+    // Expect at least the sum of the two thread totals (plus main thread allocation overhead)
+    let min_expected = (THREAD_A_ALLOCS * SIZE_A + THREAD_B_ALLOCS * SIZE_B) as u64;
+    assert!(total >= min_expected, "total {total} < expected minimum {min_expected}");
+
+    // Ensure neither thread's contribution is trivially missing: total should exceed each individual component
+    assert!(total >= (THREAD_A_ALLOCS * SIZE_A) as u64);
+    assert!(total >= (THREAD_B_ALLOCS * SIZE_B) as u64);
+}
