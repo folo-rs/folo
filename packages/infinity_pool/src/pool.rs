@@ -15,7 +15,7 @@ use crate::{DropPolicy, RawPooled, RawPooledMut, Slab, SlabLayout};
 /// The pool does not care what the type of the items is, only that the types all match the memory
 /// layout specified at creation time. This is a safety requirement of the pool APIs, guaranteed
 /// by the higher-level pool types that internally use this pool.
-/// 
+///
 /// Higher level pool types in the public API wrap this pool with different levels of type-awareness
 /// and handle lifetime management. Underneath, they all desugar into this pool, though.
 #[derive(Debug)]
@@ -257,7 +257,7 @@ impl Pool {
     /// Panics if the handle does not reference an existing item in this pool.
     ///
     /// Panics if `T` is a type-erased slab handle (`PoolHandle<()>`).
-    pub(crate) unsafe fn remove_mut_unpin<T: Unpin>(&mut self, handle: RawPooledMut<T>) -> T {
+    pub(crate) fn remove_mut_unpin<T: Unpin>(&mut self, handle: RawPooledMut<T>) -> T {
         // SAFETY: The provided handle is a unique handle, which guarantees that the object
         // has not been removed yet (because doing so consumes the unique handle).
         unsafe { self.remove_unpin(handle.into_shared()) }
@@ -457,8 +457,7 @@ mod tests {
 
         assert_eq!(pool.len(), 1);
 
-        // SAFETY: Handle is valid and comes from this pool
-        let value = unsafe { pool.remove_mut_unpin(handle) };
+        let value = pool.remove_mut_unpin(handle);
         assert_eq!(value, 42);
     }
 
@@ -488,8 +487,7 @@ mod tests {
         // SAFETY: i32 matches the layout used to create the pool
         let handle = unsafe { pool.insert(-456_i32) };
 
-        // SAFETY: Handle is valid and comes from this pool
-        let value = unsafe { pool.remove_mut_unpin(handle) };
+        let value = pool.remove_mut_unpin(handle);
         assert_eq!(value, -456);
         assert_eq!(pool.len(), 0);
     }
@@ -567,8 +565,62 @@ mod tests {
 
         assert_eq!(pool.len(), 1);
 
-        // SAFETY: Handle is valid and comes from this pool
-        let value = unsafe { pool.remove_mut_unpin(handle2) };
+        let value = pool.remove_mut_unpin(handle2);
         assert_eq!(value, 2);
+    }
+
+    #[test]
+    fn remove_with_shared_handle() {
+        let mut pool = Pool::new(Layout::new::<i64>(), DropPolicy::MayDropItems);
+
+        // SAFETY: i64 matches the layout used to create the pool
+        let handle_mut = unsafe { pool.insert(999_i64) };
+        let handle_shared = handle_mut.into_shared();
+
+        assert_eq!(pool.len(), 1);
+
+        // SAFETY: Handle is valid and comes from this pool
+        unsafe {
+            pool.remove(handle_shared);
+        }
+
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn remove_unpin_with_shared_handle() {
+        let mut pool = Pool::new(Layout::new::<i32>(), DropPolicy::MayDropItems);
+
+        // SAFETY: i32 matches the layout used to create the pool
+        let handle_mut = unsafe { pool.insert(42_i32) };
+        let handle_shared = handle_mut.into_shared();
+
+        assert_eq!(pool.len(), 1);
+
+        // SAFETY: Handle is valid and comes from this pool
+        let value = unsafe { pool.remove_unpin(handle_shared) };
+
+        assert_eq!(value, 42);
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn remove_unpin_panics_on_zero_sized_type() {
+        // We need to use a type that is not zero-sized for the pool itself,
+        // but we create a handle that gets type-erased to a ZST.
+        let mut pool = Pool::new(Layout::new::<u8>(), DropPolicy::MayDropItems);
+
+        // SAFETY: u8 matches the layout used to create the pool
+        let handle = unsafe { pool.insert(123_u8) };
+
+        let erased_handle: RawPooled<()> = handle.into_shared().erase();
+
+        // This should panic because size_of::<()>() == 0
+        // SAFETY: Handle points to valid memory but type is ZST.
+        unsafe {
+            pool.remove_unpin(erased_handle);
+        }
     }
 }
