@@ -25,9 +25,9 @@ use crate::{DropPolicy, Dropper, SlabHandle, SlabLayout, SlotMeta};
 ///
 /// # Thread safety
 ///
-/// The slab itself is thread-mobile and may be moved across threads. Thead-safety characteristics
-/// of objects in the slab are up to the caller to enforce - the slab does not even know the type
-/// of the objects, so it plays no part in that.
+/// The slab itself is thread-mobile (`Send`) and may be moved across threads. However, this is
+/// only valid if all objects in the slab are likewise `Send`. This is a safety requirement
+/// enforced by the `insert()` family of methods.
 #[derive(Debug)]
 pub(crate) struct Slab {
     /// Precomputed layout factors for the slab, based on the object layout and capacity.
@@ -143,6 +143,9 @@ impl Slab {
     ///
     /// The caller must ensure that the layout of `T` matches the slab's item layout.
     /// In debug builds, this is checked with an assertion.
+    ///
+    /// If `T` is not `Send`, the caller must ensure that the slab itself is never moved
+    /// across threads (it is effectively `!Send` while any such object is in the slab).
     pub(crate) unsafe fn insert<T>(&mut self, value: T) -> SlabHandle<T> {
         // Implement insert() in terms of insert_with() to reduce logic duplication.
         // SAFETY: Forwarding safety requirements to the caller.
@@ -178,6 +181,9 @@ impl Slab {
     ///
     /// The caller must ensure that the closure correctly initializes the object. All fields that
     /// are not `MaybeUninit` must be initialized when the closure returns.
+    ///
+    /// If `T` is not `Send`, the caller must ensure that the slab itself is never moved
+    /// across threads (it is effectively `!Send` while any such object is in the slab).
     pub(crate) unsafe fn insert_with<T, F>(&mut self, f: F) -> SlabHandle<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
@@ -461,9 +467,8 @@ impl Drop for Slab {
     }
 }
 
-// SAFETY: Slab contains raw pointers (NonNull<SlotMeta>) but they are used purely
-// for memory management within the slab's owned allocation and is done in a
-// thread-mobile way.
+// SAFETY: We are "potentially Send" - it depends on what objects are contained inside the slab.
+// See type-level documentation for more details.
 unsafe impl Send for Slab {}
 
 /// Iterator over occupied slots in a slab.
@@ -474,6 +479,10 @@ unsafe impl Send for Slab {}
 ///
 /// Supports bidirectional iteration via `DoubleEndedIterator` and exact size tracking
 /// via `ExactSizeIterator`.
+///
+/// # Thread safety
+///
+/// The type is single-threaded.
 #[derive(Debug)]
 pub(crate) struct SlabIterator<'s> {
     slab: &'s Slab,

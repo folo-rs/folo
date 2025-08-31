@@ -18,6 +18,12 @@ use crate::{DropPolicy, RawPooled, RawPooledMut, Slab, SlabLayout};
 ///
 /// Higher level pool types in the public API wrap this pool with different levels of type-awareness
 /// and handle lifetime management. Underneath, they all desugar into this pool, though.
+///
+/// # Thread safety
+///
+/// The pool itself is thread-mobile (`Send`) and may be moved across threads. However, this is
+/// only valid if all objects in the pool are likewise `Send`. This is a safety requirement
+/// enforced by the `insert()` family of methods.
 #[derive(Debug)]
 pub(crate) struct Pool {
     /// The layout of each slab in the pool, determined based on the object
@@ -148,6 +154,9 @@ impl Pool {
     /// # Safety
     ///
     /// The caller must ensure that the layout of `T` matches the pool's object layout.
+    ///
+    /// If `T` is not `Send`, the caller must ensure that the pool itself is never moved
+    /// across threads (it is effectively `!Send` while any such object is in the pool).
     pub(crate) unsafe fn insert<T>(&mut self, value: T) -> RawPooledMut<T> {
         // Implement insert() in terms of insert_with() to reduce logic duplication.
         // SAFETY: Forwarding safety requirements to the caller.
@@ -164,6 +173,9 @@ impl Pool {
     ///
     /// The caller must ensure that the layout of `T` matches the pool's object layout.
     /// The closure must correctly initialize the object.
+    ///
+    /// If `T` is not `Send`, the caller must ensure that the pool itself is never moved
+    /// across threads (it is effectively `!Send` while any such object is in the pool).
     pub(crate) unsafe fn insert_with<T, F>(&mut self, f: F) -> RawPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
@@ -201,7 +213,7 @@ impl Pool {
         self.length = self.length.wrapping_add(1);
 
         // The pool itself does not care about the type T but for the convenience of the caller
-        // we imbue the PoolHandle with the type information, to reduce required casting by caller.
+        // we imbue the RawPooledMut with the type information, to reduce required casting by caller.
         RawPooledMut::new(slab_index, slab_handle)
     }
 
@@ -231,7 +243,7 @@ impl Pool {
         let slab = self
             .slabs
             .get_mut(handle.slab_index())
-            .expect("the PoolHandle did not point to an existing item in the pool");
+            .expect("the RawPooled did not point to an existing item in the pool");
 
         // In principle, we could return the value here if `T: Unpin` but there is no need
         // for this functionality at present, so we do not implement it to reduce complexity.
@@ -256,7 +268,7 @@ impl Pool {
     ///
     /// Panics if the handle does not reference an existing item in this pool.
     ///
-    /// Panics if `T` is a type-erased slab handle (`PoolHandle<()>`).
+    /// Panics if `T` is a type-erased slab handle (`RawPooledMut<()>`).
     pub(crate) fn remove_mut_unpin<T: Unpin>(&mut self, handle: RawPooledMut<T>) -> T {
         // SAFETY: The provided handle is a unique handle, which guarantees that the object
         // has not been removed yet (because doing so consumes the unique handle).
@@ -269,13 +281,13 @@ impl Pool {
     ///
     /// Panics if the handle does not reference an existing item in this pool.
     ///
-    /// Panics if `T` is a type-erased slab handle (`PoolHandle<()>`).
+    /// Panics if `T` is a type-erased slab handle (`RawPooledMut<()>`).
     ///
     /// # Safety
     ///
     /// The caller must ensure that the handle is valid and belongs to this pool.
     pub(crate) unsafe fn remove_unpin<T: Unpin>(&mut self, handle: RawPooled<T>) -> T {
-        // We would rather prefer to check for `PoolHandle<()>` specifically but
+        // We would rather prefer to check for `RawPooledMut<()>` specifically but
         // that would imply specialization or `T: 'static` for TypeId shenanigans.
         // This is good enough because type-erasing a handle is the only way to get a
         // handle to a ZST anyway because the slab does not even support ZSTs.
@@ -288,9 +300,9 @@ impl Pool {
         let slab = self
             .slabs
             .get_mut(handle.slab_index())
-            .expect("the PoolHandle did not point to an existing item in the pool");
+            .expect("the RawPooled did not point to an existing item in the pool");
 
-        // SAFETY: The PoolHandle<T> guarantees the type T is correct for this pool slot.
+        // SAFETY: The RawPooled<T> guarantees the type T is correct for this pool slot.
         let value = unsafe { slab.remove_unpin::<T>(handle.slab_handle()) };
 
         // Update our tracked length since we just removed an item.
