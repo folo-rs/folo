@@ -780,6 +780,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "infinity_pool"
+version = "0.1.0"
+dependencies = [
+ "alloc_tracker",
+ "criterion",
+ "mutants",
+ "new_zealand",
+ "num-integer",
+ "scopeguard",
+ "static_assertions",
+]
+
+[[package]]
 name = "io-uring"
 version = "0.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

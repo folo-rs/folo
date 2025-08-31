@@ -13,6 +13,7 @@ Folo
 freelist
 gettime
 heapless
+Initializable
 JOBOBJECT
 libc
 lifecycles

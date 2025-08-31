@@ -93,6 +93,7 @@
                 "fast_time",
                 "folo_ffi",
                 "folo_utils",
+                "infinity_pool",
                 "linked",
                 "linked_macros",
                 "linked_macros_impl",
