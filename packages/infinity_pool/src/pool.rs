@@ -1,19 +1,23 @@
 use std::alloc::Layout;
 use std::mem::MaybeUninit;
 
-use crate::{DropPolicy, PoolHandle, Slab, SlabLayout};
+use crate::{DropPolicy, RawPooled, RawPooledMut, Slab, SlabLayout};
 
 // TODO: Factor out the vacancy cache into its own type.
+// TODO: Optimize scenarios with mass inserts into a large reservation (slow today, poor vacancy cache logic).
 
 /// A pool of objects of uniform memory layout.
 ///
 /// This is the building block for creating different kinds of object pools. Underneath, they all
 /// place their items in this pool, which manages the memory capacity, places items into that
-/// capacity and grants low-level access to the items.
+/// capacity and grants low-level access to the items via `RawPooled` and `RawPooledMut`.
 ///
 /// The pool does not care what the type of the items is, only that the types all match the memory
 /// layout specified at creation time. This is a safety requirement of the pool APIs, guaranteed
 /// by the higher-level pool types that internally use this pool.
+/// 
+/// Higher level pool types in the public API wrap this pool with different levels of type-awareness
+/// and handle lifetime management. Underneath, they all desugar into this pool, though.
 #[derive(Debug)]
 pub(crate) struct Pool {
     /// The layout of each slab in the pool, determined based on the object
@@ -144,7 +148,7 @@ impl Pool {
     /// # Safety
     ///
     /// The caller must ensure that the layout of `T` matches the pool's object layout.
-    pub(crate) unsafe fn insert<T>(&mut self, value: T) -> PoolHandle<T> {
+    pub(crate) unsafe fn insert<T>(&mut self, value: T) -> RawPooledMut<T> {
         // Implement insert() in terms of insert_with() to reduce logic duplication.
         // SAFETY: Forwarding safety requirements to the caller.
         unsafe {
@@ -160,7 +164,7 @@ impl Pool {
     ///
     /// The caller must ensure that the layout of `T` matches the pool's object layout.
     /// The closure must correctly initialize the object.
-    pub(crate) unsafe fn insert_with<T, F>(&mut self, f: F) -> PoolHandle<T>
+    pub(crate) unsafe fn insert_with<T, F>(&mut self, f: F) -> RawPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {
@@ -198,7 +202,20 @@ impl Pool {
 
         // The pool itself does not care about the type T but for the convenience of the caller
         // we imbue the PoolHandle with the type information, to reduce required casting by caller.
-        PoolHandle::new(slab_index, slab_handle)
+        RawPooledMut::new(slab_index, slab_handle)
+    }
+
+    /// Removes an object from the pool, dropping it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the handle does not reference an existing item in this pool.
+    pub(crate) fn remove_mut<T: ?Sized>(&mut self, handle: RawPooledMut<T>) {
+        // SAFETY: The provided handle is a unique handle, which guarantees that the object
+        // has not been removed yet (because doing so consumes the unique handle).
+        unsafe {
+            self.remove(handle.into_shared());
+        }
     }
 
     /// Removes an object from the pool, dropping it.
@@ -210,7 +227,7 @@ impl Pool {
     /// # Safety
     ///
     /// The caller must ensure that the handle is valid and belongs to this pool.
-    pub(crate) unsafe fn remove<T: ?Sized>(&mut self, handle: PoolHandle<T>) {
+    pub(crate) unsafe fn remove<T: ?Sized>(&mut self, handle: RawPooled<T>) {
         let slab = self
             .slabs
             .get_mut(handle.slab_index())
@@ -240,12 +257,24 @@ impl Pool {
     /// Panics if the handle does not reference an existing item in this pool.
     ///
     /// Panics if `T` is a type-erased slab handle (`PoolHandle<()>`).
+    pub(crate) unsafe fn remove_mut_unpin<T: Unpin>(&mut self, handle: RawPooledMut<T>) -> T {
+        // SAFETY: The provided handle is a unique handle, which guarantees that the object
+        // has not been removed yet (because doing so consumes the unique handle).
+        unsafe { self.remove_unpin(handle.into_shared()) }
+    }
+
+    /// Removes an object from the pool and returns it.
     ///
+    /// # Panics
+    ///
+    /// Panics if the handle does not reference an existing item in this pool.
+    ///
+    /// Panics if `T` is a type-erased slab handle (`PoolHandle<()>`).
     ///
     /// # Safety
     ///
     /// The caller must ensure that the handle is valid and belongs to this pool.
-    pub(crate) unsafe fn remove_unpin<T: Unpin>(&mut self, handle: PoolHandle<T>) -> T {
+    pub(crate) unsafe fn remove_unpin<T: Unpin>(&mut self, handle: RawPooled<T>) -> T {
         // We would rather prefer to check for `PoolHandle<()>` specifically but
         // that would imply specialization or `T: 'static` for TypeId shenanigans.
         // This is good enough because type-erasing a handle is the only way to get a
@@ -429,7 +458,7 @@ mod tests {
         assert_eq!(pool.len(), 1);
 
         // SAFETY: Handle is valid and comes from this pool
-        let value = unsafe { pool.remove_unpin(handle) };
+        let value = unsafe { pool.remove_mut_unpin(handle) };
         assert_eq!(value, 42);
     }
 
@@ -444,16 +473,10 @@ mod tests {
 
         assert_eq!(pool.len(), 2);
 
-        // SAFETY: Handle is valid and comes from this pool
-        unsafe {
-            pool.remove(handle1);
-        }
+        pool.remove_mut(handle1);
         assert_eq!(pool.len(), 1);
 
-        // SAFETY: Handle is valid and comes from this pool
-        unsafe {
-            pool.remove(handle2);
-        }
+        pool.remove_mut(handle2);
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
     }
@@ -466,7 +489,7 @@ mod tests {
         let handle = unsafe { pool.insert(-456_i32) };
 
         // SAFETY: Handle is valid and comes from this pool
-        let value = unsafe { pool.remove_unpin(handle) };
+        let value = unsafe { pool.remove_mut_unpin(handle) };
         assert_eq!(value, -456);
         assert_eq!(pool.len(), 0);
     }
@@ -488,10 +511,7 @@ mod tests {
 
         // Remove all items
         for handle in handles {
-            // SAFETY: Handle is valid and comes from this pool
-            unsafe {
-                pool.remove(handle);
-            }
+            pool.remove_mut(handle);
         }
 
         assert!(pool.is_empty());
@@ -519,11 +539,11 @@ mod tests {
     }
 
     #[test]
-    fn handles_are_copyable() {
+    fn shared_handles_are_copyable() {
         let mut pool = Pool::new(Layout::new::<u32>(), DropPolicy::MayDropItems);
 
         // SAFETY: u32 matches the layout used to create the pool
-        let handle1 = unsafe { pool.insert(789_u32) };
+        let handle1 = unsafe { pool.insert(789_u32) }.into_shared();
         let handle2 = handle1;
         #[expect(clippy::clone_on_copy, reason = "intentional, testing cloning")]
         let handle3 = handle1.clone();
@@ -540,10 +560,7 @@ mod tests {
         // Insert, remove, insert again to test slot reuse
         // SAFETY: usize matches the layout used to create the pool
         let handle1 = unsafe { pool.insert(1_usize) };
-        // SAFETY: Handle is valid and comes from this pool
-        unsafe {
-            pool.remove(handle1);
-        }
+        pool.remove_mut(handle1);
 
         // SAFETY: usize matches the layout used to create the pool
         let handle2 = unsafe { pool.insert(2_usize) };
@@ -551,7 +568,7 @@ mod tests {
         assert_eq!(pool.len(), 1);
 
         // SAFETY: Handle is valid and comes from this pool
-        let value = unsafe { pool.remove_unpin(handle2) };
+        let value = unsafe { pool.remove_mut_unpin(handle2) };
         assert_eq!(value, 2);
     }
 }

@@ -1,19 +1,21 @@
+use std::borrow::Borrow;
 use std::fmt;
+use std::ops::Deref;
+use std::pin::Pin;
 use std::ptr::NonNull;
 
-use crate::SlabHandle;
+use crate::{RawPooledMut, SlabHandle};
 
 /// A shared handle to an object in a [`Pool`].
 ///
-/// Public API types will hide this behind smarter handle mechanisms that may know the type of
-/// the object and may have lifetime management semantics.
-///
-/// This can be used to obtain a typed pointer to the inserted item, as well as to remove
+/// The handle can be used to obtain a typed pointer to the pooled object, as well as to remove
 /// the item from the pool when no longer needed.
 ///
-/// The handle enforces no ownership semantics - consider it merely a fat pointer. It can be
-/// freely cloned and copied. The only way to access the contents is unsafe access through
-/// the pointer obtained via `ptr()`.
+/// This is a raw handle that requires manual lifetime management of the pooled objects.
+/// You must call `remove()` on the pool to drop the object this handle references.
+/// If the handle is dropped without being passed to `remove()`, the object is only removed
+/// from the pool when the pool itself is is dropped. Different types of handles may offer
+/// automatic removal of the object from the pool when the handle is dropped.
 ///
 /// # Thread safety
 ///
@@ -22,7 +24,7 @@ use crate::SlabHandle;
 ///
 /// If the underlying object is `Sync`, the handle is thread-mobile (`Send`). Otherwise, the
 /// handle is single-threaded (neither `Send` nor `Sync`).
-pub(crate) struct PoolHandle<T: ?Sized> {
+pub struct RawPooled<T: ?Sized> {
     /// Index of the slab in the pool. Slabs are guaranteed to say at the same index unless
     /// the pool is shrunk (which can only happen when the affected slabs are empty, in which
     /// case all existing handles are already invalidated).
@@ -33,7 +35,7 @@ pub(crate) struct PoolHandle<T: ?Sized> {
     slab_handle: SlabHandle<T>,
 }
 
-impl<T: ?Sized> PoolHandle<T> {
+impl<T: ?Sized> RawPooled<T> {
     pub(crate) fn new(slab_index: usize, slab_handle: SlabHandle<T>) -> Self {
         Self {
             slab_index,
@@ -52,7 +54,7 @@ impl<T: ?Sized> PoolHandle<T> {
     ///
     /// It is the responsibility of the caller to ensure that the pointer is not used
     /// after the object has been removed from the pool.
-    pub(crate) fn ptr(&self) -> NonNull<T> {
+    pub fn ptr(&self) -> NonNull<T> {
         self.slab_handle.ptr()
     }
 
@@ -68,36 +70,78 @@ impl<T: ?Sized> PoolHandle<T> {
     /// The returned handle remains functional for most purposes, just without type information.
     /// A type-erased handle cannot be used to remove the object from the pool and return it to
     /// the caller, as there is no more knowledge of the type to be returned.
-    pub(crate) fn erase(self) -> PoolHandle<()> {
-        PoolHandle {
+    pub fn erase(self) -> RawPooled<()> {
+        RawPooled {
             slab_index: self.slab_index,
             slab_handle: self.slab_handle.erase(),
         }
     }
+
+    /// Borrows the target object as a pinned shared reference.
+    ///
+    /// All pooled objects are guaranteed to be pinned for their entire lifetime.
+    pub fn as_pin(&self) -> Pin<&T> {
+        // SAFETY: This is a shared handle, so we can only guarantee shared borrow safety
+        // by borrowing the handle itself. The only way to create an exclusive reference
+        // is via unsafe code (in which case whoever creates it takes responsibility).
+        let as_ref = unsafe { self.ptr().as_ref() };
+
+        // SAFETY: Pooled items are always pinned.
+        unsafe { Pin::new_unchecked(as_ref) }
+    }
 }
 
-impl<T: ?Sized> Clone for PoolHandle<T> {
+impl<T: ?Sized> Clone for RawPooled<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T: ?Sized> Copy for PoolHandle<T> {}
+impl<T: ?Sized> Copy for RawPooled<T> {}
 
-impl<T: ?Sized> PartialEq for PoolHandle<T> {
+impl<T: ?Sized> PartialEq for RawPooled<T> {
     fn eq(&self, other: &Self) -> bool {
         self.slab_index == other.slab_index && self.slab_handle == other.slab_handle
     }
 }
 
-impl<T: ?Sized> Eq for PoolHandle<T> {}
+impl<T: ?Sized> Eq for RawPooled<T> {}
 
-impl<T: ?Sized> fmt::Debug for PoolHandle<T> {
+impl<T: ?Sized> fmt::Debug for RawPooled<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PoolHandle")
+        f.debug_struct("RawPooled")
             .field("slab_index", &self.slab_index)
             .field("slab_handle", &self.slab_handle)
             .finish()
+    }
+}
+
+impl<T: ?Sized> Deref for RawPooled<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: This is a shared handle, so we can only guarantee shared borrow safety
+        // by borrowing the handle itself. The only way to create an exclusive reference
+        // is via unsafe code (in which case whoever creates it takes responsibility).
+        unsafe { self.ptr().as_ref() }
+    }
+}
+
+impl<T: ?Sized> Borrow<T> for RawPooled<T> {
+    fn borrow(&self) -> &T {
+        self
+    }
+}
+
+impl<T: ?Sized> AsRef<T> for RawPooled<T> {
+    fn as_ref(&self) -> &T {
+        self
+    }
+}
+
+impl<T: ?Sized> From<RawPooledMut<T>> for RawPooled<T> {
+    fn from(value: RawPooledMut<T>) -> Self {
+        value.into_shared()
     }
 }
 
@@ -109,10 +153,10 @@ mod tests {
 
     use super::*;
 
-    // u32 is Sync, so PoolHandle<u32> should be Send (but not Sync).
-    assert_impl_all!(PoolHandle<u32>: Send);
-    assert_not_impl_any!(PoolHandle<u32>: Sync);
+    // u32 is Sync, so RawPooled<u32> should be Send (but not Sync).
+    assert_impl_all!(RawPooled<u32>: Send);
+    assert_not_impl_any!(RawPooled<u32>: Sync);
 
-    // Cell is Send but not Sync, so PoolHandle<Cell> should be neither Send nor Sync.
-    assert_not_impl_any!(PoolHandle<Cell<u32>>: Send, Sync);
+    // Cell is Send but not Sync, so RawPooled<Cell> should be neither Send nor Sync.
+    assert_not_impl_any!(RawPooled<Cell<u32>>: Send, Sync);
 }
