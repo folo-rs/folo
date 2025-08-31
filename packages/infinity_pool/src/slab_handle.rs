@@ -1,6 +1,7 @@
+use std::fmt;
 use std::ptr::{self, NonNull};
 
-/// A handle to an object stored in a `Slab`.
+/// A shared handle to an object stored in a [`Slab`].
 ///
 /// This can be used to obtain a typed pointer to the inserted item, as well as to remove
 /// the item from the slab when no longer needed.
@@ -16,7 +17,6 @@ use std::ptr::{self, NonNull};
 ///
 /// If the underlying object is `Sync`, the handle is thread-mobile (`Send`). Otherwise, the
 /// handle is single-threaded (neither `Send` nor `Sync`).
-#[derive(Debug)]
 pub(crate) struct SlabHandle<T: ?Sized> {
     /// Index in the slab at which this item is stored.
     ///
@@ -35,6 +35,45 @@ pub(crate) struct SlabHandle<T: ?Sized> {
     ptr: NonNull<T>,
 }
 
+impl<T: ?Sized> SlabHandle<T> {
+    #[must_use]
+    pub(crate) fn new(index: usize, ptr: NonNull<T>) -> Self {
+        Self { index, ptr }
+    }
+
+    /// Get the index of the object in the slab.
+    ///
+    /// This is used by the slab itself to identify the slot to be freed upon removal.
+    #[must_use]
+    pub(crate) fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Get a raw pointer to the object in the slab.
+    ///
+    /// It is the responsibility of the caller to ensure that the pointer is not used
+    /// after the object has been removed from the slab.
+    #[must_use]
+    pub(crate) fn ptr(&self) -> NonNull<T> {
+        self.ptr
+    }
+
+    /// Erases the type of the object the slab handle points to.
+    ///
+    /// The returned handle remains functional for most purposes, just without type information.
+    /// A type-erased handle cannot be used to remove the object from the slab and return it to
+    /// the caller, as there is no more knowledge of the type to be returned.
+    #[must_use]
+    pub(crate) fn erase(self) -> SlabHandle<()> {
+        SlabHandle {
+            index: self.index,
+            ptr: self.ptr.cast(),
+        }
+    }
+
+    // TODO: cast to trait object
+}
+
 impl<T: ?Sized> Clone for SlabHandle<T> {
     fn clone(&self) -> Self {
         *self
@@ -51,43 +90,17 @@ impl<T: ?Sized> PartialEq for SlabHandle<T> {
 
 impl<T: ?Sized> Eq for SlabHandle<T> {}
 
-impl<T: ?Sized> SlabHandle<T> {
-    pub(crate) fn new(index: usize, ptr: NonNull<T>) -> Self {
-        Self { index, ptr }
-    }
-
-    /// Get the index of the object in the slab.
-    ///
-    /// This is used by the slab itself to identify the slot to be freed upon removal.
-    pub(crate) fn index(&self) -> usize {
-        self.index
-    }
-
-    /// Get a raw pointer to the object in the slab.
-    ///
-    /// It is the responsibility of the caller to ensure that the pointer is not used
-    /// after the object has been removed from the slab.
-    pub(crate) fn ptr(&self) -> NonNull<T> {
-        self.ptr
-    }
-
-    /// Erases the type of the object the slab handle points to.
-    ///
-    /// The returned handle remains functional for most purposes, just without type information.
-    /// A type-erased handle cannot be used to remove the object from the slab and return it to
-    /// the caller, as there is no more knowledge of the type to be returned.
-    pub(crate) fn erase(self) -> SlabHandle<()> {
-        SlabHandle {
-            index: self.index,
-            ptr: self.ptr.cast(),
-        }
-    }
-
-    // TODO: cast to trait object
-}
-
 // SAFETY: See type-level documentation.
 unsafe impl<T: ?Sized + Sync> Send for SlabHandle<T> {}
+
+impl<T: ?Sized> fmt::Debug for SlabHandle<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SlabHandle")
+            .field("index", &self.index)
+            .field("ptr", &self.ptr)
+            .finish()
+    }
+}
 
 #[cfg(test)]
 mod tests {

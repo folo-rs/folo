@@ -315,6 +315,7 @@ impl Slab {
     /// fat pointers, so ownership and object lifetime must be managed manually by the caller.
     ///
     /// The caller must ensure that the handle belongs to this slab.
+    #[must_use]
     pub(crate) unsafe fn remove_unpin<T: Unpin>(&mut self, handle: SlabHandle<T>) -> T {
         // We would rather prefer to check for `SlabHandle<()>` specifically but
         // that would imply specialization or `T: 'static` for TypeId shenanigans.
@@ -614,7 +615,7 @@ mod tests {
     assert_impl_all!(Slab: Send);
     assert_not_impl_any!(Slab: Sync);
 
-    assert_impl_all!(SlabIterator<'_>: Iterator, DoubleEndedIterator, ExactSizeIterator, std::iter::FusedIterator);
+    assert_impl_all!(SlabIterator<'_>: Iterator, DoubleEndedIterator, ExactSizeIterator, FusedIterator);
     assert_not_impl_any!(SlabIterator<'_>: Send, Sync);
 
     fn smoke_test_impl<T: Default>() {

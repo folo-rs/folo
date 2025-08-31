@@ -6,8 +6,11 @@ use num_integer::Integer;
 
 use crate::SlotMeta;
 
+// TODO: We could decrease the size of this by calculating slot_array_layout and slot_layout
+// at runtime. Might be worth it if we can do it as const? Can we, though? Mmmm not so sure.
+
 /// Precalculates factors of the slab layout, based on the object layout and slab capacity.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SlabLayout {
     /// Number of slots in the slab.
     capacity: NonZero<usize>,
@@ -82,23 +85,28 @@ impl SlabLayout {
         }
     }
 
+    #[must_use]
     pub(crate) fn capacity(&self) -> NonZero<usize> {
         self.capacity
     }
 
     #[cfg(debug_assertions)]
+    #[must_use]
     pub(crate) fn object_layout(&self) -> Layout {
         self.object_layout
     }
 
+    #[must_use]
     pub(crate) fn slot_layout(&self) -> Layout {
         self.slot_layout
     }
 
+    #[must_use]
     pub(crate) fn slot_to_object_offset(&self) -> usize {
         self.slot_to_object_offset
     }
 
+    #[must_use]
     pub(crate) fn slot_array_layout(&self) -> Layout {
         self.slot_array_layout
     }
@@ -110,6 +118,7 @@ impl SlabLayout {
 /// of memory for that layout. We assume that slabs will have a reasonable number of objects in
 /// them, so fill factor is not a problem (after all, if you only have a few objects, why would
 /// you even be using a slab/pool).
+#[must_use]
 fn determine_capacity(slot_size: NonZero<usize>) -> NonZero<usize> {
     // No matter what we are storing, we want at this this many objects per slab.
     // If we have overly tiny slabs, the slab management overhead could become significant.
