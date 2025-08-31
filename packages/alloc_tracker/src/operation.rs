@@ -189,11 +189,9 @@ impl fmt::Display for Operation {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic;
-
     use super::*;
     use crate::Session;
-    use crate::allocator::{THREAD_BYTES_ALLOCATED, TOTAL_BYTES_ALLOCATED};
+    use crate::allocator::register_fake_allocation;
 
     fn create_test_operation() -> Operation {
         let session = Session::new();
@@ -263,7 +261,7 @@ mod tests {
         {
             let _span = operation.measure_process();
             // Simulate allocation
-            TOTAL_BYTES_ALLOCATED.fetch_add(75, atomic::Ordering::Relaxed);
+            register_fake_allocation(75, 1);
         }
 
         assert_eq!(operation.mean(), 75);
@@ -277,12 +275,12 @@ mod tests {
 
         {
             let _span = operation.measure_process();
-            TOTAL_BYTES_ALLOCATED.fetch_add(100, atomic::Ordering::Relaxed);
+            register_fake_allocation(100, 1);
         }
 
         {
             let _span = operation.measure_process();
-            TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
+            register_fake_allocation(200, 1);
         }
 
         assert_eq!(operation.mean(), 150); // (100 + 200) / 2
@@ -296,11 +294,7 @@ mod tests {
 
         {
             let _span = operation.measure_thread();
-
-            // Simulate thread-local allocation
-            THREAD_BYTES_ALLOCATED.with(|counter| {
-                counter.set(counter.get() + 50);
-            });
+            register_fake_allocation(50, 1);
         }
 
         assert_eq!(operation.mean(), 50);
@@ -314,14 +308,12 @@ mod tests {
 
         {
             let _span = operation.measure_thread();
-            THREAD_BYTES_ALLOCATED.with(|counter| {
-                counter.set(counter.get() + 100);
-            });
+            register_fake_allocation(100, 1);
         }
 
         {
             let _span = operation.measure_process();
-            TOTAL_BYTES_ALLOCATED.fetch_add(200, atomic::Ordering::Relaxed);
+            register_fake_allocation(200, 1);
         }
 
         assert_eq!(operation.mean(), 150); // (100 + 200) / 2
@@ -350,7 +342,7 @@ mod tests {
         {
             let _span = operation.measure_process().iterations(10);
             // Simulate a 1000 byte allocation that should be divided by 10 iterations
-            TOTAL_BYTES_ALLOCATED.fetch_add(1000, atomic::Ordering::Relaxed);
+            register_fake_allocation(1000, 10);
         }
 
         assert_eq!(operation.total_iterations(), 10);

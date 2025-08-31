@@ -1,34 +1,127 @@
 //! Allocation wrapper for tracking memory allocations.
 
 use std::alloc::{GlobalAlloc, Layout};
-use std::cell::Cell;
+use std::cell::{Cell, OnceCell};
 use std::fmt;
 #[cfg(feature = "panic_on_next_alloc")]
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{self, AtomicU64};
+use std::sync::{Arc, LazyLock, Mutex};
 
-// The tracking allocator works with static data all over the place, so this is how it be.
-// This is global state - we could theoretically optimize via thread-local counter but that
-// might only matter in extremely allocation-heavy scenarios which are not a priority (yet?).
-pub(crate) static TOTAL_BYTES_ALLOCATED: AtomicU64 = AtomicU64::new(0);
+use crate::ERR_POISONED_LOCK;
 
-/// Global counter for tracking the total number of allocations across all threads.
-pub(crate) static TOTAL_ALLOCATIONS_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Only the per-thread counters updated on each allocation. A global registry of all
+/// counters (including those from threads that have since exited) allows summation for
+/// process-wide spans without global contention.
+#[derive(Debug)]
+pub(crate) struct PerThreadCounters {
+    bytes: AtomicU64,
+    count: AtomicU64,
+}
+
+impl PerThreadCounters {
+    #[inline]
+    const fn new() -> Self {
+        Self {
+            bytes: AtomicU64::new(0),
+            count: AtomicU64::new(0),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn register_allocation(&self, bytes: u64) {
+        // Relaxed is sufficient: we only need atomicity, not ordering w.r.t. other memory ops.
+        self.bytes.fetch_add(bytes, atomic::Ordering::Relaxed);
+        self.count.fetch_add(1, atomic::Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub(crate) fn bytes(&self) -> u64 {
+        self.bytes.load(atomic::Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub(crate) fn count(&self) -> u64 {
+        self.count.load(atomic::Ordering::Relaxed)
+    }
+}
+
+// Global registry holding Arc references so counters outlive their threads.
+// LazyLock gives us one-time initialization without a helper function.
+static REGISTRY: LazyLock<Mutex<Vec<Arc<PerThreadCounters>>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+
+thread_local! {
+    // We store a raw pointer to the per-thread counters rather than an Arc directly for two reasons:
+    // 1. TLS destructor constraints with the global allocator: If we kept an Arc in TLS, the Arc's Drop
+    //    could run during thread teardown while the global allocator is still active, potentially
+    //    performing deallocation (and therefore re-entering allocation tracking) at an unsafe point.
+    //    Using only a raw pointer avoids any Drop logic during TLS destruction.
+    // 2. Avoid recursive tracking during initialization: Setting up the Arc (heap allocation + pushing into
+    //    the global registry Vec) itself allocates. If we attempted to track those allocations we would
+    //    recurse into the allocator. A small reentrancy guard below disables tracking for that window.
+    // Lifetime safety: The Arc is stored in the global REGISTRY which is never cleared, so the pointed-to
+    // PerThreadCounters outlive all threads. Hence the raw pointer remains valid for the program lifetime.
+    static TLS_COUNTER_PTR: OnceCell<*const PerThreadCounters> = const { OnceCell::new() };
+    // Reentrancy guard flag; when true we are in the middle of initializing this thread's counters and
+    // must not attempt to record allocations.
+    static TLS_INIT_GUARD: Cell<bool> = const { Cell::new(false) };
+}
+
+#[inline]
+pub(crate) fn get_or_init_thread_counters() -> &'static PerThreadCounters {
+    TLS_COUNTER_PTR.with(|cell| {
+        if let Some(ptr) = cell.get() {
+            // SAFETY: pointer originates from Arc stored in REGISTRY which retains ownership for program lifetime.
+            return unsafe { &**ptr };
+        }
+
+        TLS_INIT_GUARD.set(true);
+
+        let arc = Arc::new(PerThreadCounters::new());
+        let ptr = Arc::as_ptr(&arc);
+        // Push Arc to global registry to extend lifetime for program duration.
+        REGISTRY.lock().expect(ERR_POISONED_LOCK).push(arc);
+        _ = cell.set(ptr);
+
+        TLS_INIT_GUARD.set(false);
+
+        // SAFETY: pointer obtained from Arc::as_ptr for Arc stored in REGISTRY; lifetime extends for program duration.
+        unsafe { &*ptr }
+    })
+}
+
+/// Aggregate totals across all registered threads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AllocationTotals {
+    pub bytes: u64,
+    pub count: u64,
+}
+
+impl AllocationTotals {
+    #[inline]
+    pub(crate) const fn zero() -> Self {
+        Self { bytes: 0, count: 0 }
+    }
+}
+
+/// Sum all registered counters (process-wide view at a point in time).
+#[inline]
+pub(crate) fn allocation_totals() -> AllocationTotals {
+    let reg = REGISTRY.lock().expect(ERR_POISONED_LOCK);
+
+    let mut totals = AllocationTotals::zero();
+    for c in reg.iter() {
+        totals.bytes = totals.bytes.wrapping_add(c.bytes());
+        totals.count = totals.count.wrapping_add(c.count());
+    }
+    totals
+}
 
 /// Global flag to control whether the next memory allocation should panic.
 /// When set to true, the next allocation attempt will panic and then reset the flag to false.
 #[cfg(feature = "panic_on_next_alloc")]
 static PANIC_ON_NEXT_ALLOCATION: AtomicBool = AtomicBool::new(false);
-
-thread_local! {
-    /// Thread-local counter for tracking allocations within the current thread.
-    /// This allows for thread-specific allocation tracking when using measure_thread().
-    pub(crate) static THREAD_BYTES_ALLOCATED: Cell<u64> = const { Cell::new(0) };
-
-    /// Thread-local counter for tracking the number of allocations within the current thread.
-    /// This allows for thread-specific allocation count tracking when using measure_thread().
-    pub(crate) static THREAD_ALLOCATIONS_COUNT: Cell<u64> = const { Cell::new(0) };
-}
 
 /// Controls whether the next memory allocation should panic.
 ///
@@ -86,20 +179,28 @@ fn check_and_panic_if_enabled() {
 fn check_and_panic_if_enabled() {}
 
 /// Updates allocation tracking counters for the given size.
-/// This tracks both global and thread-local allocation statistics for both bytes and count.
+/// Only per-thread counters are updated; process-wide views sum them on demand.
 fn track_allocation(size: usize) {
-    let size_u64 = size.try_into().expect("usize always fits into u64");
-
-    TOTAL_BYTES_ALLOCATED.fetch_add(size_u64, atomic::Ordering::Relaxed);
-    TOTAL_ALLOCATIONS_COUNT.fetch_add(1, atomic::Ordering::Relaxed);
-
-    THREAD_BYTES_ALLOCATED.with(|counter| {
-        counter.set(counter.get().wrapping_add(size_u64));
+    let size_u64: u64 = size.try_into().expect("usize always fits into u64");
+    TLS_INIT_GUARD.with(|guard| {
+        if guard.get() {
+            return; // Skip tracking during initialization path (allocations still occur but are intentionally not recorded).
+        }
+        let counters = get_or_init_thread_counters();
+        counters.register_allocation(size_u64);
     });
+}
 
-    THREAD_ALLOCATIONS_COUNT.with(|counter| {
-        counter.set(counter.get().wrapping_add(1));
-    });
+// Test helper for unit tests where we don't hook the global allocator.
+#[cfg(test)]
+pub(crate) fn register_fake_allocation(bytes: u64, count: u64) {
+    let counters = get_or_init_thread_counters();
+    if bytes != 0 {
+        counters.bytes.fetch_add(bytes, atomic::Ordering::Relaxed);
+    }
+    if count != 0 {
+        counters.count.fetch_add(count, atomic::Ordering::Relaxed);
+    }
 }
 
 /// A memory allocator that enables tracking of memory allocations and deallocations.

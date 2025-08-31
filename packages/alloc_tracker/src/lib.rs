@@ -79,11 +79,11 @@
 //! # Overhead
 //!
 //! In single-threaded scenarios, capturing a single measurement by calling
-//! `Operation::measure_xyz()` incurs an overhead of approximately 2 nanoseconds
-//! on an arbitrary sample machine.
+//! `Operation::measure_xyz()` incurs an overhead of approximately 10-15 nanoseconds
+//! on an arbitrary sample machine. You are recommended to batch your measurements
+//! over multiple benchmark iterations to amortize this overhead via `.iterations(N)`.
 //!
-//! Memory allocator activity is likewise slightly impacted by the tracking logic, especially
-//! in multi-threaded scenarios where additional synchronization may be introduced.
+//! Memory allocator activity is likewise slightly impacted by the tracking logic.
 //!
 //! # Session management
 //!

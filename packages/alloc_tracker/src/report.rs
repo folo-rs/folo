@@ -400,7 +400,8 @@ impl fmt::Display for Report {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Session, THREAD_ALLOCATIONS_COUNT, THREAD_BYTES_ALLOCATED};
+    use crate::Session;
+    use crate::allocator::register_fake_allocation;
 
     #[test]
     fn new_report_is_empty() {
@@ -421,9 +422,7 @@ mod tests {
         {
             let operation = session.operation("test");
             let _span = operation.measure_thread();
-            // Simulate allocation
-            THREAD_BYTES_ALLOCATED.with(|c| c.set(c.get().wrapping_add(100)));
-            THREAD_ALLOCATIONS_COUNT.with(|c| c.set(c.get().wrapping_add(1)));
+            register_fake_allocation(100, 1);
         } // Span drops here, releasing the mutable borrow
 
         let report = session.to_report();
@@ -444,8 +443,7 @@ mod tests {
         {
             let operation = session.operation("test");
             let _span = operation.measure_thread();
-            THREAD_BYTES_ALLOCATED.with(|c| c.set(c.get().wrapping_add(100)));
-            THREAD_ALLOCATIONS_COUNT.with(|c| c.set(c.get().wrapping_add(1)));
+            register_fake_allocation(100, 1);
         } // Span drops here
 
         let report1 = Report::new();
@@ -466,15 +464,13 @@ mod tests {
         {
             let op1 = session1.operation("test1");
             let _span1 = op1.measure_thread();
-            THREAD_BYTES_ALLOCATED.with(|c| c.set(c.get().wrapping_add(100)));
-            THREAD_ALLOCATIONS_COUNT.with(|c| c.set(c.get().wrapping_add(1)));
+            register_fake_allocation(100, 1);
         } // Span drops here
 
         {
             let op2 = session2.operation("test2");
             let _span2 = op2.measure_thread();
-            THREAD_BYTES_ALLOCATED.with(|c| c.set(c.get().wrapping_add(200)));
-            THREAD_ALLOCATIONS_COUNT.with(|c| c.set(c.get().wrapping_add(2)));
+            register_fake_allocation(200, 2);
         } // Span drops here
 
         let report1 = session1.to_report();
@@ -494,15 +490,13 @@ mod tests {
         {
             let op1 = session1.operation("test");
             let _span1 = op1.measure_thread();
-            THREAD_BYTES_ALLOCATED.with(|c| c.set(c.get().wrapping_add(100)));
-            THREAD_ALLOCATIONS_COUNT.with(|c| c.set(c.get().wrapping_add(1)));
+            register_fake_allocation(100, 1);
         } // Span drops here
 
         {
             let op2 = session2.operation("test");
             let _span2 = op2.measure_thread();
-            THREAD_BYTES_ALLOCATED.with(|c| c.set(c.get().wrapping_add(200)));
-            THREAD_ALLOCATIONS_COUNT.with(|c| c.set(c.get().wrapping_add(2)));
+            register_fake_allocation(200, 2);
         } // Span drops here
 
         let report1 = session1.to_report();
@@ -522,8 +516,7 @@ mod tests {
         {
             let operation = session.operation("test");
             let _span = operation.measure_thread();
-            THREAD_BYTES_ALLOCATED.with(|c| c.set(c.get().wrapping_add(100)));
-            THREAD_ALLOCATIONS_COUNT.with(|c| c.set(c.get().wrapping_add(1)));
+            register_fake_allocation(100, 1);
         } // Span drops here
 
         let report1 = session.to_report();
@@ -561,8 +554,7 @@ mod tests {
             let operation = session.operation("test_consistency");
             let _span = operation.measure_thread();
             // Simulate 3 allocations
-            THREAD_BYTES_ALLOCATED.with(|c| c.set(c.get().wrapping_add(300)));
-            THREAD_ALLOCATIONS_COUNT.with(|c| c.set(c.get().wrapping_add(3)));
+            register_fake_allocation(300, 3);
         } // Span drops here
 
         let report = session.to_report();

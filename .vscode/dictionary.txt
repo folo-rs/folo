@@ -27,6 +27,7 @@ nsec
 oneshot
 pointee
 println
+reentrancy
 repr
 Symcrypt
 taskset
