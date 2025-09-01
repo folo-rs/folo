@@ -2,7 +2,7 @@
 name = "new_zealand"
 description = "Utilities for working with non-zero integers"
 publish = true
-version = "0.1.6"
+version = "1.0.0"
 
 authors.workspace = true
 edition.workspace = true

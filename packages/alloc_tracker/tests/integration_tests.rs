@@ -326,9 +326,9 @@ fn process_report_includes_allocations_from_multiple_threads() {
         let _span = op.measure_process();
 
         let handle_a = thread::spawn(|| {
-            let mut total = 0usize;
+            let mut total = 0_usize;
             for _ in 0..THREAD_A_ALLOCS {
-                let v = vec![0u8; SIZE_A];
+                let v = vec![0_u8; SIZE_A];
                 total += v.len();
                 black_box(&v);
             }
@@ -336,9 +336,9 @@ fn process_report_includes_allocations_from_multiple_threads() {
         });
 
         let handle_b = thread::spawn(|| {
-            let mut total = 0usize;
+            let mut total = 0_usize;
             for _ in 0..THREAD_B_ALLOCS {
-                let v = vec![1u8; SIZE_B];
+                let v = vec![1_u8; SIZE_B];
                 black_box(&v);
                 total += v.len();
             }
@@ -346,7 +346,7 @@ fn process_report_includes_allocations_from_multiple_threads() {
         });
 
         // Also allocate on the main thread so we can distinguish process span > sum of one thread.
-        let main_alloc = vec![2u8; 64];
+        let main_alloc = vec![2_u8; 64];
         black_box(&main_alloc);
 
         let a_bytes = handle_a.join().expect("thread A joined");
