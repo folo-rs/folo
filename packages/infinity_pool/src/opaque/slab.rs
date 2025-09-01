@@ -1,6 +1,8 @@
 use std::alloc::{Layout, alloc, dealloc};
+use std::any::Any;
 use std::iter::FusedIterator;
 use std::mem::{self, MaybeUninit};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::ptr::{self, NonNull};
 use std::thread;
 
@@ -237,7 +239,7 @@ impl Slab {
     pub(crate) unsafe fn remove<T: ?Sized>(&mut self, handle: SlabHandle<T>) {
         let next_free_slot_index = self.next_free_slot_index;
 
-        {
+        let old_meta = {
             let object_ptr_erased = self.object_ptr::<()>(handle.index());
 
             let slot_meta = self.slot_meta_mut(handle.index());
@@ -257,16 +259,24 @@ impl Slab {
             ));
 
             // The Drop implementation of the existing SlotMeta will automatically call the dropper.
-            *slot_meta = SlotMeta::Vacant {
-                next_free_slot_index,
-            };
-        }
+            // We return it to the outer scope so we can defer the drop until after the slab has
+            // been updated back into its post-remove state.
+            mem::replace(
+                slot_meta,
+                SlotMeta::Vacant {
+                    next_free_slot_index,
+                },
+            )
+        };
 
         // Push the released slot into the freelist.
         self.next_free_slot_index = handle.index();
 
         // Cannot overflow because we asserted above the removed entry was occupied.
         self.count = self.count.wrapping_sub(1);
+
+        // It is now safe to do the drop. If drop() panics, the slab is still in a valid state.
+        drop(old_meta);
     }
 
     /// Removes an object from the slab, returning it.
@@ -394,17 +404,25 @@ impl Drop for Slab {
         let original_count = self.count;
         let capacity = self.layout.capacity().get();
 
+        // If a drop() panics, we continue to drop() all the items and release the pool itself,
+        // after which we later re-throw the first panic we caught from a drop() invocation.
+        let mut first_panic: Option<Box<dyn Any + Send + 'static>> = None;
+
         // Manually drop all SlotEntry instances to ensure occupied entries are properly dropped.
         // This will automatically call the dropper for any Occupied entries.
         for index in 0..capacity {
             let slot_ptr = self.slot_ptr(index);
 
-            // SAFETY: We allocated and initialized these SlotMeta instances in new(), potentially
-            // replacing them in insert()/remove(). This is the final drop any slot undergoes
-            // before deallocating the memory.
-            unsafe {
-                ptr::drop_in_place(slot_ptr.as_ptr());
-            }
+            let drop_result = catch_unwind(AssertUnwindSafe(|| {
+                // SAFETY: We allocated and initialized these SlotMeta instances in new(), potentially
+                // replacing them in insert()/remove(). This is the final drop any slot undergoes
+                // before deallocating the memory.
+                unsafe {
+                    ptr::drop_in_place(slot_ptr.as_ptr());
+                }
+            }));
+
+            first_panic = first_panic.or_else(|| drop_result.err());
         }
 
         // SAFETY: We are using the same layout, provided by the `layout` field.
@@ -414,6 +432,11 @@ impl Drop for Slab {
                 self.first_slot_ptr.as_ptr().cast(),
                 self.layout.slot_array_layout(),
             );
+        }
+
+        // If any drop() panicked, re-throw the first panic we caught now that we've cleaned up.
+        if let Some(panic) = first_panic {
+            resume_unwind(panic);
         }
 
         // We do this check at the end so we clean up the memory first.
@@ -574,6 +597,7 @@ fn ensure_virtual_pages_mapped_to_physical_pages(ptr: NonNull<SlotMeta>, layout:
 mod tests {
     use std::mem::offset_of;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
@@ -731,6 +755,60 @@ mod tests {
     }
 
     #[test]
+    fn remove_with_panicking_drop_keeps_slab_valid() {
+        // Object that always panics on drop
+        struct PanickingDrop {
+            #[allow(dead_code, reason = "Field used to give struct non-zero size")]
+            value: u32,
+        }
+
+        impl Drop for PanickingDrop {
+            fn drop(&mut self) {
+                panic!("intentional panic in drop");
+            }
+        }
+
+        let layout = SlabLayout::new(Layout::new::<PanickingDrop>());
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
+
+        // Insert a panicking object
+        // SAFETY: PanickingDrop layout matches slab layout
+        let panicking_handle = unsafe { insert(&mut slab, PanickingDrop { value: 42 }) };
+        assert_eq!(slab.len(), 1);
+        assert!(!slab.is_empty());
+
+        let original_index = panicking_handle.index();
+
+        // Remove the object - this should panic during drop but still remove the object
+        let panic_result = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: panicking_handle is valid and from this slab
+            unsafe {
+                slab.remove(panicking_handle);
+            }
+        }));
+
+        // The removal should have panicked
+        assert!(panic_result.is_err());
+
+        // But the slab should still be in a valid state:
+        // 1. The object should be removed (count should be 0)
+        assert_eq!(slab.len(), 0);
+        assert!(slab.is_empty());
+
+        // 2. The slot should be available for reuse (inserting should use the same index)
+        // SAFETY: u32 layout matches slab layout
+        let new_handle = unsafe { insert(&mut slab, 100_u32) };
+        assert_eq!(new_handle.index(), original_index);
+        assert_eq!(slab.len(), 1);
+
+        // Clean up
+        // SAFETY: new_handle is valid and from this slab
+        unsafe {
+            slab.remove(new_handle);
+        }
+    }
+
+    #[test]
     #[should_panic]
     fn drop_policy_must_not_drop_items_causes_panic_on_drop_with_items() {
         let layout = SlabLayout::new(Layout::new::<u32>());
@@ -813,7 +891,7 @@ mod tests {
     #[should_panic]
     fn remove_with_handle_from_wrong_slab_panics() {
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab1 = Slab::new(layout.clone(), DropPolicy::MayDropContents);
+        let mut slab1 = Slab::new(layout, DropPolicy::MayDropContents);
         let mut slab2 = Slab::new(layout, DropPolicy::MayDropContents);
 
         // SAFETY: u32 layout matches slab layout
@@ -830,8 +908,6 @@ mod tests {
 
     #[test]
     fn drops_inserted_object_on_slab_drop() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
         static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
 
         struct DropCounter {
@@ -970,6 +1046,7 @@ mod tests {
         // Type-erased handle should panic on remove_unpin because it's a ZST
         // SAFETY: This should panic - type-erased handle points to ZST
         unsafe {
+            #[expect(unused_must_use, reason = "impossible to use unit value")]
             slab.remove_unpin(erased_handle);
         }
     }
@@ -979,7 +1056,7 @@ mod tests {
     fn insert_panics_when_slab_is_full() {
         // Create a slab with minimal capacity to make it easy to fill
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout.clone(), DropPolicy::MayDropContents);
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         let capacity = layout.capacity().get();
 
@@ -1432,5 +1509,51 @@ mod tests {
         assert_eq!(iter.next_back(), None);
         assert_eq!(iter.next(), None); // FusedIterator guarantee
         assert_eq!(iter.next_back(), None); // FusedIterator guarantee
+    }
+
+    #[test]
+    fn slab_drop_calls_all_object_drops_even_when_they_panic() {
+        static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        // Object that always panics on drop but still increments the counter
+        struct AlwaysPanickingDrop {
+            #[allow(dead_code, reason = "Field used to give struct non-zero size")]
+            id: u32,
+        }
+
+        impl Drop for AlwaysPanickingDrop {
+            fn drop(&mut self) {
+                // Increment counter first, then panic
+                DROP_COUNT.fetch_add(1, Ordering::SeqCst);
+                panic!("intentional panic from drop of object {}", self.id);
+            }
+        }
+
+        DROP_COUNT.store(0, Ordering::SeqCst);
+
+        let drop_result = catch_unwind(AssertUnwindSafe(|| {
+            let layout = SlabLayout::new(Layout::new::<AlwaysPanickingDrop>());
+            let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
+
+            // Insert multiple panicking objects
+            // SAFETY: AlwaysPanickingDrop layout matches slab layout
+            let _handle1 = unsafe { insert(&mut slab, AlwaysPanickingDrop { id: 1 }) };
+            // SAFETY: AlwaysPanickingDrop layout matches slab layout
+            let _handle2 = unsafe { insert(&mut slab, AlwaysPanickingDrop { id: 2 }) };
+            // SAFETY: AlwaysPanickingDrop layout matches slab layout
+            let _handle3 = unsafe { insert(&mut slab, AlwaysPanickingDrop { id: 3 }) };
+            // SAFETY: AlwaysPanickingDrop layout matches slab layout
+            let _handle4 = unsafe { insert(&mut slab, AlwaysPanickingDrop { id: 4 }) };
+
+            assert_eq!(slab.len(), 4);
+
+            // Slab drops here - should call drop() on all 4 objects even though they all panic
+        }));
+
+        // The slab drop should have panicked due to the panicking object drops
+        assert!(drop_result.is_err());
+
+        // But all 4 objects should have had their drop() called
+        assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 4);
     }
 }

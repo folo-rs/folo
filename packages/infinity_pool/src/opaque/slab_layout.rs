@@ -165,7 +165,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn panics_on_zero_sized_type() {
-        drop(SlabLayout::new(Layout::new::<()>()));
+        _ = SlabLayout::new(Layout::new::<()>());
     }
 
     #[test]
