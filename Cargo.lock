@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "cpulist"
-version = "0.2.9"
+version = "1.0.0"
 dependencies = [
  "itertools 0.14.0",
  "new_zealand",
@@ -822,7 +822,7 @@ checksum = "6a82ae493e598baaea5209805c49bbf2ea7de956d50d7da0da1164f9c6d28543"
 
 [[package]]
 name = "linked"
-version = "0.2.19"
+version = "1.0.0"
 dependencies = [
  "criterion",
  "hash_hasher",
@@ -838,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros"
-version = "0.2.19"
+version = "1.0.0"
 dependencies = [
  "linked_macros_impl",
  "proc-macro2",
@@ -846,7 +846,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros_impl"
-version = "0.2.19"
+version = "1.0.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -871,7 +871,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus"
-version = "0.3.18"
+version = "1.0.0"
 dependencies = [
  "cpulist",
  "criterion",
@@ -992,7 +992,7 @@ dependencies = [
 
 [[package]]
 name = "new_zealand"
-version = "0.1.6"
+version = "1.0.0"
 
 [[package]]
 name = "nm"
@@ -1301,7 +1301,7 @@ checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
 
 [[package]]
 name = "region_cached"
-version = "0.1.36"
+version = "1.0.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1322,7 +1322,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "0.1.35"
+version = "1.0.0"
 dependencies = [
  "arc-swap",
  "axum",
