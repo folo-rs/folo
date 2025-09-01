@@ -16,7 +16,6 @@ pub(crate) struct SlabLayout {
     capacity: NonZero<usize>,
 
     /// Layout of a single object that fits into a slot. All objects in a slab use the same layout.
-    #[cfg(debug_assertions)]
     object_layout: Layout,
 
     /// Memory layout of a single slot, consisting of metadata and the object in the slot (if
@@ -77,7 +76,6 @@ impl SlabLayout {
 
         Self {
             capacity,
-            #[cfg(debug_assertions)]
             object_layout,
             slot_layout,
             slot_to_object_offset,
@@ -90,7 +88,6 @@ impl SlabLayout {
         self.capacity
     }
 
-    #[cfg(debug_assertions)]
     #[must_use]
     pub(crate) fn object_layout(&self) -> Layout {
         self.object_layout

@@ -1,31 +1,26 @@
 use std::alloc::Layout;
+use std::iter;
 use std::mem::MaybeUninit;
 
-use crate::{DropPolicy, RawPooled, RawPooledMut, Slab, SlabLayout};
+use crate::{DropPolicy, RawOpaquePoolBuilder, RawPooled, RawPooledMut, Slab, SlabLayout};
 
 // TODO: Factor out the vacancy cache into its own type.
 // TODO: Optimize scenarios with mass inserts into a large reservation (slow today, poor vacancy cache logic).
 
-/// A pool of objects of uniform memory layout.
+/// A pool of objects with uniform memory layout.
 ///
-/// This is the building block for creating different kinds of object pools. Underneath, they all
-/// place their items in this pool, which manages the memory capacity, places items into that
-/// capacity and grants low-level access to the items via `RawPooled` and `RawPooledMut`.
+/// `RawOpaquePool` stores objects of any type that match a [`Layout`] defined at pool creation
+/// time. All values in the pool remain pinned for their entire lifetime.
 ///
-/// The pool does not care what the type of the items is, only that the types all match the memory
-/// layout specified at creation time. This is a safety requirement of the pool APIs, guaranteed
-/// by the higher-level pool types that internally use this pool.
-///
-/// Higher level pool types in the public API wrap this pool with different levels of type-awareness
-/// and handle lifetime management. Underneath, they all desugar into this pool, though.
+/// The pool automatically expands its capacity when needed.
 ///
 /// # Thread safety
 ///
-/// The pool itself is thread-mobile (`Send`) and may be moved across threads. However, this is
-/// only valid if all objects in the pool are likewise `Send`. This is a safety requirement
-/// enforced by the `insert()` family of methods.
+/// The pool is single-threaded, though if all the objects inserted are `Send` then the owner of
+/// the pool is allowed to treat the pool itself as `Send` (but must do so via a wrapper type that
+/// implements `Send` using unsafe code).
 #[derive(Debug)]
-pub(crate) struct Pool {
+pub struct RawOpaquePool {
     /// The layout of each slab in the pool, determined based on the object
     /// layout provided at pool creation time.
     slab_layout: SlabLayout,
@@ -49,14 +44,43 @@ pub(crate) struct Pool {
     length: usize,
 }
 
-impl Pool {
+impl RawOpaquePool {
+    /// Creates a builder that can be used to configure and create a new instance of the pool.
+    pub fn builder() -> RawOpaquePoolBuilder {
+        RawOpaquePoolBuilder::new()
+    }
+
+    /// Creates a new instance of the pool with the specified layout.
+    ///
+    /// Shorthand for a builder that keeps all other options at their default values.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the layout is zero-sized.
+    #[must_use]
+    pub fn with_layout(object_layout: Layout) -> Self {
+        Self::builder().layout(object_layout).build()
+    }
+
+    /// Creates a new instance of the pool with the layout of `T`.
+    ///
+    /// Shorthand for a builder that keeps all other options at their default values.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `T` is a zero-sized type.
+    #[must_use]
+    pub fn with_layout_of<T: Sized>() -> Self {
+        Self::builder().layout_of::<T>().build()
+    }
+
     /// Creates a new pool for objects of the specified layout.
     ///
     /// # Panics
     ///
     /// Panics if the object layout has zero size.
     #[must_use]
-    pub(crate) fn new(object_layout: Layout, drop_policy: DropPolicy) -> Self {
+    pub(crate) fn new_inner(object_layout: Layout, drop_policy: DropPolicy) -> Self {
         let slab_layout = SlabLayout::new(object_layout);
 
         Self {
@@ -68,23 +92,24 @@ impl Pool {
         }
     }
 
-    /// Returns the layout of objects stored in this pool.
+    /// The layout of objects stored in this pool.
     #[must_use]
-    pub(crate) fn object_layout(&self) -> Layout {
+    pub fn object_layout(&self) -> Layout {
         self.slab_layout.object_layout()
     }
 
-    /// Returns the number of objects currently in the pool.
-    #[cfg_attr(test, mutants::skip)] // Can be mutated to infinitely growing memory use and/or infinite loop.
+    /// The number of objects currently in the pool.
     #[must_use]
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.length
     }
 
-    /// Returns the total capacity across all slabs in the pool.
-    #[cfg_attr(test, mutants::skip)] // Can be mutated to infinitely growing memory use and/or infinite loop.
+    /// The total capacity of the pool.
+    ///
+    /// This is the maximum number of objects that the pool can contain without capacity extension.
+    /// The pool will automatically extend its capacity if more than this many objects are inserted.
     #[must_use]
-    pub(crate) fn capacity(&self) -> usize {
+    pub fn capacity(&self) -> usize {
         // Wrapping here would imply capacity is greater than virtual memory,
         // which is impossible because we can never create that many slabs.
         self.slabs
@@ -92,14 +117,20 @@ impl Pool {
             .wrapping_mul(self.slab_layout.capacity().get())
     }
 
-    /// Returns `true` if the pool contains no objects.
+    /// Whether the pool contains zero objects.
     #[must_use]
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.length == 0
     }
 
     /// Reserves capacity for at least `additional` more objects.
-    pub(crate) fn reserve(&mut self, additional: usize) {
+    ///
+    /// The new capacity is calculated from the current `len()`, not from the current capacity.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new capacity would exceed the size of virtual memory.
+    pub fn reserve(&mut self, additional: usize) {
         let required_capacity = self
             .len()
             .checked_add(additional)
@@ -114,14 +145,17 @@ impl Pool {
         let required_slabs = required_capacity.div_ceil(self.slab_layout.capacity().get());
         let additional_slabs = required_slabs.saturating_sub(current_slabs);
 
-        for _ in 0..additional_slabs {
-            self.slabs
-                .push(Slab::new(self.slab_layout, self.drop_policy));
-        }
+        self.slabs.extend(
+            iter::repeat_with(|| Slab::new(self.slab_layout, self.drop_policy))
+                .take(additional_slabs),
+        );
     }
 
-    /// Removes empty slabs to reduce memory usage.
-    pub(crate) fn shrink_to_fit(&mut self) {
+    /// Drops unused pool capacity to reduce memory usage.
+    ///
+    /// There is no guarantee that any unused capacity can be dropped. The exact outcome depends
+    /// on the specific pool structure and which objects remain in the pool.
+    pub fn shrink_to_fit(&mut self) {
         // Find the last non-empty slab by scanning from the end
         let new_len = self
             .slabs
@@ -140,13 +174,29 @@ impl Pool {
             .unwrap_or(0);
 
         // If we're about to remove slabs, we need to invalidate the vacant slot cache
-        // since it might point to a slab that will no longer exist
+        // since it might point to a slab that will no longer exist.
         if new_len < self.slabs.len() {
             self.slab_with_vacant_slot_index = None;
         }
 
-        // Truncate the slabs vector to remove empty slabs from the end
+        // Truncate the slabs vector to remove empty slabs from the end.
         self.slabs.truncate(new_len);
+    }
+
+    /// Inserts an object into the pool and returns a handle to it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the layout of `T` does not match the object layout of the pool.
+    pub fn insert<T>(&mut self, value: T) -> RawPooledMut<T> {
+        assert_eq!(
+            Layout::new::<T>(),
+            self.object_layout(),
+            "layout of T does not match object layout of the pool"
+        );
+
+        // SAFETY: We just verified that T's layout matches the pool's layout.
+        unsafe { self.insert_unchecked(value) }
     }
 
     /// Inserts an object into the pool and returns a handle to it.
@@ -154,14 +204,11 @@ impl Pool {
     /// # Safety
     ///
     /// The caller must ensure that the layout of `T` matches the pool's object layout.
-    ///
-    /// If `T` is not `Send`, the caller must ensure that the pool itself is never moved
-    /// across threads (it is effectively `!Send` while any such object is in the pool).
-    pub(crate) unsafe fn insert<T>(&mut self, value: T) -> RawPooledMut<T> {
+    pub unsafe fn insert_unchecked<T>(&mut self, value: T) -> RawPooledMut<T> {
         // Implement insert() in terms of insert_with() to reduce logic duplication.
         // SAFETY: Forwarding safety requirements to the caller.
         unsafe {
-            self.insert_with(|uninit: &mut MaybeUninit<T>| {
+            self.insert_with_unchecked(|uninit: &mut MaybeUninit<T>| {
                 uninit.write(value);
             })
         }
@@ -169,23 +216,56 @@ impl Pool {
 
     /// Inserts an object into the pool via closure and returns a handle to it.
     ///
+    /// This method allows the caller to partially initialize the object, skipping any `MaybeUninit`
+    /// fields that are intentionally not initialized at insertion time. This can make insertion of
+    /// objects containing `MaybeUninit` fields faster, although requires unsafe code to implement.
+    ///
+    /// This method is NOT faster than `insert()` for fully initialized objects.
+    /// Prefer `insert()` for a better safety posture if you do not intend to
+    /// skip initialization of any `MaybeUninit` fields.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the layout of `T` does not match the object layout of the pool.
+    ///
     /// # Safety
     ///
-    /// The caller must ensure that the layout of `T` matches the pool's object layout.
-    /// The closure must correctly initialize the object.
-    ///
-    /// If `T` is not `Send`, the caller must ensure that the pool itself is never moved
-    /// across threads (it is effectively `!Send` while any such object is in the pool).
-    pub(crate) unsafe fn insert_with<T, F>(&mut self, f: F) -> RawPooledMut<T>
+    /// The closure must correctly initialize the object. All fields that
+    /// are not `MaybeUninit` must be initialized when the closure returns.
+    pub unsafe fn insert_with<T, F>(&mut self, f: F) -> RawPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {
-        debug_assert_eq!(
+        assert_eq!(
             Layout::new::<T>(),
             self.object_layout(),
-            "T layout does not match pool's item layout"
+            "layout of T does not match object layout of the pool"
         );
 
+        // SAFETY: We just verified that T's layout matches the pool's layout.
+        unsafe { self.insert_with_unchecked(f) }
+    }
+
+    /// Inserts an object into the pool via closure and returns a handle to it.
+    ///
+    /// This method allows the caller to partially initialize the object, skipping any `MaybeUninit`
+    /// fields that are intentionally not initialized at insertion time. This can make insertion of
+    /// objects containing `MaybeUninit` fields faster, although requires unsafe code to implement.
+    ///
+    /// This method is NOT faster than `insert_unchecked()` for fully initialized objects.
+    /// Prefer `insert_unchecked()` for a better safety posture if you do not intend to
+    /// skip initialization of any `MaybeUninit` fields.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the layout of `T` matches the pool's object layout.
+    ///
+    /// The closure must correctly initialize the object. All fields that
+    /// are not `MaybeUninit` must be initialized when the closure returns.
+    pub unsafe fn insert_with_unchecked<T, F>(&mut self, f: F) -> RawPooledMut<T>
+    where
+        F: FnOnce(&mut MaybeUninit<T>),
+    {
         let slab_index = self.index_of_slab_with_vacant_slot();
 
         #[expect(
@@ -208,7 +288,7 @@ impl Pool {
         // and that the closure properly initializes the value.
         let slab_handle = unsafe { slab.insert_with(f) };
 
-        // Update our tracked length since we just inserted an item.
+        // Update our tracked length since we just inserted an object.
         // This can never overflow since that would mean the pool is greater than virtual memory.
         self.length = self.length.wrapping_add(1);
 
@@ -221,8 +301,8 @@ impl Pool {
     ///
     /// # Panics
     ///
-    /// Panics if the handle does not reference an existing item in this pool.
-    pub(crate) fn remove_mut<T: ?Sized>(&mut self, handle: RawPooledMut<T>) {
+    /// Panics if the handle does not reference an object in this pool.
+    pub fn remove_mut<T: ?Sized>(&mut self, handle: RawPooledMut<T>) {
         // SAFETY: The provided handle is a unique handle, which guarantees that the object
         // has not been removed yet (because doing so consumes the unique handle).
         unsafe {
@@ -234,29 +314,29 @@ impl Pool {
     ///
     /// # Panics
     ///
-    /// Panics if the handle does not reference an existing item in this pool.
+    /// Panics if the handle does not reference an object in this pool.
     ///
     /// # Safety
     ///
-    /// The caller must ensure that the handle is valid and belongs to this pool.
-    pub(crate) unsafe fn remove<T: ?Sized>(&mut self, handle: RawPooled<T>) {
+    /// The caller must ensure that the handle belongs to this pool and that the object it
+    /// references has not already been removed from the pool.
+    pub unsafe fn remove<T: ?Sized>(&mut self, handle: RawPooled<T>) {
         let slab = self
             .slabs
             .get_mut(handle.slab_index())
-            .expect("the RawPooled did not point to an existing item in the pool");
+            .expect("the RawPooled did not point to an object in this pool");
 
-        // In principle, we could return the value here if `T: Unpin` but there is no need
-        // for this functionality at present, so we do not implement it to reduce complexity.
         // SAFETY: Forwarding guarantees from caller.
         unsafe {
             slab.remove(handle.slab_handle());
         }
 
-        // Update our tracked length since we just removed an item.
-        // This cannot wrap around because we just removed an item, so the value must be at least 1.
+        // Update our tracked length since we just removed an object.
+        // This cannot wrap around because we just removed an object,
+        // so the value must be at least 1 before subtraction.
         self.length = self.length.wrapping_sub(1);
 
-        // There is now a vacant slot in this slab! We may want to remember this for fast insertions.
+        // There is now a vacant slot in this slab! We remember this for fast insertions.
         // We try to remember the lowest index of a slab with a vacant slot, so we
         // fill the collection from the start (to enable easier shrinking later).
         self.update_vacant_slot_cache(handle.slab_index());
@@ -266,10 +346,11 @@ impl Pool {
     ///
     /// # Panics
     ///
-    /// Panics if the handle does not reference an existing item in this pool.
+    /// Panics if the handle does not reference an object in this pool.
     ///
-    /// Panics if `T` is a type-erased slab handle (`RawPooledMut<()>`).
-    pub(crate) fn remove_mut_unpin<T: Unpin>(&mut self, handle: RawPooledMut<T>) -> T {
+    /// Panics if the object handle has been type-erased (`RawPooledMut<()>`).
+    #[must_use]
+    pub fn remove_mut_unpin<T: Unpin>(&mut self, handle: RawPooledMut<T>) -> T {
         // SAFETY: The provided handle is a unique handle, which guarantees that the object
         // has not been removed yet (because doing so consumes the unique handle).
         unsafe { self.remove_unpin(handle.into_shared()) }
@@ -279,16 +360,18 @@ impl Pool {
     ///
     /// # Panics
     ///
-    /// Panics if the handle does not reference an existing item in this pool.
+    /// Panics if the handle does not reference an existing object in this pool.
     ///
-    /// Panics if `T` is a type-erased slab handle (`RawPooledMut<()>`).
+    /// Panics if the object handle has been type-erased (`RawPooled<()>`).
     ///
     /// # Safety
     ///
-    /// The caller must ensure that the handle is valid and belongs to this pool.
-    pub(crate) unsafe fn remove_unpin<T: Unpin>(&mut self, handle: RawPooled<T>) -> T {
-        // We would rather prefer to check for `RawPooledMut<()>` specifically but
-        // that would imply specialization or `T: 'static` for TypeId shenanigans.
+    /// The caller must ensure that the handle belongs to this pool and that the object it
+    /// references has not already been removed from the pool.
+    #[must_use]
+    pub unsafe fn remove_unpin<T: Unpin>(&mut self, handle: RawPooled<T>) -> T {
+        // We would rather prefer to check for `RawPooled<()>` specifically but
+        // that would imply specialization or `T: 'static` or TypeId shenanigans.
         // This is good enough because type-erasing a handle is the only way to get a
         // handle to a ZST anyway because the slab does not even support ZSTs.
         assert_ne!(
@@ -300,16 +383,17 @@ impl Pool {
         let slab = self
             .slabs
             .get_mut(handle.slab_index())
-            .expect("the RawPooled did not point to an existing item in the pool");
+            .expect("the RawPooled did not point to an existing object in the pool");
 
         // SAFETY: The RawPooled<T> guarantees the type T is correct for this pool slot.
         let value = unsafe { slab.remove_unpin::<T>(handle.slab_handle()) };
 
-        // Update our tracked length since we just removed an item.
-        // This cannot wrap around because we just removed an item, so the value must be at least 1.
+        // Update our tracked length since we just removed an object.
+        // This cannot wrap around because we just removed an object,
+        // so the value must be at least 1 before subtraction.
         self.length = self.length.wrapping_sub(1);
 
-        // There is now a vacant slot in this slab! We may want to remember this for fast insertions.
+        // There is now a vacant slot in this slab! We remember this for fast insertions.
         // We try to remember the lowest index of a slab with a vacant slot, so we
         // fill the collection from the start (to enable easier shrinking later).
         self.update_vacant_slot_cache(handle.slab_index());
@@ -393,7 +477,7 @@ mod tests {
 
     #[test]
     fn new_pool_is_empty() {
-        let pool = Pool::new(Layout::new::<u64>(), DropPolicy::MayDropItems);
+        let pool = RawOpaquePool::with_layout_of::<u64>();
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
@@ -402,27 +486,48 @@ mod tests {
     }
 
     #[test]
-    fn insert_and_length() {
-        let mut pool = Pool::new(Layout::new::<u32>(), DropPolicy::MayDropItems);
+    fn with_layout_results_in_pool_with_correct_layout() {
+        let layout = Layout::new::<i64>();
+        let pool = RawOpaquePool::with_layout(layout);
 
-        // SAFETY: u32 matches the layout used to create the pool
-        let _handle1 = unsafe { pool.insert(42_u32) };
+        assert_eq!(pool.object_layout(), layout);
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+        assert_eq!(pool.capacity(), 0);
+    }
+
+    #[test]
+    fn instance_creation_through_builder_succeeds() {
+        let pool = RawOpaquePool::builder()
+            .layout_of::<f64>()
+            .drop_policy(DropPolicy::MustNotDropContents)
+            .build();
+
+        assert_eq!(pool.object_layout(), Layout::new::<f64>());
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+        assert_eq!(pool.capacity(), 0);
+    }
+
+    #[test]
+    fn insert_and_length() {
+        let mut pool = RawOpaquePool::with_layout_of::<u32>();
+
+        let _handle1 = pool.insert(42_u32);
         assert_eq!(pool.len(), 1);
         assert!(!pool.is_empty());
 
-        // SAFETY: u32 matches the layout used to create the pool
-        let _handle2 = unsafe { pool.insert(100_u32) };
+        let _handle2 = pool.insert(100_u32);
         assert_eq!(pool.len(), 2);
     }
 
     #[test]
     fn capacity_grows_with_slabs() {
-        let mut pool = Pool::new(Layout::new::<u64>(), DropPolicy::MayDropItems);
+        let mut pool = RawOpaquePool::with_layout_of::<u64>();
 
         assert_eq!(pool.capacity(), 0);
 
-        // SAFETY: u64 matches the layout used to create the pool
-        let _handle = unsafe { pool.insert(123_u64) };
+        let _handle = pool.insert(123_u64);
 
         // Should have at least one slab's worth of capacity now
         assert!(pool.capacity() > 0);
@@ -430,20 +535,18 @@ mod tests {
 
         // Fill up the slab to force creation of a new one
         for i in 1..initial_capacity {
-            // SAFETY: u64 matches the layout used to create the pool
-            let _handle = unsafe { pool.insert(i as u64) };
+            let _handle = pool.insert(i as u64);
         }
 
         // One more insert should create a new slab
-        // SAFETY: u64 matches the layout used to create the pool
-        let _handle = unsafe { pool.insert(999_u64) };
+        let _handle = pool.insert(999_u64);
 
         assert!(pool.capacity() >= initial_capacity * 2);
     }
 
     #[test]
     fn reserve_creates_capacity() {
-        let mut pool = Pool::new(Layout::new::<u8>(), DropPolicy::MayDropItems);
+        let mut pool = RawOpaquePool::with_layout_of::<u8>();
 
         pool.reserve(100);
         assert!(pool.capacity() >= 100);
@@ -458,9 +561,9 @@ mod tests {
 
     #[test]
     fn insert_with_closure() {
-        let mut pool = Pool::new(Layout::new::<u64>(), DropPolicy::MayDropItems);
+        let mut pool = RawOpaquePool::with_layout_of::<u64>();
 
-        // SAFETY: u64 matches the layout used to create the pool
+        // SAFETY: we correctly initialize the slot.
         let handle = unsafe {
             pool.insert_with(|uninit: &mut MaybeUninit<u64>| {
                 uninit.write(42);
@@ -475,12 +578,10 @@ mod tests {
 
     #[test]
     fn remove_decreases_length() {
-        let mut pool = Pool::new(Layout::new::<String>(), DropPolicy::MayDropItems);
+        let mut pool = RawOpaquePool::with_layout_of::<String>();
 
-        // SAFETY: String matches the layout used to create the pool
-        let handle1 = unsafe { pool.insert("hello".to_string()) };
-        // SAFETY: String matches the layout used to create the pool
-        let handle2 = unsafe { pool.insert("world".to_string()) };
+        let handle1 = pool.insert("hello".to_string());
+        let handle2 = pool.insert("world".to_string());
 
         assert_eq!(pool.len(), 2);
 
@@ -494,10 +595,9 @@ mod tests {
 
     #[test]
     fn remove_unpin_returns_value() {
-        let mut pool = Pool::new(Layout::new::<i32>(), DropPolicy::MayDropItems);
+        let mut pool = RawOpaquePool::with_layout_of::<i32>();
 
-        // SAFETY: i32 matches the layout used to create the pool
-        let handle = unsafe { pool.insert(-456_i32) };
+        let handle = pool.insert(-456_i32);
 
         let value = pool.remove_mut_unpin(handle);
         assert_eq!(value, -456);
@@ -506,54 +606,51 @@ mod tests {
 
     #[test]
     fn shrink_to_fit_removes_empty_slabs() {
-        let mut pool = Pool::new(Layout::new::<u8>(), DropPolicy::MayDropItems);
+        let mut pool = RawOpaquePool::with_layout_of::<u8>();
 
-        // Force creation of multiple slabs
-        pool.reserve(300);
-        let initial_capacity = pool.capacity();
-
-        // Add some items
+        // Add some items.
         let mut handles = Vec::new();
         for i in 0..10 {
-            // SAFETY: u8 matches the layout used to create the pool
-            handles.push(unsafe { pool.insert(u8::try_from(i).unwrap()) });
+            handles.push(pool.insert(u8::try_from(i).unwrap()));
         }
 
-        // Remove all items
+        // Remove all items.
         for handle in handles {
             pool.remove_mut(handle);
         }
 
         assert!(pool.is_empty());
 
-        // Shrink should reduce capacity but may not eliminate all empty slabs
-        // (only trailing empty slabs are removed)
         pool.shrink_to_fit();
 
-        // Capacity should be reduced or at least not increased
-        assert!(pool.capacity() <= initial_capacity);
+        // We have white-box knowledge that an empty pool will shrink to zero.
+        // This may become untrue with future algorithm changes, at which point
+        // we will need to adjust the tests.
+        assert_eq!(pool.capacity(), 0);
     }
 
     #[test]
     fn handle_provides_access_to_object() {
-        let mut pool = Pool::new(Layout::new::<u64>(), DropPolicy::MayDropItems);
+        let mut pool = RawOpaquePool::with_layout_of::<u64>();
 
-        // SAFETY: u64 matches the layout used to create the pool
-        let handle = unsafe { pool.insert(12345_u64) };
+        let handle = pool.insert(12345_u64);
+
+        assert_eq!(*handle, 12345);
 
         // Access the value through the handle's pointer
         let ptr = handle.ptr();
+
         // SAFETY: Handle is valid and points to a u64
         let value = unsafe { ptr.as_ref() };
+
         assert_eq!(*value, 12345);
     }
 
     #[test]
     fn shared_handles_are_copyable() {
-        let mut pool = Pool::new(Layout::new::<u32>(), DropPolicy::MayDropItems);
+        let mut pool = RawOpaquePool::with_layout_of::<u32>();
 
-        // SAFETY: u32 matches the layout used to create the pool
-        let handle1 = unsafe { pool.insert(789_u32) }.into_shared();
+        let handle1 = pool.insert(789_u32).into_shared();
         let handle2 = handle1;
         #[expect(clippy::clone_on_copy, reason = "intentional, testing cloning")]
         let handle3 = handle1.clone();
@@ -565,15 +662,13 @@ mod tests {
 
     #[test]
     fn multiple_removals_and_insertions() {
-        let mut pool = Pool::new(Layout::new::<usize>(), DropPolicy::MayDropItems);
+        let mut pool = RawOpaquePool::with_layout_of::<usize>();
 
         // Insert, remove, insert again to test slot reuse
-        // SAFETY: usize matches the layout used to create the pool
-        let handle1 = unsafe { pool.insert(1_usize) };
+        let handle1 = pool.insert(1_usize);
         pool.remove_mut(handle1);
 
-        // SAFETY: usize matches the layout used to create the pool
-        let handle2 = unsafe { pool.insert(2_usize) };
+        let handle2 = pool.insert(2_usize);
 
         assert_eq!(pool.len(), 1);
 
@@ -583,17 +678,15 @@ mod tests {
 
     #[test]
     fn remove_with_shared_handle() {
-        let mut pool = Pool::new(Layout::new::<i64>(), DropPolicy::MayDropItems);
+        let mut pool = RawOpaquePool::with_layout_of::<i64>();
 
-        // SAFETY: i64 matches the layout used to create the pool
-        let handle_mut = unsafe { pool.insert(999_i64) };
-        let handle_shared = handle_mut.into_shared();
+        let handle = pool.insert(999_i64).into_shared();
 
         assert_eq!(pool.len(), 1);
 
-        // SAFETY: Handle is valid and comes from this pool
+        // SAFETY: Handle is from this pool and has not yet been used to remove.
         unsafe {
-            pool.remove(handle_shared);
+            pool.remove(handle);
         }
 
         assert_eq!(pool.len(), 0);
@@ -602,16 +695,14 @@ mod tests {
 
     #[test]
     fn remove_unpin_with_shared_handle() {
-        let mut pool = Pool::new(Layout::new::<i32>(), DropPolicy::MayDropItems);
+        let mut pool = RawOpaquePool::with_layout_of::<i32>();
 
-        // SAFETY: i32 matches the layout used to create the pool
-        let handle_mut = unsafe { pool.insert(42_i32) };
-        let handle_shared = handle_mut.into_shared();
+        let handle = pool.insert(42_i32).into_shared();
 
         assert_eq!(pool.len(), 1);
 
-        // SAFETY: Handle is valid and comes from this pool
-        let value = unsafe { pool.remove_unpin(handle_shared) };
+        // SAFETY: Handle is from this pool and has not yet been used to remove.
+        let value = unsafe { pool.remove_unpin(handle) };
 
         assert_eq!(value, 42);
         assert_eq!(pool.len(), 0);
@@ -622,17 +713,40 @@ mod tests {
     fn remove_unpin_panics_on_zero_sized_type() {
         // We need to use a type that is not zero-sized for the pool itself,
         // but we create a handle that gets type-erased to a ZST.
-        let mut pool = Pool::new(Layout::new::<u8>(), DropPolicy::MayDropItems);
+        let mut pool = RawOpaquePool::with_layout_of::<u8>();
 
-        // SAFETY: u8 matches the layout used to create the pool
-        let handle = unsafe { pool.insert(123_u8) };
+        let handle = pool.insert(123_u8);
 
         let erased_handle: RawPooled<()> = handle.into_shared().erase();
 
         // This should panic because size_of::<()>() == 0
         // SAFETY: Handle points to valid memory but type is ZST.
         unsafe {
+            #[expect(unused_must_use, reason = "impossible to use a unit value")]
             pool.remove_unpin(erased_handle);
         }
+    }
+
+    #[test]
+    #[should_panic]
+    fn insert_panics_if_provided_type_with_wrong_layout() {
+        let mut pool = RawOpaquePool::with_layout_of::<u32>();
+
+        // Try to insert a u64 into a pool configured for u32
+        let _handle = pool.insert(123_u64);
+    }
+
+    #[test]
+    #[should_panic]
+    fn insert_with_panics_if_provided_type_with_wrong_layout() {
+        let mut pool = RawOpaquePool::with_layout_of::<u16>();
+
+        // Try to insert a u32 into a pool configured for u16
+        // SAFETY: we correctly initialize the slot but with wrong type.
+        let _handle = unsafe {
+            pool.insert_with(|uninit: &mut MaybeUninit<u32>| {
+                uninit.write(456);
+            })
+        };
     }
 }

@@ -1,12 +1,12 @@
 use std::alloc::{Layout, alloc, dealloc};
-use std::cell::Cell;
 use std::iter::FusedIterator;
-use std::marker::PhantomData;
 use std::mem::{self, MaybeUninit};
 use std::ptr::{self, NonNull};
 use std::thread;
 
 use crate::{DropPolicy, Dropper, SlabHandle, SlabLayout, SlotMeta};
+
+// TODO: What happens if an object's drop() panics?
 
 /// A slab is one piece of a pool's capacity, providing the memory used to store pooled objects.
 ///
@@ -21,13 +21,14 @@ use crate::{DropPolicy, Dropper, SlabHandle, SlabLayout, SlotMeta};
 /// holding an exclusive reference to the slab.
 ///
 /// The caller is responsible for ensuring that no reference survives beyond the lifetime of the
-/// object in the slab.
+/// object in the slab. Higher-level abstractions may provide safe wrappers around these unsafe
+/// lifetime management principles.
 ///
 /// # Thread safety
 ///
-/// The slab itself is thread-mobile (`Send`) and may be moved across threads. However, this is
-/// only valid if all objects in the slab are likewise `Send`. This is a safety requirement
-/// enforced by the `insert()` family of methods.
+/// The slab is single-threaded, though if all the objects inserted are `Send` then the owner of
+/// the slab is allowed to treat the slab itself as `Send` (but must do so via a wrapper type that
+/// implements `Send` using unsafe code).
 #[derive(Debug)]
 pub(crate) struct Slab {
     /// Precomputed layout factors for the slab, based on the object layout and capacity.
@@ -57,8 +58,6 @@ pub(crate) struct Slab {
 
     /// Current number of occupied slots.
     count: usize,
-
-    _not_sync: PhantomData<Cell<()>>,
 }
 
 impl Slab {
@@ -107,7 +106,6 @@ impl Slab {
             first_slot_ptr,
             next_free_slot_index: 0,
             count: 0,
-            _not_sync: PhantomData,
         }
     }
 
@@ -129,33 +127,6 @@ impl Slab {
         self.count == self.layout.capacity().get()
     }
 
-    /// Inserts an object into the slab.
-    ///
-    /// The returned handle can be used to access the object and remove it from the slab.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the slab is full.
-    ///
-    /// In debug builds, panics if the layout of `T` does not match the slab's item layout.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that the layout of `T` matches the slab's item layout.
-    /// In debug builds, this is checked with an assertion.
-    ///
-    /// If `T` is not `Send`, the caller must ensure that the slab itself is never moved
-    /// across threads (it is effectively `!Send` while any such object is in the slab).
-    pub(crate) unsafe fn insert<T>(&mut self, value: T) -> SlabHandle<T> {
-        // Implement insert() in terms of insert_with() to reduce logic duplication.
-        // SAFETY: Forwarding safety requirements to the caller.
-        unsafe {
-            self.insert_with(|uninit: &mut MaybeUninit<T>| {
-                uninit.write(value);
-            })
-        }
-    }
-
     /// Inserts an object into the slab via closure.
     ///
     /// This method allows the caller to partially initialize the object, skipping any `MaybeUninit`
@@ -172,32 +143,23 @@ impl Slab {
     ///
     /// Panics if the slab is full.
     ///
-    /// In debug builds, panics if the layout of `T` does not match the slab's item layout.
-    ///
     /// # Safety
     ///
-    /// The caller must ensure that the layout of `T` matches the slab's item layout.
-    /// In debug builds, this is checked with an assertion.
+    /// The caller must ensure that the layout of `T` matches the slab's object layout.
     ///
     /// The caller must ensure that the closure correctly initializes the object. All fields that
     /// are not `MaybeUninit` must be initialized when the closure returns.
-    ///
-    /// If `T` is not `Send`, the caller must ensure that the slab itself is never moved
-    /// across threads (it is effectively `!Send` while any such object is in the slab).
     pub(crate) unsafe fn insert_with<T, F>(&mut self, f: F) -> SlabHandle<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {
-        #[cfg(debug_assertions)]
-        {
-            assert_eq!(
-                Layout::new::<T>(),
-                self.layout.object_layout(),
-                "type layout mismatch: expected layout {:?}, got layout {:?}",
-                self.layout.object_layout(),
-                Layout::new::<T>()
-            );
-        }
+        debug_assert_eq!(
+            Layout::new::<T>(),
+            self.layout.object_layout(),
+            "type layout mismatch: expected layout {:?}, got layout {:?}",
+            self.layout.object_layout(),
+            Layout::new::<T>()
+        );
 
         assert!(
             !self.is_full(),
@@ -253,7 +215,7 @@ impl Slab {
             }
         };
 
-        // Increment the count since we successfully inserted an item.
+        // Increment the count since we successfully inserted an object.
         // Cannot overflow because we would hit capacity limits or virtual memory limits first.
         self.count = self.count.wrapping_add(1);
 
@@ -264,14 +226,14 @@ impl Slab {
     ///
     /// # Panics
     ///
-    /// Panics if the handle does not reference an existing item in this slab.
+    /// Panics if the handle does not reference an existing object in this slab.
     ///
     /// # Safety
     ///
-    /// The caller must ensure that the object is still present in the slab. Handles are just
-    /// fat pointers, so ownership and object lifetime must be managed manually by the caller.
-    ///
     /// The caller must ensure that the handle belongs to this slab.
+    ///
+    /// The caller must ensure that the object is still present in the slab. Slab handles are just
+    /// fat pointers, so ownership and object lifetime must be managed manually by the caller.
     pub(crate) unsafe fn remove<T: ?Sized>(&mut self, handle: SlabHandle<T>) {
         let next_free_slot_index = self.next_free_slot_index;
 
@@ -311,20 +273,20 @@ impl Slab {
     ///
     /// # Panics
     ///
-    /// Panics if the handle does not reference an existing item in this slab.
+    /// Panics if the handle does not reference an existing object in this slab.
     ///
-    /// Panics if `T` is a type-erased slab handle (`SlabHandle<()>`).
+    /// Panics if `T` is a type-erased handle (`SlabHandle<()>`).
     ///
     /// # Safety
     ///
-    /// The caller must ensure that the object is still present in the slab. Handles are just
-    /// fat pointers, so ownership and object lifetime must be managed manually by the caller.
-    ///
     /// The caller must ensure that the handle belongs to this slab.
+    ///
+    /// The caller must ensure that the object is still present in the slab. Slab handles are just
+    /// fat pointers, so ownership and object lifetime must be managed manually by the caller.
     #[must_use]
     pub(crate) unsafe fn remove_unpin<T: Unpin>(&mut self, handle: SlabHandle<T>) -> T {
         // We would rather prefer to check for `SlabHandle<()>` specifically but
-        // that would imply specialization or `T: 'static` for TypeId shenanigans.
+        // that would imply specialization or `T: 'static` or TypeId shenanigans.
         // This is good enough because type-erasing a handle is the only way to get a
         // handle to a ZST anyway because the slab does not even support ZSTs.
         assert_ne!(
@@ -458,7 +420,7 @@ impl Drop for Slab {
         //
         // If we are already panicking, we do not want to panic again because that will
         // simply obscure whatever the original panic was, leading to debug difficulties.
-        if !thread::panicking() && matches!(self.drop_policy, DropPolicy::MustNotDropItems) {
+        if !thread::panicking() && matches!(self.drop_policy, DropPolicy::MustNotDropContents) {
             assert!(
                 was_empty,
                 "dropped a non-empty slab with {original_count} items - this is forbidden by DropPolicy::MustNotDropItems"
@@ -466,10 +428,6 @@ impl Drop for Slab {
         }
     }
 }
-
-// SAFETY: We are "potentially Send" - it depends on what objects are contained inside the slab.
-// See type-level documentation for more details.
-unsafe impl Send for Slab {}
 
 /// Iterator over occupied slots in a slab.
 ///
@@ -621,11 +579,23 @@ mod tests {
 
     use super::*;
 
-    assert_impl_all!(Slab: Send);
+    assert_not_impl_any!(Slab: Send);
     assert_not_impl_any!(Slab: Sync);
 
     assert_impl_all!(SlabIterator<'_>: Iterator, DoubleEndedIterator, ExactSizeIterator, FusedIterator);
     assert_not_impl_any!(SlabIterator<'_>: Send, Sync);
+
+    /// # Safety
+    ///
+    /// The caller must guarantee that the layout of `T` matches the object layout of the slab.
+    unsafe fn insert<T>(slab: &mut Slab, value: T) -> SlabHandle<T> {
+        // SAFETY: Caller guarantees T layout matches slab layout, then we initialize.
+        unsafe {
+            slab.insert_with(|slot| {
+                slot.write(value);
+            })
+        }
+    }
 
     fn smoke_test_impl<T: Default>() {
         // Test basic slab operations with default values of T.
@@ -637,7 +607,7 @@ mod tests {
         //
         // At relevant points, we check the slab length and emptiness/fullness.
         let layout = SlabLayout::new(Layout::new::<T>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropItems);
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         assert!(slab.is_empty());
         assert!(!slab.is_full());
@@ -645,11 +615,11 @@ mod tests {
 
         // 1. Insert 3 items
         // SAFETY: T::default() creates a valid T with matching layout
-        let handle1 = unsafe { slab.insert(T::default()) };
+        let handle1 = unsafe { insert(&mut slab, T::default()) };
         // SAFETY: T::default() creates a valid T with matching layout
-        let handle2 = unsafe { slab.insert(T::default()) };
+        let handle2 = unsafe { insert(&mut slab, T::default()) };
         // SAFETY: T::default() creates a valid T with matching layout
-        let handle3 = unsafe { slab.insert(T::default()) };
+        let handle3 = unsafe { insert(&mut slab, T::default()) };
 
         assert!(!slab.is_empty());
         assert_eq!(slab.len(), 3);
@@ -663,9 +633,9 @@ mod tests {
 
         // 3. Insert 2 more items
         // SAFETY: T::default() creates a valid T with matching layout
-        let handle4 = unsafe { slab.insert(T::default()) };
+        let handle4 = unsafe { insert(&mut slab, T::default()) };
         // SAFETY: T::default() creates a valid T with matching layout
-        let handle5 = unsafe { slab.insert(T::default()) };
+        let handle5 = unsafe { insert(&mut slab, T::default()) };
         assert_eq!(slab.len(), 4);
 
         // 4. Remove the first item
@@ -726,11 +696,11 @@ mod tests {
     #[test]
     fn remove_unpin_returns_original_object() {
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropItems);
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         let original_value = 42_u32;
         // SAFETY: u32 layout matches slab layout
-        let handle = unsafe { slab.insert(original_value) };
+        let handle = unsafe { insert(&mut slab, original_value) };
 
         // SAFETY: handle is valid and from this slab
         let returned_value = unsafe { slab.remove_unpin(handle) };
@@ -739,13 +709,35 @@ mod tests {
     }
 
     #[test]
+    fn handles_very_large_objects() {
+        // Test with objects larger than typical page size
+        struct LargeObject {
+            data: [u8; 8192], // 8KB object
+        }
+
+        let layout = SlabLayout::new(Layout::new::<LargeObject>());
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
+
+        let large_obj = LargeObject { data: [123; 8192] };
+        // SAFETY: LargeObject layout matches slab layout
+        let handle = unsafe { insert(&mut slab, large_obj) };
+
+        // Verify we can retrieve the object
+        // SAFETY: handle is valid and from this slab
+        let retrieved = unsafe { slab.remove_unpin(handle) };
+        assert_eq!(retrieved.data[0], 123);
+        assert_eq!(retrieved.data[8191], 123);
+        assert!(slab.is_empty());
+    }
+
+    #[test]
     #[should_panic]
     fn drop_policy_must_not_drop_items_causes_panic_on_drop_with_items() {
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout, DropPolicy::MustNotDropItems);
+        let mut slab = Slab::new(layout, DropPolicy::MustNotDropContents);
 
         // SAFETY: u32 layout matches slab layout
-        let _handle = unsafe { slab.insert(42_u32) };
+        let _handle = unsafe { insert(&mut slab, 42_u32) };
 
         // Slab drops here with items still present - should panic
     }
@@ -778,7 +770,7 @@ mod tests {
         }
 
         let layout = SlabLayout::new(Layout::new::<PartiallyInitializable>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropItems);
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         // SAFETY: PartiallyInitializable layout matches slab layout,
         // and new_in_place properly initializes required fields
@@ -802,10 +794,10 @@ mod tests {
     #[should_panic]
     fn double_remove_panics() {
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropItems);
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         // SAFETY: u32 layout matches slab layout
-        let handle = unsafe { slab.insert(42_u32) };
+        let handle = unsafe { insert(&mut slab, 42_u32) };
 
         // SAFETY: handle is valid and from this slab
         unsafe {
@@ -821,13 +813,13 @@ mod tests {
     #[should_panic]
     fn remove_with_handle_from_wrong_slab_panics() {
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab1 = Slab::new(layout.clone(), DropPolicy::MayDropItems);
-        let mut slab2 = Slab::new(layout, DropPolicy::MayDropItems);
+        let mut slab1 = Slab::new(layout.clone(), DropPolicy::MayDropContents);
+        let mut slab2 = Slab::new(layout, DropPolicy::MayDropContents);
 
         // SAFETY: u32 layout matches slab layout
-        let _handle_from_slab1 = unsafe { slab1.insert(42_u32) };
+        let _handle_from_slab1 = unsafe { insert(&mut slab1, 42_u32) };
         // SAFETY: u32 layout matches slab layout
-        let handle_from_slab2 = unsafe { slab2.insert(42_u32) };
+        let handle_from_slab2 = unsafe { insert(&mut slab2, 42_u32) };
 
         // Try to remove handle from slab2 using slab1 - should panic
         // SAFETY: This should panic - handle is from wrong slab
@@ -857,12 +849,12 @@ mod tests {
 
         {
             let layout = SlabLayout::new(Layout::new::<DropCounter>());
-            let mut slab = Slab::new(layout, DropPolicy::MayDropItems);
+            let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
             // SAFETY: DropCounter layout matches slab layout
-            let _handle1 = unsafe { slab.insert(DropCounter { value: 1 }) };
+            let _handle1 = unsafe { insert(&mut slab, DropCounter { value: 1 }) };
             // SAFETY: DropCounter layout matches slab layout
-            let _handle2 = unsafe { slab.insert(DropCounter { value: 2 }) };
+            let _handle2 = unsafe { insert(&mut slab, DropCounter { value: 2 }) };
 
             // Slab drops here, should drop both objects
         }
@@ -886,17 +878,17 @@ mod tests {
         assert_eq!(Layout::new::<TypeA>(), Layout::new::<TypeB>());
 
         let layout = SlabLayout::new(Layout::new::<TypeA>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropItems);
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         // Insert objects of different types
         // SAFETY: TypeA layout matches slab layout
-        let handle_a1 = unsafe { slab.insert(TypeA(100)) };
+        let handle_a1 = unsafe { insert(&mut slab, TypeA(100)) };
         // SAFETY: TypeB has same layout as TypeA, so it matches slab layout
-        let handle_b1 = unsafe { slab.insert(TypeB(200)) };
+        let handle_b1 = unsafe { insert(&mut slab, TypeB(200)) };
         // SAFETY: TypeA layout matches slab layout
-        let handle_a2 = unsafe { slab.insert(TypeA(300)) };
+        let handle_a2 = unsafe { insert(&mut slab, TypeA(300)) };
         // SAFETY: TypeB has same layout as TypeA, so it matches slab layout
-        let handle_b2 = unsafe { slab.insert(TypeB(400)) };
+        let handle_b2 = unsafe { insert(&mut slab, TypeB(400)) };
 
         assert_eq!(slab.len(), 4);
         assert!(!slab.is_empty());
@@ -927,9 +919,9 @@ mod tests {
 
         // Insert more objects after clearing
         // SAFETY: TypeB has same layout as TypeA, so it matches slab layout
-        let handle_b3 = unsafe { slab.insert(TypeB(500)) };
+        let handle_b3 = unsafe { insert(&mut slab, TypeB(500)) };
         // SAFETY: TypeA layout matches slab layout
-        let handle_a3 = unsafe { slab.insert(TypeA(600)) };
+        let handle_a3 = unsafe { insert(&mut slab, TypeA(600)) };
 
         assert_eq!(slab.len(), 2);
 
@@ -949,10 +941,10 @@ mod tests {
     #[test]
     fn type_erased_handle_works_for_remove_but_not_remove_unpin() {
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropItems);
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         // SAFETY: u32 layout matches slab layout
-        let handle = unsafe { slab.insert(42_u32) };
+        let handle = unsafe { insert(&mut slab, 42_u32) };
         let erased_handle = handle.erase();
 
         assert_eq!(slab.len(), 1);
@@ -969,10 +961,10 @@ mod tests {
     #[should_panic]
     fn type_erased_handle_panics_on_remove_unpin() {
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropItems);
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         // SAFETY: u32 layout matches slab layout
-        let handle = unsafe { slab.insert(42_u32) };
+        let handle = unsafe { insert(&mut slab, 42_u32) };
         let erased_handle = handle.erase();
 
         // Type-erased handle should panic on remove_unpin because it's a ZST
@@ -987,7 +979,7 @@ mod tests {
     fn insert_panics_when_slab_is_full() {
         // Create a slab with minimal capacity to make it easy to fill
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout.clone(), DropPolicy::MayDropItems);
+        let mut slab = Slab::new(layout.clone(), DropPolicy::MayDropContents);
 
         let capacity = layout.capacity().get();
 
@@ -998,7 +990,7 @@ mod tests {
                 clippy::cast_possible_truncation,
                 reason = "test uses small capacity values"
             )]
-            let _handle = unsafe { slab.insert(i as u32) };
+            let _handle = unsafe { insert(&mut slab, i as u32) };
         }
 
         assert!(slab.is_full());
@@ -1007,22 +999,22 @@ mod tests {
         // This should panic - slab is full
         // SAFETY: u32 layout matches slab layout, but slab is full so should panic
         unsafe {
-            slab.insert(999_u32);
+            insert(&mut slab, 999_u32);
         }
     }
 
     #[test]
     fn insertion_follows_lowest_index_first_order() {
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropItems);
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         // Insert items and verify they get indices 0, 1, 2
         // SAFETY: u32 layout matches slab layout
-        let handle0 = unsafe { slab.insert(100_u32) };
+        let handle0 = unsafe { insert(&mut slab, 100_u32) };
         // SAFETY: u32 layout matches slab layout
-        let handle1 = unsafe { slab.insert(200_u32) };
+        let handle1 = unsafe { insert(&mut slab, 200_u32) };
         // SAFETY: u32 layout matches slab layout
-        let handle2 = unsafe { slab.insert(300_u32) };
+        let handle2 = unsafe { insert(&mut slab, 300_u32) };
 
         assert_eq!(handle0.index(), 0);
         assert_eq!(handle1.index(), 1);
@@ -1038,13 +1030,13 @@ mod tests {
 
         // Next insertion should reuse the freed slot at index 1
         // SAFETY: u32 layout matches slab layout
-        let handle_reuse = unsafe { slab.insert(400_u32) };
+        let handle_reuse = unsafe { insert(&mut slab, 400_u32) };
         assert_eq!(handle_reuse.index(), 1);
         assert_eq!(slab.len(), 3);
 
         // Next insertion should use index 3 (next available)
         // SAFETY: u32 layout matches slab layout
-        let handle3 = unsafe { slab.insert(500_u32) };
+        let handle3 = unsafe { insert(&mut slab, 500_u32) };
         assert_eq!(handle3.index(), 3);
         assert_eq!(slab.len(), 4);
 
@@ -1061,19 +1053,19 @@ mod tests {
 
         // Next insertion should reuse index 2 (most recently freed, stack behavior)
         // SAFETY: u32 layout matches slab layout
-        let handle_reuse2 = unsafe { slab.insert(600_u32) };
+        let handle_reuse2 = unsafe { insert(&mut slab, 600_u32) };
         assert_eq!(handle_reuse2.index(), 2);
 
         // Then index 0 should be reused
         // SAFETY: u32 layout matches slab layout
-        let handle_reuse0 = unsafe { slab.insert(700_u32) };
+        let handle_reuse0 = unsafe { insert(&mut slab, 700_u32) };
         assert_eq!(handle_reuse0.index(), 0);
     }
 
     #[test]
     fn iter_empty_slab() {
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let slab = Slab::new(layout, DropPolicy::MayDropItems);
+        let slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         let mut iter = slab.iter();
         assert_eq!(iter.size_hint(), (0, Some(0)));
@@ -1087,10 +1079,10 @@ mod tests {
     #[test]
     fn iter_single_item() {
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropItems);
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         // SAFETY: u32 layout matches slab layout
-        let _handle = unsafe { slab.insert(42_u32) };
+        let _handle = unsafe { insert(&mut slab, 42_u32) };
 
         let mut iter = slab.iter();
 
@@ -1108,15 +1100,15 @@ mod tests {
     #[test]
     fn iter_multiple_items() {
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropItems);
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         // Insert multiple items
         // SAFETY: u32 layout matches slab layout
-        let _handle1 = unsafe { slab.insert(100_u32) };
+        let _handle1 = unsafe { insert(&mut slab, 100_u32) };
         // SAFETY: u32 layout matches slab layout
-        let _handle2 = unsafe { slab.insert(200_u32) };
+        let _handle2 = unsafe { insert(&mut slab, 200_u32) };
         // SAFETY: u32 layout matches slab layout
-        let _handle3 = unsafe { slab.insert(300_u32) };
+        let _handle3 = unsafe { insert(&mut slab, 300_u32) };
 
         let values: Vec<u32> = slab
             .iter()
@@ -1133,15 +1125,15 @@ mod tests {
     #[test]
     fn iter_with_gaps() {
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropItems);
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         // Insert items
         // SAFETY: u32 layout matches slab layout
-        let handle1 = unsafe { slab.insert(100_u32) };
+        let handle1 = unsafe { insert(&mut slab, 100_u32) };
         // SAFETY: u32 layout matches slab layout
-        let handle2 = unsafe { slab.insert(200_u32) };
+        let handle2 = unsafe { insert(&mut slab, 200_u32) };
         // SAFETY: u32 layout matches slab layout
-        let handle3 = unsafe { slab.insert(300_u32) };
+        let handle3 = unsafe { insert(&mut slab, 300_u32) };
 
         // Remove the middle item to create a gap
         // SAFETY: handle2 is valid and from this slab
@@ -1174,13 +1166,13 @@ mod tests {
         struct TypeB(u32);
 
         let layout = SlabLayout::new(Layout::new::<TypeA>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropItems);
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         // Insert different types with same layout
         // SAFETY: TypeA layout matches slab layout
-        let _handle_a = unsafe { slab.insert(TypeA(100)) };
+        let _handle_a = unsafe { insert(&mut slab, TypeA(100)) };
         // SAFETY: TypeB has same layout as TypeA
-        let _handle_b = unsafe { slab.insert(TypeB(200)) };
+        let _handle_b = unsafe { insert(&mut slab, TypeB(200)) };
 
         let mut values = Vec::new();
         for (i, ptr) in slab.iter().enumerate() {
@@ -1203,7 +1195,7 @@ mod tests {
     #[test]
     fn iter_size_hint() {
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropItems);
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         // Empty slab
         let iter = slab.iter();
@@ -1212,9 +1204,9 @@ mod tests {
 
         // Add some items
         // SAFETY: u32 layout matches slab layout
-        let _handle1 = unsafe { slab.insert(100_u32) };
+        let _handle1 = unsafe { insert(&mut slab, 100_u32) };
         // SAFETY: u32 layout matches slab layout
-        let _handle2 = unsafe { slab.insert(200_u32) };
+        let _handle2 = unsafe { insert(&mut slab, 200_u32) };
 
         let mut iter = slab.iter();
         assert_eq!(iter.size_hint(), (2, Some(2)));
@@ -1241,15 +1233,15 @@ mod tests {
     #[test]
     fn iter_double_ended_basic() {
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropItems);
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         // Insert items at indices 0, 1, 2
         // SAFETY: u32 layout matches slab layout
-        let _handle1 = unsafe { slab.insert(100_u32) };
+        let _handle1 = unsafe { insert(&mut slab, 100_u32) };
         // SAFETY: u32 layout matches slab layout
-        let _handle2 = unsafe { slab.insert(200_u32) };
+        let _handle2 = unsafe { insert(&mut slab, 200_u32) };
         // SAFETY: u32 layout matches slab layout
-        let _handle3 = unsafe { slab.insert(300_u32) };
+        let _handle3 = unsafe { insert(&mut slab, 300_u32) };
 
         let mut iter = slab.iter();
 
@@ -1277,19 +1269,19 @@ mod tests {
     #[test]
     fn iter_double_ended_mixed_directions() {
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropItems);
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         // Insert 5 items
         // SAFETY: u32 layout matches slab layout
-        let _handle1 = unsafe { slab.insert(100_u32) };
+        let _handle1 = unsafe { insert(&mut slab, 100_u32) };
         // SAFETY: u32 layout matches slab layout
-        let _handle2 = unsafe { slab.insert(200_u32) };
+        let _handle2 = unsafe { insert(&mut slab, 200_u32) };
         // SAFETY: u32 layout matches slab layout
-        let _handle3 = unsafe { slab.insert(300_u32) };
+        let _handle3 = unsafe { insert(&mut slab, 300_u32) };
         // SAFETY: u32 layout matches slab layout
-        let _handle4 = unsafe { slab.insert(400_u32) };
+        let _handle4 = unsafe { insert(&mut slab, 400_u32) };
         // SAFETY: u32 layout matches slab layout
-        let _handle5 = unsafe { slab.insert(500_u32) };
+        let _handle5 = unsafe { insert(&mut slab, 500_u32) };
 
         let mut iter = slab.iter();
         assert_eq!(iter.len(), 5);
@@ -1338,19 +1330,19 @@ mod tests {
     #[test]
     fn iter_double_ended_with_gaps() {
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropItems);
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         // Insert items and create gaps
         // SAFETY: u32 layout matches slab layout
-        let handle1 = unsafe { slab.insert(100_u32) };
+        let handle1 = unsafe { insert(&mut slab, 100_u32) };
         // SAFETY: u32 layout matches slab layout
-        let handle2 = unsafe { slab.insert(200_u32) };
+        let handle2 = unsafe { insert(&mut slab, 200_u32) };
         // SAFETY: u32 layout matches slab layout
-        let handle3 = unsafe { slab.insert(300_u32) };
+        let handle3 = unsafe { insert(&mut slab, 300_u32) };
         // SAFETY: u32 layout matches slab layout
-        let handle4 = unsafe { slab.insert(400_u32) };
+        let handle4 = unsafe { insert(&mut slab, 400_u32) };
         // SAFETY: u32 layout matches slab layout
-        let handle5 = unsafe { slab.insert(500_u32) };
+        let handle5 = unsafe { insert(&mut slab, 500_u32) };
 
         // Remove items to create gaps (remove indices 1 and 3)
         // SAFETY: handle2 is valid and from this slab
@@ -1398,7 +1390,7 @@ mod tests {
     #[test]
     fn iter_fused_behavior() {
         let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropItems);
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         // Test with empty slab
         let mut iter = slab.iter();
@@ -1409,9 +1401,9 @@ mod tests {
 
         // Test with some items
         // SAFETY: u32 layout matches slab layout
-        let _handle1 = unsafe { slab.insert(100_u32) };
+        let _handle1 = unsafe { insert(&mut slab, 100_u32) };
         // SAFETY: u32 layout matches slab layout
-        let _handle2 = unsafe { slab.insert(200_u32) };
+        let _handle2 = unsafe { insert(&mut slab, 200_u32) };
 
         let mut iter = slab.iter();
 

@@ -3,7 +3,7 @@ use std::cell::Cell;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 
-use crate::{DropPolicy, Pool, RawPooled, RawPooledMut};
+use crate::{DropPolicy, RawOpaquePool, RawPooled, RawPooledMut};
 
 // NOTE: This implementation is designed to stay synchronized with the Pool implementation.
 // When Pool is updated, this type should be updated accordingly to maintain API alignment.
@@ -30,7 +30,7 @@ pub struct PinnedPoolOptions {
 #[derive(Debug)]
 pub struct RawPinnedPool<T> {
     /// The underlying pool that manages memory and storage.
-    pool: Pool,
+    pool: RawOpaquePool,
     
     /// Phantom data to associate the pool with type T.
     _marker: PhantomData<T>,
@@ -57,7 +57,7 @@ impl<T> RawPinnedPool<T> {
     /// Panics if the type `T` has zero size.
     #[must_use]
     pub fn with_options(options: PinnedPoolOptions) -> Self {
-        let pool = Pool::new(Layout::new::<T>(), options.drop_policy);
+        let pool = RawOpaquePool::new(Layout::new::<T>(), options.drop_policy);
         
         Self {
             pool,
