@@ -114,7 +114,7 @@ impl<T: ?Sized> AsRef<T> for Pooled<T> {
 impl<T: ?Sized> Clone for Pooled<T> {
     fn clone(&self) -> Self {
         Self {
-            inner: self.inner.clone(),
+            inner: self.inner,
             remover: Arc::clone(&self.remover),
         }
     }
@@ -139,7 +139,9 @@ impl Drop for Remover {
 
         // SAFETY: The remover controls the shared object lifetime and is the only thing
         // that can remove the item from the pool.
-        unsafe { pool.remove(self.handle) };
+        unsafe {
+            pool.remove(self.handle);
+        }
     }
 }
 

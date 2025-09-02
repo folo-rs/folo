@@ -111,6 +111,7 @@ impl<T: ?Sized> PooledMut<T> {
 
 impl<T: Unpin> PooledMut<T> {
     /// Removes the item from the pool and returns it to the caller.
+    #[must_use]
     pub fn into_inner(self) -> T {
         let (inner, pool) = self.into_parts();
 

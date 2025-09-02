@@ -206,21 +206,7 @@ impl OpaquePool {
 
         PooledMut::new(inner, Arc::clone(&self.inner))
     }
-
-    /// Returns an iterator over all objects in the pool.
-    ///
-    /// The iterator yields untyped pointers (`NonNull<()>`) to the objects stored in the pool.
-    /// It is the caller's responsibility to cast these pointers to the appropriate type.
-    /// 
-    /// The pool is exclusively locked for the lifetime of the iterator. Attempting to access
-    /// the pool from the same thread during the iteration will result in a deadlock.
-    #[must_use]
-    pub fn iter(&self) -> OpaquePoolIterator<'_> {
-        todo!()
-    }
 }
-
-pub struct OpaquePoolIterator<'p> {}
 
 #[cfg(test)]
 mod tests {
