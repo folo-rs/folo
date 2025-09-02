@@ -1,7 +1,10 @@
 use std::alloc::Layout;
+use std::iter::FusedIterator;
 use std::mem::MaybeUninit;
+use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
+use crate::opaque::pool_raw::RawOpaquePoolIterator;
 use crate::{ERR_POISONED_LOCK, PooledMut, RawOpaquePool, RawOpaquePoolSend};
 
 /// A pool of reference-counted objects with uniform memory layout.
@@ -206,9 +209,232 @@ impl OpaquePool {
 
         PooledMut::new(inner, Arc::clone(&self.inner))
     }
+
+    /// Calls a closure with an iterator over all objects in the pool.
+    ///
+    /// The iterator yields untyped pointers (`NonNull<()>`) to the objects stored in the pool.
+    /// It is the caller's responsibility to cast these pointers to the appropriate type.
+    ///
+    /// The pool is locked for the entire duration of the closure, ensuring that objects
+    /// cannot be removed while iteration is in progress. This guarantees that all pointers
+    /// yielded by the iterator remain valid for the duration of the closure.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use infinity_pool::OpaquePool;
+    /// let mut pool = OpaquePool::with_layout_of::<u32>();
+    /// let _handle1 = pool.insert(42u32);
+    /// let _handle2 = pool.insert(100u32);
+    /// 
+    /// // Safe iteration with guaranteed pointer validity
+    /// pool.with_iter(|iter| {
+    ///     for ptr in iter {
+    ///         // SAFETY: We know these are u32 pointers from this pool
+    ///         let value = unsafe { *ptr.cast::<u32>().as_ref() };
+    ///         println!("Value: {}", value);
+    ///     }
+    /// });
+    /// 
+    /// // Collect values safely
+    /// let values: Vec<u32> = pool.with_iter(|iter| {
+    ///     iter.map(|ptr| unsafe { *ptr.cast::<u32>().as_ref() }).collect()
+    /// });
+    /// ```
+    ///
+    pub fn with_iter<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(OpaquePoolIterator<'_>) -> R,
+    {
+        let guard = self.inner.lock().expect(ERR_POISONED_LOCK);
+        let iter = OpaquePoolIterator::new(&guard);
+        f(iter)
+    }
 }
+
+/// Iterator over all objects in an opaque pool.
+///
+/// This iterator yields untyped pointers to objects stored in the pool.
+/// Since the pool can contain objects of different types (as long as they have the same layout),
+/// the iterator returns `NonNull<()>` and leaves type casting to the caller.
+///
+/// The iterator holds a reference to the locked pool, ensuring that objects cannot be
+/// removed while iteration is in progress and that all yielded pointers remain valid.
+///
+/// # Safety
+///
+/// While the iterator ensures objects cannot be removed from the pool during iteration,
+/// it is still the caller's responsibility to cast the `NonNull<()>` pointers to the
+/// correct type that matches the pool's layout.
+#[derive(Debug)]
+pub struct OpaquePoolIterator<'p> {
+    raw_iter: RawOpaquePoolIterator<'p>,
+}
+
+impl<'p> OpaquePoolIterator<'p> {
+    fn new(pool: &'p RawOpaquePoolSend) -> Self {
+        Self {
+            raw_iter: pool.iter(),
+        }
+    }
+}
+
+impl Iterator for OpaquePoolIterator<'_> {
+    type Item = NonNull<()>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.raw_iter.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.raw_iter.size_hint()
+    }
+}
+
+impl DoubleEndedIterator for OpaquePoolIterator<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.raw_iter.next_back()
+    }
+}
+
+impl ExactSizeIterator for OpaquePoolIterator<'_> {
+    fn len(&self) -> usize {
+        self.raw_iter.len()
+    }
+}
+
+impl FusedIterator for OpaquePoolIterator<'_> {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn iter_empty_pool() {
+        let pool = OpaquePool::with_layout_of::<u32>();
+        
+        pool.with_iter(|mut iter| {
+            assert_eq!(iter.size_hint(), (0, Some(0)));
+            assert_eq!(iter.len(), 0);
+            
+            assert_eq!(iter.next(), None);
+            assert_eq!(iter.size_hint(), (0, Some(0)));
+            assert_eq!(iter.len(), 0);
+        });
+    }    #[test]
+    fn iter_single_item() {
+        let mut pool = OpaquePool::with_layout_of::<u32>();
+        
+        let _handle = pool.insert(42_u32);
+        
+        pool.with_iter(|mut iter| {
+            assert_eq!(iter.len(), 1);
+            
+            // First item should be the object we inserted
+            let ptr = iter.next().expect("should have one item");
+            
+            // SAFETY: We know this points to a u32 we just inserted
+            let value = unsafe { ptr.cast::<u32>().as_ref() };
+            assert_eq!(*value, 42);
+            
+            // No more items
+            assert_eq!(iter.next(), None);
+            assert_eq!(iter.len(), 0);
+        });
+    }    #[test]
+    fn iter_multiple_items() {
+        let mut pool = OpaquePool::with_layout_of::<u32>();
+        
+        let _handle1 = pool.insert(100_u32);
+        let _handle2 = pool.insert(200_u32);
+        let _handle3 = pool.insert(300_u32);
+        
+        pool.with_iter(|iter| {
+            let values: Vec<u32> = iter
+                .map(|ptr| {
+                    // SAFETY: We know these point to u32s we inserted
+                    unsafe { *ptr.cast::<u32>().as_ref() }
+                })
+                .collect();
+            
+            assert_eq!(values, vec![100, 200, 300]);
+        });
+    }    #[test]
+    fn iter_double_ended_basic() {
+        let mut pool = OpaquePool::with_layout_of::<u32>();
+        
+        let _handle1 = pool.insert(100_u32);
+        let _handle2 = pool.insert(200_u32);
+        let _handle3 = pool.insert(300_u32);
+        
+        pool.with_iter(|mut iter| {
+            // Iterate from the back
+            let last_ptr = iter.next_back().expect("should have last item");
+            // SAFETY: We know this points to a u32 we inserted
+            let last_value = unsafe { *last_ptr.cast::<u32>().as_ref() };
+            assert_eq!(last_value, 300);
+            
+            let middle_ptr = iter.next_back().expect("should have middle item");
+            // SAFETY: We know this points to a u32 we inserted
+            let middle_value = unsafe { *middle_ptr.cast::<u32>().as_ref() };
+            assert_eq!(middle_value, 200);
+            
+            let first_ptr = iter.next().expect("should have first item");
+            // SAFETY: We know this points to a u32 we inserted
+            let first_value = unsafe { *first_ptr.cast::<u32>().as_ref() };
+            assert_eq!(first_value, 100);
+            
+            // Should be exhausted now
+            assert_eq!(iter.next(), None);
+            assert_eq!(iter.next_back(), None);
+        });
+    }    #[test]
+    fn with_iter_scoped_access() {
+        let mut pool = OpaquePool::with_layout_of::<u32>();
+        
+        let _handle1 = pool.insert(100_u32);
+        let _handle2 = pool.insert(200_u32);
+        let _handle3 = pool.insert(300_u32);
+        
+        // Test that we can use the iterator in a scoped manner
+        let result = pool.with_iter(|iter| {
+            let mut values = Vec::new();
+            for ptr in iter {
+                // SAFETY: We know these point to u32s we just inserted
+                let value = unsafe { *ptr.cast::<u32>().as_ref() };
+                values.push(value);
+            }
+            values
+        });
+        
+        assert_eq!(result, vec![100, 200, 300]);
+    }    #[test]
+    fn with_iter_holds_lock() {
+        let mut pool = OpaquePool::with_layout_of::<u32>();
+        
+        let _handle1 = pool.insert(100_u32);
+        let _handle2 = pool.insert(200_u32);
+        
+        // Test that iteration sees a consistent view
+        pool.with_iter(|iter| {
+            assert_eq!(iter.len(), 2);
+            
+            let values: Vec<u32> = iter
+                .map(|ptr| {
+                    // SAFETY: We know these point to u32s we inserted
+                    unsafe { *ptr.cast::<u32>().as_ref() }
+                })
+                .collect();
+            
+            assert_eq!(values, vec![100, 200]);
+        });
+        
+        // After the scope, we can modify the pool again
+        let _handle3 = pool.insert(300_u32);
+        
+        // A new with_iter call should see all 3 items
+        pool.with_iter(|iter| {
+            assert_eq!(iter.len(), 3);
+        });
+    }
 }
