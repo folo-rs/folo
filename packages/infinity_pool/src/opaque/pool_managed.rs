@@ -40,6 +40,14 @@ pub struct OpaquePool {
     inner: Arc<Mutex<RawOpaquePoolSend>>,
 }
 
+impl Clone for OpaquePool {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
 impl OpaquePool {
     /// Creates a new instance of the pool with the specified layout.
     ///
@@ -226,7 +234,7 @@ impl OpaquePool {
     /// let mut pool = OpaquePool::with_layout_of::<u32>();
     /// let _handle1 = pool.insert(42u32);
     /// let _handle2 = pool.insert(100u32);
-    /// 
+    ///
     /// // Safe iteration with guaranteed pointer validity
     /// pool.with_iter(|iter| {
     ///     for ptr in iter {
@@ -235,13 +243,13 @@ impl OpaquePool {
     ///         println!("Value: {}", value);
     ///     }
     /// });
-    /// 
+    ///
     /// // Collect values safely
     /// let values: Vec<u32> = pool.with_iter(|iter| {
-    ///     iter.map(|ptr| unsafe { *ptr.cast::<u32>().as_ref() }).collect()
+    ///     iter.map(|ptr| unsafe { *ptr.cast::<u32>().as_ref() })
+    ///         .collect()
     /// });
     /// ```
-    ///
     pub fn with_iter<F, R>(&self, f: F) -> R
     where
         F: FnOnce(OpaquePoolIterator<'_>) -> R,
@@ -312,43 +320,47 @@ mod tests {
     #[test]
     fn iter_empty_pool() {
         let pool = OpaquePool::with_layout_of::<u32>();
-        
+
         pool.with_iter(|mut iter| {
             assert_eq!(iter.size_hint(), (0, Some(0)));
             assert_eq!(iter.len(), 0);
-            
+
             assert_eq!(iter.next(), None);
             assert_eq!(iter.size_hint(), (0, Some(0)));
             assert_eq!(iter.len(), 0);
         });
-    }    #[test]
+    }
+
+    #[test]
     fn iter_single_item() {
         let mut pool = OpaquePool::with_layout_of::<u32>();
-        
+
         let _handle = pool.insert(42_u32);
-        
+
         pool.with_iter(|mut iter| {
             assert_eq!(iter.len(), 1);
-            
+
             // First item should be the object we inserted
             let ptr = iter.next().expect("should have one item");
-            
+
             // SAFETY: We know this points to a u32 we just inserted
             let value = unsafe { ptr.cast::<u32>().as_ref() };
             assert_eq!(*value, 42);
-            
+
             // No more items
             assert_eq!(iter.next(), None);
             assert_eq!(iter.len(), 0);
         });
-    }    #[test]
+    }
+
+    #[test]
     fn iter_multiple_items() {
         let mut pool = OpaquePool::with_layout_of::<u32>();
-        
+
         let _handle1 = pool.insert(100_u32);
         let _handle2 = pool.insert(200_u32);
         let _handle3 = pool.insert(300_u32);
-        
+
         pool.with_iter(|iter| {
             let values: Vec<u32> = iter
                 .map(|ptr| {
@@ -356,46 +368,50 @@ mod tests {
                     unsafe { *ptr.cast::<u32>().as_ref() }
                 })
                 .collect();
-            
+
             assert_eq!(values, vec![100, 200, 300]);
         });
-    }    #[test]
+    }
+
+    #[test]
     fn iter_double_ended_basic() {
         let mut pool = OpaquePool::with_layout_of::<u32>();
-        
+
         let _handle1 = pool.insert(100_u32);
         let _handle2 = pool.insert(200_u32);
         let _handle3 = pool.insert(300_u32);
-        
+
         pool.with_iter(|mut iter| {
             // Iterate from the back
             let last_ptr = iter.next_back().expect("should have last item");
             // SAFETY: We know this points to a u32 we inserted
             let last_value = unsafe { *last_ptr.cast::<u32>().as_ref() };
             assert_eq!(last_value, 300);
-            
+
             let middle_ptr = iter.next_back().expect("should have middle item");
             // SAFETY: We know this points to a u32 we inserted
             let middle_value = unsafe { *middle_ptr.cast::<u32>().as_ref() };
             assert_eq!(middle_value, 200);
-            
+
             let first_ptr = iter.next().expect("should have first item");
             // SAFETY: We know this points to a u32 we inserted
             let first_value = unsafe { *first_ptr.cast::<u32>().as_ref() };
             assert_eq!(first_value, 100);
-            
+
             // Should be exhausted now
             assert_eq!(iter.next(), None);
             assert_eq!(iter.next_back(), None);
         });
-    }    #[test]
+    }
+
+    #[test]
     fn with_iter_scoped_access() {
         let mut pool = OpaquePool::with_layout_of::<u32>();
-        
+
         let _handle1 = pool.insert(100_u32);
         let _handle2 = pool.insert(200_u32);
         let _handle3 = pool.insert(300_u32);
-        
+
         // Test that we can use the iterator in a scoped manner
         let result = pool.with_iter(|iter| {
             let mut values = Vec::new();
@@ -406,35 +422,326 @@ mod tests {
             }
             values
         });
-        
+
         assert_eq!(result, vec![100, 200, 300]);
-    }    #[test]
+    }
+
+    #[test]
     fn with_iter_holds_lock() {
         let mut pool = OpaquePool::with_layout_of::<u32>();
-        
+
         let _handle1 = pool.insert(100_u32);
         let _handle2 = pool.insert(200_u32);
-        
+
         // Test that iteration sees a consistent view
         pool.with_iter(|iter| {
             assert_eq!(iter.len(), 2);
-            
+
             let values: Vec<u32> = iter
                 .map(|ptr| {
                     // SAFETY: We know these point to u32s we inserted
                     unsafe { *ptr.cast::<u32>().as_ref() }
                 })
                 .collect();
-            
+
             assert_eq!(values, vec![100, 200]);
         });
-        
+
         // After the scope, we can modify the pool again
         let _handle3 = pool.insert(300_u32);
-        
+
         // A new with_iter call should see all 3 items
         pool.with_iter(|iter| {
             assert_eq!(iter.len(), 3);
         });
+    }
+
+    #[test]
+    fn arc_like_clone_behavior() {
+        let mut pool1 = OpaquePool::with_layout_of::<u32>();
+
+        // Clone the pool handle
+        let mut pool2 = pool1.clone();
+
+        // Both should have the same object layout
+        assert_eq!(pool1.object_layout(), pool2.object_layout());
+
+        // Insert via first handle
+        let _handle1 = pool1.insert(100_u32);
+
+        // Second handle should see the same pool state
+        assert_eq!(pool2.len(), 1);
+        assert!(!pool2.is_empty());
+
+        // Insert via second handle
+        let _handle2 = pool2.insert(200_u32);
+
+        // First handle should see the updated state
+        assert_eq!(pool1.len(), 2);
+
+        // Both handles should see the objects via iteration
+        pool1.with_iter(|iter| {
+            let values: Vec<u32> = iter
+                // SAFETY: We know these point to u32s we inserted
+                .map(|ptr| unsafe { *ptr.cast::<u32>().as_ref() })
+                .collect();
+            assert_eq!(values, vec![100, 200]);
+        });
+
+        pool2.with_iter(|iter| {
+            let values: Vec<u32> = iter
+                // SAFETY: We know these point to u32s we inserted
+                .map(|ptr| unsafe { *ptr.cast::<u32>().as_ref() })
+                .collect();
+            assert_eq!(values, vec![100, 200]);
+        });
+    }
+
+    #[test]
+    fn lifecycle_management_pool_keeps_inner_alive() {
+        let mut pool = OpaquePool::with_layout_of::<String>();
+
+        // Insert an object and get a handle
+        let handle = pool.insert("test data".to_string());
+
+        // Clone the pool before dropping the original
+        let pool_clone = pool.clone();
+
+        // Drop the original pool
+        drop(pool);
+
+        // The handle should still be valid because pool_clone keeps the inner pool alive
+        assert_eq!(&*handle, "test data");
+
+        // We should still be able to access pool operations through the clone
+        assert_eq!(pool_clone.len(), 1);
+        assert!(!pool_clone.is_empty());
+
+        // Dropping the handle should remove the object
+        drop(handle);
+
+        // Pool clone should reflect the removal
+        assert_eq!(pool_clone.len(), 0);
+        assert!(pool_clone.is_empty());
+    }
+
+    #[test]
+    fn lifecycle_management_handles_keep_pool_alive() {
+        let handle = {
+            let mut pool = OpaquePool::with_layout_of::<String>();
+            // Pool goes out of scope here, but handle should keep inner pool alive
+            pool.insert("persistent data".to_string())
+        };
+
+        // Handle should still be valid and accessible
+        assert_eq!(&*handle, "persistent data");
+
+        // Even though the original pool is dropped, the object remains accessible
+        // This tests that PooledMut holds a reference to the inner pool
+        drop(handle);
+        // Object is cleaned up when handle is dropped
+    }
+
+    #[test]
+    fn concurrent_access_basic() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let pool = Arc::new(Mutex::new(OpaquePool::with_layout_of::<u32>()));
+        let barrier = Arc::new(Barrier::new(3));
+
+        let mut handles = vec![];
+
+        // Spawn threads that insert concurrently
+        for i in 0..3 {
+            let pool_clone = Arc::clone(&pool);
+            let barrier_clone = Arc::clone(&barrier);
+
+            let handle = thread::spawn(move || {
+                barrier_clone.wait();
+
+                let value = (i + 1) * 100;
+                let handle = {
+                    let mut pool_guard = pool_clone.lock().unwrap();
+                    pool_guard.insert(value)
+                };
+
+                // Return the handle and the value we inserted
+                (handle, value)
+            });
+
+            handles.push(handle);
+        }
+
+        // Collect results
+        for handle in handles {
+            let (pooled_handle, value) = handle.join().unwrap();
+            assert_eq!(*pooled_handle, value);
+        }
+
+        // Verify final pool state
+        {
+            let pool_guard = pool.lock().unwrap();
+            assert_eq!(pool_guard.len(), 3);
+
+            let mut values: Vec<u32> = pool_guard.with_iter(|iter| {
+                iter
+                    // SAFETY: We know these point to u32s we inserted
+                    .map(|ptr| unsafe { *ptr.cast::<u32>().as_ref() })
+                    .collect()
+            });
+
+            values.sort_unstable();
+            assert_eq!(values, vec![100, 200, 300]);
+        }
+    }
+
+    #[test]
+    fn pooled_mut_integration() {
+        let mut pool = OpaquePool::with_layout_of::<String>();
+
+        // Test that PooledMut works correctly with OpaquePool
+        let mut handle = pool.insert("initial".to_string());
+
+        // Test deref access
+        assert_eq!(&*handle, "initial");
+
+        // Test mutable access
+        handle.push_str(" value");
+        assert_eq!(&*handle, "initial value");
+
+        // Test that the pool sees the mutation
+        assert_eq!(pool.len(), 1);
+
+        // Test that iteration sees the mutated value
+        pool.with_iter(|iter| {
+            let values: Vec<String> = iter
+                // SAFETY: We know these point to Strings we inserted
+                .map(|ptr| unsafe { ptr.cast::<String>().as_ref().clone() })
+                .collect();
+            assert_eq!(values, vec!["initial value"]);
+        });
+
+        // Test that dropping the handle removes from pool
+        drop(handle);
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn multiple_handles_to_different_objects() {
+        let mut pool = OpaquePool::with_layout_of::<u32>();
+
+        // Insert multiple objects
+        let handle1 = pool.insert(100_u32);
+        let handle2 = pool.insert(200_u32);
+        let handle3 = pool.insert(300_u32);
+
+        assert_eq!(pool.len(), 3);
+
+        // All handles should be independently accessible
+        assert_eq!(*handle1, 100);
+        assert_eq!(*handle2, 200);
+        assert_eq!(*handle3, 300);
+
+        // Drop one handle
+        drop(handle2);
+        assert_eq!(pool.len(), 2);
+
+        // Remaining handles should still work
+        assert_eq!(*handle1, 100);
+        assert_eq!(*handle3, 300);
+
+        // Pool should reflect the removal
+        pool.with_iter(|iter| {
+            let mut values: Vec<u32> = iter
+                // SAFETY: We know these point to u32s we inserted
+                .map(|ptr| unsafe { *ptr.cast::<u32>().as_ref() })
+                .collect();
+            values.sort_unstable();
+            assert_eq!(values, vec![100, 300]);
+        });
+
+        drop(handle1);
+        drop(handle3);
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn insert_methods_with_lifecycle() {
+        let mut pool = OpaquePool::with_layout_of::<String>();
+
+        // Test regular insert
+        let handle1 = pool.insert("regular".to_string());
+        assert_eq!(pool.len(), 1);
+
+        // Test unsafe insert_unchecked
+        // SAFETY: String layout matches the pool's object layout
+        let handle2 = unsafe { pool.insert_unchecked("unchecked".to_string()) };
+        assert_eq!(pool.len(), 2);
+
+        // Test insert_with
+        // SAFETY: We properly initialize the string value
+        let handle3 = unsafe {
+            pool.insert_with(|uninit| {
+                uninit.write("with_closure".to_string());
+            })
+        };
+        assert_eq!(pool.len(), 3);
+
+        // Test insert_with_unchecked
+        // SAFETY: String layout matches the pool and we properly initialize the value
+        let handle4 = unsafe {
+            pool.insert_with_unchecked(|uninit| {
+                uninit.write("with_closure_unchecked".to_string());
+            })
+        };
+        assert_eq!(pool.len(), 4);
+
+        // Verify all values
+        assert_eq!(&*handle1, "regular");
+        assert_eq!(&*handle2, "unchecked");
+        assert_eq!(&*handle3, "with_closure");
+        assert_eq!(&*handle4, "with_closure_unchecked");
+
+        // Test cleanup
+        drop(handle1);
+        assert_eq!(pool.len(), 3);
+
+        drop(handle2);
+        drop(handle3);
+        drop(handle4);
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn pool_operations_with_arc_semantics() {
+        let mut pool1 = OpaquePool::with_layout_of::<u32>();
+
+        // Insert some initial data
+        let _handle1 = pool1.insert(100_u32);
+        let _handle2 = pool1.insert(200_u32);
+
+        // Clone the pool
+        let mut pool2 = pool1.clone();
+
+        // Test capacity operations on both handles
+        assert_eq!(pool1.capacity(), pool2.capacity());
+
+        let initial_capacity = pool1.capacity();
+        pool1.reserve(10);
+
+        // Both should see the capacity change (note: reserve is a minimum, actual capacity may be higher)
+        assert!(pool1.capacity() >= initial_capacity);
+        assert_eq!(pool1.capacity(), pool2.capacity());
+
+        // Test shrink_to_fit
+        pool2.shrink_to_fit();
+        assert_eq!(pool1.capacity(), pool2.capacity());
+
+        // Both should see the same length and state
+        assert_eq!(pool1.len(), pool2.len());
+        assert_eq!(pool1.is_empty(), pool2.is_empty());
+        assert_eq!(pool1.object_layout(), pool2.object_layout());
     }
 }
