@@ -6,9 +6,9 @@ use std::ptr::NonNull;
 
 use crate::{RawPooledMut, SlabHandle};
 
-/// A shared handle to an object in a [`Pool`].
+/// A shared handle to an object in an object pool.
 ///
-/// The handle can be used to obtain a typed pointer to the pooled object, as well as to remove
+/// The handle can be used to access the pooled object, as well as to remove
 /// the item from the pool when no longer needed.
 ///
 /// This is a raw handle that requires manual lifetime management of the pooled objects.
@@ -16,6 +16,9 @@ use crate::{RawPooledMut, SlabHandle};
 /// If the handle is dropped without being passed to `remove()`, the object is only removed
 /// from the pool when the pool itself is is dropped. Different types of handles may offer
 /// automatic removal of the object from the pool when the handle is dropped.
+///
+/// This is a shared handle that only grants shared access to the object. No exclusive
+/// references can be created through this handle.
 ///
 /// # Thread safety
 ///
@@ -52,10 +55,7 @@ impl<T: ?Sized> RawPooled<T> {
         self.slab_index
     }
 
-    /// Get a raw pointer to the object in the pool.
-    ///
-    /// It is the responsibility of the caller to ensure that the pointer is not used
-    /// after the object has been removed from the pool.
+    /// Get a pointer to the object in the pool.
     #[must_use]
     pub fn ptr(&self) -> NonNull<T> {
         self.slab_handle.ptr()
@@ -87,13 +87,8 @@ impl<T: ?Sized> RawPooled<T> {
     /// All pooled objects are guaranteed to be pinned for their entire lifetime.
     #[must_use]
     pub fn as_pin(&self) -> Pin<&T> {
-        // SAFETY: This is a shared handle, so we can only guarantee shared borrow safety
-        // by borrowing the handle itself. The only way to create an exclusive reference
-        // is via unsafe code (in which case whoever creates it takes responsibility).
-        let as_ref = unsafe { self.ptr().as_ref() };
-
         // SAFETY: Pooled items are always pinned.
-        unsafe { Pin::new_unchecked(as_ref) }
+        unsafe { Pin::new_unchecked(self) }
     }
 }
 
@@ -104,14 +99,6 @@ impl<T: ?Sized> Clone for RawPooled<T> {
 }
 
 impl<T: ?Sized> Copy for RawPooled<T> {}
-
-impl<T: ?Sized> PartialEq for RawPooled<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.slab_index == other.slab_index && self.slab_handle == other.slab_handle
-    }
-}
-
-impl<T: ?Sized> Eq for RawPooled<T> {}
 
 impl<T: ?Sized> fmt::Debug for RawPooled<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -126,9 +113,8 @@ impl<T: ?Sized> Deref for RawPooled<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        // SAFETY: This is a shared handle, so we can only guarantee shared borrow safety
-        // by borrowing the handle itself. The only way to create an exclusive reference
-        // is via unsafe code (in which case whoever creates it takes responsibility).
+        // SAFETY: This is a shared handle - the only references
+        // that can ever exist are shared references.
         unsafe { self.ptr().as_ref() }
     }
 }

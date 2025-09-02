@@ -11,7 +11,7 @@ use crate::{DropPolicy, RawOpaquePoolBuilder, RawPooled, RawPooledMut, Slab, Sla
 
 /// A pool of objects with uniform memory layout.
 ///
-/// `RawOpaquePool` stores objects of any type that match a [`Layout`] defined at pool creation
+/// Stores objects of any type that match a [`Layout`] defined at pool creation
 /// time. All values in the pool remain pinned for their entire lifetime.
 ///
 /// The pool automatically expands its capacity when needed.
@@ -408,7 +408,7 @@ impl RawOpaquePool {
     /// The iterator yields untyped pointers (`NonNull<()>`) to the objects stored in the pool.
     /// It is the caller's responsibility to cast these pointers to the appropriate type.
     #[must_use]
-    pub(crate) fn iter(&self) -> RawOpaquePoolIterator<'_> {
+    pub fn iter(&self) -> RawOpaquePoolIterator<'_> {
         RawOpaquePoolIterator::new(self)
     }
 
@@ -805,9 +805,9 @@ mod tests {
         #[expect(clippy::clone_on_copy, reason = "intentional, testing cloning")]
         let handle3 = handle1.clone();
 
-        assert_eq!(handle1, handle2);
-        assert_eq!(handle1, handle3);
-        assert_eq!(handle2, handle3);
+        assert_eq!(*handle1, *handle2);
+        assert_eq!(*handle1, *handle3);
+        assert_eq!(*handle2, *handle3);
     }
 
     #[test]

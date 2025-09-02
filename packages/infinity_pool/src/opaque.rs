@@ -1,12 +1,16 @@
 mod dropper;
+mod pool_managed;
 mod pool_raw;
+mod pool_raw_send;
 mod slab;
 mod slab_handle;
 mod slab_layout;
 mod slot_meta;
 
 pub(crate) use dropper::*;
+pub use pool_managed::*;
 pub use pool_raw::*;
+pub(crate) use pool_raw_send::*;
 pub(crate) use slab::*;
 pub(crate) use slab_handle::*;
 pub(crate) use slab_layout::*;

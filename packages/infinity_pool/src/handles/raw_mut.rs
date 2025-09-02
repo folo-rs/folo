@@ -8,7 +8,7 @@ use crate::{RawPooled, SlabHandle};
 
 /// A unique handle to an object in an object pool.
 ///
-/// The handle can be used to obtain a typed pointer to the pooled object, as well as to remove
+/// The handle can be used to access the pooled object, as well as to remove
 /// the item from the pool when no longer needed.
 ///
 /// This is a raw handle that requires manual lifetime management of the pooled objects.
@@ -56,10 +56,7 @@ impl<T: ?Sized> RawPooledMut<T> {
         self.slab_index
     }
 
-    /// Get a raw pointer to the object in the pool.
-    ///
-    /// It is the responsibility of the caller to ensure that the pointer is not used
-    /// after the object has been removed from the pool.
+    /// Get a pointer to the object in the pool.
     #[must_use]
     pub fn ptr(&self) -> NonNull<T> {
         self.slab_handle.ptr()
@@ -97,13 +94,8 @@ impl<T: ?Sized> RawPooledMut<T> {
     /// All pooled objects are guaranteed to be pinned for their entire lifetime.
     #[must_use]
     pub fn as_pin(&self) -> Pin<&T> {
-        // SAFETY: This is a shared handle, so we can only guarantee shared borrow safety
-        // by borrowing the handle itself. The only way to create an exclusive reference
-        // is via unsafe code (in which case whoever creates it takes responsibility).
-        let as_ref = unsafe { self.ptr().as_ref() };
-
         // SAFETY: Pooled items are always pinned.
-        unsafe { Pin::new_unchecked(as_ref) }
+        unsafe { Pin::new_unchecked(self) }
     }
 
     /// Borrows the target object as a pinned exclusive reference.
@@ -111,23 +103,14 @@ impl<T: ?Sized> RawPooledMut<T> {
     /// All pooled objects are guaranteed to be pinned for their entire lifetime.
     #[must_use]
     pub fn as_pin_mut(&mut self) -> Pin<&mut T> {
-        // SAFETY: This is a shared handle, so we can only guarantee shared borrow safety
-        // by borrowing the handle itself. The only way to create an exclusive reference
-        // is via unsafe code (in which case whoever creates it takes responsibility).
+        // SAFETY: This is a unique handle, so we guarantee borrow safety
+        // of the target object by borrowing the handle itself.
         let as_mut = unsafe { self.ptr().as_mut() };
 
         // SAFETY: Pooled items are always pinned.
         unsafe { Pin::new_unchecked(as_mut) }
     }
 }
-
-impl<T: ?Sized> PartialEq for RawPooledMut<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.slab_index == other.slab_index && self.slab_handle == other.slab_handle
-    }
-}
-
-impl<T: ?Sized> Eq for RawPooledMut<T> {}
 
 impl<T: ?Sized> fmt::Debug for RawPooledMut<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -148,7 +131,7 @@ impl<T: ?Sized> Deref for RawPooledMut<T> {
     }
 }
 
-impl<T: ?Sized> DerefMut for RawPooledMut<T> {
+impl<T: ?Sized + Unpin> DerefMut for RawPooledMut<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself.
@@ -162,7 +145,7 @@ impl<T: ?Sized> Borrow<T> for RawPooledMut<T> {
     }
 }
 
-impl<T: ?Sized> BorrowMut<T> for RawPooledMut<T> {
+impl<T: ?Sized + Unpin> BorrowMut<T> for RawPooledMut<T> {
     fn borrow_mut(&mut self) -> &mut T {
         self
     }
@@ -174,7 +157,7 @@ impl<T: ?Sized> AsRef<T> for RawPooledMut<T> {
     }
 }
 
-impl<T: ?Sized> AsMut<T> for RawPooledMut<T> {
+impl<T: ?Sized + Unpin> AsMut<T> for RawPooledMut<T> {
     fn as_mut(&mut self) -> &mut T {
         self
     }
@@ -188,10 +171,10 @@ mod tests {
 
     use super::*;
 
-    // u32 is Sync, so PoolHandleMut<u32> should be Send (but not Sync).
+    // u32 is Sync, so RawPooledMut<u32> should be Send (but not Sync).
     assert_impl_all!(RawPooledMut<u32>: Send);
     assert_not_impl_any!(RawPooledMut<u32>: Sync);
 
-    // Cell is Send but not Sync, so PoolHandleMut<Cell> should be neither Send nor Sync.
+    // Cell is Send but not Sync, so RawPooledMut<Cell> should be neither Send nor Sync.
     assert_not_impl_any!(RawPooledMut<Cell<u32>>: Send, Sync);
 }
