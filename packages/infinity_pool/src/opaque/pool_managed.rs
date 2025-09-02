@@ -573,10 +573,12 @@ mod tests {
             handles.push(handle);
         }
 
-        // Collect results
+        // Collect results and keep the pooled handles alive
+        let mut pooled_handles = vec![];
         for handle in handles {
             let (pooled_handle, value) = handle.join().unwrap();
             assert_eq!(*pooled_handle, value);
+            pooled_handles.push(pooled_handle);
         }
 
         // Verify final pool state
@@ -594,6 +596,9 @@ mod tests {
             values.sort_unstable();
             assert_eq!(values, vec![100, 200, 300]);
         }
+
+        // Clean up by dropping the handles
+        drop(pooled_handles);
     }
 
     #[test]
@@ -743,5 +748,34 @@ mod tests {
         assert_eq!(pool1.len(), pool2.len());
         assert_eq!(pool1.is_empty(), pool2.is_empty());
         assert_eq!(pool1.object_layout(), pool2.object_layout());
+    }
+
+    #[test]
+    fn into_inner_removes_and_returns_value() {
+        let mut pool = OpaquePool::with_layout_of::<String>();
+
+        // Insert an item into the pool
+        let mut handle = pool.insert("initial value".to_string());
+        assert_eq!(pool.len(), 1);
+        assert_eq!(&*handle, "initial value");
+
+        // Modify the value while it's in the pool
+        handle.push_str(" - modified");
+        assert_eq!(&*handle, "initial value - modified");
+        assert_eq!(pool.len(), 1);
+
+        // Extract the value from the pool using into_inner()
+        let extracted_value = handle.into_inner();
+
+        // Verify the extracted value is correct
+        assert_eq!(extracted_value, "initial value - modified");
+
+        // Verify the pool is now empty (item was removed)
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+
+        // The caller now owns the value and can continue using it
+        let final_value = extracted_value + " - after extraction";
+        assert_eq!(final_value, "initial value - modified - after extraction");
     }
 }

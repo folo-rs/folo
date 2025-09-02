@@ -48,26 +48,10 @@ impl<T: ?Sized> RawPooledMut<T> {
         }
     }
 
-    /// Get the index of the slab in the pool.
-    ///
-    /// This is used by the pool itself to identify the slab in which the object resides.
-    #[must_use]
-    pub(crate) fn slab_index(&self) -> usize {
-        self.slab_index
-    }
-
     /// Get a pointer to the object in the pool.
     #[must_use]
     pub fn ptr(&self) -> NonNull<T> {
         self.slab_handle.ptr()
-    }
-
-    /// Get the slab handle for this pool handle.
-    ///
-    /// This is used by the pool itself to perform operations on the object in the slab.
-    #[must_use]
-    pub(crate) fn slab_handle(&self) -> SlabHandle<T> {
-        self.slab_handle
     }
 
     /// Erases the type of the object the pool handle points to.
