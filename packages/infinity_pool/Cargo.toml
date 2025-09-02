@@ -16,6 +16,7 @@ default = []
 [dependencies]
 new_zealand = { workspace = true }
 num-integer = { workspace = true }
+pastey = { workspace = true }
 scopeguard = { workspace = true }
 
 [dev-dependencies]
