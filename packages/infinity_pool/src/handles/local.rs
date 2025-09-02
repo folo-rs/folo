@@ -1,15 +1,12 @@
 use std::borrow::Borrow;
+use std::cell::RefCell;
 use std::fmt;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::NonNull;
-use std::sync::{Arc, Mutex};
+use std::rc::Rc;
 
-use crate::{ERR_POISONED_LOCK, PooledMut, RawOpaquePoolSend, RawPooled, RawPooledMut};
-
-// Note that we do not require `T: Send` because we do not want to require every
-// trait we cast into via trait object to be `Send`. It is the responsibility of
-// the pool to ensure that only `Send` objects are inserted.
+use crate::{LocalPooledMut, RawOpaquePool, RawPooled, RawPooledMut};
 
 /// A shared handle to a reference-counted object in an object pool.
 ///
@@ -25,19 +22,15 @@ use crate::{ERR_POISONED_LOCK, PooledMut, RawOpaquePoolSend, RawPooled, RawPoole
 ///
 /// # Thread safety
 ///
-/// The handle provides access to the underlying object, so its thread-safety characteristics
-/// are determined by the type of the object it points to.
-///
-/// If the underlying object is `Sync`, the handle is thread-mobile (`Send`). Otherwise, the
-/// handle is single-threaded (neither `Send` nor `Sync`).
-pub struct Pooled<T: ?Sized> {
+/// This type is single-threaded.
+pub struct LocalPooled<T: ?Sized> {
     inner: RawPooled<T>,
-    remover: Arc<Remover>,
+    remover: Rc<Remover>,
 }
 
-impl<T: ?Sized> Pooled<T> {
+impl<T: ?Sized> LocalPooled<T> {
     #[must_use]
-    pub(crate) fn new(inner: RawPooledMut<T>, pool: Arc<Mutex<RawOpaquePoolSend>>) -> Self {
+    pub(crate) fn new(inner: RawPooledMut<T>, pool: Rc<RefCell<RawOpaquePool>>) -> Self {
         let inner = inner.into_shared();
 
         let remover = Remover {
@@ -47,7 +40,7 @@ impl<T: ?Sized> Pooled<T> {
 
         Self {
             inner,
-            remover: Arc::new(remover),
+            remover: Rc::new(remover),
         }
     }
 
@@ -63,8 +56,8 @@ impl<T: ?Sized> Pooled<T> {
     /// A type-erased handle cannot be used to remove the object from the pool and return it to
     /// the caller, as there is no more knowledge of the type to be returned.
     #[must_use]
-    pub fn erase(self) -> Pooled<()> {
-        Pooled {
+    pub fn erase(self) -> LocalPooled<()> {
+        LocalPooled {
             inner: self.inner.erase(),
             remover: self.remover,
         }
@@ -80,16 +73,16 @@ impl<T: ?Sized> Pooled<T> {
     }
 }
 
-impl<T: ?Sized> fmt::Debug for Pooled<T> {
+impl<T: ?Sized> fmt::Debug for LocalPooled<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Pooled")
+        f.debug_struct("LocalPooled")
             .field("inner", &self.inner)
             .field("remover", &self.remover)
             .finish()
     }
 }
 
-impl<T: ?Sized> Deref for Pooled<T> {
+impl<T: ?Sized> Deref for LocalPooled<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -99,29 +92,29 @@ impl<T: ?Sized> Deref for Pooled<T> {
     }
 }
 
-impl<T: ?Sized> Borrow<T> for Pooled<T> {
+impl<T: ?Sized> Borrow<T> for LocalPooled<T> {
     fn borrow(&self) -> &T {
         self
     }
 }
 
-impl<T: ?Sized> AsRef<T> for Pooled<T> {
+impl<T: ?Sized> AsRef<T> for LocalPooled<T> {
     fn as_ref(&self) -> &T {
         self
     }
 }
 
-impl<T: ?Sized> Clone for Pooled<T> {
+impl<T: ?Sized> Clone for LocalPooled<T> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner,
-            remover: Arc::clone(&self.remover),
+            remover: Rc::clone(&self.remover),
         }
     }
 }
 
-impl<T: ?Sized> From<PooledMut<T>> for Pooled<T> {
-    fn from(value: PooledMut<T>) -> Self {
+impl<T: ?Sized> From<LocalPooledMut<T>> for LocalPooled<T> {
+    fn from(value: LocalPooledMut<T>) -> Self {
         value.into_shared()
     }
 }
@@ -130,12 +123,12 @@ impl<T: ?Sized> From<PooledMut<T>> for Pooled<T> {
 #[derive(Debug)]
 struct Remover {
     handle: RawPooled<()>,
-    pool: Arc<Mutex<RawOpaquePoolSend>>,
+    pool: Rc<RefCell<RawOpaquePool>>,
 }
 
 impl Drop for Remover {
     fn drop(&mut self) {
-        let mut pool = self.pool.lock().expect(ERR_POISONED_LOCK);
+        let mut pool = self.pool.borrow_mut();
 
         // SAFETY: The remover controls the shared object lifetime and is the only thing
         // that can remove the item from the pool.
@@ -145,24 +138,11 @@ impl Drop for Remover {
     }
 }
 
-// SAFETY: By default we do not have `Sync` because the handle is not `Sync`. However, the reason
-// for that is because the handle can be used to access the object. As we have a type-erased handle
-// that cannot access anything meaningful, and as the remover is not accessing the object anyway,
-// just removing it from the pool, we can safety glue back the `Sync` label onto the type.
-unsafe impl Sync for Remover {}
-
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-
-    use static_assertions::{assert_impl_all, assert_not_impl_any};
+    use static_assertions::assert_not_impl_any;
 
     use super::*;
 
-    // u32 is Sync, so Pooled<u32> should be Send (but not Sync).
-    assert_impl_all!(Pooled<u32>: Send);
-    assert_not_impl_any!(Pooled<u32>: Sync);
-
-    // Cell is Send but not Sync, so Pooled<Cell> should be neither Send nor Sync.
-    assert_not_impl_any!(Pooled<Cell<u32>>: Send, Sync);
+    assert_not_impl_any!(LocalPooled<u32>: Send, Sync);
 }

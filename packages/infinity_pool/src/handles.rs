@@ -1,8 +1,12 @@
+mod local;
+mod local_mut;
 mod managed;
 mod managed_mut;
 mod raw;
 mod raw_mut;
 
+pub use local::*;
+pub use local_mut::*;
 pub use managed::*;
 pub use managed_mut::*;
 pub use raw::*;
