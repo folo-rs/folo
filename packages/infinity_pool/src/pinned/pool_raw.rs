@@ -1,7 +1,11 @@
+use std::iter::FusedIterator;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
+use std::ptr::NonNull;
 
-use crate::{DropPolicy, RawOpaquePool, RawPinnedPoolBuilder, RawPooled, RawPooledMut};
+use crate::{
+    DropPolicy, RawOpaquePool, RawOpaquePoolIterator, RawPinnedPoolBuilder, RawPooled, RawPooledMut,
+};
 
 /// A pool of objects of type `T`.
 ///
@@ -142,6 +146,12 @@ impl<T> RawPinnedPool<T> {
             self.inner.remove(handle);
         }
     }
+
+    /// Returns an iterator over all objects in the pool.
+    #[must_use]
+    pub fn iter(&self) -> RawPinnedPoolIterator<'_, T> {
+        RawPinnedPoolIterator::new(self)
+    }
 }
 
 impl<T: Unpin> RawPinnedPool<T> {
@@ -183,23 +193,89 @@ impl<T> Default for RawPinnedPool<T> {
 // which we guarantee via the type parameter T.
 unsafe impl<T: Send> Send for RawPinnedPool<T> {}
 
+/// Iterator over all objects in a [`RawPinnedPool`].
+///
+/// The iterator only yields pointers to the objects, not references, because the pool
+/// does not have the authority to create references to its contents as user code may
+/// concurrently be holding a conflicting exclusive reference via `PooledMut<T>`.
+///
+/// Therefore, obtaining actual references to pool contents via iteration is only possible
+/// by using the pointer to create such references in unsafe code and relies on the caller
+/// guaranteeing that no conflicting exclusive references exist.
+///
+/// # Thread safety
+///
+/// The type is single-threaded.
+#[derive(Debug)]
+pub struct RawPinnedPoolIterator<'p, T> {
+    inner: RawOpaquePoolIterator<'p>,
+    _marker: PhantomData<&'p T>,
+}
+
+impl<'p, T> RawPinnedPoolIterator<'p, T> {
+    fn new(pool: &'p RawPinnedPool<T>) -> Self {
+        Self {
+            inner: pool.inner.iter(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T> Iterator for RawPinnedPoolIterator<'_, T> {
+    type Item = NonNull<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(NonNull::cast::<T>)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<T> DoubleEndedIterator for RawPinnedPoolIterator<'_, T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner.next_back().map(NonNull::cast::<T>)
+    }
+}
+
+impl<T> ExactSizeIterator for RawPinnedPoolIterator<'_, T> {
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+impl<T> FusedIterator for RawPinnedPoolIterator<'_, T> {}
+
+impl<'p, T> IntoIterator for &'p RawPinnedPool<T> {
+    type Item = NonNull<T>;
+    type IntoIter = RawPinnedPoolIterator<'p, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::mem::MaybeUninit;
+    use std::rc::Rc;
 
-    use static_assertions::assert_not_impl_any;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
-
-    use std::rc::Rc;
-    use static_assertions::assert_impl_all;
 
     // When T: Send, the pool should be Send but not Sync
     assert_impl_all!(RawPinnedPool<i32>: Send);
     assert_not_impl_any!(RawPinnedPool<i32>: Sync);
 
-    // When T: !Send, the pool should be neither Send nor Sync  
+    // When T: !Send, the pool should be neither Send nor Sync
     assert_not_impl_any!(RawPinnedPool<Rc<i32>>: Send, Sync);
+
+    // Iterator trait assertions
+    assert_impl_all!(RawPinnedPoolIterator<'_, i32>: Iterator, DoubleEndedIterator, ExactSizeIterator, FusedIterator);
+    assert_not_impl_any!(RawPinnedPoolIterator<'_, i32>: Send, Sync);
+    assert_impl_all!(&RawPinnedPool<i32>: IntoIterator);
 
     #[test]
     fn new_pool_is_empty() {
@@ -406,5 +482,97 @@ mod tests {
         assert_eq!(pool.len(), 0);
     }
 
+    #[test]
+    fn iter_empty_pool() {
+        let pool = RawPinnedPool::<u64>::new();
+        let mut iter = pool.iter();
 
+        assert_eq!(iter.len(), 0);
+        assert_eq!(iter.size_hint(), (0, Some(0)));
+        assert!(iter.next().is_none());
+        assert!(iter.next_back().is_none());
+    }
+
+    #[test]
+    fn iter_single_item() {
+        let mut pool = RawPinnedPool::<i32>::new();
+        let _handle = pool.insert(42);
+
+        let mut iter = pool.iter();
+        assert_eq!(iter.len(), 1);
+        assert_eq!(iter.size_hint(), (1, Some(1)));
+
+        let ptr = iter.next().expect("should have one item");
+        // SAFETY: We know this points to a valid i32 from our insertion
+        let value = unsafe { ptr.as_ref() };
+        assert_eq!(*value, 42);
+
+        assert_eq!(iter.len(), 0);
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn iter_multiple_items() {
+        let mut pool = RawPinnedPool::<u8>::new();
+        let values = [1_u8, 2, 3, 4, 5];
+        let _handles: Vec<_> = values.iter().map(|&v| pool.insert(v)).collect();
+
+        let iter = pool.iter();
+        assert_eq!(iter.len(), 5);
+
+        let collected_values: Vec<u8> = iter
+            // SAFETY: All pointers are valid u8 values from our insertions above
+            .map(|ptr| unsafe { *ptr.as_ref() })
+            .collect();
+
+        // The iteration order may not match insertion order, so we just verify the count and contents
+        assert_eq!(collected_values.len(), 5);
+        for expected in values {
+            assert!(collected_values.contains(&expected));
+        }
+    }
+
+    #[test]
+    fn iter_double_ended() {
+        let mut pool = RawPinnedPool::<u16>::new();
+        let _handles: Vec<_> = (0..3_u16).map(|v| pool.insert(v)).collect();
+
+        let mut iter = pool.iter();
+        assert_eq!(iter.len(), 3);
+
+        // Take one from front
+        let _front = iter.next().expect("should have front item");
+        assert_eq!(iter.len(), 2);
+
+        // Take one from back
+        let _back = iter.next_back().expect("should have back item");
+        assert_eq!(iter.len(), 1);
+
+        // Take remaining
+        let _remaining = iter.next().expect("should have remaining item");
+        assert_eq!(iter.len(), 0);
+        assert!(iter.next().is_none());
+        assert!(iter.next_back().is_none());
+    }
+
+    #[test]
+    fn iter_into_iterator_trait() {
+        let mut pool = RawPinnedPool::<char>::new();
+        let _handle = pool.insert('x');
+
+        let count = (&pool).into_iter().count();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn iter_fused() {
+        let pool = RawPinnedPool::<u32>::new();
+        let mut iter = pool.iter();
+
+        // Empty iterator should keep returning None
+        assert!(iter.next().is_none());
+        assert!(iter.next().is_none());
+        assert!(iter.next_back().is_none());
+        assert!(iter.next_back().is_none());
+    }
 }
