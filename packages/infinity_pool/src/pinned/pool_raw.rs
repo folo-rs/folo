@@ -1,3 +1,4 @@
+use std::fmt;
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
@@ -18,7 +19,6 @@ use crate::{
 /// If `T: Send` then the pool is thread-mobile (`Send` but not `Sync`).
 ///
 /// If `T: !Send`, the pool is single-threaded.
-#[derive(Debug)]
 pub struct RawPinnedPool<T> {
     /// The underlying pool that manages memory and storage.
     inner: RawOpaquePool,
@@ -188,6 +188,14 @@ impl<T> Default for RawPinnedPool<T> {
     }
 }
 
+impl<T> fmt::Debug for RawPinnedPool<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawPinnedPool")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
 // SAFETY: RawPinnedPool<T> is Send when T is Send. This is possible because the underlying
 // RawOpaquePool allows us to consider it `Send` when all objects inserted into it are `Send`,
 // which we guarantee via the type parameter T.
@@ -197,7 +205,7 @@ unsafe impl<T: Send> Send for RawPinnedPool<T> {}
 ///
 /// The iterator only yields pointers to the objects, not references, because the pool
 /// does not have the authority to create references to its contents as user code may
-/// concurrently be holding a conflicting exclusive reference via `PooledMut<T>`.
+/// concurrently be holding a conflicting exclusive reference via `RawPooledMut<T>`.
 ///
 /// Therefore, obtaining actual references to pool contents via iteration is only possible
 /// by using the pointer to create such references in unsafe code and relies on the caller
