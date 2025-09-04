@@ -114,7 +114,10 @@ impl<T: ?Sized> Deref for RawPooledMut<T> {
     }
 }
 
-impl<T: ?Sized + Unpin> DerefMut for RawPooledMut<T> {
+impl<T> DerefMut for RawPooledMut<T>
+where
+    T: ?Sized + Unpin,
+{
     fn deref_mut(&mut self) -> &mut Self::Target {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself.
@@ -128,7 +131,10 @@ impl<T: ?Sized> Borrow<T> for RawPooledMut<T> {
     }
 }
 
-impl<T: ?Sized + Unpin> BorrowMut<T> for RawPooledMut<T> {
+impl<T> BorrowMut<T> for RawPooledMut<T>
+where
+    T: ?Sized + Unpin,
+{
     fn borrow_mut(&mut self) -> &mut T {
         self
     }
@@ -140,7 +146,10 @@ impl<T: ?Sized> AsRef<T> for RawPooledMut<T> {
     }
 }
 
-impl<T: ?Sized + Unpin> AsMut<T> for RawPooledMut<T> {
+impl<T> AsMut<T> for RawPooledMut<T>
+where
+    T: ?Sized + Unpin,
+{
     fn as_mut(&mut self) -> &mut T {
         self
     }

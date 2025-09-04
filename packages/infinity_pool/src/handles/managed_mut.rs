@@ -109,7 +109,10 @@ impl<T: ?Sized> PooledMut<T> {
     }
 }
 
-impl<T: Unpin> PooledMut<T> {
+impl<T> PooledMut<T>
+where
+    T: Unpin,
+{
     /// Removes the item from the pool and returns it to the caller.
     #[must_use]
     pub fn into_inner(self) -> T {
@@ -139,7 +142,10 @@ impl<T: ?Sized> Deref for PooledMut<T> {
     }
 }
 
-impl<T: ?Sized + Unpin> DerefMut for PooledMut<T> {
+impl<T> DerefMut for PooledMut<T>
+where
+    T: ?Sized + Unpin,
+{
     fn deref_mut(&mut self) -> &mut Self::Target {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself.
@@ -153,7 +159,10 @@ impl<T: ?Sized> Borrow<T> for PooledMut<T> {
     }
 }
 
-impl<T: ?Sized + Unpin> BorrowMut<T> for PooledMut<T> {
+impl<T> BorrowMut<T> for PooledMut<T>
+where
+    T: ?Sized + Unpin,
+{
     fn borrow_mut(&mut self) -> &mut T {
         self
     }
@@ -165,7 +174,10 @@ impl<T: ?Sized> AsRef<T> for PooledMut<T> {
     }
 }
 
-impl<T: ?Sized + Unpin> AsMut<T> for PooledMut<T> {
+impl<T> AsMut<T> for PooledMut<T>
+where
+    T: ?Sized + Unpin,
+{
     fn as_mut(&mut self) -> &mut T {
         self
     }

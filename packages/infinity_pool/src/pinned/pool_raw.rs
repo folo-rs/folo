@@ -152,7 +152,10 @@ impl<T> RawPinnedPool<T> {
     }
 }
 
-impl<T: Unpin> RawPinnedPool<T> {
+impl<T> RawPinnedPool<T>
+where
+    T: Unpin,
+{
     /// Removes an object from the pool and returns it.
     ///
     /// # Panics
@@ -197,7 +200,11 @@ impl<T> fmt::Debug for RawPinnedPool<T> {
 // SAFETY: RawPinnedPool<T> is Send when T is Send. This is possible because the underlying
 // RawOpaquePool allows us to consider it `Send` when all objects inserted into it are `Send`,
 // which we guarantee via the type parameter T.
-unsafe impl<T: Send> Send for RawPinnedPool<T> {}
+unsafe impl<T> Send for RawPinnedPool<T>
+where
+    T: Send,
+{
+}
 
 /// Iterator over all objects in a [`RawPinnedPool`].
 ///

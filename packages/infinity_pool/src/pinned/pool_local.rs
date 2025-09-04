@@ -42,7 +42,10 @@ pub struct LocalPinnedPool<T: 'static> {
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T: 'static> LocalPinnedPool<T> {
+impl<T> LocalPinnedPool<T>
+where
+    T: 'static,
+{
     /// Creates a new pool for objects of type `T`.
     #[must_use]
     pub fn new() -> Self {
@@ -470,5 +473,53 @@ mod tests {
             assert!(iter.next().is_none());
             assert!(iter.next_back().is_none());
         });
+    }
+
+    #[test]
+    fn non_send_types() {
+        // Custom non-Send type with raw pointer
+        struct NonSendType(*const u8);
+        // SAFETY: Only used in single-threaded local test environment, never shared across threads
+        unsafe impl Sync for NonSendType {}
+
+        // LocalPinnedPool should work with non-Send types since it's single-threaded
+        use std::rc::Rc;
+        use std::cell::RefCell;
+
+        // Test with Rc (not Send)
+        let mut rc_pool = LocalPinnedPool::<Rc<String>>::new();
+        let rc_handle = rc_pool.insert(Rc::new("Non-Send data".to_string()));
+        assert_eq!(rc_pool.len(), 1);
+        assert_eq!(&**rc_handle, "Non-Send data");
+
+        // Test with RefCell (not Send)
+        let mut refcell_pool = LocalPinnedPool::<RefCell<i32>>::new();
+        let refcell_handle = refcell_pool.insert(RefCell::new(42));
+        assert_eq!(refcell_pool.len(), 1);
+        assert_eq!(*refcell_handle.borrow(), 42);
+
+        // Test with custom non-Send type
+        let mut custom_pool = LocalPinnedPool::<NonSendType>::new();
+        let raw_ptr = 0x1234 as *const u8;
+        let non_send_handle = custom_pool.insert(NonSendType(raw_ptr));
+        assert_eq!(custom_pool.len(), 1);
+        assert_eq!(non_send_handle.0, raw_ptr);
+
+        // Test iteration with non-Send types
+        rc_pool.with_iter(|iter| {
+            let values: Vec<String> = iter
+                .map(|ptr| {
+                    // SAFETY: Iterator yields valid NonNull<T> pointers for items alive in pool
+                    unsafe { ptr.as_ref().as_ref().clone() }
+                })
+                .collect();
+            assert_eq!(values, vec!["Non-Send data"]);
+        });
+
+        // Test nested non-Send types
+        let mut nested_pool = LocalPinnedPool::<Rc<RefCell<Vec<i32>>>>::new();
+        let nested_handle = nested_pool.insert(Rc::new(RefCell::new(vec![1, 2, 3])));
+        assert_eq!(nested_pool.len(), 1);
+        assert_eq!(*nested_handle.borrow(), vec![1, 2, 3]);
     }
 }

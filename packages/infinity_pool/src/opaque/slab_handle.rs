@@ -155,7 +155,11 @@ impl<T: ?Sized> PartialEq for SlabHandle<T> {
 impl<T: ?Sized> Eq for SlabHandle<T> {}
 
 // SAFETY: See type-level documentation.
-unsafe impl<T: ?Sized + Sync> Send for SlabHandle<T> {}
+unsafe impl<T> Send for SlabHandle<T>
+where
+    T: ?Sized + Sync,
+{
+}
 
 impl<T: ?Sized> fmt::Debug for SlabHandle<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

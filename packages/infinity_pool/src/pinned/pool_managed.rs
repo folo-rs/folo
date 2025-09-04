@@ -43,7 +43,10 @@ pub struct PinnedPool<T: Send + 'static> {
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T: Send + 'static> PinnedPool<T> {
+impl<T> PinnedPool<T>
+where
+    T: Send + 'static,
+{
     /// Creates a new pool for objects of type `T`.
     #[must_use]
     pub fn new() -> Self {
@@ -177,7 +180,10 @@ impl<T: Send + 'static> PinnedPool<T> {
     }
 }
 
-impl<T: Send> Clone for PinnedPool<T> {
+impl<T> Clone for PinnedPool<T>
+where
+    T: Send,
+{
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
@@ -186,13 +192,19 @@ impl<T: Send> Clone for PinnedPool<T> {
     }
 }
 
-impl<T: Send> Default for PinnedPool<T> {
+impl<T> Default for PinnedPool<T>
+where
+    T: Send,
+{
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: Send> fmt::Debug for PinnedPool<T> {
+impl<T> fmt::Debug for PinnedPool<T>
+where
+    T: Send,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PinnedPool")
             .field("inner", &self.inner)

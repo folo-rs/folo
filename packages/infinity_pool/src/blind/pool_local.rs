@@ -400,16 +400,37 @@ mod tests {
 
     #[test]
     fn non_send_types() {
-        // LocalBlindPool should now work with non-Send types since it's single-threaded
+        // Custom non-Send type with raw pointer
+        struct NonSendType(*const u8);
+        // SAFETY: Only used in single-threaded local test environment, never shared across threads
+        unsafe impl Sync for NonSendType {}
+
+        // LocalBlindPool should work with non-Send types since it's single-threaded
         use std::rc::Rc;
+        use std::cell::RefCell;
 
         let mut pool = LocalBlindPool::new();
 
         // Rc is not Send, but LocalBlindPool should handle it since it's single-threaded
         let rc_handle = pool.insert(Rc::new("Non-Send data".to_string()));
-
         assert_eq!(pool.len(), 1);
         assert_eq!(&**rc_handle, "Non-Send data");
+
+        // RefCell is also not Send
+        let refcell_handle = pool.insert(RefCell::new(42));
+        assert_eq!(pool.len(), 2);
+        assert_eq!(*refcell_handle.borrow(), 42);
+
+        // Nested non-Send types
+        let nested_handle = pool.insert(Rc::new(RefCell::new(vec![1, 2, 3])));
+        assert_eq!(pool.len(), 3);
+        assert_eq!(*nested_handle.borrow(), vec![1, 2, 3]);
+
+        // Custom non-Send type with raw pointer
+        let raw_ptr = 0x1234 as *const u8;
+        let non_send_handle = pool.insert(NonSendType(raw_ptr));
+        assert_eq!(pool.len(), 4);
+        assert_eq!(non_send_handle.0, raw_ptr);
     }
 
     #[test]

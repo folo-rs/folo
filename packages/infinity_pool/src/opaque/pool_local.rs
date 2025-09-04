@@ -159,7 +159,7 @@ impl LocalOpaquePool {
     /// are not `MaybeUninit` must be initialized when the closure returns.
     pub unsafe fn insert_with<T, F>(&mut self, f: F) -> LocalPooledMut<T>
     where
-        T: Send + 'static,
+        T: 'static,
         F: FnOnce(&mut MaybeUninit<T>),
     {
         // SAFETY: Forwarding safety guarantees from caller.
@@ -186,7 +186,7 @@ impl LocalOpaquePool {
     /// are not `MaybeUninit` must be initialized when the closure returns.
     pub unsafe fn insert_with_unchecked<T, F>(&mut self, f: F) -> LocalPooledMut<T>
     where
-        T: Send + 'static,
+        T: 'static,
         F: FnOnce(&mut MaybeUninit<T>),
     {
         // SAFETY: Forwarding safety guarantees from caller.
@@ -703,5 +703,48 @@ mod tests {
         // The caller now owns the value and can continue using it
         let final_value = extracted_value + " - after extraction";
         assert_eq!(final_value, "initial value - modified - after extraction");
+    }
+
+    #[test]
+    fn non_send_types() {
+        // Custom non-Send type with raw pointer
+        struct NonSendType(*const u8);
+        // SAFETY: Only used in single-threaded local test environment, never shared across threads
+        unsafe impl Sync for NonSendType {}
+
+        // LocalOpaquePool should work with non-Send types since it's single-threaded
+        use std::rc::Rc;
+        use std::cell::RefCell;
+
+        let mut pool = LocalOpaquePool::with_layout_of::<Rc<String>>();
+
+        // Rc is not Send, but LocalOpaquePool should handle it since it's single-threaded
+        let rc_handle = pool.insert(Rc::new("Non-Send data".to_string()));
+        assert_eq!(pool.len(), 1);
+        assert_eq!(&**rc_handle, "Non-Send data");
+
+        // Test with RefCell pool
+        let mut refcell_pool = LocalOpaquePool::with_layout_of::<RefCell<i32>>();
+        let refcell_handle = refcell_pool.insert(RefCell::new(42));
+        assert_eq!(refcell_pool.len(), 1);
+        assert_eq!(*refcell_handle.borrow(), 42);
+
+        // Test with custom non-Send type
+        let mut custom_pool = LocalOpaquePool::with_layout_of::<NonSendType>();
+        let raw_ptr = 0x1234 as *const u8;
+        let non_send_handle = custom_pool.insert(NonSendType(raw_ptr));
+        assert_eq!(custom_pool.len(), 1);
+        assert_eq!(non_send_handle.0, raw_ptr);
+
+        // Test iteration with non-Send types
+        pool.with_iter(|iter| {
+            let values: Vec<String> = iter
+                .map(|ptr| {
+                    // SAFETY: We know these point to Rc<String> we inserted
+                    unsafe { ptr.cast::<Rc<String>>().as_ref().as_ref().clone() }
+                })
+                .collect();
+            assert_eq!(values, vec!["Non-Send data"]);
+        });
     }
 }
