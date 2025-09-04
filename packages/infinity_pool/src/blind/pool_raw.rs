@@ -3,7 +3,7 @@ use std::mem::MaybeUninit;
 
 use foldhash::{HashMap, HashMapExt};
 
-use crate::{DropPolicy, RawBlindPooled, RawBlindPooledMut, RawOpaquePool};
+use crate::{DropPolicy, RawBlindPoolBuilder, RawBlindPooled, RawBlindPooledMut, RawOpaquePool};
 
 /// An object pool that accepts any type of object.
 ///
@@ -25,12 +25,22 @@ pub struct RawBlindPool {
 }
 
 impl RawBlindPool {
+    /// Starts configuring and creating a new instance of the pool.
+    pub fn builder() -> RawBlindPoolBuilder {
+        RawBlindPoolBuilder::new()
+    }
+
     /// Creates a new instance of the pool with the default configuration.
     #[must_use]
     pub fn new() -> Self {
+        Self::builder().build()
+    }
+
+    #[must_use]
+    pub(crate) fn new_inner(drop_policy: DropPolicy) -> Self {
         Self {
             pools: HashMap::new(),
-            drop_policy: DropPolicy::default(),
+            drop_policy,
         }
     }
 
