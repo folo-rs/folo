@@ -29,6 +29,7 @@ pub struct RawPinnedPool<T> {
 
 impl<T> RawPinnedPool<T> {
     /// Starts configuring and creating a new instance of the pool.
+    #[cfg_attr(test, mutants::skip)] // Gets mutated to alternate version of itself.
     pub fn builder() -> RawPinnedPoolBuilder<T> {
         RawPinnedPoolBuilder::new()
     }

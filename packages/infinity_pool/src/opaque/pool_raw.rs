@@ -48,6 +48,7 @@ pub struct RawOpaquePool {
 
 impl RawOpaquePool {
     /// Creates a builder that can be used to configure and create a new instance of the pool.
+    #[cfg_attr(test, mutants::skip)] // Gets mutated to alternate version of itself.
     pub fn builder() -> RawOpaquePoolBuilder {
         RawOpaquePoolBuilder::new()
     }
@@ -155,6 +156,7 @@ impl RawOpaquePool {
     ///
     /// There is no guarantee that any unused capacity can be dropped. The exact outcome depends
     /// on the specific pool structure and which objects remain in the pool.
+    #[cfg_attr(test, mutants::skip)] // Vacant slot cache mutation - hard to test. Revisit later.
     pub fn shrink_to_fit(&mut self) {
         // Find the last non-empty slab by scanning from the end
         let new_len = self

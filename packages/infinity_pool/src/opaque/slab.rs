@@ -646,6 +646,7 @@ mod tests {
         let handle3 = unsafe { insert(&mut slab, T::default()) };
 
         assert!(!slab.is_empty());
+        assert!(!slab.is_full()); // Slab should still have capacity after 3 insertions
         assert_eq!(slab.len(), 3);
 
         // 2. Remove the second item
@@ -654,6 +655,7 @@ mod tests {
             slab.remove(handle2);
         }
         assert_eq!(slab.len(), 2);
+        assert!(!slab.is_full()); // Still not full after removal
 
         // 3. Insert 2 more items
         // SAFETY: T::default() creates a valid T with matching layout
@@ -661,6 +663,7 @@ mod tests {
         // SAFETY: T::default() creates a valid T with matching layout
         let handle5 = unsafe { insert(&mut slab, T::default()) };
         assert_eq!(slab.len(), 4);
+        assert!(!slab.is_full()); // Should still have capacity
 
         // 4. Remove the first item
         // SAFETY: handle1 is valid and from this slab
@@ -1085,11 +1088,19 @@ mod tests {
         let layout = SlabLayout::new(Layout::new::<u32>());
         let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
+        assert!(!slab.is_full());
+        assert!(slab.is_empty());
+
         // Insert items and verify they get indices 0, 1, 2
         // SAFETY: u32 layout matches slab layout
         let handle0 = unsafe { insert(&mut slab, 100_u32) };
+        assert!(!slab.is_full());
+        assert!(!slab.is_empty());
+        
         // SAFETY: u32 layout matches slab layout
         let handle1 = unsafe { insert(&mut slab, 200_u32) };
+        assert!(!slab.is_full());
+        
         // SAFETY: u32 layout matches slab layout
         let handle2 = unsafe { insert(&mut slab, 300_u32) };
 
@@ -1097,6 +1108,7 @@ mod tests {
         assert_eq!(handle1.index(), 1);
         assert_eq!(handle2.index(), 2);
         assert_eq!(slab.len(), 3);
+        assert!(!slab.is_full()); // Slab should still have capacity
 
         // Remove the middle item (index 1)
         // SAFETY: handle1 is valid and from this slab

@@ -26,6 +26,7 @@ pub struct RawBlindPool {
 
 impl RawBlindPool {
     /// Starts configuring and creating a new instance of the pool.
+    #[cfg_attr(test, mutants::skip)] // Gets mutated to alternate version of itself.
     pub fn builder() -> RawBlindPoolBuilder {
         RawBlindPoolBuilder::new()
     }

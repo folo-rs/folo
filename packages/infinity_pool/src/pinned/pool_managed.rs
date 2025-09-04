@@ -13,7 +13,6 @@ use crate::{
 /// All values in the pool remain pinned for their entire lifetime.
 ///
 /// The pool automatically expands its capacity when needed.
-///
 /// # Lifetime management
 ///
 /// The pool type itself acts as a handle - any clones of it are functionally equivalent,
@@ -414,6 +413,30 @@ mod tests {
         assert_eq!(pool.len(), 1);
 
         drop(handle2);
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn handle_drop_removes_objects_both_exclusive_and_shared() {
+        let mut pool = PinnedPool::<String>::new();
+
+        // Test exclusive handle drop
+        let exclusive_handle = pool.insert("exclusive".to_string());
+        assert_eq!(pool.len(), 1);
+        drop(exclusive_handle);
+        assert_eq!(pool.len(), 0);
+        
+        // Test shared handle drop
+        let mut_handle = pool.insert("shared".to_string());
+        let shared_handle = mut_handle.into_shared();
+        assert_eq!(pool.len(), 1);
+        
+        // Verify shared handle works
+        assert_eq!(&*shared_handle, "shared");
+        
+        // Drop the shared handle should remove from pool
+        drop(shared_handle);
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
     }
