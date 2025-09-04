@@ -28,6 +28,9 @@ use crate::{LocalPooledMut, RawOpaquePool, RawOpaquePoolIterator};
 /// The pool is single-threaded.
 #[derive(Debug)]
 pub struct LocalOpaquePool {
+    // We require 'static from any inserted values because the pool
+    // does not enforce any Rust lifetime semantics, only reference counts.
+    //
     // The pool type itself is just a handle around the inner pool,
     // which is reference-counted and RefCell-guarded. The inner pool
     // will only ever be dropped once all items have been removed from
@@ -65,7 +68,7 @@ impl LocalOpaquePool {
     ///
     /// Panics if `T` is a zero-sized type.
     #[must_use]
-    pub fn with_layout_of<T: Sized + Send>() -> Self {
+    pub fn with_layout_of<T: Sized>() -> Self {
         Self::with_layout(Layout::new::<T>())
     }
 
@@ -118,7 +121,7 @@ impl LocalOpaquePool {
     /// # Panics
     ///
     /// Panics if the layout of `T` does not match the object layout of the pool.
-    pub fn insert<T: Send>(&mut self, value: T) -> LocalPooledMut<T> {
+    pub fn insert<T: 'static>(&mut self, value: T) -> LocalPooledMut<T> {
         let inner = self.inner.borrow_mut().insert(value);
 
         LocalPooledMut::new(inner, Rc::clone(&self.inner))
@@ -129,7 +132,7 @@ impl LocalOpaquePool {
     /// # Safety
     ///
     /// The caller must ensure that the layout of `T` matches the pool's object layout.
-    pub unsafe fn insert_unchecked<T: Send>(&mut self, value: T) -> LocalPooledMut<T> {
+    pub unsafe fn insert_unchecked<T: 'static>(&mut self, value: T) -> LocalPooledMut<T> {
         // SAFETY: Forwarding safety guarantees from caller.
         let inner = unsafe { self.inner.borrow_mut().insert_unchecked(value) };
 
@@ -156,7 +159,7 @@ impl LocalOpaquePool {
     /// are not `MaybeUninit` must be initialized when the closure returns.
     pub unsafe fn insert_with<T, F>(&mut self, f: F) -> LocalPooledMut<T>
     where
-        T: Send,
+        T: Send + 'static,
         F: FnOnce(&mut MaybeUninit<T>),
     {
         // SAFETY: Forwarding safety guarantees from caller.
@@ -183,7 +186,7 @@ impl LocalOpaquePool {
     /// are not `MaybeUninit` must be initialized when the closure returns.
     pub unsafe fn insert_with_unchecked<T, F>(&mut self, f: F) -> LocalPooledMut<T>
     where
-        T: Send,
+        T: Send + 'static,
         F: FnOnce(&mut MaybeUninit<T>),
     {
         // SAFETY: Forwarding safety guarantees from caller.

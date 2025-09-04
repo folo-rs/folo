@@ -25,7 +25,10 @@ use crate::{LocalPooledMut, RawOpaquePool, RawOpaquePoolIterator};
 /// # Thread safety
 ///
 /// The pool is single-threaded.
-pub struct LocalPinnedPool<T> {
+pub struct LocalPinnedPool<T: 'static> {
+    // We require 'static from any inserted values because the pool
+    // does not enforce any Rust lifetime semantics, only reference counts.
+    //
     // The pool type itself is just a handle around the inner opaque pool,
     // which is reference-counted and refcell-guarded. The inner pool
     // will only ever be dropped once all items have been removed from
@@ -39,7 +42,7 @@ pub struct LocalPinnedPool<T> {
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T> LocalPinnedPool<T> {
+impl<T: 'static> LocalPinnedPool<T> {
     /// Creates a new pool for objects of type `T`.
     #[must_use]
     pub fn new() -> Self {
@@ -200,7 +203,7 @@ impl<T> fmt::Debug for LocalPinnedPool<T> {
 /// by using the pointer to create such references in unsafe code and relies on the caller
 /// guaranteeing that no conflicting exclusive references exist.
 #[derive(Debug)]
-pub struct LocalPinnedPoolIterator<'p, T> {
+pub struct LocalPinnedPoolIterator<'p, T: 'static> {
     raw_iter: RawOpaquePoolIterator<'p>,
     _phantom: std::marker::PhantomData<T>,
 }

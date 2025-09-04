@@ -26,7 +26,10 @@ use crate::{
 /// # Thread safety
 ///
 /// The pool is thread-safe (`Send` and `Sync`) and requires `T: Send`.
-pub struct PinnedPool<T: Send> {
+pub struct PinnedPool<T: Send + 'static> {
+    // We require 'static from any inserted values because the pool
+    // does not enforce any Rust lifetime semantics, only reference counts.
+    //
     // The pool type itself is just a handle around the inner opaque pool,
     // which is reference-counted and mutex-guarded. The inner pool
     // will only ever be dropped once all items have been removed from
@@ -40,7 +43,7 @@ pub struct PinnedPool<T: Send> {
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T: Send> PinnedPool<T> {
+impl<T: Send + 'static> PinnedPool<T> {
     /// Creates a new pool for objects of type `T`.
     #[must_use]
     pub fn new() -> Self {
@@ -207,7 +210,7 @@ impl<T: Send> fmt::Debug for PinnedPool<T> {
 /// by using the pointer to create such references in unsafe code and relies on the caller
 /// guaranteeing that no conflicting exclusive references exist.
 #[derive(Debug)]
-pub struct PinnedPoolIterator<'p, T> {
+pub struct PinnedPoolIterator<'p, T: 'static> {
     raw_iter: RawOpaquePoolIterator<'p>,
     _phantom: std::marker::PhantomData<T>,
 }

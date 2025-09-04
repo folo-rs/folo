@@ -28,6 +28,9 @@ use crate::{ERR_POISONED_LOCK, PooledMut, RawOpaquePool, RawOpaquePoolSend};
 /// The pool is thread-safe (`Send` and `Sync`) and requires that any inserted items are `Send`.
 #[derive(Debug)]
 pub struct OpaquePool {
+    // We require 'static from any inserted values because the pool
+    // does not enforce any Rust lifetime semantics, only reference counts.
+    //
     // The pool type itself is just a handle around the inner pool,
     // which is reference-counted and mutex-guarded. The inner pool
     // will only ever be dropped once all items have been removed from
@@ -124,7 +127,7 @@ impl OpaquePool {
     /// # Panics
     ///
     /// Panics if the layout of `T` does not match the object layout of the pool.
-    pub fn insert<T: Send>(&mut self, value: T) -> PooledMut<T> {
+    pub fn insert<T: Send + 'static>(&mut self, value: T) -> PooledMut<T> {
         let inner = self.inner.lock().expect(ERR_POISONED_LOCK).insert(value);
 
         PooledMut::new(inner, Arc::clone(&self.inner))
@@ -135,7 +138,7 @@ impl OpaquePool {
     /// # Safety
     ///
     /// The caller must ensure that the layout of `T` matches the pool's object layout.
-    pub unsafe fn insert_unchecked<T: Send>(&mut self, value: T) -> PooledMut<T> {
+    pub unsafe fn insert_unchecked<T: Send + 'static>(&mut self, value: T) -> PooledMut<T> {
         // SAFETY: Forwarding safety guarantees from caller.
         let inner = unsafe {
             self.inner
@@ -167,7 +170,7 @@ impl OpaquePool {
     /// are not `MaybeUninit` must be initialized when the closure returns.
     pub unsafe fn insert_with<T, F>(&mut self, f: F) -> PooledMut<T>
     where
-        T: Send,
+        T: Send + 'static,
         F: FnOnce(&mut MaybeUninit<T>),
     {
         // SAFETY: Forwarding safety guarantees from caller.
@@ -194,7 +197,7 @@ impl OpaquePool {
     /// are not `MaybeUninit` must be initialized when the closure returns.
     pub unsafe fn insert_with_unchecked<T, F>(&mut self, f: F) -> PooledMut<T>
     where
-        T: Send,
+        T: Send + 'static,
         F: FnOnce(&mut MaybeUninit<T>),
     {
         // SAFETY: Forwarding safety guarantees from caller.
