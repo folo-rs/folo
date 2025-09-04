@@ -25,7 +25,7 @@ use crate::{ERR_POISONED_LOCK, PooledMut, RawOpaquePool, RawOpaquePoolSend};
 ///
 /// # Thread safety
 ///
-/// The pool is thread-mobile (`Send`) and requires that any inserted items are `Send`, as well.
+/// The pool is thread-safe (`Send` and `Sync`) and requires that any inserted items are `Send`.
 #[derive(Debug)]
 pub struct OpaquePool {
     // The pool type itself is just a handle around the inner pool,
@@ -99,9 +99,7 @@ impl OpaquePool {
         self.inner.lock().expect(ERR_POISONED_LOCK).is_empty()
     }
 
-    /// Reserves capacity for at least `additional` more objects.
-    ///
-    /// The new capacity is calculated from the current `len()`, not from the current capacity.
+    /// Ensures that the pool has capacity for at least `additional` more objects.
     ///
     /// # Panics
     ///

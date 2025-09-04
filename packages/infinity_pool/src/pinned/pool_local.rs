@@ -72,9 +72,7 @@ impl<T> LocalPinnedPool<T> {
         self.inner.borrow().is_empty()
     }
 
-    /// Reserves capacity for at least `additional` more objects.
-    ///
-    /// The new capacity is calculated from the current `len()`, not from the current capacity.
+    /// Ensures that the pool has capacity for at least `additional` more objects.
     ///
     /// # Panics
     ///

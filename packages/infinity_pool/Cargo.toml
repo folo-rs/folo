@@ -14,6 +14,7 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
+foldhash = { workspace = true }
 new_zealand = { workspace = true }
 num-integer = { workspace = true }
 pastey = { workspace = true }

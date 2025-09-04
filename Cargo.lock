@@ -785,6 +785,7 @@ version = "0.1.0"
 dependencies = [
  "alloc_tracker",
  "criterion",
+ "foldhash",
  "mutants",
  "new_zealand",
  "num-integer",

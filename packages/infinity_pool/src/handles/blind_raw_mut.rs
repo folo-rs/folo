@@ -1,12 +1,13 @@
+use std::alloc::Layout;
 use std::borrow::{Borrow, BorrowMut};
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::ptr::NonNull;
 
-use crate::{RawPooled, SlabHandle};
+use crate::{RawBlindPooled, RawPooledMut};
 
-/// A unique handle to an object in an object pool.
+/// A unique handle to an object in a [`RawBlindPool`][1].
 ///
 /// The handle can be used to access the pooled object, as well as to remove
 /// it from the pool when no longer needed.
@@ -27,30 +28,38 @@ use crate::{RawPooled, SlabHandle};
 ///
 /// If the underlying object is `Sync`, the handle is thread-mobile (`Send`). Otherwise, the
 /// handle is single-threaded (neither `Send` nor `Sync`).
-pub struct RawPooledMut<T: ?Sized> {
-    /// Index of the slab in the pool. Slabs are guaranteed to stay at the same index unless
-    /// the pool is shrunk (which can only happen when the affected slabs are empty, in which
-    /// case all existing handles are already invalidated).
-    slab_index: usize,
+///
+/// [1]: crate::RawBlindPool
+pub struct RawBlindPooledMut<T: ?Sized> {
+    // We combine the inner RawPooledMut with a layout that
+    // acts as the inner pool key for the RawBlindPool.
+    layout: Layout,
 
-    /// Handle to the object in the slab. This grants us access to the object's pointer
-    /// and allows us to operate on the object (e.g. to remove it).
-    slab_handle: SlabHandle<T>,
+    inner: RawPooledMut<T>,
 }
 
-impl<T: ?Sized> RawPooledMut<T> {
+impl<T: ?Sized> RawBlindPooledMut<T> {
     #[must_use]
-    pub(crate) fn new(slab_index: usize, slab_handle: SlabHandle<T>) -> Self {
-        Self {
-            slab_index,
-            slab_handle,
-        }
+    pub(crate) fn new(layout: Layout, inner: RawPooledMut<T>) -> Self {
+        Self { layout, inner }
+    }
+
+    /// The layout originally used to insert the item
+    ///
+    /// This might not match `T` any more, as the `T` parameter may have been transformed.
+    pub(crate) fn layout(&self) -> Layout {
+        self.layout
+    }
+
+    /// Becomes the inner handle for the `RawOpaquePool` that holds the object.
+    pub(crate) fn into_inner(self) -> RawPooledMut<T> {
+        self.inner
     }
 
     /// Get a pointer to the object in the pool.
     #[must_use]
     pub fn ptr(&self) -> NonNull<T> {
-        self.slab_handle.ptr()
+        self.inner.ptr()
     }
 
     /// Erases the type of the object the pool handle points to.
@@ -59,17 +68,17 @@ impl<T: ?Sized> RawPooledMut<T> {
     /// A type-erased handle cannot be used to remove the object from the pool and return it to
     /// the caller, as there is no more knowledge of the type to be returned.
     #[must_use]
-    pub fn erase(self) -> RawPooledMut<()> {
-        RawPooledMut {
-            slab_index: self.slab_index,
-            slab_handle: self.slab_handle.erase(),
+    pub fn erase(self) -> RawBlindPooledMut<()> {
+        RawBlindPooledMut {
+            layout: self.layout,
+            inner: self.inner.erase(),
         }
     }
 
     /// Transforms the unique handle into a shared handle that can be cloned and copied freely.
     #[must_use]
-    pub fn into_shared(self) -> RawPooled<T> {
-        RawPooled::new(self.slab_index, self.slab_handle)
+    pub fn into_shared(self) -> RawBlindPooled<T> {
+        RawBlindPooled::new(self.layout, self.inner.into_shared())
     }
 
     /// Borrows the target object as a pinned shared reference.
@@ -95,16 +104,16 @@ impl<T: ?Sized> RawPooledMut<T> {
     }
 }
 
-impl<T: ?Sized> fmt::Debug for RawPooledMut<T> {
+impl<T: ?Sized> fmt::Debug for RawBlindPooledMut<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawPooledMut")
-            .field("slab_index", &self.slab_index)
-            .field("slab_handle", &self.slab_handle)
+        f.debug_struct("RawBlindPooledMut")
+            .field("layout", &self.layout)
+            .field("inner", &self.inner)
             .finish()
     }
 }
 
-impl<T: ?Sized> Deref for RawPooledMut<T> {
+impl<T: ?Sized> Deref for RawBlindPooledMut<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -114,7 +123,7 @@ impl<T: ?Sized> Deref for RawPooledMut<T> {
     }
 }
 
-impl<T: ?Sized + Unpin> DerefMut for RawPooledMut<T> {
+impl<T: ?Sized + Unpin> DerefMut for RawBlindPooledMut<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself.
@@ -122,25 +131,25 @@ impl<T: ?Sized + Unpin> DerefMut for RawPooledMut<T> {
     }
 }
 
-impl<T: ?Sized> Borrow<T> for RawPooledMut<T> {
+impl<T: ?Sized> Borrow<T> for RawBlindPooledMut<T> {
     fn borrow(&self) -> &T {
         self
     }
 }
 
-impl<T: ?Sized + Unpin> BorrowMut<T> for RawPooledMut<T> {
+impl<T: ?Sized + Unpin> BorrowMut<T> for RawBlindPooledMut<T> {
     fn borrow_mut(&mut self) -> &mut T {
         self
     }
 }
 
-impl<T: ?Sized> AsRef<T> for RawPooledMut<T> {
+impl<T: ?Sized> AsRef<T> for RawBlindPooledMut<T> {
     fn as_ref(&self) -> &T {
         self
     }
 }
 
-impl<T: ?Sized + Unpin> AsMut<T> for RawPooledMut<T> {
+impl<T: ?Sized + Unpin> AsMut<T> for RawBlindPooledMut<T> {
     fn as_mut(&mut self) -> &mut T {
         self
     }
@@ -154,10 +163,10 @@ mod tests {
 
     use super::*;
 
-    // u32 is Sync, so RawPooledMut<u32> should be Send (but not Sync).
-    assert_impl_all!(RawPooledMut<u32>: Send);
-    assert_not_impl_any!(RawPooledMut<u32>: Sync);
+    // u32 is Sync, so RawBlindPooledMut<u32> should be Send (but not Sync).
+    assert_impl_all!(RawBlindPooledMut<u32>: Send);
+    assert_not_impl_any!(RawBlindPooledMut<u32>: Sync);
 
-    // Cell is Send but not Sync, so RawPooledMut<Cell> should be neither Send nor Sync.
-    assert_not_impl_any!(RawPooledMut<Cell<u32>>: Send, Sync);
+    // Cell is Send but not Sync, so RawBlindPooledMut<Cell> should be neither Send nor Sync.
+    assert_not_impl_any!(RawBlindPooledMut<Cell<u32>>: Send, Sync);
 }

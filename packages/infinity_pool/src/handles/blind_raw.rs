@@ -1,10 +1,11 @@
+use std::alloc::Layout;
 use std::borrow::Borrow;
 use std::fmt;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::NonNull;
 
-use crate::{RawPooledMut, SlabHandle};
+use crate::{RawBlindPooledMut, RawPooled};
 
 /// A shared handle to an object in an object pool.
 ///
@@ -14,7 +15,7 @@ use crate::{RawPooledMut, SlabHandle};
 /// This is a raw handle that requires manual lifetime management of the pooled objects.
 /// You must call `remove()` on the pool to drop the object this handle references.
 /// If the handle is dropped without being passed to `remove()`, the object is only removed
-/// from the pool when the pool itself is dropped. 
+/// from the pool when the pool itself is dropped.
 ///
 /// This is a shared handle that only grants shared access to the object. No exclusive
 /// references can be created through this handle.
@@ -26,46 +27,36 @@ use crate::{RawPooledMut, SlabHandle};
 ///
 /// If the underlying object is `Sync`, the handle is thread-mobile (`Send`). Otherwise, the
 /// handle is single-threaded (neither `Send` nor `Sync`).
-pub struct RawPooled<T: ?Sized> {
-    /// Index of the slab in the pool. Slabs are guaranteed to stay at the same index unless
-    /// the pool is shrunk (which can only happen when the affected slabs are empty, in which
-    /// case all existing handles are already invalidated).
-    slab_index: usize,
+pub struct RawBlindPooled<T: ?Sized> {
+    // We combine the inner RawPooled with a layout that
+    // acts as the inner pool key for the RawBlindPool.
+    layout: Layout,
 
-    /// Handle to the object in the slab. This grants us access to the object's pointer
-    /// and allows us to operate on the object (e.g. to remove it).
-    slab_handle: SlabHandle<T>,
+    inner: RawPooled<T>,
 }
 
-impl<T: ?Sized> RawPooled<T> {
+impl<T: ?Sized> RawBlindPooled<T> {
     #[must_use]
-    pub(crate) fn new(slab_index: usize, slab_handle: SlabHandle<T>) -> Self {
-        Self {
-            slab_index,
-            slab_handle,
-        }
+    pub(crate) fn new(layout: Layout, inner: RawPooled<T>) -> Self {
+        Self { layout, inner }
     }
 
-    /// Get the index of the slab in the pool.
+    /// The layout originally used to insert the item
     ///
-    /// This is used by the pool itself to identify the slab in which the object resides.
-    #[must_use]
-    pub(crate) fn slab_index(&self) -> usize {
-        self.slab_index
+    /// This might not match `T` any more, as the `T` parameter may have been transformed.
+    pub(crate) fn layout(&self) -> Layout {
+        self.layout
+    }
+
+    /// Becomes the inner handle for the `RawOpaquePool` that holds the object.
+    pub(crate) fn into_inner(self) -> RawPooled<T> {
+        self.inner
     }
 
     /// Get a pointer to the object in the pool.
     #[must_use]
     pub fn ptr(&self) -> NonNull<T> {
-        self.slab_handle.ptr()
-    }
-
-    /// Get the slab handle for this pool handle.
-    ///
-    /// This is used by the pool itself to perform operations on the object in the slab.
-    #[must_use]
-    pub(crate) fn slab_handle(&self) -> SlabHandle<T> {
-        self.slab_handle
+        self.inner.ptr()
     }
 
     /// Erases the type of the object the pool handle points to.
@@ -74,10 +65,10 @@ impl<T: ?Sized> RawPooled<T> {
     /// A type-erased handle cannot be used to remove the object from the pool and return it to
     /// the caller, as there is no more knowledge of the type to be returned.
     #[must_use]
-    pub fn erase(self) -> RawPooled<()> {
-        RawPooled {
-            slab_index: self.slab_index,
-            slab_handle: self.slab_handle.erase(),
+    pub fn erase(self) -> RawBlindPooled<()> {
+        RawBlindPooled {
+            layout: self.layout,
+            inner: self.inner.erase(),
         }
     }
 
@@ -91,24 +82,24 @@ impl<T: ?Sized> RawPooled<T> {
     }
 }
 
-impl<T: ?Sized> Clone for RawPooled<T> {
+impl<T: ?Sized> Clone for RawBlindPooled<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T: ?Sized> Copy for RawPooled<T> {}
+impl<T: ?Sized> Copy for RawBlindPooled<T> {}
 
-impl<T: ?Sized> fmt::Debug for RawPooled<T> {
+impl<T: ?Sized> fmt::Debug for RawBlindPooled<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawPooled")
-            .field("slab_index", &self.slab_index)
-            .field("slab_handle", &self.slab_handle)
+        f.debug_struct("RawBlindPooled")
+            .field("layout", &self.layout)
+            .field("inner", &self.inner)
             .finish()
     }
 }
 
-impl<T: ?Sized> Deref for RawPooled<T> {
+impl<T: ?Sized> Deref for RawBlindPooled<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -118,20 +109,20 @@ impl<T: ?Sized> Deref for RawPooled<T> {
     }
 }
 
-impl<T: ?Sized> Borrow<T> for RawPooled<T> {
+impl<T: ?Sized> Borrow<T> for RawBlindPooled<T> {
     fn borrow(&self) -> &T {
         self
     }
 }
 
-impl<T: ?Sized> AsRef<T> for RawPooled<T> {
+impl<T: ?Sized> AsRef<T> for RawBlindPooled<T> {
     fn as_ref(&self) -> &T {
         self
     }
 }
 
-impl<T: ?Sized> From<RawPooledMut<T>> for RawPooled<T> {
-    fn from(value: RawPooledMut<T>) -> Self {
+impl<T: ?Sized> From<RawBlindPooledMut<T>> for RawBlindPooled<T> {
+    fn from(value: RawBlindPooledMut<T>) -> Self {
         value.into_shared()
     }
 }
@@ -144,10 +135,10 @@ mod tests {
 
     use super::*;
 
-    // u32 is Sync, so RawPooled<u32> should be Send (but not Sync).
-    assert_impl_all!(RawPooled<u32>: Send);
-    assert_not_impl_any!(RawPooled<u32>: Sync);
+    // u32 is Sync, so RawBlindPooled<u32> should be Send (but not Sync).
+    assert_impl_all!(RawBlindPooled<u32>: Send);
+    assert_not_impl_any!(RawBlindPooled<u32>: Sync);
 
-    // Cell is Send but not Sync, so RawPooled<Cell> should be neither Send nor Sync.
-    assert_not_impl_any!(RawPooled<Cell<u32>>: Send, Sync);
+    // Cell is Send but not Sync, so RawBlindPooled<Cell> should be neither Send nor Sync.
+    assert_not_impl_any!(RawBlindPooled<Cell<u32>>: Send, Sync);
 }

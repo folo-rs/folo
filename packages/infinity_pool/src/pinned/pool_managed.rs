@@ -25,7 +25,7 @@ use crate::{
 ///
 /// # Thread safety
 ///
-/// The pool is thread-mobile (`Send`) and requires that `T: Send`.
+/// The pool is thread-safe (`Send` and `Sync`) and requires `T: Send`.
 pub struct PinnedPool<T: Send> {
     // The pool type itself is just a handle around the inner opaque pool,
     // which is reference-counted and mutex-guarded. The inner pool
@@ -76,9 +76,7 @@ impl<T: Send> PinnedPool<T> {
         self.inner.lock().expect(ERR_POISONED_LOCK).is_empty()
     }
 
-    /// Reserves capacity for at least `additional` more objects.
-    ///
-    /// The new capacity is calculated from the current `len()`, not from the current capacity.
+    /// Ensures that the pool has capacity for at least `additional` more objects.
     ///
     /// # Panics
     ///
