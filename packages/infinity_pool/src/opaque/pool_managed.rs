@@ -626,6 +626,43 @@ mod tests {
     }
 
     #[test]
+    fn iter_size_hint_and_exact_size() {
+        let mut pool = OpaquePool::with_layout_of::<u32>();
+
+        // Empty pool
+        pool.with_iter(|iter| {
+            assert_eq!(iter.size_hint(), (0, Some(0)));
+            assert_eq!(iter.len(), 0);
+        });
+
+        // Add some items
+        let _handle1 = pool.insert(100_u32);
+        let _handle2 = pool.insert(200_u32);
+
+        pool.with_iter(|mut iter| {
+            assert_eq!(iter.size_hint(), (2, Some(2)));
+            assert_eq!(iter.len(), 2);
+
+            // Consume one item
+            let first_item = iter.next();
+            assert!(first_item.is_some());
+            assert_eq!(iter.size_hint(), (1, Some(1)));
+            assert_eq!(iter.len(), 1);
+
+            // Consume another
+            let second_item = iter.next();
+            assert!(second_item.is_some());
+            assert_eq!(iter.size_hint(), (0, Some(0)));
+            assert_eq!(iter.len(), 0);
+
+            // Should be exhausted now
+            assert_eq!(iter.next(), None);
+            assert_eq!(iter.size_hint(), (0, Some(0)));
+            assert_eq!(iter.len(), 0);
+        });
+    }
+
+    #[test]
     fn clone_behavior() {
         let mut pool1 = OpaquePool::with_layout_of::<u32>();
 
