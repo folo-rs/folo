@@ -175,13 +175,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_pool() {
-        let pool = LocalBlindPool::new();
+    fn default_pool_is_empty() {
+        let pool = LocalBlindPool::default();
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
-        assert_eq!(pool.capacity_for::<String>(), 0);
-        assert_eq!(pool.capacity_for::<u32>(), 0);
     }
 
     #[test]
@@ -255,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn reserve_functionality() {
+    fn reserve_creates_capacity() {
         let mut pool = LocalBlindPool::new();
 
         // Reserve capacity for strings
@@ -281,7 +279,7 @@ mod tests {
     }
 
     #[test]
-    fn shrink_to_fit() {
+    fn shrink_to_fit_removes_unused_capacity() {
         let mut pool = LocalBlindPool::new();
 
         // Reserve more than we need
@@ -299,6 +297,35 @@ mod tests {
         assert_eq!(pool.len(), 2);
         let _handle3 = pool.insert("Three".to_string());
         assert_eq!(pool.len(), 3);
+    }
+
+    #[test]
+    fn shrink_to_fit_with_zero_items_shrinks_to_zero_capacity() {
+        let mut pool = LocalBlindPool::new();
+
+        // Add some items to create capacity
+        let handle1 = pool.insert("Item1".to_string());
+        let handle2 = pool.insert(42_u32);
+        let handle3 = pool.insert("Item3".to_string());
+
+        // Verify we have capacity
+        assert!(pool.capacity_for::<String>() > 0);
+        assert!(pool.capacity_for::<u32>() > 0);
+
+        // Remove all items by dropping handles
+        drop(handle1);
+        drop(handle2);
+        drop(handle3);
+
+        assert!(pool.is_empty());
+
+        pool.shrink_to_fit();
+
+        // Testing implementation detail: empty pool should shrink capacity to zero
+        // This may become untrue with future algorithm changes, at which point
+        // we will need to adjust the tests.
+        assert_eq!(pool.capacity_for::<String>(), 0);
+        assert_eq!(pool.capacity_for::<u32>(), 0);
     }
 
     #[test]

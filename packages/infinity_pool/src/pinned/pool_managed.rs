@@ -299,6 +299,126 @@ mod tests {
     }
 
     #[test]
+    fn capacity_grows_when_needed() {
+        let mut pool = PinnedPool::<u64>::new();
+
+        assert_eq!(pool.capacity(), 0);
+
+        let _handle = pool.insert(123_u64);
+
+        // Should have some capacity now
+        assert!(pool.capacity() > 0);
+        let initial_capacity = pool.capacity();
+
+        // Fill up the pool to force capacity expansion
+        #[expect(
+            clippy::collection_is_never_read,
+            reason = "handles are used for ownership"
+        )]
+        let mut handles = Vec::new();
+        for i in 1..initial_capacity {
+            handles.push(pool.insert(i as u64));
+        }
+
+        // One more insert should expand capacity
+        let _handle = pool.insert(999_u64);
+
+        assert!(pool.capacity() >= initial_capacity);
+    }
+
+    #[test]
+    fn reserve_creates_capacity() {
+        let mut pool = PinnedPool::<u8>::new();
+
+        pool.reserve(100);
+        assert!(pool.capacity() >= 100);
+
+        let initial_capacity = pool.capacity();
+        pool.reserve(50); // Should not increase capacity
+        assert_eq!(pool.capacity(), initial_capacity);
+
+        pool.reserve(200); // Should increase capacity
+        assert!(pool.capacity() >= 200);
+    }
+
+    #[test]
+    fn shrink_to_fit_removes_unused_capacity() {
+        let mut pool = PinnedPool::<u8>::new();
+
+        // Reserve more than we need
+        pool.reserve(100);
+
+        // Insert only a few items
+        let _handle1 = pool.insert(1_u8);
+        let _handle2 = pool.insert(2_u8);
+
+        // Shrink should not panic
+        pool.shrink_to_fit();
+
+        // Pool should still work normally
+        assert_eq!(pool.len(), 2);
+        let _handle3 = pool.insert(3_u8);
+        assert_eq!(pool.len(), 3);
+    }
+
+    #[test]
+    fn shrink_to_fit_with_zero_items_shrinks_to_zero_capacity() {
+        let mut pool = PinnedPool::<u8>::new();
+
+        // Add some items to create capacity
+        let handle1 = pool.insert(1_u8);
+        let handle2 = pool.insert(2_u8);
+        let handle3 = pool.insert(3_u8);
+
+        // Verify we have capacity
+        assert!(pool.capacity() > 0);
+
+        // Remove all items by dropping handles
+        drop(handle1);
+        drop(handle2);
+        drop(handle3);
+
+        assert!(pool.is_empty());
+
+        pool.shrink_to_fit();
+
+        // Testing implementation detail: empty pool should shrink capacity to zero
+        // This may become untrue with future algorithm changes, at which point
+        // we will need to adjust the tests.
+        assert_eq!(pool.capacity(), 0);
+    }
+
+    #[test]
+    fn handle_provides_access_to_object() {
+        let mut pool = PinnedPool::<u64>::new();
+
+        let handle = pool.insert(12345_u64);
+
+        assert_eq!(*handle, 12345);
+    }
+
+    #[test]
+    fn multiple_handles_to_same_type() {
+        let mut pool = PinnedPool::<String>::new();
+
+        let handle1 = pool.insert("hello".to_string());
+        let handle2 = pool.insert("world".to_string());
+
+        assert_eq!(pool.len(), 2);
+
+        assert_eq!(&*handle1, "hello");
+        assert_eq!(&*handle2, "world");
+
+        // Dropping handles should remove items from pool
+        drop(handle1);
+        assert_eq!(pool.len(), 1);
+
+        drop(handle2);
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+    }
+
+    #[test]
     fn insert_with_closure() {
         let mut pool = PinnedPool::<u64>::new();
 
@@ -314,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn clone_arc_like_behavior() {
+    fn clone_behavior() {
         let mut p1 = PinnedPool::<u32>::new();
         let mut p2 = p1.clone();
 
@@ -474,5 +594,39 @@ mod tests {
             assert!(iter.next().is_none());
             assert!(iter.next_back().is_none());
         });
+    }
+
+    #[test]
+    fn thread_safety() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let mut pool = PinnedPool::<String>::new();
+
+        // Insert some initial data
+        let handle1 = pool.insert("Thread test 1".to_string());
+        let handle2 = pool.insert("Thread test 2".to_string());
+
+        let pool = Arc::new(pool);
+        let pool_clone = Arc::clone(&pool);
+
+        // Spawn a thread that can access the pool
+        let thread_handle = thread::spawn(move || {
+            // Should be able to read the length
+            assert!(pool_clone.len() >= 2);
+
+            // Should be able to check capacity
+            assert!(pool_clone.capacity() >= 2);
+
+            // Should be able to check if empty
+            assert!(!pool_clone.is_empty());
+        });
+
+        // Wait for thread to complete
+        thread_handle.join().unwrap();
+
+        // Original handles should still be valid
+        assert_eq!(&*handle1, "Thread test 1");
+        assert_eq!(&*handle2, "Thread test 2");
     }
 }

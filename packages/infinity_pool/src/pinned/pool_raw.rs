@@ -309,6 +309,15 @@ mod tests {
     }
 
     #[test]
+    fn instance_creation_through_builder_succeeds() {
+        let pool = RawPinnedPool::<String>::builder().build();
+
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+        assert_eq!(pool.capacity(), 0);
+    }
+
+    #[test]
     fn insert_and_length() {
         let mut pool = RawPinnedPool::<u32>::new();
 
@@ -436,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_provides_access_to_pinned_object() {
+    fn handle_provides_access_to_object() {
         let mut pool = RawPinnedPool::<u64>::new();
 
         let handle = pool.insert(12345_u64);
