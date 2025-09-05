@@ -8,7 +8,7 @@ use crate::{RawPooled, SlabHandle};
 #[doc = include_str!("../../doc/snippets/raw_handle_implications.md")]
 #[doc = include_str!("../../doc/snippets/unique_handle_implications.md")]
 #[doc = include_str!("../../doc/snippets/unique_raw_handle_implications.md")]
-#[doc = include_str!("../../doc/snippets/raw_handle_thread_safety.md")]
+#[doc = include_str!("../../doc/snippets/nonlocal_handle_thread_safety.md")]
 pub struct RawPooledMut<T>
 where
     // We support casting to trait objects, hence `?Sized`.
@@ -48,11 +48,7 @@ impl<T: ?Sized> RawPooledMut<T> {
         }
     }
 
-    /// Transforms the unique handle into a shared handle that can be cloned and copied freely.
-    ///
-    /// A shared handle does not support the creation of exclusive references to the target object
-    /// and requires the caller to guarantee that no further access is attempted through any handle
-    /// after removing the object from the pool.
+    #[doc = include_str!("../../doc/snippets/handle_into_shared.md")]
     #[must_use]
     pub fn into_shared(self) -> RawPooled<T> {
         RawPooled::new(self.slab_index, self.slab_handle)
@@ -153,4 +149,7 @@ mod tests {
 
     // Cell is Send but not Sync, so RawPooledMut<Cell> should be neither Send nor Sync.
     assert_not_impl_any!(RawPooledMut<Cell<u32>>: Send, Sync);
+
+    // This is a unique handle, it cannot be copyable.
+    assert_not_impl_any!(RawPooledMut<u32>: Copy);
 }

@@ -1,0 +1,1 @@
+Removes the item from the pool and returns it to the caller.

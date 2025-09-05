@@ -8,17 +8,9 @@ use std::rc::Rc;
 
 use crate::{LocalPooledMut, RawOpaquePool, RawPooled, RawPooledMut};
 
-/// A shared handle to a reference-counted object in an object pool.
-///
-/// The handle can be used to access the pooled object, as well as to remove
-/// the item from the pool when no longer needed.
-///
-/// This is a reference-counted handle that automatically removes the object when the
-/// last clone of the handle is dropped. Dropping the handle is the only way to remove
-/// the object from the pool.
-///
-/// This is a shared handle that only grants shared access to the object. No exclusive
-/// references can be created through this handle.
+/// A shared single-threaded reference-counting handle for a pooled object.
+#[doc = include_str!("../../doc/snippets/ref_counted_handle_implications.md")]
+#[doc = include_str!("../../doc/snippets/shared_handle_implications.md")]
 ///
 /// # Thread safety
 ///
@@ -44,17 +36,13 @@ impl<T: ?Sized> LocalPooled<T> {
         }
     }
 
-    /// Get a pointer to the object in the pool.
+    #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
     #[must_use]
     pub fn ptr(&self) -> NonNull<T> {
         self.inner.ptr()
     }
 
-    /// Erases the type of the object the pool handle points to.
-    ///
-    /// The returned handle remains functional for most purposes, just without type information.
-    /// A type-erased handle cannot be used to remove the object from the pool and return it to
-    /// the caller, as there is no more knowledge of the type to be returned.
+    #[doc = include_str!("../../doc/snippets/handle_erase.md")]
     #[must_use]
     pub fn erase(self) -> LocalPooled<()> {
         LocalPooled {
@@ -63,9 +51,7 @@ impl<T: ?Sized> LocalPooled<T> {
         }
     }
 
-    /// Borrows the target object as a pinned shared reference.
-    ///
-    /// All pooled objects are guaranteed to be pinned for their entire lifetime.
+    #[doc = include_str!("../../doc/snippets/ref_counted_as_pin.md")]
     #[must_use]
     pub fn as_pin(&self) -> Pin<&T> {
         // SAFETY: Pooled items are always pinned.
@@ -114,6 +100,7 @@ impl<T: ?Sized> Deref for LocalPooled<T> {
     fn deref(&self) -> &Self::Target {
         // SAFETY: This is a shared handle - the only references
         // that can ever exist are shared references.
+        // We guarantee liveness by being a reference counted handle.
         unsafe { self.ptr().as_ref() }
     }
 }

@@ -8,7 +8,7 @@ use crate::{RawPooledMut, SlabHandle};
 #[doc = include_str!("../../doc/snippets/raw_handle_implications.md")]
 #[doc = include_str!("../../doc/snippets/shared_handle_implications.md")]
 #[doc = include_str!("../../doc/snippets/shared_raw_handle_implications.md")]
-#[doc = include_str!("../../doc/snippets/raw_handle_thread_safety.md")]
+#[doc = include_str!("../../doc/snippets/nonlocal_handle_thread_safety.md")]
 pub struct RawPooled<T>
 where
     // We support casting to trait objects, hence `?Sized`.

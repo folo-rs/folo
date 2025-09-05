@@ -9,7 +9,7 @@ use crate::{RawBlindPooled, RawPooledMut};
 #[doc = include_str!("../../doc/snippets/raw_handle_implications.md")]
 #[doc = include_str!("../../doc/snippets/unique_handle_implications.md")]
 #[doc = include_str!("../../doc/snippets/unique_raw_handle_implications.md")]
-#[doc = include_str!("../../doc/snippets/raw_handle_thread_safety.md")]
+#[doc = include_str!("../../doc/snippets/nonlocal_handle_thread_safety.md")]
 /// [1]: crate::RawBlindPool
 pub struct RawBlindPooledMut<T>
 where
