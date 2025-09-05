@@ -16,6 +16,29 @@ use crate::{DropPolicy, RawOpaquePoolBuilder, RawPooled, RawPooledMut, Slab, Sla
 ///
 /// The pool automatically expands its capacity when needed.
 #[doc = include_str!("../../doc/snippets/raw_pool_is_potentially_send.md")]
+///
+/// # Example
+///
+/// ```rust
+/// use infinity_pool::RawOpaquePool;
+///
+/// fn work_with_displayable<T: std::fmt::Display + 'static + Unpin>(value: T) {
+///     let mut pool = RawOpaquePool::with_layout_of::<T>();
+///
+///     // Insert an object into the pool
+///     let handle = pool.insert(value);
+///
+///     // Access the object through the handle
+///     let stored_value = unsafe { handle.ptr().as_ref() };
+///     println!("Stored: {}", stored_value);
+///
+///     // Explicitly remove the object from the pool
+///     pool.remove_mut(handle);
+/// }
+///
+/// work_with_displayable("Hello, world!");
+/// work_with_displayable(42);
+/// ```
 #[derive(Debug)]
 pub struct RawOpaquePool {
     /// The layout of each slab in the pool, determined based on the object

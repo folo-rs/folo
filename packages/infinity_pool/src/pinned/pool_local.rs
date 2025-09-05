@@ -18,6 +18,22 @@ use crate::{LocalPooledMut, RawOpaquePool, RawOpaquePoolIterator};
 /// # Thread safety
 ///
 /// The pool is single-threaded.
+///
+/// # Example
+///
+/// ```rust
+/// use infinity_pool::LocalPinnedPool;
+///
+/// let mut pool = LocalPinnedPool::<String>::new();
+///
+/// // Insert an object into the pool
+/// let handle = pool.insert("Hello, Local Pinned!".to_string());
+///
+/// // Access the object through the handle
+/// assert_eq!(*handle, "Hello, Local Pinned!");
+///
+/// // The object is automatically removed when the handle is dropped
+/// ```
 pub struct LocalPinnedPool<T: 'static> {
     // We require 'static from any inserted values because the pool
     // does not enforce any Rust lifetime semantics, only reference counts.

@@ -18,6 +18,27 @@ use crate::{LocalPooledMut, RawOpaquePool, RawOpaquePoolIterator};
 /// # Thread safety
 ///
 /// The pool is single-threaded.
+///
+/// # Example
+///
+/// ```rust
+/// use infinity_pool::LocalOpaquePool;
+///
+/// fn work_with_displayable<T: std::fmt::Display + 'static>(value: T) {
+///     let mut pool = LocalOpaquePool::with_layout_of::<T>();
+///
+///     // Insert an object into the pool
+///     let handle = pool.insert(value);
+///
+///     // Access the object through the handle
+///     println!("Stored: {}", &*handle);
+///
+///     // The object is automatically removed when the handle is dropped
+/// }
+///
+/// work_with_displayable("Hello, world!");
+/// work_with_displayable(42);
+/// ```
 #[derive(Debug)]
 pub struct LocalOpaquePool {
     // We require 'static from any inserted values because the pool

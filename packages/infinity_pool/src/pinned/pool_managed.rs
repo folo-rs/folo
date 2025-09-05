@@ -18,6 +18,24 @@ use crate::{
 ///
 /// # Thread safety
 ///
+/// The pool is thread-safe.
+///
+/// # Example
+///
+/// ```rust
+/// use infinity_pool::PinnedPool;
+///
+/// let mut pool = PinnedPool::<String>::new();
+///
+/// // Insert an object into the pool
+/// let handle = pool.insert("Hello, Pinned!".to_string());
+///
+/// // Access the object through the handle
+/// assert_eq!(*handle, "Hello, Pinned!");
+///
+/// // The object is automatically removed when the handle is dropped
+/// ```
+///
 /// The pool is thread-safe (`Send` and `Sync`) and requires `T: Send`.
 pub struct PinnedPool<T: Send + 'static> {
     // We require 'static from any inserted values because the pool

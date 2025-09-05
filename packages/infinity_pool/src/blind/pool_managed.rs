@@ -13,6 +13,27 @@ use crate::{ERR_POISONED_LOCK, PooledMut, RawOpaquePool, RawOpaquePoolSend};
 /// The pool automatically expands its capacity when needed.
 #[doc = include_str!("../../doc/snippets/managed_pool_lifetimes.md")]
 #[doc = include_str!("../../doc/snippets/managed_pool_is_thread_safe.md")]
+///
+/// # Example
+///
+/// ```rust
+/// use infinity_pool::BlindPool;
+///
+/// fn work_with_data(data: impl std::fmt::Display + Send + 'static) {
+///     let mut pool = BlindPool::new();
+///
+///     // Insert an object into the pool (type determined at runtime)
+///     let handle = pool.insert(data.to_string());
+///
+///     // Access the object through the handle
+///     assert_eq!(*handle, data.to_string());
+///
+///     // The object is automatically removed when the handle is dropped
+/// }
+///
+/// work_with_data("Hello, Blind!");
+/// work_with_data(42);
+/// ```
 #[derive(Debug, Default, Clone)]
 pub struct BlindPool {
     // Internal pools, one for each unique memory layout encountered.

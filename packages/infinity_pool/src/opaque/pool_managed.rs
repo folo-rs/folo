@@ -15,6 +15,27 @@ use crate::{ERR_POISONED_LOCK, PooledMut, RawOpaquePool, RawOpaquePoolSend};
 /// The pool automatically expands its capacity when needed.
 #[doc = include_str!("../../doc/snippets/managed_pool_lifetimes.md")]
 #[doc = include_str!("../../doc/snippets/managed_pool_is_thread_safe.md")]
+///
+/// # Example
+///
+/// ```rust
+/// use infinity_pool::OpaquePool;
+///
+/// fn work_with_displayable<T: std::fmt::Display + Send + 'static>(value: T) {
+///     let mut pool = OpaquePool::with_layout_of::<T>();
+///
+///     // Insert an object into the pool
+///     let handle = pool.insert(value);
+///
+///     // Access the object through the handle
+///     println!("Stored: {}", &*handle);
+///
+///     // The object is automatically removed when the handle is dropped
+/// }
+///
+/// work_with_displayable("Hello, world!");
+/// work_with_displayable(42);
+/// ```
 #[derive(Debug)]
 pub struct OpaquePool {
     // We require 'static from any inserted values because the pool

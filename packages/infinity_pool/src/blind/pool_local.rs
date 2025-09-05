@@ -17,6 +17,29 @@ use crate::{LocalPooledMut, RawOpaquePool};
 /// # Thread safety
 ///
 /// The pool is single-threaded.
+///
+/// # Example
+///
+/// ```rust
+/// use infinity_pool::LocalBlindPool;
+///
+/// fn work_with_data(data: impl std::fmt::Display + 'static) {
+///     let mut pool = LocalBlindPool::new();
+///
+///     // Insert an object into the pool (type determined at runtime)
+///     let handle = pool.insert(data.to_string());
+///
+///     // Access the object through the handle
+///     assert_eq!(*handle, data.to_string());
+///
+///     // The object is automatically removed when the handle is dropped
+/// }
+///
+/// work_with_data("Hello, Local Blind!");
+/// work_with_data(42);
+/// ```
+///
+/// The pool is single-threaded.
 #[derive(Debug, Default, Clone)]
 pub struct LocalBlindPool {
     // Internal pools, one for each unique memory layout encountered.

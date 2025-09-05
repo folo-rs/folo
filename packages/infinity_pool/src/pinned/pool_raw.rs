@@ -17,8 +17,26 @@ use crate::{
 /// # Thread safety
 ///
 /// If `T: Send` then the pool is thread-mobile (`Send` but not `Sync`).
-///
+/// 
 /// If `T: !Send`, the pool is single-threaded.
+///
+/// # Example
+///
+/// ```rust
+/// use infinity_pool::RawPinnedPool;
+///
+/// let mut pool = RawPinnedPool::<String>::new();
+///
+/// // Insert an object into the pool
+/// let handle = pool.insert("Hello, Raw Pinned!".to_string());
+///
+/// // Access the object through the handle
+/// let stored_value = unsafe { handle.ptr().as_ref() };
+/// assert_eq!(stored_value, "Hello, Raw Pinned!");
+///
+/// // Explicitly remove the object from the pool
+/// pool.remove_mut(handle);
+/// ```
 pub struct RawPinnedPool<T> {
     /// The underlying pool that manages memory and storage.
     inner: RawOpaquePool,

@@ -11,6 +11,29 @@ use crate::{DropPolicy, RawBlindPoolBuilder, RawBlindPooled, RawBlindPooledMut, 
 ///
 /// The pool automatically expands its capacity when needed.
 #[doc = include_str!("../../doc/snippets/raw_pool_is_potentially_send.md")]
+///
+/// # Example
+///
+/// ```rust
+/// use infinity_pool::RawBlindPool;
+///
+/// fn work_with_displayable<T: std::fmt::Display + Unpin>(value: T) {
+///     let mut pool = RawBlindPool::new();
+///
+///     // Insert an object into the pool (type determined at runtime)
+///     let handle = pool.insert(value);
+///
+///     // Access the object through the handle
+///     let stored_value = unsafe { handle.ptr().as_ref() };
+///     println!("Stored: {}", stored_value);
+///
+///     // Explicitly remove the object from the pool
+///     pool.remove_mut(handle);
+/// }
+///
+/// work_with_displayable("Hello, Raw Blind!");
+/// work_with_displayable(42);
+/// ```
 #[derive(Debug)]
 pub struct RawBlindPool {
     /// Internal pools, one for each unique memory layout encountered.

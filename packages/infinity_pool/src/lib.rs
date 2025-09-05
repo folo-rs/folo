@@ -59,9 +59,14 @@
 //! ```
 //! use infinity_pool::OpaquePool;
 //!
-//! let mut pool = OpaquePool::with_layout_of::<String>();
-//! let handle = pool.insert("Hello, world!".to_string());
-//! assert_eq!(&*handle, "Hello, world!");
+//! fn work_with_displayable<T: std::fmt::Display + Send + 'static>(value: T) {
+//!     let mut pool = OpaquePool::with_layout_of::<T>();
+//!     let handle = pool.insert(value);
+//!     println!("Stored: {}", &*handle);
+//! }
+//!
+//! work_with_displayable("Hello, world!");
+//! work_with_displayable(42);
 //! ```
 //!
 //! ## Blind pool (thread-safe, multiple unnamed types)
