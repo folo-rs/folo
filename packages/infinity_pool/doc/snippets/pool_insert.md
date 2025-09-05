@@ -1,0 +1,1 @@
+Inserts an object into the pool and returns a handle to it.

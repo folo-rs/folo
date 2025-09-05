@@ -1,0 +1,1 @@
+The caller must ensure that the layout of `T` matches the pool's object layout.

@@ -53,6 +53,12 @@ impl RawOpaquePoolBuilder {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::multiple_unsafe_ops_per_block,
+    clippy::undocumented_unsafe_blocks,
+    reason = "tests focus on succinct code and do not need to tick all the boxes"
+)]
 mod tests {
     use static_assertions::assert_not_impl_any;
 
@@ -76,20 +82,17 @@ mod tests {
 
     #[test]
     fn builder_with_layout_creates_functional_pool() {
-        let mut pool = RawOpaquePoolBuilder::new()
-            .layout_of::<u64>()
-            .build();
+        let mut pool = RawOpaquePoolBuilder::new().layout_of::<u64>().build();
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
         assert_eq!(pool.capacity(), 0);
-        
+
         // Test inserting correct type
         let handle = pool.insert(12345_u64);
         assert_eq!(pool.len(), 1);
-        assert_eq!(*handle, 12345);
-        
-        // SAFETY: Handle is valid and from this pool
+        assert_eq!(unsafe { *handle.as_ref() }, 12345);
+
         unsafe {
             pool.remove(handle.into_shared());
         }
@@ -98,16 +101,14 @@ mod tests {
 
     #[test]
     fn builder_with_explicit_layout() {
-        let layout = Layout::new::<f32>();
-        let mut pool = RawOpaquePoolBuilder::new()
-            .layout(layout)
-            .build();
+        let layout = Layout::new::<u32>();
+        let mut pool = RawOpaquePoolBuilder::new().layout(layout).build();
 
         // Verify the layout is respected
-        let handle = pool.insert(1.234_f32);
-        assert!(((*handle) - 1.234_f32).abs() < f32::EPSILON);
-        
-        // SAFETY: Handle is valid and from this pool
+        let handle = pool.insert(1234);
+        assert_eq!(pool.len(), 1);
+        assert_eq!(unsafe { *handle.as_ref() }, 1234);
+
         unsafe {
             pool.remove(handle.into_shared());
         }
@@ -124,9 +125,9 @@ mod tests {
         // Insert items and deliberately DO NOT remove them
         let _handle1 = pool.insert("test1".to_string());
         let _handle2 = pool.insert("test2".to_string());
-        
+
         assert_eq!(pool.len(), 2);
-        
+
         // Pool should be dropped successfully even with items still in it
         // (This is the whole point of MayDropContents policy)
         drop(pool);
@@ -144,7 +145,7 @@ mod tests {
         // Insert an item and deliberately DO NOT remove it
         let _handle = pool.insert(999_i32);
         assert_eq!(pool.len(), 1);
-        
+
         // Pool should panic when dropped with items still in it
         // (This is the whole point of MustNotDropContents policy)
         drop(pool);
@@ -166,17 +167,8 @@ mod tests {
         // Both should work identically
         let handle1 = pool1.insert(100_u32);
         let handle2 = pool2.insert(200_u32);
-        
-        assert_eq!(*handle1, 100);
-        assert_eq!(*handle2, 200);
-        
-        // SAFETY: Handles are valid and from their respective pools
-        unsafe {
-            pool1.remove(handle1.into_shared());
-        }
-        // SAFETY: Handle is valid and from this pool
-        unsafe {
-            pool2.remove(handle2.into_shared());
-        }
+
+        assert_eq!(unsafe { *handle1.as_ref() }, 100);
+        assert_eq!(unsafe { *handle2.as_ref() }, 200);
     }
 }

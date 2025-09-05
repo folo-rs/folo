@@ -1,33 +1,21 @@
 use std::alloc::Layout;
-use std::borrow::Borrow;
 use std::fmt;
-use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::NonNull;
 
 use crate::{RawBlindPooledMut, RawPooled};
 
-/// A shared handle to an object in an object pool.
-///
-/// The handle can be used to access the pooled object, as well as to remove
-/// it from the pool when no longer needed.
-///
-/// This is a raw handle that requires manual lifetime management of the pooled objects.
-/// You must call `remove()` on the pool to drop the object this handle references.
-/// If the handle is dropped without being passed to `remove()`, the object is only removed
-/// from the pool when the pool itself is dropped.
-///
-/// This is a shared handle that only grants shared access to the object. No exclusive
-/// references can be created through this handle.
-///
-/// # Thread safety
-///
-/// The handle provides access to the underlying object, so its thread-safety characteristics
-/// are determined by the type of the object it points to.
-///
-/// If the underlying object is `Sync`, the handle is thread-mobile (`Send`). Otherwise, the
-/// handle is single-threaded (neither `Send` nor `Sync`).
-pub struct RawBlindPooled<T: ?Sized> {
+/// A shared handle to an object in a [`RawBlindPool`][1].
+#[doc = include_str!("../../doc/snippets/raw_handle_implications.md")]
+#[doc = include_str!("../../doc/snippets/shared_handle_implications.md")]
+#[doc = include_str!("../../doc/snippets/shared_raw_handle_implications.md")]
+#[doc = include_str!("../../doc/snippets/raw_handle_thread_safety.md")]
+/// [1]: crate::RawBlindPool
+pub struct RawBlindPooled<T>
+where
+    // We support casting to trait objects, hence `?Sized`.
+    T: ?Sized,
+{
     // We combine the inner RawPooled with a layout that
     // acts as the inner pool key for the RawBlindPool.
     layout: Layout,
@@ -53,17 +41,13 @@ impl<T: ?Sized> RawBlindPooled<T> {
         self.inner
     }
 
-    /// Get a pointer to the object in the pool.
+    #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
     #[must_use]
     pub fn ptr(&self) -> NonNull<T> {
         self.inner.ptr()
     }
 
-    /// Erases the type of the object the pool handle points to.
-    ///
-    /// The returned handle remains functional for most purposes, just without type information.
-    /// A type-erased handle cannot be used to remove the object from the pool and return it to
-    /// the caller, as there is no more knowledge of the type to be returned.
+    #[doc = include_str!("../../doc/snippets/handle_erase.md")]
     #[must_use]
     pub fn erase(self) -> RawBlindPooled<()> {
         RawBlindPooled {
@@ -72,13 +56,23 @@ impl<T: ?Sized> RawBlindPooled<T> {
         }
     }
 
-    /// Borrows the target object as a pinned shared reference.
-    ///
-    /// All pooled objects are guaranteed to be pinned for their entire lifetime.
+    #[doc = include_str!("../../doc/snippets/raw_as_pin.md")]
     #[must_use]
-    pub fn as_pin(&self) -> Pin<&T> {
+    pub unsafe fn as_pin(&self) -> Pin<&T> {
+        // SAFETY: Forwarding safety guarantees from the caller.
+        let as_ref = unsafe { self.as_ref() };
+
         // SAFETY: Pooled items are always pinned.
-        unsafe { Pin::new_unchecked(self) }
+        unsafe { Pin::new_unchecked(as_ref) }
+    }
+
+    #[doc = include_str!("../../doc/snippets/raw_as_ref.md")]
+    #[must_use]
+    pub unsafe fn as_ref(&self) -> &T {
+        // SAFETY: This is a unique handle, so we guarantee borrow safety
+        // of the target object by borrowing the handle itself. Pointer validity
+        // requires pool to be alive, which is a safety requirement of this function.
+        unsafe { self.ptr().as_ref() }
     }
 
     /// Casts this handle to reference the target as a trait object.
@@ -122,28 +116,6 @@ impl<T: ?Sized> fmt::Debug for RawBlindPooled<T> {
             .field("layout", &self.layout)
             .field("inner", &self.inner)
             .finish()
-    }
-}
-
-impl<T: ?Sized> Deref for RawBlindPooled<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        // SAFETY: This is a shared handle - the only references
-        // that can ever exist are shared references.
-        unsafe { self.ptr().as_ref() }
-    }
-}
-
-impl<T: ?Sized> Borrow<T> for RawBlindPooled<T> {
-    fn borrow(&self) -> &T {
-        self
-    }
-}
-
-impl<T: ?Sized> AsRef<T> for RawBlindPooled<T> {
-    fn as_ref(&self) -> &T {
-        self
     }
 }
 

@@ -28,13 +28,13 @@ pub struct RawPinnedPool<T> {
 }
 
 impl<T> RawPinnedPool<T> {
-    /// Starts configuring and creating a new instance of the pool.
+    #[doc = include_str!("../../doc/snippets/pool_builder.md")]
     #[cfg_attr(test, mutants::skip)] // Gets mutated to alternate version of itself.
     pub fn builder() -> RawPinnedPoolBuilder<T> {
         RawPinnedPoolBuilder::new()
     }
 
-    /// Creates a new pool with the default configuration.
+    #[doc = include_str!("../../doc/snippets/pool_new.md")]
     #[must_use]
     pub fn new() -> Self {
         Self::new_inner(DropPolicy::default())
@@ -53,64 +53,44 @@ impl<T> RawPinnedPool<T> {
         }
     }
 
-    /// The number of objects currently in the pool.
+    #[doc = include_str!("../../doc/snippets/pool_len.md")]
     #[must_use]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
-    /// The total capacity of the pool.
-    ///
-    /// This is the maximum number of objects that the pool can contain without capacity extension.
-    /// The pool will automatically extend its capacity if more than this many objects are inserted.
+    #[doc = include_str!("../../doc/snippets/pool_capacity.md")]
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.inner.capacity()
     }
 
-    /// Whether the pool contains zero objects.
+    #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
-    /// Ensures that the pool has capacity for at least `additional` more objects.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the new capacity would exceed the size of virtual memory.
+    #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
     pub fn reserve(&mut self, additional: usize) {
         self.inner.reserve(additional);
     }
 
-    /// Drops unused pool capacity to reduce memory usage.
-    ///
-    /// There is no guarantee that any unused capacity can be dropped. The exact outcome depends
-    /// on the specific pool structure and which objects remain in the pool.
+    #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     pub fn shrink_to_fit(&mut self) {
         self.inner.shrink_to_fit();
     }
 
-    /// Inserts an object into the pool and returns a handle to it.
+    #[doc = include_str!("../../doc/snippets/pool_insert.md")]
     pub fn insert(&mut self, value: T) -> RawPooledMut<T> {
         // SAFETY: match between T and inner pool layout is a type invariant.
         unsafe { self.inner.insert_unchecked(value) }
     }
 
-    /// Inserts an object into the pool via closure and returns a handle to it.
-    ///
-    /// This method allows the caller to partially initialize the object, skipping any `MaybeUninit`
-    /// fields that are intentionally not initialized at insertion time. This can make insertion of
-    /// objects containing `MaybeUninit` fields faster, although requires unsafe code to implement.
-    ///
-    /// This method is NOT faster than `insert()` for fully initialized objects.
-    /// Prefer `insert()` for a better safety posture if you do not intend to
-    /// skip initialization of any `MaybeUninit` fields.
+    #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
     ///
     /// # Safety
-    ///
-    /// The closure must correctly initialize the object. All fields that
-    /// are not `MaybeUninit` must be initialized when the closure returns.
+    #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
     pub unsafe fn insert_with<F>(&mut self, f: F) -> RawPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
@@ -120,25 +100,12 @@ impl<T> RawPinnedPool<T> {
         unsafe { self.inner.insert_with_unchecked(f) }
     }
 
-    /// Removes an object from the pool, dropping it.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the handle does not reference an object in this pool.
+    #[doc = include_str!("../../doc/snippets/raw_pool_remove_mut.md")]
     pub fn remove_mut<P: ?Sized>(&mut self, handle: RawPooledMut<P>) {
         self.inner.remove_mut(handle);
     }
 
-    /// Removes an object from the pool, dropping it.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the handle does not reference an object in this pool.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that the handle belongs to this pool and that the object it
-    /// references has not already been removed from the pool.
+    #[doc = include_str!("../../doc/snippets/raw_pool_remove.md")]
     pub unsafe fn remove<P: ?Sized>(&mut self, handle: RawPooled<P>) {
         // SAFETY: Forwarding safety guarantees from the caller.
         unsafe {
@@ -201,11 +168,7 @@ impl<T> fmt::Debug for RawPinnedPool<T> {
 // SAFETY: RawPinnedPool<T> is Send when T is Send. This is possible because the underlying
 // RawOpaquePool allows us to consider it `Send` when all objects inserted into it are `Send`,
 // which we guarantee via the type parameter T.
-unsafe impl<T> Send for RawPinnedPool<T>
-where
-    T: Send,
-{
-}
+unsafe impl<T> Send for RawPinnedPool<T> where T: Send {}
 
 /// Iterator over all objects in a [`RawPinnedPool`].
 ///
@@ -271,6 +234,12 @@ impl<'p, T> IntoIterator for &'p RawPinnedPool<T> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::multiple_unsafe_ops_per_block,
+    clippy::undocumented_unsafe_blocks,
+    reason = "tests focus on succinct code and do not need to tick all the boxes"
+)]
 mod tests {
     use std::mem::MaybeUninit;
     use std::rc::Rc;
@@ -385,7 +354,7 @@ mod tests {
         };
 
         assert_eq!(pool.len(), 1);
-        assert_eq!(*handle, 42);
+        assert_eq!(unsafe { *handle.as_ref() }, 42);
     }
 
     #[test]
@@ -413,7 +382,6 @@ mod tests {
 
         assert_eq!(pool.len(), 1);
 
-        // SAFETY: Handle is from this pool and has not yet been used to remove.
         unsafe {
             pool.remove(handle);
         }
@@ -451,12 +419,11 @@ mod tests {
 
         let handle = pool.insert(12345_u64);
 
-        assert_eq!(*handle, 12345);
+        assert_eq!(unsafe { *handle.as_ref() }, 12345);
 
         // Verify we can get a pointer to the object
         let ptr = handle.ptr();
 
-        // SAFETY: Handle is valid and points to a u64
         let value = unsafe { ptr.as_ref() };
 
         assert_eq!(*value, 12345);
@@ -473,7 +440,7 @@ mod tests {
         let handle2 = pool.insert(2_usize);
 
         assert_eq!(pool.len(), 1);
-        assert_eq!(*handle2, 2);
+        assert_eq!(unsafe { *handle2.as_ref() }, 2);
 
         pool.remove_mut(handle2);
         assert!(pool.is_empty());
@@ -498,7 +465,6 @@ mod tests {
 
         assert_eq!(pool.len(), 1);
 
-        // SAFETY: Handle is from this pool and has not yet been used to remove.
         let value = unsafe { pool.remove_unpin(handle) };
 
         assert_eq!(value, 42);
@@ -526,7 +492,6 @@ mod tests {
         assert_eq!(iter.size_hint(), (1, Some(1)));
 
         let ptr = iter.next().expect("should have one item");
-        // SAFETY: We know this points to a valid i32 from our insertion
         let value = unsafe { ptr.as_ref() };
         assert_eq!(*value, 42);
 
@@ -543,10 +508,7 @@ mod tests {
         let iter = pool.iter();
         assert_eq!(iter.len(), 5);
 
-        let collected_values: Vec<u8> = iter
-            // SAFETY: All pointers are valid u8 values from our insertions above
-            .map(|ptr| unsafe { *ptr.as_ref() })
-            .collect();
+        let collected_values: Vec<u8> = iter.map(|ptr| unsafe { *ptr.as_ref() }).collect();
 
         // The iteration order may not match insertion order, so we just verify the count and contents
         assert_eq!(collected_values.len(), 5);

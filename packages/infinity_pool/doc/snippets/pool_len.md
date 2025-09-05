@@ -1,0 +1,1 @@
+The number of objects currently in the pool.

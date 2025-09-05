@@ -43,6 +43,12 @@ impl<T> Default for RawPinnedPoolBuilder<T> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::multiple_unsafe_ops_per_block,
+    clippy::undocumented_unsafe_blocks,
+    reason = "tests focus on succinct code and do not need to tick all the boxes"
+)]
 mod tests {
     use static_assertions::assert_not_impl_any;
 
@@ -60,7 +66,7 @@ mod tests {
         // Insert an item and deliberately DO NOT remove it
         let _handle = pool.insert("test string".to_string());
         assert_eq!(pool.len(), 1);
-        
+
         // Pool should be dropped successfully even with items still in it
         // (This is the whole point of MayDropContents policy)
         drop(pool);
@@ -77,7 +83,7 @@ mod tests {
         // Insert an item and deliberately DO NOT remove it
         let _handle = pool.insert(9999_i64);
         assert_eq!(pool.len(), 1);
-        
+
         // Pool should panic when dropped with items still in it
         // (This is the whole point of MustNotDropContents policy)
         drop(pool);
@@ -90,10 +96,10 @@ mod tests {
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
         assert_eq!(pool.capacity(), 0);
-        
+
         // Verify it's functional
         let handle = pool.insert(123_u32);
-        assert_eq!(*handle, 123);
+        assert_eq!(unsafe { *handle.as_ref() }, 123);
         // SAFETY: Handle is valid and from this pool
         unsafe {
             pool.remove(handle.into_shared());
@@ -102,16 +108,16 @@ mod tests {
 
     #[test]
     fn builder_via_pool_static_method() {
-        let mut pool = RawPinnedPool::<f64>::builder().build();
+        let mut pool = RawPinnedPool::<u64>::builder().build();
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
         assert_eq!(pool.capacity(), 0);
-        
+
         // Test functionality
-        let handle = pool.insert(42.0_f64);
-        assert!(((*handle) - 42.0).abs() < f64::EPSILON);
-        // SAFETY: Handle is valid and from this pool
+        let handle = pool.insert(64);
+        assert_eq!(unsafe { *handle.as_ref() }, 64);
+
         unsafe {
             pool.remove(handle.into_shared());
         }
