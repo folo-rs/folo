@@ -93,6 +93,32 @@ impl<T: ?Sized> RawPooledMut<T> {
         // SAFETY: Pooled items are always pinned.
         unsafe { Pin::new_unchecked(as_mut) }
     }
+
+    /// Casts this handle to reference the target as a trait object.
+    ///
+    /// This method is only intended for use by the [`define_pooled_dyn_cast!`] macro
+    /// for type-safe casting operations.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the provided closure's input and output references
+    /// point to the same object.
+    #[doc(hidden)]
+    #[must_use]
+    pub unsafe fn __private_cast_dyn_with_fn<U: ?Sized, F>(self, cast_fn: F) -> RawPooledMut<U>
+    where
+        F: FnOnce(&mut T) -> &mut U,
+    {
+        // SAFETY: Forwarding callback safety guarantees from the caller.
+        // We are an exclusive handle, so we always have the right to create
+        // exclusive references to the target of the handle, satisfying that requirement.
+        let new_handle = unsafe { self.slab_handle.cast_with_mut(cast_fn) };
+
+        RawPooledMut {
+            slab_index: self.slab_index,
+            slab_handle: new_handle,
+        }
+    }
 }
 
 impl<T: ?Sized> fmt::Debug for RawPooledMut<T> {

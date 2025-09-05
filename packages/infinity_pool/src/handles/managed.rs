@@ -78,6 +78,32 @@ impl<T: ?Sized> Pooled<T> {
         // SAFETY: Pooled items are always pinned.
         unsafe { Pin::new_unchecked(self) }
     }
+
+    /// Casts this handle to reference the target as a trait object.
+    ///
+    /// This method is only intended for use by the [`define_pooled_dyn_cast!`] macro
+    /// for type-safe casting operations.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the provided closure's input and output references
+    /// point to the same object.
+    #[doc(hidden)]
+    #[must_use]
+    pub unsafe fn __private_cast_dyn_with_fn<U: ?Sized, F>(self, cast_fn: F) -> Pooled<U>
+    where
+        F: FnOnce(&T) -> &U,
+    {
+        // SAFETY: Forwarding callback safety guarantees from the caller.
+        // We are a shared handle, so we always have the right to create
+        // shared references to the target of the handle, satisfying that requirement.
+        let new_inner = unsafe { self.inner.__private_cast_dyn_with_fn(cast_fn) };
+
+        Pooled {
+            inner: new_inner,
+            remover: self.remover,
+        }
+    }
 }
 
 impl<T: ?Sized> fmt::Debug for Pooled<T> {

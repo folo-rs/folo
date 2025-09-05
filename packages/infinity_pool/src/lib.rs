@@ -1,3 +1,8 @@
+//! Infinity Pool: Advanced object pool implementations with flexible memory management.
+//!
+//! This crate provides several types of object pools designed for different use cases,
+//! from basic pooling to advanced memory layouts with custom drop policies.
+
 mod blind;
 mod builders;
 mod cast;
