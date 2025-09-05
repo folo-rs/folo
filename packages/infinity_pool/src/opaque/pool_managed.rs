@@ -127,6 +127,36 @@ impl OpaquePool {
 
     #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
     ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::mem::MaybeUninit;
+    /// use infinity_pool::OpaquePool;
+    ///
+    /// struct DataBuffer {
+    ///     id: u32,
+    ///     data: MaybeUninit<[u8; 1024]>, // Large buffer to skip initializing
+    /// }
+    ///
+    /// let mut pool = OpaquePool::with_layout_of::<DataBuffer>();
+    ///
+    /// // Initialize only the id, leaving data uninitialized for performance
+    /// let handle = unsafe {
+    ///     pool.insert_with(|uninit: &mut MaybeUninit<DataBuffer>| {
+    ///         let ptr = uninit.as_mut_ptr();
+    ///         // SAFETY: Writing to the id field within allocated space
+    ///         unsafe {
+    ///             std::ptr::addr_of_mut!((*ptr).id).write(42);
+    ///             // data field is intentionally left uninitialized
+    ///         }
+    ///     })
+    /// };
+    ///
+    /// // ID is accessible, data remains uninitialized
+    /// let id = unsafe { std::ptr::addr_of!((*handle).id).read() };
+    /// assert_eq!(id, 42);
+    /// ```
+    ///
     /// # Panics
     #[doc = include_str!("../../doc/snippets/panic_on_pool_t_layout_mismatch.md")]
     ///
@@ -144,6 +174,36 @@ impl OpaquePool {
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::mem::MaybeUninit;
+    /// use infinity_pool::OpaquePool;
+    ///
+    /// struct DataBuffer {
+    ///     id: u32,
+    ///     data: MaybeUninit<[u8; 1024]>, // Large buffer to skip initializing
+    /// }
+    ///
+    /// let mut pool = OpaquePool::with_layout_of::<DataBuffer>();
+    ///
+    /// // Initialize only the id, leaving data uninitialized for performance
+    /// let handle = unsafe {
+    ///     pool.insert_with_unchecked(|uninit: &mut MaybeUninit<DataBuffer>| {
+    ///         let ptr = uninit.as_mut_ptr();
+    ///         // SAFETY: Writing to the id field within allocated space
+    ///         unsafe {
+    ///             std::ptr::addr_of_mut!((*ptr).id).write(42);
+    ///             // data field is intentionally left uninitialized
+    ///         }
+    ///     })
+    /// };
+    ///
+    /// // ID is accessible, data remains uninitialized
+    /// let id = unsafe { std::ptr::addr_of!((*handle).id).read() };
+    /// assert_eq!(id, 42);
+    /// ```
     ///
     /// # Safety
     #[doc = include_str!("../../doc/snippets/safety_pool_t_layout_must_match.md")]
