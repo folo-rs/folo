@@ -64,7 +64,7 @@ impl LocalBlindPool {
             .unwrap_or_default()
     }
 
-    #[must_use]
+    #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0

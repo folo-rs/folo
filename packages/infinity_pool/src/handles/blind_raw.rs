@@ -5,12 +5,11 @@ use std::ptr::NonNull;
 
 use crate::{RawBlindPooledMut, RawPooled};
 
-/// A shared handle to an object in a [`RawBlindPool`][1].
+/// A shared handle to an object in a [`RawBlindPool`][crate::RawBlindPool].
 #[doc = include_str!("../../doc/snippets/raw_handle_implications.md")]
 #[doc = include_str!("../../doc/snippets/shared_handle_implications.md")]
 #[doc = include_str!("../../doc/snippets/shared_raw_handle_implications.md")]
 #[doc = include_str!("../../doc/snippets/nonlocal_handle_thread_safety.md")]
-/// [1]: crate::RawBlindPool
 pub struct RawBlindPooled<T>
 where
     // We support casting to trait objects, hence `?Sized`.
