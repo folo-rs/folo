@@ -10,8 +10,6 @@ use crate::{DropPolicy, RawBlindPoolBuilder, RawBlindPooled, RawBlindPooledMut, 
 /// All values in the pool remain pinned for their entire lifetime.
 ///
 /// The pool automatically expands its capacity when needed.
-///
-/// # Thread safety
 #[doc = include_str!("../../doc/snippets/raw_pool_is_potentially_send.md")]
 #[derive(Debug)]
 pub struct RawBlindPool {

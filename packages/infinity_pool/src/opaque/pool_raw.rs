@@ -15,8 +15,6 @@ use crate::{DropPolicy, RawOpaquePoolBuilder, RawPooled, RawPooledMut, Slab, Sla
 /// time. All values in the pool remain pinned for their entire lifetime.
 ///
 /// The pool automatically expands its capacity when needed.
-///
-/// # Thread safety
 #[doc = include_str!("../../doc/snippets/raw_pool_is_potentially_send.md")]
 #[derive(Debug)]
 pub struct RawOpaquePool {
@@ -92,7 +90,7 @@ impl RawOpaquePool {
         }
     }
 
-    /// The layout of objects stored in this pool.
+    #[doc = include_str!("../../doc/snippets/opaque_pool_layout.md")]
     #[must_use]
     pub fn object_layout(&self) -> Layout {
         self.slab_layout.object_layout()
@@ -579,11 +577,11 @@ mod tests {
     #[test]
     fn instance_creation_through_builder_succeeds() {
         let pool = RawOpaquePool::builder()
-            .layout_of::<f64>()
+            .layout_of::<i64>()
             .drop_policy(DropPolicy::MustNotDropContents)
             .build();
 
-        assert_eq!(pool.object_layout(), Layout::new::<f64>());
+        assert_eq!(pool.object_layout(), Layout::new::<i64>());
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
         assert_eq!(pool.capacity(), 0);

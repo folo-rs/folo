@@ -1,26 +1,19 @@
 use std::cell::RefCell;
 use std::fmt;
 use std::iter::FusedIterator;
+use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
 use crate::{LocalPooledMut, RawOpaquePool, RawOpaquePoolIterator};
 
-/// A pool of reference-counted objects of type `T`.
+/// A single-threaded pool of reference-counted objects of type `T`.
 ///
 /// All values in the pool remain pinned for their entire lifetime.
 ///
 /// The pool automatically expands its capacity when needed.
-///
-/// # Lifetime management
-///
-/// The pool type itself acts as a handle - any clones of it are functionally equivalent,
-/// similar to `Rc`.
-///
-/// When inserting an object into the pool, a handle to the object is returned.
-/// The object is removed from the pool when the last remaining handle to the object
-/// is dropped (`Rc`-like behavior).
+#[doc = include_str!("../../doc/snippets/local_pool_lifetimes.md")]
 ///
 /// # Thread safety
 ///
@@ -39,7 +32,8 @@ pub struct LocalPinnedPool<T: 'static> {
     // contents (as dropping the handles of pooled objects will remove
     // them from the pool, while keeping the pool alive until then).
     inner: Rc<RefCell<RawOpaquePool>>,
-    _phantom: std::marker::PhantomData<T>,
+
+    _phantom: PhantomData<T>,
 }
 
 impl<T> LocalPinnedPool<T>
@@ -53,69 +47,49 @@ where
 
         Self {
             inner: Rc::new(RefCell::new(inner)),
-            _phantom: std::marker::PhantomData,
+            _phantom: PhantomData,
         }
     }
 
-    /// The number of objects currently in the pool.
+    #[doc = include_str!("../../doc/snippets/pool_len.md")]
     #[must_use]
     pub fn len(&self) -> usize {
         self.inner.borrow().len()
     }
 
-    /// The total capacity of the pool.
-    ///
-    /// This is the maximum number of objects that the pool can contain without capacity extension.
-    /// The pool will automatically extend its capacity if more than this many objects are inserted.
+    #[doc = include_str!("../../doc/snippets/pool_capacity.md")]
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.inner.borrow().capacity()
     }
 
-    /// Whether the pool contains zero objects.
+    #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.inner.borrow().is_empty()
     }
 
-    /// Ensures that the pool has capacity for at least `additional` more objects.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the new capacity would exceed the size of virtual memory.
+    #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
     pub fn reserve(&mut self, additional: usize) {
         self.inner.borrow_mut().reserve(additional);
     }
 
-    /// Drops unused pool capacity to reduce memory usage.
-    ///
-    /// There is no guarantee that any unused capacity can be dropped. The exact outcome depends
-    /// on the specific pool structure and which objects remain in the pool.
+    #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     pub fn shrink_to_fit(&mut self) {
         self.inner.borrow_mut().shrink_to_fit();
     }
 
-    /// Inserts an object into the pool and returns a handle to it.
+    #[doc = include_str!("../../doc/snippets/pool_insert.md")]
     pub fn insert(&mut self, value: T) -> LocalPooledMut<T> {
         let inner = self.inner.borrow_mut().insert(value);
 
         LocalPooledMut::new(inner, Rc::clone(&self.inner))
     }
 
-    /// Inserts an object into the pool via closure and returns a handle to it.
-    ///
-    /// This method allows the caller to partially initialize the object, skipping any `MaybeUninit`
-    /// fields that are intentionally not initialized at insertion time. This can make insertion of
-    /// objects containing `MaybeUninit` fields faster, although requires unsafe code to implement.
-    ///
-    /// This method is NOT faster than `insert()` for fully initialized objects.
-    /// Prefer `insert()` for a better safety posture if you do not intend to
-    /// skip initialization of any `MaybeUninit` fields.
+    #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
     ///
     /// # Safety
-    ///
-    /// The closure must correctly initialize the object. All fields that
-    /// are not `MaybeUninit` must be initialized when the closure returns.
+    #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
     pub unsafe fn insert_with<F>(&mut self, f: F) -> LocalPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
@@ -177,7 +151,7 @@ impl<T> Clone for LocalPinnedPool<T> {
     fn clone(&self) -> Self {
         Self {
             inner: Rc::clone(&self.inner),
-            _phantom: std::marker::PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
@@ -208,14 +182,14 @@ impl<T> fmt::Debug for LocalPinnedPool<T> {
 #[derive(Debug)]
 pub struct LocalPinnedPoolIterator<'p, T: 'static> {
     raw_iter: RawOpaquePoolIterator<'p>,
-    _phantom: std::marker::PhantomData<T>,
+    _phantom: PhantomData<T>,
 }
 
 impl<'p, T> LocalPinnedPoolIterator<'p, T> {
     fn new(pool: &'p RawOpaquePool) -> Self {
         Self {
             raw_iter: pool.iter(),
-            _phantom: std::marker::PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
@@ -248,8 +222,9 @@ impl<T> FusedIterator for LocalPinnedPoolIterator<'_, T> {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::mem::MaybeUninit;
+
+    use super::*;
 
     #[test]
     fn new_pool_is_empty() {
@@ -410,15 +385,15 @@ mod tests {
         assert_eq!(pool.len(), 1);
         drop(exclusive_handle);
         assert_eq!(pool.len(), 0);
-        
+
         // Test shared handle drop
         let mut_handle = pool.insert("shared".to_string());
         let shared_handle = mut_handle.into_shared();
         assert_eq!(pool.len(), 1);
-        
+
         // Verify shared handle works
         assert_eq!(&*shared_handle, "shared");
-        
+
         // Drop the shared handle should remove from pool
         drop(shared_handle);
         assert_eq!(pool.len(), 0);
@@ -664,8 +639,8 @@ mod tests {
         unsafe impl Sync for NonSendType {}
 
         // LocalPinnedPool should work with non-Send types since it's single-threaded
-        use std::rc::Rc;
         use std::cell::RefCell;
+        use std::rc::Rc;
 
         // Test with Rc (not Send)
         let mut rc_pool = LocalPinnedPool::<Rc<String>>::new();

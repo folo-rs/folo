@@ -12,15 +12,7 @@ use crate::{LocalPooledMut, RawOpaquePool};
 /// All values in the pool remain pinned for their entire lifetime.
 ///
 /// The pool automatically expands its capacity when needed.
-///
-/// # Lifetime management
-///
-/// The pool type itself acts as a handle - any clones of it are functionally equivalent,
-/// similar to `Rc`.
-///
-/// When inserting an object into the pool, a handle to the object is returned.
-/// The object is removed from the pool when the last remaining handle to the object
-/// is dropped (`Rc`-like behavior).
+#[doc = include_str!("../../doc/snippets/local_pool_lifetimes.md")]
 ///
 /// # Thread safety
 ///
@@ -45,13 +37,13 @@ pub struct LocalBlindPool {
 }
 
 impl LocalBlindPool {
-    /// Creates a new instance of the pool.
+    #[doc = include_str!("../../doc/snippets/pool_new.md")]
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// The number of objects currently in the pool.
+    #[doc = include_str!("../../doc/snippets/pool_len.md")]
     #[must_use]
     pub fn len(&self) -> usize {
         let pools = self.pools.borrow();
@@ -59,12 +51,7 @@ impl LocalBlindPool {
         pools.values().map(|pool| pool.borrow().len()).sum()
     }
 
-    /// The total capacity of the pool for objects of type `T`.
-    ///
-    /// This is the maximum number of objects of this type that the pool can contain without
-    /// capacity extension. The pool will automatically extend its capacity if more than
-    /// this many objects of type `T` are inserted. Capacity may be shared between different
-    /// types of objects.
+    #[doc = include_str!("../../doc/snippets/blind_pool_capacity.md")]
     #[must_use]
     pub fn capacity_for<T: 'static>(&self) -> usize {
         let layout = Layout::new::<T>();
@@ -77,17 +64,13 @@ impl LocalBlindPool {
             .unwrap_or_default()
     }
 
-    /// Whether the pool contains zero objects.
+    #[must_use]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Ensures that the pool has capacity for at least `additional` more objects of type `T`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the new capacity would exceed the size of virtual memory.
+    #[doc = include_str!("../../doc/snippets/blind_pool_reserve.md")]
     pub fn reserve_for<T: 'static>(&mut self, additional: usize) {
         let mut pools = self.pools.borrow_mut();
 
@@ -96,10 +79,7 @@ impl LocalBlindPool {
         pool.borrow_mut().reserve(additional);
     }
 
-    /// Drops unused pool capacity to reduce memory usage.
-    ///
-    /// There is no guarantee that any unused capacity can be dropped. The exact outcome depends
-    /// on the specific pool structure and which objects remain in the pool.
+    #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     pub fn shrink_to_fit(&mut self) {
         let mut pools = self.pools.borrow_mut();
 
@@ -108,7 +88,7 @@ impl LocalBlindPool {
         }
     }
 
-    /// Inserts an object into the pool and returns a handle to it.
+    #[doc = include_str!("../../doc/snippets/pool_insert.md")]
     pub fn insert<T: 'static>(&mut self, value: T) -> LocalPooledMut<T> {
         let mut pools = self.pools.borrow_mut();
 
@@ -120,20 +100,10 @@ impl LocalBlindPool {
         LocalPooledMut::new(inner_handle, Rc::clone(pool))
     }
 
-    /// Inserts an object into the pool via closure and returns a handle to it.
-    ///
-    /// This method allows the caller to partially initialize the object, skipping any `MaybeUninit`
-    /// fields that are intentionally not initialized at insertion time. This can make insertion of
-    /// objects containing `MaybeUninit` fields faster, although requires unsafe code to implement.
-    ///
-    /// This method is NOT faster than `insert()` for fully initialized objects.
-    /// Prefer `insert()` for a better safety posture if you do not intend to
-    /// skip initialization of any `MaybeUninit` fields.
+    #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
     ///
     /// # Safety
-    ///
-    /// The closure must correctly initialize the object. All fields that
-    /// are not `MaybeUninit` must be initialized when the closure returns.
+    #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
     pub unsafe fn insert_with<T, F>(&mut self, f: F) -> LocalPooledMut<T>
     where
         T: 'static,
@@ -433,8 +403,8 @@ mod tests {
         unsafe impl Sync for NonSendType {}
 
         // LocalBlindPool should work with non-Send types since it's single-threaded
-        use std::rc::Rc;
         use std::cell::RefCell;
+        use std::rc::Rc;
 
         let mut pool = LocalBlindPool::new();
 

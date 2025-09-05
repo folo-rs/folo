@@ -7,21 +7,13 @@ use std::rc::Rc;
 
 use crate::{LocalPooledMut, RawOpaquePool, RawOpaquePoolIterator};
 
-/// A pool of reference-counted objects with uniform memory layout.
+/// A single-threaded pool of reference-counted objects with uniform memory layout.
 ///
 /// Stores objects of any type that match a [`Layout`] defined at pool creation
 /// time. All values in the pool remain pinned for their entire lifetime.
 ///
 /// The pool automatically expands its capacity when needed.
-///
-/// # Lifetime management
-///
-/// The pool type itself acts as a handle - any clones of it are functionally equivalent,
-/// similar to `Rc`.
-///
-/// When inserting an object into the pool, a handle to the object is returned.
-/// The object is removed from the pool when the last remaining handle to the object
-/// is dropped (`Rc`-like behavior).
+#[doc = include_str!("../../doc/snippets/local_pool_lifetimes.md")]
 ///
 /// # Thread safety
 ///
@@ -72,66 +64,52 @@ impl LocalOpaquePool {
         Self::with_layout(Layout::new::<T>())
     }
 
-    /// The layout of objects stored in this pool.
+    #[doc = include_str!("../../doc/snippets/opaque_pool_layout.md")]
     #[must_use]
     pub fn object_layout(&self) -> Layout {
         self.inner.borrow().object_layout()
     }
 
-    /// The number of objects currently in the pool.
+    #[doc = include_str!("../../doc/snippets/pool_len.md")]
     #[must_use]
     pub fn len(&self) -> usize {
         self.inner.borrow().len()
     }
 
-    /// The total capacity of the pool.
-    ///
-    /// This is the maximum number of objects that the pool can contain without capacity extension.
-    /// The pool will automatically extend its capacity if more than this many objects are inserted.
+    #[doc = include_str!("../../doc/snippets/pool_capacity.md")]
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.inner.borrow().capacity()
     }
 
-    /// Whether the pool contains zero objects.
+    #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.inner.borrow().is_empty()
     }
 
-    /// Ensures that the pool has capacity for at least `additional` more objects.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the new capacity would exceed the size of virtual memory.
+    #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
     pub fn reserve(&mut self, additional: usize) {
         self.inner.borrow_mut().reserve(additional);
     }
 
-    /// Drops unused pool capacity to reduce memory usage.
-    ///
-    /// There is no guarantee that any unused capacity can be dropped. The exact outcome depends
-    /// on the specific pool structure and which objects remain in the pool.
+    #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     pub fn shrink_to_fit(&mut self) {
         self.inner.borrow_mut().shrink_to_fit();
     }
 
-    /// Inserts an object into the pool and returns a handle to it.
-    ///
+    #[doc = include_str!("../../doc/snippets/pool_insert.md")]
     /// # Panics
-    ///
-    /// Panics if the layout of `T` does not match the object layout of the pool.
+    #[doc = include_str!("../../doc/snippets/panic_on_pool_t_layout_mismatch.md")]
     pub fn insert<T: 'static>(&mut self, value: T) -> LocalPooledMut<T> {
         let inner = self.inner.borrow_mut().insert(value);
 
         LocalPooledMut::new(inner, Rc::clone(&self.inner))
     }
 
-    /// Inserts an object into the pool and returns a handle to it.
-    ///
+    #[doc = include_str!("../../doc/snippets/pool_insert.md")]
     /// # Safety
-    ///
-    /// The caller must ensure that the layout of `T` matches the pool's object layout.
+    #[doc = include_str!("../../doc/snippets/safety_pool_t_layout_must_match.md")]
     pub unsafe fn insert_unchecked<T: 'static>(&mut self, value: T) -> LocalPooledMut<T> {
         // SAFETY: Forwarding safety guarantees from caller.
         let inner = unsafe { self.inner.borrow_mut().insert_unchecked(value) };
@@ -139,24 +117,13 @@ impl LocalOpaquePool {
         LocalPooledMut::new(inner, Rc::clone(&self.inner))
     }
 
-    /// Inserts an object into the pool via closure and returns a handle to it.
-    ///
-    /// This method allows the caller to partially initialize the object, skipping any `MaybeUninit`
-    /// fields that are intentionally not initialized at insertion time. This can make insertion of
-    /// objects containing `MaybeUninit` fields faster, although requires unsafe code to implement.
-    ///
-    /// This method is NOT faster than `insert()` for fully initialized objects.
-    /// Prefer `insert()` for a better safety posture if you do not intend to
-    /// skip initialization of any `MaybeUninit` fields.
+    #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
     ///
     /// # Panics
-    ///
-    /// Panics if the layout of `T` does not match the object layout of the pool.
+    #[doc = include_str!("../../doc/snippets/panic_on_pool_t_layout_mismatch.md")]
     ///
     /// # Safety
-    ///
-    /// The closure must correctly initialize the object. All fields that
-    /// are not `MaybeUninit` must be initialized when the closure returns.
+    #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
     pub unsafe fn insert_with<T, F>(&mut self, f: F) -> LocalPooledMut<T>
     where
         T: 'static,
@@ -168,22 +135,11 @@ impl LocalOpaquePool {
         LocalPooledMut::new(inner, Rc::clone(&self.inner))
     }
 
-    /// Inserts an object into the pool via closure and returns a handle to it.
-    ///
-    /// This method allows the caller to partially initialize the object, skipping any `MaybeUninit`
-    /// fields that are intentionally not initialized at insertion time. This can make insertion of
-    /// objects containing `MaybeUninit` fields faster, although requires unsafe code to implement.
-    ///
-    /// This method is NOT faster than `insert_unchecked()` for fully initialized objects.
-    /// Prefer `insert_unchecked()` for a better safety posture if you do not intend to
-    /// skip initialization of any `MaybeUninit` fields.
+    #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
     ///
     /// # Safety
-    ///
-    /// The caller must ensure that the layout of `T` matches the pool's object layout.
-    ///
-    /// The closure must correctly initialize the object. All fields that
-    /// are not `MaybeUninit` must be initialized when the closure returns.
+    #[doc = include_str!("../../doc/snippets/safety_pool_t_layout_must_match.md")]
+    #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
     pub unsafe fn insert_with_unchecked<T, F>(&mut self, f: F) -> LocalPooledMut<T>
     where
         T: 'static,
@@ -479,15 +435,15 @@ mod tests {
         assert_eq!(pool.len(), 1);
         drop(exclusive_handle);
         assert_eq!(pool.len(), 0);
-        
+
         // Test shared handle drop
         let mut_handle = pool.insert("shared".to_string());
         let shared_handle = mut_handle.into_shared();
         assert_eq!(pool.len(), 1);
-        
+
         // Verify shared handle works
         assert_eq!(&*shared_handle, "shared");
-        
+
         // Drop the shared handle should remove from pool
         drop(shared_handle);
         assert_eq!(pool.len(), 0);
@@ -942,8 +898,8 @@ mod tests {
         unsafe impl Sync for NonSendType {}
 
         // LocalOpaquePool should work with non-Send types since it's single-threaded
-        use std::rc::Rc;
         use std::cell::RefCell;
+        use std::rc::Rc;
 
         let mut pool = LocalOpaquePool::with_layout_of::<Rc<String>>();
 
