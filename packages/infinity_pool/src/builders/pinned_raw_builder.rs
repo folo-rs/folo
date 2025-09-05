@@ -52,41 +52,35 @@ mod tests {
 
     #[test]
     fn builder_with_drop_policy() {
+        // Test that MayDropContents allows pool to be dropped with items still in it
         let mut pool = RawPinnedPoolBuilder::<String>::new()
             .drop_policy(DropPolicy::MayDropContents)
             .build();
 
-        assert_eq!(pool.len(), 0);
-        assert!(pool.is_empty());
-        assert_eq!(pool.capacity(), 0);
-        
-        // Test with actual data
-        let handle = pool.insert("test string".to_string());
+        // Insert an item and deliberately DO NOT remove it
+        let _handle = pool.insert("test string".to_string());
         assert_eq!(pool.len(), 1);
-        assert_eq!(&*handle, "test string");
         
-        // SAFETY: Handle is valid and from this pool
-        unsafe {
-            pool.remove(handle.into_shared());
-        }
-        assert_eq!(pool.len(), 0);
+        // Pool should be dropped successfully even with items still in it
+        // (This is the whole point of MayDropContents policy)
+        drop(pool);
     }
 
     #[test]
+    #[should_panic(expected = "dropped a non-empty slab")]
     fn builder_with_must_not_drop_contents_policy() {
+        // Test that MustNotDropContents panics when pool is dropped with items
         let mut pool = RawPinnedPoolBuilder::<i64>::new()
             .drop_policy(DropPolicy::MustNotDropContents)
             .build();
 
-        let handle = pool.insert(9999_i64);
-        assert_eq!(*handle, 9999);
+        // Insert an item and deliberately DO NOT remove it
+        let _handle = pool.insert(9999_i64);
+        assert_eq!(pool.len(), 1);
         
-        // Clean up to avoid panic on drop
-        // SAFETY: Handle is valid and from this pool
-        unsafe {
-            pool.remove(handle.into_shared());
-        }
-        assert_eq!(pool.len(), 0);
+        // Pool should panic when dropped with items still in it
+        // (This is the whole point of MustNotDropContents policy)
+        drop(pool);
     }
 
     #[test]

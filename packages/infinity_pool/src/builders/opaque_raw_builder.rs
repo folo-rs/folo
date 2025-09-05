@@ -115,50 +115,39 @@ mod tests {
 
     #[test]
     fn builder_with_may_drop_contents_policy() {
+        // Test that MayDropContents allows pool to be dropped with items still in it
         let mut pool = RawOpaquePoolBuilder::new()
             .layout_of::<String>()
             .drop_policy(DropPolicy::MayDropContents)
             .build();
 
-        // Insert items to test drop behavior
-        let handle1 = pool.insert("test1".to_string());
-        let handle2 = pool.insert("test2".to_string());
+        // Insert items and deliberately DO NOT remove them
+        let _handle1 = pool.insert("test1".to_string());
+        let _handle2 = pool.insert("test2".to_string());
         
         assert_eq!(pool.len(), 2);
-        assert_eq!(&*handle1, "test1");
-        assert_eq!(&*handle2, "test2");
         
-        // Remove items explicitly
-        // SAFETY: Handles are valid and from this pool
-        unsafe {
-            pool.remove(handle1.into_shared());
-        }
-        // SAFETY: Handle is valid and from this pool
-        unsafe {
-            pool.remove(handle2.into_shared());
-        }
-        
-        assert_eq!(pool.len(), 0);
-        assert!(pool.is_empty());
+        // Pool should be dropped successfully even with items still in it
+        // (This is the whole point of MayDropContents policy)
+        drop(pool);
     }
 
     #[test]
+    #[should_panic(expected = "dropped a non-empty slab")]
     fn builder_with_must_not_drop_contents_policy() {
+        // Test that MustNotDropContents panics when pool is dropped with items
         let mut pool = RawOpaquePoolBuilder::new()
             .layout_of::<i32>()
             .drop_policy(DropPolicy::MustNotDropContents)
             .build();
 
-        let handle = pool.insert(999_i32);
+        // Insert an item and deliberately DO NOT remove it
+        let _handle = pool.insert(999_i32);
         assert_eq!(pool.len(), 1);
-        assert_eq!(*handle, 999);
         
-        // Clean up to avoid panic on drop
-        // SAFETY: Handle is valid and from this pool
-        unsafe {
-            pool.remove(handle.into_shared());
-        }
-        assert_eq!(pool.len(), 0);
+        // Pool should panic when dropped with items still in it
+        // (This is the whole point of MustNotDropContents policy)
+        drop(pool);
     }
 
     #[test]
