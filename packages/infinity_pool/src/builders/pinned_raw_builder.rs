@@ -51,40 +51,75 @@ mod tests {
     assert_not_impl_any!(RawPinnedPoolBuilder<i32>: Send, Sync);
 
     #[test]
-    fn builder_creates_functional_pool() {
-        let pool = RawPinnedPoolBuilder::<u32>::new().build();
-
-        assert_eq!(pool.len(), 0);
-        assert!(pool.is_empty());
-        assert_eq!(pool.capacity(), 0);
-    }
-
-    #[test]
     fn builder_with_drop_policy() {
-        let pool = RawPinnedPoolBuilder::<u32>::new()
-            .drop_policy(DropPolicy::MustNotDropContents)
+        let mut pool = RawPinnedPoolBuilder::<String>::new()
+            .drop_policy(DropPolicy::MayDropContents)
             .build();
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
         assert_eq!(pool.capacity(), 0);
+        
+        // Test with actual data
+        let handle = pool.insert("test string".to_string());
+        assert_eq!(pool.len(), 1);
+        assert_eq!(&*handle, "test string");
+        
+        // SAFETY: Handle is valid and from this pool
+        unsafe {
+            pool.remove(handle.into_shared());
+        }
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn builder_with_must_not_drop_contents_policy() {
+        let mut pool = RawPinnedPoolBuilder::<i64>::new()
+            .drop_policy(DropPolicy::MustNotDropContents)
+            .build();
+
+        let handle = pool.insert(9999_i64);
+        assert_eq!(*handle, 9999);
+        
+        // Clean up to avoid panic on drop
+        // SAFETY: Handle is valid and from this pool
+        unsafe {
+            pool.remove(handle.into_shared());
+        }
+        assert_eq!(pool.len(), 0);
     }
 
     #[test]
     fn builder_default_works() {
-        let pool = RawPinnedPoolBuilder::<u32>::default().build();
+        let mut pool = RawPinnedPoolBuilder::<u32>::default().build();
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
         assert_eq!(pool.capacity(), 0);
+        
+        // Verify it's functional
+        let handle = pool.insert(123_u32);
+        assert_eq!(*handle, 123);
+        // SAFETY: Handle is valid and from this pool
+        unsafe {
+            pool.remove(handle.into_shared());
+        }
     }
 
     #[test]
     fn builder_via_pool_static_method() {
-        let pool = RawPinnedPool::<f64>::builder().build();
+        let mut pool = RawPinnedPool::<f64>::builder().build();
 
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
         assert_eq!(pool.capacity(), 0);
+        
+        // Test functionality
+        let handle = pool.insert(42.0_f64);
+        assert!(((*handle) - 42.0).abs() < f64::EPSILON);
+        // SAFETY: Handle is valid and from this pool
+        unsafe {
+            pool.remove(handle.into_shared());
+        }
     }
 }

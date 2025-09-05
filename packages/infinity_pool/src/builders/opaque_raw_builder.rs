@@ -73,4 +73,121 @@ mod tests {
             .layout(Layout::new::<()>())
             .build();
     }
+
+    #[test]
+    fn builder_with_layout_creates_functional_pool() {
+        let mut pool = RawOpaquePoolBuilder::new()
+            .layout_of::<u64>()
+            .build();
+
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+        assert_eq!(pool.capacity(), 0);
+        
+        // Test inserting correct type
+        let handle = pool.insert(12345_u64);
+        assert_eq!(pool.len(), 1);
+        assert_eq!(*handle, 12345);
+        
+        // SAFETY: Handle is valid and from this pool
+        unsafe {
+            pool.remove(handle.into_shared());
+        }
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn builder_with_explicit_layout() {
+        let layout = Layout::new::<f32>();
+        let mut pool = RawOpaquePoolBuilder::new()
+            .layout(layout)
+            .build();
+
+        // Verify the layout is respected
+        let handle = pool.insert(1.234_f32);
+        assert!(((*handle) - 1.234_f32).abs() < f32::EPSILON);
+        
+        // SAFETY: Handle is valid and from this pool
+        unsafe {
+            pool.remove(handle.into_shared());
+        }
+    }
+
+    #[test]
+    fn builder_with_may_drop_contents_policy() {
+        let mut pool = RawOpaquePoolBuilder::new()
+            .layout_of::<String>()
+            .drop_policy(DropPolicy::MayDropContents)
+            .build();
+
+        // Insert items to test drop behavior
+        let handle1 = pool.insert("test1".to_string());
+        let handle2 = pool.insert("test2".to_string());
+        
+        assert_eq!(pool.len(), 2);
+        assert_eq!(&*handle1, "test1");
+        assert_eq!(&*handle2, "test2");
+        
+        // Remove items explicitly
+        // SAFETY: Handles are valid and from this pool
+        unsafe {
+            pool.remove(handle1.into_shared());
+        }
+        // SAFETY: Handle is valid and from this pool
+        unsafe {
+            pool.remove(handle2.into_shared());
+        }
+        
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn builder_with_must_not_drop_contents_policy() {
+        let mut pool = RawOpaquePoolBuilder::new()
+            .layout_of::<i32>()
+            .drop_policy(DropPolicy::MustNotDropContents)
+            .build();
+
+        let handle = pool.insert(999_i32);
+        assert_eq!(pool.len(), 1);
+        assert_eq!(*handle, 999);
+        
+        // Clean up to avoid panic on drop
+        // SAFETY: Handle is valid and from this pool
+        unsafe {
+            pool.remove(handle.into_shared());
+        }
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn builder_method_chaining() {
+        // Test that method chaining works in any order
+        let mut pool1 = RawOpaquePoolBuilder::new()
+            .layout_of::<u32>()
+            .drop_policy(DropPolicy::MayDropContents)
+            .build();
+
+        let mut pool2 = RawOpaquePoolBuilder::new()
+            .drop_policy(DropPolicy::MayDropContents)
+            .layout_of::<u32>()
+            .build();
+
+        // Both should work identically
+        let handle1 = pool1.insert(100_u32);
+        let handle2 = pool2.insert(200_u32);
+        
+        assert_eq!(*handle1, 100);
+        assert_eq!(*handle2, 200);
+        
+        // SAFETY: Handles are valid and from their respective pools
+        unsafe {
+            pool1.remove(handle1.into_shared());
+        }
+        // SAFETY: Handle is valid and from this pool
+        unsafe {
+            pool2.remove(handle2.into_shared());
+        }
+    }
 }

@@ -1084,6 +1084,81 @@ mod tests {
     }
 
     #[test]
+    fn is_full_comprehensive_behavior() {
+        // Create a slab with minimal capacity to test full behavior
+        let layout = SlabLayout::new(Layout::new::<u32>());
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
+
+        let capacity = layout.capacity().get();
+
+        // Initially slab should not be full
+        assert!(!slab.is_full());
+        assert!(slab.is_empty());
+        assert_eq!(slab.len(), 0);
+
+        let mut handles = Vec::new();
+
+        // Fill the slab one item at a time, verifying is_full() at each step
+        for i in 0..capacity {
+            // Should not be full before inserting (except when about to reach capacity)
+            assert!(!slab.is_full());
+
+            // SAFETY: u32 layout matches slab layout
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "test uses small capacity values"
+            )]
+            let handle = unsafe { insert(&mut slab, i as u32) };
+            handles.push(handle);
+
+            assert_eq!(slab.len(), i + 1);
+            assert!(!slab.is_empty());
+
+            // Check if we're now full
+            if i + 1 == capacity {
+                // Should be full now
+                assert!(slab.is_full());
+                assert_eq!(slab.len(), capacity);
+            } else {
+                // Should not be full yet
+                assert!(!slab.is_full());
+            }
+        }
+
+        // Slab should definitely be full now
+        assert!(slab.is_full());
+        assert_eq!(slab.len(), capacity);
+        assert!(!slab.is_empty());
+
+        // Remove one item - should no longer be full
+        if !handles.is_empty() {
+            let handle_to_remove = handles.pop().unwrap();
+            // SAFETY: handle is valid and from this slab
+            unsafe {
+                slab.remove(handle_to_remove);
+            }
+
+            // Should no longer be full
+            assert!(!slab.is_full());
+            assert_eq!(slab.len(), capacity - 1);
+            assert!(!slab.is_empty());
+        }
+
+        // Clean up remaining handles
+        for handle in handles {
+            // SAFETY: All handles are valid and from this slab
+            unsafe {
+                slab.remove(handle);
+            }
+        }
+
+        // Should be empty again
+        assert!(!slab.is_full());
+        assert!(slab.is_empty());
+        assert_eq!(slab.len(), 0);
+    }
+
+    #[test]
     fn insertion_follows_lowest_index_first_order() {
         let layout = SlabLayout::new(Layout::new::<u32>());
         let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
