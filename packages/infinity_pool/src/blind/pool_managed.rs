@@ -40,7 +40,7 @@ use crate::{ERR_POISONED_LOCK, PooledMut, RawOpaquePool, RawOpaquePoolSend};
 /// ```rust
 /// use infinity_pool::BlindPool;
 ///
-/// let pool1 = BlindPool::new();
+/// let mut pool1 = BlindPool::new();
 /// let pool2 = pool1.clone();
 ///
 /// assert_eq!(pool1.len(), pool2.len());

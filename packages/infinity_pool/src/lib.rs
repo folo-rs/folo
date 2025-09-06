@@ -12,8 +12,9 @@
 //! * Blind pool - accepts any type of object, including multiple different types in the same pool,
 //!   without requiring any of the types to be named (e.g. many different `impl Future` types).
 //!
-//! In addition to the above characteristics, the objects in all the pools can be accessed as trait
-//! objects, thereby ensuring you do not need to name any types even at point of use, and can pass
+//! In addition to the above characteristics,
+//! [the objects in all the pools can be accessed as trait objects][casting],
+//! thereby ensuring you do not need to name any types even at point of use, and can pass
 //! objects around between APIs that extend beyond `impl Future` style type inference.
 //!   
 //! # Access models
@@ -38,7 +39,7 @@
 //!
 //! | Pool Type / Access Model  | `Arc`-like | `Rc`-like | Raw |
 //! |---------------------------|------------|-----------|-----|
-//! | Pinned Pool               | [`PinnedPool`] | [`LocalPinnedPool`] | [`RawPinnedPool`] |
+//! | Pinned Pool               | [`PinnedPool<T>`] | [`LocalPinnedPool<T>`] | [`RawPinnedPool<T>`] |
 //! | Opaque Pool               | [`OpaquePool`] | [`LocalOpaquePool`] | [`RawOpaquePool`] |
 //! | Blind Pool                | [`BlindPool`]  | [`LocalBlindPool`]  | [`RawBlindPool`]  |
 //!
@@ -85,13 +86,13 @@
 //!
 //! ```
 //! use std::fmt::Display;
-//! use infinity_pool::{BlindPool, Pooled, define_pooled_dyn_cast};
+//! use infinity_pool::{BlindPool, PooledMut, define_pooled_dyn_cast};
 //!
 //! // Enable casting to Display trait objects
 //! define_pooled_dyn_cast!(Display);
 //!
 //! // Function that accepts trait object handles directly
-//! fn process_displayable(handle: Pooled<dyn Display>) {
+//! fn process_displayable(handle: PooledMut<dyn Display>) {
 //!     println!("Processing: {}", &*handle);
 //! }
 //!
@@ -103,6 +104,8 @@
 //! process_displayable(string_handle.cast_display());
 //! process_displayable(number_handle.cast_display());
 //! ```
+//! 
+//! [casting]: define_pooled_dyn_cast
 
 mod blind;
 mod builders;

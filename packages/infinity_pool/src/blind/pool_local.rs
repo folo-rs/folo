@@ -44,7 +44,7 @@ use crate::{LocalPooledMut, RawOpaquePool};
 /// ```rust
 /// use infinity_pool::LocalBlindPool;
 ///
-/// let pool1 = LocalBlindPool::new();
+/// let mut pool1 = LocalBlindPool::new();
 /// let pool2 = pool1.clone();
 ///
 /// assert_eq!(pool1.len(), pool2.len());

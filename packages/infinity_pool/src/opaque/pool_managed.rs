@@ -42,7 +42,7 @@ use crate::{ERR_POISONED_LOCK, PooledMut, RawOpaquePool, RawOpaquePoolSend};
 /// ```rust
 /// use infinity_pool::OpaquePool;
 ///
-/// let pool1 = OpaquePool::with_layout_of::<i32>();
+/// let mut pool1 = OpaquePool::with_layout_of::<i32>();
 /// let pool2 = pool1.clone();
 ///
 /// assert_eq!(pool1.len(), pool2.len());

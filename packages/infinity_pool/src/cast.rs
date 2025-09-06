@@ -20,6 +20,60 @@
 /// For complex trait bounds, define a trait alias first, to simplify the trait to a single name,
 /// then use this macro with the trait alias name. You may otherwise experience macro parsing
 /// issues.
+/// 
+/// # Examples
+///
+/// ## Basic usage with simple trait
+///
+/// ```
+/// use std::fmt::Display;
+/// use infinity_pool::{BlindPool, PooledMut, define_pooled_dyn_cast};
+///
+/// // Enable casting to Display trait objects
+/// define_pooled_dyn_cast!(Display);
+///
+/// // Function that accepts trait object handles directly
+/// fn process_displayable(handle: PooledMut<dyn Display>) {
+///     println!("Processing: {}", &*handle);
+/// }
+///
+/// let mut pool = BlindPool::new();
+/// let string_handle = pool.insert("Hello, world!".to_string());
+/// let number_handle = pool.insert(42i32);
+///
+/// // Cast to trait objects and pass to function
+/// process_displayable(string_handle.cast_display());
+/// process_displayable(number_handle.cast_display());
+/// ```
+///
+/// ## Complex trait bounds using trait aliases
+///
+/// ```
+/// use std::future::Future;
+/// use infinity_pool::{BlindPool, PooledMut, define_pooled_dyn_cast};
+///
+/// // Define a trait alias for complex trait bounds
+/// trait MyUsizeFuture: Future<Output = Option<usize>> + Send {}
+///
+/// // Blanket implementation for any type that satisfies the bounds
+/// impl<T> MyUsizeFuture for T where T: Future<Output = Option<usize>> + Send {}
+///
+/// // Enable casting using the trait alias
+/// define_pooled_dyn_cast!(MyUsizeFuture);
+///
+/// // Function that accepts the complex trait object
+/// fn process_future(future: &mut PooledMut<dyn MyUsizeFuture>) {
+///     // Can work with the future as a trait object
+///     println!("Got a future that returns Option<usize>");
+/// }
+///
+/// let mut pool = BlindPool::new();
+/// 
+/// let my_future = pool.insert(async { Some(1234_usize) });
+/// let mut my_future = my_future.cast_my_usize_future();
+/// 
+/// process_future(&mut my_future);
+/// ```
 #[macro_export]
 macro_rules! define_pooled_dyn_cast {
     // Handle simple traits without generic parameters

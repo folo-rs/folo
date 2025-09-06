@@ -41,7 +41,7 @@ use crate::{
 /// ```rust
 /// use infinity_pool::PinnedPool;
 ///
-/// let pool1 = PinnedPool::<i32>::new();
+/// let mut pool1 = PinnedPool::<i32>::new();
 /// let pool2 = pool1.clone();
 ///
 /// assert_eq!(pool1.len(), pool2.len());
