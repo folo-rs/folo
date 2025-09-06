@@ -1,7 +1,22 @@
-//! Infinity Pool: Advanced object pool implementations with flexible memory management.
+//! Infinity pool: object pools with trait object support and multiple access models.
 //!
-//! This crate provides several types of object pools designed for different use cases,
+//! This package provides several types of object pools designed for different use cases,
 //! from basic pooling to advanced memory layouts with custom drop policies.
+//! 
+//! # Motivating scenario
+//! 
+//! The primary characteristics of the target scenario are:
+//! 
+//! * You need to create and destroy many objects on a regular basis.
+//! * These objects need to be pinned.
+//! * You want better performance than you get from `Box::pin()`.
+//! * Optionally, you may also want to store references to the objects in the form of
+//!   trait object references (`&dyn Foo`), perhaps because you cannot name the type
+//!   due to it being inferred.
+//! * Optionally, you may want to use reference counting to manage object lifetimes.
+//! 
+//! It would be fair to say that this package essentially provides faster alternatives
+//! to `Box::pin()`, `Arc::pin()` and `Rc::pin()`.
 //!
 //! # Pool types
 //!
