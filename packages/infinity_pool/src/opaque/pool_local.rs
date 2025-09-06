@@ -100,34 +100,40 @@ impl LocalOpaquePool {
 
     #[doc = include_str!("../../doc/snippets/opaque_pool_layout.md")]
     #[must_use]
+    #[inline]
     pub fn object_layout(&self) -> Layout {
         self.inner.borrow().object_layout()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_len.md")]
     #[must_use]
+    #[inline]
     pub fn len(&self) -> usize {
         self.inner.borrow().len()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_capacity.md")]
     #[must_use]
+    #[inline]
     pub fn capacity(&self) -> usize {
         self.inner.borrow().capacity()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.inner.borrow().is_empty()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
+    #[inline]
     pub fn reserve(&mut self, additional: usize) {
         self.inner.borrow_mut().reserve(additional);
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
+    #[inline]
     pub fn shrink_to_fit(&mut self) {
         self.inner.borrow_mut().shrink_to_fit();
     }
@@ -162,6 +168,8 @@ impl LocalOpaquePool {
     /// drop(shared_handle); // Explicitly drop to remove from pool
     /// assert_eq!(pool.len(), 0);
     /// ```
+    #[inline]
+    #[must_use]
     pub fn insert<T: 'static>(&mut self, value: T) -> LocalPooledMut<T> {
         let inner = self.inner.borrow_mut().insert(value);
 
@@ -171,6 +179,8 @@ impl LocalOpaquePool {
     #[doc = include_str!("../../doc/snippets/pool_insert.md")]
     /// # Safety
     #[doc = include_str!("../../doc/snippets/safety_pool_t_layout_must_match.md")]
+    #[inline]
+    #[must_use]
     pub unsafe fn insert_unchecked<T: 'static>(&mut self, value: T) -> LocalPooledMut<T> {
         // SAFETY: Forwarding safety guarantees from caller.
         let inner = unsafe { self.inner.borrow_mut().insert_unchecked(value) };
@@ -215,6 +225,8 @@ impl LocalOpaquePool {
     ///
     /// # Safety
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
+    #[inline]
+    #[must_use]
     pub unsafe fn insert_with<T, F>(&mut self, f: F) -> LocalPooledMut<T>
     where
         T: 'static,
@@ -261,6 +273,8 @@ impl LocalOpaquePool {
     /// # Safety
     #[doc = include_str!("../../doc/snippets/safety_pool_t_layout_must_match.md")]
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
+    #[inline]
+    #[must_use]
     pub unsafe fn insert_with_unchecked<T, F>(&mut self, f: F) -> LocalPooledMut<T>
     where
         T: 'static,
@@ -315,6 +329,7 @@ impl LocalOpaquePool {
 }
 
 impl Clone for LocalOpaquePool {
+    #[inline]
     fn clone(&self) -> Self {
         Self {
             inner: Rc::clone(&self.inner),

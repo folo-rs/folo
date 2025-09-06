@@ -35,12 +35,14 @@ impl<T: ?Sized> RawPooledMut<T> {
 
     #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
     #[must_use]
+    #[inline]
     pub fn ptr(&self) -> NonNull<T> {
         self.slab_handle.ptr()
     }
 
     #[doc = include_str!("../../doc/snippets/handle_erase.md")]
     #[must_use]
+    #[inline]
     pub fn erase(self) -> RawPooledMut<()> {
         RawPooledMut {
             slab_index: self.slab_index,
@@ -50,12 +52,14 @@ impl<T: ?Sized> RawPooledMut<T> {
 
     #[doc = include_str!("../../doc/snippets/handle_into_shared.md")]
     #[must_use]
+    #[inline]
     pub fn into_shared(self) -> RawPooled<T> {
         RawPooled::new(self.slab_index, self.slab_handle)
     }
 
     #[doc = include_str!("../../doc/snippets/raw_as_pin.md")]
     #[must_use]
+    #[inline]
     pub unsafe fn as_pin(&self) -> Pin<&T> {
         // SAFETY: Forwarding safety guarantees from the caller.
         let as_ref = unsafe { self.as_ref() };
@@ -66,6 +70,7 @@ impl<T: ?Sized> RawPooledMut<T> {
 
     #[doc = include_str!("../../doc/snippets/raw_as_pin_mut.md")]
     #[must_use]
+    #[inline]
     pub unsafe fn as_pin_mut(&mut self) -> Pin<&mut T> {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself. Pointer validity
@@ -78,6 +83,7 @@ impl<T: ?Sized> RawPooledMut<T> {
 
     #[doc = include_str!("../../doc/snippets/raw_as_ref.md")]
     #[must_use]
+    #[inline]
     pub unsafe fn as_ref(&self) -> &T {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself. Pointer validity
@@ -99,6 +105,7 @@ impl<T: ?Sized> RawPooledMut<T> {
     /// reference is used.
     #[doc(hidden)]
     #[must_use]
+    #[inline]
     pub unsafe fn __private_cast_dyn_with_fn<U: ?Sized, F>(self, cast_fn: F) -> RawPooledMut<U>
     where
         F: FnOnce(&mut T) -> &mut U,
@@ -118,6 +125,7 @@ impl<T: ?Sized> RawPooledMut<T> {
 impl<T: ?Sized + Unpin> RawPooledMut<T> {
     #[doc = include_str!("../../doc/snippets/raw_as_mut.md")]
     #[must_use]
+    #[inline]
     pub unsafe fn as_mut(&mut self) -> &mut T {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself. Pointer validity

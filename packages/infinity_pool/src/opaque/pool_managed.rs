@@ -100,29 +100,34 @@ impl OpaquePool {
 
     #[doc = include_str!("../../doc/snippets/opaque_pool_layout.md")]
     #[must_use]
+    #[inline]
     pub fn object_layout(&self) -> Layout {
         self.inner.lock().expect(ERR_POISONED_LOCK).object_layout()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_len.md")]
     #[must_use]
+    #[inline]
     pub fn len(&self) -> usize {
         self.inner.lock().expect(ERR_POISONED_LOCK).len()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_capacity.md")]
     #[must_use]
+    #[inline]
     pub fn capacity(&self) -> usize {
         self.inner.lock().expect(ERR_POISONED_LOCK).capacity()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.inner.lock().expect(ERR_POISONED_LOCK).is_empty()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
+    #[inline]
     pub fn reserve(&mut self, additional: usize) {
         self.inner
             .lock()
@@ -131,6 +136,7 @@ impl OpaquePool {
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
+    #[inline]
     pub fn shrink_to_fit(&mut self) {
         self.inner.lock().expect(ERR_POISONED_LOCK).shrink_to_fit();
     }
@@ -165,6 +171,8 @@ impl OpaquePool {
     /// drop(shared_handle); // Explicitly drop to remove from pool
     /// assert_eq!(pool.len(), 0);
     /// ```
+    #[inline]
+    #[must_use]
     pub fn insert<T: Send + 'static>(&mut self, value: T) -> PooledMut<T> {
         let inner = self.inner.lock().expect(ERR_POISONED_LOCK).insert(value);
 
@@ -174,6 +182,8 @@ impl OpaquePool {
     #[doc = include_str!("../../doc/snippets/pool_insert.md")]
     /// # Safety
     #[doc = include_str!("../../doc/snippets/safety_pool_t_layout_must_match.md")]
+    #[inline]
+    #[must_use]
     pub unsafe fn insert_unchecked<T: Send + 'static>(&mut self, value: T) -> PooledMut<T> {
         // SAFETY: Forwarding safety guarantees from caller.
         let inner = unsafe {
@@ -223,6 +233,8 @@ impl OpaquePool {
     ///
     /// # Safety
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
+    #[inline]
+    #[must_use]
     pub unsafe fn insert_with<T, F>(&mut self, f: F) -> PooledMut<T>
     where
         T: Send + 'static,
@@ -269,6 +281,8 @@ impl OpaquePool {
     /// # Safety
     #[doc = include_str!("../../doc/snippets/safety_pool_t_layout_must_match.md")]
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
+    #[inline]
+    #[must_use]
     pub unsafe fn insert_with_unchecked<T, F>(&mut self, f: F) -> PooledMut<T>
     where
         T: Send + 'static,
@@ -328,6 +342,7 @@ impl OpaquePool {
 }
 
 impl Clone for OpaquePool {
+    #[inline]
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),

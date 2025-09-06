@@ -31,23 +31,27 @@ impl<T: ?Sized> RawBlindPooledMut<T> {
     /// The layout originally used to insert the item
     ///
     /// This might not match `T` any more, as the `T` parameter may have been transformed.
+    #[must_use]
     pub(crate) fn layout(&self) -> Layout {
         self.layout
     }
 
     /// Becomes the inner handle for the `RawOpaquePool` that holds the object.
+    #[must_use]
     pub(crate) fn into_inner(self) -> RawPooledMut<T> {
         self.inner
     }
 
     #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
     #[must_use]
+    #[inline]
     pub fn ptr(&self) -> NonNull<T> {
         self.inner.ptr()
     }
 
     #[doc = include_str!("../../doc/snippets/handle_erase.md")]
     #[must_use]
+    #[inline]
     pub fn erase(self) -> RawBlindPooledMut<()> {
         RawBlindPooledMut {
             layout: self.layout,
@@ -61,12 +65,14 @@ impl<T: ?Sized> RawBlindPooledMut<T> {
     /// and requires the caller to guarantee that no further access is attempted through any handle
     /// after removing the object from the pool.
     #[must_use]
+    #[inline]
     pub fn into_shared(self) -> RawBlindPooled<T> {
         RawBlindPooled::new(self.layout, self.inner.into_shared())
     }
 
     #[doc = include_str!("../../doc/snippets/raw_as_pin.md")]
     #[must_use]
+    #[inline]
     pub unsafe fn as_pin(&self) -> Pin<&T> {
         // SAFETY: Forwarding safety guarantees from the caller.
         let as_ref = unsafe { self.as_ref() };
@@ -77,6 +83,7 @@ impl<T: ?Sized> RawBlindPooledMut<T> {
 
     #[doc = include_str!("../../doc/snippets/raw_as_pin_mut.md")]
     #[must_use]
+    #[inline]
     pub unsafe fn as_pin_mut(&mut self) -> Pin<&mut T> {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself. Pointer validity
@@ -89,6 +96,7 @@ impl<T: ?Sized> RawBlindPooledMut<T> {
 
     #[doc = include_str!("../../doc/snippets/raw_as_ref.md")]
     #[must_use]
+    #[inline]
     pub unsafe fn as_ref(&self) -> &T {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself. Pointer validity
@@ -110,6 +118,7 @@ impl<T: ?Sized> RawBlindPooledMut<T> {
     /// reference is used.
     #[doc(hidden)]
     #[must_use]
+    #[inline]
     pub unsafe fn __private_cast_dyn_with_fn<U: ?Sized, F>(self, cast_fn: F) -> RawBlindPooledMut<U>
     where
         F: FnOnce(&mut T) -> &mut U,
@@ -129,6 +138,7 @@ impl<T: ?Sized> RawBlindPooledMut<T> {
 impl<T: ?Sized + Unpin> RawBlindPooledMut<T> {
     #[doc = include_str!("../../doc/snippets/raw_as_mut.md")]
     #[must_use]
+    #[inline]
     pub unsafe fn as_mut(&mut self) -> &mut T {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself. Pointer validity

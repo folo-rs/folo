@@ -88,23 +88,27 @@ where
 
     #[doc = include_str!("../../doc/snippets/pool_len.md")]
     #[must_use]
+    #[inline]
     pub fn len(&self) -> usize {
         self.inner.lock().expect(ERR_POISONED_LOCK).len()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_capacity.md")]
     #[must_use]
+    #[inline]
     pub fn capacity(&self) -> usize {
         self.inner.lock().expect(ERR_POISONED_LOCK).capacity()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.inner.lock().expect(ERR_POISONED_LOCK).is_empty()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
+    #[inline]
     pub fn reserve(&mut self, additional: usize) {
         self.inner
             .lock()
@@ -113,6 +117,7 @@ where
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
+    #[inline]
     pub fn shrink_to_fit(&mut self) {
         self.inner.lock().expect(ERR_POISONED_LOCK).shrink_to_fit();
     }
@@ -144,6 +149,8 @@ where
     /// drop(shared_handle); // Explicitly drop to remove from pool
     /// assert_eq!(pool.len(), 0);
     /// ```
+    #[inline]
+    #[must_use]
     pub fn insert(&mut self, value: T) -> PooledMut<T> {
         let inner = self.inner.lock().expect(ERR_POISONED_LOCK).insert(value);
 
@@ -184,6 +191,8 @@ where
     ///
     /// # Safety
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
+    #[inline]
+    #[must_use]
     pub unsafe fn insert_with<F>(&mut self, f: F) -> PooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
@@ -245,6 +254,7 @@ impl<T> Clone for PinnedPool<T>
 where
     T: Send,
 {
+    #[inline]
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),

@@ -82,28 +82,33 @@ where
 
     #[doc = include_str!("../../doc/snippets/pool_len.md")]
     #[must_use]
+    #[inline]
     pub fn len(&self) -> usize {
         self.inner.borrow().len()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_capacity.md")]
     #[must_use]
+    #[inline]
     pub fn capacity(&self) -> usize {
         self.inner.borrow().capacity()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.inner.borrow().is_empty()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
+    #[inline]
     pub fn reserve(&mut self, additional: usize) {
         self.inner.borrow_mut().reserve(additional);
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
+    #[inline]
     pub fn shrink_to_fit(&mut self) {
         self.inner.borrow_mut().shrink_to_fit();
     }
@@ -135,6 +140,8 @@ where
     /// drop(shared_handle); // Explicitly drop to remove from pool
     /// assert_eq!(pool.len(), 0);
     /// ```
+    #[inline]
+    #[must_use]
     pub fn insert(&mut self, value: T) -> LocalPooledMut<T> {
         let inner = self.inner.borrow_mut().insert(value);
 
@@ -147,6 +154,7 @@ where
     ///
     /// ```rust
     /// use std::mem::MaybeUninit;
+    ///
     /// use infinity_pool::LocalPinnedPool;
     ///
     /// struct DataBuffer {
@@ -175,6 +183,8 @@ where
     ///
     /// # Safety
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
+    #[inline]
+    #[must_use]
     pub unsafe fn insert_with<F>(&mut self, f: F) -> LocalPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
@@ -233,6 +243,7 @@ where
 }
 
 impl<T> Clone for LocalPinnedPool<T> {
+    #[inline]
     fn clone(&self) -> Self {
         Self {
             inner: Rc::clone(&self.inner),

@@ -65,12 +65,14 @@ impl RawBlindPool {
 
     #[doc = include_str!("../../doc/snippets/pool_len.md")]
     #[must_use]
+    #[inline]
     pub fn len(&self) -> usize {
         self.pools.values().map(RawOpaquePool::len).sum()
     }
 
     #[doc = include_str!("../../doc/snippets/blind_pool_capacity.md")]
     #[must_use]
+    #[inline]
     pub fn capacity_for<T>(&self) -> usize {
         self.inner_pool_of::<T>()
             .map(RawOpaquePool::capacity)
@@ -79,16 +81,19 @@ impl RawBlindPool {
 
     #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     #[doc = include_str!("../../doc/snippets/blind_pool_reserve.md")]
+    #[inline]
     pub fn reserve_for<T>(&mut self, additional: usize) {
         self.inner_pool_of_mut::<T>().reserve(additional);
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
+    #[inline]
     pub fn shrink_to_fit(&mut self) {
         for pool in self.pools.values_mut() {
             pool.shrink_to_fit();
@@ -131,6 +136,7 @@ impl RawBlindPool {
     /// }
     /// assert_eq!(pool.len(), 0);
     /// ```
+    #[inline]
     pub fn insert<T>(&mut self, value: T) -> RawBlindPooledMut<T> {
         let layout = Layout::new::<T>();
         let pool = self.inner_pool_mut(layout);
@@ -175,6 +181,7 @@ impl RawBlindPool {
     ///
     /// # Safety
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
+    #[inline]
     pub unsafe fn insert_with<T, F>(&mut self, f: F) -> RawBlindPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
@@ -190,6 +197,7 @@ impl RawBlindPool {
     }
 
     #[doc = include_str!("../../doc/snippets/raw_pool_remove_mut.md")]
+    #[inline]
     pub fn remove_mut<T: ?Sized>(&mut self, handle: RawBlindPooledMut<T>) {
         let pool = self.inner_pool_mut(handle.layout());
 
@@ -197,6 +205,7 @@ impl RawBlindPool {
     }
 
     #[doc = include_str!("../../doc/snippets/raw_pool_remove.md")]
+    #[inline]
     pub unsafe fn remove<T: ?Sized>(&mut self, handle: RawBlindPooled<T>) {
         let pool = self.inner_pool_mut(handle.layout());
 
@@ -208,6 +217,7 @@ impl RawBlindPool {
 
     #[doc = include_str!("../../doc/snippets/raw_pool_remove_mut_unpin.md")]
     #[must_use]
+    #[inline]
     pub fn remove_mut_unpin<T: Unpin>(&mut self, handle: RawBlindPooledMut<T>) -> T {
         // We would rather prefer to check for `RawBlindPooledMut<()>` specifically but
         // that would imply specialization or `T: 'static` or TypeId shenanigans.
@@ -226,6 +236,7 @@ impl RawBlindPool {
 
     #[doc = include_str!("../../doc/snippets/raw_pool_remove_unpin.md")]
     #[must_use]
+    #[inline]
     pub unsafe fn remove_unpin<T: Unpin>(&mut self, handle: RawBlindPooled<T>) -> T {
         // We would rather prefer to check for `RawPooled<()>` specifically but
         // that would imply specialization or `T: 'static` or TypeId shenanigans.

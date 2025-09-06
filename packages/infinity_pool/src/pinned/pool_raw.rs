@@ -73,28 +73,33 @@ impl<T> RawPinnedPool<T> {
 
     #[doc = include_str!("../../doc/snippets/pool_len.md")]
     #[must_use]
+    #[inline]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_capacity.md")]
     #[must_use]
+    #[inline]
     pub fn capacity(&self) -> usize {
         self.inner.capacity()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
+    #[inline]
     pub fn reserve(&mut self, additional: usize) {
         self.inner.reserve(additional);
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
+    #[inline]
     pub fn shrink_to_fit(&mut self) {
         self.inner.shrink_to_fit();
     }
@@ -135,6 +140,7 @@ impl<T> RawPinnedPool<T> {
     /// }
     /// assert_eq!(pool.len(), 0);
     /// ```
+    #[inline]
     pub fn insert(&mut self, value: T) -> RawPooledMut<T> {
         // SAFETY: match between T and inner pool layout is a type invariant.
         unsafe { self.inner.insert_unchecked(value) }
@@ -174,6 +180,7 @@ impl<T> RawPinnedPool<T> {
     ///
     /// # Safety
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
+    #[inline]
     pub unsafe fn insert_with<F>(&mut self, f: F) -> RawPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
@@ -184,11 +191,13 @@ impl<T> RawPinnedPool<T> {
     }
 
     #[doc = include_str!("../../doc/snippets/raw_pool_remove_mut.md")]
+    #[inline]
     pub fn remove_mut<P: ?Sized>(&mut self, handle: RawPooledMut<P>) {
         self.inner.remove_mut(handle);
     }
 
     #[doc = include_str!("../../doc/snippets/raw_pool_remove.md")]
+    #[inline]
     pub unsafe fn remove<P: ?Sized>(&mut self, handle: RawPooled<P>) {
         // SAFETY: Forwarding safety guarantees from the caller.
         unsafe {
@@ -198,6 +207,7 @@ impl<T> RawPinnedPool<T> {
 
     /// Returns an iterator over all objects in the pool.
     #[must_use]
+    #[inline]
     pub fn iter(&self) -> RawPinnedPoolIterator<'_, T> {
         RawPinnedPoolIterator::new(self)
     }
@@ -213,6 +223,7 @@ where
     ///
     /// Panics if the handle does not reference an object in this pool.
     #[must_use]
+    #[inline]
     pub fn remove_mut_unpin(&mut self, handle: RawPooledMut<T>) -> T {
         self.inner.remove_mut_unpin(handle)
     }
@@ -228,6 +239,7 @@ where
     /// The caller must ensure that the handle belongs to this pool and that the object it
     /// references has not already been removed from the pool.
     #[must_use]
+    #[inline]
     pub unsafe fn remove_unpin(&mut self, handle: RawPooled<T>) -> T {
         // SAFETY: Forwarding safety guarantees from the caller.
         unsafe { self.inner.remove_unpin(handle) }

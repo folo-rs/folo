@@ -38,12 +38,14 @@ impl<T: ?Sized> Pooled<T> {
 
     #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
     #[must_use]
+    #[inline]
     pub fn ptr(&self) -> NonNull<T> {
         self.inner.ptr()
     }
 
     #[doc = include_str!("../../doc/snippets/handle_erase.md")]
     #[must_use]
+    #[inline]
     pub fn erase(self) -> Pooled<()> {
         Pooled {
             inner: self.inner.erase(),
@@ -53,6 +55,7 @@ impl<T: ?Sized> Pooled<T> {
 
     #[doc = include_str!("../../doc/snippets/ref_counted_as_pin.md")]
     #[must_use]
+    #[inline]
     pub fn as_pin(&self) -> Pin<&T> {
         // SAFETY: Pooled items are always pinned.
         unsafe { Pin::new_unchecked(self) }
@@ -69,6 +72,7 @@ impl<T: ?Sized> Pooled<T> {
     /// point to the same object.
     #[doc(hidden)]
     #[must_use]
+    #[inline]
     pub unsafe fn __private_cast_dyn_with_fn<U: ?Sized, F>(self, cast_fn: F) -> Pooled<U>
     where
         F: FnOnce(&T) -> &U,
@@ -97,6 +101,7 @@ impl<T: ?Sized> fmt::Debug for Pooled<T> {
 impl<T: ?Sized> Deref for Pooled<T> {
     type Target = T;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         // SAFETY: This is a shared handle - the only references
         // that can ever exist are shared references.
@@ -106,18 +111,21 @@ impl<T: ?Sized> Deref for Pooled<T> {
 }
 
 impl<T: ?Sized> Borrow<T> for Pooled<T> {
+    #[inline]
     fn borrow(&self) -> &T {
         self
     }
 }
 
 impl<T: ?Sized> AsRef<T> for Pooled<T> {
+    #[inline]
     fn as_ref(&self) -> &T {
         self
     }
 }
 
 impl<T: ?Sized> Clone for Pooled<T> {
+    #[inline]
     fn clone(&self) -> Self {
         Self {
             inner: self.inner,
@@ -127,6 +135,7 @@ impl<T: ?Sized> Clone for Pooled<T> {
 }
 
 impl<T: ?Sized> From<PooledMut<T>> for Pooled<T> {
+    #[inline]
     fn from(value: PooledMut<T>) -> Self {
         value.into_shared()
     }

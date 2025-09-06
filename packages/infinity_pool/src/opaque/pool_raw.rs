@@ -115,18 +115,21 @@ impl RawOpaquePool {
 
     #[doc = include_str!("../../doc/snippets/opaque_pool_layout.md")]
     #[must_use]
+    #[inline]
     pub fn object_layout(&self) -> Layout {
         self.slab_layout.object_layout()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_len.md")]
     #[must_use]
+    #[inline]
     pub fn len(&self) -> usize {
         self.length
     }
 
     #[doc = include_str!("../../doc/snippets/pool_capacity.md")]
     #[must_use]
+    #[inline]
     pub fn capacity(&self) -> usize {
         // Wrapping here would imply capacity is greater than virtual memory,
         // which is impossible because we can never create that many slabs.
@@ -137,6 +140,7 @@ impl RawOpaquePool {
 
     #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.length == 0
     }
@@ -234,6 +238,7 @@ impl RawOpaquePool {
     /// }
     /// assert_eq!(pool.len(), 0);
     /// ```
+    #[inline]
     pub fn insert<T>(&mut self, value: T) -> RawPooledMut<T> {
         assert_eq!(
             Layout::new::<T>(),
@@ -248,6 +253,7 @@ impl RawOpaquePool {
     #[doc = include_str!("../../doc/snippets/pool_insert.md")]
     /// # Safety
     #[doc = include_str!("../../doc/snippets/safety_pool_t_layout_must_match.md")]
+    #[inline]
     pub unsafe fn insert_unchecked<T>(&mut self, value: T) -> RawPooledMut<T> {
         // Implement insert() in terms of insert_with() to reduce logic duplication.
         // SAFETY: Forwarding safety requirements to the caller.
@@ -296,6 +302,7 @@ impl RawOpaquePool {
     ///
     /// # Safety
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
+    #[inline]
     pub unsafe fn insert_with<T, F>(&mut self, f: F) -> RawPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
@@ -382,6 +389,7 @@ impl RawOpaquePool {
     }
 
     #[doc = include_str!("../../doc/snippets/raw_pool_remove_mut.md")]
+    #[inline]
     pub fn remove_mut<T: ?Sized>(&mut self, handle: RawPooledMut<T>) {
         // SAFETY: The provided handle is a unique handle, which guarantees that the object
         // has not been removed yet (because doing so consumes the unique handle).
@@ -415,6 +423,7 @@ impl RawOpaquePool {
 
     #[doc = include_str!("../../doc/snippets/raw_pool_remove_mut_unpin.md")]
     #[must_use]
+    #[inline]
     pub fn remove_mut_unpin<T: Unpin>(&mut self, handle: RawPooledMut<T>) -> T {
         // SAFETY: The provided handle is a unique handle, which guarantees that the object
         // has not been removed yet (because doing so consumes the unique handle).
@@ -457,6 +466,7 @@ impl RawOpaquePool {
 
     #[doc = include_str!("../../doc/snippets/raw_pool_iter.md")]
     #[must_use]
+    #[inline]
     pub fn iter(&self) -> RawOpaquePoolIterator<'_> {
         RawOpaquePoolIterator::new(self)
     }

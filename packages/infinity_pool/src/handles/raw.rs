@@ -51,12 +51,14 @@ impl<T: ?Sized> RawPooled<T> {
 
     #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
     #[must_use]
+    #[inline]
     pub fn ptr(&self) -> NonNull<T> {
         self.slab_handle.ptr()
     }
 
     #[doc = include_str!("../../doc/snippets/handle_erase.md")]
     #[must_use]
+    #[inline]
     pub fn erase(self) -> RawPooled<()> {
         RawPooled {
             slab_index: self.slab_index,
@@ -66,6 +68,7 @@ impl<T: ?Sized> RawPooled<T> {
 
     #[doc = include_str!("../../doc/snippets/raw_as_pin.md")]
     #[must_use]
+    #[inline]
     pub unsafe fn as_pin(&self) -> Pin<&T> {
         // SAFETY: Forwarding safety guarantees from the caller.
         let as_ref = unsafe { self.as_ref() };
@@ -76,6 +79,7 @@ impl<T: ?Sized> RawPooled<T> {
 
     #[doc = include_str!("../../doc/snippets/raw_as_ref.md")]
     #[must_use]
+    #[inline]
     pub unsafe fn as_ref(&self) -> &T {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself. Pointer validity
@@ -97,6 +101,7 @@ impl<T: ?Sized> RawPooled<T> {
     /// reference is used.
     #[doc(hidden)]
     #[must_use]
+    #[inline]
     pub unsafe fn __private_cast_dyn_with_fn<U: ?Sized, F>(self, cast_fn: F) -> RawPooled<U>
     where
         F: FnOnce(&T) -> &U,
@@ -114,6 +119,7 @@ impl<T: ?Sized> RawPooled<T> {
 }
 
 impl<T: ?Sized> Clone for RawPooled<T> {
+    #[inline]
     fn clone(&self) -> Self {
         *self
     }
@@ -131,6 +137,7 @@ impl<T: ?Sized> fmt::Debug for RawPooled<T> {
 }
 
 impl<T: ?Sized> From<RawPooledMut<T>> for RawPooled<T> {
+    #[inline]
     fn from(value: RawPooledMut<T>) -> Self {
         value.into_shared()
     }

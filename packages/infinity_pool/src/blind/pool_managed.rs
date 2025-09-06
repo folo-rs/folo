@@ -75,6 +75,7 @@ impl BlindPool {
 
     #[doc = include_str!("../../doc/snippets/pool_len.md")]
     #[must_use]
+    #[inline]
     pub fn len(&self) -> usize {
         let pools = self.pools.lock().expect(ERR_POISONED_LOCK);
 
@@ -86,6 +87,7 @@ impl BlindPool {
 
     #[doc = include_str!("../../doc/snippets/blind_pool_capacity.md")]
     #[must_use]
+    #[inline]
     pub fn capacity_for<T: Send + 'static>(&self) -> usize {
         let layout = Layout::new::<T>();
 
@@ -99,11 +101,13 @@ impl BlindPool {
 
     #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     #[doc = include_str!("../../doc/snippets/blind_pool_reserve.md")]
+    #[inline]
     pub fn reserve_for<T: Send + 'static>(&mut self, additional: usize) {
         let mut pools = self.pools.lock().expect(ERR_POISONED_LOCK);
 
@@ -113,6 +117,7 @@ impl BlindPool {
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
+    #[inline]
     pub fn shrink_to_fit(&mut self) {
         let mut pools = self.pools.lock().expect(ERR_POISONED_LOCK);
 
@@ -148,6 +153,8 @@ impl BlindPool {
     /// drop(shared_handle); // Explicitly drop to remove from pool
     /// assert_eq!(pool.len(), 0);
     /// ```
+    #[inline]
+    #[must_use]
     pub fn insert<T: Send + 'static>(&mut self, value: T) -> PooledMut<T> {
         let mut pools = self.pools.lock().expect(ERR_POISONED_LOCK);
 
@@ -197,6 +204,8 @@ impl BlindPool {
     ///
     /// # Safety
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
+    #[inline]
+    #[must_use]
     pub unsafe fn insert_with<T: Send + 'static, F>(&mut self, f: F) -> PooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),

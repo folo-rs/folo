@@ -28,12 +28,14 @@ impl<T: ?Sized> PooledMut<T> {
 
     #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
     #[must_use]
+    #[inline]
     pub fn ptr(&self) -> NonNull<T> {
         self.inner.ptr()
     }
 
     #[doc = include_str!("../../doc/snippets/handle_erase.md")]
     #[must_use]
+    #[inline]
     pub fn erase(self) -> PooledMut<()> {
         let (inner, pool) = self.into_parts();
 
@@ -45,6 +47,7 @@ impl<T: ?Sized> PooledMut<T> {
 
     #[doc = include_str!("../../doc/snippets/handle_into_shared.md")]
     #[must_use]
+    #[inline]
     pub fn into_shared(self) -> Pooled<T> {
         let (inner, pool) = self.into_parts();
 
@@ -68,6 +71,7 @@ impl<T: ?Sized> PooledMut<T> {
 
     #[doc = include_str!("../../doc/snippets/ref_counted_as_pin.md")]
     #[must_use]
+    #[inline]
     pub fn as_pin(&self) -> Pin<&T> {
         // SAFETY: Pooled items are always pinned.
         unsafe { Pin::new_unchecked(self) }
@@ -75,6 +79,7 @@ impl<T: ?Sized> PooledMut<T> {
 
     #[doc = include_str!("../../doc/snippets/ref_counted_as_pin_mut.md")]
     #[must_use]
+    #[inline]
     pub fn as_pin_mut(&mut self) -> Pin<&mut T> {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself.
@@ -95,6 +100,7 @@ impl<T: ?Sized> PooledMut<T> {
     /// point to the same object.
     #[doc(hidden)]
     #[must_use]
+    #[inline]
     pub unsafe fn __private_cast_dyn_with_fn<U: ?Sized, F>(self, cast_fn: F) -> PooledMut<U>
     where
         F: FnOnce(&mut T) -> &mut U,
@@ -119,6 +125,7 @@ where
 {
     #[doc = include_str!("../../doc/snippets/ref_counted_into_inner.md")]
     #[must_use]
+    #[inline]
     pub fn into_inner(self) -> T {
         let (inner, pool) = self.into_parts();
 
@@ -139,6 +146,7 @@ impl<T: ?Sized> fmt::Debug for PooledMut<T> {
 impl<T: ?Sized> Deref for PooledMut<T> {
     type Target = T;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself.
@@ -151,6 +159,7 @@ impl<T> DerefMut for PooledMut<T>
 where
     T: ?Sized + Unpin,
 {
+    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself.
@@ -160,6 +169,7 @@ where
 }
 
 impl<T: ?Sized> Borrow<T> for PooledMut<T> {
+    #[inline]
     fn borrow(&self) -> &T {
         self
     }
@@ -169,12 +179,14 @@ impl<T> BorrowMut<T> for PooledMut<T>
 where
     T: ?Sized + Unpin,
 {
+    #[inline]
     fn borrow_mut(&mut self) -> &mut T {
         self
     }
 }
 
 impl<T: ?Sized> AsRef<T> for PooledMut<T> {
+    #[inline]
     fn as_ref(&self) -> &T {
         self
     }
@@ -184,6 +196,7 @@ impl<T> AsMut<T> for PooledMut<T>
 where
     T: ?Sized + Unpin,
 {
+    #[inline]
     fn as_mut(&mut self) -> &mut T {
         self
     }

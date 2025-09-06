@@ -79,6 +79,7 @@ impl LocalBlindPool {
 
     #[doc = include_str!("../../doc/snippets/pool_len.md")]
     #[must_use]
+    #[inline]
     pub fn len(&self) -> usize {
         let pools = self.pools.borrow();
 
@@ -87,6 +88,7 @@ impl LocalBlindPool {
 
     #[doc = include_str!("../../doc/snippets/blind_pool_capacity.md")]
     #[must_use]
+    #[inline]
     pub fn capacity_for<T: 'static>(&self) -> usize {
         let layout = Layout::new::<T>();
 
@@ -100,11 +102,13 @@ impl LocalBlindPool {
 
     #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
     #[must_use]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     #[doc = include_str!("../../doc/snippets/blind_pool_reserve.md")]
+    #[inline]
     pub fn reserve_for<T: 'static>(&mut self, additional: usize) {
         let mut pools = self.pools.borrow_mut();
 
@@ -114,6 +118,7 @@ impl LocalBlindPool {
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
+    #[inline]
     pub fn shrink_to_fit(&mut self) {
         let mut pools = self.pools.borrow_mut();
 
@@ -149,6 +154,8 @@ impl LocalBlindPool {
     /// drop(shared_handle); // Explicitly drop to remove from pool
     /// assert_eq!(pool.len(), 0);
     /// ```
+    #[inline]
+    #[must_use]
     pub fn insert<T: 'static>(&mut self, value: T) -> LocalPooledMut<T> {
         let mut pools = self.pools.borrow_mut();
 
@@ -194,6 +201,8 @@ impl LocalBlindPool {
     ///
     /// # Safety
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
+    #[inline]
+    #[must_use]
     pub unsafe fn insert_with<T, F>(&mut self, f: F) -> LocalPooledMut<T>
     where
         T: 'static,
