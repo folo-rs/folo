@@ -4,7 +4,9 @@ use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 
 use crate::opaque::slab::SlabIterator;
-use crate::{DropPolicy, RawOpaquePoolBuilder, RawPooled, RawPooledMut, Slab, SlabLayout};
+use crate::{
+    DropPolicy, RawOpaquePoolBuilder, RawPooled, RawPooledMut, Slab, SlabLayout, VacancyTracker,
+};
 
 // TODO: Factor out the vacancy cache into its own type.
 // TODO: Optimize scenarios with mass inserts into a large reservation (slow today, poor vacancy cache logic).
@@ -49,19 +51,16 @@ pub struct RawOpaquePool {
     /// with new slabs as needed. Shrinking is supported but must be manually commanded.
     slabs: Vec<Slab>,
 
-    /// Lowest index of any slab that has a vacant slot, if known. We use this to avoid scanning
-    /// the entire collection for vacant slots when reserving memory. This being `None` does not
-    /// imply that there are no vacant slots, it just means we do not know what slab they are in.
-    /// In other words, this is a cache, not the ground truth - we set it to `None` when we lose
-    /// confidence that the data is still valid but when we have no need to look up the new value.
-    slab_with_vacant_slot_index: Option<usize>,
-
     /// Drop policy that determines how the pool handles remaining items when dropped.
     drop_policy: DropPolicy,
 
     /// Number of items currently in the pool. We track this explicitly to avoid repeatedly
     /// summing across slabs when calculating the length.
     length: usize,
+
+    /// Tracks which slabs have vacancies, acting as a cache for fast insertion.
+    /// Guaranteed 100% accurate - we update the tracker whenever there is a status change.
+    vacancy_tracker: VacancyTracker,
 }
 
 impl RawOpaquePool {
@@ -107,9 +106,9 @@ impl RawOpaquePool {
         Self {
             slab_layout,
             slabs: Vec::new(),
-            slab_with_vacant_slot_index: None,
             drop_policy,
             length: 0,
+            vacancy_tracker: VacancyTracker::new(),
         }
     }
 
@@ -165,6 +164,8 @@ impl RawOpaquePool {
             iter::repeat_with(|| Slab::new(self.slab_layout, self.drop_policy))
                 .take(additional_slabs),
         );
+
+        self.vacancy_tracker.update_slab_count(self.slabs.len());
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
@@ -187,14 +188,10 @@ impl RawOpaquePool {
             })
             .unwrap_or(0);
 
-        // If we're about to remove slabs, we need to invalidate the vacant slot cache
-        // since it might point to a slab that will no longer exist.
-        if new_len < self.slabs.len() {
-            self.slab_with_vacant_slot_index = None;
-        }
-
         // Truncate the slabs vector to remove empty slabs from the end.
         self.slabs.truncate(new_len);
+
+        self.vacancy_tracker.update_slab_count(self.slabs.len());
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert.md")]
@@ -357,13 +354,10 @@ impl RawOpaquePool {
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {
-        let slab_index = self.index_of_slab_with_vacant_slot();
+        let slab_index = self.index_of_slab_to_insert_into();
 
-        #[expect(
-            clippy::indexing_slicing,
-            reason = "we just received knowledge that there is a slab with a vacant slot at this index"
-        )]
-        let slab = &mut self.slabs[slab_index];
+        // SAFETY: We just received knowledge that there is a slab with a vacant slot at this index.
+        let slab = unsafe { self.slabs.get_unchecked_mut(slab_index) };
 
         // We invalidate the "slab with vacant slot" cache here if this is the last vacant slot.
         //
@@ -372,7 +366,7 @@ impl RawOpaquePool {
         let predicted_slab_filled_slots = slab.len().wrapping_add(1);
 
         if predicted_slab_filled_slots == self.slab_layout.capacity().get() {
-            self.slab_with_vacant_slot_index = None;
+            self.vacancy_tracker.update_slab_status(slab_index, false);
         }
 
         // SAFETY: Forwarding guarantee from caller that T's layout matches the pool's layout
@@ -418,7 +412,8 @@ impl RawOpaquePool {
         // There is now a vacant slot in this slab! We remember this for fast insertions.
         // We try to remember the lowest index of a slab with a vacant slot, so we
         // fill the collection from the start (to enable easier shrinking later).
-        self.update_vacant_slot_cache(handle.slab_index());
+        self.vacancy_tracker
+            .update_slab_status(handle.slab_index(), true);
     }
 
     #[doc = include_str!("../../doc/snippets/raw_pool_remove_mut_unpin.md")]
@@ -459,7 +454,8 @@ impl RawOpaquePool {
         // There is now a vacant slot in this slab! We remember this for fast insertions.
         // We try to remember the lowest index of a slab with a vacant slot, so we
         // fill the collection from the start (to enable easier shrinking later).
-        self.update_vacant_slot_cache(handle.slab_index());
+        self.vacancy_tracker
+            .update_slab_status(handle.slab_index(), true);
 
         value
     }
@@ -471,66 +467,24 @@ impl RawOpaquePool {
         RawOpaquePoolIterator::new(self)
     }
 
-    /// Adds a new slab to the pool and returns its index.
+    /// Adds a new slab if needed.
     #[must_use]
-    fn add_new_slab(&mut self) -> usize {
+    fn index_of_slab_to_insert_into(&mut self) -> usize {
+        if let Some(index) = self.vacancy_tracker.next_vacancy() {
+            // There is a vacancy, so use it.
+            return index;
+        }
+
+        // If we got here, there are no vacancies and we need to extend the pool.
+        debug_assert_eq!(self.len(), self.capacity());
+
         self.slabs
             .push(Slab::new(self.slab_layout, self.drop_policy));
 
+        self.vacancy_tracker.update_slab_count(self.slabs.len());
+
         // This can never wrap around because we just added a slab, so len() is at least 1.
         self.slabs.len().wrapping_sub(1)
-    }
-
-    #[must_use]
-    fn index_of_slab_with_vacant_slot(&mut self) -> usize {
-        if let Some(index) = self.slab_with_vacant_slot_index {
-            // If we have this cached, we return it immediately.
-            // This is a performance optimization to avoid scanning the entire collection.
-            return index;
-        }
-
-        // If the pool is full, we know we need to add a new slab without checking.
-        if self.len() == self.capacity() {
-            let index = self.add_new_slab();
-            self.set_vacant_slot_cache(index);
-            return index;
-        }
-
-        // We lookup the first slab with some free space, filling the collection from the start.
-        let index = self
-            .slabs
-            .iter()
-            .enumerate()
-            .find_map(|(index, slab)| if !slab.is_full() { Some(index) } else { None })
-            .expect("since len() != capacity(), at least one slab must have vacant slots");
-
-        // We update the cache. The caller is responsible for invalidating this when needed.
-        self.set_vacant_slot_cache(index);
-        index
-    }
-
-    /// Updates the vacant slot cache to point to the slab with the lowest index that has a vacant slot.
-    ///
-    /// This should be called when a slot becomes vacant in a slab. The cache will only be updated
-    /// if the provided slab index is lower than the current cached index, ensuring we always
-    /// point to the lowest-indexed slab with vacant slots for better memory locality.
-    #[cfg_attr(test, mutants::skip)] // Some mutations are untestable - this is just a cache so even if this gets mutated away, we will still operate correctly, just with less performance.
-    fn update_vacant_slot_cache(&mut self, slab_with_vacant_slot_index: usize) {
-        if self
-            .slab_with_vacant_slot_index
-            .is_none_or(|current| current > slab_with_vacant_slot_index)
-        {
-            self.slab_with_vacant_slot_index = Some(slab_with_vacant_slot_index);
-        }
-    }
-
-    /// Sets the vacant slot cache to the specified slab index.
-    ///
-    /// This unconditionally updates the cache and should be used when we have determined
-    /// the exact slab index that should be cached.
-    #[cfg_attr(test, mutants::skip)] // Some mutations are untestable - this is just a cache so even if this gets mutated away, we will still operate correctly, just with less performance.
-    fn set_vacant_slot_cache(&mut self, slab_index: usize) {
-        self.slab_with_vacant_slot_index = Some(slab_index);
     }
 }
 
