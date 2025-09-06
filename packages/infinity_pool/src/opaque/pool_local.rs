@@ -120,8 +120,35 @@ impl LocalOpaquePool {
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert.md")]
+    /// 
     /// # Panics
     #[doc = include_str!("../../doc/snippets/panic_on_pool_t_layout_mismatch.md")]
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use infinity_pool::LocalOpaquePool;
+    ///
+    /// let mut pool = LocalOpaquePool::with_layout_of::<String>();
+    ///
+    /// // Insert an object into the pool
+    /// let mut handle = pool.insert("Hello".to_string());
+    ///
+    /// // Mutate the object via the unique handle
+    /// handle.push_str(", Local Opaque World!");
+    /// assert_eq!(&*handle, "Hello, Local Opaque World!");
+    ///
+    /// // Transform the unique handle into a shared handle
+    /// let shared_handle = handle.into_shared();
+    ///
+    /// // After transformation, you can only immutably dereference the object
+    /// assert_eq!(&*shared_handle, "Hello, Local Opaque World!");
+    /// // shared_handle.push_str("!"); // This would not compile
+    ///
+    /// // The object is removed when the handle is dropped
+    /// drop(shared_handle); // Explicitly drop to remove from pool
+    /// assert_eq!(pool.len(), 0);
+    /// ```
     pub fn insert<T: 'static>(&mut self, value: T) -> LocalPooledMut<T> {
         let inner = self.inner.borrow_mut().insert(value);
 

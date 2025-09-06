@@ -109,6 +109,32 @@ impl BlindPool {
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert.md")]
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use infinity_pool::BlindPool;
+    ///
+    /// let mut pool = BlindPool::new();
+    ///
+    /// // Insert an object into the pool
+    /// let mut handle = pool.insert("Hello".to_string());
+    ///
+    /// // Mutate the object via the unique handle
+    /// handle.push_str(", Blind World!");
+    /// assert_eq!(&*handle, "Hello, Blind World!");
+    ///
+    /// // Transform the unique handle into a shared handle
+    /// let shared_handle = handle.into_shared();
+    ///
+    /// // After transformation, you can only immutably dereference the object
+    /// assert_eq!(&*shared_handle, "Hello, Blind World!");
+    /// // shared_handle.push_str("!"); // This would not compile
+    ///
+    /// // The object is removed when the handle is dropped
+    /// drop(shared_handle); // Explicitly drop to remove from pool
+    /// assert_eq!(pool.len(), 0);
+    /// ```
     pub fn insert<T: Send + 'static>(&mut self, value: T) -> PooledMut<T> {
         let mut pools = self.pools.lock().expect(ERR_POISONED_LOCK);
 

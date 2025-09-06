@@ -96,6 +96,32 @@ where
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert.md")]
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use infinity_pool::LocalPinnedPool;
+    ///
+    /// let mut pool = LocalPinnedPool::<String>::new();
+    ///
+    /// // Insert an object into the pool
+    /// let mut handle = pool.insert("Hello".to_string());
+    ///
+    /// // Mutate the object via the unique handle
+    /// handle.push_str(", Local World!");
+    /// assert_eq!(&*handle, "Hello, Local World!");
+    ///
+    /// // Transform the unique handle into a shared handle
+    /// let shared_handle = handle.into_shared();
+    ///
+    /// // After transformation, you can only immutably dereference the object
+    /// assert_eq!(&*shared_handle, "Hello, Local World!");
+    /// // shared_handle.push_str("!"); // This would not compile
+    ///
+    /// // The object is removed when the handle is dropped
+    /// drop(shared_handle); // Explicitly drop to remove from pool
+    /// assert_eq!(pool.len(), 0);
+    /// ```
     pub fn insert(&mut self, value: T) -> LocalPooledMut<T> {
         let inner = self.inner.borrow_mut().insert(value);
 

@@ -194,8 +194,46 @@ impl RawOpaquePool {
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert.md")]
+    ///
     /// # Panics
     #[doc = include_str!("../../doc/snippets/panic_on_pool_t_layout_mismatch.md")]
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::alloc::Layout;
+    ///
+    /// use infinity_pool::RawOpaquePool;
+    ///
+    /// let mut pool = RawOpaquePool::with_layout(Layout::new::<String>());
+    ///
+    /// // Insert an object into the pool
+    /// let mut handle = pool.insert("Hello".to_string());
+    ///
+    /// // Mutate the object via the unique handle
+    /// // SAFETY: The handle is valid and points to a properly initialized String
+    /// unsafe {
+    ///     handle.as_mut().push_str(", Raw Opaque World!");
+    ///     assert_eq!(handle.as_ref(), "Hello, Raw Opaque World!");
+    /// }
+    ///
+    /// // Transform the unique handle into a shared handle
+    /// let shared_handle = handle.into_shared();
+    ///
+    /// // After transformation, you can only immutably dereference the object
+    /// // SAFETY: The shared handle is valid and points to a properly initialized String
+    /// unsafe {
+    ///     assert_eq!(shared_handle.as_ref(), "Hello, Raw Opaque World!");
+    ///     // shared_handle.as_mut(); // This would not compile
+    /// }
+    ///
+    /// // Explicitly remove the object from the pool
+    /// // SAFETY: The handle belongs to this pool and references a valid object
+    /// unsafe {
+    ///     pool.remove(shared_handle);
+    /// }
+    /// assert_eq!(pool.len(), 0);
+    /// ```
     pub fn insert<T>(&mut self, value: T) -> RawPooledMut<T> {
         assert_eq!(
             Layout::new::<T>(),
@@ -226,6 +264,7 @@ impl RawOpaquePool {
     ///
     /// ```rust
     /// use std::mem::MaybeUninit;
+    ///
     /// use infinity_pool::RawOpaquePool;
     ///
     /// struct DataBuffer {
@@ -277,6 +316,7 @@ impl RawOpaquePool {
     ///
     /// ```rust
     /// use std::mem::MaybeUninit;
+    ///
     /// use infinity_pool::RawOpaquePool;
     ///
     /// struct DataBuffer {

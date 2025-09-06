@@ -100,6 +100,41 @@ impl<T> RawPinnedPool<T> {
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert.md")]
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use infinity_pool::RawPinnedPool;
+    ///
+    /// let mut pool = RawPinnedPool::<String>::new();
+    ///
+    /// // Insert an object into the pool
+    /// let mut handle = pool.insert("Hello".to_string());
+    ///
+    /// // Mutate the object via the unique handle
+    /// // SAFETY: The handle is valid and points to a properly initialized String
+    /// unsafe {
+    ///     handle.as_mut().push_str(", Raw World!");
+    ///     assert_eq!(handle.as_ref(), "Hello, Raw World!");
+    /// }
+    ///
+    /// // Transform the unique handle into a shared handle
+    /// let shared_handle = handle.into_shared();
+    ///
+    /// // After transformation, you can only immutably dereference the object
+    /// // SAFETY: The shared handle is valid and points to a properly initialized String
+    /// unsafe {
+    ///     assert_eq!(shared_handle.as_ref(), "Hello, Raw World!");
+    ///     // shared_handle.as_mut(); // This would not compile
+    /// }
+    ///
+    /// // Explicitly remove the object from the pool
+    /// // SAFETY: The handle belongs to this pool and references a valid object
+    /// unsafe {
+    ///     pool.remove(shared_handle);
+    /// }
+    /// assert_eq!(pool.len(), 0);
+    /// ```
     pub fn insert(&mut self, value: T) -> RawPooledMut<T> {
         // SAFETY: match between T and inner pool layout is a type invariant.
         unsafe { self.inner.insert_unchecked(value) }
