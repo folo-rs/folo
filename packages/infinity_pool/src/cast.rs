@@ -6,8 +6,8 @@
 /// a handle that dereferences to the trait object instead of the original concrete type.
 ///
 /// The generated cast method allows conversion from `Pooled<T>` to `Pooled<dyn Trait>`
-/// where `T` implements the trait in question (and equivalently for `LocalPooled`,
-/// `RawPooled` and `RawBlindPooled`).
+/// where `T` implements the trait in question (and equivalently for `LocalPooled<T>`,
+/// `RawPooled<T>` and `RawBlindPooled<T>`).
 ///
 /// # Parameters
 ///
