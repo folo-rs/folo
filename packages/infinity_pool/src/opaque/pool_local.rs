@@ -39,6 +39,19 @@ use crate::{LocalPooledMut, RawOpaquePool, RawOpaquePoolIterator};
 /// work_with_displayable("Hello, world!");
 /// work_with_displayable(42);
 /// ```
+///
+/// # Pool clones are functionally equivalent
+///
+/// ```rust
+/// use infinity_pool::LocalOpaquePool;
+///
+/// let pool1 = LocalOpaquePool::with_layout_of::<i32>();
+/// let pool2 = pool1.clone();
+///
+/// assert_eq!(pool1.len(), pool2.len());
+/// let _handle = pool1.insert(42_i32);
+/// assert_eq!(pool1.len(), pool2.len());
+/// ```
 #[derive(Debug)]
 pub struct LocalOpaquePool {
     // We require 'static from any inserted values because the pool

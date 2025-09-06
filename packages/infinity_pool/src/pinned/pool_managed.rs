@@ -36,6 +36,19 @@ use crate::{
 /// // The object is automatically removed when the handle is dropped
 /// ```
 ///
+/// # Pool clones are functionally equivalent
+///
+/// ```rust
+/// use infinity_pool::PinnedPool;
+///
+/// let pool1 = PinnedPool::<i32>::new();
+/// let pool2 = pool1.clone();
+///
+/// assert_eq!(pool1.len(), pool2.len());
+/// let _handle = pool1.insert(42);
+/// assert_eq!(pool1.len(), pool2.len());
+/// ```
+///
 /// The pool is thread-safe (`Send` and `Sync`) and requires `T: Send`.
 pub struct PinnedPool<T: Send + 'static> {
     // We require 'static from any inserted values because the pool

@@ -34,6 +34,19 @@ use crate::{ERR_POISONED_LOCK, PooledMut, RawOpaquePool, RawOpaquePoolSend};
 /// work_with_data("Hello, Blind!");
 /// work_with_data(42);
 /// ```
+///
+/// # Pool clones are functionally equivalent
+///
+/// ```rust
+/// use infinity_pool::BlindPool;
+///
+/// let pool1 = BlindPool::new();
+/// let pool2 = pool1.clone();
+///
+/// assert_eq!(pool1.len(), pool2.len());
+/// let _handle = pool1.insert(42_i32);
+/// assert_eq!(pool1.len(), pool2.len());
+/// ```
 #[derive(Debug, Default, Clone)]
 pub struct BlindPool {
     // Internal pools, one for each unique memory layout encountered.

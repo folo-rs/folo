@@ -39,7 +39,18 @@ use crate::{LocalPooledMut, RawOpaquePool};
 /// work_with_data(42);
 /// ```
 ///
-/// The pool is single-threaded.
+/// # Pool clones are functionally equivalent
+///
+/// ```rust
+/// use infinity_pool::LocalBlindPool;
+///
+/// let pool1 = LocalBlindPool::new();
+/// let pool2 = pool1.clone();
+///
+/// assert_eq!(pool1.len(), pool2.len());
+/// let _handle = pool1.insert(42_i32);
+/// assert_eq!(pool1.len(), pool2.len());
+/// ```
 #[derive(Debug, Default, Clone)]
 pub struct LocalBlindPool {
     // Internal pools, one for each unique memory layout encountered.

@@ -36,6 +36,19 @@ use crate::{ERR_POISONED_LOCK, PooledMut, RawOpaquePool, RawOpaquePoolSend};
 /// work_with_displayable("Hello, world!");
 /// work_with_displayable(42);
 /// ```
+///
+/// # Pool clones are functionally equivalent
+///
+/// ```rust
+/// use infinity_pool::OpaquePool;
+///
+/// let pool1 = OpaquePool::with_layout_of::<i32>();
+/// let pool2 = pool1.clone();
+///
+/// assert_eq!(pool1.len(), pool2.len());
+/// let _handle = pool1.insert(42_i32);
+/// assert_eq!(pool1.len(), pool2.len());
+/// ```
 #[derive(Debug)]
 pub struct OpaquePool {
     // We require 'static from any inserted values because the pool

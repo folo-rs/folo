@@ -34,6 +34,19 @@ use crate::{LocalPooledMut, RawOpaquePool, RawOpaquePoolIterator};
 ///
 /// // The object is automatically removed when the handle is dropped
 /// ```
+///
+/// # Pool clones are functionally equivalent
+///
+/// ```rust
+/// use infinity_pool::LocalPinnedPool;
+///
+/// let pool1 = LocalPinnedPool::<i32>::new();
+/// let pool2 = pool1.clone();
+///
+/// assert_eq!(pool1.len(), pool2.len());
+/// let _handle = pool1.insert(42);
+/// assert_eq!(pool1.len(), pool2.len());
+/// ```
 pub struct LocalPinnedPool<T: 'static> {
     // We require 'static from any inserted values because the pool
     // does not enforce any Rust lifetime semantics, only reference counts.
