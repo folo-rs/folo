@@ -81,27 +81,27 @@
 //! assert_eq!(*number_handle, 42);
 //! ```
 //!
-//! ## Trait object usage with [`OpaquePool`]
+//! ## Trait object usage with [`BlindPool`]
 //!
 //! ```
 //! use std::fmt::Display;
-//! use infinity_pool::{OpaquePool, define_pooled_dyn_cast};
+//! use infinity_pool::{BlindPool, Pooled, define_pooled_dyn_cast};
 //!
 //! // Enable casting to Display trait objects
 //! define_pooled_dyn_cast!(Display);
 //!
-//! // Function that works with any Display type - no hardcoded types
-//! fn store_and_process<T: Display + Send + 'static>(item: T) {
-//!     let mut pool = OpaquePool::with_layout_of::<T>();
-//!     let handle = pool.insert(item);
-//!     
-//!     // Cast to trait object - function doesn't know what T is
-//!     let display_handle = handle.cast_display();
-//!     println!("Stored and processing: {}", &*display_handle);
+//! // Function that accepts trait object handles directly
+//! fn process_displayable(handle: Pooled<dyn Display>) {
+//!     println!("Processing: {}", &*handle);
 //! }
 //!
-//! store_and_process("Hello, world!".to_string()); // Works with String
-//! store_and_process(42); // Works with i32
+//! let mut pool = BlindPool::new();
+//! let string_handle = pool.insert("Hello, world!".to_string());
+//! let number_handle = pool.insert(42i32);
+//!
+//! // Cast to trait objects and pass to function
+//! process_displayable(string_handle.cast_display());
+//! process_displayable(number_handle.cast_display());
 //! ```
 
 mod blind;
