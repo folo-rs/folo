@@ -27,15 +27,7 @@ mutants = { workspace = true }
 static_assertions = { workspace = true }
 
 [[bench]]
-name = "ip_insertion_benchmark"
-harness = false
-
-[[bench]]
-name = "ip_reserved_insertion_benchmark"
-harness = false
-
-[[bench]]
-name = "ip_churn_insertion_benchmark"
+name = "ip_vs_std"
 harness = false
 
 [lints]
