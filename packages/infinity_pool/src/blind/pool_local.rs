@@ -1,11 +1,9 @@
 use std::alloc::Layout;
-use std::cell::{RefCell, RefMut};
+use std::cell::RefMut;
 use std::mem::MaybeUninit;
 use std::rc::Rc;
 
-use foldhash::HashMap;
-
-use crate::{LocalPooledMut, RawOpaquePool};
+use crate::{LocalBlindPoolCore, LocalBlindPoolInnerMap, LocalBlindPooledMut, RawOpaquePool};
 
 /// A single-threaded reference-counting object pool that accepts any type of object.
 ///
@@ -58,16 +56,16 @@ pub struct LocalBlindPool {
     // We require 'static from any inserted values because the pool
     // does not enforce any Rust lifetime semantics, only reference counts.
     //
-    // The pool type itself is just a handle around the inner pool,
-    // which is reference-counted and mutex-guarded. The inner pool
-    // will only ever be dropped once all items have been removed from
-    // it and no more `OpaquePool` instances exist that point to it.
+    // The pool type itself is just a handle around the core object,
+    // which is reference-counted, mutex-guarded and shared between all pool
+    // and handle objects. The core will only ever be dropped once all items
+    // have been removed from the pool and all the pool objects have been dropped.
     //
     // This also implies that `DropPolicy` has no meaning for this
-    // pool configuration, as the pool can never be dropped if it has
+    // pool configuration, as the core can never be dropped if it has
     // contents (as dropping the handles of pooled objects will remove
     // them from the pool, while keeping the pool alive until then).
-    pools: Rc<RefCell<PoolMap>>,
+    core: LocalBlindPoolCore,
 }
 
 impl LocalBlindPool {
@@ -81,9 +79,9 @@ impl LocalBlindPool {
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        let pools = self.pools.borrow();
+        let core = self.core.borrow();
 
-        pools.values().map(|pool| pool.borrow().len()).sum()
+        core.values().map(RawOpaquePool::len).sum()
     }
 
     #[doc = include_str!("../../doc/snippets/blind_pool_capacity.md")]
@@ -92,11 +90,10 @@ impl LocalBlindPool {
     pub fn capacity_for<T: 'static>(&self) -> usize {
         let layout = Layout::new::<T>();
 
-        let pools = self.pools.borrow();
+        let core = self.core.borrow();
 
-        pools
-            .get(&layout)
-            .map(|pool| pool.borrow().capacity())
+        core.get(&layout)
+            .map(RawOpaquePool::capacity)
             .unwrap_or_default()
     }
 
@@ -110,20 +107,20 @@ impl LocalBlindPool {
     #[doc = include_str!("../../doc/snippets/blind_pool_reserve.md")]
     #[inline]
     pub fn reserve_for<T: 'static>(&mut self, additional: usize) {
-        let mut pools = self.pools.borrow_mut();
+        let mut core = self.core.borrow_mut();
 
-        let pool = ensure_inner_pool::<T>(&mut pools);
+        let pool = ensure_inner_pool::<T>(&mut core);
 
-        pool.borrow_mut().reserve(additional);
+        pool.reserve(additional);
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     #[inline]
     pub fn shrink_to_fit(&mut self) {
-        let mut pools = self.pools.borrow_mut();
+        let mut core = self.core.borrow_mut();
 
-        for pool in pools.values_mut() {
-            pool.borrow_mut().shrink_to_fit();
+        for pool in core.values_mut() {
+            pool.shrink_to_fit();
         }
     }
 
@@ -156,15 +153,15 @@ impl LocalBlindPool {
     /// ```
     #[inline]
     #[must_use]
-    pub fn insert<T: 'static>(&mut self, value: T) -> LocalPooledMut<T> {
-        let mut pools = self.pools.borrow_mut();
+    pub fn insert<T: 'static>(&mut self, value: T) -> LocalBlindPooledMut<T> {
+        let mut core = self.core.borrow_mut();
 
-        let pool = ensure_inner_pool::<T>(&mut pools);
+        let pool = ensure_inner_pool::<T>(&mut core);
 
         // SAFETY: inner pool selector guarantees matching layout.
-        let inner_handle = unsafe { pool.borrow_mut().insert_unchecked(value) };
+        let inner_handle = unsafe { pool.insert_unchecked(value) };
 
-        LocalPooledMut::new(inner_handle, Rc::clone(pool))
+        LocalBlindPooledMut::new(inner_handle, Layout::new::<T>(), Rc::clone(&self.core))
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
@@ -173,6 +170,7 @@ impl LocalBlindPool {
     ///
     /// ```rust
     /// use std::mem::MaybeUninit;
+    ///
     /// use infinity_pool::LocalBlindPool;
     ///
     /// struct DataBuffer {
@@ -203,38 +201,31 @@ impl LocalBlindPool {
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
     #[inline]
     #[must_use]
-    pub unsafe fn insert_with<T, F>(&mut self, f: F) -> LocalPooledMut<T>
+    pub unsafe fn insert_with<T, F>(&mut self, f: F) -> LocalBlindPooledMut<T>
     where
         T: 'static,
         F: FnOnce(&mut MaybeUninit<T>),
     {
-        let mut pools = self.pools.borrow_mut();
+        let mut core = self.core.borrow_mut();
 
-        let pool = ensure_inner_pool::<T>(&mut pools);
+        let pool = ensure_inner_pool::<T>(&mut core);
 
         // SAFETY: inner pool selector guarantees matching layout.
         // Initialization guarantee is forwarded from the caller.
-        let inner_handle = unsafe { pool.borrow_mut().insert_with_unchecked(f) };
+        let inner_handle = unsafe { pool.insert_with_unchecked(f) };
 
-        LocalPooledMut::new(inner_handle, Rc::clone(pool))
+        LocalBlindPooledMut::new(inner_handle, Layout::new::<T>(), Rc::clone(&self.core))
     }
 }
 
-// Each inner pool is separately locked because those locks are used by the handles to
-// remove the specific object from the specific pool in a runtime-borrowed manner. The pool
-// itself only ever takes those locks while holding the map lock, ensuring correct lock ordering.
-type PoolMap = HashMap<Layout, Rc<RefCell<RawOpaquePool>>>;
-
 fn ensure_inner_pool<'a, T: 'static>(
-    pools: &'a mut RefMut<'_, PoolMap>,
-) -> &'a Rc<RefCell<RawOpaquePool>> {
+    pools: &'a mut RefMut<'_, LocalBlindPoolInnerMap>,
+) -> &'a mut RawOpaquePool {
     let layout = Layout::new::<T>();
 
-    pools.entry(layout).or_insert_with_key(|layout| {
-        let inner = RawOpaquePool::with_layout(*layout);
-
-        Rc::new(RefCell::new(inner))
-    })
+    pools
+        .entry(layout)
+        .or_insert_with_key(|layout| RawOpaquePool::with_layout(*layout))
 }
 
 #[cfg(test)]

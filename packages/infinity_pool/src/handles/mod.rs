@@ -1,3 +1,7 @@
+mod blind_local;
+mod blind_local_mut;
+mod blind_managed;
+mod blind_managed_mut;
 mod blind_raw;
 mod blind_raw_mut;
 mod local;
@@ -7,6 +11,10 @@ mod managed_mut;
 mod raw;
 mod raw_mut;
 
+pub use blind_local::*;
+pub use blind_local_mut::*;
+pub use blind_managed::*;
+pub use blind_managed_mut::*;
 pub use blind_raw::*;
 pub use blind_raw_mut::*;
 pub use local::*;

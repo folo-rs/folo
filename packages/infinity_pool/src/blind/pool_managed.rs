@@ -1,10 +1,11 @@
 use std::alloc::Layout;
 use std::mem::MaybeUninit;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, MutexGuard};
 
-use foldhash::HashMap;
-
-use crate::{ERR_POISONED_LOCK, PooledMut, RawOpaquePool, RawOpaquePoolSend};
+use crate::{
+    BlindPoolCore, BlindPoolInnerMap, BlindPooledMut, ERR_POISONED_LOCK, RawOpaquePool,
+    RawOpaquePoolSend,
+};
 
 /// A thread-safe reference-counting object pool that accepts any type of object.
 ///
@@ -54,16 +55,16 @@ pub struct BlindPool {
     // We require 'static from any inserted values because the pool
     // does not enforce any Rust lifetime semantics, only reference counts.
     //
-    // The pool type itself is just a handle around the inner pool,
-    // which is reference-counted and mutex-guarded. The inner pool
-    // will only ever be dropped once all items have been removed from
-    // it and no more `OpaquePool` instances exist that point to it.
+    // The pool type itself is just a handle around the core object,
+    // which is reference-counted, mutex-guarded and shared between all pool
+    // and handle objects. The core will only ever be dropped once all items
+    // have been removed from the pool and all the pool objects have been dropped.
     //
     // This also implies that `DropPolicy` has no meaning for this
-    // pool configuration, as the pool can never be dropped if it has
+    // pool configuration, as the core can never be dropped if it has
     // contents (as dropping the handles of pooled objects will remove
     // them from the pool, while keeping the pool alive until then).
-    pools: Arc<Mutex<PoolMap>>,
+    core: BlindPoolCore,
 }
 
 impl BlindPool {
@@ -77,12 +78,9 @@ impl BlindPool {
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        let pools = self.pools.lock().expect(ERR_POISONED_LOCK);
+        let core = self.core.lock().expect(ERR_POISONED_LOCK);
 
-        pools
-            .values()
-            .map(|pool| pool.lock().expect(ERR_POISONED_LOCK).len())
-            .sum()
+        core.values().map(|pool| pool.len()).sum()
     }
 
     #[doc = include_str!("../../doc/snippets/blind_pool_capacity.md")]
@@ -91,11 +89,10 @@ impl BlindPool {
     pub fn capacity_for<T: Send + 'static>(&self) -> usize {
         let layout = Layout::new::<T>();
 
-        let pools = self.pools.lock().expect(ERR_POISONED_LOCK);
+        let core = self.core.lock().expect(ERR_POISONED_LOCK);
 
-        pools
-            .get(&layout)
-            .map(|pool| pool.lock().expect(ERR_POISONED_LOCK).capacity())
+        core.get(&layout)
+            .map(|pool| pool.capacity())
             .unwrap_or_default()
     }
 
@@ -109,20 +106,20 @@ impl BlindPool {
     #[doc = include_str!("../../doc/snippets/blind_pool_reserve.md")]
     #[inline]
     pub fn reserve_for<T: Send + 'static>(&mut self, additional: usize) {
-        let mut pools = self.pools.lock().expect(ERR_POISONED_LOCK);
+        let mut core = self.core.lock().expect(ERR_POISONED_LOCK);
 
-        let pool = ensure_inner_pool::<T>(&mut pools);
+        let pool = ensure_inner_pool::<T>(&mut core);
 
-        pool.lock().expect(ERR_POISONED_LOCK).reserve(additional);
+        pool.reserve(additional);
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     #[inline]
     pub fn shrink_to_fit(&mut self) {
-        let mut pools = self.pools.lock().expect(ERR_POISONED_LOCK);
+        let mut core = self.core.lock().expect(ERR_POISONED_LOCK);
 
-        for pool in pools.values_mut() {
-            pool.lock().expect(ERR_POISONED_LOCK).shrink_to_fit();
+        for pool in core.values_mut() {
+            pool.shrink_to_fit();
         }
     }
 
@@ -155,19 +152,15 @@ impl BlindPool {
     /// ```
     #[inline]
     #[must_use]
-    pub fn insert<T: Send + 'static>(&mut self, value: T) -> PooledMut<T> {
-        let mut pools = self.pools.lock().expect(ERR_POISONED_LOCK);
+    pub fn insert<T: Send + 'static>(&mut self, value: T) -> BlindPooledMut<T> {
+        let mut core = self.core.lock().expect(ERR_POISONED_LOCK);
 
-        let pool = ensure_inner_pool::<T>(&mut pools);
+        let pool = ensure_inner_pool::<T>(&mut core);
 
         // SAFETY: inner pool selector guarantees matching layout.
-        let inner_handle = unsafe {
-            pool.lock()
-                .expect(ERR_POISONED_LOCK)
-                .insert_unchecked(value)
-        };
+        let inner_handle = unsafe { pool.insert_unchecked(value) };
 
-        PooledMut::new(inner_handle, Arc::clone(pool))
+        BlindPooledMut::new(inner_handle, Layout::new::<T>(), Arc::clone(&self.core))
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
@@ -176,6 +169,7 @@ impl BlindPool {
     ///
     /// ```rust
     /// use std::mem::MaybeUninit;
+    ///
     /// use infinity_pool::BlindPool;
     ///
     /// struct DataBuffer {
@@ -206,41 +200,30 @@ impl BlindPool {
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
     #[inline]
     #[must_use]
-    pub unsafe fn insert_with<T: Send + 'static, F>(&mut self, f: F) -> PooledMut<T>
+    pub unsafe fn insert_with<T: Send + 'static, F>(&mut self, f: F) -> BlindPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {
-        let mut pools = self.pools.lock().expect(ERR_POISONED_LOCK);
+        let mut core = self.core.lock().expect(ERR_POISONED_LOCK);
 
-        let pool = ensure_inner_pool::<T>(&mut pools);
+        let pool = ensure_inner_pool::<T>(&mut core);
 
         // SAFETY: inner pool selector guarantees matching layout.
         // Initialization guarantee is forwarded from the caller.
-        let inner_handle = unsafe {
-            pool.lock()
-                .expect(ERR_POISONED_LOCK)
-                .insert_with_unchecked(f)
-        };
+        let inner_handle = unsafe { pool.insert_with_unchecked(f) };
 
-        PooledMut::new(inner_handle, Arc::clone(pool))
+        BlindPooledMut::new(inner_handle, Layout::new::<T>(), Arc::clone(&self.core))
     }
 }
 
-// Each inner pool is separately locked because those locks are used by the handles to
-// remove the specific object from the specific pool in a thread-safe manner. The pool
-// itself only ever takes those locks while holding the map lock, ensuring correct lock ordering.
-type PoolMap = HashMap<Layout, Arc<Mutex<RawOpaquePoolSend>>>;
-
 fn ensure_inner_pool<'a, T: Send + 'static>(
-    pools: &'a mut MutexGuard<'_, PoolMap>,
-) -> &'a Arc<Mutex<RawOpaquePoolSend>> {
+    core: &'a mut MutexGuard<'_, BlindPoolInnerMap>,
+) -> &'a mut RawOpaquePoolSend {
     let layout = Layout::new::<T>();
 
-    pools.entry(layout).or_insert_with_key(|layout| {
+    core.entry(layout).or_insert_with_key(|layout| {
         // SAFETY: We always require `T: Send`.
-        let inner = unsafe { RawOpaquePoolSend::new(RawOpaquePool::with_layout(*layout)) };
-
-        Arc::new(Mutex::new(inner))
+        unsafe { RawOpaquePoolSend::new(RawOpaquePool::with_layout(*layout)) }
     })
 }
 
