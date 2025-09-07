@@ -406,11 +406,12 @@ impl RawOpaquePool {
         // so the value must be at least 1 before subtraction.
         self.length = self.length.wrapping_sub(1);
 
-        // There is now a vacant slot in this slab! We remember this for fast insertions.
-        // We try to remember the lowest index of a slab with a vacant slot, so we
-        // fill the collection from the start (to enable easier shrinking later).
-        self.vacancy_tracker
-            .update_slab_status(handle.slab_index(), true);
+        if slab.len() == self.slab_layout.capacity().get().wrapping_sub(1) {
+            // We removed from a full slab.
+            // This means we have a vacant slot where there was not one before.
+            self.vacancy_tracker
+                .update_slab_status(handle.slab_index(), true);
+        }
     }
 
     #[doc = include_str!("../../doc/snippets/raw_pool_remove_mut_unpin.md")]
@@ -448,11 +449,12 @@ impl RawOpaquePool {
         // so the value must be at least 1 before subtraction.
         self.length = self.length.wrapping_sub(1);
 
-        // There is now a vacant slot in this slab! We remember this for fast insertions.
-        // We try to remember the lowest index of a slab with a vacant slot, so we
-        // fill the collection from the start (to enable easier shrinking later).
-        self.vacancy_tracker
-            .update_slab_status(handle.slab_index(), true);
+        if slab.len() == self.slab_layout.capacity().get().wrapping_sub(1) {
+            // We removed from a full slab.
+            // This means we have a vacant slot where there was not one before.
+            self.vacancy_tracker
+                .update_slab_status(handle.slab_index(), true);
+        }
 
         value
     }
