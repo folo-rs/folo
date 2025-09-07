@@ -14,7 +14,7 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
-pinned_pool = { workspace = true }
+infinity_pool = { workspace = true }
 
 [dev-dependencies]
 all_the_time = { path = "../all_the_time" }

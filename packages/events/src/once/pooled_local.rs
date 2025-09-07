@@ -7,6 +7,7 @@
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
 use std::cell::RefCell;
+use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomPinned;
 use std::mem::ManuallyDrop;
@@ -16,7 +17,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::{any, fmt, ptr, task};
 
-use pinned_pool::{Key, PinnedPool};
+use infinity_pool::{RawPinnedPool, RawPooled};
 
 use crate::{Disconnected, LocalOnceEvent, ReflectiveT, Sealed};
 
@@ -53,7 +54,7 @@ use crate::{Disconnected, LocalOnceEvent, ReflectiveT, Sealed};
 /// // Same event reused - no additional allocation overhead
 /// ```
 pub struct LocalOnceEventPool<T> {
-    pool: RefCell<PinnedPool<LocalOnceEvent<T>>>,
+    pool: RefCell<RawPinnedPool<LocalOnceEvent<T>>>,
 
     // It is invalid to move this type once it has been pinned.
     _requires_pinning: PhantomPinned,
@@ -80,7 +81,7 @@ impl<T> LocalOnceEventPool<T> {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            pool: RefCell::new(PinnedPool::new()),
+            pool: RefCell::new(RawPinnedPool::new()),
             _requires_pinning: PhantomPinned,
         }
     }
@@ -117,26 +118,22 @@ impl<T> LocalOnceEventPool<T> {
         PooledLocalOnceReceiver<RefLocalPool<'_, T>>,
     ) {
         let mut inner_pool = self.pool.borrow_mut();
-        let inserter = inner_pool.begin_insert();
-        let key = inserter.key();
 
         // SAFETY: We rely on LocalOnceEvent::new_in_place_bound() for correct initialization.
-        let item = unsafe { inserter.insert_with(LocalOnceEvent::new_in_place_bound) };
-
-        let item_ptr = NonNull::from(item.get_ref());
+        let handle = unsafe { inner_pool.insert_with(LocalOnceEvent::new_in_place_bound) };
 
         let pool_ref = RefLocalPool { pool: self };
 
+        let shared_handle = handle.into_shared();
+
         (
             PooledLocalOnceSender {
-                event: item_ptr,
                 pool_ref: pool_ref.clone(),
-                key,
+                event: shared_handle,
             },
             PooledLocalOnceReceiver {
-                event: Some(item_ptr),
                 pool_ref,
-                key,
+                event: Some(shared_handle),
             },
         )
     }
@@ -175,28 +172,24 @@ impl<T> LocalOnceEventPool<T> {
         PooledLocalOnceReceiver<RcLocalPool<T>>,
     ) {
         let mut inner_pool = self.pool.borrow_mut();
-        let inserter = inner_pool.begin_insert();
-        let key = inserter.key();
 
         // SAFETY: We rely on LocalOnceEvent::new_in_place_bound() for correct initialization.
-        let item = unsafe { inserter.insert_with(LocalOnceEvent::new_in_place_bound) };
-
-        let item_ptr = NonNull::from(item.get_ref());
+        let handle = unsafe { inner_pool.insert_with(LocalOnceEvent::new_in_place_bound) };
 
         let pool_ref = RcLocalPool {
             pool: Rc::clone(self),
         };
 
+        let shared_handle = handle.into_shared();
+
         (
             PooledLocalOnceSender {
-                event: item_ptr,
                 pool_ref: pool_ref.clone(),
-                key,
+                event: shared_handle,
             },
             PooledLocalOnceReceiver {
-                event: Some(item_ptr),
                 pool_ref,
-                key,
+                event: Some(shared_handle),
             },
         )
     }
@@ -247,28 +240,24 @@ impl<T> LocalOnceEventPool<T> {
         PooledLocalOnceReceiver<PtrLocalPool<T>>,
     ) {
         let mut inner_pool = self.pool.borrow_mut();
-        let inserter = inner_pool.begin_insert();
-        let key = inserter.key();
 
         // SAFETY: We rely on LocalOnceEvent::new_in_place_bound() for correct initialization.
-        let item = unsafe { inserter.insert_with(LocalOnceEvent::new_in_place_bound) };
-
-        let item_ptr = NonNull::from(item.get_ref());
+        let handle = unsafe { inner_pool.insert_with(LocalOnceEvent::new_in_place_bound) };
 
         let pool_ref = PtrLocalPool {
             pool: NonNull::from(self.get_ref()),
         };
 
+        let shared_handle = handle.into_shared();
+
         (
             PooledLocalOnceSender {
-                event: item_ptr,
                 pool_ref: pool_ref.clone(),
-                key,
+                event: shared_handle,
             },
             PooledLocalOnceReceiver {
-                event: Some(item_ptr),
                 pool_ref,
-                key,
+                event: Some(shared_handle),
             },
         )
     }
@@ -363,9 +352,14 @@ impl<T> LocalOnceEventPool<T> {
     /// someone.
     #[cfg(debug_assertions)]
     pub fn inspect_awaiters(&self, mut f: impl FnMut(Option<&Backtrace>)) {
-        let pool = self.pool.borrow();
+        let inner_pool = self.pool.borrow();
 
-        for event in pool.iter() {
+        for event_ptr in inner_pool.iter() {
+            // SAFETY: The pool remains alive for the duration of this function call, satisfying
+            // the lifetime requirement. The pointer is valid as it comes from the pool's iterator.
+            // We only ever create shared references to the events, so no conflicting exclusive
+            // references can exist.
+            let event = unsafe { event_ptr.as_ref() };
             event.inspect_awaiter(&mut f);
         }
     }
@@ -381,7 +375,10 @@ impl<T> Default for LocalOnceEventPool<T> {
 ///
 /// This is a sealed trait and exists for internal use only. You never need to use it.
 #[expect(private_bounds, reason = "intentional - sealed trait")]
-pub trait LocalPoolRef<T>: Deref<Target = LocalOnceEventPool<T>> + ReflectiveT + Sealed {}
+pub trait LocalPoolRef<T>:
+    Deref<Target = LocalOnceEventPool<T>> + ReflectiveT + Debug + Sealed
+{
+}
 
 /// An event pool referenced via `&` shared reference.
 ///
@@ -391,7 +388,7 @@ pub struct RefLocalPool<'a, T> {
     pool: &'a LocalOnceEventPool<T>,
 }
 
-impl<T> fmt::Debug for RefLocalPool<'_, T> {
+impl<T> Debug for RefLocalPool<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RefLocalPool")
             .field("item_type", &format_args!("{}", any::type_name::<T>()))
@@ -424,7 +421,7 @@ pub struct RcLocalPool<T> {
     pool: Rc<LocalOnceEventPool<T>>,
 }
 
-impl<T> fmt::Debug for RcLocalPool<T> {
+impl<T> Debug for RcLocalPool<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RcLocalPool")
             .field("item_type", &format_args!("{}", any::type_name::<T>()))
@@ -460,7 +457,7 @@ pub struct PtrLocalPool<T> {
     pool: NonNull<LocalOnceEventPool<T>>,
 }
 
-impl<T> fmt::Debug for PtrLocalPool<T> {
+impl<T> Debug for PtrLocalPool<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PtrLocalPool")
             .field("item_type", &format_args!("{}", any::type_name::<T>()))
@@ -474,7 +471,8 @@ impl<T> Deref for PtrLocalPool<T> {
     type Target = LocalOnceEventPool<T>;
 
     fn deref(&self) -> &Self::Target {
-        // SAFETY: The creator of the reference is responsible for ensuring the pool outlives it.
+        // SAFETY: The owner of the sender/receiver pair is responsible for ensuring the pool
+        // outlives both, satisfying the lifetime requirement for as_ref().
         unsafe { self.pool.as_ref() }
     }
 }
@@ -498,25 +496,20 @@ pub struct PooledLocalOnceSender<P>
 where
     P: LocalPoolRef<<P as ReflectiveT>::T>,
 {
-    // This is a pointer to avoid contaminating the type signature with the event lifetime.
-    //
-    // SAFETY: We rely on the inner pool guaranteeing pinning and the event state machine
-    // itself controlling when it is the appropriate time to release the event.
-    event: NonNull<LocalOnceEvent<P::T>>,
-
     pool_ref: P,
-    key: Key,
+    event: RawPooled<LocalOnceEvent<P::T>>,
 }
 
-impl<P> fmt::Debug for PooledLocalOnceSender<P>
+impl<P> Debug for PooledLocalOnceSender<P>
 where
     P: LocalPoolRef<<P as ReflectiveT>::T>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PooledLocalOnceSender")
             .field("item_type", &format_args!("{}", any::type_name::<P::T>()))
-            .field("key", &self.key)
-            .finish_non_exhaustive()
+            .field("pool_ref", &self.pool_ref)
+            .field("event", &self.event)
+            .finish()
     }
 }
 
@@ -546,21 +539,25 @@ where
         // The drop logic is different before/after set(), so we switch to manual drop here.
         let mut this = ManuallyDrop::new(self);
 
-        // SAFETY: We rely on the event state machine to only signal "release the event" when
-        // we know it will never be used by any logic path again. We only ever create shared
-        // references, so there is no aliasing conflict risk. The two different paths that will
-        // result in the event being released (set() and drop()) are mutually exclusive.
+        // SAFETY: The pool remains alive through the pool_ref, satisfying the lifetime requirement
+        // for creating a reference. No exclusive references can exist because the events package
+        // only uses RawPooled<T> (shared handles), never RawPooledMut<T> (exclusive handles).
         let event = unsafe { this.event.as_ref() };
 
         let set_result = event.set(value);
 
         if set_result == Err(Disconnected) {
             // The other endpoint was disconnected, so we need to release the event resources.
-            this.pool_ref.pool.borrow_mut().remove(this.key);
+
+            // SAFETY: The handle belongs to this pool (created via insert_with()) and the event
+            // state machine ensures this is the only removal path for this event instance.
+            unsafe {
+                this.pool_ref.pool.borrow_mut().remove(this.event);
+            }
         }
 
         // We also still need to drop the pool ref itself!
-        // SAFETY: It is a valid object and ManuallyDrop ensures it will not be auto-dropped.
+        // SAFETY: This is a valid object and ManuallyDrop ensures it will not be auto-dropped.
         unsafe {
             ptr::drop_in_place(&raw mut this.pool_ref);
         }
@@ -573,15 +570,18 @@ where
 {
     #[inline]
     fn drop(&mut self) {
-        // SAFETY: We rely on the event state machine to only signal "release the event" when
-        // we know it will never be used by any logic path again. We only ever create shared
-        // references, so there is no aliasing conflict risk. The two different paths that will
-        // result in the event being released (set() and drop()) are mutually exclusive.
+        // SAFETY: The pool remains alive through the pool_ref, satisfying the lifetime requirement
+        // for creating a reference. No exclusive references can exist because the events package
+        // only uses RawPooled<T> (shared handles), never RawPooledMut<T> (exclusive handles).
         let event = unsafe { self.event.as_ref() };
 
         // This ensures receivers get Disconnected errors if the sender is dropped without sending.
         if event.sender_dropped_without_set() == Err(Disconnected) {
-            self.pool_ref.pool.borrow_mut().remove(self.key);
+            // SAFETY: The handle belongs to this pool (created via insert_with()) and the event
+            // state machine ensures this is the only removal path for this event instance.
+            unsafe {
+                self.pool_ref.pool.borrow_mut().remove(self.event);
+            }
         }
     }
 }
@@ -597,25 +597,20 @@ pub struct PooledLocalOnceReceiver<P>
 where
     P: LocalPoolRef<<P as ReflectiveT>::T>,
 {
-    // This is a pointer to avoid contaminating the type signature with the event lifetime.
-    //
-    // SAFETY: We rely on the inner pool guaranteeing pinning and the event state machine
-    // itself controlling when it is the appropriate time to release the event.
-    event: Option<NonNull<LocalOnceEvent<P::T>>>,
-
     pool_ref: P,
-    key: Key,
+    event: Option<RawPooled<LocalOnceEvent<P::T>>>,
 }
 
-impl<P> fmt::Debug for PooledLocalOnceReceiver<P>
+impl<P> Debug for PooledLocalOnceReceiver<P>
 where
     P: LocalPoolRef<<P as ReflectiveT>::T>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PooledLocalOnceReceiver")
             .field("item_type", &format_args!("{}", any::type_name::<P::T>()))
-            .field("key", &self.key)
-            .finish_non_exhaustive()
+            .field("pool_ref", &self.pool_ref)
+            .field("event", &self.event)
+            .finish()
     }
 }
 
@@ -686,24 +681,28 @@ where
     ///
     /// May also be used from contexts where the receiver itself is not yet consumed.
     fn drop_inner(&mut self) -> Option<<P as ReflectiveT>::T> {
-        let Some(event) = self.event else {
+        let Some(event_handle) = self.event.take() else {
             // Already pseudo-consumed the receiver as part of the Future impl.
             return None;
         };
 
-        // SAFETY: See comments on field.
-        let event = unsafe { event.as_ref() };
+        // SAFETY: The pool remains alive through the pool_ref, satisfying the lifetime requirement
+        // for creating a reference. No exclusive references can exist because the events package
+        // only uses RawPooled<T> (shared handles), never RawPooledMut<T> (exclusive handles).
+        let event = unsafe { event_handle.as_ref() };
 
         let final_poll_result = event.final_poll();
-
-        // Regardless of whether we were the last reference holder or not, we are no longer
-        // allowed to reference the event as we are releasing our reference.
-        self.event = None;
 
         match final_poll_result {
             Ok(Some(value)) => {
                 // The sender has disconnected and sent a value, so we need to clean up.
-                self.pool_ref.pool.borrow_mut().remove(self.key);
+
+                // SAFETY: The handle belongs to this pool (created via insert_with()) and the event
+                // state machine ensures this is the only removal path for this event instance.
+                unsafe {
+                    self.pool_ref.pool.borrow_mut().remove(event_handle);
+                }
+
                 Some(value)
             }
             Ok(None) => {
@@ -713,7 +712,13 @@ where
             }
             Err(Disconnected) => {
                 // The sender has already disconnected, so we need to clean up the event.
-                self.pool_ref.pool.borrow_mut().remove(self.key);
+
+                // SAFETY: The handle belongs to this pool (created via insert_with()) and the event
+                // state machine ensures this is the only removal path for this event instance.
+                unsafe {
+                    self.pool_ref.pool.borrow_mut().remove(event_handle);
+                }
+
                 None
             }
         }
@@ -731,12 +736,13 @@ where
         // SAFETY: We are not moving anything, just touching internal state.
         let this = unsafe { self.get_unchecked_mut() };
 
-        // SAFETY: See comments on field.
-        let event = unsafe {
-            this.event
-                .expect("polling a Future after completion is invalid")
-                .as_ref()
-        };
+        let event_handle = this
+            .event
+            .expect("polling a Future after completion is invalid");
+
+        // SAFETY: The pool remains alive through the pool_ref, satisfying the lifetime requirement
+        // for creating a reference. The handle is valid as it was created from this same pool.
+        let event = unsafe { event_handle.as_ref() };
 
         let poll_result = event.poll(cx.waker());
 
@@ -745,7 +751,12 @@ where
             |value| {
                 // Any result from the inner poll means we were the last endpoint connected,
                 // so we have to clean up the event now.
-                this.pool_ref.pool.borrow_mut().remove(this.key);
+
+                // SAFETY: The handle belongs to this pool (created via insert_with()) and the event
+                // state machine ensures this is the only removal path for this event instance.
+                unsafe {
+                    this.pool_ref.pool.borrow_mut().remove(event_handle);
+                }
 
                 // The cleanup is already all done by poll() when it returns a result.
                 // This just ensures panic on double poll (otherwise we would violate memory safety).
