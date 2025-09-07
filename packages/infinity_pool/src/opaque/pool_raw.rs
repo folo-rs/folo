@@ -8,9 +8,6 @@ use crate::{
     DropPolicy, RawOpaquePoolBuilder, RawPooled, RawPooledMut, Slab, SlabLayout, VacancyTracker,
 };
 
-// TODO: Factor out the vacancy cache into its own type.
-// TODO: Optimize scenarios with mass inserts into a large reservation (slow today, poor vacancy cache logic).
-
 /// A pool of objects with uniform memory layout.
 ///
 /// Stores objects of any type that match a [`Layout`] defined at pool creation
