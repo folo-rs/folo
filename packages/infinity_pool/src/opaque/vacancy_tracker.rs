@@ -16,6 +16,7 @@ use bitvec::vec::BitVec;
 ///   next slabs still having vacancies (or none).
 /// * Removing an object crates a vacancy in the slab it was removed from. This might not be
 ///   the lowest-index slab with a vacancy, though.
+/// * Adding/removing slabs will add/remove vacancies where those slabs are added/removed.
 ///
 /// # How we track vacancies
 ///
@@ -50,7 +51,7 @@ impl VacancyTracker {
     pub(crate) fn update_slab_count(&mut self, count: usize) {
         let previous_count = self.has_vacancy.len();
 
-        self.has_vacancy.resize(count, false);
+        self.has_vacancy.resize(count, true);
 
         if count > previous_count {
             // If we added slabs, they are empty and therefore have vacancies.
@@ -111,5 +112,141 @@ impl VacancyTracker {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_tracker_reports_no_vacancies() {
+        let tracker = VacancyTracker::new();
+        assert_eq!(tracker.next_vacancy(), None);
+    }
+
+    #[test]
+    fn tracker_with_empty_slabs_reports_slab_0_as_next_vacancy() {
+        let mut tracker = VacancyTracker::new();
+        tracker.update_slab_count(3);
+        assert_eq!(tracker.next_vacancy(), Some(0));
+    }
+
+    #[test]
+    fn tracker_with_full_slabs_reports_no_vacancies() {
+        let mut tracker = VacancyTracker::new();
+        tracker.update_slab_count(3);
+        tracker.update_slab_status(0, false);
+        tracker.update_slab_status(1, false);
+        tracker.update_slab_status(2, false);
+        assert_eq!(tracker.next_vacancy(), None);
+    }
+
+    #[test]
+    fn full_tracker_with_new_vacancy_at_slab_0_reports_slab_0() {
+        let mut tracker = VacancyTracker::new();
+        tracker.update_slab_count(3);
+        tracker.update_slab_status(0, false);
+        tracker.update_slab_status(1, false);
+        tracker.update_slab_status(2, false);
+        assert_eq!(tracker.next_vacancy(), None);
+
+        tracker.update_slab_status(0, true);
+        assert_eq!(tracker.next_vacancy(), Some(0));
+    }
+
+    #[test]
+    fn full_tracker_with_new_vacancy_at_last_slab_reports_last_slab() {
+        let mut tracker = VacancyTracker::new();
+        tracker.update_slab_count(3);
+        tracker.update_slab_status(0, false);
+        tracker.update_slab_status(1, false);
+        tracker.update_slab_status(2, false);
+        assert_eq!(tracker.next_vacancy(), None);
+
+        tracker.update_slab_status(2, true);
+        assert_eq!(tracker.next_vacancy(), Some(2));
+    }
+
+    #[test]
+    fn full_tracker_with_side_by_side_vacancies_reports_first_then_next() {
+        let mut tracker = VacancyTracker::new();
+        tracker.update_slab_count(5);
+        tracker.update_slab_status(0, false);
+        tracker.update_slab_status(1, false);
+        tracker.update_slab_status(2, false);
+        tracker.update_slab_status(3, false);
+        tracker.update_slab_status(4, false);
+        assert_eq!(tracker.next_vacancy(), None);
+
+        tracker.update_slab_status(2, true);
+        tracker.update_slab_status(3, true);
+        assert_eq!(tracker.next_vacancy(), Some(2));
+
+        tracker.update_slab_status(2, false);
+        assert_eq!(tracker.next_vacancy(), Some(3));
+    }
+
+    #[test]
+    fn full_tracker_with_disjoint_vacancies_reports_first_then_next() {
+        let mut tracker = VacancyTracker::new();
+        tracker.update_slab_count(5);
+        tracker.update_slab_status(0, false);
+        tracker.update_slab_status(1, false);
+        tracker.update_slab_status(2, false);
+        tracker.update_slab_status(3, false);
+        tracker.update_slab_status(4, false);
+        assert_eq!(tracker.next_vacancy(), None);
+
+        tracker.update_slab_status(1, true);
+        tracker.update_slab_status(4, true);
+        assert_eq!(tracker.next_vacancy(), Some(1));
+
+        tracker.update_slab_status(1, false);
+        assert_eq!(tracker.next_vacancy(), Some(4));
+    }
+
+    #[test]
+    fn full_tracker_with_end_vacancies_reports_first_then_next() {
+        let mut tracker = VacancyTracker::new();
+        tracker.update_slab_count(5);
+        tracker.update_slab_status(0, false);
+        tracker.update_slab_status(1, false);
+        tracker.update_slab_status(2, false);
+        tracker.update_slab_status(3, false);
+        tracker.update_slab_status(4, false);
+        assert_eq!(tracker.next_vacancy(), None);
+
+        tracker.update_slab_status(0, true);
+        tracker.update_slab_status(4, true);
+        assert_eq!(tracker.next_vacancy(), Some(0));
+
+        tracker.update_slab_status(0, false);
+        assert_eq!(tracker.next_vacancy(), Some(4));
+    }
+
+    #[test]
+    fn removing_slabs_from_end_removes_last_remaining_vacancy() {
+        let mut tracker = VacancyTracker::new();
+        tracker.update_slab_count(3);
+        tracker.update_slab_status(0, false);
+        tracker.update_slab_status(1, false);
+        assert_eq!(tracker.next_vacancy(), Some(2));
+
+        tracker.update_slab_count(2);
+        assert_eq!(tracker.next_vacancy(), None);
+    }
+
+    #[test]
+    fn adding_slabs_to_full_tracker_reports_first_added_slab() {
+        let mut tracker = VacancyTracker::new();
+        tracker.update_slab_count(3);
+        tracker.update_slab_status(0, false);
+        tracker.update_slab_status(1, false);
+        tracker.update_slab_status(2, false);
+        assert_eq!(tracker.next_vacancy(), None);
+
+        tracker.update_slab_count(5);
+        assert_eq!(tracker.next_vacancy(), Some(3));
     }
 }
