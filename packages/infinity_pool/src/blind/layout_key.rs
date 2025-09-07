@@ -3,7 +3,7 @@ use std::alloc::Layout;
 /// A collection key derived from a `Layout`.
 ///
 /// Used for fast and efficient lookup by transforming a `Layout` into a single integer.
-#[derive(Debug, Eq, PartialEq, Hash, Clone, Copy, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct LayoutKey {
     value: u64,
 }

@@ -51,7 +51,7 @@ use crate::{
 /// let _handle = pool1.insert(42_i32);
 /// assert_eq!(pool1.len(), pool2.len());
 /// ```
-#[derive(Debug, Default, Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct LocalBlindPool {
     // Internal pools, one for each unique memory layout encountered.
     //

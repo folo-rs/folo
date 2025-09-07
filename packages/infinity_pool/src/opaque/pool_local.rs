@@ -139,7 +139,7 @@ impl LocalOpaquePool {
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert.md")]
-    /// 
+    ///
     /// # Panics
     #[doc = include_str!("../../doc/snippets/panic_on_pool_t_layout_mismatch.md")]
     ///
@@ -194,6 +194,7 @@ impl LocalOpaquePool {
     ///
     /// ```rust
     /// use std::mem::MaybeUninit;
+    ///
     /// use infinity_pool::LocalOpaquePool;
     ///
     /// struct DataBuffer {
@@ -244,6 +245,7 @@ impl LocalOpaquePool {
     ///
     /// ```rust
     /// use std::mem::MaybeUninit;
+    ///
     /// use infinity_pool::LocalOpaquePool;
     ///
     /// struct DataBuffer {

@@ -4,7 +4,7 @@
 use std::fmt::Display;
 
 use infinity_pool::{
-    BlindPool, LocalBlindPool, LocalPinnedPool, PinnedPool, RawBlindPoolBuilder, 
+    BlindPool, LocalBlindPool, LocalPinnedPool, PinnedPool, RawBlindPoolBuilder,
     RawOpaquePoolBuilder, RawPinnedPoolBuilder, define_pooled_dyn_cast,
 };
 
@@ -23,7 +23,7 @@ fn cast_managed_blind_pooled_to_display_trait() {
 
     // Verify the cast worked
     assert_eq!(display_pooled.to_string(), "Test string");
-    
+
     // Drop the cast handle and verify pool is empty (reference counting works)
     drop(display_pooled);
     assert_eq!(pool.len(), 0);
@@ -39,7 +39,7 @@ fn cast_managed_blind_pooled_mut_to_display_trait() {
 
     // Verify the cast worked
     assert_eq!(display_pooled.to_string(), "Test string");
-    
+
     // Drop the cast handle and verify pool is empty (reference counting works)
     drop(display_pooled);
     assert_eq!(pool.len(), 0);
@@ -55,7 +55,7 @@ fn cast_local_blind_pooled_to_display_trait() {
 
     // Verify the cast worked
     assert_eq!(display_pooled.to_string(), "Test string");
-    
+
     // Drop the cast handle and verify pool is empty (reference counting works)
     drop(display_pooled);
     assert_eq!(pool.len(), 0);
@@ -71,7 +71,7 @@ fn cast_local_blind_pooled_mut_to_display_trait() {
 
     // Verify the cast worked
     assert_eq!(display_pooled.to_string(), "Test string");
-    
+
     // Drop the cast handle and verify pool is empty (reference counting works)
     drop(display_pooled);
     assert_eq!(pool.len(), 0);
@@ -87,7 +87,7 @@ fn cast_managed_pinned_pooled_to_display_trait() {
 
     // Verify the cast worked
     assert_eq!(display_pooled.to_string(), "Test string");
-    
+
     // Drop the cast handle and verify pool is empty (reference counting works)
     drop(display_pooled);
     assert_eq!(pool.len(), 0);
@@ -103,7 +103,7 @@ fn cast_managed_pinned_pooled_mut_to_display_trait() {
 
     // Verify the cast worked
     assert_eq!(display_pooled.to_string(), "Test string");
-    
+
     // Drop the cast handle and verify pool is empty (reference counting works)
     drop(display_pooled);
     assert_eq!(pool.len(), 0);
@@ -119,7 +119,7 @@ fn cast_local_pinned_pooled_to_display_trait() {
 
     // Verify the cast worked
     assert_eq!(display_pooled.to_string(), "Test string");
-    
+
     // Drop the cast handle and verify pool is empty (reference counting works)
     drop(display_pooled);
     assert_eq!(pool.len(), 0);
@@ -135,7 +135,7 @@ fn cast_local_pinned_pooled_mut_to_display_trait() {
 
     // Verify the cast worked
     assert_eq!(display_pooled.to_string(), "Test string");
-    
+
     // Drop the cast handle and verify pool is empty (reference counting works)
     drop(display_pooled);
     assert_eq!(pool.len(), 0);

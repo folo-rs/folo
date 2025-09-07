@@ -163,6 +163,7 @@ where
     ///
     /// ```rust
     /// use std::mem::MaybeUninit;
+    ///
     /// use infinity_pool::PinnedPool;
     ///
     /// struct DataBuffer {

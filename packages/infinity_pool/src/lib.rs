@@ -2,11 +2,11 @@
 //!
 //! This package provides several types of object pools designed for different use cases,
 //! from basic pooling to advanced memory layouts with custom drop policies.
-//! 
+//!
 //! # Motivating scenario
-//! 
+//!
 //! The primary characteristics of the target scenario are:
-//! 
+//!
 //! * You need to create and destroy many objects on a regular basis.
 //! * These objects need to be pinned.
 //! * You want better performance than you get from `Box::pin()`.
@@ -14,10 +14,10 @@
 //!   trait object references (`&dyn Foo`), perhaps because you cannot name the type
 //!   due to it being inferred.
 //! * Optionally, you may want to use reference counting to manage object lifetimes.
-//! 
+//!
 //! It would be fair to say that this package essentially provides faster alternatives
 //! to `Box::pin()`, `Arc::pin()` and `Rc::pin()`.
-//! 
+//!
 //! # Pool types
 //!
 //! * Pinned pool - the most basic object pool, resembling a `Vec<T>` that guarantees all its
@@ -59,12 +59,12 @@
 //! | Blind Pool                | [`BlindPool`]  | [`LocalBlindPool`]  | [`RawBlindPool`]  |
 //!
 //! # Performance
-//! 
+//!
 //! On an arbitrary x64 machine running Windows, the pools provided by this package offer better
 //! performance than the equivalent standard library primitives (`Box::pin()`, `Arc::pin()`, `Rc::pin()`).
-//! 
+//!
 //! <img src="https://media.githubusercontent.com/media/folo-rs/folo/refs/heads/main/packages/infinity_pool/benchmark_results.png">
-//! 
+//!
 //! # Examples
 //!
 //! ## Pinned pool (thread-safe, single type)
@@ -108,6 +108,7 @@
 //!
 //! ```
 //! use std::fmt::Display;
+//!
 //! use infinity_pool::{BlindPool, PooledMut, define_pooled_dyn_cast};
 //!
 //! // Enable casting to Display trait objects
@@ -126,7 +127,7 @@
 //! process_displayable(string_handle.cast_display());
 //! process_displayable(number_handle.cast_display());
 //! ```
-//! 
+//!
 //! [casting]: define_pooled_dyn_cast
 
 mod blind;

@@ -10,7 +10,7 @@ use crate::SlotMeta;
 // at runtime. Might be worth it if we can do it as const? Can we, though? Mmmm not so sure.
 
 /// Precalculates factors of the slab layout, based on the object layout and slab capacity.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SlabLayout {
     /// Number of slots in the slab.
     capacity: NonZero<usize>,

@@ -66,9 +66,9 @@ mod tests {
         // Insert some items and deliberately DO NOT remove them
         let _handle1 = pool.insert("test1".to_string());
         let _handle2 = pool.insert(42_u32);
-        
+
         assert_eq!(pool.len(), 2);
-        
+
         // Pool should be dropped successfully even with items still in it
         // (This is the whole point of MayDropContents policy)
         drop(pool);
@@ -85,7 +85,7 @@ mod tests {
         // Insert an item and deliberately DO NOT remove it
         let _handle = pool.insert(100_i64);
         assert_eq!(pool.len(), 1);
-        
+
         // Pool should panic when dropped with items still in it
         // (This is the whole point of MustNotDropContents policy)
         drop(pool);

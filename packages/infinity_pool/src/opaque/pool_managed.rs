@@ -202,6 +202,7 @@ impl OpaquePool {
     ///
     /// ```rust
     /// use std::mem::MaybeUninit;
+    ///
     /// use infinity_pool::OpaquePool;
     ///
     /// struct DataBuffer {
@@ -252,6 +253,7 @@ impl OpaquePool {
     ///
     /// ```rust
     /// use std::mem::MaybeUninit;
+    ///
     /// use infinity_pool::OpaquePool;
     ///
     /// struct DataBuffer {

@@ -26,7 +26,7 @@ fn main() {
     // Convert to std::time::Instant for interoperability
     let fast_instant = clock.now();
     let std_instant: std::time::Instant = fast_instant.into();
-    
+
     println!("Collected {} timestamps", timestamps.len());
     println!("Converted instant: {std_instant:?}");
 }

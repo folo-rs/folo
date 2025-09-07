@@ -2,7 +2,7 @@
 //! just to prove that this does not depend on accessing any private APIs.
 
 use infinity_pool::{
-    BlindPool, LocalBlindPool, LocalPinnedPool, PinnedPool, RawBlindPoolBuilder, 
+    BlindPool, LocalBlindPool, LocalPinnedPool, PinnedPool, RawBlindPoolBuilder,
     RawOpaquePoolBuilder, RawPinnedPoolBuilder, define_pooled_dyn_cast,
 };
 
@@ -37,7 +37,7 @@ fn cast_managed_blind_pooled_to_generic_trait() {
 
     // Verify the cast worked
     assert_eq!(future_pooled.get_output(), 42);
-    
+
     // Drop the cast handle and verify pool is empty (reference counting works)
     drop(future_pooled);
     assert_eq!(pool.len(), 0);
@@ -54,7 +54,7 @@ fn cast_managed_blind_pooled_mut_to_generic_trait() {
 
     // Verify the cast worked
     assert_eq!(future_pooled.get_output(), 42);
-    
+
     // Drop the cast handle and verify pool is empty (reference counting works)
     drop(future_pooled);
     assert_eq!(pool.len(), 0);
@@ -71,7 +71,7 @@ fn cast_local_blind_pooled_to_generic_trait() {
 
     // Verify the cast worked
     assert_eq!(future_pooled.get_output(), 100);
-    
+
     // Drop the cast handle and verify pool is empty (reference counting works)
     drop(future_pooled);
     assert_eq!(pool.len(), 0);
@@ -88,7 +88,7 @@ fn cast_local_blind_pooled_mut_to_generic_trait() {
 
     // Verify the cast worked
     assert_eq!(future_pooled.get_output(), 100);
-    
+
     // Drop the cast handle and verify pool is empty (reference counting works)
     drop(future_pooled);
     assert_eq!(pool.len(), 0);
@@ -105,7 +105,7 @@ fn cast_managed_pinned_pooled_to_generic_trait() {
 
     // Verify the cast worked
     assert_eq!(future_pooled.get_output(), "hello");
-    
+
     // Drop the cast handle and verify pool is empty (reference counting works)
     drop(future_pooled);
     assert_eq!(pool.len(), 0);
@@ -122,7 +122,7 @@ fn cast_managed_pinned_pooled_mut_to_generic_trait() {
 
     // Verify the cast worked
     assert_eq!(future_pooled.get_output(), "hello");
-    
+
     // Drop the cast handle and verify pool is empty (reference counting works)
     drop(future_pooled);
     assert_eq!(pool.len(), 0);
@@ -139,7 +139,7 @@ fn cast_local_pinned_pooled_to_generic_trait() {
 
     // Verify the cast worked
     assert_eq!(future_pooled.get_output(), 250);
-    
+
     // Drop the cast handle and verify pool is empty (reference counting works)
     drop(future_pooled);
     assert_eq!(pool.len(), 0);
@@ -156,7 +156,7 @@ fn cast_local_pinned_pooled_mut_to_generic_trait() {
 
     // Verify the cast worked
     assert_eq!(future_pooled.get_output(), 250);
-    
+
     // Drop the cast handle and verify pool is empty (reference counting works)
     drop(future_pooled);
     assert_eq!(pool.len(), 0);
@@ -209,7 +209,9 @@ fn cast_raw_blind_pooled_generic_removal_unique() {
 
 #[test]
 fn cast_raw_opaque_pooled_generic_removal_shared() {
-    let mut pool = RawOpaquePoolBuilder::new().layout_of::<AsyncValue<String>>().build();
+    let mut pool = RawOpaquePoolBuilder::new()
+        .layout_of::<AsyncValue<String>>()
+        .build();
     let async_val = AsyncValue("test value".to_string());
     let pooled = pool.insert(async_val).into_shared();
 
@@ -232,7 +234,9 @@ fn cast_raw_opaque_pooled_generic_removal_shared() {
 
 #[test]
 fn cast_raw_opaque_pooled_generic_removal_unique() {
-    let mut pool = RawOpaquePoolBuilder::new().layout_of::<AsyncValue<String>>().build();
+    let mut pool = RawOpaquePoolBuilder::new()
+        .layout_of::<AsyncValue<String>>()
+        .build();
     let async_val = AsyncValue("test value".to_string());
     let pooled_mut = pool.insert(async_val);
 

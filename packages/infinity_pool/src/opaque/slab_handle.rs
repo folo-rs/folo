@@ -155,11 +155,7 @@ impl<T: ?Sized> PartialEq for SlabHandle<T> {
 impl<T: ?Sized> Eq for SlabHandle<T> {}
 
 // SAFETY: See type-level documentation.
-unsafe impl<T> Send for SlabHandle<T>
-where
-    T: ?Sized + Sync,
-{
-}
+unsafe impl<T> Send for SlabHandle<T> where T: ?Sized + Sync {}
 
 impl<T: ?Sized> fmt::Debug for SlabHandle<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -249,7 +245,7 @@ mod tests {
     fn cast_with_to_display_trait() {
         let mut value = 42_usize;
         let handle: SlabHandle<usize> = SlabHandle::new(10, NonNull::from(&mut value));
-        
+
         // Cast from SlabHandle<usize> to SlabHandle<dyn Display>
         // SAFETY: We control the lifetime and the value is valid for the duration of the test
         let display_handle: SlabHandle<dyn Display> = unsafe {
@@ -258,10 +254,10 @@ mod tests {
                 display_ref
             })
         };
-        
+
         // Verify the index is preserved
         assert_eq!(display_handle.index(), 10);
-        
+
         // Verify we can use the trait object
         // SAFETY: The handle points to valid data for the test duration
         let display_str = unsafe { display_handle.ptr().as_ref().to_string() };
@@ -272,7 +268,7 @@ mod tests {
     fn cast_with_mut_to_display_trait() {
         let mut value = 123_u64;
         let handle: SlabHandle<u64> = SlabHandle::new(7, NonNull::from(&mut value));
-        
+
         // Cast from SlabHandle<u64> to SlabHandle<dyn Display>
         // SAFETY: We control the lifetime and the value is valid for the duration of the test
         let display_handle: SlabHandle<dyn Display> = unsafe {
@@ -281,10 +277,10 @@ mod tests {
                 display_ref
             })
         };
-        
+
         // Verify the index is preserved
         assert_eq!(display_handle.index(), 7);
-        
+
         // Verify we can use the trait object
         // SAFETY: The handle points to valid data for the test duration
         let display_str = unsafe { display_handle.ptr().as_ref().to_string() };
@@ -296,12 +292,12 @@ mod tests {
         fn increment(&mut self);
         fn get_value(&self) -> u32;
     }
-    
+
     impl Incrementable for u32 {
         fn increment(&mut self) {
             *self = self.wrapping_add(1);
         }
-        
+
         fn get_value(&self) -> u32 {
             *self
         }
@@ -311,7 +307,7 @@ mod tests {
     fn cast_with_mut_allows_mutation() {
         let mut value = 100_u32;
         let handle: SlabHandle<u32> = SlabHandle::new(15, NonNull::from(&mut value));
-        
+
         // Cast to mutable trait object
         // SAFETY: We control the lifetime and the value is valid for the duration of the test
         let mut_handle: SlabHandle<dyn Incrementable> = unsafe {
@@ -320,20 +316,20 @@ mod tests {
                 trait_ref
             })
         };
-        
+
         // Verify index is preserved
         assert_eq!(mut_handle.index(), 15);
-        
+
         // Verify initial value through trait object
         // SAFETY: The handle points to valid data for the test duration
         assert_eq!(unsafe { mut_handle.ptr().as_ref().get_value() }, 100);
-        
+
         // Mutate through the trait object
         // SAFETY: We have exclusive access to the data for the test duration
         unsafe {
             mut_handle.ptr().as_mut().increment();
         }
-        
+
         // Verify the mutation worked through trait object
         // SAFETY: The handle points to valid data for the test duration
         assert_eq!(unsafe { mut_handle.ptr().as_ref().get_value() }, 101);

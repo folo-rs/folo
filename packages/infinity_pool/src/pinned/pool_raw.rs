@@ -17,7 +17,7 @@ use crate::{
 /// # Thread safety
 ///
 /// If `T: Send` then the pool is thread-mobile (`Send` but not `Sync`).
-/// 
+///
 /// If `T: !Send`, the pool is single-threaded.
 ///
 /// # Example
@@ -152,6 +152,7 @@ impl<T> RawPinnedPool<T> {
     ///
     /// ```rust
     /// use std::mem::MaybeUninit;
+    ///
     /// use infinity_pool::RawPinnedPool;
     ///
     /// struct DataBuffer {
