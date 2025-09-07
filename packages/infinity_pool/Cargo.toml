@@ -15,11 +15,9 @@ default = []
 
 [dependencies]
 bitvec = { workspace = true, features = ["atomic", "std"] }
-foldhash = { workspace = true }
 new_zealand = { workspace = true }
 num-integer = { workspace = true }
 pastey = { workspace = true }
-scopeguard = { workspace = true }
 
 [dev-dependencies]
 alloc_tracker = { path = "../alloc_tracker" }

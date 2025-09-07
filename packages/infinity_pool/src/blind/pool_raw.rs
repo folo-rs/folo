@@ -1,9 +1,10 @@
 use std::alloc::Layout;
 use std::mem::MaybeUninit;
 
-use foldhash::{HashMap, HashMapExt};
-
-use crate::{DropPolicy, RawBlindPoolBuilder, RawBlindPooled, RawBlindPooledMut, RawOpaquePool};
+use crate::{
+    DropPolicy, LayoutKey, RawBlindPoolBuilder, RawBlindPoolInnerMap, RawBlindPooled,
+    RawBlindPooledMut, RawOpaquePool,
+};
 
 /// An object pool that accepts any type of object.
 ///
@@ -37,7 +38,7 @@ use crate::{DropPolicy, RawBlindPoolBuilder, RawBlindPooled, RawBlindPooledMut, 
 #[derive(Debug)]
 pub struct RawBlindPool {
     /// Internal pools, one for each unique memory layout encountered.
-    pools: HashMap<Layout, RawOpaquePool>,
+    pools: RawBlindPoolInnerMap,
 
     drop_policy: DropPolicy,
 }
@@ -58,7 +59,7 @@ impl RawBlindPool {
     #[must_use]
     pub(crate) fn new_inner(drop_policy: DropPolicy) -> Self {
         Self {
-            pools: HashMap::new(),
+            pools: RawBlindPoolInnerMap::new(),
             drop_policy,
         }
     }
@@ -139,7 +140,9 @@ impl RawBlindPool {
     #[inline]
     pub fn insert<T>(&mut self, value: T) -> RawBlindPooledMut<T> {
         let layout = Layout::new::<T>();
-        let pool = self.inner_pool_mut(layout);
+        let key = LayoutKey::new(layout);
+
+        let pool = self.inner_pool_mut(layout, key);
 
         // SAFETY: inner pool selector guarantees matching layout.
         let inner_handle = unsafe { pool.insert_unchecked(value) };
@@ -153,6 +156,7 @@ impl RawBlindPool {
     ///
     /// ```rust
     /// use std::mem::MaybeUninit;
+    ///
     /// use infinity_pool::RawBlindPool;
     ///
     /// struct DataBuffer {
@@ -187,7 +191,9 @@ impl RawBlindPool {
         F: FnOnce(&mut MaybeUninit<T>),
     {
         let layout = Layout::new::<T>();
-        let pool = self.inner_pool_mut(layout);
+        let key = LayoutKey::new(layout);
+
+        let pool = self.inner_pool_mut(layout, key);
 
         // SAFETY: inner pool selector guarantees matching layout.
         // Initialization guarantee is forwarded from the caller.
@@ -199,7 +205,10 @@ impl RawBlindPool {
     #[doc = include_str!("../../doc/snippets/raw_pool_remove_mut.md")]
     #[inline]
     pub fn remove_mut<T: ?Sized>(&mut self, handle: RawBlindPooledMut<T>) {
-        let pool = self.inner_pool_mut(handle.layout());
+        let layout = handle.layout();
+        let key = LayoutKey::new(layout);
+
+        let pool = self.inner_pool_mut(layout, key);
 
         pool.remove_mut(handle.into_inner());
     }
@@ -207,7 +216,10 @@ impl RawBlindPool {
     #[doc = include_str!("../../doc/snippets/raw_pool_remove.md")]
     #[inline]
     pub unsafe fn remove<T: ?Sized>(&mut self, handle: RawBlindPooled<T>) {
-        let pool = self.inner_pool_mut(handle.layout());
+        let layout = handle.layout();
+        let key = LayoutKey::new(layout);
+
+        let pool = self.inner_pool_mut(layout, key);
 
         // SAFETY: Forwarding safety guarantees from the caller.
         unsafe {
@@ -255,22 +267,23 @@ impl RawBlindPool {
     }
 
     fn inner_pool_of<T>(&self) -> Option<&RawOpaquePool> {
-        let layout = Layout::new::<T>();
+        let key = LayoutKey::with_layout_of::<T>();
 
-        self.pools.get(&layout)
+        self.pools.get(&key)
     }
 
     fn inner_pool_of_mut<T>(&mut self) -> &mut RawOpaquePool {
         let layout = Layout::new::<T>();
+        let key = LayoutKey::new(layout);
 
-        self.inner_pool_mut(layout)
+        self.inner_pool_mut(layout, key)
     }
 
-    fn inner_pool_mut(&mut self, layout: Layout) -> &mut RawOpaquePool {
-        self.pools.entry(layout).or_insert_with_key(|layout| {
+    fn inner_pool_mut(&mut self, layout: Layout, key: LayoutKey) -> &mut RawOpaquePool {
+        self.pools.entry(key).or_insert_with(|| {
             RawOpaquePool::builder()
                 .drop_policy(self.drop_policy)
-                .layout(*layout)
+                .layout(layout)
                 .build()
         })
     }

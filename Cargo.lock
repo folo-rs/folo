@@ -804,12 +804,10 @@ dependencies = [
  "alloc_tracker",
  "bitvec",
  "criterion",
- "foldhash",
  "mutants",
  "new_zealand",
  "num-integer",
  "pastey",
- "scopeguard",
  "static_assertions",
 ]
 

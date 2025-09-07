@@ -3,7 +3,9 @@ use std::cell::RefMut;
 use std::mem::MaybeUninit;
 use std::rc::Rc;
 
-use crate::{LocalBlindPoolCore, LocalBlindPoolInnerMap, LocalBlindPooledMut, RawOpaquePool};
+use crate::{
+    LayoutKey, LocalBlindPoolCore, LocalBlindPoolInnerMap, LocalBlindPooledMut, RawOpaquePool,
+};
 
 /// A single-threaded reference-counting object pool that accepts any type of object.
 ///
@@ -88,11 +90,11 @@ impl LocalBlindPool {
     #[must_use]
     #[inline]
     pub fn capacity_for<T: 'static>(&self) -> usize {
-        let layout = Layout::new::<T>();
+        let key = LayoutKey::with_layout_of::<T>();
 
         let core = self.core.borrow();
 
-        core.get(&layout)
+        core.get(&key)
             .map(RawOpaquePool::capacity)
             .unwrap_or_default()
     }
@@ -161,7 +163,11 @@ impl LocalBlindPool {
         // SAFETY: inner pool selector guarantees matching layout.
         let inner_handle = unsafe { pool.insert_unchecked(value) };
 
-        LocalBlindPooledMut::new(inner_handle, Layout::new::<T>(), Rc::clone(&self.core))
+        LocalBlindPooledMut::new(
+            inner_handle,
+            LayoutKey::with_layout_of::<T>(),
+            Rc::clone(&self.core),
+        )
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
@@ -214,7 +220,11 @@ impl LocalBlindPool {
         // Initialization guarantee is forwarded from the caller.
         let inner_handle = unsafe { pool.insert_with_unchecked(f) };
 
-        LocalBlindPooledMut::new(inner_handle, Layout::new::<T>(), Rc::clone(&self.core))
+        LocalBlindPooledMut::new(
+            inner_handle,
+            LayoutKey::with_layout_of::<T>(),
+            Rc::clone(&self.core),
+        )
     }
 }
 
@@ -222,10 +232,11 @@ fn ensure_inner_pool<'a, T: 'static>(
     pools: &'a mut RefMut<'_, LocalBlindPoolInnerMap>,
 ) -> &'a mut RawOpaquePool {
     let layout = Layout::new::<T>();
+    let key = LayoutKey::new(layout);
 
     pools
-        .entry(layout)
-        .or_insert_with_key(|layout| RawOpaquePool::with_layout(*layout))
+        .entry(key)
+        .or_insert_with(|| RawOpaquePool::with_layout(layout))
 }
 
 #[cfg(test)]

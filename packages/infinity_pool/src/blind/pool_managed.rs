@@ -3,7 +3,7 @@ use std::mem::MaybeUninit;
 use std::sync::{Arc, MutexGuard};
 
 use crate::{
-    BlindPoolCore, BlindPoolInnerMap, BlindPooledMut, ERR_POISONED_LOCK, RawOpaquePool,
+    BlindPoolCore, BlindPoolInnerMap, BlindPooledMut, ERR_POISONED_LOCK, LayoutKey, RawOpaquePool,
     RawOpaquePoolSend,
 };
 
@@ -87,11 +87,11 @@ impl BlindPool {
     #[must_use]
     #[inline]
     pub fn capacity_for<T: Send + 'static>(&self) -> usize {
-        let layout = Layout::new::<T>();
+        let key = LayoutKey::with_layout_of::<T>();
 
         let core = self.core.lock().expect(ERR_POISONED_LOCK);
 
-        core.get(&layout)
+        core.get(&key)
             .map(|pool| pool.capacity())
             .unwrap_or_default()
     }
@@ -160,7 +160,11 @@ impl BlindPool {
         // SAFETY: inner pool selector guarantees matching layout.
         let inner_handle = unsafe { pool.insert_unchecked(value) };
 
-        BlindPooledMut::new(inner_handle, Layout::new::<T>(), Arc::clone(&self.core))
+        BlindPooledMut::new(
+            inner_handle,
+            LayoutKey::with_layout_of::<T>(),
+            Arc::clone(&self.core),
+        )
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
@@ -212,7 +216,11 @@ impl BlindPool {
         // Initialization guarantee is forwarded from the caller.
         let inner_handle = unsafe { pool.insert_with_unchecked(f) };
 
-        BlindPooledMut::new(inner_handle, Layout::new::<T>(), Arc::clone(&self.core))
+        BlindPooledMut::new(
+            inner_handle,
+            LayoutKey::with_layout_of::<T>(),
+            Arc::clone(&self.core),
+        )
     }
 }
 
@@ -220,10 +228,11 @@ fn ensure_inner_pool<'a, T: Send + 'static>(
     core: &'a mut MutexGuard<'_, BlindPoolInnerMap>,
 ) -> &'a mut RawOpaquePoolSend {
     let layout = Layout::new::<T>();
+    let key = LayoutKey::new(layout);
 
-    core.entry(layout).or_insert_with_key(|layout| {
+    core.entry(key).or_insert_with(|| {
         // SAFETY: We always require `T: Send`.
-        unsafe { RawOpaquePoolSend::new(RawOpaquePool::with_layout(*layout)) }
+        unsafe { RawOpaquePoolSend::new(RawOpaquePool::with_layout(layout)) }
     })
 }
 

@@ -1,4 +1,3 @@
-use std::alloc::Layout;
 use std::borrow::{Borrow, BorrowMut};
 use std::cell::RefCell;
 use std::ops::{Deref, DerefMut};
@@ -6,7 +5,7 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::{fmt, mem, ptr};
 
-use crate::{LocalBlindPoolCore, LocalBlindPooled, RawPooledMut};
+use crate::{LayoutKey, LocalBlindPoolCore, LocalBlindPooled, RawPooledMut};
 
 /// A unique single-threaded reference-counting handle for a pooled object.
 #[doc = include_str!("../../doc/snippets/ref_counted_handle_implications.md")]
@@ -17,18 +16,14 @@ use crate::{LocalBlindPoolCore, LocalBlindPooled, RawPooledMut};
 /// This type is single-threaded.
 pub struct LocalBlindPooledMut<T: ?Sized> {
     inner: RawPooledMut<T>,
-    layout: Layout,
+    key: LayoutKey,
     core: LocalBlindPoolCore,
 }
 
 impl<T: ?Sized> LocalBlindPooledMut<T> {
     #[must_use]
-    pub(crate) fn new(inner: RawPooledMut<T>, layout: Layout, core: LocalBlindPoolCore) -> Self {
-        Self {
-            inner,
-            layout,
-            core,
-        }
+    pub(crate) fn new(inner: RawPooledMut<T>, key: LayoutKey, core: LocalBlindPoolCore) -> Self {
+        Self { inner, key, core }
     }
 
     #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
@@ -42,11 +37,11 @@ impl<T: ?Sized> LocalBlindPooledMut<T> {
     #[must_use]
     #[inline]
     pub fn erase(self) -> LocalBlindPooledMut<()> {
-        let (inner, layout, core) = self.into_parts();
+        let (inner, key, core) = self.into_parts();
 
         LocalBlindPooledMut {
             inner: inner.erase(),
-            layout,
+            key,
             core,
         }
     }
@@ -60,21 +55,21 @@ impl<T: ?Sized> LocalBlindPooledMut<T> {
         LocalBlindPooled::new(inner, layout, core)
     }
 
-    fn into_parts(self) -> (RawPooledMut<T>, Layout, LocalBlindPoolCore) {
+    fn into_parts(self) -> (RawPooledMut<T>, LayoutKey, LocalBlindPoolCore) {
         // We transfer these fields to the caller, so we do not want the current handle
         // to be dropped. Hence we perform raw reads to extract the fields directly.
 
         // SAFETY: The target is valid for reads.
         let inner = unsafe { ptr::read(&raw const self.inner) };
         // SAFETY: The target is valid for reads.
-        let layout = unsafe { ptr::read(&raw const self.layout) };
+        let key = unsafe { ptr::read(&raw const self.key) };
         // SAFETY: The target is valid for reads.
         let core = unsafe { ptr::read(&raw const self.core) };
 
         // We are just "destructuring with Drop" here.
         mem::forget(self);
 
-        (inner, layout, core)
+        (inner, key, core)
     }
 
     #[doc = include_str!("../../doc/snippets/ref_counted_as_pin.md")]
@@ -116,7 +111,7 @@ impl<T: ?Sized> LocalBlindPooledMut<T> {
     where
         F: FnOnce(&mut T) -> &mut U,
     {
-        let (inner, layout, core) = self.into_parts();
+        let (inner, key, core) = self.into_parts();
 
         // SAFETY: Forwarding callback safety guarantees from the caller.
         // We are an exclusive handle, so we always have the right to create
@@ -125,7 +120,7 @@ impl<T: ?Sized> LocalBlindPooledMut<T> {
 
         LocalBlindPooledMut {
             inner: new_inner,
-            layout,
+            key,
             core,
         }
     }
@@ -139,12 +134,12 @@ where
     #[must_use]
     #[inline]
     pub fn into_inner(self) -> T {
-        let (inner, layout, core) = self.into_parts();
+        let (inner, key, core) = self.into_parts();
 
         let mut core = RefCell::borrow_mut(&core);
 
         let pool = core
-            .get_mut(&layout)
+            .get_mut(&key)
             .expect("if the handle still exists, the inner pool must still exist");
 
         pool.remove_mut_unpin(inner)
@@ -155,7 +150,7 @@ impl<T: ?Sized> fmt::Debug for LocalBlindPooledMut<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalBlindPooledMut")
             .field("inner", &self.inner)
-            .field("layout", &self.layout)
+            .field("key", &self.key)
             .field("core", &self.core)
             .finish()
     }
@@ -234,7 +229,7 @@ impl<T: ?Sized> Drop for LocalBlindPooledMut<T> {
         let mut core = RefCell::borrow_mut(&self.core);
 
         let pool = core
-            .get_mut(&self.layout)
+            .get_mut(&self.key)
             .expect("if the handle still exists, the inner pool must still exist");
 
         pool.remove_mut(inner);

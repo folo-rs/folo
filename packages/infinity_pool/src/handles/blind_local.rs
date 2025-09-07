@@ -1,4 +1,3 @@
-use std::alloc::Layout;
 use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::fmt;
@@ -7,7 +6,7 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
-use crate::{LocalBlindPoolCore, LocalBlindPooledMut, RawPooled, RawPooledMut};
+use crate::{LayoutKey, LocalBlindPoolCore, LocalBlindPooledMut, RawPooled, RawPooledMut};
 
 /// A shared single-threaded reference-counting handle for a pooled object.
 #[doc = include_str!("../../doc/snippets/ref_counted_handle_implications.md")]
@@ -23,12 +22,12 @@ pub struct LocalBlindPooled<T: ?Sized> {
 
 impl<T: ?Sized> LocalBlindPooled<T> {
     #[must_use]
-    pub(crate) fn new(inner: RawPooledMut<T>, layout: Layout, core: LocalBlindPoolCore) -> Self {
+    pub(crate) fn new(inner: RawPooledMut<T>, key: LayoutKey, core: LocalBlindPoolCore) -> Self {
         let inner = inner.into_shared();
 
         let remover = Remover {
             handle: inner.erase(),
-            layout,
+            key,
             core,
         };
 
@@ -147,7 +146,7 @@ impl<T: ?Sized> From<LocalBlindPooledMut<T>> for LocalBlindPooled<T> {
 #[derive(Debug)]
 struct Remover {
     handle: RawPooled<()>,
-    layout: Layout,
+    key: LayoutKey,
     core: LocalBlindPoolCore,
 }
 
@@ -156,7 +155,7 @@ impl Drop for Remover {
         let mut core = RefCell::borrow_mut(&self.core);
 
         let pool = core
-            .get_mut(&self.layout)
+            .get_mut(&self.key)
             .expect("if the handle still exists, the inner pool must still exist");
 
         // SAFETY: The remover controls the shared object lifetime and is the only thing

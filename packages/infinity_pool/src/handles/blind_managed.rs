@@ -1,4 +1,3 @@
-use std::alloc::Layout;
 use std::borrow::Borrow;
 use std::fmt;
 use std::ops::Deref;
@@ -6,7 +5,7 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use crate::{BlindPoolCore, BlindPooledMut, ERR_POISONED_LOCK, RawPooled, RawPooledMut};
+use crate::{BlindPoolCore, BlindPooledMut, ERR_POISONED_LOCK, LayoutKey, RawPooled, RawPooledMut};
 
 // Note that while this is a thread-safe handle, we do not require `T: Send` because
 // we do not want to require every trait we cast into via trait object to be `Send`.
@@ -23,12 +22,12 @@ pub struct BlindPooled<T: ?Sized> {
 
 impl<T: ?Sized> BlindPooled<T> {
     #[must_use]
-    pub(crate) fn new(inner: RawPooledMut<T>, layout: Layout, core: BlindPoolCore) -> Self {
+    pub(crate) fn new(inner: RawPooledMut<T>, key: LayoutKey, core: BlindPoolCore) -> Self {
         let inner = inner.into_shared();
 
         let remover = Remover {
             handle: inner.erase(),
-            layout,
+            key,
             core,
         };
 
@@ -147,7 +146,7 @@ impl<T: ?Sized> From<BlindPooledMut<T>> for BlindPooled<T> {
 #[derive(Debug)]
 struct Remover {
     handle: RawPooled<()>,
-    layout: Layout,
+    key: LayoutKey,
     core: BlindPoolCore,
 }
 
@@ -156,7 +155,7 @@ impl Drop for Remover {
         let mut core = self.core.lock().expect(ERR_POISONED_LOCK);
 
         let pool = core
-            .get_mut(&self.layout)
+            .get_mut(&self.key)
             .expect("if the handle still exists, the inner pool must still exist");
 
         // SAFETY: The remover controls the shared object lifetime and is the only thing
