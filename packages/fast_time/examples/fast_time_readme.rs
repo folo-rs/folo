@@ -12,7 +12,7 @@ fn main() {
     let start = clock.now();
 
     // Simulate some work
-    simulate_work();
+    std::thread::sleep(std::time::Duration::from_millis(10));
 
     let elapsed = start.elapsed(&mut clock);
     println!("Work completed in: {elapsed:?}");
@@ -23,23 +23,10 @@ fn main() {
         timestamps.push(clock.now());
     }
 
-    // Calculate total collection time
-    let total_time = timestamps
-        .last()
-        .unwrap()
-        .saturating_duration_since(*timestamps.first().unwrap());
-
-    println!(
-        "Collected {} timestamps in {total_time:?}",
-        timestamps.len()
-    );
-
     // Convert to std::time::Instant for interoperability
     let fast_instant = clock.now();
     let std_instant: std::time::Instant = fast_instant.into();
+    
+    println!("Collected {} timestamps", timestamps.len());
     println!("Converted instant: {std_instant:?}");
-}
-
-fn simulate_work() {
-    std::thread::sleep(std::time::Duration::from_millis(10));
 }
