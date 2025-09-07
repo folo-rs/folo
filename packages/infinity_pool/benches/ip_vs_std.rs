@@ -19,15 +19,13 @@
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use infinity_pool::*;
 
 fn churn_insertion_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("ip_vs_std");
-
-    group.measurement_time(Duration::from_secs(10));
 
     // Box::pin() baseline with churn (insertion + removal pattern)
     group.bench_function("Box::pin()", |b| {
