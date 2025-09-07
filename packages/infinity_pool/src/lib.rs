@@ -58,6 +58,13 @@
 //! | Opaque Pool               | [`OpaquePool`] | [`LocalOpaquePool`] | [`RawOpaquePool`] |
 //! | Blind Pool                | [`BlindPool`]  | [`LocalBlindPool`]  | [`RawBlindPool`]  |
 //!
+//! # Performance
+//! 
+//! On an arbitrary x64 machine running Windows, the pools provided by this package offer better
+//! performance than the equivalent standard library primitives (`Box::pin()`, `Arc::pin()`, `Rc::pin()`).
+//! 
+//! <img src="https://media.githubusercontent.com/media/folo-rs/folo/refs/heads/main/packages/infinity_pool/benchmark_results.png">
+//! 
 //! # Examples
 //!
 //! ## Pinned pool (thread-safe, single type)
