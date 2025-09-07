@@ -71,13 +71,16 @@ impl VacancyTracker {
     }
 
     /// Updates the vacancy status of a slab.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the vacancy status matches the previous vacancy status.
     pub(crate) fn update_slab_status(&mut self, slab_index: usize, has_vacancy: bool) {
         let slab_previously_had_vacancy = self.has_vacancy.replace(slab_index, has_vacancy);
 
-        if has_vacancy == slab_previously_had_vacancy {
-            // No change.
-            return;
-        }
+        // We should not be calling this for no reason, as that just wastes energy.
+        // In other words, we expect the status to change on every call.
+        debug_assert_ne!(has_vacancy, slab_previously_had_vacancy);
 
         if has_vacancy {
             // If we just added a vacancy, and it's the lowest-index vacancy, update our cache.

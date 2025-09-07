@@ -8,8 +8,6 @@ use std::thread;
 
 use crate::{DropPolicy, Dropper, SlabHandle, SlabLayout, SlotMeta};
 
-// TODO: What happens if an object's drop() panics?
-
 /// A slab is one piece of a pool's capacity, providing the memory used to store pooled objects.
 ///
 /// All slabs in a pool have the same capacity but the pool may add/remove slabs as needed.
