@@ -17,7 +17,7 @@
 //! 
 //! It would be fair to say that this package essentially provides faster alternatives
 //! to `Box::pin()`, `Arc::pin()` and `Rc::pin()`.
-//!
+//! 
 //! # Pool types
 //!
 //! * Pinned pool - the most basic object pool, resembling a `Vec<T>` that guarantees all its

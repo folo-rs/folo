@@ -171,14 +171,19 @@ impl Slab {
 
         // Pop the next free index from the stack of free entries.
         let index = self.next_free_slot_index;
-        let mut slot_ptr = self.slot_ptr(index);
+
+        // SAFETY: Guaranteed in-bounds since we verified the slab is not full
+        // and we picked the next free slot index from the freelist.
+        let mut slot_ptr = unsafe { self.slot_ptr_unchecked(index) };
 
         // SAFETY: We hold an exclusive reference to the slab (&mut self), and slot_ptr
         // points to a valid, initialized SlotMeta. The slab design ensures no other references
         // to individual entries exist while we hold the exclusive slab reference.
         let slot_meta = unsafe { slot_ptr.as_mut() };
 
-        let object_ptr = self.object_ptr::<T>(index);
+        // SAFETY: Guaranteed in-bounds since we verified the slab is not full
+        // and we picked the next free slot index from the freelist.
+        let object_ptr = unsafe { self.object_ptr_unchecked::<T>(index) };
 
         // We create a MaybeUninit wrapper around the memory location where the object is to be
         // stored and call the initialization function to fill any part of it that need filling
@@ -240,7 +245,10 @@ impl Slab {
         let next_free_slot_index = self.next_free_slot_index;
 
         let old_meta = {
-            let object_ptr_erased = self.object_ptr::<()>(handle.index());
+            // SAFETY: delay-guarded by slot_meta_mut() bounds checking below.
+            // We will not use this pointer if bounds check fails but we just need
+            // to get the pointer already here due to self-borrowing rules.
+            let object_ptr_erased = unsafe { self.object_ptr_unchecked::<()>(handle.index()) };
 
             let slot_meta = self.slot_meta_mut(handle.index());
 
@@ -308,7 +316,10 @@ impl Slab {
         let next_free_slot_index = self.next_free_slot_index;
 
         {
-            let object_ptr_erased = self.object_ptr::<T>(handle.index());
+            // SAFETY: delay-guarded by slot_meta_mut() bounds checking below.
+            // We will not use this pointer if bounds check fails but we just need
+            // to get the pointer already here due to self-borrowing rules.
+            let object_ptr_erased = unsafe { self.object_ptr_unchecked::<()>(handle.index()) };
 
             let slot_meta = self.slot_meta_mut(handle.index());
 
@@ -351,13 +362,10 @@ impl Slab {
         value
     }
 
-    fn slot_ptr(&self, index: usize) -> NonNull<SlotMeta> {
-        assert!(
-            index < self.layout.capacity().get(),
-            "slot {index} is out of bounds in slab of capacity {}",
-            self.layout.capacity().get()
-        );
-
+    /// # Safety
+    ///
+    /// The caller must ensure that `index` is not out of bounds.
+    unsafe fn slot_ptr_unchecked(&self, index: usize) -> NonNull<SlotMeta> {
         // Guarded by bounds check above, so we are guaranteed that the pointer is valid.
         // This cannot overflow because that would imply the slab extends beyond virtual memory.
         let offset = index.wrapping_mul(self.layout.slot_layout().size());
@@ -367,19 +375,29 @@ impl Slab {
         unsafe { self.first_slot_ptr.byte_add(offset) }
     }
 
-    #[expect(clippy::needless_pass_by_ref_mut, reason = "false positive")]
     fn slot_meta_mut(&mut self, index: usize) -> &mut SlotMeta {
-        let mut slot_ptr = self.slot_ptr(index);
+        assert!(
+            index < self.layout.capacity().get(),
+            "slot {index} is out of bounds in slab of capacity {}",
+            self.layout.capacity().get()
+        );
 
-        // SAFETY: slot_ptr was validated by slot_ptr() bounds checking and points to
+        // SAFETY: Guarded by above assertion.
+        let mut slot_ptr = unsafe { self.slot_ptr_unchecked(index) };
+
+        // SAFETY: slot_ptr was validated by above bounds checking and points to
         // an initialized SlotMeta that we own exclusively (we hold &mut self).
         unsafe { slot_ptr.as_mut() }
     }
 
-    fn object_ptr<T>(&self, index: usize) -> NonNull<T> {
-        let slot_ptr = self.slot_ptr(index);
+    /// # Safety
+    ///
+    /// The caller must ensure that `index` is not out of bounds.
+    unsafe fn object_ptr_unchecked<T>(&self, index: usize) -> NonNull<T> {
+        // SAFETY: Forwarding safety guarantees from caller.
+        let slot_ptr = unsafe { self.slot_ptr_unchecked(index) };
 
-        // SAFETY: slot_ptr is valid from slot_ptr() and slot_to_object_offset is guaranteed by
+        // SAFETY: slot_ptr is presumed valid and slot_to_object_offset is guaranteed by
         // SlabLayout to be the offset we need to access the object in the slot.
         unsafe {
             slot_ptr
@@ -411,7 +429,8 @@ impl Drop for Slab {
         // Manually drop all SlotEntry instances to ensure occupied entries are properly dropped.
         // This will automatically call the dropper for any Occupied entries.
         for index in 0..capacity {
-            let slot_ptr = self.slot_ptr(index);
+            // SAFETY: Guaranteed in-bounds because we are iterating over all our slots.
+            let slot_ptr = unsafe { self.slot_ptr_unchecked(index) };
 
             let drop_result = catch_unwind(AssertUnwindSafe(|| {
                 // SAFETY: We allocated and initialized these SlotMeta instances in new(), potentially
@@ -500,7 +519,8 @@ impl Iterator for SlabIterator<'_> {
             // when the front and back index meet (at latest).
             self.current_front_index = self.current_front_index.wrapping_add(1);
 
-            let slot_ptr = self.slab.slot_ptr(entry_index);
+            // SAFETY: Guaranteed in-bounds since we are iterating over all our slots.
+            let slot_ptr = unsafe { self.slab.slot_ptr_unchecked(entry_index) };
 
             // SAFETY: slot_ptr() guarantees the result is a valid slot.
             let slot_meta = unsafe { slot_ptr.as_ref() };
@@ -509,7 +529,9 @@ impl Iterator for SlabIterator<'_> {
                 // Will not wrap because that would imply we yielded more
                 // items than the size of virtual memory, which is impossible.
                 self.yielded_count = self.yielded_count.wrapping_add(1);
-                return Some(self.slab.object_ptr::<()>(entry_index));
+
+                // SAFETY: Guaranteed in-bounds since we are iterating over all our slots.
+                return Some(unsafe { self.slab.object_ptr_unchecked::<()>(entry_index) });
             }
         }
 
@@ -531,7 +553,8 @@ impl DoubleEndedIterator for SlabIterator<'_> {
 
             let entry_index = self.current_back_index;
 
-            let slot_ptr = self.slab.slot_ptr(entry_index);
+            // SAFETY: Guaranteed in-bounds since we are iterating over all our slots.
+            let slot_ptr = unsafe { self.slab.slot_ptr_unchecked(entry_index) };
 
             // SAFETY: slot_ptr() guarantees the result is a valid slot.
             let slot_meta = unsafe { slot_ptr.as_ref() };
@@ -540,7 +563,9 @@ impl DoubleEndedIterator for SlabIterator<'_> {
                 // Will not wrap because that would imply we yielded more
                 // items than the size of virtual memory, which is impossible.
                 self.yielded_count = self.yielded_count.wrapping_add(1);
-                return Some(self.slab.object_ptr::<()>(entry_index));
+
+                // SAFETY: Guaranteed in-bounds since we are iterating over all our slots.
+                return Some(unsafe { self.slab.object_ptr_unchecked::<()>(entry_index) });
             }
         }
 
@@ -1171,11 +1196,11 @@ mod tests {
         let handle0 = unsafe { insert(&mut slab, 100_u32) };
         assert!(!slab.is_full());
         assert!(!slab.is_empty());
-        
+
         // SAFETY: u32 layout matches slab layout
         let handle1 = unsafe { insert(&mut slab, 200_u32) };
         assert!(!slab.is_full());
-        
+
         // SAFETY: u32 layout matches slab layout
         let handle2 = unsafe { insert(&mut slab, 300_u32) };
 
