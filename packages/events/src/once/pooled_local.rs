@@ -60,7 +60,7 @@ pub struct LocalOnceEventPool<T> {
     _requires_pinning: PhantomPinned,
 }
 
-impl<T> fmt::Debug for LocalOnceEventPool<T> {
+impl<T> Debug for LocalOnceEventPool<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalOnceEventPool")
             .field("item_type", &format_args!("{}", any::type_name::<T>()))
