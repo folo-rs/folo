@@ -124,8 +124,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
 
             // Pre-allocate pools and handle vectors outside timed span
             for _ in 0..iters {
-                let mut pool = PinnedPool::<u64>::new();
-                pool.reserve(OBJECT_COUNT as usize);
+                let pool = PinnedPool::<u64>::new();
                 all_pools.push(pool);
                 all_handles.push(Vec::<Option<_>>::with_capacity(OBJECT_COUNT as usize));
             }
@@ -154,8 +153,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
 
             // Pre-allocate pools and handle vectors outside timed span
             for _ in 0..iters {
-                let mut pool = LocalPinnedPool::<u64>::new();
-                pool.reserve(OBJECT_COUNT as usize);
+                let pool = LocalPinnedPool::<u64>::new();
                 all_pools.push(pool);
                 all_handles.push(Vec::<Option<_>>::with_capacity(OBJECT_COUNT as usize));
             }
@@ -184,8 +182,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
 
             // Pre-allocate pools and handle vectors outside timed span
             for _ in 0..iters {
-                let mut pool = RawPinnedPool::<u64>::new();
-                pool.reserve(OBJECT_COUNT as usize);
+                let pool = RawPinnedPool::<u64>::new();
                 all_pools.push(pool);
                 all_handles.push(Vec::<Option<_>>::with_capacity(OBJECT_COUNT as usize));
             }
@@ -216,8 +213,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
 
             // Pre-allocate pools and handle vectors outside timed span
             for _ in 0..iters {
-                let mut pool = OpaquePool::with_layout_of::<u64>();
-                pool.reserve(OBJECT_COUNT as usize);
+                let pool = OpaquePool::with_layout_of::<u64>();
                 all_pools.push(pool);
                 all_handles.push(Vec::<Option<_>>::with_capacity(OBJECT_COUNT as usize));
             }
@@ -246,8 +242,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
 
             // Pre-allocate pools and handle vectors outside timed span
             for _ in 0..iters {
-                let mut pool = LocalOpaquePool::with_layout_of::<u64>();
-                pool.reserve(OBJECT_COUNT as usize);
+                let pool = LocalOpaquePool::with_layout_of::<u64>();
                 all_pools.push(pool);
                 all_handles.push(Vec::<Option<_>>::with_capacity(OBJECT_COUNT as usize));
             }
@@ -276,8 +271,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
 
             // Pre-allocate pools and handle vectors outside timed span
             for _ in 0..iters {
-                let mut pool = RawOpaquePool::with_layout_of::<u64>();
-                pool.reserve(OBJECT_COUNT as usize);
+                let pool = RawOpaquePool::with_layout_of::<u64>();
                 all_pools.push(pool);
                 all_handles.push(Vec::<Option<_>>::with_capacity(OBJECT_COUNT as usize));
             }
@@ -308,8 +302,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
 
             // Pre-allocate pools and handle vectors outside timed span
             for _ in 0..iters {
-                let mut pool = BlindPool::new();
-                pool.reserve_for::<u64>(OBJECT_COUNT as usize);
+                let pool = BlindPool::new();
                 all_pools.push(pool);
                 all_handles.push(Vec::<Option<_>>::with_capacity(OBJECT_COUNT as usize));
             }
@@ -338,8 +331,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
 
             // Pre-allocate pools and handle vectors outside timed span
             for _ in 0..iters {
-                let mut pool = LocalBlindPool::new();
-                pool.reserve_for::<u64>(OBJECT_COUNT as usize);
+                let pool = LocalBlindPool::new();
                 all_pools.push(pool);
                 all_handles.push(Vec::<Option<_>>::with_capacity(OBJECT_COUNT as usize));
             }
@@ -368,8 +360,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
 
             // Pre-allocate pools and handle vectors outside timed span
             for _ in 0..iters {
-                let mut pool = RawBlindPool::new();
-                pool.reserve_for::<u64>(OBJECT_COUNT as usize);
+                let pool = RawBlindPool::new();
                 all_pools.push(pool);
                 all_handles.push(Vec::<Option<_>>::with_capacity(OBJECT_COUNT as usize));
             }
