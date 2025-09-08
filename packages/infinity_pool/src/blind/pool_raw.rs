@@ -147,7 +147,7 @@ impl RawBlindPool {
         // SAFETY: inner pool selector guarantees matching layout.
         let inner_handle = unsafe { pool.insert_unchecked(value) };
 
-        RawBlindPooledMut::new(layout, inner_handle)
+        RawBlindPooledMut::new(key, inner_handle)
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
@@ -199,16 +199,17 @@ impl RawBlindPool {
         // Initialization guarantee is forwarded from the caller.
         let inner_handle = unsafe { pool.insert_with_unchecked(f) };
 
-        RawBlindPooledMut::new(layout, inner_handle)
+        RawBlindPooledMut::new(key, inner_handle)
     }
 
     #[doc = include_str!("../../doc/snippets/raw_pool_remove_mut.md")]
     #[inline]
     pub fn remove_mut<T: ?Sized>(&mut self, handle: RawBlindPooledMut<T>) {
-        let layout = handle.layout();
-        let key = LayoutKey::new(layout);
+        let key = handle.layout_key();
 
-        let pool = self.inner_pool_mut(layout, key);
+        let pool = self
+            .try_inner_pool_mut(key)
+            .expect("attempted to remove an item that is not present in the pool");
 
         pool.remove_mut(handle.into_inner());
     }
@@ -216,10 +217,11 @@ impl RawBlindPool {
     #[doc = include_str!("../../doc/snippets/raw_pool_remove.md")]
     #[inline]
     pub unsafe fn remove<T: ?Sized>(&mut self, handle: RawBlindPooled<T>) {
-        let layout = handle.layout();
-        let key = LayoutKey::new(layout);
+        let key = handle.layout_key();
 
-        let pool = self.inner_pool_mut(layout, key);
+        let pool = self
+            .try_inner_pool_mut(key)
+            .expect("attempted to remove an item that is not present in the pool");
 
         // SAFETY: Forwarding safety guarantees from the caller.
         unsafe {
@@ -241,7 +243,11 @@ impl RawBlindPool {
             "cannot remove_mut_unpin() from a blind pool through a type-erased handle"
         );
 
-        let pool = self.inner_pool_of_mut::<T>();
+        let key = handle.layout_key();
+
+        let pool = self
+            .try_inner_pool_mut(key)
+            .expect("attempted to remove an item that is not present in the pool");
 
         pool.remove_mut_unpin(handle.into_inner())
     }
@@ -260,7 +266,11 @@ impl RawBlindPool {
             "cannot remove_unpin() from a blind pool through a type-erased handle"
         );
 
-        let pool = self.inner_pool_of_mut::<T>();
+        let key = handle.layout_key();
+
+        let pool = self
+            .try_inner_pool_mut(key)
+            .expect("attempted to remove an item that is not present in the pool");
 
         // SAFETY: Forwarding safety guarantees from the caller.
         unsafe { pool.remove_unpin(handle.into_inner()) }
@@ -286,6 +296,10 @@ impl RawBlindPool {
                 .layout(layout)
                 .build()
         })
+    }
+
+    fn try_inner_pool_mut(&mut self, key: LayoutKey) -> Option<&mut RawOpaquePool> {
+        self.pools.get_mut(&key)
     }
 }
 

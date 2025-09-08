@@ -1,9 +1,8 @@
-use std::alloc::Layout;
 use std::fmt;
 use std::pin::Pin;
 use std::ptr::NonNull;
 
-use crate::{RawBlindPooledMut, RawPooled};
+use crate::{LayoutKey, RawBlindPooledMut, RawPooled};
 
 /// A shared handle to an object in a [`RawBlindPool`][crate::RawBlindPool].
 #[doc = include_str!("../../doc/snippets/raw_handle_implications.md")]
@@ -15,25 +14,20 @@ where
     // We support casting to trait objects, hence `?Sized`.
     T: ?Sized,
 {
-    // We combine the inner RawPooled with a layout that
-    // acts as the inner pool key for the RawBlindPool.
-    layout: Layout,
-
+    key: LayoutKey,
     inner: RawPooled<T>,
 }
 
 impl<T: ?Sized> RawBlindPooled<T> {
     #[must_use]
-    pub(crate) fn new(layout: Layout, inner: RawPooled<T>) -> Self {
-        Self { layout, inner }
+    pub(crate) fn new(key: LayoutKey, inner: RawPooled<T>) -> Self {
+        Self { key, inner }
     }
 
-    /// The layout originally used to insert the item
-    ///
-    /// This might not match `T` any more, as the `T` parameter may have been transformed.
+    /// The layout key used to identify the inner pool the blind pool used to store it.
     #[must_use]
-    pub(crate) fn layout(&self) -> Layout {
-        self.layout
+    pub(crate) fn layout_key(&self) -> LayoutKey {
+        self.key
     }
 
     /// Becomes the inner handle for the `RawOpaquePool` that holds the object.
@@ -54,7 +48,7 @@ impl<T: ?Sized> RawBlindPooled<T> {
     #[inline]
     pub fn erase(self) -> RawBlindPooled<()> {
         RawBlindPooled {
-            layout: self.layout,
+            key: self.key,
             inner: self.inner.erase(),
         }
     }
@@ -102,7 +96,7 @@ impl<T: ?Sized> RawBlindPooled<T> {
         let new_inner = unsafe { self.inner.__private_cast_dyn_with_fn(cast_fn) };
 
         RawBlindPooled {
-            layout: self.layout,
+            key: self.key,
             inner: new_inner,
         }
     }
@@ -120,7 +114,7 @@ impl<T: ?Sized> Copy for RawBlindPooled<T> {}
 impl<T: ?Sized> fmt::Debug for RawBlindPooled<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RawBlindPooled")
-            .field("layout", &self.layout)
+            .field("key", &self.key)
             .field("inner", &self.inner)
             .finish()
     }
