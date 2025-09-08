@@ -38,7 +38,7 @@ dependencies = [
 
 [[package]]
 name = "alloc_tracker"
-version = "0.5.6"
+version = "0.5.7"
 dependencies = [
  "criterion",
  "mutants",
@@ -202,7 +202,7 @@ dependencies = [
 
 [[package]]
 name = "blind_pool"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -441,7 +441,7 @@ dependencies = [
 
 [[package]]
 name = "events"
-version = "0.3.12"
+version = "0.3.13"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -469,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "fast_time"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "criterion",
  "libc",
@@ -799,7 +799,7 @@ dependencies = [
 
 [[package]]
 name = "infinity_pool"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "alloc_tracker",
  "bitvec",
@@ -1094,7 +1094,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "opaque_pool"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -1105,7 +1105,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
