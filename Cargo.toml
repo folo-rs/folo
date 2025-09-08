@@ -53,7 +53,10 @@ ui_tests = { path = "packages/ui_tests" }
 arc-swap = { version = "1.7", default-features = false }
 argh = { version = "0.1.13", default-features = false }
 axum = { version = "0.8", default-features = false }
-bitvec = { version = "1.0.1", default-features = false }
+bitvec = { version = "1.0.1", default-features = false, features = [
+    "atomic",
+    "std",
+] }
 cargo = { version = "0.89.0", default-features = false }
 criterion = { version = "0.7", default-features = false }
 darling = { version = "0.20", default-features = false }

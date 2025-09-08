@@ -14,7 +14,7 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
-bitvec = { workspace = true, features = ["atomic", "std"] }
+bitvec = { workspace = true }
 new_zealand = { workspace = true }
 num-integer = { workspace = true }
 pastey = { workspace = true }
@@ -23,6 +23,7 @@ pastey = { workspace = true }
 alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
 mutants = { workspace = true }
+rand = { workspace = true, features = ["small_rng"] }
 static_assertions = { workspace = true }
 
 [[bench]]

@@ -1,19 +1,16 @@
 //! Benchmark comparing insertion performance of standard library primitives
 //! against `infinity_pool` primitives in the target scenario:
 //! 1. Lots of insertions.
-//! 2. Lots of removals at arbitrary points (for benchmarks, <= midpoint)
+//! 2. Lots of removals at arbitrary points.
 #![allow(
     dead_code,
     clippy::collection_is_never_read,
     clippy::arithmetic_side_effects,
     clippy::cast_possible_truncation,
-    clippy::uninlined_format_args,
     clippy::explicit_counter_loop,
     clippy::integer_division,
     clippy::indexing_slicing,
-    missing_docs,
-    unused_doc_comments,
-    reason = "Benchmark code, relax"
+    reason = "duty of care is slightly lowered for benchmark code"
 )]
 
 use std::pin::Pin;
