@@ -52,7 +52,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
 
             // Pre-allocate per-iteration vectors outside timed span
             for _ in 0..iters {
-                all_boxes.push(Vec::<Option<Pin<Box<u64>>>>::with_capacity(
+                all_boxes.push(Vec::<Pin<Box<u64>>>::with_capacity(
                     (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
                 ));
             }
@@ -60,7 +60,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             // Pre-fill with initial items outside timed span
             for boxes in &mut all_boxes {
                 for i in 0..INITIAL_ITEMS {
-                    boxes.push(Some(Box::pin(i)));
+                    boxes.push(Box::pin(i));
                 }
             }
 
@@ -73,18 +73,14 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 for _ in 0..BATCH_COUNT {
                     // Add BATCH_SIZE new items
                     for _ in 0..BATCH_SIZE {
-                        boxes.push(Some(Box::pin(next_value)));
+                        boxes.push(Box::pin(next_value));
                         next_value = next_value.wrapping_add(1);
                     }
 
                     // Remove BATCH_SIZE random existing items
                     for _ in 0..BATCH_SIZE {
-                        let mut target_index = rng.random_range(0..boxes.len());
-                        // Find a non-None item to remove
-                        while boxes[target_index].is_none() {
-                            target_index = rng.random_range(0..boxes.len());
-                        }
-                        boxes[target_index] = None;
+                        let target_index = rng.random_range(0..boxes.len());
+                        boxes.swap_remove(target_index);
                     }
                 }
             }
@@ -100,7 +96,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
 
             // Pre-allocate per-iteration vectors outside timed span
             for _ in 0..iters {
-                all_rcs.push(Vec::<Option<Pin<Rc<u64>>>>::with_capacity(
+                all_rcs.push(Vec::<Pin<Rc<u64>>>::with_capacity(
                     (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
                 ));
             }
@@ -108,7 +104,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             // Pre-fill with initial items outside timed span
             for rcs in &mut all_rcs {
                 for i in 0..INITIAL_ITEMS {
-                    rcs.push(Some(Rc::pin(i)));
+                    rcs.push(Rc::pin(i));
                 }
             }
 
@@ -121,18 +117,14 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 for _ in 0..BATCH_COUNT {
                     // Add BATCH_SIZE new items
                     for _ in 0..BATCH_SIZE {
-                        rcs.push(Some(Rc::pin(next_value)));
+                        rcs.push(Rc::pin(next_value));
                         next_value = next_value.wrapping_add(1);
                     }
 
                     // Remove BATCH_SIZE random existing items
                     for _ in 0..BATCH_SIZE {
-                        let mut target_index = rng.random_range(0..rcs.len());
-                        // Find a non-None item to remove
-                        while rcs[target_index].is_none() {
-                            target_index = rng.random_range(0..rcs.len());
-                        }
-                        rcs[target_index] = None;
+                        let target_index = rng.random_range(0..rcs.len());
+                        rcs.swap_remove(target_index);
                     }
                 }
             }
@@ -148,7 +140,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
 
             // Pre-allocate per-iteration vectors outside timed span
             for _ in 0..iters {
-                all_arcs.push(Vec::<Option<Pin<Arc<u64>>>>::with_capacity(
+                all_arcs.push(Vec::<Pin<Arc<u64>>>::with_capacity(
                     (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
                 ));
             }
@@ -156,7 +148,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             // Pre-fill with initial items outside timed span
             for arcs in &mut all_arcs {
                 for i in 0..INITIAL_ITEMS {
-                    arcs.push(Some(Arc::pin(i)));
+                    arcs.push(Arc::pin(i));
                 }
             }
 
@@ -169,18 +161,14 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 for _ in 0..BATCH_COUNT {
                     // Add BATCH_SIZE new items
                     for _ in 0..BATCH_SIZE {
-                        arcs.push(Some(Arc::pin(next_value)));
+                        arcs.push(Arc::pin(next_value));
                         next_value = next_value.wrapping_add(1);
                     }
 
                     // Remove BATCH_SIZE random existing items
                     for _ in 0..BATCH_SIZE {
-                        let mut target_index = rng.random_range(0..arcs.len());
-                        // Find a non-None item to remove
-                        while arcs[target_index].is_none() {
-                            target_index = rng.random_range(0..arcs.len());
-                        }
-                        arcs[target_index] = None;
+                        let target_index = rng.random_range(0..arcs.len());
+                        arcs.swap_remove(target_index);
                     }
                 }
             }
@@ -199,7 +187,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             for _ in 0..iters {
                 let pool = PinnedPool::<u64>::new();
                 all_pools.push(pool);
-                all_handles.push(Vec::<Option<_>>::with_capacity(
+                all_handles.push(Vec::with_capacity(
                     (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
                 ));
             }
@@ -207,7 +195,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             // Pre-fill with initial items outside timed span
             for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
                 for i in 0..INITIAL_ITEMS {
-                    handles.push(Some(pool.insert(i)));
+                    handles.push(pool.insert(i));
                 }
             }
 
@@ -220,18 +208,14 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 for _ in 0..BATCH_COUNT {
                     // Add BATCH_SIZE new items
                     for _ in 0..BATCH_SIZE {
-                        handles.push(Some(pool.insert(next_value)));
+                        handles.push(pool.insert(next_value));
                         next_value = next_value.wrapping_add(1);
                     }
 
                     // Remove BATCH_SIZE random existing items
                     for _ in 0..BATCH_SIZE {
-                        let mut target_index = rng.random_range(0..handles.len());
-                        // Find a non-None item to remove
-                        while handles[target_index].is_none() {
-                            target_index = rng.random_range(0..handles.len());
-                        }
-                        handles[target_index] = None;
+                        let target_index = rng.random_range(0..handles.len());
+                        handles.swap_remove(target_index);
                     }
                 }
             }
@@ -250,7 +234,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             for _ in 0..iters {
                 let pool = LocalPinnedPool::<u64>::new();
                 all_pools.push(pool);
-                all_handles.push(Vec::<Option<_>>::with_capacity(
+                all_handles.push(Vec::with_capacity(
                     (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
                 ));
             }
@@ -258,7 +242,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             // Pre-fill with initial items outside timed span
             for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
                 for i in 0..INITIAL_ITEMS {
-                    handles.push(Some(pool.insert(i)));
+                    handles.push(pool.insert(i));
                 }
             }
 
@@ -271,18 +255,14 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 for _ in 0..BATCH_COUNT {
                     // Add BATCH_SIZE new items
                     for _ in 0..BATCH_SIZE {
-                        handles.push(Some(pool.insert(next_value)));
+                        handles.push(pool.insert(next_value));
                         next_value = next_value.wrapping_add(1);
                     }
 
                     // Remove BATCH_SIZE random existing items
                     for _ in 0..BATCH_SIZE {
-                        let mut target_index = rng.random_range(0..handles.len());
-                        // Find a non-None item to remove
-                        while handles[target_index].is_none() {
-                            target_index = rng.random_range(0..handles.len());
-                        }
-                        handles[target_index] = None;
+                        let target_index = rng.random_range(0..handles.len());
+                        handles.swap_remove(target_index);
                     }
                 }
             }
@@ -301,7 +281,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             for _ in 0..iters {
                 let pool = RawPinnedPool::<u64>::new();
                 all_pools.push(pool);
-                all_handles.push(Vec::<Option<_>>::with_capacity(
+                all_handles.push(Vec::with_capacity(
                     (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
                 ));
             }
@@ -309,7 +289,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             // Pre-fill with initial items outside timed span
             for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
                 for i in 0..INITIAL_ITEMS {
-                    handles.push(Some(pool.insert(i)));
+                    handles.push(pool.insert(i));
                 }
             }
 
@@ -322,20 +302,15 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 for _ in 0..BATCH_COUNT {
                     // Add BATCH_SIZE new items
                     for _ in 0..BATCH_SIZE {
-                        handles.push(Some(pool.insert(next_value)));
+                        handles.push(pool.insert(next_value));
                         next_value = next_value.wrapping_add(1);
                     }
 
                     // Remove BATCH_SIZE random existing items
                     for _ in 0..BATCH_SIZE {
-                        let mut target_index = rng.random_range(0..handles.len());
-                        // Find a non-None item to remove
-                        while handles[target_index].is_none() {
-                            target_index = rng.random_range(0..handles.len());
-                        }
-                        if let Some(handle) = handles[target_index].take() {
-                            pool.remove_mut(handle);
-                        }
+                        let target_index = rng.random_range(0..handles.len());
+                        let handle = handles.swap_remove(target_index);
+                        pool.remove_mut(handle);
                     }
                 }
             }
@@ -354,7 +329,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             for _ in 0..iters {
                 let pool = OpaquePool::with_layout_of::<u64>();
                 all_pools.push(pool);
-                all_handles.push(Vec::<Option<_>>::with_capacity(
+                all_handles.push(Vec::with_capacity(
                     (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
                 ));
             }
@@ -362,7 +337,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             // Pre-fill with initial items outside timed span
             for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
                 for i in 0..INITIAL_ITEMS {
-                    handles.push(Some(pool.insert(i)));
+                    handles.push(pool.insert(i));
                 }
             }
 
@@ -375,18 +350,14 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 for _ in 0..BATCH_COUNT {
                     // Add BATCH_SIZE new items
                     for _ in 0..BATCH_SIZE {
-                        handles.push(Some(pool.insert(next_value)));
+                        handles.push(pool.insert(next_value));
                         next_value = next_value.wrapping_add(1);
                     }
 
                     // Remove BATCH_SIZE random existing items
                     for _ in 0..BATCH_SIZE {
-                        let mut target_index = rng.random_range(0..handles.len());
-                        // Find a non-None item to remove
-                        while handles[target_index].is_none() {
-                            target_index = rng.random_range(0..handles.len());
-                        }
-                        handles[target_index] = None;
+                        let target_index = rng.random_range(0..handles.len());
+                        handles.swap_remove(target_index);
                     }
                 }
             }
@@ -405,7 +376,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             for _ in 0..iters {
                 let pool = LocalOpaquePool::with_layout_of::<u64>();
                 all_pools.push(pool);
-                all_handles.push(Vec::<Option<_>>::with_capacity(
+                all_handles.push(Vec::with_capacity(
                     (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
                 ));
             }
@@ -413,7 +384,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             // Pre-fill with initial items outside timed span
             for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
                 for i in 0..INITIAL_ITEMS {
-                    handles.push(Some(pool.insert(i)));
+                    handles.push(pool.insert(i));
                 }
             }
 
@@ -426,18 +397,14 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 for _ in 0..BATCH_COUNT {
                     // Add BATCH_SIZE new items
                     for _ in 0..BATCH_SIZE {
-                        handles.push(Some(pool.insert(next_value)));
+                        handles.push(pool.insert(next_value));
                         next_value = next_value.wrapping_add(1);
                     }
 
                     // Remove BATCH_SIZE random existing items
                     for _ in 0..BATCH_SIZE {
-                        let mut target_index = rng.random_range(0..handles.len());
-                        // Find a non-None item to remove
-                        while handles[target_index].is_none() {
-                            target_index = rng.random_range(0..handles.len());
-                        }
-                        handles[target_index] = None;
+                        let target_index = rng.random_range(0..handles.len());
+                        handles.swap_remove(target_index);
                     }
                 }
             }
@@ -456,7 +423,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             for _ in 0..iters {
                 let pool = RawOpaquePool::with_layout_of::<u64>();
                 all_pools.push(pool);
-                all_handles.push(Vec::<Option<_>>::with_capacity(
+                all_handles.push(Vec::with_capacity(
                     (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
                 ));
             }
@@ -464,7 +431,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             // Pre-fill with initial items outside timed span
             for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
                 for i in 0..INITIAL_ITEMS {
-                    handles.push(Some(pool.insert(i)));
+                    handles.push(pool.insert(i));
                 }
             }
 
@@ -477,20 +444,15 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 for _ in 0..BATCH_COUNT {
                     // Add BATCH_SIZE new items
                     for _ in 0..BATCH_SIZE {
-                        handles.push(Some(pool.insert(next_value)));
+                        handles.push(pool.insert(next_value));
                         next_value = next_value.wrapping_add(1);
                     }
 
                     // Remove BATCH_SIZE random existing items
                     for _ in 0..BATCH_SIZE {
-                        let mut target_index = rng.random_range(0..handles.len());
-                        // Find a non-None item to remove
-                        while handles[target_index].is_none() {
-                            target_index = rng.random_range(0..handles.len());
-                        }
-                        if let Some(handle) = handles[target_index].take() {
-                            pool.remove_mut(handle);
-                        }
+                        let target_index = rng.random_range(0..handles.len());
+                        let handle = handles.swap_remove(target_index);
+                        pool.remove_mut(handle);
                     }
                 }
             }
@@ -509,7 +471,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             for _ in 0..iters {
                 let pool = BlindPool::new();
                 all_pools.push(pool);
-                all_handles.push(Vec::<Option<_>>::with_capacity(
+                all_handles.push(Vec::with_capacity(
                     (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
                 ));
             }
@@ -517,7 +479,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             // Pre-fill with initial items outside timed span
             for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
                 for i in 0..INITIAL_ITEMS {
-                    handles.push(Some(pool.insert(i)));
+                    handles.push(pool.insert(i));
                 }
             }
 
@@ -530,18 +492,14 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 for _ in 0..BATCH_COUNT {
                     // Add BATCH_SIZE new items
                     for _ in 0..BATCH_SIZE {
-                        handles.push(Some(pool.insert(next_value)));
+                        handles.push(pool.insert(next_value));
                         next_value = next_value.wrapping_add(1);
                     }
 
                     // Remove BATCH_SIZE random existing items
                     for _ in 0..BATCH_SIZE {
-                        let mut target_index = rng.random_range(0..handles.len());
-                        // Find a non-None item to remove
-                        while handles[target_index].is_none() {
-                            target_index = rng.random_range(0..handles.len());
-                        }
-                        handles[target_index] = None;
+                        let target_index = rng.random_range(0..handles.len());
+                        handles.swap_remove(target_index);
                     }
                 }
             }
@@ -560,7 +518,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             for _ in 0..iters {
                 let pool = LocalBlindPool::new();
                 all_pools.push(pool);
-                all_handles.push(Vec::<Option<_>>::with_capacity(
+                all_handles.push(Vec::with_capacity(
                     (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
                 ));
             }
@@ -568,7 +526,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             // Pre-fill with initial items outside timed span
             for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
                 for i in 0..INITIAL_ITEMS {
-                    handles.push(Some(pool.insert(i)));
+                    handles.push(pool.insert(i));
                 }
             }
 
@@ -581,18 +539,14 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 for _ in 0..BATCH_COUNT {
                     // Add BATCH_SIZE new items
                     for _ in 0..BATCH_SIZE {
-                        handles.push(Some(pool.insert(next_value)));
+                        handles.push(pool.insert(next_value));
                         next_value = next_value.wrapping_add(1);
                     }
 
                     // Remove BATCH_SIZE random existing items
                     for _ in 0..BATCH_SIZE {
-                        let mut target_index = rng.random_range(0..handles.len());
-                        // Find a non-None item to remove
-                        while handles[target_index].is_none() {
-                            target_index = rng.random_range(0..handles.len());
-                        }
-                        handles[target_index] = None;
+                        let target_index = rng.random_range(0..handles.len());
+                        handles.swap_remove(target_index);
                     }
                 }
             }
@@ -611,7 +565,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             for _ in 0..iters {
                 let pool = RawBlindPool::new();
                 all_pools.push(pool);
-                all_handles.push(Vec::<Option<_>>::with_capacity(
+                all_handles.push(Vec::with_capacity(
                     (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
                 ));
             }
@@ -619,7 +573,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             // Pre-fill with initial items outside timed span
             for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
                 for i in 0..INITIAL_ITEMS {
-                    handles.push(Some(pool.insert(i)));
+                    handles.push(pool.insert(i));
                 }
             }
 
@@ -632,20 +586,15 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 for _ in 0..BATCH_COUNT {
                     // Add BATCH_SIZE new items
                     for _ in 0..BATCH_SIZE {
-                        handles.push(Some(pool.insert(next_value)));
+                        handles.push(pool.insert(next_value));
                         next_value = next_value.wrapping_add(1);
                     }
 
                     // Remove BATCH_SIZE random existing items
                     for _ in 0..BATCH_SIZE {
-                        let mut target_index = rng.random_range(0..handles.len());
-                        // Find a non-None item to remove
-                        while handles[target_index].is_none() {
-                            target_index = rng.random_range(0..handles.len());
-                        }
-                        if let Some(handle) = handles[target_index].take() {
-                            pool.remove_mut(handle);
-                        }
+                        let target_index = rng.random_range(0..handles.len());
+                        let handle = handles.swap_remove(target_index);
+                        pool.remove_mut(handle);
                     }
                 }
             }
