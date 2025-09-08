@@ -240,20 +240,20 @@ impl Slab {
     pub(crate) unsafe fn remove<T: ?Sized>(&mut self, handle: SlabHandle<T>) {
         let next_free_slot_index = self.next_free_slot_index;
 
-        let old_meta = {
-            // SAFETY: delay-guarded by slot_meta_mut() bounds checking below.
-            // We will not use this pointer if bounds check fails but we just need
-            // to get the pointer already here due to self-borrowing rules.
-            let object_ptr_erased = unsafe { self.object_ptr_unchecked::<()>(handle.index()) };
+        // SAFETY: delay-guarded by slot_meta_mut() bounds checking below.
+        // We will not use this pointer if bounds check fails but we just need
+        // to get the pointer already here due to self-borrowing rules.
+        let object_ptr_erased = unsafe { self.object_ptr_unchecked::<()>(handle.index()) };
 
+        let slot_meta = self.slot_meta_mut(handle.index());
+
+        let old_meta = {
             // For extra security, we also verify that the pointer matches, because otherwise
             // one might mix up slot 5 in slab A with slot 5 in slab B.
             assert!(ptr::addr_eq(
                 object_ptr_erased.as_ptr(),
                 handle.ptr().as_ptr()
             ));
-
-            let slot_meta = self.slot_meta_mut(handle.index());
 
             // The Drop implementation of the existing SlotMeta will automatically call the dropper.
             // We return it to the outer scope so we can defer the drop until after the slab has
@@ -273,7 +273,6 @@ impl Slab {
 
             // All we did was overwrite the slot with a "vacant" sign,
             // so to restore the previous state we just put back the old meta.
-            let slot_meta = self.slot_meta_mut(handle.index());
             *slot_meta = old_meta;
 
             panic!(
@@ -321,21 +320,14 @@ impl Slab {
 
         let next_free_slot_index = self.next_free_slot_index;
 
-        {
-            // SAFETY: delay-guarded by slot_meta_mut() bounds checking below.
-            // We will not use this pointer if bounds check fails but we just need
-            // to get the pointer already here due to self-borrowing rules.
-            let object_ptr_erased = unsafe { self.object_ptr_unchecked::<()>(handle.index()) };
+        // SAFETY: delay-guarded by slot_meta_mut() bounds checking below.
+        // We will not use this pointer if bounds check fails but we just need
+        // to get the pointer already here due to self-borrowing rules.
+        let object_ptr_erased = unsafe { self.object_ptr_unchecked::<()>(handle.index()) };
 
-            let slot_meta = self.slot_meta_mut(handle.index());
+        let slot_meta = self.slot_meta_mut(handle.index());
 
-            assert!(
-                matches!(slot_meta, SlotMeta::Occupied { .. }),
-                "remove() slot {} was vacant in slab of capacity {}",
-                handle.index(),
-                self.layout.capacity().get()
-            );
-
+        let old_meta = {
             // For extra security, we also verify that the pointer matches, because otherwise
             // one might mix up slot 5 in slab A with slot 5 in slab B.
             assert!(ptr::addr_eq(
@@ -343,16 +335,34 @@ impl Slab {
                 handle.ptr().as_ptr()
             ));
 
-            // We deliberately do NOT drop the existing slot meta here, instead forgetting it.
-            // This prevents the dropper from running, which would drop the object we want to
-            // return to the caller.
-            mem::forget(mem::replace(
+            mem::replace(
                 slot_meta,
                 SlotMeta::Vacant {
                     next_free_slot_index,
                 },
-            ));
+            )
+        };
+
+        if !matches!(old_meta, SlotMeta::Occupied { .. }) {
+            // Uh-oh, we were told to remove an object that did not actually exist.
+            // While this is a no-no and we will panic, we still need to preserve
+            // the pool in a valid state after this (if only for a proper drop to happen).
+
+            // All we did was overwrite the slot with a "vacant" sign,
+            // so to restore the previous state we just put back the old meta.
+            *slot_meta = old_meta;
+
+            panic!(
+                "remove() slot {} was vacant in slab of capacity {}",
+                handle.index(),
+                self.layout.capacity().get()
+            );
         }
+
+        // We deliberately do NOT drop the existing slot meta here, instead forgetting it.
+        // This prevents the dropper from running, which would drop the object we want to
+        // return to the caller.
+        mem::forget(old_meta);
 
         // Read the value from the slot so we can return it to the caller.
         // SAFETY: The caller guarantees the handle points to a valid object of type T in the slab.
