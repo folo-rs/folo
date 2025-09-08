@@ -48,9 +48,9 @@ impl VacancyTracker {
     /// Informs the tracker that the number of slabs has changed.
     ///
     /// Any added slabs are assumed to be empty.
-    /// 
+    ///
     /// # Panics
-    /// 
+    ///
     /// In debug builds, panics if the old and new count are the same (due to useless call).
     pub(crate) fn update_slab_count(&mut self, count: usize) {
         let previous_count = self.has_vacancy.len();

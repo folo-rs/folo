@@ -19,7 +19,7 @@
 ///
 /// The trait must have at least `pub(crate)` visibility because the generated code uses that
 /// visibility.
-/// 
+///
 /// For complex trait bounds, define a trait alias first, to simplify the trait to a single name,
 /// then use this macro with the trait alias name. You may otherwise experience macro parsing
 /// issues.

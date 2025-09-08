@@ -239,7 +239,8 @@ fn ensure_inner_pool<'a, T: Send + 'static>(
 #[cfg(test)]
 mod tests {
     use std::mem::MaybeUninit;
-    use std::sync::{Arc, atomic::{AtomicI32, Ordering}};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicI32, Ordering};
     use std::thread;
 
     use super::*;

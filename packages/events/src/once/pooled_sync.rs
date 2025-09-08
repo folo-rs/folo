@@ -781,7 +781,7 @@ where
                         .expect(ERR_POISONED_LOCK)
                         .remove(event_handle);
                 }
-                
+
                 None
             }
         }
