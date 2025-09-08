@@ -185,6 +185,11 @@ impl RawOpaquePool {
             })
             .unwrap_or(0);
 
+        if new_len == self.slabs.len() {
+            // Nothing to do.
+            return;
+        }
+
         // Truncate the slabs vector to remove empty slabs from the end.
         self.slabs.truncate(new_len);
 
