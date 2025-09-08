@@ -52,6 +52,7 @@ impl VacancyTracker {
     /// # Panics
     ///
     /// In debug builds, panics if the old and new count are the same (due to useless call).
+    #[cfg_attr(test, mutants::skip)] // Does some silly mutations that cannot be reached.
     pub(crate) fn update_slab_count(&mut self, count: usize) {
         let previous_count = self.has_vacancy.len();
 
