@@ -239,10 +239,20 @@ fn ensure_inner_pool<'a, T: Send + 'static>(
 #[cfg(test)]
 mod tests {
     use std::mem::MaybeUninit;
-    use std::sync::Arc;
+    use std::sync::{Arc, atomic::{AtomicI32, Ordering}};
     use std::thread;
 
     use super::*;
+
+    struct DropTracker {
+        counter: Arc<AtomicI32>,
+    }
+
+    impl Drop for DropTracker {
+        fn drop(&mut self) {
+            self.counter.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 
     #[test]
     fn default_pool_is_empty() {
@@ -545,5 +555,58 @@ mod tests {
 
         // Insert unit types (zero-sized) - this should panic
         let _unit_handle = pool.insert(());
+    }
+
+    #[test]
+    fn object_dropped_when_last_shared_handle_dropped() {
+        // Track drop count with a shared counter
+        let drop_count = Arc::new(AtomicI32::new(0));
+
+        let mut pool = BlindPool::new();
+
+        // Create an object that tracks when it's dropped
+        let tracker = DropTracker {
+            counter: Arc::clone(&drop_count),
+        };
+
+        // Insert the tracker into the pool
+        let mut_handle = pool.insert(tracker);
+
+        // Verify the object hasn't been dropped yet
+        assert_eq!(drop_count.load(Ordering::Relaxed), 0);
+
+        // Convert to shared handle
+        let shared_handle1 = mut_handle.into_shared();
+
+        // Clone the shared handle to create multiple references
+        let shared_handle2 = shared_handle1.clone();
+        let shared_handle3 = shared_handle2.clone();
+
+        // Verify the object still hasn't been dropped
+        assert_eq!(drop_count.load(Ordering::Relaxed), 0);
+
+        // Drop all but the last handle
+        drop(shared_handle1);
+        drop(shared_handle2);
+
+        // Object should still not be dropped
+        assert_eq!(drop_count.load(Ordering::Relaxed), 0);
+
+        // Drop the last handle
+        drop(shared_handle3);
+
+        // Now the object should be dropped
+        // Note: Due to Arc cleanup timing, we might need to yield to ensure cleanup happens
+        // For testing purposes, we'll check that the drop eventually happens
+        let mut attempts = 0;
+        loop {
+            let count = drop_count.load(Ordering::Relaxed);
+            if count == 1 {
+                break;
+            }
+            attempts += 1;
+            assert!(attempts <= 100, "Object was not dropped after 100 attempts");
+            thread::yield_now();
+        }
     }
 }

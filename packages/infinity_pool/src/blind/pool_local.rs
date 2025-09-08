@@ -241,9 +241,22 @@ fn ensure_inner_pool<'a, T: 'static>(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::mem::MaybeUninit;
+    use std::rc::Rc;
 
     use super::*;
+
+    struct LocalDropTracker {
+        counter: Rc<RefCell<i32>>,
+    }
+
+    impl Drop for LocalDropTracker {
+        fn drop(&mut self) {
+            let mut count = self.counter.borrow_mut();
+            *count = count.checked_add(1).expect("Drop count overflow");
+        }
+    }
 
     #[test]
     fn default_pool_is_empty() {
@@ -570,5 +583,48 @@ mod tests {
         // Add another item after the short-lived one is gone
         let new_handle = pool.insert("New item".to_string());
         assert_eq!(&*new_handle, "New item");
+    }
+
+    #[test]
+    fn object_dropped_when_last_shared_handle_dropped() {
+        // Track drop count with a shared counter
+        let drop_count = Rc::new(RefCell::new(0));
+
+        let mut pool = LocalBlindPool::new();
+
+        // Create an object that tracks when it's dropped
+        let tracker = LocalDropTracker {
+            counter: Rc::clone(&drop_count),
+        };
+
+        // Insert the tracker into the pool
+        let mut_handle = pool.insert(tracker);
+
+        // Verify the object hasn't been dropped yet
+        assert_eq!(*drop_count.borrow(), 0);
+
+        // Convert to shared handle
+        let shared_handle1 = mut_handle.into_shared();
+
+        // Clone the shared handle to create multiple references
+        let shared_handle2 = shared_handle1.clone();
+        let shared_handle3 = shared_handle2.clone();
+
+        // Verify the object still hasn't been dropped
+        assert_eq!(*drop_count.borrow(), 0);
+
+        // Drop all but the last handle
+        drop(shared_handle1);
+        drop(shared_handle2);
+
+        // Object should still not be dropped
+        assert_eq!(*drop_count.borrow(), 0);
+
+        // Drop the last handle
+        drop(shared_handle3);
+
+        // Now the object should be dropped
+        // Since this is single-threaded, the drop should happen immediately
+        assert_eq!(*drop_count.borrow(), 1);
     }
 }
