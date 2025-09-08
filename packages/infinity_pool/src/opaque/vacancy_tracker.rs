@@ -75,8 +75,15 @@ impl VacancyTracker {
     /// # Panics
     ///
     /// Panics if the vacancy status matches the previous vacancy status.
-    pub(crate) fn update_slab_status(&mut self, slab_index: usize, has_vacancy: bool) {
-        let slab_previously_had_vacancy = self.has_vacancy.replace(slab_index, has_vacancy);
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the slab index is in bounds
+    /// defined by the most recent `update_slab_count()` call.
+    pub(crate) unsafe fn update_slab_status(&mut self, slab_index: usize, has_vacancy: bool) {
+        // SAFETY: Forwarding safety guarantees from the caller.
+        let slab_previously_had_vacancy =
+            unsafe { self.has_vacancy.replace_unchecked(slab_index, has_vacancy) };
 
         // We should not be calling this for no reason, as that just wastes energy.
         // In other words, we expect the status to change on every call.
@@ -119,6 +126,11 @@ impl VacancyTracker {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::multiple_unsafe_ops_per_block,
+    clippy::undocumented_unsafe_blocks,
+    reason = "test code, we assume safety is considered"
+)]
 mod tests {
     use super::*;
 
@@ -139,9 +151,12 @@ mod tests {
     fn tracker_with_full_slabs_reports_no_vacancies() {
         let mut tracker = VacancyTracker::new();
         tracker.update_slab_count(3);
-        tracker.update_slab_status(0, false);
-        tracker.update_slab_status(1, false);
-        tracker.update_slab_status(2, false);
+
+        unsafe {
+            tracker.update_slab_status(0, false);
+            tracker.update_slab_status(1, false);
+            tracker.update_slab_status(2, false);
+        }
         assert_eq!(tracker.next_vacancy(), None);
     }
 
@@ -149,12 +164,17 @@ mod tests {
     fn full_tracker_with_new_vacancy_at_slab_0_reports_slab_0() {
         let mut tracker = VacancyTracker::new();
         tracker.update_slab_count(3);
-        tracker.update_slab_status(0, false);
-        tracker.update_slab_status(1, false);
-        tracker.update_slab_status(2, false);
+
+        unsafe {
+            tracker.update_slab_status(0, false);
+            tracker.update_slab_status(1, false);
+            tracker.update_slab_status(2, false);
+        }
         assert_eq!(tracker.next_vacancy(), None);
 
-        tracker.update_slab_status(0, true);
+        unsafe {
+            tracker.update_slab_status(0, true);
+        }
         assert_eq!(tracker.next_vacancy(), Some(0));
     }
 
@@ -162,12 +182,17 @@ mod tests {
     fn full_tracker_with_new_vacancy_at_last_slab_reports_last_slab() {
         let mut tracker = VacancyTracker::new();
         tracker.update_slab_count(3);
-        tracker.update_slab_status(0, false);
-        tracker.update_slab_status(1, false);
-        tracker.update_slab_status(2, false);
+
+        unsafe {
+            tracker.update_slab_status(0, false);
+            tracker.update_slab_status(1, false);
+            tracker.update_slab_status(2, false);
+        }
         assert_eq!(tracker.next_vacancy(), None);
 
-        tracker.update_slab_status(2, true);
+        unsafe {
+            tracker.update_slab_status(2, true);
+        }
         assert_eq!(tracker.next_vacancy(), Some(2));
     }
 
@@ -175,18 +200,25 @@ mod tests {
     fn full_tracker_with_side_by_side_vacancies_reports_first_then_next() {
         let mut tracker = VacancyTracker::new();
         tracker.update_slab_count(5);
-        tracker.update_slab_status(0, false);
-        tracker.update_slab_status(1, false);
-        tracker.update_slab_status(2, false);
-        tracker.update_slab_status(3, false);
-        tracker.update_slab_status(4, false);
+
+        unsafe {
+            tracker.update_slab_status(0, false);
+            tracker.update_slab_status(1, false);
+            tracker.update_slab_status(2, false);
+            tracker.update_slab_status(3, false);
+            tracker.update_slab_status(4, false);
+        }
         assert_eq!(tracker.next_vacancy(), None);
 
-        tracker.update_slab_status(2, true);
-        tracker.update_slab_status(3, true);
+        unsafe {
+            tracker.update_slab_status(2, true);
+            tracker.update_slab_status(3, true);
+        }
         assert_eq!(tracker.next_vacancy(), Some(2));
 
-        tracker.update_slab_status(2, false);
+        unsafe {
+            tracker.update_slab_status(2, false);
+        }
         assert_eq!(tracker.next_vacancy(), Some(3));
     }
 
@@ -194,18 +226,24 @@ mod tests {
     fn full_tracker_with_disjoint_vacancies_reports_first_then_next() {
         let mut tracker = VacancyTracker::new();
         tracker.update_slab_count(5);
-        tracker.update_slab_status(0, false);
-        tracker.update_slab_status(1, false);
-        tracker.update_slab_status(2, false);
-        tracker.update_slab_status(3, false);
-        tracker.update_slab_status(4, false);
+        unsafe {
+            tracker.update_slab_status(0, false);
+            tracker.update_slab_status(1, false);
+            tracker.update_slab_status(2, false);
+            tracker.update_slab_status(3, false);
+            tracker.update_slab_status(4, false);
+        }
         assert_eq!(tracker.next_vacancy(), None);
 
-        tracker.update_slab_status(1, true);
-        tracker.update_slab_status(4, true);
+        unsafe {
+            tracker.update_slab_status(1, true);
+            tracker.update_slab_status(4, true);
+        }
         assert_eq!(tracker.next_vacancy(), Some(1));
 
-        tracker.update_slab_status(1, false);
+        unsafe {
+            tracker.update_slab_status(1, false);
+        }
         assert_eq!(tracker.next_vacancy(), Some(4));
     }
 
@@ -213,18 +251,25 @@ mod tests {
     fn full_tracker_with_end_vacancies_reports_first_then_next() {
         let mut tracker = VacancyTracker::new();
         tracker.update_slab_count(5);
-        tracker.update_slab_status(0, false);
-        tracker.update_slab_status(1, false);
-        tracker.update_slab_status(2, false);
-        tracker.update_slab_status(3, false);
-        tracker.update_slab_status(4, false);
+
+        unsafe {
+            tracker.update_slab_status(0, false);
+            tracker.update_slab_status(1, false);
+            tracker.update_slab_status(2, false);
+            tracker.update_slab_status(3, false);
+            tracker.update_slab_status(4, false);
+        }
         assert_eq!(tracker.next_vacancy(), None);
 
-        tracker.update_slab_status(0, true);
-        tracker.update_slab_status(4, true);
+        unsafe {
+            tracker.update_slab_status(0, true);
+            tracker.update_slab_status(4, true);
+        }
         assert_eq!(tracker.next_vacancy(), Some(0));
 
-        tracker.update_slab_status(0, false);
+        unsafe {
+            tracker.update_slab_status(0, false);
+        }
         assert_eq!(tracker.next_vacancy(), Some(4));
     }
 
@@ -232,8 +277,11 @@ mod tests {
     fn removing_slabs_from_end_removes_last_remaining_vacancy() {
         let mut tracker = VacancyTracker::new();
         tracker.update_slab_count(3);
-        tracker.update_slab_status(0, false);
-        tracker.update_slab_status(1, false);
+
+        unsafe {
+            tracker.update_slab_status(0, false);
+            tracker.update_slab_status(1, false);
+        }
         assert_eq!(tracker.next_vacancy(), Some(2));
 
         tracker.update_slab_count(2);
@@ -244,9 +292,12 @@ mod tests {
     fn adding_slabs_to_full_tracker_reports_first_added_slab() {
         let mut tracker = VacancyTracker::new();
         tracker.update_slab_count(3);
-        tracker.update_slab_status(0, false);
-        tracker.update_slab_status(1, false);
-        tracker.update_slab_status(2, false);
+
+        unsafe {
+            tracker.update_slab_status(0, false);
+            tracker.update_slab_status(1, false);
+            tracker.update_slab_status(2, false);
+        }
         assert_eq!(tracker.next_vacancy(), None);
 
         tracker.update_slab_count(5);

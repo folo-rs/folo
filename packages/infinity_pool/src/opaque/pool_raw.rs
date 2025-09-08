@@ -356,23 +356,25 @@ impl RawOpaquePool {
         // SAFETY: We just received knowledge that there is a slab with a vacant slot at this index.
         let slab = unsafe { self.slabs.get_unchecked_mut(slab_index) };
 
-        // We invalidate the "slab with vacant slot" cache here if this is the last vacant slot.
-        //
-        // We cannot overflow because there is at least one free slot,
-        // which means there must be room to increment.
-        let predicted_slab_filled_slots = slab.len().wrapping_add(1);
-
-        if predicted_slab_filled_slots == self.slab_layout.capacity().get() {
-            self.vacancy_tracker.update_slab_status(slab_index, false);
-        }
-
         // SAFETY: Forwarding guarantee from caller that T's layout matches the pool's layout
         // and that the closure properly initializes the value.
+        //
+        // We ensure that the slab is not full via the logic that gets us `slab_index`,
+        // with the logic always guaranteeing that there is a vacancy in that slab.
         let slab_handle = unsafe { slab.insert_with(f) };
 
         // Update our tracked length since we just inserted an object.
         // This can never overflow since that would mean the pool is greater than virtual memory.
         self.length = self.length.wrapping_add(1);
+
+        // We invalidate the "slab with vacant slot" cache here if this is the last vacant slot.
+        if slab.is_full() {
+            // SAFETY: We are currently operating on the slab, so it must be an existing slab.
+            // The mechanism that adds slabs is responsible for updating vacancy tracker bounds.
+            unsafe {
+                self.vacancy_tracker.update_slab_status(slab_index, false);
+            }
+        }
 
         // The pool itself does not care about the type T but for the convenience of the caller
         // we imbue the RawPooledMut with the type information, to reduce required casting by caller.
@@ -409,8 +411,13 @@ impl RawOpaquePool {
         if slab.len() == self.slab_layout.capacity().get().wrapping_sub(1) {
             // We removed from a full slab.
             // This means we have a vacant slot where there was not one before.
-            self.vacancy_tracker
-                .update_slab_status(handle.slab_index(), true);
+
+            // SAFETY: We are currently operating on the slab, so it must be an existing slab.
+            // The mechanism that adds slabs is responsible for updating vacancy tracker bounds.
+            unsafe {
+                self.vacancy_tracker
+                    .update_slab_status(handle.slab_index(), true);
+            }
         }
     }
 
@@ -452,8 +459,13 @@ impl RawOpaquePool {
         if slab.len() == self.slab_layout.capacity().get().wrapping_sub(1) {
             // We removed from a full slab.
             // This means we have a vacant slot where there was not one before.
-            self.vacancy_tracker
-                .update_slab_status(handle.slab_index(), true);
+
+            // SAFETY: We are currently operating on the slab, so it must be an existing slab.
+            // The mechanism that adds slabs is responsible for updating vacancy tracker bounds.
+            unsafe {
+                self.vacancy_tracker
+                    .update_slab_status(handle.slab_index(), true);
+            }
         }
 
         value

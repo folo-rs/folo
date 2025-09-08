@@ -139,16 +139,14 @@ impl Slab {
     ///
     /// The returned handle can be used to access the object and remove it from the slab.
     ///
-    /// # Panics
-    ///
-    /// Panics if the slab is full.
-    ///
     /// # Safety
     ///
     /// The caller must ensure that the layout of `T` matches the slab's object layout.
     ///
     /// The caller must ensure that the closure correctly initializes the object. All fields that
     /// are not `MaybeUninit` must be initialized when the closure returns.
+    ///
+    /// The caller must ensure that the slab is not full.
     pub(crate) unsafe fn insert_with<T, F>(&mut self, f: F) -> SlabHandle<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
@@ -161,7 +159,7 @@ impl Slab {
             Layout::new::<T>()
         );
 
-        assert!(
+        debug_assert!(
             !self.is_full(),
             "cannot insert value into a full slab of capacity {}",
             self.layout.capacity().get()
