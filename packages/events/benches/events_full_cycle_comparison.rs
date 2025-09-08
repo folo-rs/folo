@@ -311,7 +311,7 @@ fn oneshot_channel(
             measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|_| {
-            let (sender, receiver) = oneshot::channel();
+            let (sender, receiver) = oneshot::channel::<Payload>();
 
             drop(sender.send(42));
             black_box(spin_on(receiver).unwrap());
@@ -331,7 +331,7 @@ fn futures_oneshot_channel(
             measure.allocs(allocs).processor_time(processor_time)
         })
         .iter(|_| {
-            let (sender, receiver) = futures::channel::oneshot::channel();
+            let (sender, receiver) = futures::channel::oneshot::channel::<Payload>();
 
             _ = sender.send(42);
             black_box(spin_on(receiver).unwrap());
