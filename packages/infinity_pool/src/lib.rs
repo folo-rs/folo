@@ -109,13 +109,13 @@
 //! ```
 //! use std::fmt::Display;
 //!
-//! use infinity_pool::{BlindPool, PooledMut, define_pooled_dyn_cast};
+//! use infinity_pool::{BlindPool, BlindPooledMut, define_pooled_dyn_cast};
 //!
 //! // Enable casting to Display trait objects
 //! define_pooled_dyn_cast!(Display);
 //!
 //! // Function that accepts trait object handles directly
-//! fn process_displayable(handle: PooledMut<dyn Display>) {
+//! fn process_displayable(handle: BlindPooledMut<dyn Display>) {
 //!     println!("Processing: {}", &*handle);
 //! }
 //!

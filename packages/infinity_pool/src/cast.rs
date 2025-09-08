@@ -31,13 +31,13 @@
 /// ```
 /// use std::fmt::Display;
 ///
-/// use infinity_pool::{BlindPool, PooledMut, define_pooled_dyn_cast};
+/// use infinity_pool::{BlindPool, BlindPooledMut, define_pooled_dyn_cast};
 ///
 /// // Enable casting to Display trait objects
 /// define_pooled_dyn_cast!(Display);
 ///
 /// // Function that accepts trait object handles directly
-/// fn process_displayable(handle: PooledMut<dyn Display>) {
+/// fn process_displayable(handle: BlindPooledMut<dyn Display>) {
 ///     println!("Processing: {}", &*handle);
 /// }
 ///
@@ -55,7 +55,7 @@
 /// ```
 /// use std::future::Future;
 ///
-/// use infinity_pool::{BlindPool, PooledMut, define_pooled_dyn_cast};
+/// use infinity_pool::{BlindPool, BlindPooledMut, define_pooled_dyn_cast};
 ///
 /// // Define a trait alias for complex trait bounds
 /// trait MyUsizeFuture: Future<Output = Option<usize>> + Send {}
@@ -67,7 +67,7 @@
 /// define_pooled_dyn_cast!(MyUsizeFuture);
 ///
 /// // Function that accepts the complex trait object
-/// fn process_future(future: &mut PooledMut<dyn MyUsizeFuture>) {
+/// fn process_future(future: &mut BlindPooledMut<dyn MyUsizeFuture>) {
 ///     // Can work with the future as a trait object
 ///     println!("Got a future that returns Option<usize>");
 /// }
