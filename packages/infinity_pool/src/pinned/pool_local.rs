@@ -103,13 +103,13 @@ where
 
     #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
     #[inline]
-    pub fn reserve(&mut self, additional: usize) {
+    pub fn reserve(&self, additional: usize) {
         self.inner.borrow_mut().reserve(additional);
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     #[inline]
-    pub fn shrink_to_fit(&mut self) {
+    pub fn shrink_to_fit(&self) {
         self.inner.borrow_mut().shrink_to_fit();
     }
 
@@ -142,7 +142,7 @@ where
     /// ```
     #[inline]
     #[must_use]
-    pub fn insert(&mut self, value: T) -> LocalPooledMut<T> {
+    pub fn insert(&self, value: T) -> LocalPooledMut<T> {
         let inner = self.inner.borrow_mut().insert(value);
 
         LocalPooledMut::new(inner, Rc::clone(&self.inner))
@@ -185,7 +185,7 @@ where
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
     #[inline]
     #[must_use]
-    pub unsafe fn insert_with<F>(&mut self, f: F) -> LocalPooledMut<T>
+    pub unsafe fn insert_with<F>(&self, f: F) -> LocalPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {
@@ -342,7 +342,7 @@ mod tests {
 
     #[test]
     fn insert_and_length() {
-        let mut pool = LocalPinnedPool::<u64>::new();
+        let pool = LocalPinnedPool::<u64>::new();
 
         let _h1 = pool.insert(10);
         assert_eq!(pool.len(), 1);
@@ -354,7 +354,7 @@ mod tests {
 
     #[test]
     fn capacity_grows_when_needed() {
-        let mut pool = LocalPinnedPool::<u64>::new();
+        let pool = LocalPinnedPool::<u64>::new();
 
         assert_eq!(pool.capacity(), 0);
 
@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn reserve_creates_capacity() {
-        let mut pool = LocalPinnedPool::<u8>::new();
+        let pool = LocalPinnedPool::<u8>::new();
 
         pool.reserve(100);
         assert!(pool.capacity() >= 100);
@@ -397,7 +397,7 @@ mod tests {
 
     #[test]
     fn shrink_to_fit_removes_unused_capacity() {
-        let mut pool = LocalPinnedPool::<u8>::new();
+        let pool = LocalPinnedPool::<u8>::new();
 
         // Reserve more than we need
         pool.reserve(100);
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn shrink_to_fit_with_zero_items_shrinks_to_zero_capacity() {
-        let mut pool = LocalPinnedPool::<u8>::new();
+        let pool = LocalPinnedPool::<u8>::new();
 
         // Add some items to create capacity
         let handle1 = pool.insert(1_u8);
@@ -444,7 +444,7 @@ mod tests {
 
     #[test]
     fn handle_provides_access_to_object() {
-        let mut pool = LocalPinnedPool::<u64>::new();
+        let pool = LocalPinnedPool::<u64>::new();
 
         let handle = pool.insert(12345_u64);
 
@@ -453,7 +453,7 @@ mod tests {
 
     #[test]
     fn multiple_handles_to_same_type() {
-        let mut pool = LocalPinnedPool::<String>::new();
+        let pool = LocalPinnedPool::<String>::new();
 
         let handle1 = pool.insert("hello".to_string());
         let handle2 = pool.insert("world".to_string());
@@ -474,7 +474,7 @@ mod tests {
 
     #[test]
     fn handle_drop_removes_objects_both_exclusive_and_shared() {
-        let mut pool = LocalPinnedPool::<String>::new();
+        let pool = LocalPinnedPool::<String>::new();
 
         // Test exclusive handle drop
         let exclusive_handle = pool.insert("exclusive".to_string());
@@ -498,7 +498,7 @@ mod tests {
 
     #[test]
     fn insert_with_closure() {
-        let mut pool = LocalPinnedPool::<u64>::new();
+        let pool = LocalPinnedPool::<u64>::new();
 
         // SAFETY: we correctly initialize the value
         let handle = unsafe {
@@ -513,8 +513,8 @@ mod tests {
 
     #[test]
     fn clone_behavior() {
-        let mut p1 = LocalPinnedPool::<u32>::new();
-        let mut p2 = p1.clone();
+        let p1 = LocalPinnedPool::<u32>::new();
+        let p2 = p1.clone();
 
         let _h1 = p1.insert(100);
         assert_eq!(p2.len(), 1);
@@ -546,7 +546,7 @@ mod tests {
     #[test]
     fn lifecycle_handles_keep_pool_alive() {
         let handle = {
-            let mut pool = LocalPinnedPool::<String>::new();
+            let pool = LocalPinnedPool::<String>::new();
             pool.insert("persist".to_string())
         }; // pool dropped here
 
@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn lifecycle_pool_clone_keeps_inner_alive() {
-        let mut pool = LocalPinnedPool::<String>::new();
+        let pool = LocalPinnedPool::<String>::new();
 
         // Insert & clone
         let handle = pool.insert("data".to_string());
@@ -574,7 +574,7 @@ mod tests {
 
     #[test]
     fn pooled_mut_mutation_reflected() {
-        let mut pool = LocalPinnedPool::<String>::new();
+        let pool = LocalPinnedPool::<String>::new();
 
         let mut handle = pool.insert("hello".to_string());
         handle.push_str(" world");
@@ -595,7 +595,7 @@ mod tests {
 
     #[test]
     fn multiple_handles_and_drop() {
-        let mut pool = LocalPinnedPool::<u32>::new();
+        let pool = LocalPinnedPool::<u32>::new();
 
         // Insert multiple objects
         let h1 = pool.insert(1);
@@ -618,8 +618,8 @@ mod tests {
 
     #[test]
     fn reserve_and_shrink_to_fit_shared() {
-        let mut p1 = LocalPinnedPool::<u8>::new();
-        let mut p2 = p1.clone();
+        let p1 = LocalPinnedPool::<u8>::new();
+        let p2 = p1.clone();
 
         // Reserve via first handle
         p1.reserve(50);
@@ -644,7 +644,7 @@ mod tests {
 
     #[test]
     fn with_iter_collect_values() {
-        let mut pool = LocalPinnedPool::<u32>::new();
+        let pool = LocalPinnedPool::<u32>::new();
 
         let _handles: Vec<_> = [10, 20, 30].into_iter().map(|v| pool.insert(v)).collect();
 
@@ -662,7 +662,7 @@ mod tests {
 
     #[test]
     fn with_iter_double_ended() {
-        let mut pool = LocalPinnedPool::<i32>::new();
+        let pool = LocalPinnedPool::<i32>::new();
         let _handles: Vec<_> = [1, 2, 3].into_iter().map(|v| pool.insert(v)).collect();
 
         pool.with_iter(|mut iter| {
@@ -692,7 +692,7 @@ mod tests {
 
     #[test]
     fn iter_size_hint_and_exact_size() {
-        let mut pool = LocalPinnedPool::<u32>::new();
+        let pool = LocalPinnedPool::<u32>::new();
 
         // Empty pool
         pool.with_iter(|iter| {
@@ -739,19 +739,19 @@ mod tests {
         use std::rc::Rc;
 
         // Test with Rc (not Send)
-        let mut rc_pool = LocalPinnedPool::<Rc<String>>::new();
+        let rc_pool = LocalPinnedPool::<Rc<String>>::new();
         let rc_handle = rc_pool.insert(Rc::new("Non-Send data".to_string()));
         assert_eq!(rc_pool.len(), 1);
         assert_eq!(&**rc_handle, "Non-Send data");
 
         // Test with RefCell (not Send)
-        let mut refcell_pool = LocalPinnedPool::<RefCell<i32>>::new();
+        let refcell_pool = LocalPinnedPool::<RefCell<i32>>::new();
         let refcell_handle = refcell_pool.insert(RefCell::new(42));
         assert_eq!(refcell_pool.len(), 1);
         assert_eq!(*refcell_handle.borrow(), 42);
 
         // Test with custom non-Send type
-        let mut custom_pool = LocalPinnedPool::<NonSendType>::new();
+        let custom_pool = LocalPinnedPool::<NonSendType>::new();
         let raw_ptr = 0x1234 as *const u8;
         let non_send_handle = custom_pool.insert(NonSendType(raw_ptr));
         assert_eq!(custom_pool.len(), 1);
@@ -769,7 +769,7 @@ mod tests {
         });
 
         // Test nested non-Send types
-        let mut nested_pool = LocalPinnedPool::<Rc<RefCell<Vec<i32>>>>::new();
+        let nested_pool = LocalPinnedPool::<Rc<RefCell<Vec<i32>>>>::new();
         let nested_handle = nested_pool.insert(Rc::new(RefCell::new(vec![1, 2, 3])));
         assert_eq!(nested_pool.len(), 1);
         assert_eq!(*nested_handle.borrow(), vec![1, 2, 3]);

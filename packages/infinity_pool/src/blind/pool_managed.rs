@@ -105,7 +105,7 @@ impl BlindPool {
 
     #[doc = include_str!("../../doc/snippets/blind_pool_reserve.md")]
     #[inline]
-    pub fn reserve_for<T: Send + 'static>(&mut self, additional: usize) {
+    pub fn reserve_for<T: Send + 'static>(&self, additional: usize) {
         let mut core = self.core.lock().expect(ERR_POISONED_LOCK);
 
         let pool = ensure_inner_pool::<T>(&mut core);
@@ -115,7 +115,7 @@ impl BlindPool {
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     #[inline]
-    pub fn shrink_to_fit(&mut self) {
+    pub fn shrink_to_fit(&self) {
         let mut core = self.core.lock().expect(ERR_POISONED_LOCK);
 
         for pool in core.values_mut() {
@@ -152,7 +152,7 @@ impl BlindPool {
     /// ```
     #[inline]
     #[must_use]
-    pub fn insert<T: Send + 'static>(&mut self, value: T) -> BlindPooledMut<T> {
+    pub fn insert<T: Send + 'static>(&self, value: T) -> BlindPooledMut<T> {
         let mut core = self.core.lock().expect(ERR_POISONED_LOCK);
 
         let pool = ensure_inner_pool::<T>(&mut core);
@@ -204,7 +204,7 @@ impl BlindPool {
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
     #[inline]
     #[must_use]
-    pub unsafe fn insert_with<T: Send + 'static, F>(&mut self, f: F) -> BlindPooledMut<T>
+    pub unsafe fn insert_with<T: Send + 'static, F>(&self, f: F) -> BlindPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn single_type_operations() {
-        let mut pool = BlindPool::new();
+        let pool = BlindPool::new();
 
         // Insert some strings
         let handle1 = pool.insert("Hello".to_string());
@@ -289,7 +289,7 @@ mod tests {
 
     #[test]
     fn handle_drop_removes_objects_both_exclusive_and_shared() {
-        let mut pool = BlindPool::new();
+        let pool = BlindPool::new();
 
         // Test exclusive handle drop
         let exclusive_handle = pool.insert("exclusive".to_string());
@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn multiple_types_different_layouts() {
-        let mut pool = BlindPool::new();
+        let pool = BlindPool::new();
 
         // Insert different types with different layouts
         let string_handle = pool.insert("Test string".to_string());
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn same_layout_different_types() {
-        let mut pool = BlindPool::new();
+        let pool = BlindPool::new();
 
         // u32 and i32 have the same layout
         let u32_handle = pool.insert(42_u32);
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn reserve_creates_capacity() {
-        let mut pool = BlindPool::new();
+        let pool = BlindPool::new();
 
         // Reserve capacity for strings
         pool.reserve_for::<String>(10);
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn shrink_to_fit_removes_unused_capacity() {
-        let mut pool = BlindPool::new();
+        let pool = BlindPool::new();
 
         // Reserve more than we need
         pool.reserve_for::<String>(100);
@@ -405,7 +405,7 @@ mod tests {
 
     #[test]
     fn shrink_to_fit_with_zero_items_shrinks_to_zero_capacity() {
-        let mut pool = BlindPool::new();
+        let pool = BlindPool::new();
 
         // Add some items to create capacity
         let handle1 = pool.insert("Item1".to_string());
@@ -434,7 +434,7 @@ mod tests {
 
     #[test]
     fn insert_with_functionality() {
-        let mut pool = BlindPool::new();
+        let pool = BlindPool::new();
 
         // Test insert_with for partial initialization
         // SAFETY: We correctly initialize the String value in the closure
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn pool_cloning_and_sharing() {
-        let mut pool = BlindPool::new();
+        let pool = BlindPool::new();
 
         // Insert an item
         let handle = pool.insert("Shared data".to_string());
@@ -468,7 +468,7 @@ mod tests {
 
     #[test]
     fn thread_safety() {
-        let mut pool = BlindPool::new();
+        let pool = BlindPool::new();
 
         // Insert some initial data
         let handle1 = pool.insert("Thread test 1".to_string());
@@ -497,7 +497,7 @@ mod tests {
 
     #[test]
     fn large_variety_of_types() {
-        let mut pool = BlindPool::new();
+        let pool = BlindPool::new();
 
         // Insert many different types (avoiding floating point for comparison issues)
         let string_handle = pool.insert("String".to_string());
@@ -534,7 +534,7 @@ mod tests {
 
     #[test]
     fn handle_mutation() {
-        let mut pool = BlindPool::new();
+        let pool = BlindPool::new();
 
         // Insert a mutable type
         let mut string_handle = pool.insert("Initial".to_string());
@@ -552,7 +552,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn zero_sized_types() {
-        let mut pool = BlindPool::new();
+        let pool = BlindPool::new();
 
         // Insert unit types (zero-sized) - this should panic
         let _unit_handle = pool.insert(());
@@ -563,7 +563,7 @@ mod tests {
         // Track drop count with a shared counter
         let drop_count = Arc::new(AtomicI32::new(0));
 
-        let mut pool = BlindPool::new();
+        let pool = BlindPool::new();
 
         // Create an object that tracks when it's dropped
         let tracker = DropTracker {

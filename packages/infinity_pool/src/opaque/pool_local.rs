@@ -128,13 +128,13 @@ impl LocalOpaquePool {
 
     #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
     #[inline]
-    pub fn reserve(&mut self, additional: usize) {
+    pub fn reserve(&self, additional: usize) {
         self.inner.borrow_mut().reserve(additional);
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     #[inline]
-    pub fn shrink_to_fit(&mut self) {
+    pub fn shrink_to_fit(&self) {
         self.inner.borrow_mut().shrink_to_fit();
     }
 
@@ -170,7 +170,7 @@ impl LocalOpaquePool {
     /// ```
     #[inline]
     #[must_use]
-    pub fn insert<T: 'static>(&mut self, value: T) -> LocalPooledMut<T> {
+    pub fn insert<T: 'static>(&self, value: T) -> LocalPooledMut<T> {
         let inner = self.inner.borrow_mut().insert(value);
 
         LocalPooledMut::new(inner, Rc::clone(&self.inner))
@@ -181,7 +181,7 @@ impl LocalOpaquePool {
     #[doc = include_str!("../../doc/snippets/safety_pool_t_layout_must_match.md")]
     #[inline]
     #[must_use]
-    pub unsafe fn insert_unchecked<T: 'static>(&mut self, value: T) -> LocalPooledMut<T> {
+    pub unsafe fn insert_unchecked<T: 'static>(&self, value: T) -> LocalPooledMut<T> {
         // SAFETY: Forwarding safety guarantees from caller.
         let inner = unsafe { self.inner.borrow_mut().insert_unchecked(value) };
 
@@ -228,7 +228,7 @@ impl LocalOpaquePool {
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
     #[inline]
     #[must_use]
-    pub unsafe fn insert_with<T, F>(&mut self, f: F) -> LocalPooledMut<T>
+    pub unsafe fn insert_with<T, F>(&self, f: F) -> LocalPooledMut<T>
     where
         T: 'static,
         F: FnOnce(&mut MaybeUninit<T>),
@@ -277,7 +277,7 @@ impl LocalOpaquePool {
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
     #[inline]
     #[must_use]
-    pub unsafe fn insert_with_unchecked<T, F>(&mut self, f: F) -> LocalPooledMut<T>
+    pub unsafe fn insert_with_unchecked<T, F>(&self, f: F) -> LocalPooledMut<T>
     where
         T: 'static,
         F: FnOnce(&mut MaybeUninit<T>),
@@ -419,7 +419,7 @@ mod tests {
 
     #[test]
     fn insert_and_length() {
-        let mut pool = LocalOpaquePool::with_layout_of::<u32>();
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
 
         let _handle1 = pool.insert(42_u32);
         assert_eq!(pool.len(), 1);
@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn capacity_grows_when_needed() {
-        let mut pool = LocalOpaquePool::with_layout_of::<u64>();
+        let pool = LocalOpaquePool::with_layout_of::<u64>();
 
         assert_eq!(pool.capacity(), 0);
 
@@ -459,7 +459,7 @@ mod tests {
 
     #[test]
     fn reserve_creates_capacity() {
-        let mut pool = LocalOpaquePool::with_layout_of::<u8>();
+        let pool = LocalOpaquePool::with_layout_of::<u8>();
 
         pool.reserve(100);
         assert!(pool.capacity() >= 100);
@@ -474,7 +474,7 @@ mod tests {
 
     #[test]
     fn insert_with_closure() {
-        let mut pool = LocalOpaquePool::with_layout_of::<u64>();
+        let pool = LocalOpaquePool::with_layout_of::<u64>();
 
         // SAFETY: we correctly initialize the slot.
         let handle = unsafe {
@@ -489,7 +489,7 @@ mod tests {
 
     #[test]
     fn shrink_to_fit_removes_unused_capacity() {
-        let mut pool = LocalOpaquePool::with_layout_of::<u8>();
+        let pool = LocalOpaquePool::with_layout_of::<u8>();
 
         // Reserve more than we need
         pool.reserve(100);
@@ -509,7 +509,7 @@ mod tests {
 
     #[test]
     fn shrink_to_fit_with_zero_items_shrinks_to_zero_capacity() {
-        let mut pool = LocalOpaquePool::with_layout_of::<u8>();
+        let pool = LocalOpaquePool::with_layout_of::<u8>();
 
         // Add some items to create capacity
         let handle1 = pool.insert(1_u8);
@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn handle_provides_access_to_object() {
-        let mut pool = LocalOpaquePool::with_layout_of::<u64>();
+        let pool = LocalOpaquePool::with_layout_of::<u64>();
 
         let handle = pool.insert(12345_u64);
 
@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn multiple_handles_to_same_type() {
-        let mut pool = LocalOpaquePool::with_layout_of::<String>();
+        let pool = LocalOpaquePool::with_layout_of::<String>();
 
         let handle1 = pool.insert("hello".to_string());
         let handle2 = pool.insert("world".to_string());
@@ -566,7 +566,7 @@ mod tests {
 
     #[test]
     fn handle_drop_removes_objects_both_exclusive_and_shared() {
-        let mut pool = LocalOpaquePool::with_layout_of::<String>();
+        let pool = LocalOpaquePool::with_layout_of::<String>();
 
         // Test exclusive handle drop
         let exclusive_handle = pool.insert("exclusive".to_string());
@@ -604,7 +604,7 @@ mod tests {
 
     #[test]
     fn iter_single_item() {
-        let mut pool = LocalOpaquePool::with_layout_of::<u32>();
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
 
         let _handle = pool.insert(42_u32);
 
@@ -626,7 +626,7 @@ mod tests {
 
     #[test]
     fn iter_multiple_items() {
-        let mut pool = LocalOpaquePool::with_layout_of::<u32>();
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
 
         let _handle1 = pool.insert(100_u32);
         let _handle2 = pool.insert(200_u32);
@@ -646,7 +646,7 @@ mod tests {
 
     #[test]
     fn iter_double_ended_basic() {
-        let mut pool = LocalOpaquePool::with_layout_of::<u32>();
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
 
         let _handle1 = pool.insert(100_u32);
         let _handle2 = pool.insert(200_u32);
@@ -677,7 +677,7 @@ mod tests {
 
     #[test]
     fn with_iter_scoped_access() {
-        let mut pool = LocalOpaquePool::with_layout_of::<u32>();
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
 
         let _handle1 = pool.insert(100_u32);
         let _handle2 = pool.insert(200_u32);
@@ -699,7 +699,7 @@ mod tests {
 
     #[test]
     fn with_iter_holds_lock() {
-        let mut pool = LocalOpaquePool::with_layout_of::<u32>();
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
 
         let _handle1 = pool.insert(100_u32);
         let _handle2 = pool.insert(200_u32);
@@ -729,7 +729,7 @@ mod tests {
 
     #[test]
     fn iter_size_hint_and_exact_size() {
-        let mut pool = LocalOpaquePool::with_layout_of::<u32>();
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
 
         // Empty pool
         pool.with_iter(|iter| {
@@ -766,10 +766,10 @@ mod tests {
 
     #[test]
     fn clone_behavior() {
-        let mut pool1 = LocalOpaquePool::with_layout_of::<u32>();
+        let pool1 = LocalOpaquePool::with_layout_of::<u32>();
 
         // Clone the pool handle
-        let mut pool2 = pool1.clone();
+        let pool2 = pool1.clone();
 
         // Both should have the same object layout
         assert_eq!(pool1.object_layout(), pool2.object_layout());
@@ -807,7 +807,7 @@ mod tests {
 
     #[test]
     fn lifecycle_management_pool_keeps_inner_alive() {
-        let mut pool = LocalOpaquePool::with_layout_of::<String>();
+        let pool = LocalOpaquePool::with_layout_of::<String>();
 
         // Insert an object and get a handle
         let handle = pool.insert("test data".to_string());
@@ -836,7 +836,7 @@ mod tests {
     #[test]
     fn lifecycle_management_handles_keep_pool_alive() {
         let handle = {
-            let mut pool = LocalOpaquePool::with_layout_of::<String>();
+            let pool = LocalOpaquePool::with_layout_of::<String>();
             // Pool goes out of scope here, but handle should keep inner pool alive
             pool.insert("persistent data".to_string())
         };
@@ -852,7 +852,7 @@ mod tests {
 
     #[test]
     fn pooled_mut_integration() {
-        let mut pool = LocalOpaquePool::with_layout_of::<String>();
+        let pool = LocalOpaquePool::with_layout_of::<String>();
 
         // Test that PooledMut works correctly with LocalOpaquePool
         let mut handle = pool.insert("initial".to_string());
@@ -884,7 +884,7 @@ mod tests {
 
     #[test]
     fn multiple_handles_to_different_objects() {
-        let mut pool = LocalOpaquePool::with_layout_of::<u32>();
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
 
         // Insert multiple objects
         let handle1 = pool.insert(100_u32);
@@ -923,7 +923,7 @@ mod tests {
 
     #[test]
     fn insert_methods_with_lifecycle() {
-        let mut pool = LocalOpaquePool::with_layout_of::<String>();
+        let pool = LocalOpaquePool::with_layout_of::<String>();
 
         // Test regular insert
         let handle1 = pool.insert("regular".to_string());
@@ -970,14 +970,14 @@ mod tests {
 
     #[test]
     fn pool_operations_with_arc_semantics() {
-        let mut pool1 = LocalOpaquePool::with_layout_of::<u32>();
+        let pool1 = LocalOpaquePool::with_layout_of::<u32>();
 
         // Insert some initial data
         let _handle1 = pool1.insert(100_u32);
         let _handle2 = pool1.insert(200_u32);
 
         // Clone the pool
-        let mut pool2 = pool1.clone();
+        let pool2 = pool1.clone();
 
         // Test capacity operations on both handles
         assert_eq!(pool1.capacity(), pool2.capacity());
@@ -1001,7 +1001,7 @@ mod tests {
 
     #[test]
     fn into_inner_removes_and_returns_value() {
-        let mut pool = LocalOpaquePool::with_layout_of::<String>();
+        let pool = LocalOpaquePool::with_layout_of::<String>();
 
         // Insert an item into the pool
         let mut handle = pool.insert("initial value".to_string());
@@ -1039,7 +1039,7 @@ mod tests {
         use std::cell::RefCell;
         use std::rc::Rc;
 
-        let mut pool = LocalOpaquePool::with_layout_of::<Rc<String>>();
+        let pool = LocalOpaquePool::with_layout_of::<Rc<String>>();
 
         // Rc is not Send, but LocalOpaquePool should handle it since it's single-threaded
         let rc_handle = pool.insert(Rc::new("Non-Send data".to_string()));
@@ -1047,13 +1047,13 @@ mod tests {
         assert_eq!(&**rc_handle, "Non-Send data");
 
         // Test with RefCell pool
-        let mut refcell_pool = LocalOpaquePool::with_layout_of::<RefCell<i32>>();
+        let refcell_pool = LocalOpaquePool::with_layout_of::<RefCell<i32>>();
         let refcell_handle = refcell_pool.insert(RefCell::new(42));
         assert_eq!(refcell_pool.len(), 1);
         assert_eq!(*refcell_handle.borrow(), 42);
 
         // Test with custom non-Send type
-        let mut custom_pool = LocalOpaquePool::with_layout_of::<NonSendType>();
+        let custom_pool = LocalOpaquePool::with_layout_of::<NonSendType>();
         let raw_ptr = 0x1234 as *const u8;
         let non_send_handle = custom_pool.insert(NonSendType(raw_ptr));
         assert_eq!(custom_pool.len(), 1);
@@ -1069,5 +1069,53 @@ mod tests {
                 .collect();
             assert_eq!(values, vec!["Non-Send data"]);
         });
+    }
+
+    #[test]
+    fn pool_operations_work_with_shared_references() {
+        // Test that all insertion methods work with &self (shared references)
+        let pool = LocalOpaquePool::with_layout_of::<String>();
+
+        // Test basic insert
+        let handle1 = pool.insert("hello".to_string());
+        assert_eq!(pool.len(), 1);
+        assert_eq!(&*handle1, "hello");
+
+        // Test insert_with
+        // SAFETY: We properly initialize the value in the closure.
+        let handle2 = unsafe {
+            pool.insert_with(|uninit| {
+                uninit.write("world".to_string());
+            })
+        };
+        assert_eq!(pool.len(), 2);
+        assert_eq!(&*handle2, "world");
+
+        // Test insert_unchecked
+        // SAFETY: String layout matches the expected layout for this pool.
+        let handle3 = unsafe { pool.insert_unchecked("test".to_string()) };
+        assert_eq!(pool.len(), 3);
+        assert_eq!(&*handle3, "test");
+
+        // Test insert_with_unchecked
+        // SAFETY: We properly initialize the value in the closure.
+        let handle4 = unsafe {
+            pool.insert_with_unchecked(|uninit| {
+                uninit.write("unchecked".to_string());
+            })
+        };
+        assert_eq!(pool.len(), 4);
+        assert_eq!(&*handle4, "unchecked");
+
+        // Test reserve and shrink_to_fit work with shared references
+        pool.reserve(10);
+        pool.shrink_to_fit();
+
+        // Clean up
+        drop(handle1);
+        drop(handle2);
+        drop(handle3);
+        drop(handle4);
+        assert_eq!(pool.len(), 0);
     }
 }

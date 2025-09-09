@@ -28,7 +28,7 @@ define_pooled_dyn_cast!(TestFuture<T>);
 
 #[test]
 fn cast_managed_blind_pooled_to_generic_trait() {
-    let mut pool = BlindPool::new();
+    let pool = BlindPool::new();
     let async_val = AsyncValue(42_usize);
     let pooled = pool.insert(async_val);
 
@@ -45,7 +45,7 @@ fn cast_managed_blind_pooled_to_generic_trait() {
 
 #[test]
 fn cast_managed_blind_pooled_mut_to_generic_trait() {
-    let mut pool = BlindPool::new();
+    let pool = BlindPool::new();
     let async_val = AsyncValue(42_usize);
     let pooled_mut = pool.insert(async_val);
 
@@ -62,7 +62,7 @@ fn cast_managed_blind_pooled_mut_to_generic_trait() {
 
 #[test]
 fn cast_local_blind_pooled_to_generic_trait() {
-    let mut pool = LocalBlindPool::new();
+    let pool = LocalBlindPool::new();
     let async_val = AsyncValue(100_i32);
     let pooled = pool.insert(async_val);
 
@@ -79,7 +79,7 @@ fn cast_local_blind_pooled_to_generic_trait() {
 
 #[test]
 fn cast_local_blind_pooled_mut_to_generic_trait() {
-    let mut pool = LocalBlindPool::new();
+    let pool = LocalBlindPool::new();
     let async_val = AsyncValue(100_i32);
     let pooled_mut = pool.insert(async_val);
 
@@ -96,7 +96,7 @@ fn cast_local_blind_pooled_mut_to_generic_trait() {
 
 #[test]
 fn cast_managed_pinned_pooled_to_generic_trait() {
-    let mut pool = PinnedPool::new();
+    let pool = PinnedPool::new();
     let async_val = AsyncValue("hello".to_string());
     let pooled = pool.insert(async_val);
 
@@ -113,7 +113,7 @@ fn cast_managed_pinned_pooled_to_generic_trait() {
 
 #[test]
 fn cast_managed_pinned_pooled_mut_to_generic_trait() {
-    let mut pool = PinnedPool::new();
+    let pool = PinnedPool::new();
     let async_val = AsyncValue("hello".to_string());
     let pooled_mut = pool.insert(async_val);
 
@@ -130,7 +130,7 @@ fn cast_managed_pinned_pooled_mut_to_generic_trait() {
 
 #[test]
 fn cast_local_pinned_pooled_to_generic_trait() {
-    let mut pool = LocalPinnedPool::new();
+    let pool = LocalPinnedPool::new();
     let async_val = AsyncValue(250_i64);
     let pooled = pool.insert(async_val);
 
@@ -147,7 +147,7 @@ fn cast_local_pinned_pooled_to_generic_trait() {
 
 #[test]
 fn cast_local_pinned_pooled_mut_to_generic_trait() {
-    let mut pool = LocalPinnedPool::new();
+    let pool = LocalPinnedPool::new();
     let async_val = AsyncValue(250_i64);
     let pooled_mut = pool.insert(async_val);
 

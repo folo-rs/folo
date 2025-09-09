@@ -72,7 +72,7 @@
 //! ```
 //! use infinity_pool::PinnedPool;
 //!
-//! let mut pool = PinnedPool::<String>::new();
+//! let pool = PinnedPool::<String>::new();
 //! let handle = pool.insert("Hello, world!".to_string());
 //! assert_eq!(&*handle, "Hello, world!");
 //! ```
@@ -83,7 +83,7 @@
 //! use infinity_pool::OpaquePool;
 //!
 //! fn work_with_displayable<T: std::fmt::Display + Send + 'static>(value: T) {
-//!     let mut pool = OpaquePool::with_layout_of::<T>();
+//!     let pool = OpaquePool::with_layout_of::<T>();
 //!     let handle = pool.insert(value);
 //!     println!("Stored: {}", &*handle);
 //! }
@@ -97,7 +97,7 @@
 //! ```
 //! use infinity_pool::BlindPool;
 //!
-//! let mut pool = BlindPool::new();
+//! let pool = BlindPool::new();
 //! let string_handle = pool.insert("Hello, world!".to_string());
 //! let number_handle = pool.insert(42u32);
 //! assert_eq!(&*string_handle, "Hello, world!");
@@ -119,7 +119,7 @@
 //!     println!("Processing: {}", &*handle);
 //! }
 //!
-//! let mut pool = BlindPool::new();
+//! let pool = BlindPool::new();
 //! let string_handle = pool.insert("Hello, world!".to_string());
 //! let number_handle = pool.insert(42i32);
 //!

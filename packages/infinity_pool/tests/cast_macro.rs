@@ -15,7 +15,7 @@ define_pooled_dyn_cast!(Display);
 
 #[test]
 fn cast_managed_blind_pooled_to_display_trait() {
-    let mut pool = BlindPool::new();
+    let pool = BlindPool::new();
     let pooled = pool.insert("Test string".to_string());
 
     // Cast to trait object while preserving reference counting
@@ -31,7 +31,7 @@ fn cast_managed_blind_pooled_to_display_trait() {
 
 #[test]
 fn cast_managed_blind_pooled_mut_to_display_trait() {
-    let mut pool = BlindPool::new();
+    let pool = BlindPool::new();
     let pooled_mut = pool.insert("Test string".to_string());
 
     // Cast to trait object while preserving reference counting
@@ -47,7 +47,7 @@ fn cast_managed_blind_pooled_mut_to_display_trait() {
 
 #[test]
 fn cast_local_blind_pooled_to_display_trait() {
-    let mut pool = LocalBlindPool::new();
+    let pool = LocalBlindPool::new();
     let pooled = pool.insert("Test string".to_string());
 
     // Cast to trait object while preserving reference counting
@@ -63,7 +63,7 @@ fn cast_local_blind_pooled_to_display_trait() {
 
 #[test]
 fn cast_local_blind_pooled_mut_to_display_trait() {
-    let mut pool = LocalBlindPool::new();
+    let pool = LocalBlindPool::new();
     let pooled_mut = pool.insert("Test string".to_string());
 
     // Cast to trait object while preserving reference counting
@@ -79,7 +79,7 @@ fn cast_local_blind_pooled_mut_to_display_trait() {
 
 #[test]
 fn cast_managed_pinned_pooled_to_display_trait() {
-    let mut pool = PinnedPool::new();
+    let pool = PinnedPool::new();
     let pooled = pool.insert("Test string".to_string());
 
     // Cast to trait object while preserving reference counting
@@ -95,7 +95,7 @@ fn cast_managed_pinned_pooled_to_display_trait() {
 
 #[test]
 fn cast_managed_pinned_pooled_mut_to_display_trait() {
-    let mut pool = PinnedPool::new();
+    let pool = PinnedPool::new();
     let pooled_mut = pool.insert("Test string".to_string());
 
     // Cast to trait object while preserving reference counting
@@ -111,7 +111,7 @@ fn cast_managed_pinned_pooled_mut_to_display_trait() {
 
 #[test]
 fn cast_local_pinned_pooled_to_display_trait() {
-    let mut pool = LocalPinnedPool::new();
+    let pool = LocalPinnedPool::new();
     let pooled = pool.insert("Test string".to_string());
 
     // Cast to trait object while preserving reference counting
@@ -127,7 +127,7 @@ fn cast_local_pinned_pooled_to_display_trait() {
 
 #[test]
 fn cast_local_pinned_pooled_mut_to_display_trait() {
-    let mut pool = LocalPinnedPool::new();
+    let pool = LocalPinnedPool::new();
     let pooled_mut = pool.insert("Test string".to_string());
 
     // Cast to trait object while preserving reference counting
