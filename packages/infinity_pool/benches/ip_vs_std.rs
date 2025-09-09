@@ -17,7 +17,7 @@
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use alloc_tracker::Allocator;
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -43,6 +43,11 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
     let allocs = alloc_tracker::Session::new();
 
     let mut group = c.benchmark_group("ip_vs_std");
+
+    // Criterion's default 5 seconds just goes not give the precision we need, we get constant
+    // plus or minus 10% noise that just prevents any sort of fine-tuning.
+    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(2000);
 
     // Box::pin() baseline with churn (insertion + removal pattern)
     let allocs_op = allocs.operation("Box::pin()");
