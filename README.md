@@ -94,12 +94,15 @@ Auxiliary packages developed and published by this project:
 Packages present in the repo but not relevant to a general audience:
 
 * `benchmarks` - random pile of benchmarks to explore relevant scenarios and guide Folo development.
-* `blind_pool` - deprecated, use `infinity_pool` which offers a similar API but is internally structured in a more maintainable manner.
 * `folo_ffi` - utilities for working with FFI logic; exists for internal use in Folo packages; no stable API surface.
 * `folo_utils` - utilities for internal use in Folo packages; exists for internal use in Folo packages; no stable API surface.
+* `testing` - private helpers for testing and examples in Folo packages.
+
+Deprecated packages:
+
+* `blind_pool` - deprecated, use `infinity_pool` which offers a similar API but is internally structured in a more maintainable manner.
 * `opaque_pool` - deprecated, use `infinity_pool` which offers a similar API but is internally structured in a more maintainable manner.
 * `pinned_pool` - deprecated, use `infinity_pool` which offers a similar API but is internally structured in a more maintainable manner.
-* `testing` - private helpers for testing and examples in Folo packages .
 
 [all_the_time]: packages/all_the_time/README.md
 [alloc_tracker]: packages/alloc_tracker/README.md
