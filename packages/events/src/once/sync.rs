@@ -1032,6 +1032,17 @@ where
         }
     }
 
+    /// Checks whether the event has been set (either with a value or with a disconnect signal).
+    pub(crate) fn is_set(&self) -> bool {
+        // We use Relaxed ordering because this is independent of any other data.
+        // If something wishes to actually obtain the value from the event, that
+        // logic will perform its own synchronization.
+        matches!(
+            self.state.load(atomic::Ordering::Relaxed),
+            EVENT_SET | EVENT_SIGNALING | EVENT_DISCONNECTED
+        )
+    }
+
     /// Attempts to obtain the value from the event, if one has been sent, while indicating
     /// that no further polls will be performed by the receiver.
     ///
@@ -1455,6 +1466,19 @@ where
         }
     }
 
+    /// Checks whether a value is ready to be received.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called after `poll()` has returned `Ready`.
+    pub fn is_ready(&self) -> bool {
+        let Some(event_ref) = &self.event_ref else {
+            panic!("receiver queried after completion");
+        };
+
+        event_ref.is_set()
+    }
+
     /// Consumes the receiver and transforms it into the received value, if the value is available.
     ///
     /// This method provides an alternative to awaiting the receiver when you want to check for
@@ -1618,7 +1642,14 @@ mod tests {
                 let event = OnceEvent::<u64>::new();
                 let (sender, receiver) = event.bind_by_ref();
 
+                // Receiver should not be ready before value is sent
+                assert!(!receiver.is_ready());
+
                 sender.send(123);
+
+                // Receiver should be ready after value is sent
+                assert!(receiver.is_ready());
+
                 let value = receiver.await.unwrap();
                 assert_eq!(value, 123);
             });

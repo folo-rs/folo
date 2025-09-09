@@ -618,6 +618,25 @@ impl<P> PooledLocalOnceReceiver<P>
 where
     P: LocalPoolRef<<P as ReflectiveT>::T>,
 {
+    /// Checks whether a value is ready to be received.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called after `poll()` has returned `Ready`.
+    pub fn is_ready(&self) -> bool {
+        let Some(event_handle) = &self.event else {
+            // Already pseudo-consumed the receiver as part of the Future impl.
+            panic!("receiver queried after completion");
+        };
+
+        // SAFETY: The pool remains alive through the pool_ref, satisfying the lifetime requirement
+        // for creating a reference. No exclusive references can exist because the events package
+        // only uses RawPooled<T> (shared handles), never RawPooledMut<T> (exclusive handles).
+        let event = unsafe { event_handle.as_ref() };
+
+        event.is_set()
+    }
+
     /// Consumes the receiver and transforms it into the received value, if the value is available.
     ///
     /// This method provides an alternative to awaiting the receiver when you want to check for
@@ -805,7 +824,14 @@ mod tests {
                 assert_eq!(pool.len(), 1);
                 assert!(!pool.is_empty());
 
+                // Receiver should not be ready before value is sent
+                assert!(!receiver.is_ready());
+
                 sender.send(42);
+
+                // Receiver should be ready after value is sent
+                assert!(receiver.is_ready());
+
                 let value = receiver.await.unwrap();
                 assert_eq!(value, 42);
 
