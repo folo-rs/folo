@@ -128,13 +128,13 @@ impl LocalOpaquePool {
 
     #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
     #[inline]
-    pub fn reserve(&mut self, additional: usize) {
+    pub fn reserve(&self, additional: usize) {
         self.inner.borrow_mut().reserve(additional);
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     #[inline]
-    pub fn shrink_to_fit(&mut self) {
+    pub fn shrink_to_fit(&self) {
         self.inner.borrow_mut().shrink_to_fit();
     }
 
@@ -170,7 +170,7 @@ impl LocalOpaquePool {
     /// ```
     #[inline]
     #[must_use]
-    pub fn insert<T: 'static>(&mut self, value: T) -> LocalPooledMut<T> {
+    pub fn insert<T: 'static>(&self, value: T) -> LocalPooledMut<T> {
         let inner = self.inner.borrow_mut().insert(value);
 
         LocalPooledMut::new(inner, Rc::clone(&self.inner))
@@ -181,7 +181,7 @@ impl LocalOpaquePool {
     #[doc = include_str!("../../doc/snippets/safety_pool_t_layout_must_match.md")]
     #[inline]
     #[must_use]
-    pub unsafe fn insert_unchecked<T: 'static>(&mut self, value: T) -> LocalPooledMut<T> {
+    pub unsafe fn insert_unchecked<T: 'static>(&self, value: T) -> LocalPooledMut<T> {
         // SAFETY: Forwarding safety guarantees from caller.
         let inner = unsafe { self.inner.borrow_mut().insert_unchecked(value) };
 
@@ -228,7 +228,7 @@ impl LocalOpaquePool {
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
     #[inline]
     #[must_use]
-    pub unsafe fn insert_with<T, F>(&mut self, f: F) -> LocalPooledMut<T>
+    pub unsafe fn insert_with<T, F>(&self, f: F) -> LocalPooledMut<T>
     where
         T: 'static,
         F: FnOnce(&mut MaybeUninit<T>),
@@ -277,7 +277,7 @@ impl LocalOpaquePool {
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
     #[inline]
     #[must_use]
-    pub unsafe fn insert_with_unchecked<T, F>(&mut self, f: F) -> LocalPooledMut<T>
+    pub unsafe fn insert_with_unchecked<T, F>(&self, f: F) -> LocalPooledMut<T>
     where
         T: 'static,
         F: FnOnce(&mut MaybeUninit<T>),
@@ -1069,5 +1069,50 @@ mod tests {
                 .collect();
             assert_eq!(values, vec!["Non-Send data"]);
         });
+    }
+
+    #[test]
+    fn pool_operations_work_with_shared_references() {
+        // Test that all insertion methods work with &self (shared references)
+        let pool = LocalOpaquePool::with_layout_of::<String>();
+        
+        // Test basic insert
+        let handle1 = pool.insert("hello".to_string());
+        assert_eq!(pool.len(), 1);
+        assert_eq!(&*handle1, "hello");
+        
+        // Test insert_with
+        let handle2 = unsafe {
+            pool.insert_with(|uninit| {
+                uninit.write("world".to_string());
+            })
+        };
+        assert_eq!(pool.len(), 2);
+        assert_eq!(&*handle2, "world");
+        
+        // Test insert_unchecked
+        let handle3 = unsafe { pool.insert_unchecked("test".to_string()) };
+        assert_eq!(pool.len(), 3);
+        assert_eq!(&*handle3, "test");
+        
+        // Test insert_with_unchecked
+        let handle4 = unsafe {
+            pool.insert_with_unchecked(|uninit| {
+                uninit.write("unchecked".to_string());
+            })
+        };
+        assert_eq!(pool.len(), 4);
+        assert_eq!(&*handle4, "unchecked");
+        
+        // Test reserve and shrink_to_fit work with shared references
+        pool.reserve(10);
+        pool.shrink_to_fit();
+        
+        // Clean up
+        drop(handle1);
+        drop(handle2);
+        drop(handle3);
+        drop(handle4);
+        assert_eq!(pool.len(), 0);
     }
 }

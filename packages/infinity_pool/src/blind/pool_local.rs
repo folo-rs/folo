@@ -108,7 +108,7 @@ impl LocalBlindPool {
 
     #[doc = include_str!("../../doc/snippets/blind_pool_reserve.md")]
     #[inline]
-    pub fn reserve_for<T: 'static>(&mut self, additional: usize) {
+    pub fn reserve_for<T: 'static>(&self, additional: usize) {
         let mut core = self.core.borrow_mut();
 
         let pool = ensure_inner_pool::<T>(&mut core);
@@ -118,7 +118,7 @@ impl LocalBlindPool {
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     #[inline]
-    pub fn shrink_to_fit(&mut self) {
+    pub fn shrink_to_fit(&self) {
         let mut core = self.core.borrow_mut();
 
         for pool in core.values_mut() {
@@ -155,7 +155,7 @@ impl LocalBlindPool {
     /// ```
     #[inline]
     #[must_use]
-    pub fn insert<T: 'static>(&mut self, value: T) -> LocalBlindPooledMut<T> {
+    pub fn insert<T: 'static>(&self, value: T) -> LocalBlindPooledMut<T> {
         let mut core = self.core.borrow_mut();
 
         let pool = ensure_inner_pool::<T>(&mut core);
@@ -207,7 +207,7 @@ impl LocalBlindPool {
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
     #[inline]
     #[must_use]
-    pub unsafe fn insert_with<T, F>(&mut self, f: F) -> LocalBlindPooledMut<T>
+    pub unsafe fn insert_with<T, F>(&self, f: F) -> LocalBlindPooledMut<T>
     where
         T: 'static,
         F: FnOnce(&mut MaybeUninit<T>),

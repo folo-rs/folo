@@ -105,7 +105,7 @@ impl BlindPool {
 
     #[doc = include_str!("../../doc/snippets/blind_pool_reserve.md")]
     #[inline]
-    pub fn reserve_for<T: Send + 'static>(&mut self, additional: usize) {
+    pub fn reserve_for<T: Send + 'static>(&self, additional: usize) {
         let mut core = self.core.lock().expect(ERR_POISONED_LOCK);
 
         let pool = ensure_inner_pool::<T>(&mut core);
@@ -115,7 +115,7 @@ impl BlindPool {
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     #[inline]
-    pub fn shrink_to_fit(&mut self) {
+    pub fn shrink_to_fit(&self) {
         let mut core = self.core.lock().expect(ERR_POISONED_LOCK);
 
         for pool in core.values_mut() {
@@ -152,7 +152,7 @@ impl BlindPool {
     /// ```
     #[inline]
     #[must_use]
-    pub fn insert<T: Send + 'static>(&mut self, value: T) -> BlindPooledMut<T> {
+    pub fn insert<T: Send + 'static>(&self, value: T) -> BlindPooledMut<T> {
         let mut core = self.core.lock().expect(ERR_POISONED_LOCK);
 
         let pool = ensure_inner_pool::<T>(&mut core);
@@ -204,7 +204,7 @@ impl BlindPool {
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
     #[inline]
     #[must_use]
-    pub unsafe fn insert_with<T: Send + 'static, F>(&mut self, f: F) -> BlindPooledMut<T>
+    pub unsafe fn insert_with<T: Send + 'static, F>(&self, f: F) -> BlindPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {

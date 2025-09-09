@@ -109,7 +109,7 @@ where
 
     #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
     #[inline]
-    pub fn reserve(&mut self, additional: usize) {
+    pub fn reserve(&self, additional: usize) {
         self.inner
             .lock()
             .expect(ERR_POISONED_LOCK)
@@ -118,7 +118,7 @@ where
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     #[inline]
-    pub fn shrink_to_fit(&mut self) {
+    pub fn shrink_to_fit(&self) {
         self.inner.lock().expect(ERR_POISONED_LOCK).shrink_to_fit();
     }
 
@@ -151,7 +151,7 @@ where
     /// ```
     #[inline]
     #[must_use]
-    pub fn insert(&mut self, value: T) -> PooledMut<T> {
+    pub fn insert(&self, value: T) -> PooledMut<T> {
         let inner = self.inner.lock().expect(ERR_POISONED_LOCK).insert(value);
 
         PooledMut::new(inner, Arc::clone(&self.inner))
@@ -194,7 +194,7 @@ where
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
     #[inline]
     #[must_use]
-    pub unsafe fn insert_with<F>(&mut self, f: F) -> PooledMut<T>
+    pub unsafe fn insert_with<F>(&self, f: F) -> PooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {

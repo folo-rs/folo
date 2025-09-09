@@ -103,13 +103,13 @@ where
 
     #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
     #[inline]
-    pub fn reserve(&mut self, additional: usize) {
+    pub fn reserve(&self, additional: usize) {
         self.inner.borrow_mut().reserve(additional);
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     #[inline]
-    pub fn shrink_to_fit(&mut self) {
+    pub fn shrink_to_fit(&self) {
         self.inner.borrow_mut().shrink_to_fit();
     }
 
@@ -142,7 +142,7 @@ where
     /// ```
     #[inline]
     #[must_use]
-    pub fn insert(&mut self, value: T) -> LocalPooledMut<T> {
+    pub fn insert(&self, value: T) -> LocalPooledMut<T> {
         let inner = self.inner.borrow_mut().insert(value);
 
         LocalPooledMut::new(inner, Rc::clone(&self.inner))
@@ -185,7 +185,7 @@ where
     #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
     #[inline]
     #[must_use]
-    pub unsafe fn insert_with<F>(&mut self, f: F) -> LocalPooledMut<T>
+    pub unsafe fn insert_with<F>(&self, f: F) -> LocalPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {
