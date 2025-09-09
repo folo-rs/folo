@@ -21,7 +21,6 @@ use infinity_pool::{RawPinnedPool, RawPooled};
 
 use crate::{Disconnected, LocalOnceEvent, ReflectiveT, Sealed};
 
-
 /// A pool that manages single-threaded events with automatic cleanup.
 ///
 /// The pool creates local events on demand and automatically cleans them up when both
@@ -1223,7 +1222,7 @@ mod tests {
 
             let result = receiver.into_value();
             match result {
-                Err(_) => {}, // Expected - receiver returned
+                Err(_) => {} // Expected - receiver returned
                 Ok(_) => panic!("Expected Err when sender not ready"),
             }
         });
@@ -1238,7 +1237,7 @@ mod tests {
 
             let result = receiver.into_value();
             match result {
-                Ok(Err(Disconnected)) => {}, // Expected - disconnected
+                Ok(Err(Disconnected)) => {} // Expected - disconnected
                 _ => panic!("Expected Ok(Err(Disconnected)) when sender disconnected"),
             }
         });
@@ -1298,7 +1297,7 @@ mod tests {
                 // This should return None since the receiver was already consumed
                 let value = receiver.into_value();
                 match value {
-                    Err(_) => {}, // Expected - receiver returned after consumption
+                    Err(_) => {} // Expected - receiver returned after consumption
                     _ => panic!("Expected NotReady error after receiver consumption"),
                 }
             });

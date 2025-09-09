@@ -1250,7 +1250,7 @@ where
     /// ## Sender disconnected without sending
     ///
     /// ```rust
-    /// use events::{LocalOnceEvent, Disconnected};
+    /// use events::{Disconnected, LocalOnceEvent};
     ///
     /// let (sender, receiver) = LocalOnceEvent::<String>::new_managed();
     /// drop(sender); // Disconnect without sending
@@ -1264,12 +1264,14 @@ where
     /// }
     /// ```
     pub fn into_value(self) -> Result<Result<E::T, Disconnected>, Self> {
-        let event_ref = self.event_ref.as_ref()
+        let event_ref = self
+            .event_ref
+            .as_ref()
             .expect("LocalOnceReceiver polled after completion");
 
         // Check the current state directly to decide what to do
         let current_state = event_ref.state.get();
-        
+
         match current_state {
             EVENT_BOUND | EVENT_AWAITING => {
                 // No value available yet - return the receiver
@@ -1279,7 +1281,7 @@ where
                 // Value available or disconnected - consume self and let final_poll decide
                 let mut this = ManuallyDrop::new(self);
                 let event_ref = this.event_ref.take().unwrap();
-                
+
                 match event_ref.final_poll() {
                     Ok(Some(value)) => {
                         event_ref.release_event();
@@ -1848,7 +1850,7 @@ mod tests {
 
             let result = receiver.into_value();
             match result {
-                Err(_) => {}, // Expected - receiver returned
+                Err(_) => {} // Expected - receiver returned
                 _ => panic!("Expected Err when sender not ready"),
             }
         });
@@ -1862,7 +1864,7 @@ mod tests {
 
             let result = receiver.into_value();
             match result {
-                Ok(Err(Disconnected)) => {}, // Expected - disconnected
+                Ok(Err(Disconnected)) => {} // Expected - disconnected
                 _ => panic!("Expected Ok(Err(Disconnected)) when sender disconnected"),
             }
         });

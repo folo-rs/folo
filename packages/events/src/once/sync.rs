@@ -28,7 +28,6 @@ use crate::{
     EVENT_UNBOUND, ReflectiveTSend, Sealed,
 };
 
-
 /// A one-time event that can send and receive a value of type `T`, potentially across threads.
 ///
 /// The event can only be used once - after binding a sender and receiver,
@@ -1529,12 +1528,14 @@ where
     /// assert!(matches!(value.unwrap(), Err(events::Disconnected))); // Sender disconnected
     /// ```
     pub fn into_value(self) -> Result<Result<E::T, Disconnected>, Self> {
-        let event_ref = self.event_ref.as_ref()
+        let event_ref = self
+            .event_ref
+            .as_ref()
             .expect("OnceReceiver polled after completion");
 
         // Check the current state directly to decide what to do
         let current_state = event_ref.state.load(atomic::Ordering::Acquire);
-        
+
         match current_state {
             EVENT_BOUND | EVENT_AWAITING | EVENT_SIGNALING => {
                 // No value available yet - return the receiver
@@ -1544,7 +1545,7 @@ where
                 // Value available or disconnected - consume self and let final_poll decide
                 let mut this = ManuallyDrop::new(self);
                 let event_ref = this.event_ref.take().unwrap();
-                
+
                 match event_ref.final_poll() {
                     Ok(Some(value)) => {
                         event_ref.release_event();
@@ -2175,7 +2176,7 @@ mod tests {
 
             let result = receiver.into_value();
             match result {
-                Err(_) => {}, // Expected - receiver returned
+                Err(_) => {} // Expected - receiver returned
                 _ => panic!("Expected NotReady error when sender not ready"),
             }
         });
@@ -2189,7 +2190,7 @@ mod tests {
 
             let result = receiver.into_value();
             match result {
-                Ok(Err(Disconnected)) => {}, // Expected - disconnected
+                Ok(Err(Disconnected)) => {} // Expected - disconnected
                 _ => panic!("Expected Ok(Err(Disconnected)) when sender disconnected"),
             }
         });
