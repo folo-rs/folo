@@ -9,7 +9,7 @@ define_pooled_dyn_cast!(Display);
 
 fn main() {
     // PinnedPool: thread-safe pool for a single type
-    let mut pinned_pool = PinnedPool::<String>::new();
+    let pinned_pool = PinnedPool::<String>::new();
     let handle = pinned_pool.insert("Hello, PinnedPool!".to_string());
 
     // Cast PinnedPool handle to trait object and pass to function
@@ -17,7 +17,7 @@ fn main() {
     print_item("PinnedPool", &display_pinned);
 
     // BlindPool: thread-safe pool for multiple types
-    let mut blind_pool = BlindPool::new();
+    let blind_pool = BlindPool::new();
     let string_handle = blind_pool.insert("Hello, BlindPool!".to_string());
     let number_handle = blind_pool.insert(42_i32);
 
