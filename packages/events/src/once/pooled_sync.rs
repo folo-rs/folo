@@ -20,6 +20,7 @@ use infinity_pool::{RawPinnedPool, RawPooled};
 
 use crate::{Disconnected, ERR_POISONED_LOCK, OnceEvent, ReflectiveTSend, Sealed};
 
+
 /// A pool that manages thread-safe events with automatic cleanup.
 ///
 /// The pool creates events on demand and automatically cleans them up when both
@@ -715,7 +716,7 @@ where
     ///
     /// // Value is immediately available
     /// let value = receiver.into_value();
-    /// assert_eq!(value, Some("Hello from pool".to_string()));
+    /// assert_eq!(value.unwrap(), Ok("Hello from pool".to_string()));
     /// // Event is automatically returned to pool for reuse
     /// ```
     ///
@@ -729,9 +730,9 @@ where
     /// let pool = Arc::new(OnceEventPool::<i32>::new());
     /// let (_sender, receiver) = pool.bind_by_arc();
     ///
-    /// // No value sent yet
-    /// let value = receiver.into_value();
-    /// assert_eq!(value, None);
+    /// // No value sent yet - receiver is returned back
+    /// let result = receiver.into_value();
+    /// assert!(result.is_err()); // Returns Err(receiver)
     /// // Event is still returned to pool
     /// ```
     ///
@@ -744,11 +745,61 @@ where
     /// let (sender, receiver) = pool.bind_by_ref();
     /// sender.send("Hello".to_string());
     ///
-    /// let value = receiver.into_value();
-    /// assert_eq!(value, Some("Hello".to_string()));
+    /// let value = receiver.into_value().unwrap();
+    /// assert_eq!(value, Ok("Hello".to_string()));
     /// ```
-    pub fn into_value(mut self) -> Option<<P as ReflectiveTSend>::T> {
-        self.drop_inner()
+    pub fn into_value(mut self) -> Result<Result<<P as ReflectiveTSend>::T, Disconnected>, Self> {
+        let Some(event_handle) = self.event.take() else {
+            // Already pseudo-consumed the receiver as part of the Future impl.
+            return Err(self);
+        };
+
+        // SAFETY: The pool remains alive through the pool_ref, satisfying the lifetime requirement
+        // for creating a reference. No exclusive references can exist because the events package
+        // only uses RawPooled<T> (shared handles), never RawPooledMut<T> (exclusive handles).
+        let event = unsafe { event_handle.as_ref() };
+
+        // First check if the event is set (non-destructive)
+        if !event.is_set() {
+            // No value available yet and sender hasn't disconnected - return the receiver
+            self.event = Some(event_handle);
+            return Err(self);
+        }
+
+        // Event is set - use final_poll to determine if we have a value or disconnection
+        match event.final_poll() {
+            Ok(Some(value)) => {
+                // We have a value - clean up and return it
+                // SAFETY: The handle belongs to this pool (created via insert_with()) and the event
+                // state machine ensures this is the only removal path for this event instance.
+                unsafe {
+                    self.pool_ref
+                        .pool
+                        .lock()
+                        .expect(ERR_POISONED_LOCK)
+                        .remove(event_handle);
+                }
+                Ok(Ok(value))
+            }
+            Ok(None) => {
+                // This shouldn't happen since is_set() returned true, but handle it gracefully
+                self.event = Some(event_handle);
+                Err(self)
+            }
+            Err(Disconnected) => {
+                // Sender disconnected - clean up and return Disconnected
+                // SAFETY: The handle belongs to this pool (created via insert_with()) and the event
+                // state machine ensures this is the only removal path for this event instance.
+                unsafe {
+                    self.pool_ref
+                        .pool
+                        .lock()
+                        .expect(ERR_POISONED_LOCK)
+                        .remove(event_handle);
+                }
+                Ok(Err(Disconnected))
+            }
+        }
     }
 
     /// Drops the inner state, releasing the event back to the pool, returning the value (if any).
@@ -1359,7 +1410,7 @@ mod tests {
 
                 // Receiver should get a Disconnected error
                 let result = receiver.await;
-                assert!(result.is_err());
+                assert!(matches!(result, Err(Disconnected)));
                 assert!(matches!(result, Err(Disconnected)));
             });
         });
@@ -1377,7 +1428,7 @@ mod tests {
 
                 // Receiver should get a Disconnected error
                 let result = receiver.await;
-                assert!(result.is_err());
+                assert!(matches!(result, Err(Disconnected)));
                 assert!(matches!(result, Err(Disconnected)));
             });
         });
@@ -1487,7 +1538,7 @@ mod tests {
             sender.send("test value".to_string());
 
             let result = receiver.into_value();
-            assert_eq!(result, Some("test value".to_string()));
+            assert_eq!(result.unwrap(), Ok("test value".to_string()));
         });
     }
 
@@ -1498,7 +1549,10 @@ mod tests {
             let (_sender, receiver) = pool.bind_by_arc();
 
             let result = receiver.into_value();
-            assert_eq!(result, None);
+            match result {
+                Err(_) => {}, // Expected - receiver returned
+                _ => panic!("Expected NotReady error when sender not ready"),
+            }
         });
     }
 
@@ -1510,7 +1564,10 @@ mod tests {
             drop(sender); // Disconnect without sending
 
             let result = receiver.into_value();
-            assert_eq!(result, None);
+            match result {
+                Ok(Err(Disconnected)) => {}, // Expected - disconnected
+                _ => panic!("Expected Ok(Err(Disconnected)) when sender disconnected"),
+            }
         });
     }
 
@@ -1522,7 +1579,7 @@ mod tests {
             sender.send(42);
 
             let result = receiver.into_value();
-            assert_eq!(result, Some(42));
+            assert_eq!(result.unwrap(), Ok(42));
         });
     }
 
@@ -1534,7 +1591,7 @@ mod tests {
             sender.send("arc test".to_string());
 
             let result = receiver.into_value();
-            assert_eq!(result, Some("arc test".to_string()));
+            assert_eq!(result.unwrap(), Ok("arc test".to_string()));
         });
     }
 
@@ -1547,7 +1604,7 @@ mod tests {
             sender.send(999);
 
             let result = receiver.into_value();
-            assert_eq!(result, Some(999));
+            assert_eq!(result.unwrap(), Ok(999));
         });
     }
 
@@ -1567,7 +1624,10 @@ mod tests {
 
                 // This should return None since the receiver was already consumed
                 let value = receiver.into_value();
-                assert_eq!(value, None);
+                match value {
+                    Err(_) => {}, // Expected - receiver returned after consumption
+                    _ => panic!("Expected NotReady error after receiver consumption"),
+                }
             });
         });
     }
@@ -1581,13 +1641,13 @@ mod tests {
             let (sender1, receiver1) = pool.bind_by_arc();
             sender1.send(123);
             let result1 = receiver1.into_value();
-            assert_eq!(result1, Some(123));
+            assert_eq!(result1.unwrap(), Ok(123));
 
             // Second usage - should reuse the event from the pool
             let (sender2, receiver2) = pool.bind_by_arc();
             sender2.send(456);
             let result2 = receiver2.into_value();
-            assert_eq!(result2, Some(456));
+            assert_eq!(result2.unwrap(), Ok(456));
         });
     }
 
@@ -1598,19 +1658,19 @@ mod tests {
             let pool1 = Arc::new(OnceEventPool::<()>::new());
             let (sender1, receiver1) = pool1.bind_by_arc();
             sender1.send(());
-            assert_eq!(receiver1.into_value(), Some(()));
+            assert_eq!(receiver1.into_value().unwrap(), Ok(()));
 
             let pool2 = Arc::new(OnceEventPool::<Vec<i32>>::new());
             let (sender2, receiver2) = pool2.bind_by_arc();
             sender2.send(vec![1, 2, 3]);
-            assert_eq!(receiver2.into_value(), Some(vec![1, 2, 3]));
+            assert_eq!(receiver2.into_value().unwrap(), Ok(vec![1, 2, 3]));
 
             let pool3 = Arc::new(OnceEventPool::<Option<String>>::new());
             let (sender3, receiver3) = pool3.bind_by_arc();
             sender3.send(Some("nested option".to_string()));
             assert_eq!(
-                receiver3.into_value(),
-                Some(Some("nested option".to_string()))
+                receiver3.into_value().unwrap(),
+                Ok(Some("nested option".to_string()))
             );
         });
     }

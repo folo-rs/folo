@@ -1208,8 +1208,8 @@ where
     /// Consumes the receiver and transforms it into the received value, if the value is available.
     ///
     /// This method provides an alternative to awaiting the receiver when you want to check for
-    /// an immediately available value without blocking. It returns `Some(value)` if a value has
-    /// already been sent, or `None` if no value is currently available.
+    /// an immediately available value without blocking. It returns `Ok(value)` if a value has
+    /// already been sent, or returns the receiver if no value is currently available.
     ///
     /// # Panics
     ///
@@ -1226,8 +1226,8 @@ where
     /// sender.send("Hello".to_string());
     ///
     /// // Value is immediately available
-    /// let value = receiver.into_value();
-    /// assert_eq!(value, Some("Hello".to_string()));
+    /// let value = receiver.into_value().unwrap();
+    /// assert_eq!(value, Ok("Hello".to_string()));
     /// ```
     ///
     /// ## No value available
@@ -1237,46 +1237,66 @@ where
     ///
     /// let (_sender, receiver) = LocalOnceEvent::<i32>::new_managed();
     ///
-    /// // No value sent yet
-    /// let value = receiver.into_value();
-    /// assert_eq!(value, None);
+    /// // No value sent yet - receiver is returned back
+    /// let result = receiver.into_value();
+    /// match result {
+    ///     Err(receiver) => {
+    ///         // Can retry or await the receiver
+    ///     }
+    ///     _ => panic!("Unexpected result"),
+    /// }
     /// ```
     ///
     /// ## Sender disconnected without sending
     ///
     /// ```rust
-    /// use events::LocalOnceEvent;
+    /// use events::{LocalOnceEvent, Disconnected};
     ///
     /// let (sender, receiver) = LocalOnceEvent::<String>::new_managed();
     /// drop(sender); // Disconnect without sending
     ///
-    /// let value = receiver.into_value();
-    /// assert_eq!(value, None);
+    /// let result = receiver.into_value();
+    /// match result {
+    ///     Ok(Err(Disconnected)) => {
+    ///         // Sender disconnected, no value will ever be available
+    ///     }
+    ///     _ => panic!("Unexpected result"),
+    /// }
     /// ```
-    pub fn into_value(self) -> Option<E::T> {
-        // This fn is a drop() implementation of sorts, so no need to run regular drop().
-        let mut this = ManuallyDrop::new(self);
-
-        let event_ref = this
-            .event_ref
-            .take()
+    pub fn into_value(self) -> Result<Result<E::T, Disconnected>, Self> {
+        let event_ref = self.event_ref.as_ref()
             .expect("LocalOnceReceiver polled after completion");
 
-        match event_ref.final_poll() {
-            Ok(Some(value)) => {
-                // The sender has disconnected and sent a value, so we need to clean up.
-                event_ref.release_event();
-                Some(value)
+        // Check the current state directly to decide what to do
+        let current_state = event_ref.state.get();
+        
+        match current_state {
+            EVENT_BOUND | EVENT_AWAITING => {
+                // No value available yet - return the receiver
+                Err(self)
             }
-            Ok(None) => {
-                // Nothing for us to do - the sender was still connected and had not
-                // sent any value, so it will perform the cleanup on its own.
-                None
+            EVENT_SET | EVENT_DISCONNECTED => {
+                // Value available or disconnected - consume self and let final_poll decide
+                let mut this = ManuallyDrop::new(self);
+                let event_ref = this.event_ref.take().unwrap();
+                
+                match event_ref.final_poll() {
+                    Ok(Some(value)) => {
+                        event_ref.release_event();
+                        Ok(Ok(value))
+                    }
+                    Ok(None) => {
+                        // This shouldn't happen - final_poll should return Some(value) or Err(Disconnected)
+                        unreachable!("final_poll returned None")
+                    }
+                    Err(Disconnected) => {
+                        event_ref.release_event();
+                        Ok(Err(Disconnected))
+                    }
+                }
             }
-            Err(Disconnected) => {
-                // The sender has already disconnected, so we need to clean up the event.
-                event_ref.release_event();
-                None
+            _ => {
+                unreachable!("Invalid event state: {}", current_state)
             }
         }
     }
@@ -1817,7 +1837,7 @@ mod tests {
             sender.send("test value".to_string());
 
             let result = receiver.into_value();
-            assert_eq!(result, Some("test value".to_string()));
+            assert_eq!(result.unwrap(), Ok("test value".to_string()));
         });
     }
 
@@ -1827,7 +1847,10 @@ mod tests {
             let (_sender, receiver) = LocalOnceEvent::<i32>::new_managed();
 
             let result = receiver.into_value();
-            assert_eq!(result, None);
+            match result {
+                Err(_) => {}, // Expected - receiver returned
+                _ => panic!("Expected Err when sender not ready"),
+            }
         });
     }
 
@@ -1838,7 +1861,10 @@ mod tests {
             drop(sender); // Disconnect without sending
 
             let result = receiver.into_value();
-            assert_eq!(result, None);
+            match result {
+                Ok(Err(Disconnected)) => {}, // Expected - disconnected
+                _ => panic!("Expected Ok(Err(Disconnected)) when sender disconnected"),
+            }
         });
     }
 
@@ -1850,7 +1876,7 @@ mod tests {
             sender.send(42);
 
             let result = receiver.into_value();
-            assert_eq!(result, Some(42));
+            assert_eq!(result.unwrap(), Ok(42));
         });
     }
 
@@ -1862,7 +1888,7 @@ mod tests {
             sender.send("rc test".to_string());
 
             let result = receiver.into_value();
-            assert_eq!(result, Some("rc test".to_string()));
+            assert_eq!(result.unwrap(), Ok("rc test".to_string()));
         });
     }
 
@@ -1875,7 +1901,7 @@ mod tests {
             sender.send(999);
 
             let result = receiver.into_value();
-            assert_eq!(result, Some(999));
+            assert_eq!(result.unwrap(), Ok(999));
         });
     }
 
@@ -1897,7 +1923,7 @@ mod tests {
                 let _ = Pin::new(&mut receiver).poll(&mut context);
 
                 // This should panic
-                let _ = receiver.into_value();
+                drop(receiver.into_value());
             });
         });
     }
@@ -1908,17 +1934,17 @@ mod tests {
             // Test with different value types
             let (sender1, receiver1) = LocalOnceEvent::<()>::new_managed();
             sender1.send(());
-            assert_eq!(receiver1.into_value(), Some(()));
+            assert_eq!(receiver1.into_value().unwrap(), Ok(()));
 
             let (sender2, receiver2) = LocalOnceEvent::<Vec<i32>>::new_managed();
             sender2.send(vec![1, 2, 3]);
-            assert_eq!(receiver2.into_value(), Some(vec![1, 2, 3]));
+            assert_eq!(receiver2.into_value().unwrap(), Ok(vec![1, 2, 3]));
 
             let (sender3, receiver3) = LocalOnceEvent::<Option<String>>::new_managed();
             sender3.send(Some("nested option".to_string()));
             assert_eq!(
-                receiver3.into_value(),
-                Some(Some("nested option".to_string()))
+                receiver3.into_value().unwrap(),
+                Ok(Some("nested option".to_string()))
             );
         });
     }
