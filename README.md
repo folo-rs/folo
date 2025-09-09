@@ -34,10 +34,10 @@ across thread boundaries. These are the building blocks used to implement `regio
 
 Measuring effects of hardware-aware programming sometimes requires benchmarks to be multi-threaded,
 which is not something you get out of the box with benchmark frameworks like [Criterion][criterion].
-[`par_bench`] extends Criterion with a simple harness for multithreaded benchmarking, running your
-benchmark logic on a specific processor set obtained from `many_cpus`. It takes care of all the
-dirty business involved in coordinating the threads and eliminating any test harness overhead
-from the data.
+[`par_bench`][par_bench] extends Criterion with a simple harness for multithreaded benchmarking,
+running your benchmark logic on a specific processor set obtained from `many_cpus`. It takes care
+of all the dirty business involved in coordinating the threads and eliminating any test harness
+overhead from the data.
 
 ```
 Processor time statistics:
