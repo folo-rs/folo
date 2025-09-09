@@ -18,17 +18,12 @@ use crate::{ERR_POISONED_LOCK, Pooled, RawOpaquePoolSend, RawPooledMut};
 pub struct PooledMut<T: ?Sized> {
     inner: RawPooledMut<T>,
     pool: Arc<Mutex<RawOpaquePoolSend>>,
-    type_erased: bool,
 }
 
 impl<T: ?Sized> PooledMut<T> {
     #[must_use]
     pub(crate) fn new(inner: RawPooledMut<T>, pool: Arc<Mutex<RawOpaquePoolSend>>) -> Self {
-        Self { 
-            inner, 
-            pool, 
-            type_erased: false,
-        }
+        Self { inner, pool }
     }
 
     #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
@@ -47,7 +42,6 @@ impl<T: ?Sized> PooledMut<T> {
         PooledMut {
             inner: inner.erase(),
             pool,
-            type_erased: true,
         }
     }
 
@@ -55,12 +49,10 @@ impl<T: ?Sized> PooledMut<T> {
     #[must_use]
     #[inline]
     pub fn into_shared(self) -> Pooled<T> {
-        if self.type_erased {
-            panic!("Cannot create shared handle from type-erased handle. Type-erase after creating shared handle instead.");
-        }
-        
-        let (inner, pool) = self.into_parts();
+        // Detect type erasure by checking if T is the unit type
+        check_for_type_erasure::<T>();
 
+        let (inner, pool) = self.into_parts();
         Pooled::new(inner, pool)
     }
 
@@ -126,7 +118,6 @@ impl<T: ?Sized> PooledMut<T> {
         PooledMut {
             inner: new_inner,
             pool,
-            type_erased: false,
         }
     }
 }
@@ -236,6 +227,17 @@ impl<T: ?Sized> Drop for PooledMut<T> {
 // The underlying pool storage is thread-safe via Arc<Mutex<...>>, so the handle can be moved
 // between threads as long as T itself can be moved (T: Send).
 unsafe impl<T: ?Sized + Send> Send for PooledMut<T> {}
+
+// Helper function to detect type erasure using type_name
+#[inline]
+fn check_for_type_erasure<T: ?Sized>() {
+    // Use type_name to detect if T is the unit type
+    use std::any::type_name;
+    assert!(
+        !(type_name::<T>() == "()"),
+        "Cannot create shared handle from type-erased handle. Type-erase after creating shared handle instead."
+    );
+}
 
 #[cfg(test)]
 mod tests {

@@ -16,17 +16,12 @@ where
 {
     key: LayoutKey,
     inner: RawPooledMut<T>,
-    type_erased: bool,
 }
 
 impl<T: ?Sized> RawBlindPooledMut<T> {
     #[must_use]
     pub(crate) fn new(key: LayoutKey, inner: RawPooledMut<T>) -> Self {
-        Self { 
-            key, 
-            inner, 
-            type_erased: false,
-        }
+        Self { key, inner }
     }
 
     /// The layout key used to identify the inner pool the blind pool used to store it.
@@ -55,7 +50,6 @@ impl<T: ?Sized> RawBlindPooledMut<T> {
         RawBlindPooledMut {
             key: self.key,
             inner: self.inner.erase(),
-            type_erased: true,
         }
     }
 
@@ -67,10 +61,9 @@ impl<T: ?Sized> RawBlindPooledMut<T> {
     #[must_use]
     #[inline]
     pub fn into_shared(self) -> RawBlindPooled<T> {
-        if self.type_erased {
-            panic!("Cannot create shared handle from type-erased handle. Type-erase after creating shared handle instead.");
-        }
-        
+        // Detect type erasure by checking if T is the unit type
+        check_for_type_erasure::<T>();
+
         RawBlindPooled::new(self.key, self.inner.into_shared_unchecked())
     }
 
@@ -135,7 +128,6 @@ impl<T: ?Sized> RawBlindPooledMut<T> {
         RawBlindPooledMut {
             key: self.key,
             inner: new_inner,
-            type_erased: false,
         }
     }
 }
@@ -214,5 +206,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(result, 77);
+    }
+}
+
+// Helper function to detect type erasure using type_name
+#[inline]
+fn check_for_type_erasure<T: ?Sized>() {
+    // Use type_name to detect if T is the unit type
+    use std::any::type_name;
+    if type_name::<T>() == "()" {
+        panic!(
+            "Cannot create shared handle from type-erased handle. Type-erase after creating shared handle instead."
+        );
     }
 }

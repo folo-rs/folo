@@ -22,9 +22,6 @@ where
     /// Handle to the object in the slab. This grants us access to the object's pointer
     /// and allows us to operate on the object (e.g. to remove it or create a reference).
     slab_handle: SlabHandle<T>,
-    
-    /// Tracks whether this handle has been type-erased.
-    type_erased: bool,
 }
 
 impl<T: ?Sized> RawPooledMut<T> {
@@ -33,7 +30,6 @@ impl<T: ?Sized> RawPooledMut<T> {
         Self {
             slab_index,
             slab_handle,
-            type_erased: false,
         }
     }
 
@@ -47,6 +43,7 @@ impl<T: ?Sized> RawPooledMut<T> {
     /// Get the slab index for this handle.
     #[must_use]
     #[inline]
+    #[allow(dead_code, reason = "Used by pool_raw.rs")]
     pub(crate) fn slab_index(&self) -> usize {
         self.slab_index
     }
@@ -54,6 +51,7 @@ impl<T: ?Sized> RawPooledMut<T> {
     /// Get the slab handle for this handle.
     #[must_use]
     #[inline]
+    #[allow(dead_code, reason = "Used by pool_raw.rs")]
     pub(crate) fn slab_handle(&self) -> SlabHandle<T> {
         self.slab_handle
     }
@@ -65,7 +63,6 @@ impl<T: ?Sized> RawPooledMut<T> {
         RawPooledMut {
             slab_index: self.slab_index,
             slab_handle: self.slab_handle.erase(),
-            type_erased: true,
         }
     }
 
@@ -73,10 +70,9 @@ impl<T: ?Sized> RawPooledMut<T> {
     #[must_use]
     #[inline]
     pub fn into_shared(self) -> RawPooled<T> {
-        if self.type_erased {
-            panic!("Cannot create shared handle from type-erased handle. Type-erase after creating shared handle instead.");
-        }
-        
+        // Detect type erasure by checking if T is the unit type
+        check_for_type_erasure::<T>();
+
         RawPooled::new(self.slab_index, self.slab_handle)
     }
 
@@ -147,7 +143,6 @@ impl<T: ?Sized> RawPooledMut<T> {
         RawPooledMut {
             slab_index: self.slab_index,
             slab_handle: new_handle,
-            type_erased: false,
         }
     }
 }
@@ -229,5 +224,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(result, 55);
+    }
+}
+
+// Helper function to detect type erasure using type_name
+#[inline]
+fn check_for_type_erasure<T: ?Sized>() {
+    // Use type_name to detect if T is the unit type
+    use std::any::type_name;
+    if type_name::<T>() == "()" {
+        panic!(
+            "Cannot create shared handle from type-erased handle. Type-erase after creating shared handle instead."
+        );
     }
 }
