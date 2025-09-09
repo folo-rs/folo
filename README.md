@@ -4,6 +4,8 @@ Mechanisms for high-performance hardware-aware programming in Rust.
 
 # What it gives you
 
+![](doc/hardware.png)
+
 To take advantage of hardware-awareness we must first gain that awareness.
 [`many_cpus`][many_cpus] informs us about the nature of the system's processors and
 [the arrangement of them in relation to main memory][numa], giving us control over what
@@ -14,10 +16,14 @@ blindly - now we spawn specific threads for specific processors or groups of pro
 how work and data are spread between processors, when applied to different algorithms. This
 allows you to judge when it matters and by how much.
 
-The ability to target our workloads to specific processors and specific memory regions unlocks
-new optimization opportunities. [`region_local`][region_local] and [`region_cached`][region_cached]
+![](doc/region_cached.png)
+
+[The ability to target our workloads to specific processors and specific memory regions unlocks new optimization opportunities.][structural_changes]
+[`region_local`][region_local] and [`region_cached`][region_cached]
 provide something like a layer of caching between the processor and main memory, ensuring that
 even data sets that do not fit into processor caches still experience high data locality.
+
+![](doc/linked.png)
 
 Designing code for hardware-efficiency often benefits from a thread-isolated mindset, treating
 each thread as its own universe. [`linked`][linked] provides valuable concepts, metaphors and
@@ -33,6 +39,19 @@ benchmark logic on a specific processor set obtained from `many_cpus`. It takes 
 dirty business involved in coordinating the threads and eliminating any test harness overhead
 from the data.
 
+```
+Processor time statistics:
+
+| Operation                   | Mean |
+|-----------------------------|------|
+| futures_oneshot_channel_mt  | 92ns |
+| futures_oneshot_channel_st  | 76ns |
+| local_once_event_managed    | 38ns |
+| pooled_local_once_event_ptr | 27ns |
+| pooled_local_once_event_rc  | 31ns |
+| pooled_local_once_event_ref | 24ns |
+```
+
 When evaluating complex application logic, it can be important to take a holistic view - it does
 not only matter how fast the benchmark logic runs but also how much energy (processor time) it
 uses. Perhaps the code also runs logic on background threads or perhaps the code just blocks
@@ -40,6 +59,18 @@ some threads for a while on syscalls, costing wall clock time without costing pr
 These are all factors that we must account for in complex scenarios. [`all_the_time`][all_the_time]
 allows us to track the processor time spent by the process, in addition to the wall clock time.
 It integrates well into Criterion and is natively supported by `par_bench`.
+
+```
+Allocation statistics:
+
+| Operation                      | Mean bytes | Mean count |
+|--------------------------------|------------|------------|
+| futures_oneshot_channel        |        128 |          1 |
+| local_once_event_managed       |         48 |          1 |
+| pooled_local_once_event_ptr    |          0 |          0 |
+| pooled_local_once_event_rc     |          0 |          0 |
+| pooled_local_once_event_ref    |          0 |          0 |
+```
 
 Memory allocation is the root of all evil. The simplest and most effective way to make a typical
 application faster is to eliminate memory allocations from it - this can often multiply performance
@@ -57,14 +88,31 @@ around for reuse, so the next allocation is simple and fast.
 Another term for special-purpose allocators is object pools and [`infinity_pool`][infinity_pool]
 offers several of them, from basic `Vec<T>` style pinned object collections to type-agnostic object
 pools that can allocate any type of object. While the safe-API variants come with substantial
-overheads compared to the unsafe-API variants, they both can exceed the default Rust memory
-allocator under many conditions. Your mileage may vary - measure 100 times, cut 10 times.
+overheads compared to the unsafe-API variants, they both can surpass the efficiency of using the
+global memory allocator under many conditions. Your mileage may vary - measure 100 times,
+cut 10 times.
 
 A surprising source of memory allocations in high-performance code can be signaling. We are used
 to thinking of oneshot channels as cheap and efficient things and while this is true, they are
 still built upon shared memory allocated from the heap. Every signaling channel you create is a
 heap allocation and they can add up fast! [`events`][events] provides you with pooled signaling
 channels that take advantage of `infinity_pool` to reuse memory allocations.
+
+```
+bagels_cooked_weight_grams: 2300; sum 744000; mean 323
+value <=    0 [    0 ]: 
+value <=  100 [    0 ]: 
+value <=  200 [ 1300 ]: ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+value <=  300 [    0 ]: 
+value <=  400 [    0 ]: 
+value <=  500 [    0 ]: 
+value <=  600 [ 1000 ]: ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+value <=  700 [    0 ]: 
+value <=  800 [    0 ]: 
+value <=  900 [    0 ]: 
+value <= 1000 [    0 ]: 
+value <= +inf [    0 ]: 
+```
 
 It is easy to think that performance and efficiency has been achieved once the benchmarks look good. 
 Yet time makes fools of us all! Real-world data often shows surprising behaviors - where we thought
@@ -118,6 +166,7 @@ Deprecated packages:
 [numa]: https://www.kernel.org/doc/html/v4.18/vm/numa.html
 [region_cached]: packages/region_cached/README.md
 [region_local]: packages/region_local/README.md
+[structural_changes]: https://sander.saares.eu/2025/03/31/structural-changes-for-48-throughput-in-a-rust-web-service/
 
 # Development environment setup
 
