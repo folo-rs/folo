@@ -18,8 +18,14 @@ fn cast_managed_blind_pooled_to_display_trait() {
     let pool = BlindPool::new();
     let pooled = pool.insert("Test string".to_string());
 
+    // Verify object is in the pool before casting
+    assert_eq!(pool.len(), 1);
+
     // Cast to trait object while preserving reference counting
     let display_pooled = pooled.cast_display();
+
+    // Verify object is still in the pool after casting
+    assert_eq!(pool.len(), 1);
 
     // Verify the cast worked
     assert_eq!(display_pooled.to_string(), "Test string");
@@ -34,8 +40,14 @@ fn cast_managed_blind_pooled_mut_to_display_trait() {
     let pool = BlindPool::new();
     let pooled_mut = pool.insert("Test string".to_string());
 
+    // Verify object is in the pool before casting
+    assert_eq!(pool.len(), 1);
+
     // Cast to trait object while preserving reference counting
     let display_pooled = pooled_mut.cast_display();
+
+    // Verify object is still in the pool after casting
+    assert_eq!(pool.len(), 1);
 
     // Verify the cast worked
     assert_eq!(display_pooled.to_string(), "Test string");
@@ -50,8 +62,14 @@ fn cast_local_blind_pooled_to_display_trait() {
     let pool = LocalBlindPool::new();
     let pooled = pool.insert("Test string".to_string());
 
+    // Verify object is in the pool before casting
+    assert_eq!(pool.len(), 1);
+
     // Cast to trait object while preserving reference counting
     let display_pooled = pooled.cast_display();
+
+    // Verify object is still in the pool after casting
+    assert_eq!(pool.len(), 1);
 
     // Verify the cast worked
     assert_eq!(display_pooled.to_string(), "Test string");
@@ -66,8 +84,14 @@ fn cast_local_blind_pooled_mut_to_display_trait() {
     let pool = LocalBlindPool::new();
     let pooled_mut = pool.insert("Test string".to_string());
 
+    // Verify object is in the pool before casting
+    assert_eq!(pool.len(), 1);
+
     // Cast to trait object while preserving reference counting
     let display_pooled = pooled_mut.cast_display();
+
+    // Verify object is still in the pool after casting
+    assert_eq!(pool.len(), 1);
 
     // Verify the cast worked
     assert_eq!(display_pooled.to_string(), "Test string");
@@ -82,8 +106,14 @@ fn cast_managed_pinned_pooled_to_display_trait() {
     let pool = PinnedPool::new();
     let pooled = pool.insert("Test string".to_string());
 
+    // Verify object is in the pool before casting
+    assert_eq!(pool.len(), 1);
+
     // Cast to trait object while preserving reference counting
     let display_pooled = pooled.cast_display();
+
+    // Verify object is still in the pool after casting
+    assert_eq!(pool.len(), 1);
 
     // Verify the cast worked
     assert_eq!(display_pooled.to_string(), "Test string");
@@ -98,8 +128,14 @@ fn cast_managed_pinned_pooled_mut_to_display_trait() {
     let pool = PinnedPool::new();
     let pooled_mut = pool.insert("Test string".to_string());
 
+    // Verify object is in the pool before casting
+    assert_eq!(pool.len(), 1);
+
     // Cast to trait object while preserving reference counting
     let display_pooled = pooled_mut.cast_display();
+
+    // Verify object is still in the pool after casting
+    assert_eq!(pool.len(), 1);
 
     // Verify the cast worked
     assert_eq!(display_pooled.to_string(), "Test string");
@@ -114,8 +150,14 @@ fn cast_local_pinned_pooled_to_display_trait() {
     let pool = LocalPinnedPool::new();
     let pooled = pool.insert("Test string".to_string());
 
+    // Verify object is in the pool before casting
+    assert_eq!(pool.len(), 1);
+
     // Cast to trait object while preserving reference counting
     let display_pooled = pooled.cast_display();
+
+    // Verify object is still in the pool after casting
+    assert_eq!(pool.len(), 1);
 
     // Verify the cast worked
     assert_eq!(display_pooled.to_string(), "Test string");
@@ -130,8 +172,14 @@ fn cast_local_pinned_pooled_mut_to_display_trait() {
     let pool = LocalPinnedPool::new();
     let pooled_mut = pool.insert("Test string".to_string());
 
+    // Verify object is in the pool before casting
+    assert_eq!(pool.len(), 1);
+
     // Cast to trait object while preserving reference counting
     let display_pooled = pooled_mut.cast_display();
+
+    // Verify object is still in the pool after casting
+    assert_eq!(pool.len(), 1);
 
     // Verify the cast worked
     assert_eq!(display_pooled.to_string(), "Test string");
@@ -148,9 +196,15 @@ fn cast_raw_blind_pooled_removal_shared() {
     let mut pool = RawBlindPoolBuilder::new().build();
     let pooled = pool.insert("Test string".to_string()).into_shared();
 
+    // Verify object is in the pool before casting
+    assert_eq!(pool.len(), 1);
+
     // Cast to trait object.
     // SAFETY: We must guarantee the pool remains alive during this call - yes, we promise.
     let display_pooled = unsafe { pooled.cast_display() };
+
+    // Verify object is still in the pool after casting
+    assert_eq!(pool.len(), 1);
 
     // Verify the cast worked
     // SAFETY: We know the handle is valid
@@ -170,9 +224,15 @@ fn cast_raw_blind_pooled_removal_unique() {
     let mut pool = RawBlindPoolBuilder::new().build();
     let pooled_mut = pool.insert("Test string".to_string());
 
+    // Verify object is in the pool before casting
+    assert_eq!(pool.len(), 1);
+
     // Cast to trait object.
     // SAFETY: We must guarantee the pool remains alive during this call - yes, we promise.
     let display_pooled = unsafe { pooled_mut.cast_display() };
+
+    // Verify object is still in the pool after casting
+    assert_eq!(pool.len(), 1);
 
     // Verify the cast worked
     // SAFETY: We know the handle is valid
@@ -189,9 +249,15 @@ fn cast_raw_opaque_pooled_removal_shared() {
     let mut pool = RawOpaquePoolBuilder::new().layout_of::<String>().build();
     let pooled = pool.insert("Test string".to_string()).into_shared();
 
+    // Verify object is in the pool before casting
+    assert_eq!(pool.len(), 1);
+
     // Cast to trait object - raw pooled requires unsafe
     // SAFETY: We must guarantee the pool remains alive during this call - yes, we promise.
     let display_pooled = unsafe { pooled.cast_display() };
+
+    // Verify object is still in the pool after casting
+    assert_eq!(pool.len(), 1);
 
     // Verify the cast worked
     // SAFETY: We know the handle is valid
@@ -211,9 +277,15 @@ fn cast_raw_opaque_pooled_removal_unique() {
     let mut pool = RawOpaquePoolBuilder::new().layout_of::<String>().build();
     let pooled_mut = pool.insert("Test string".to_string());
 
+    // Verify object is in the pool before casting
+    assert_eq!(pool.len(), 1);
+
     // Cast to trait object - raw pooled requires unsafe
     // SAFETY: We must guarantee the pool remains alive during this call - yes, we promise.
     let display_pooled = unsafe { pooled_mut.cast_display() };
+
+    // Verify object is still in the pool after casting
+    assert_eq!(pool.len(), 1);
 
     // Verify the cast worked
     // SAFETY: We know the handle is valid
@@ -230,9 +302,15 @@ fn cast_raw_pinned_pooled_removal_shared() {
     let mut pool = RawPinnedPoolBuilder::new().build();
     let pooled = pool.insert("Test string".to_string()).into_shared();
 
+    // Verify object is in the pool before casting
+    assert_eq!(pool.len(), 1);
+
     // Cast to trait object - raw pooled requires unsafe
     // SAFETY: We must guarantee the pool remains alive during this call - yes, we promise.
     let display_pooled = unsafe { pooled.cast_display() };
+
+    // Verify object is still in the pool after casting
+    assert_eq!(pool.len(), 1);
 
     // Verify the cast worked
     // SAFETY: We know the handle is valid
@@ -252,9 +330,15 @@ fn cast_raw_pinned_pooled_removal_unique() {
     let mut pool = RawPinnedPoolBuilder::new().build();
     let pooled_mut = pool.insert("Test string".to_string());
 
+    // Verify object is in the pool before casting
+    assert_eq!(pool.len(), 1);
+
     // Cast to trait object - raw pooled requires unsafe
     // SAFETY: We must guarantee the pool remains alive during this call - yes, we promise.
     let display_pooled = unsafe { pooled_mut.cast_display() };
+
+    // Verify object is still in the pool after casting
+    assert_eq!(pool.len(), 1);
 
     // Verify the cast worked
     // SAFETY: We know the handle is valid

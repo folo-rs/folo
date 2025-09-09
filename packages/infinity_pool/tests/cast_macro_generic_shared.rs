@@ -1,4 +1,4 @@
-//! Tests of the `define_pooled_dyn_cast!` macro with generic traits, separate from the main crate
+//! Tests of the `define_pooled_dyn_cast!` macro with generic traits and shared handles, separate from the main crate
 //! just to prove that this does not depend on accessing any private APIs.
 
 use infinity_pool::{
@@ -24,13 +24,13 @@ where
 // Define cast for generic trait to test the macro
 define_pooled_dyn_cast!(TestFuture<T>);
 
-// ========== Tests for all 8 handle types with generic trait ==========
+// ========== Tests for all 8 handle types with generic trait and shared handles ==========
 
 #[test]
-fn cast_managed_blind_pooled_to_generic_trait() {
+fn cast_managed_blind_pooled_shared_to_generic_trait() {
     let pool = BlindPool::new();
     let async_val = AsyncValue(42_usize);
-    let pooled = pool.insert(async_val);
+    let pooled = pool.insert(async_val).into_shared();
 
     // Verify object is in the pool before casting
     assert_eq!(pool.len(), 1);
@@ -50,10 +50,10 @@ fn cast_managed_blind_pooled_to_generic_trait() {
 }
 
 #[test]
-fn cast_managed_blind_pooled_mut_to_generic_trait() {
+fn cast_managed_blind_pooled_mut_shared_to_generic_trait() {
     let pool = BlindPool::new();
     let async_val = AsyncValue(42_usize);
-    let pooled_mut = pool.insert(async_val);
+    let pooled_mut = pool.insert(async_val).into_shared();
 
     // Verify object is in the pool before casting
     assert_eq!(pool.len(), 1);
@@ -73,10 +73,10 @@ fn cast_managed_blind_pooled_mut_to_generic_trait() {
 }
 
 #[test]
-fn cast_local_blind_pooled_to_generic_trait() {
+fn cast_local_blind_pooled_shared_to_generic_trait() {
     let pool = LocalBlindPool::new();
     let async_val = AsyncValue(100_i32);
-    let pooled = pool.insert(async_val);
+    let pooled = pool.insert(async_val).into_shared();
 
     // Verify object is in the pool before casting
     assert_eq!(pool.len(), 1);
@@ -96,10 +96,10 @@ fn cast_local_blind_pooled_to_generic_trait() {
 }
 
 #[test]
-fn cast_local_blind_pooled_mut_to_generic_trait() {
+fn cast_local_blind_pooled_mut_shared_to_generic_trait() {
     let pool = LocalBlindPool::new();
     let async_val = AsyncValue(100_i32);
-    let pooled_mut = pool.insert(async_val);
+    let pooled_mut = pool.insert(async_val).into_shared();
 
     // Verify object is in the pool before casting
     assert_eq!(pool.len(), 1);
@@ -119,10 +119,10 @@ fn cast_local_blind_pooled_mut_to_generic_trait() {
 }
 
 #[test]
-fn cast_managed_pinned_pooled_to_generic_trait() {
+fn cast_managed_pinned_pooled_shared_to_generic_trait() {
     let pool = PinnedPool::new();
     let async_val = AsyncValue("hello".to_string());
-    let pooled = pool.insert(async_val);
+    let pooled = pool.insert(async_val).into_shared();
 
     // Verify object is in the pool before casting
     assert_eq!(pool.len(), 1);
@@ -142,10 +142,10 @@ fn cast_managed_pinned_pooled_to_generic_trait() {
 }
 
 #[test]
-fn cast_managed_pinned_pooled_mut_to_generic_trait() {
+fn cast_managed_pinned_pooled_mut_shared_to_generic_trait() {
     let pool = PinnedPool::new();
     let async_val = AsyncValue("hello".to_string());
-    let pooled_mut = pool.insert(async_val);
+    let pooled_mut = pool.insert(async_val).into_shared();
 
     // Verify object is in the pool before casting
     assert_eq!(pool.len(), 1);
@@ -165,10 +165,10 @@ fn cast_managed_pinned_pooled_mut_to_generic_trait() {
 }
 
 #[test]
-fn cast_local_pinned_pooled_to_generic_trait() {
+fn cast_local_pinned_pooled_shared_to_generic_trait() {
     let pool = LocalPinnedPool::new();
     let async_val = AsyncValue(250_i64);
-    let pooled = pool.insert(async_val);
+    let pooled = pool.insert(async_val).into_shared();
 
     // Verify object is in the pool before casting
     assert_eq!(pool.len(), 1);
@@ -188,10 +188,10 @@ fn cast_local_pinned_pooled_to_generic_trait() {
 }
 
 #[test]
-fn cast_local_pinned_pooled_mut_to_generic_trait() {
+fn cast_local_pinned_pooled_mut_shared_to_generic_trait() {
     let pool = LocalPinnedPool::new();
     let async_val = AsyncValue(250_i64);
-    let pooled_mut = pool.insert(async_val);
+    let pooled_mut = pool.insert(async_val).into_shared();
 
     // Verify object is in the pool before casting
     assert_eq!(pool.len(), 1);
@@ -210,10 +210,10 @@ fn cast_local_pinned_pooled_mut_to_generic_trait() {
     assert_eq!(pool.len(), 0);
 }
 
-// ========== Tests for raw pool removal via generic trait objects ==========
+// ========== Tests for raw pool removal via generic trait objects with shared handles ==========
 
 #[test]
-fn cast_raw_blind_pooled_generic_removal_shared() {
+fn cast_raw_blind_pooled_shared_generic_removal_shared() {
     let mut pool = RawBlindPoolBuilder::new().build();
     let async_val = AsyncValue(999_u64);
     let pooled = pool.insert(async_val).into_shared();
@@ -242,10 +242,10 @@ fn cast_raw_blind_pooled_generic_removal_shared() {
 }
 
 #[test]
-fn cast_raw_blind_pooled_generic_removal_unique() {
+fn cast_raw_blind_pooled_shared_generic_removal_unique() {
     let mut pool = RawBlindPoolBuilder::new().build();
     let async_val = AsyncValue(999_u64);
-    let pooled_mut = pool.insert(async_val);
+    let pooled_mut = pool.insert(async_val).into_shared();
 
     // Verify object is in the pool before casting
     assert_eq!(pool.len(), 1);
@@ -263,12 +263,15 @@ fn cast_raw_blind_pooled_generic_removal_unique() {
     assert_eq!(future_ref.get_output(), 999);
 
     // Remove via trait object
-    pool.remove_mut(future_pooled);
+    // SAFETY: We know the handle is valid and we own it
+    unsafe {
+        pool.remove(future_pooled);
+    }
     assert_eq!(pool.len(), 0);
 }
 
 #[test]
-fn cast_raw_opaque_pooled_generic_removal_shared() {
+fn cast_raw_opaque_pooled_shared_generic_removal_shared() {
     let mut pool = RawOpaquePoolBuilder::new()
         .layout_of::<AsyncValue<String>>()
         .build();
@@ -299,12 +302,12 @@ fn cast_raw_opaque_pooled_generic_removal_shared() {
 }
 
 #[test]
-fn cast_raw_opaque_pooled_generic_removal_unique() {
+fn cast_raw_opaque_pooled_shared_generic_removal_unique() {
     let mut pool = RawOpaquePoolBuilder::new()
         .layout_of::<AsyncValue<String>>()
         .build();
     let async_val = AsyncValue("test value".to_string());
-    let pooled_mut = pool.insert(async_val);
+    let pooled_mut = pool.insert(async_val).into_shared();
 
     // Verify object is in the pool before casting
     assert_eq!(pool.len(), 1);
@@ -322,12 +325,15 @@ fn cast_raw_opaque_pooled_generic_removal_unique() {
     assert_eq!(future_ref.get_output(), "test value");
 
     // Remove via trait object
-    pool.remove_mut(future_pooled);
+    // SAFETY: We know the handle is valid and we own it
+    unsafe {
+        pool.remove(future_pooled);
+    }
     assert_eq!(pool.len(), 0);
 }
 
 #[test]
-fn cast_raw_pinned_pooled_generic_removal_shared() {
+fn cast_raw_pinned_pooled_shared_generic_removal_shared() {
     let mut pool = RawPinnedPoolBuilder::new().build();
     let async_val = AsyncValue(vec![1, 2, 3]);
     let pooled = pool.insert(async_val).into_shared();
@@ -356,10 +362,10 @@ fn cast_raw_pinned_pooled_generic_removal_shared() {
 }
 
 #[test]
-fn cast_raw_pinned_pooled_generic_removal_unique() {
+fn cast_raw_pinned_pooled_shared_generic_removal_unique() {
     let mut pool = RawPinnedPoolBuilder::new().build();
     let async_val = AsyncValue(vec![1, 2, 3]);
-    let pooled_mut = pool.insert(async_val);
+    let pooled_mut = pool.insert(async_val).into_shared();
 
     // Verify object is in the pool before casting
     assert_eq!(pool.len(), 1);
@@ -377,6 +383,9 @@ fn cast_raw_pinned_pooled_generic_removal_unique() {
     assert_eq!(future_ref.get_output(), vec![1, 2, 3]);
 
     // Remove via trait object
-    pool.remove_mut(future_pooled);
+    // SAFETY: We know the handle is valid and we own it
+    unsafe {
+        pool.remove(future_pooled);
+    }
     assert_eq!(pool.len(), 0);
 }
