@@ -143,6 +143,13 @@ impl<T: ?Sized> fmt::Debug for RawPooledMut<T> {
     }
 }
 
+// SAFETY: RawPooledMut<T> is a unique handle that grants exclusive access to T. When T is Send,
+// the exclusive handle can be safely transferred between threads because there are no concurrent
+// accesses to T - the handle provides the only way to access T and ensures exclusive ownership.
+// The underlying SlabHandle is just a pointer and index which are safe to transfer between threads
+// as long as T itself can be moved (T: Send).
+unsafe impl<T: ?Sized + Send> Send for RawPooledMut<T> {}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -155,8 +162,9 @@ mod tests {
     assert_impl_all!(RawPooledMut<u32>: Send);
     assert_not_impl_any!(RawPooledMut<u32>: Sync);
 
-    // Cell is Send but not Sync, so RawPooledMut<Cell> should be neither Send nor Sync.
-    assert_not_impl_any!(RawPooledMut<Cell<u32>>: Send, Sync);
+    // Cell is Send but not Sync, so RawPooledMut<Cell> should now be Send (but not Sync).
+    assert_impl_all!(RawPooledMut<Cell<u32>>: Send);
+    assert_not_impl_any!(RawPooledMut<Cell<u32>>: Sync);
 
     // This is a unique handle, it cannot be copyable.
     assert_not_impl_any!(RawPooledMut<u32>: Copy);

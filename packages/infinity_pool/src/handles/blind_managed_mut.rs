@@ -233,6 +233,13 @@ impl<T: ?Sized> Drop for BlindPooledMut<T> {
     }
 }
 
+// SAFETY: BlindPooledMut<T> is a unique handle that grants exclusive access to T. When T is Send,
+// the exclusive handle can be safely transferred between threads because there are no concurrent
+// accesses to T - the handle provides the only way to access T and ensures exclusive ownership.
+// The underlying pool storage is thread-safe via Arc<Mutex<...>>, so the handle can be moved
+// between threads as long as T itself can be moved (T: Send).
+unsafe impl<T: ?Sized + Send> Send for BlindPooledMut<T> {}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -245,8 +252,9 @@ mod tests {
     assert_impl_all!(BlindPooledMut<u32>: Send);
     assert_not_impl_any!(BlindPooledMut<u32>: Sync);
 
-    // Cell is Send but not Sync, so BlindPooledMut<Cell> should be neither Send nor Sync.
-    assert_not_impl_any!(BlindPooledMut<Cell<u32>>: Send, Sync);
+    // Cell is Send but not Sync, so BlindPooledMut<Cell> should now be Send (but not Sync).
+    assert_impl_all!(BlindPooledMut<Cell<u32>>: Send);
+    assert_not_impl_any!(BlindPooledMut<Cell<u32>>: Sync);
 
     // We expect no destructor because we treat it as `Copy` in our own Drop::drop().
     assert_not_impl_any!(RawPooledMut<()>: Drop);
