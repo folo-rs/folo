@@ -243,8 +243,11 @@ unsafe impl<T: ?Sized + Send> Send for BlindPooledMut<T> {}
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::thread;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+    use crate::BlindPool;
 
     use super::*;
 
@@ -258,4 +261,25 @@ mod tests {
 
     // We expect no destructor because we treat it as `Copy` in our own Drop::drop().
     assert_not_impl_any!(RawPooledMut<()>: Drop);
+
+    // Test type that is Send but not Sync.
+    struct SendNotSync {
+        data: Cell<i32>,
+    }
+
+    // SAFETY: Cell<T> is Send if T is Send.
+    unsafe impl Send for SendNotSync {}
+
+    #[test]
+    fn unique_blind_handle_works_with_send_not_sync() {
+        let pool = BlindPool::new();
+        let handle = pool.insert(SendNotSync {
+            data: Cell::new(24),
+        });
+
+        // Unique blind handles should be Send even when T is !Sync but Send.
+        let result = thread::spawn(move || handle.data.get()).join().unwrap();
+
+        assert_eq!(result, 24);
+    }
 }

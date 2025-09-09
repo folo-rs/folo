@@ -160,8 +160,11 @@ unsafe impl<T: ?Sized + Send> Send for RawBlindPooledMut<T> {}
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::thread;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+    use crate::RawBlindPool;
 
     use super::*;
 
@@ -172,4 +175,33 @@ mod tests {
     // Cell is Send but not Sync, so RawBlindPooledMut<Cell> should now be Send (but not Sync).
     assert_impl_all!(RawBlindPooledMut<Cell<u32>>: Send);
     assert_not_impl_any!(RawBlindPooledMut<Cell<u32>>: Sync);
+
+    // Test type that is Send but not Sync.
+    struct SendNotSync {
+        data: Cell<i32>,
+    }
+
+    // SAFETY: Cell<T> is Send if T is Send.
+    unsafe impl Send for SendNotSync {}
+
+    #[test]
+    fn unique_raw_blind_handle_works_with_send_not_sync() {
+        let mut pool = RawBlindPool::new();
+        let handle = pool.insert(SendNotSync {
+            data: Cell::new(77),
+        });
+
+        // Unique raw blind handles should be Send even when T is !Sync but Send.
+        // Note: We need to use unsafe access methods for raw handles.
+        let result = thread::spawn(move || {
+            // SAFETY: The handle is unique and we own it, so we can create a reference.
+            // The pool remains alive for the duration of the test.
+            let value = unsafe { handle.as_ref() };
+            value.data.get()
+        })
+        .join()
+        .unwrap();
+
+        assert_eq!(result, 77);
+    }
 }

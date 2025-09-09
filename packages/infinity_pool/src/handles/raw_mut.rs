@@ -153,8 +153,11 @@ unsafe impl<T: ?Sized + Send> Send for RawPooledMut<T> {}
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::thread;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+    use crate::RawPinnedPool;
 
     use super::*;
 
@@ -168,4 +171,33 @@ mod tests {
 
     // This is a unique handle, it cannot be copyable.
     assert_not_impl_any!(RawPooledMut<u32>: Copy);
+
+    // Test type that is Send but not Sync.
+    struct SendNotSync {
+        data: Cell<i32>,
+    }
+
+    // SAFETY: Cell<T> is Send if T is Send.
+    unsafe impl Send for SendNotSync {}
+
+    #[test]
+    fn unique_raw_handle_works_with_send_not_sync() {
+        let mut pool = RawPinnedPool::<SendNotSync>::new();
+        let handle = pool.insert(SendNotSync {
+            data: Cell::new(55),
+        });
+
+        // Unique raw handles should be Send even when T is !Sync but Send.
+        // Note: We need to use unsafe access methods for raw handles.
+        let result = thread::spawn(move || {
+            // SAFETY: The handle is unique and we own it, so we can create a reference.
+            // The pool remains alive for the duration of the test.
+            let value = unsafe { handle.as_ref() };
+            value.data.get()
+        })
+        .join()
+        .unwrap();
+
+        assert_eq!(result, 55);
+    }
 }
