@@ -1,6 +1,8 @@
+//! Tests for unique handle Send requirements.
+
+use infinity_pool::{BlindPool, PinnedPool};
 use std::cell::Cell;
 use std::thread;
-use infinity_pool::{BlindPool, PinnedPool};
 
 // Test type that is Send but not Sync
 struct SendNotSync {
@@ -45,7 +47,9 @@ fn shared_handles_still_require_sync() {
         data: AtomicI32,
     }
 
+    // SAFETY: AtomicI32 is Send - can be safely transferred between threads.
     unsafe impl Send for SendAndSync {}
+    // SAFETY: AtomicI32 is Sync - can be safely shared between threads.
     unsafe impl Sync for SendAndSync {}
 
     let pool = PinnedPool::<SendAndSync>::new();
@@ -77,10 +81,10 @@ fn type_erasure_preserves_thread_safety_expectations() {
     let shared_erased = erased_handle.into_shared(); // Pooled<()>
 
     // The shared handle can be moved because () is Sync
-    // But it can't meaningfully access the original object  
+    // But it can't meaningfully access the original object
     let moved_successfully = thread::spawn(move || {
         // We can verify the handle was moved but shouldn't access raw pointers across threads
-        format!("Handle moved successfully: {:?}", shared_erased)
+        format!("Handle moved successfully: {shared_erased:?}")
     })
     .join()
     .unwrap();
