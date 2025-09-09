@@ -164,6 +164,7 @@ Deprecated packages:
 [nm]: packages/nm/README.md
 [nonzero]: https://github.com/rust-lang/rfcs/pull/3786
 [numa]: https://www.kernel.org/doc/html/v4.18/vm/numa.html
+[par_bench]: packages/par_bench/README.md
 [region_cached]: packages/region_cached/README.md
 [region_local]: packages/region_local/README.md
 [structural_changes]: https://sander.saares.eu/2025/03/31/structural-changes-for-48-throughput-in-a-rust-web-service/
