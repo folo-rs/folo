@@ -18,12 +18,17 @@ use crate::{ERR_POISONED_LOCK, Pooled, RawOpaquePoolSend, RawPooledMut};
 pub struct PooledMut<T: ?Sized> {
     inner: RawPooledMut<T>,
     pool: Arc<Mutex<RawOpaquePoolSend>>,
+    type_erased: bool,
 }
 
 impl<T: ?Sized> PooledMut<T> {
     #[must_use]
     pub(crate) fn new(inner: RawPooledMut<T>, pool: Arc<Mutex<RawOpaquePoolSend>>) -> Self {
-        Self { inner, pool }
+        Self { 
+            inner, 
+            pool, 
+            type_erased: false,
+        }
     }
 
     #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
@@ -42,6 +47,7 @@ impl<T: ?Sized> PooledMut<T> {
         PooledMut {
             inner: inner.erase(),
             pool,
+            type_erased: true,
         }
     }
 
@@ -49,6 +55,10 @@ impl<T: ?Sized> PooledMut<T> {
     #[must_use]
     #[inline]
     pub fn into_shared(self) -> Pooled<T> {
+        if self.type_erased {
+            panic!("Cannot create shared handle from type-erased handle. Type-erase after creating shared handle instead.");
+        }
+        
         let (inner, pool) = self.into_parts();
 
         Pooled::new(inner, pool)
@@ -62,6 +72,7 @@ impl<T: ?Sized> PooledMut<T> {
         let pool = unsafe { ptr::read(&raw const self.pool) };
         // SAFETY: The target is valid for reads.
         let inner = unsafe { ptr::read(&raw const self.inner) };
+        // We don't need to read type_erased as it's not returned
 
         // We are just "destructuring with Drop" here.
         mem::forget(self);
@@ -115,6 +126,7 @@ impl<T: ?Sized> PooledMut<T> {
         PooledMut {
             inner: new_inner,
             pool,
+            type_erased: false,
         }
     }
 }
@@ -228,7 +240,6 @@ unsafe impl<T: ?Sized + Send> Send for PooledMut<T> {}
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::sync::atomic::{AtomicI32, Ordering};
     use std::thread;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
@@ -269,34 +280,12 @@ mod tests {
         assert_eq!(result, 42);
     }
 
-    #[test]
-    fn shared_handles_still_require_sync() {
-        // Test type that is both Send and Sync.
-        struct SendAndSync {
-            data: AtomicI32,
-        }
-
-        // SAFETY: AtomicI32 is Send - can be safely transferred between threads.
-        unsafe impl Send for SendAndSync {}
-        // SAFETY: AtomicI32 is Sync - can be safely shared between threads.
-        unsafe impl Sync for SendAndSync {}
-
-        let pool = PinnedPool::<SendAndSync>::new();
-        let handle = pool.insert(SendAndSync {
-            data: AtomicI32::new(100),
-        });
-        let shared_handle = handle.into_shared();
-
-        // This should work because SendAndSync is Send + Sync.
-        let result = thread::spawn(move || shared_handle.data.load(Ordering::Relaxed))
-            .join()
-            .unwrap();
-
-        assert_eq!(result, 100);
-    }
+    // Note: We do not test that shared handles require T: Sync here because such a test
+    // would not compile. Instead, see the UI test in packages/ui_tests/tests/ui/infinity_pool/compile_fail/
+    // which demonstrates that !Sync types cannot be used in shared handles across threads.
 
     #[test]
-    fn type_erasure_preserves_thread_safety_expectations() {
+    fn type_erasure_prevents_shared_handle_creation() {
         let pool = PinnedPool::<SendNotSync>::new();
         let handle = pool.insert(SendNotSync {
             data: Cell::new(333),
@@ -305,20 +294,22 @@ mod tests {
         // Type erase to () - this loses the original type information.
         let erased_handle = handle.erase(); // Now PooledMut<()>
 
-        // Unit type is Sync, so this creates a shared handle that is Send.
-        // This demonstrates the type erasure caveat mentioned in the issue.
-        let shared_erased = erased_handle.into_shared(); // Pooled<()>
+        // This should panic because we cannot create shared handles from type-erased handles.
+        let result = std::panic::catch_unwind(|| {
+            let _shared_erased = erased_handle.into_shared(); // Should panic
+        });
 
-        // The shared handle can be moved because () is Sync.
-        // But it cannot meaningfully access the original object.
-        let moved_successfully = thread::spawn(move || {
-            // We can verify the handle was moved but should not access raw pointers across threads.
-            format!("Handle moved successfully: {shared_erased:?}")
-        })
-        .join()
-        .unwrap();
+        // Verify that it panicked
+        assert!(result.is_err());
 
-        // We can verify the operation completed successfully.
-        assert!(moved_successfully.contains("Handle moved successfully"));
+        // Verify the panic message contains the expected text
+        let panic_msg = result.unwrap_err();
+        if let Some(msg) = panic_msg.downcast_ref::<String>() {
+            assert!(msg.contains("Cannot create shared handle from type-erased handle"));
+        } else if let Some(msg) = panic_msg.downcast_ref::<&str>() {
+            assert!(msg.contains("Cannot create shared handle from type-erased handle"));
+        } else {
+            panic!("Expected panic with string message");
+        }
     }
 }

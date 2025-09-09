@@ -18,12 +18,18 @@ pub struct BlindPooledMut<T: ?Sized> {
     inner: RawPooledMut<T>,
     key: LayoutKey,
     core: BlindPoolCore,
+    type_erased: bool,
 }
 
 impl<T: ?Sized> BlindPooledMut<T> {
     #[must_use]
     pub(crate) fn new(inner: RawPooledMut<T>, key: LayoutKey, core: BlindPoolCore) -> Self {
-        Self { inner, key, core }
+        Self { 
+            inner, 
+            key, 
+            core, 
+            type_erased: false,
+        }
     }
 
     #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
@@ -43,6 +49,7 @@ impl<T: ?Sized> BlindPooledMut<T> {
             inner: inner.erase(),
             key,
             core,
+            type_erased: true,
         }
     }
 
@@ -50,6 +57,10 @@ impl<T: ?Sized> BlindPooledMut<T> {
     #[must_use]
     #[inline]
     pub fn into_shared(self) -> BlindPooled<T> {
+        if self.type_erased {
+            panic!("Cannot create shared handle from type-erased handle. Type-erase after creating shared handle instead.");
+        }
+        
         let (inner, key, core) = self.into_parts();
 
         BlindPooled::new(inner, key, core)
@@ -65,6 +76,7 @@ impl<T: ?Sized> BlindPooledMut<T> {
         let key = unsafe { ptr::read(&raw const self.key) };
         // SAFETY: The target is valid for reads.
         let core = unsafe { ptr::read(&raw const self.core) };
+        // We don't need to read type_erased as it's not returned
 
         // We are just "destructuring with Drop" here.
         mem::forget(self);
@@ -119,6 +131,7 @@ impl<T: ?Sized> BlindPooledMut<T> {
             inner: new_inner,
             key,
             core,
+            type_erased: false,
         }
     }
 }

@@ -22,6 +22,9 @@ where
     /// Handle to the object in the slab. This grants us access to the object's pointer
     /// and allows us to operate on the object (e.g. to remove it or create a reference).
     slab_handle: SlabHandle<T>,
+    
+    /// Tracks whether this handle has been type-erased.
+    type_erased: bool,
 }
 
 impl<T: ?Sized> RawPooledMut<T> {
@@ -30,6 +33,7 @@ impl<T: ?Sized> RawPooledMut<T> {
         Self {
             slab_index,
             slab_handle,
+            type_erased: false,
         }
     }
 
@@ -40,6 +44,20 @@ impl<T: ?Sized> RawPooledMut<T> {
         self.slab_handle.ptr()
     }
 
+    /// Get the slab index for this handle.
+    #[must_use]
+    #[inline]
+    pub(crate) fn slab_index(&self) -> usize {
+        self.slab_index
+    }
+
+    /// Get the slab handle for this handle.
+    #[must_use]
+    #[inline]
+    pub(crate) fn slab_handle(&self) -> SlabHandle<T> {
+        self.slab_handle
+    }
+
     #[doc = include_str!("../../doc/snippets/handle_erase.md")]
     #[must_use]
     #[inline]
@@ -47,6 +65,7 @@ impl<T: ?Sized> RawPooledMut<T> {
         RawPooledMut {
             slab_index: self.slab_index,
             slab_handle: self.slab_handle.erase(),
+            type_erased: true,
         }
     }
 
@@ -54,6 +73,16 @@ impl<T: ?Sized> RawPooledMut<T> {
     #[must_use]
     #[inline]
     pub fn into_shared(self) -> RawPooled<T> {
+        if self.type_erased {
+            panic!("Cannot create shared handle from type-erased handle. Type-erase after creating shared handle instead.");
+        }
+        
+        RawPooled::new(self.slab_index, self.slab_handle)
+    }
+
+    /// Internal method to convert to shared handle bypassing type erasure check.
+    /// This is used by wrapper types that manage their own type erasure tracking.
+    pub(crate) fn into_shared_unchecked(self) -> RawPooled<T> {
         RawPooled::new(self.slab_index, self.slab_handle)
     }
 
@@ -118,6 +147,7 @@ impl<T: ?Sized> RawPooledMut<T> {
         RawPooledMut {
             slab_index: self.slab_index,
             slab_handle: new_handle,
+            type_erased: false,
         }
     }
 }

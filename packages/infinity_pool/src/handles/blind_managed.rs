@@ -23,7 +23,7 @@ pub struct BlindPooled<T: ?Sized> {
 impl<T: ?Sized> BlindPooled<T> {
     #[must_use]
     pub(crate) fn new(inner: RawPooledMut<T>, key: LayoutKey, core: BlindPoolCore) -> Self {
-        let inner = inner.into_shared();
+        let inner = inner.into_shared_unchecked();
 
         let remover = Remover {
             handle: inner.erase(),

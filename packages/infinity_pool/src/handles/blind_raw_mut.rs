@@ -16,12 +16,17 @@ where
 {
     key: LayoutKey,
     inner: RawPooledMut<T>,
+    type_erased: bool,
 }
 
 impl<T: ?Sized> RawBlindPooledMut<T> {
     #[must_use]
     pub(crate) fn new(key: LayoutKey, inner: RawPooledMut<T>) -> Self {
-        Self { key, inner }
+        Self { 
+            key, 
+            inner, 
+            type_erased: false,
+        }
     }
 
     /// The layout key used to identify the inner pool the blind pool used to store it.
@@ -50,6 +55,7 @@ impl<T: ?Sized> RawBlindPooledMut<T> {
         RawBlindPooledMut {
             key: self.key,
             inner: self.inner.erase(),
+            type_erased: true,
         }
     }
 
@@ -61,7 +67,11 @@ impl<T: ?Sized> RawBlindPooledMut<T> {
     #[must_use]
     #[inline]
     pub fn into_shared(self) -> RawBlindPooled<T> {
-        RawBlindPooled::new(self.key, self.inner.into_shared())
+        if self.type_erased {
+            panic!("Cannot create shared handle from type-erased handle. Type-erase after creating shared handle instead.");
+        }
+        
+        RawBlindPooled::new(self.key, self.inner.into_shared_unchecked())
     }
 
     #[doc = include_str!("../../doc/snippets/raw_as_pin.md")]
@@ -125,6 +135,7 @@ impl<T: ?Sized> RawBlindPooledMut<T> {
         RawBlindPooledMut {
             key: self.key,
             inner: new_inner,
+            type_erased: false,
         }
     }
 }

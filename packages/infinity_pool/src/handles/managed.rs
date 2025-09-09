@@ -23,7 +23,7 @@ pub struct Pooled<T: ?Sized> {
 impl<T: ?Sized> Pooled<T> {
     #[must_use]
     pub(crate) fn new(inner: RawPooledMut<T>, pool: Arc<Mutex<RawOpaquePoolSend>>) -> Self {
-        let inner = inner.into_shared();
+        let inner = inner.into_shared_unchecked();
 
         let remover = Remover {
             handle: inner.erase(),

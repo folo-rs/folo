@@ -13,8 +13,10 @@ workspace = true
 
 [dev-dependencies]
 blind_pool = { workspace = true }
+infinity_pool = { path = "../infinity_pool" }
+pinned_pool = { path = "../pinned_pool" }
 trybuild = "1.0"
 
 [package.metadata.cargo-udeps.ignore]
 # udeps fails to "look through" trybuild tests, so we need to exclude all our dependencies here.
-development = ["blind_pool"]
+development = ["blind_pool", "infinity_pool", "pinned_pool"]
