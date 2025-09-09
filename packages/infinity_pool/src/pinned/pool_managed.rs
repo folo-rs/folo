@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn insert_and_length() {
-        let mut pool = PinnedPool::<u64>::new();
+        let pool = PinnedPool::<u64>::new();
 
         let _h1 = pool.insert(10);
         assert_eq!(pool.len(), 1);
@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn capacity_grows_when_needed() {
-        let mut pool = PinnedPool::<u64>::new();
+        let pool = PinnedPool::<u64>::new();
 
         assert_eq!(pool.capacity(), 0);
 
@@ -400,7 +400,7 @@ mod tests {
 
     #[test]
     fn reserve_creates_capacity() {
-        let mut pool = PinnedPool::<u8>::new();
+        let pool = PinnedPool::<u8>::new();
 
         pool.reserve(100);
         assert!(pool.capacity() >= 100);
@@ -415,7 +415,7 @@ mod tests {
 
     #[test]
     fn shrink_to_fit_removes_unused_capacity() {
-        let mut pool = PinnedPool::<u8>::new();
+        let pool = PinnedPool::<u8>::new();
 
         // Reserve more than we need
         pool.reserve(100);
@@ -435,7 +435,7 @@ mod tests {
 
     #[test]
     fn shrink_to_fit_with_zero_items_shrinks_to_zero_capacity() {
-        let mut pool = PinnedPool::<u8>::new();
+        let pool = PinnedPool::<u8>::new();
 
         // Add some items to create capacity
         let handle1 = pool.insert(1_u8);
@@ -462,7 +462,7 @@ mod tests {
 
     #[test]
     fn handle_provides_access_to_object() {
-        let mut pool = PinnedPool::<u64>::new();
+        let pool = PinnedPool::<u64>::new();
 
         let handle = pool.insert(12345_u64);
 
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn multiple_handles_to_same_type() {
-        let mut pool = PinnedPool::<String>::new();
+        let pool = PinnedPool::<String>::new();
 
         let handle1 = pool.insert("hello".to_string());
         let handle2 = pool.insert("world".to_string());
@@ -492,7 +492,7 @@ mod tests {
 
     #[test]
     fn handle_drop_removes_objects_both_exclusive_and_shared() {
-        let mut pool = PinnedPool::<String>::new();
+        let pool = PinnedPool::<String>::new();
 
         // Test exclusive handle drop
         let exclusive_handle = pool.insert("exclusive".to_string());
@@ -516,7 +516,7 @@ mod tests {
 
     #[test]
     fn insert_with_closure() {
-        let mut pool = PinnedPool::<u64>::new();
+        let pool = PinnedPool::<u64>::new();
 
         // SAFETY: we correctly initialize the value
         let handle = unsafe {
@@ -531,8 +531,8 @@ mod tests {
 
     #[test]
     fn clone_behavior() {
-        let mut p1 = PinnedPool::<u32>::new();
-        let mut p2 = p1.clone();
+        let p1 = PinnedPool::<u32>::new();
+        let p2 = p1.clone();
 
         let _h1 = p1.insert(100);
         assert_eq!(p2.len(), 1);
@@ -564,7 +564,7 @@ mod tests {
     #[test]
     fn lifecycle_handles_keep_pool_alive() {
         let handle = {
-            let mut pool = PinnedPool::<String>::new();
+            let pool = PinnedPool::<String>::new();
             pool.insert("persist".to_string())
         }; // pool dropped here
 
@@ -576,7 +576,7 @@ mod tests {
 
     #[test]
     fn lifecycle_pool_clone_keeps_inner_alive() {
-        let mut pool = PinnedPool::<String>::new();
+        let pool = PinnedPool::<String>::new();
 
         // Insert & clone
         let handle = pool.insert("data".to_string());
@@ -596,7 +596,7 @@ mod tests {
 
     #[test]
     fn pooled_mut_mutation_reflected() {
-        let mut pool = PinnedPool::<String>::new();
+        let pool = PinnedPool::<String>::new();
 
         let mut handle = pool.insert("hello".to_string());
         handle.push_str(" world");
@@ -618,8 +618,8 @@ mod tests {
 
     #[test]
     fn reserve_and_shrink_to_fit_shared() {
-        let mut p1 = PinnedPool::<u8>::new();
-        let mut p2 = p1.clone();
+        let p1 = PinnedPool::<u8>::new();
+        let p2 = p1.clone();
 
         // Reserve capacity via one handle
         p1.reserve(50);
@@ -646,7 +646,7 @@ mod tests {
 
     #[test]
     fn with_iter_collect_values() {
-        let mut pool = PinnedPool::<u32>::new();
+        let pool = PinnedPool::<u32>::new();
 
         let _handles: Vec<_> = [10, 20, 30].into_iter().map(|v| pool.insert(v)).collect();
 
@@ -664,7 +664,7 @@ mod tests {
 
     #[test]
     fn with_iter_double_ended() {
-        let mut pool = PinnedPool::<i32>::new();
+        let pool = PinnedPool::<i32>::new();
         let _handles: Vec<_> = [1, 2, 3].into_iter().map(|v| pool.insert(v)).collect();
 
         pool.with_iter(|mut iter| {
@@ -694,7 +694,7 @@ mod tests {
 
     #[test]
     fn iter_size_hint_and_exact_size() {
-        let mut pool = PinnedPool::<u32>::new();
+        let pool = PinnedPool::<u32>::new();
 
         // Empty pool
         pool.with_iter(|iter| {
@@ -734,7 +734,7 @@ mod tests {
         use std::sync::Arc;
         use std::thread;
 
-        let mut pool = PinnedPool::<String>::new();
+        let pool = PinnedPool::<String>::new();
 
         // Insert some initial data
         let handle1 = pool.insert("Thread test 1".to_string());

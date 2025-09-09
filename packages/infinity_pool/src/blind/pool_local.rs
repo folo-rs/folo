@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn single_type_operations() {
-        let mut pool = LocalBlindPool::new();
+        let pool = LocalBlindPool::new();
 
         // Insert some strings
         let handle1 = pool.insert("Hello".to_string());
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn multiple_types_different_layouts() {
-        let mut pool = LocalBlindPool::new();
+        let pool = LocalBlindPool::new();
 
         // Insert different types with different layouts
         let string_handle = pool.insert("Test string".to_string());
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn same_layout_different_types() {
-        let mut pool = LocalBlindPool::new();
+        let pool = LocalBlindPool::new();
 
         // u32 and i32 have the same layout
         let u32_handle = pool.insert(42_u32);
@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn reserve_creates_capacity() {
-        let mut pool = LocalBlindPool::new();
+        let pool = LocalBlindPool::new();
 
         // Reserve capacity for strings
         pool.reserve_for::<String>(10);
@@ -364,7 +364,7 @@ mod tests {
 
     #[test]
     fn shrink_to_fit_removes_unused_capacity() {
-        let mut pool = LocalBlindPool::new();
+        let pool = LocalBlindPool::new();
 
         // Reserve more than we need
         pool.reserve_for::<String>(100);
@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn shrink_to_fit_with_zero_items_shrinks_to_zero_capacity() {
-        let mut pool = LocalBlindPool::new();
+        let pool = LocalBlindPool::new();
 
         // Add some items to create capacity
         let handle1 = pool.insert("Item1".to_string());
@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn insert_with_functionality() {
-        let mut pool = LocalBlindPool::new();
+        let pool = LocalBlindPool::new();
 
         // Test insert_with for partial initialization
         // SAFETY: We correctly initialize the String value in the closure
@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn pool_cloning_and_sharing() {
-        let mut pool = LocalBlindPool::new();
+        let pool = LocalBlindPool::new();
 
         // Insert an item
         let handle = pool.insert("Shared data".to_string());
@@ -448,7 +448,7 @@ mod tests {
 
     #[test]
     fn large_variety_of_types() {
-        let mut pool = LocalBlindPool::new();
+        let pool = LocalBlindPool::new();
 
         // Insert many different types (avoiding floating point for comparison issues)
         let string_handle = pool.insert("String".to_string());
@@ -485,7 +485,7 @@ mod tests {
 
     #[test]
     fn handle_mutation() {
-        let mut pool = LocalBlindPool::new();
+        let pool = LocalBlindPool::new();
 
         // Insert a mutable type
         let mut string_handle = pool.insert("Initial".to_string());
@@ -503,7 +503,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn zero_sized_types() {
-        let mut pool = LocalBlindPool::new();
+        let pool = LocalBlindPool::new();
 
         // Insert unit types (zero-sized) - this should panic
         let _unit_handle = pool.insert(());
@@ -520,7 +520,7 @@ mod tests {
         use std::cell::RefCell;
         use std::rc::Rc;
 
-        let mut pool = LocalBlindPool::new();
+        let pool = LocalBlindPool::new();
 
         // Rc is not Send, but LocalBlindPool should handle it since it's single-threaded
         let rc_handle = pool.insert(Rc::new("Non-Send data".to_string()));
@@ -546,7 +546,7 @@ mod tests {
 
     #[test]
     fn borrow_checker_test() {
-        let mut pool = LocalBlindPool::new();
+        let pool = LocalBlindPool::new();
 
         // Test that we can work with multiple borrows correctly
         let handle1 = pool.insert("First".to_string());
@@ -566,7 +566,7 @@ mod tests {
 
     #[test]
     fn mixed_lifetime_test() {
-        let mut pool = LocalBlindPool::new();
+        let pool = LocalBlindPool::new();
 
         let long_lived_handle = pool.insert("Long lived".to_string());
 
@@ -590,7 +590,7 @@ mod tests {
         // Track drop count with a shared counter
         let drop_count = Rc::new(RefCell::new(0));
 
-        let mut pool = LocalBlindPool::new();
+        let pool = LocalBlindPool::new();
 
         // Create an object that tracks when it's dropped
         let tracker = LocalDropTracker {
