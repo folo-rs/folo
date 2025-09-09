@@ -160,6 +160,17 @@ impl<T: ?Sized> fmt::Debug for RawBlindPooledMut<T> {
 // transfer between threads as long as T itself can be moved (T: Send).
 unsafe impl<T: ?Sized + Send> Send for RawBlindPooledMut<T> {}
 
+// Helper function to detect type erasure using type_name
+#[inline]
+fn check_for_type_erasure<T: ?Sized>() {
+    // Use type_name to detect if T is the unit type
+    use std::any::type_name;
+    assert!(
+        !(type_name::<T>() == "()"),
+        "Cannot create shared handle from type-erased handle. Type-erase after creating shared handle instead."
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -206,17 +217,5 @@ mod tests {
         .unwrap();
 
         assert_eq!(result, 77);
-    }
-}
-
-// Helper function to detect type erasure using type_name
-#[inline]
-fn check_for_type_erasure<T: ?Sized>() {
-    // Use type_name to detect if T is the unit type
-    use std::any::type_name;
-    if type_name::<T>() == "()" {
-        panic!(
-            "Cannot create shared handle from type-erased handle. Type-erase after creating shared handle instead."
-        );
     }
 }
