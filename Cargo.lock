@@ -441,7 +441,7 @@ dependencies = [
 
 [[package]]
 name = "events"
-version = "0.3.14"
+version = "0.3.15"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -799,7 +799,7 @@ dependencies = [
 
 [[package]]
 name = "infinity_pool"
-version = "0.5.3"
+version = "0.6.0"
 dependencies = [
  "alloc_tracker",
  "bitvec",
