@@ -44,16 +44,6 @@ impl<T: ?Sized> BlindPooled<T> {
         self.inner.ptr()
     }
 
-    #[doc = include_str!("../../doc/snippets/handle_erase.md")]
-    #[must_use]
-    #[inline]
-    pub fn erase(self) -> BlindPooled<()> {
-        BlindPooled {
-            inner: self.inner.erase(),
-            remover: self.remover,
-        }
-    }
-
     #[doc = include_str!("../../doc/snippets/ref_counted_as_pin.md")]
     #[must_use]
     #[inline]

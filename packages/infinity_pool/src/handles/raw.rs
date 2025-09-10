@@ -56,10 +56,10 @@ impl<T: ?Sized> RawPooled<T> {
         self.slab_handle.ptr()
     }
 
-    #[doc = include_str!("../../doc/snippets/handle_erase.md")]
+    /// Erase the type information from this handle for internal use by remover logic.
     #[must_use]
     #[inline]
-    pub fn erase(self) -> RawPooled<()> {
+    pub(crate) fn erase(self) -> RawPooled<()> {
         RawPooled {
             slab_index: self.slab_index,
             slab_handle: self.slab_handle.erase(),

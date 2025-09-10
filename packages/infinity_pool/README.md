@@ -8,7 +8,7 @@ Object pools with trait object support and multiple access models. Provides fast
 * **OpaquePool** - for objects with unnameable types (e.g. `impl Future`)  
 * **BlindPool** - accepts multiple different types in the same pool
 
-All pools support trait object casting for type-erased access.
+All pools support trait object casting.
 
 ## Access models
 

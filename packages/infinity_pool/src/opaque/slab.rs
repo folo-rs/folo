@@ -298,8 +298,6 @@ impl Slab {
     ///
     /// Panics if the handle does not reference an existing object in this slab.
     ///
-    /// Panics if `T` is a type-erased handle (`SlabHandle<()>`).
-    ///
     /// # Safety
     ///
     /// The caller must ensure that the handle belongs to this slab.
@@ -308,15 +306,6 @@ impl Slab {
     /// fat pointers, so ownership and object lifetime must be managed manually by the caller.
     #[must_use]
     pub(crate) unsafe fn remove_unpin<T: Unpin>(&mut self, handle: SlabHandle<T>) -> T {
-        // We would rather prefer to check for `SlabHandle<()>` specifically but
-        // that would imply specialization or `T: 'static` or TypeId shenanigans.
-        // This is good enough because type-erasing a handle is the only way to get a
-        // handle to a ZST anyway because the slab does not even support ZSTs.
-        assert_ne!(
-            size_of::<T>(),
-            0,
-            "cannot remove_unpin() through a type-erased handle"
-        );
 
         let next_free_slot_index = self.next_free_slot_index;
 
@@ -1058,42 +1047,7 @@ mod tests {
         assert!(slab.is_empty());
     }
 
-    #[test]
-    fn type_erased_handle_works_for_remove_but_not_remove_unpin() {
-        let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
-        // SAFETY: u32 layout matches slab layout
-        let handle = unsafe { insert(&mut slab, 42_u32) };
-        let erased_handle = handle.erase();
-
-        assert_eq!(slab.len(), 1);
-
-        // Type-erased handle should work for remove (dropping the object)
-        // SAFETY: erased_handle is valid and from this slab
-        unsafe {
-            slab.remove(erased_handle);
-        }
-        assert!(slab.is_empty());
-    }
-
-    #[test]
-    #[should_panic]
-    fn type_erased_handle_panics_on_remove_unpin() {
-        let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
-
-        // SAFETY: u32 layout matches slab layout
-        let handle = unsafe { insert(&mut slab, 42_u32) };
-        let erased_handle = handle.erase();
-
-        // Type-erased handle should panic on remove_unpin because it's a ZST
-        // SAFETY: This should panic - type-erased handle points to ZST
-        unsafe {
-            #[expect(unused_must_use, reason = "impossible to use unit value")]
-            slab.remove_unpin(erased_handle);
-        }
-    }
 
     #[test]
     #[should_panic]

@@ -43,16 +43,6 @@ impl<T: ?Sized> RawBlindPooledMut<T> {
         self.inner.ptr()
     }
 
-    #[doc = include_str!("../../doc/snippets/handle_erase.md")]
-    #[must_use]
-    #[inline]
-    pub fn erase(self) -> RawBlindPooledMut<()> {
-        RawBlindPooledMut {
-            key: self.key,
-            inner: self.inner.erase(),
-        }
-    }
-
     /// Transforms the unique handle into a shared handle that can be cloned and copied freely.
     ///
     /// A shared handle does not support the creation of exclusive references to the target object

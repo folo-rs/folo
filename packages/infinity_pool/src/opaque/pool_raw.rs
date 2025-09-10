@@ -438,15 +438,6 @@ impl RawOpaquePool {
     #[doc = include_str!("../../doc/snippets/raw_pool_remove_unpin.md")]
     #[must_use]
     pub unsafe fn remove_unpin<T: Unpin>(&mut self, handle: RawPooled<T>) -> T {
-        // We would rather prefer to check for `RawPooled<()>` specifically but
-        // that would imply specialization or `T: 'static` or TypeId shenanigans.
-        // This is good enough because type-erasing a handle is the only way to get a
-        // handle to a ZST anyway because the slab does not even support ZSTs.
-        assert_ne!(
-            size_of::<T>(),
-            0,
-            "cannot remove_unpin() through a type-erased handle"
-        );
 
         let slab = self
             .slabs
@@ -887,23 +878,7 @@ mod tests {
         assert_eq!(pool.len(), 0);
     }
 
-    #[test]
-    #[should_panic]
-    fn remove_unpin_panics_on_zero_sized_type() {
-        // We need to use a type that is not zero-sized for the pool itself,
-        // but we create a handle that gets type-erased to a ZST.
-        let mut pool = RawOpaquePool::with_layout_of::<u8>();
 
-        let handle = pool.insert(123_u8);
-
-        let erased_handle: RawPooled<()> = handle.into_shared().erase();
-
-        // This should panic because size_of::<()>() == 0
-        unsafe {
-            #[expect(unused_must_use, reason = "impossible to use a unit value")]
-            pool.remove_unpin(erased_handle);
-        }
-    }
 
     #[test]
     #[should_panic]

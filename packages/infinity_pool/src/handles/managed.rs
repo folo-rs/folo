@@ -43,15 +43,7 @@ impl<T: ?Sized> Pooled<T> {
         self.inner.ptr()
     }
 
-    #[doc = include_str!("../../doc/snippets/handle_erase.md")]
-    #[must_use]
-    #[inline]
-    pub fn erase(self) -> Pooled<()> {
-        Pooled {
-            inner: self.inner.erase(),
-            remover: self.remover,
-        }
-    }
+
 
     #[doc = include_str!("../../doc/snippets/ref_counted_as_pin.md")]
     #[must_use]
@@ -142,10 +134,18 @@ impl<T: ?Sized> From<PooledMut<T>> for Pooled<T> {
 }
 
 /// When dropped, removes an object from a pool.
-#[derive(Debug)]
 struct Remover {
     handle: RawPooled<()>,
     pool: Arc<Mutex<RawOpaquePoolSend>>,
+}
+
+impl fmt::Debug for Remover {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Remover")
+            .field("handle", &self.handle)
+            .field("pool", &"<pool>")
+            .finish()
+    }
 }
 
 impl Drop for Remover {

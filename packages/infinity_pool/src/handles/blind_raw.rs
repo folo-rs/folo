@@ -43,15 +43,7 @@ impl<T: ?Sized> RawBlindPooled<T> {
         self.inner.ptr()
     }
 
-    #[doc = include_str!("../../doc/snippets/handle_erase.md")]
-    #[must_use]
-    #[inline]
-    pub fn erase(self) -> RawBlindPooled<()> {
-        RawBlindPooled {
-            key: self.key,
-            inner: self.inner.erase(),
-        }
-    }
+
 
     #[doc = include_str!("../../doc/snippets/raw_as_pin.md")]
     #[must_use]

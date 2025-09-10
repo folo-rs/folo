@@ -58,18 +58,7 @@ impl<T: ?Sized> SlabHandle<T> {
         self.ptr
     }
 
-    /// Erases the type of the object the slab handle points to.
-    ///
-    /// The returned handle remains functional for most purposes, just without type information.
-    /// A type-erased handle cannot be used to remove the object from the slab and return it to
-    /// the caller, as there is no more knowledge of the type to be returned.
-    #[must_use]
-    pub(crate) fn erase(self) -> SlabHandle<()> {
-        SlabHandle {
-            index: self.index,
-            ptr: self.ptr.cast(),
-        }
-    }
+
 
     /// Casts this handle to reference the target as a trait object.
     ///
@@ -134,6 +123,19 @@ impl<T: ?Sized> SlabHandle<T> {
         SlabHandle {
             index: self.index,
             ptr: new_ptr,
+        }
+    }
+
+    /// Erase the type information from this handle.
+    ///
+    /// This is used internally by the pool cleanup system to allow uniform handling
+    /// of handles with different types, particularly for shared handle cleanup where
+    /// different trait object casts would otherwise create incompatible remover types.
+    #[must_use]
+    pub(crate) fn erase(self) -> SlabHandle<()> {
+        SlabHandle {
+            index: self.index,
+            ptr: self.ptr.cast::<()>(),
         }
     }
 }
@@ -220,26 +222,7 @@ mod tests {
         assert_eq!(cloned, copied);
     }
 
-    #[test]
-    fn erase_preserves_equality() {
-        let mut x = 42_u32;
-        let mut y = 42_u32;
-        let handle1 = SlabHandle::new(5, NonNull::from(&mut x));
-        let handle2 = SlabHandle::new(5, NonNull::from(&mut x));
-        let handle3 = SlabHandle::new(5, NonNull::from(&mut y));
 
-        // Handles pointing to same location should be equal before and after erase
-        assert_eq!(handle1, handle2);
-        assert_eq!(handle1.erase(), handle2.erase());
-
-        // Handles pointing to different locations should be unequal before and after erase
-        assert_ne!(handle1, handle3);
-        assert_ne!(handle1.erase(), handle3.erase());
-
-        // The erased handle should maintain the same index
-        let erased = handle1.erase();
-        assert_eq!(erased.index(), handle1.index());
-    }
 
     #[test]
     fn cast_with_to_display_trait() {

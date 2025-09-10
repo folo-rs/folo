@@ -233,15 +233,6 @@ impl RawBlindPool {
     #[must_use]
     #[inline]
     pub fn remove_mut_unpin<T: Unpin>(&mut self, handle: RawBlindPooledMut<T>) -> T {
-        // We would rather prefer to check for `RawBlindPooledMut<()>` specifically but
-        // that would imply specialization or `T: 'static` or TypeId shenanigans.
-        // This is good enough because type-erasing a handle is the only way to get a
-        // handle to a ZST anyway because the slab does not even support ZSTs.
-        assert_ne!(
-            size_of::<T>(),
-            0,
-            "cannot remove_mut_unpin() from a blind pool through a type-erased handle"
-        );
 
         let key = handle.layout_key();
 
@@ -256,15 +247,6 @@ impl RawBlindPool {
     #[must_use]
     #[inline]
     pub unsafe fn remove_unpin<T: Unpin>(&mut self, handle: RawBlindPooled<T>) -> T {
-        // We would rather prefer to check for `RawPooled<()>` specifically but
-        // that would imply specialization or `T: 'static` or TypeId shenanigans.
-        // This is good enough because type-erasing a handle is the only way to get a
-        // handle to a ZST anyway because the slab does not even support ZSTs.
-        assert_ne!(
-            size_of::<T>(),
-            0,
-            "cannot remove_unpin() from a blind pool through a type-erased handle"
-        );
 
         let key = handle.layout_key();
 

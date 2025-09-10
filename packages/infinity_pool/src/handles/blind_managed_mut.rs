@@ -33,18 +33,7 @@ impl<T: ?Sized> BlindPooledMut<T> {
         self.inner.ptr()
     }
 
-    #[doc = include_str!("../../doc/snippets/handle_erase.md")]
-    #[must_use]
-    #[inline]
-    pub fn erase(self) -> BlindPooledMut<()> {
-        let (inner, key, core) = self.into_parts();
-
-        BlindPooledMut {
-            inner: inner.erase(),
-            key,
-            core,
-        }
-    }
+    
 
     #[doc = include_str!("../../doc/snippets/handle_into_shared.md")]
     #[must_use]

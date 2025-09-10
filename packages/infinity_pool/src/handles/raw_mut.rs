@@ -40,15 +40,7 @@ impl<T: ?Sized> RawPooledMut<T> {
         self.slab_handle.ptr()
     }
 
-    #[doc = include_str!("../../doc/snippets/handle_erase.md")]
-    #[must_use]
-    #[inline]
-    pub fn erase(self) -> RawPooledMut<()> {
-        RawPooledMut {
-            slab_index: self.slab_index,
-            slab_handle: self.slab_handle.erase(),
-        }
-    }
+    
 
     #[doc = include_str!("../../doc/snippets/handle_into_shared.md")]
     #[must_use]

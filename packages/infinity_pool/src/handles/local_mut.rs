@@ -33,17 +33,7 @@ impl<T: ?Sized> LocalPooledMut<T> {
         self.inner.ptr()
     }
 
-    #[doc = include_str!("../../doc/snippets/handle_erase.md")]
-    #[must_use]
-    #[inline]
-    pub fn erase(self) -> LocalPooledMut<()> {
-        let (inner, pool) = self.into_parts();
 
-        LocalPooledMut {
-            inner: inner.erase(),
-            pool,
-        }
-    }
 
     #[doc = include_str!("../../doc/snippets/handle_into_shared.md")]
     #[must_use]
