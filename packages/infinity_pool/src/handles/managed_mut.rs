@@ -209,6 +209,7 @@ impl<T: ?Sized> Drop for PooledMut<T> {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::thread;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
@@ -218,9 +219,62 @@ mod tests {
     assert_impl_all!(PooledMut<u32>: Send);
     assert_not_impl_any!(PooledMut<u32>: Sync);
 
-    // Cell is Send but not Sync, so PooledMut<Cell> should be neither Send nor Sync.
-    assert_not_impl_any!(PooledMut<Cell<u32>>: Send, Sync);
+    // Cell is Send but not Sync, so PooledMut<Cell> should now be Send (but not Sync)
+    // because unique handles only need T: Send.
+    assert_impl_all!(PooledMut<Cell<u32>>: Send);
+    assert_not_impl_any!(PooledMut<Cell<u32>>: Sync);
+
+    // Non-Send types should make the handle non-Send.
+    assert_not_impl_any!(PooledMut<std::rc::Rc<i32>>: Send);
 
     // We expect no destructor because we treat it as `Copy` in our own Drop::drop().
     assert_not_impl_any!(RawPooledMut<()>: Drop);
+
+    #[test]
+    fn unique_handle_can_cross_threads_with_send_only() {
+        use crate::OpaquePool;
+
+        // A type that is Send but not Sync.
+        struct Counter {
+            value: Cell<i32>,
+        }
+
+        // SAFETY: Counter is designed to be Send but not Sync for testing.
+        unsafe impl Send for Counter {}
+
+        impl Counter {
+            fn new(value: i32) -> Self {
+                Self {
+                    value: Cell::new(value),
+                }
+            }
+
+            fn increment(&self) {
+                self.value.set(self.value.get() + 1);
+            }
+
+            fn get(&self) -> i32 {
+                self.value.get()
+            }
+        }
+
+        let pool = OpaquePool::with_layout_of::<Counter>();
+        let handle = pool.insert(Counter::new(0));
+
+        // Increment in main thread.
+        handle.increment();
+        assert_eq!(handle.get(), 1);
+
+        // Move handle to another thread (requires Send but not Sync).
+        let handle_in_thread = thread::spawn(move || {
+            handle.increment();
+            assert_eq!(handle.get(), 2);
+            handle
+        })
+        .join()
+        .unwrap();
+
+        // Back in main thread.
+        assert_eq!(handle_in_thread.get(), 2);
+    }
 }

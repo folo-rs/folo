@@ -1794,6 +1794,7 @@ name = "ui_tests"
 version = "0.0.0-never"
 dependencies = [
  "blind_pool",
+ "infinity_pool",
  "trybuild",
 ]
 

@@ -1,0 +1,31 @@
+error[E0277]: `Cell<i32>` cannot be shared between threads safely
+  --> tests/ui/infinity_pool/blind_shared_handle_requires_sync.rs:23:18
+   |
+23 |     require_send(shared_handle);
+   |     ------------ ^^^^^^^^^^^^^ `Cell<i32>` cannot be shared between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `SendNotSync`, the trait `Sync` is not implemented for `Cell<i32>`
+   = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` or `std::sync::atomic::AtomicI32` instead
+note: required because it appears within the type `SendNotSync`
+  --> tests/ui/infinity_pool/blind_shared_handle_requires_sync.rs:7:8
+   |
+7  | struct SendNotSync {
+   |        ^^^^^^^^^^^
+   = note: required for `infinity_pool::opaque::slab_handle::SlabHandle<SendNotSync>` to implement `Send`
+note: required because it appears within the type `RawPooled<SendNotSync>`
+  --> $WORKSPACE/packages/infinity_pool/src/handles/raw.rs
+   |
+   | pub struct RawPooled<T>
+   |            ^^^^^^^^^
+note: required because it appears within the type `BlindPooled<SendNotSync>`
+  --> $WORKSPACE/packages/infinity_pool/src/handles/blind_managed.rs
+   |
+   | pub struct BlindPooled<T: ?Sized> {
+   |            ^^^^^^^^^^^
+note: required by a bound in `require_send`
+  --> tests/ui/infinity_pool/blind_shared_handle_requires_sync.rs:13:20
+   |
+13 | fn require_send<T: Send>(_: T) {}
+   |                    ^^^^ required by this bound in `require_send`

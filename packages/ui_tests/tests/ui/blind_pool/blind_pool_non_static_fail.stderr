@@ -1,5 +1,5 @@
 error[E0597]: `value` does not live long enough
-  --> tests/ui/blind_pool/compile_fail/local_blind_pool_non_static_fail.rs:7:21
+  --> tests/ui/blind_pool/blind_pool_non_static_fail.rs:7:21
    |
 6  |     let value = 42;
    |         ----- binding `value` declared here

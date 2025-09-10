@@ -133,9 +133,15 @@ impl<T: ?Sized> fmt::Debug for RawPooledMut<T> {
     }
 }
 
+// SAFETY: RawPooledMut provides unique access to T. When the handle moves between
+// threads, T moves with it atomically. No concurrent access is possible through
+// a unique handle, so we only require T: Send, not T: Sync.
+unsafe impl<T: ?Sized + Send> Send for RawPooledMut<T> {}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::thread;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
@@ -145,9 +151,67 @@ mod tests {
     assert_impl_all!(RawPooledMut<u32>: Send);
     assert_not_impl_any!(RawPooledMut<u32>: Sync);
 
-    // Cell is Send but not Sync, so RawPooledMut<Cell> should be neither Send nor Sync.
-    assert_not_impl_any!(RawPooledMut<Cell<u32>>: Send, Sync);
+    // Cell is Send but not Sync, so RawPooledMut<Cell> should now be Send (but not Sync)
+    // because unique handles only need T: Send.
+    assert_impl_all!(RawPooledMut<Cell<u32>>: Send);
+    assert_not_impl_any!(RawPooledMut<Cell<u32>>: Sync);
+
+    // Non-Send types should make the handle non-Send.
+    assert_not_impl_any!(RawPooledMut<std::rc::Rc<i32>>: Send);
 
     // This is a unique handle, it cannot be copyable.
     assert_not_impl_any!(RawPooledMut<u32>: Copy);
+
+    #[test]
+    fn unique_handle_can_cross_threads_with_send_only() {
+        use crate::RawPinnedPool;
+
+        // A type that is Send but not Sync.
+        struct Counter {
+            value: Cell<i32>,
+        }
+
+        // SAFETY: Counter is designed to be Send but not Sync for testing.
+        unsafe impl Send for Counter {}
+
+        impl Counter {
+            fn new(value: i32) -> Self {
+                Self {
+                    value: Cell::new(value),
+                }
+            }
+
+            fn increment(&self) {
+                self.value.set(self.value.get() + 1);
+            }
+
+            fn get(&self) -> i32 {
+                self.value.get()
+            }
+        }
+
+        let mut pool = RawPinnedPool::<Counter>::new();
+        let handle = pool.insert(Counter::new(0));
+
+        // Increment in main thread.
+        // SAFETY: Handle is valid and pool is still alive.
+        unsafe { handle.ptr().as_ref() }.increment();
+        // SAFETY: Handle is valid and pool is still alive.
+        assert_eq!(unsafe { handle.ptr().as_ref() }.get(), 1);
+
+        // Move handle to another thread (requires Send but not Sync).
+        let handle_in_thread = thread::spawn(move || {
+            // SAFETY: Handle is valid and pool is still alive.
+            unsafe { handle.ptr().as_ref() }.increment();
+            // SAFETY: Handle is valid and pool is still alive.
+            assert_eq!(unsafe { handle.ptr().as_ref() }.get(), 2);
+            handle
+        })
+        .join()
+        .unwrap();
+
+        // Back in main thread.
+        // SAFETY: Handle is valid and pool is still alive.
+        assert_eq!(unsafe { handle_in_thread.ptr().as_ref() }.get(), 2);
+    }
 }
