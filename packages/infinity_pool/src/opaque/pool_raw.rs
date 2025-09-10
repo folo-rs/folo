@@ -438,7 +438,6 @@ impl RawOpaquePool {
     #[doc = include_str!("../../doc/snippets/raw_pool_remove_unpin.md")]
     #[must_use]
     pub unsafe fn remove_unpin<T: Unpin>(&mut self, handle: RawPooled<T>) -> T {
-
         let slab = self
             .slabs
             .get_mut(handle.slab_index())
@@ -877,8 +876,6 @@ mod tests {
         assert_eq!(value, 42);
         assert_eq!(pool.len(), 0);
     }
-
-
 
     #[test]
     #[should_panic]

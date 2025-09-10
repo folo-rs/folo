@@ -58,8 +58,6 @@ impl<T: ?Sized> SlabHandle<T> {
         self.ptr
     }
 
-
-
     /// Casts this handle to reference the target as a trait object.
     ///
     /// # Safety
@@ -221,8 +219,6 @@ mod tests {
         assert_eq!(handle, copied);
         assert_eq!(cloned, copied);
     }
-
-
 
     #[test]
     fn cast_with_to_display_trait() {

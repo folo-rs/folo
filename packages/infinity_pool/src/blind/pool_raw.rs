@@ -233,7 +233,6 @@ impl RawBlindPool {
     #[must_use]
     #[inline]
     pub fn remove_mut_unpin<T: Unpin>(&mut self, handle: RawBlindPooledMut<T>) -> T {
-
         let key = handle.layout_key();
 
         let pool = self
@@ -247,7 +246,6 @@ impl RawBlindPool {
     #[must_use]
     #[inline]
     pub unsafe fn remove_unpin<T: Unpin>(&mut self, handle: RawBlindPooled<T>) -> T {
-
         let key = handle.layout_key();
 
         let pool = self

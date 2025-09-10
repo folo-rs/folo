@@ -306,7 +306,6 @@ impl Slab {
     /// fat pointers, so ownership and object lifetime must be managed manually by the caller.
     #[must_use]
     pub(crate) unsafe fn remove_unpin<T: Unpin>(&mut self, handle: SlabHandle<T>) -> T {
-
         let next_free_slot_index = self.next_free_slot_index;
 
         // SAFETY: delay-guarded by slot_meta_mut() bounds checking below.
@@ -1046,8 +1045,6 @@ mod tests {
 
         assert!(slab.is_empty());
     }
-
-
 
     #[test]
     #[should_panic]

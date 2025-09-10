@@ -33,8 +33,6 @@ impl<T: ?Sized> BlindPooledMut<T> {
         self.inner.ptr()
     }
 
-    
-
     #[doc = include_str!("../../doc/snippets/handle_into_shared.md")]
     #[must_use]
     #[inline]

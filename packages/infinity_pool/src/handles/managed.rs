@@ -43,8 +43,6 @@ impl<T: ?Sized> Pooled<T> {
         self.inner.ptr()
     }
 
-
-
     #[doc = include_str!("../../doc/snippets/ref_counted_as_pin.md")]
     #[must_use]
     #[inline]

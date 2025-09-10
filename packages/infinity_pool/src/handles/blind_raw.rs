@@ -43,8 +43,6 @@ impl<T: ?Sized> RawBlindPooled<T> {
         self.inner.ptr()
     }
 
-
-
     #[doc = include_str!("../../doc/snippets/raw_as_pin.md")]
     #[must_use]
     #[inline]
