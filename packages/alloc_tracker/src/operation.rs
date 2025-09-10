@@ -259,7 +259,7 @@ mod tests {
         let operation = create_test_operation();
 
         {
-            let _span = operation.measure_process();
+            let _span = operation.measure_thread();
             // Simulate allocation
             register_fake_allocation(75, 1);
         }
@@ -274,12 +274,12 @@ mod tests {
         let operation = create_test_operation();
 
         {
-            let _span = operation.measure_process();
+            let _span = operation.measure_thread();
             register_fake_allocation(100, 1);
         }
 
         {
-            let _span = operation.measure_process();
+            let _span = operation.measure_thread();
             register_fake_allocation(200, 1);
         }
 
@@ -312,7 +312,7 @@ mod tests {
         }
 
         {
-            let _span = operation.measure_process();
+            let _span = operation.measure_thread();
             register_fake_allocation(200, 1);
         }
 
@@ -340,7 +340,7 @@ mod tests {
         let operation = create_test_operation();
 
         {
-            let _span = operation.measure_process().iterations(10);
+            let _span = operation.measure_thread().iterations(10);
             // Simulate a 1000 byte allocation that should be divided by 10 iterations
             register_fake_allocation(1000, 10);
         }
