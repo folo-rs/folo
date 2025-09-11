@@ -40,11 +40,3 @@ The contents of a `README.md` file for binary-only packages (containing a `main.
 1. A thorough description of how to use the binary - instead of putting thorough documentation
   in `main.rs`, put it in `README.md`.
 2. Examples on how to use the binary in key scenarios.
-3. The standard footer.
-
-The standard footer for binary packages is:
-
-```
-This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
-high-performance hardware-aware programming in Rust.
-```

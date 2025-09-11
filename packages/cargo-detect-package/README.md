@@ -133,8 +133,3 @@ Common scenarios that trigger outside-package behavior:
 - Files outside the workspace  
 - Files in the workspace root that don't belong to any specific package
 - Invalid or missing package configuration
-
-More details in the [package documentation](https://docs.rs/cargo-detect-package/).
-
-This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
-high-performance hardware-aware programming in Rust.
