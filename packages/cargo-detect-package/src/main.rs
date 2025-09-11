@@ -58,6 +58,30 @@
 //! # Prints: Detected package: events
 //! # Executes: cargo clippy -- -D warnings -p events
 //! ```
+//! 
+//! Visual Studio Code task:
+//! 
+//! ```json
+//! {
+//!     "label": "rust: build (current package)"
+//!     "type": "cargo",
+//!     "command": "detect-package",
+//!     "args": [
+//!         "--path",
+//!         "${relativeFileDirname}",
+//!         "build",
+//!         "--all-features",
+//!         "--all-targets"
+//!     ],
+//!     "group": {
+//!         "kind": "build",
+//!         "isDefault": true
+//!     },
+//!     "problemMatcher": [
+//!         "$rustc"
+//!     ],
+//! },
+//! ```
 //!
 //! ## Environment Variable Mode
 //!
@@ -89,26 +113,11 @@
 //! # Exits with code 1, does not execute subcommand
 //! ```
 //!
-//! # Package Detection Logic
-//!
-//! The tool uses the following logic to detect packages:
-//!
-//! 1. **Path Resolution**: Attempts to canonicalize the input path
-//!    - If the path cannot be resolved (file doesn't exist), falls back to workspace scope
-//!
-//! 2. **Workspace Root Discovery**: Walks up the directory tree to find the workspace root
-//!    - Looks for a `Cargo.toml` file containing a `[workspace]` section
-//!    - If no workspace root is found, falls back to workspace scope
-//!
-//! 3. **Package Detection**: Starting from the file's directory, walks up toward the workspace root
-//!    - Looks for the nearest `Cargo.toml` file that is not the workspace root
-//!    - Extracts the package name from the `[package]` section
-//!    - If no package-level `Cargo.toml` is found, uses workspace scope
-//!
 //! # Workspace Validation
 //!
 //! The tool requires that both the current directory and target path are within the same Cargo workspace.
 //! Cross-workspace operations are rejected with an error.
+//! 
 //! # Fallback Behavior
 //!
 //! The tool's behavior when a file is not within any package is configurable via the `--outside-package` flag:

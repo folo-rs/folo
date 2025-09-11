@@ -8,10 +8,17 @@ A `README.md` is only used for packages that are to be published (`publish = tru
 Macro packages (anything with `_macros` in the name) do not need a `README.md`, as they only
 exist to be hidden dependencies.
 
-The contents of a `README.md` file should be:
+The contents of a `README.md` file for library packages should be:
 
 1. A summary of no more than 2 pages.
 2. A very succinct example.
+3. The standard footer.
+
+The contents of a `README.md` file for binary-only packages should be:
+
+1. A thorough description of how to use the binary - instead of putting thorough documentation
+  in `main.rs`, put it in `README.md`.
+2. Examples on how to use the binary in key scenarios.
 3. The standard footer.
 
 For packages that are published as libraries and have code showing how they are used as libraries,
