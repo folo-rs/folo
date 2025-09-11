@@ -97,7 +97,8 @@ A surprising source of memory allocations in high-performance code can be signal
 to thinking of oneshot channels as cheap and efficient things and while this is true, they are
 still built upon shared memory allocated from the heap. Every signaling channel you create is a
 heap allocation and they can add up fast! [`events`][events] provides you with pooled signaling
-channels that take advantage of `infinity_pool` to reuse memory allocations.
+channels that take advantage of `infinity_pool` to reuse memory allocations, as well as providing
+single-threaded and unsafe-code-managed events for lower overhead in specialized scenarios.
 
 ```
 bagels_cooked_weight_grams: 2300; sum 744000; mean 323
