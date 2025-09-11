@@ -49,9 +49,9 @@ benchmarks = { path = "packages/benchmarks" }
 testing = { path = "packages/testing" }
 ui_tests = { path = "packages/ui_tests" }
 
-# The packages we consume. We only enable "std" features here, the rest in individual packages.
+# The packages we consume. We mostly only enable "std" features here, the rest in individual packages.
 arc-swap = { version = "1.7", default-features = false }
-argh = { version = "0.1.13", default-features = false }
+argh = { version = "0.1.13", default-features = false, features = ["help"] }
 axum = { version = "0.8", default-features = false }
 bitvec = { version = "1.0.1", default-features = false, features = [
     "atomic",
