@@ -469,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "fast_time"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "criterion",
  "libc",
@@ -910,7 +910,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "cpulist",
  "criterion",
@@ -935,7 +935,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_benchmarking"
-version = "0.1.29"
+version = "0.1.30"
 dependencies = [
  "cpulist",
  "criterion",
@@ -1035,7 +1035,7 @@ version = "1.0.0"
 
 [[package]]
 name = "nm"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "criterion",
  "foldhash 0.2.0",
@@ -1346,7 +1346,7 @@ checksum = "caf4aa5b0f434c91fe5c7f1ecb6a5ece2130b02ad2a590589dda5146df959001"
 
 [[package]]
 name = "region_cached"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1367,7 +1367,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "arc-swap",
  "axum",

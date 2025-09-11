@@ -34,15 +34,15 @@ infinity_pool = { version = "0.6.0", path = "packages/infinity_pool" }
 linked = { version = "1.0.0", path = "packages/linked" }
 linked_macros = { version = "1.0.0", path = "packages/linked_macros" }
 linked_macros_impl = { version = "1.0.0", path = "packages/linked_macros_impl" }
-many_cpus = { version = "1.0.0", path = "packages/many_cpus" }
-many_cpus_benchmarking = { version = "0.1.29", path = "packages/many_cpus_benchmarking" }
+many_cpus = { version = "1.0.1", path = "packages/many_cpus" }
+many_cpus_benchmarking = { version = "0.1.30", path = "packages/many_cpus_benchmarking" }
 new_zealand = { version = "1.0.0", path = "packages/new_zealand" }
 opaque_pool = { version = "0.3.5", path = "packages/opaque_pool" }
-nm = { version = "0.1.18", path = "packages/nm" }
+nm = { version = "0.1.19", path = "packages/nm" }
 par_bench = { version = "0.2.16", path = "packages/par_bench" }
 pinned_pool = { version = "0.1.22", path = "packages/pinned_pool" }
-region_cached = { version = "1.0.0", path = "packages/region_cached" }
-region_local = { version = "1.0.0", path = "packages/region_local" }
+region_cached = { version = "1.0.1", path = "packages/region_cached" }
+region_local = { version = "1.0.1", path = "packages/region_local" }
 
 # Internal packages we do not publish.
 benchmarks = { path = "packages/benchmarks" }
