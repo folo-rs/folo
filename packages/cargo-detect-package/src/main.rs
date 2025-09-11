@@ -56,14 +56,14 @@
 //! # Run clippy with additional arguments
 //! cargo detect-package --path packages/events/src/lib.rs clippy -- -D warnings
 //! # Prints: Detected package: events
-//! # Executes: cargo clippy -- -D warnings -p events
+//! # Executes: cargo clippy -p events -- -D warnings
 //! ```
 //! 
 //! Visual Studio Code task:
 //! 
 //! ```json
 //! {
-//!     "label": "rust: build (current package)"
+//!     "label": "rust: build (current package)",
 //!     "type": "cargo",
 //!     "command": "detect-package",
 //!     "args": [
