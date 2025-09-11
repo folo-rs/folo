@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use crate::{BlindPoolCore, BlindPooledMut, ERR_POISONED_LOCK, LayoutKey, RawPooled, RawPooledMut};
+use crate::{BlindPoolCore, BlindPooledMut, LayoutKey, RawPooled, RawPooledMut};
 
 // Note that while this is a thread-safe handle, we do not require `T: Send` because
 // we do not want to require every trait we cast into via trait object to be `Send`.
@@ -142,7 +142,7 @@ struct Remover {
 
 impl Drop for Remover {
     fn drop(&mut self) {
-        let mut core = self.core.lock().expect(ERR_POISONED_LOCK);
+        let mut core = self.core.lock();
 
         let pool = core
             .get_mut(&self.key)

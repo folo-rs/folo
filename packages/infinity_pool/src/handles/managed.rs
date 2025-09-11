@@ -3,9 +3,11 @@ use std::fmt;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::NonNull;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use crate::{ERR_POISONED_LOCK, PooledMut, RawOpaquePoolSend, RawPooled, RawPooledMut};
+use parking_lot::Mutex;
+
+use crate::{PooledMut, RawOpaquePoolSend, RawPooled, RawPooledMut};
 
 // Note that while this is a thread-safe handle, we do not require `T: Send` because
 // we do not want to require every trait we cast into via trait object to be `Send`.
@@ -148,7 +150,7 @@ impl fmt::Debug for Remover {
 
 impl Drop for Remover {
     fn drop(&mut self) {
-        let mut pool = self.pool.lock().expect(ERR_POISONED_LOCK);
+        let mut pool = self.pool.lock();
 
         // SAFETY: The remover controls the shared object lifetime and is the only thing
         // that can remove the item from the pool.

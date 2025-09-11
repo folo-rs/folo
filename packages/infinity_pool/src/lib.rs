@@ -133,7 +133,6 @@
 mod blind;
 mod builders;
 mod cast;
-mod constants;
 mod drop_policy;
 mod handles;
 mod opaque;
@@ -141,7 +140,6 @@ mod pinned;
 
 pub use blind::*;
 pub use builders::*;
-pub(crate) use constants::*;
 pub use drop_policy::*;
 pub use handles::*;
 pub use opaque::*;

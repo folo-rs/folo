@@ -3,11 +3,11 @@ use std::iter::FusedIterator;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ptr::NonNull;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use crate::{
-    ERR_POISONED_LOCK, PooledMut, RawOpaquePool, RawOpaquePoolIterator, RawOpaquePoolSend,
-};
+use parking_lot::Mutex;
+
+use crate::{PooledMut, RawOpaquePool, RawOpaquePoolIterator, RawOpaquePoolSend};
 
 /// A thread-safe pool of reference-counted objects of type `T`.
 ///
@@ -90,36 +90,33 @@ where
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        self.inner.lock().expect(ERR_POISONED_LOCK).len()
+        self.inner.lock().len()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_capacity.md")]
     #[must_use]
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.inner.lock().expect(ERR_POISONED_LOCK).capacity()
+        self.inner.lock().capacity()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.inner.lock().expect(ERR_POISONED_LOCK).is_empty()
+        self.inner.lock().is_empty()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
     #[inline]
     pub fn reserve(&self, additional: usize) {
-        self.inner
-            .lock()
-            .expect(ERR_POISONED_LOCK)
-            .reserve(additional);
+        self.inner.lock().reserve(additional);
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     #[inline]
     pub fn shrink_to_fit(&self) {
-        self.inner.lock().expect(ERR_POISONED_LOCK).shrink_to_fit();
+        self.inner.lock().shrink_to_fit();
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert.md")]
@@ -152,7 +149,7 @@ where
     #[inline]
     #[must_use]
     pub fn insert(&self, value: T) -> PooledMut<T> {
-        let inner = self.inner.lock().expect(ERR_POISONED_LOCK).insert(value);
+        let inner = self.inner.lock().insert(value);
 
         PooledMut::new(inner, Arc::clone(&self.inner))
     }
@@ -199,7 +196,7 @@ where
         F: FnOnce(&mut MaybeUninit<T>),
     {
         // SAFETY: Forwarding safety guarantees from caller.
-        let inner = unsafe { self.inner.lock().expect(ERR_POISONED_LOCK).insert_with(f) };
+        let inner = unsafe { self.inner.lock().insert_with(f) };
 
         PooledMut::new(inner, Arc::clone(&self.inner))
     }
@@ -245,7 +242,7 @@ where
     where
         F: FnOnce(PinnedPoolIterator<'_, T>) -> R,
     {
-        let guard = self.inner.lock().expect(ERR_POISONED_LOCK);
+        let guard = self.inner.lock();
         let iter = PinnedPoolIterator::new(&guard);
         f(iter)
     }

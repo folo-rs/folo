@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::{fmt, mem, ptr};
 
-use crate::{BlindPoolCore, BlindPooled, ERR_POISONED_LOCK, LayoutKey, RawPooledMut};
+use crate::{BlindPoolCore, BlindPooled, LayoutKey, RawPooledMut};
 
 // Note that while this is a thread-safe handle, we do not require `T: Send` because
 // we do not want to require every trait we cast into via trait object to be `Send`.
@@ -120,7 +120,7 @@ where
     pub fn into_inner(self) -> T {
         let (inner, key, core) = self.into_parts();
 
-        let mut core = core.lock().expect(ERR_POISONED_LOCK);
+        let mut core = core.lock();
 
         let pool = core
             .get_mut(&key)
@@ -210,7 +210,7 @@ impl<T: ?Sized> Drop for BlindPooledMut<T> {
         // SAFETY: The target is valid for reads.
         let inner = unsafe { ptr::read(&raw const self.inner) };
 
-        let mut core = self.core.lock().expect(ERR_POISONED_LOCK);
+        let mut core = self.core.lock();
 
         let pool = core
             .get_mut(&self.key)

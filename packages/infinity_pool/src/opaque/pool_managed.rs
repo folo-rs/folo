@@ -2,10 +2,12 @@ use std::alloc::Layout;
 use std::iter::FusedIterator;
 use std::mem::MaybeUninit;
 use std::ptr::NonNull;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 use crate::opaque::pool_raw::RawOpaquePoolIterator;
-use crate::{ERR_POISONED_LOCK, PooledMut, RawOpaquePool, RawOpaquePoolSend};
+use crate::{PooledMut, RawOpaquePool, RawOpaquePoolSend};
 
 /// A thread-safe pool of reference-counted objects with uniform memory layout.
 ///
@@ -102,43 +104,40 @@ impl OpaquePool {
     #[must_use]
     #[inline]
     pub fn object_layout(&self) -> Layout {
-        self.inner.lock().expect(ERR_POISONED_LOCK).object_layout()
+        self.inner.lock().object_layout()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_len.md")]
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        self.inner.lock().expect(ERR_POISONED_LOCK).len()
+        self.inner.lock().len()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_capacity.md")]
     #[must_use]
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.inner.lock().expect(ERR_POISONED_LOCK).capacity()
+        self.inner.lock().capacity()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.inner.lock().expect(ERR_POISONED_LOCK).is_empty()
+        self.inner.lock().is_empty()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
     #[inline]
     pub fn reserve(&self, additional: usize) {
-        self.inner
-            .lock()
-            .expect(ERR_POISONED_LOCK)
-            .reserve(additional);
+        self.inner.lock().reserve(additional);
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     #[inline]
     pub fn shrink_to_fit(&self) {
-        self.inner.lock().expect(ERR_POISONED_LOCK).shrink_to_fit();
+        self.inner.lock().shrink_to_fit();
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert.md")]
@@ -174,7 +173,7 @@ impl OpaquePool {
     #[inline]
     #[must_use]
     pub fn insert<T: Send + 'static>(&self, value: T) -> PooledMut<T> {
-        let inner = self.inner.lock().expect(ERR_POISONED_LOCK).insert(value);
+        let inner = self.inner.lock().insert(value);
 
         PooledMut::new(inner, Arc::clone(&self.inner))
     }
@@ -186,12 +185,7 @@ impl OpaquePool {
     #[must_use]
     pub unsafe fn insert_unchecked<T: Send + 'static>(&self, value: T) -> PooledMut<T> {
         // SAFETY: Forwarding safety guarantees from caller.
-        let inner = unsafe {
-            self.inner
-                .lock()
-                .expect(ERR_POISONED_LOCK)
-                .insert_unchecked(value)
-        };
+        let inner = unsafe { self.inner.lock().insert_unchecked(value) };
 
         PooledMut::new(inner, Arc::clone(&self.inner))
     }
@@ -242,7 +236,7 @@ impl OpaquePool {
         F: FnOnce(&mut MaybeUninit<T>),
     {
         // SAFETY: Forwarding safety guarantees from caller.
-        let inner = unsafe { self.inner.lock().expect(ERR_POISONED_LOCK).insert_with(f) };
+        let inner = unsafe { self.inner.lock().insert_with(f) };
 
         PooledMut::new(inner, Arc::clone(&self.inner))
     }
@@ -291,12 +285,7 @@ impl OpaquePool {
         F: FnOnce(&mut MaybeUninit<T>),
     {
         // SAFETY: Forwarding safety guarantees from caller.
-        let inner = unsafe {
-            self.inner
-                .lock()
-                .expect(ERR_POISONED_LOCK)
-                .insert_with_unchecked(f)
-        };
+        let inner = unsafe { self.inner.lock().insert_with_unchecked(f) };
 
         PooledMut::new(inner, Arc::clone(&self.inner))
     }
@@ -337,7 +326,7 @@ impl OpaquePool {
     where
         F: FnOnce(OpaquePoolIterator<'_>) -> R,
     {
-        let guard = self.inner.lock().expect(ERR_POISONED_LOCK);
+        let guard = self.inner.lock();
         let iter = OpaquePoolIterator::new(&guard);
         f(iter)
     }
@@ -883,7 +872,7 @@ mod tests {
 
                 let value = (i + 1) * 100;
                 let handle = {
-                    let pool_guard = pool_clone.lock().unwrap();
+                    let pool_guard = pool_clone.lock();
                     pool_guard.insert(value)
                 };
 
@@ -904,7 +893,7 @@ mod tests {
 
         // Verify final pool state
         {
-            let pool_guard = pool.lock().unwrap();
+            let pool_guard = pool.lock();
             assert_eq!(pool_guard.len(), 3);
 
             let mut values: Vec<u32> = pool_guard.with_iter(|iter| {

@@ -2,10 +2,12 @@ use std::borrow::{Borrow, BorrowMut};
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::ptr::NonNull;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::{fmt, mem, ptr};
 
-use crate::{ERR_POISONED_LOCK, Pooled, RawOpaquePoolSend, RawPooledMut};
+use parking_lot::Mutex;
+
+use crate::{Pooled, RawOpaquePoolSend, RawPooledMut};
 
 // Note that while this is a thread-safe handle, we do not require `T: Send` because
 // we do not want to require every trait we cast into via trait object to be `Send`.
@@ -117,7 +119,7 @@ where
     pub fn into_inner(self) -> T {
         let (inner, pool) = self.into_parts();
 
-        let mut pool = pool.lock().expect(ERR_POISONED_LOCK);
+        let mut pool = pool.lock();
         pool.remove_mut_unpin(inner)
     }
 }
@@ -201,7 +203,7 @@ impl<T: ?Sized> Drop for PooledMut<T> {
         // SAFETY: The target is valid for reads.
         let inner = unsafe { ptr::read(&raw const self.inner) };
 
-        let mut pool = self.pool.lock().expect(ERR_POISONED_LOCK);
+        let mut pool = self.pool.lock();
         pool.remove_mut(inner);
     }
 }

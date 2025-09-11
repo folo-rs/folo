@@ -1,10 +1,11 @@
 use std::alloc::Layout;
 use std::mem::MaybeUninit;
-use std::sync::{Arc, MutexGuard};
+use std::sync::Arc;
+
+use parking_lot::MutexGuard;
 
 use crate::{
-    BlindPoolCore, BlindPoolInnerMap, BlindPooledMut, ERR_POISONED_LOCK, LayoutKey, RawOpaquePool,
-    RawOpaquePoolSend,
+    BlindPoolCore, BlindPoolInnerMap, BlindPooledMut, LayoutKey, RawOpaquePool, RawOpaquePoolSend,
 };
 
 /// A thread-safe reference-counting object pool that accepts any type of object.
@@ -78,7 +79,7 @@ impl BlindPool {
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        let core = self.core.lock().expect(ERR_POISONED_LOCK);
+        let core = self.core.lock();
 
         core.values().map(|pool| pool.len()).sum()
     }
@@ -89,7 +90,7 @@ impl BlindPool {
     pub fn capacity_for<T: Send + 'static>(&self) -> usize {
         let key = LayoutKey::with_layout_of::<T>();
 
-        let core = self.core.lock().expect(ERR_POISONED_LOCK);
+        let core = self.core.lock();
 
         core.get(&key)
             .map(|pool| pool.capacity())
@@ -106,7 +107,7 @@ impl BlindPool {
     #[doc = include_str!("../../doc/snippets/blind_pool_reserve.md")]
     #[inline]
     pub fn reserve_for<T: Send + 'static>(&self, additional: usize) {
-        let mut core = self.core.lock().expect(ERR_POISONED_LOCK);
+        let mut core = self.core.lock();
 
         let pool = ensure_inner_pool::<T>(&mut core);
 
@@ -116,7 +117,7 @@ impl BlindPool {
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     #[inline]
     pub fn shrink_to_fit(&self) {
-        let mut core = self.core.lock().expect(ERR_POISONED_LOCK);
+        let mut core = self.core.lock();
 
         for pool in core.values_mut() {
             pool.shrink_to_fit();
@@ -153,7 +154,7 @@ impl BlindPool {
     #[inline]
     #[must_use]
     pub fn insert<T: Send + 'static>(&self, value: T) -> BlindPooledMut<T> {
-        let mut core = self.core.lock().expect(ERR_POISONED_LOCK);
+        let mut core = self.core.lock();
 
         let pool = ensure_inner_pool::<T>(&mut core);
 
@@ -208,7 +209,7 @@ impl BlindPool {
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {
-        let mut core = self.core.lock().expect(ERR_POISONED_LOCK);
+        let mut core = self.core.lock();
 
         let pool = ensure_inner_pool::<T>(&mut core);
 
