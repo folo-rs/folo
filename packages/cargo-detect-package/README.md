@@ -8,6 +8,8 @@ cargo integration mode (default) and environment variable mode.
 
 ## Usage
 
+Install via `cargo install cargo-detect-package` and then:
+
 ```text
 cargo detect-package --path <PATH> [--via-env <ENV_VAR>] [--outside-package <ACTION>] <SUBCOMMAND>...
 ```
