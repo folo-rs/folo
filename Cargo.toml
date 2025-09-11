@@ -105,7 +105,7 @@ thiserror = { version = "2.0", default-features = false }
 tokio = { version = "1.43", default-features = false }
 toml = { version = "0.9.2", default-features = false }
 trybuild = { version = "1.0", default-features = false }
-windows = { version = "0.61", default-features = false, features = ["std"] }
+windows = { version = "0.62", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 # https://doc.rust-lang.org/rustc/lints/listing/allowed-by-default.html
