@@ -178,7 +178,7 @@ dependencies = [
  "linked",
  "many_cpus",
  "many_cpus_benchmarking",
- "scc",
+ "scc 3.0.5",
  "windows",
 ]
 
@@ -206,7 +206,7 @@ version = "0.4.6"
 dependencies = [
  "alloc_tracker",
  "criterion",
- "foldhash",
+ "foldhash 0.2.0",
  "mutants",
  "opaque_pool",
  "pastey",
@@ -377,18 +377,18 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
 name = "deranged"
-version = "0.4.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c9e6a11ca8224451684bc0d7d5a7adbf8f2fd6887261a1cfc3c0432f9d4068e"
+checksum = "d630bccd429a5bb5a64b5e94f693bfc48c9f8566418fda4c494cc94f911f87cc"
 dependencies = [
  "deranged-macros",
 ]
 
 [[package]]
 name = "deranged-macros"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16bb9aa094461caab2e48a161407cc7f48923afa48d36324b6d23ab61688b78f"
+checksum = "8952b6aa444b5338b25807ef3ccfc4082637d28bd77e2305dc60d6cae04af6c1"
 
 [[package]]
 name = "derive_more"
@@ -498,6 +498,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
 name = "folo_ffi"
 version = "0.1.6"
 dependencies = [
@@ -523,7 +529,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "005b30254b1476f894fd4b993b0768b6638968c5b197ee246b71bbfe7bd56b7b"
 dependencies = [
- "foldhash",
+ "foldhash 0.1.5",
  "frozen-collections-core",
  "rand 0.9.2",
  "rand_chacha 0.9.0",
@@ -537,7 +543,7 @@ checksum = "965a37fa0c39baf50ed38a7d55169b1c9b3b4f17b0f511a054ecb26c549e60a4"
 dependencies = [
  "const-random",
  "equivalent",
- "foldhash",
+ "foldhash 0.1.5",
  "hashbrown",
  "mutants",
 ]
@@ -691,14 +697,14 @@ version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
- "foldhash",
+ "foldhash 0.1.5",
 ]
 
 [[package]]
 name = "heapless"
-version = "0.8.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad"
+checksum = "b1edcd5a338e64688fbdcb7531a846cfd3476a54784dcb918a0844682bc7ada5"
 dependencies = [
  "hash32",
  "stable_deref_trait",
@@ -909,7 +915,7 @@ dependencies = [
  "cpulist",
  "criterion",
  "derive_more",
- "foldhash",
+ "foldhash 0.2.0",
  "folo_ffi",
  "heapless",
  "itertools 0.14.0",
@@ -1032,7 +1038,7 @@ name = "nm"
 version = "0.1.18"
 dependencies = [
  "criterion",
- "foldhash",
+ "foldhash 0.2.0",
  "many_cpus",
  "mutants",
  "new_zealand",
@@ -1427,6 +1433,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
+name = "saa"
+version = "3.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "293e425dca7c7889a87de14ff29a4112f18a155119295671cd7fb8c70015a1c5"
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1441,7 +1453,17 @@ version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46e6f046b7fef48e2660c57ed794263155d713de679057f2d0c169bfc6e756cc"
 dependencies = [
- "sdd",
+ "sdd 3.0.10",
+]
+
+[[package]]
+name = "scc"
+version = "3.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd16f6e3f14db5e2d04969332b3eaabd54577b61bf9aae516251ed23b32cecb"
+dependencies = [
+ "saa",
+ "sdd 4.0.1",
 ]
 
 [[package]]
@@ -1455,6 +1477,12 @@ name = "sdd"
 version = "3.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "490dcfcbfef26be6800d11870ff2df8774fa6e86d047e3e8c8a76b25655e41ca"
+
+[[package]]
+name = "sdd"
+version = "4.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d51b068a416b603c6b3aaeeba43feb2924ee80739c543482f931328dfc71cdb"
 
 [[package]]
 name = "seq-macro"
@@ -1511,7 +1539,7 @@ checksum = "1b258109f244e1d6891bf1053a55d63a5cd4f8f4c30cf9a1280989f80e7a1fa9"
 dependencies = [
  "once_cell",
  "parking_lot",
- "scc",
+ "scc 2.4.0",
  "serial_test_derive",
 ]
 

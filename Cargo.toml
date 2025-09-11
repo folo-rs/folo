@@ -60,17 +60,17 @@ bitvec = { version = "1.0.1", default-features = false, features = [
 cargo = { version = "0.89.0", default-features = false }
 criterion = { version = "0.7", default-features = false }
 darling = { version = "0.20", default-features = false }
-deranged = { version = "0.4", default-features = false }
+deranged = { version = "0.5", default-features = false }
 derive_more = { version = "2.0", default-features = false }
 fake_headers = { version = "0.0", default-features = false }
-foldhash = { version = "0.1", default-features = false, features = ["std"] }
+foldhash = { version = "0.2", default-features = false, features = ["std"] }
 frozen-collections = { version = "0.5", default-features = false }
 futures = { version = "0.3", default-features = false, features = [
     "std",
     "executor",
 ] }
 hash_hasher = { version = "2.0", default-features = false }
-heapless = { version = "0.8", default-features = false }
+heapless = { version = "0.9", default-features = false }
 http = { version = "1.2", default-features = false, features = ["std"] }
 itertools = { version = "0.14", default-features = false, features = [
     "use_std",
@@ -91,7 +91,7 @@ proc-macro2 = { version = "1.0", default-features = false }
 quote = { version = "1.0", default-features = false }
 rand = { version = "0.9", default-features = false, features = ["std"] }
 rsevents = { version = "0.3.1", default-features = false }
-scc = { version = "2.3", default-features = false }
+scc = { version = "3.0", default-features = false }
 scopeguard = { version = "1.2", default-features = false }
 seq-macro = { version = "0.3", default-features = false }
 serial_test = { version = "3.2", default-features = false }

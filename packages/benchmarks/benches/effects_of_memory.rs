@@ -358,14 +358,14 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
         self.map = scc::HashMap::with_capacity(MAP_ENTRY_COUNT);
 
         for i in 0..MAP_ENTRY_COUNT {
-            self.map.insert(i as u64, i.wrapping_mul(2) as u64).unwrap();
+            self.map.insert_sync(i as u64, i.wrapping_mul(2) as u64).unwrap();
         }
     }
 
     fn process(&mut self) {
         for _ in 0..REPEAT_COUNT {
             for k in 0..MAP_ENTRY_COUNT {
-                black_box(self.map.get(&(k as u64)));
+                black_box(self.map.get_sync(&(k as u64)));
             }
         }
     }
@@ -405,14 +405,14 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
         }
 
         for i in 0..MAP_ENTRY_COUNT {
-            self.map.insert(i as u64, i.wrapping_mul(2) as u64).unwrap();
+            self.map.insert_sync(i as u64, i.wrapping_mul(2) as u64).unwrap();
         }
     }
 
     fn process(&mut self) {
         for _ in 0..REPEAT_COUNT {
             for k in 0..MAP_ENTRY_COUNT {
-                black_box(self.map.get(&(k as u64)));
+                black_box(self.map.get_sync(&(k as u64)));
             }
         }
     }
@@ -434,7 +434,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize>
     SccMapSharedReadWrite<MAP_ENTRY_COUNT, REPEAT_COUNT>
 {
     fn increment(&self, key: u64) {
-        let mut value = black_box(self.map.get(&key).unwrap());
+        let mut value = black_box(self.map.get_sync(&key).unwrap());
         *value = value.wrapping_add(1);
     }
 }
@@ -463,7 +463,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
         }
 
         for i in 0..MAP_ENTRY_COUNT {
-            self.map.insert(i as u64, i.wrapping_mul(2) as u64).unwrap();
+            self.map.insert_sync(i as u64, i.wrapping_mul(2) as u64).unwrap();
         }
     }
 
