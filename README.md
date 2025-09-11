@@ -79,12 +79,13 @@ us the ability to measure exactly how much heap memory is allocated by a particu
 It integrates well into Criterion and is natively supported by `par_bench`.
 
 Once we have knowledge of how much memory we are allocating, we can start making a difference. The
-simplest way is to change the algorithms so no memory allocations are necessary. Often, that is
-still not enough! The global Rust memory allocator (whichever one might be used) is general-purpose
-and it pays a price in performance for that generality. If we are allocating a large number of
-objects of specific sizes, we can benefit from special-purpose allocators that keep the memory
-around for reuse, so the next allocation is simple and fast.
+simplest way is to change the algorithms so no memory allocations are necessary but sometimes that
+is impractical. Nevertheless, the global Rust memory allocator (whichever one might be used) is a
+general-purpose mechanism and it pays a price in performance for that generality. If we are
+allocating a large number of objects of specific sizes, we can benefit from special-purpose
+allocators that keep the memory around for reuse, so the next allocation is simple and fast.
 
+While allocator APIs are still an unstable Rust feature, there are stable-API alternatives.
 Another term for special-purpose allocators is object pools and [`infinity_pool`][infinity_pool]
 offers several of them, from basic `Vec<T>` style pinned object collections to type-agnostic object
 pools that can allocate any type of object. While the safe-API variants come with substantial
