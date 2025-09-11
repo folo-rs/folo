@@ -292,6 +292,64 @@ impl Slab {
         drop(old_meta);
     }
 
+    /// Removes an object from the slab, dropping it.
+    ///
+    /// Performs minimal validation. The idea is to only use this from contexts where the
+    /// caller can make solid guarantees (e.g. because the caller is the exclusive owner
+    /// of the target object and the slab handle).
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the handle belongs to this slab.
+    ///
+    /// The caller must ensure that the object is still present in the slab. Slab handles are just
+    /// fat pointers, so ownership and object lifetime must be managed manually by the caller.
+    pub(crate) unsafe fn remove_unchecked<T: ?Sized>(&mut self, handle: SlabHandle<T>) {
+        let next_free_slot_index = self.next_free_slot_index;
+
+        // SAFETY: Caller guarantees this object belongs to this slab and is still present.
+        let mut slot_ptr = unsafe { self.slot_ptr_unchecked(handle.index()) };
+
+        // SAFETY: Caller guarantees that we are in the right state to do this, as the safety
+        // requirements state that ownership and object lifetime are managed manually by the caller.
+        let slot_meta = unsafe { slot_ptr.as_mut() };
+
+        // The Drop implementation of the existing SlotMeta will automatically call the dropper.
+        // We return it to the outer scope so we can defer the drop until after the slab has
+        // been updated back into its post-remove state.
+        let old_meta = mem::replace(
+            slot_meta,
+            SlotMeta::Vacant {
+                next_free_slot_index,
+            },
+        );
+
+        if !matches!(old_meta, SlotMeta::Occupied { .. }) {
+            // Uh-oh, we were told to remove an object that did not actually exist.
+            // While this is a no-no and we will panic, we still need to preserve
+            // the pool in a valid state after this (if only for a proper drop to happen).
+
+            // All we did was overwrite the slot with a "vacant" sign,
+            // so to restore the previous state we just put back the old meta.
+            *slot_meta = old_meta;
+
+            panic!(
+                "remove() slot {} was vacant in slab of capacity {}",
+                handle.index(),
+                self.layout.capacity().get()
+            );
+        }
+
+        // Push the released slot into the freelist.
+        self.next_free_slot_index = handle.index();
+
+        // Cannot overflow because we asserted above the removed entry was occupied.
+        self.count = self.count.wrapping_sub(1);
+
+        // It is now safe to do the drop. If drop() panics, the slab is still in a valid state.
+        drop(old_meta);
+    }
+
     /// Removes an object from the slab, returning it.
     ///
     /// # Panics

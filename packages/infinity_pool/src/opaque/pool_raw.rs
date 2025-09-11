@@ -392,7 +392,7 @@ impl RawOpaquePool {
         // SAFETY: The provided handle is a unique handle, which guarantees that the object
         // has not been removed yet (because doing so consumes the unique handle).
         unsafe {
-            self.remove(handle.into_shared());
+            self.remove_unchecked(handle.into_shared());
         }
     }
 
@@ -406,6 +406,44 @@ impl RawOpaquePool {
         // SAFETY: Forwarding guarantees from caller.
         unsafe {
             slab.remove(handle.slab_handle());
+        }
+
+        // Update our tracked length since we just removed an object.
+        // This cannot wrap around because we just removed an object,
+        // so the value must be at least 1 before subtraction.
+        self.length = self.length.wrapping_sub(1);
+
+        if slab.len() == self.slab_layout.capacity().get().wrapping_sub(1) {
+            // We removed from a full slab.
+            // This means we have a vacant slot where there was not one before.
+
+            // SAFETY: We are currently operating on the slab, so it must be an existing slab.
+            // The mechanism that adds slabs is responsible for updating vacancy tracker bounds.
+            unsafe {
+                self.vacancy_tracker
+                    .update_slab_status(handle.slab_index(), true);
+            }
+        }
+    }
+
+    /// An unchecked version of `remove()`, intended for callers who can make strong guarantees.
+    ///
+    /// While it imposes substantially the same requirements as regular `remove()`, it skips
+    /// many of the internal validity checks that `remove()` still performs (as the safety
+    /// requirements of `remove()` are more of a technical limitation and not desired, whereas
+    /// here they are desired).
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the handle belongs to this pool and that the object it
+    /// references has not already been removed from the pool.
+    pub(crate) unsafe fn remove_unchecked<T: ?Sized>(&mut self, handle: RawPooled<T>) {
+        // SAFETY: Caller guarantees the handle is valid for this pool.
+        let slab = unsafe { self.slabs.get_unchecked_mut(handle.slab_index()) };
+
+        // SAFETY: Caller guarantees the handle is valid for this pool.
+        unsafe {
+            slab.remove_unchecked(handle.slab_handle());
         }
 
         // Update our tracked length since we just removed an object.

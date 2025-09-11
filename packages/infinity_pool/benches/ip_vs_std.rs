@@ -46,7 +46,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
 
     // Criterion's default 5 seconds just goes not give the precision we need, we get constant
     // plus or minus 10% noise that just prevents any sort of fine-tuning.
-    group.measurement_time(Duration::from_secs(10));
+    group.measurement_time(Duration::from_secs(20));
     group.sample_size(2000);
 
     // Box::pin() baseline with churn (insertion + removal pattern)
