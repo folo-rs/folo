@@ -89,6 +89,7 @@ impl VacancyTracker {
     ///
     /// The caller must ensure that the slab index is in bounds
     /// defined by the most recent `update_slab_count()` call.
+    #[cold]
     pub(crate) unsafe fn update_slab_status(&mut self, slab_index: usize, has_vacancy: bool) {
         // SAFETY: Forwarding safety guarantees from the caller.
         let slab_previously_had_vacancy =
