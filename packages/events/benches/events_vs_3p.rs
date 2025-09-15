@@ -52,7 +52,7 @@ fn churn_event_benchmark(c: &mut Criterion) {
 
     // Criterion's default 5 seconds does not give the precision we need.
     group.measurement_time(Duration::from_secs(20));
-    group.sample_size(2000);
+    group.sample_size(1000);
 
     // LocalOnceEvent standalone, by rc binding
     let allocs_op = allocs.operation("LocalOnceEvent rc");

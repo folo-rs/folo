@@ -13,12 +13,13 @@ use std::mem::ManuallyDrop;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::{self, NonNull};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::{any, fmt, task};
 
 use infinity_pool::{RawPinnedPool, RawPooled};
+use parking_lot::Mutex;
 
-use crate::{Disconnected, ERR_POISONED_LOCK, OnceEvent, ReflectiveTSend, Sealed};
+use crate::{Disconnected, OnceEvent, ReflectiveTSend, Sealed};
 
 /// A pool that manages thread-safe events with automatic cleanup.
 ///
@@ -128,7 +129,7 @@ where
         PooledOnceSender<RefPool<'_, T>>,
         PooledOnceReceiver<RefPool<'_, T>>,
     ) {
-        let mut inner_pool = self.pool.lock().expect(ERR_POISONED_LOCK);
+        let mut inner_pool = self.pool.lock();
 
         // SAFETY: We rely on OnceEvent::new_in_place_bound() for correct initialization.
         let handle = unsafe { inner_pool.insert_with(OnceEvent::new_in_place_bound) };
@@ -179,7 +180,7 @@ where
     pub fn bind_by_arc(
         self: &Arc<Self>,
     ) -> (PooledOnceSender<ArcPool<T>>, PooledOnceReceiver<ArcPool<T>>) {
-        let mut inner_pool = self.pool.lock().expect(ERR_POISONED_LOCK);
+        let mut inner_pool = self.pool.lock();
 
         // SAFETY: We rely on OnceEvent::new_in_place_bound() for correct initialization.
         let handle = unsafe { inner_pool.insert_with(OnceEvent::new_in_place_bound) };
@@ -239,7 +240,7 @@ where
     pub unsafe fn bind_by_ptr(
         self: Pin<&Self>,
     ) -> (PooledOnceSender<PtrPool<T>>, PooledOnceReceiver<PtrPool<T>>) {
-        let mut inner_pool = self.pool.lock().expect(ERR_POISONED_LOCK);
+        let mut inner_pool = self.pool.lock();
 
         // SAFETY: We rely on OnceEvent::new_in_place_bound() for correct initialization.
         let handle = unsafe { inner_pool.insert_with(OnceEvent::new_in_place_bound) };
@@ -285,7 +286,7 @@ where
     /// ```
     #[must_use]
     pub fn len(&self) -> usize {
-        self.pool.lock().expect(ERR_POISONED_LOCK).len()
+        self.pool.lock().len()
     }
 
     /// Returns whether the pool is empty.
@@ -310,7 +311,7 @@ where
     /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.pool.lock().expect(ERR_POISONED_LOCK).is_empty()
+        self.pool.lock().is_empty()
     }
 
     /// Shrinks the capacity of the pool to reduce memory usage.
@@ -337,7 +338,7 @@ where
     /// pool.shrink_to_fit();
     /// ```
     pub fn shrink_to_fit(&self) {
-        let mut inner_pool = self.pool.lock().expect(ERR_POISONED_LOCK);
+        let mut inner_pool = self.pool.lock();
         inner_pool.shrink_to_fit();
     }
 
@@ -351,7 +352,7 @@ where
     /// someone.
     #[cfg(debug_assertions)]
     pub fn inspect_awaiters(&self, mut f: impl FnMut(Option<&Backtrace>)) {
-        let inner_pool = self.pool.lock().expect(ERR_POISONED_LOCK);
+        let inner_pool = self.pool.lock();
 
         for event_ptr in inner_pool.iter() {
             // SAFETY: The pool remains alive for the duration of this function call, satisfying
@@ -592,11 +593,7 @@ where
             // SAFETY: The handle belongs to this pool (created via insert_with()) and the event
             // state machine ensures this is the only removal path for this event instance.
             unsafe {
-                this.pool_ref
-                    .pool
-                    .lock()
-                    .expect(ERR_POISONED_LOCK)
-                    .remove(this.event);
+                this.pool_ref.pool.lock().remove(this.event);
             }
         }
 
@@ -624,11 +621,7 @@ where
             // SAFETY: The handle belongs to this pool (created via insert_with()) and the event
             // state machine ensures this is the only removal path for this event instance.
             unsafe {
-                self.pool_ref
-                    .pool
-                    .lock()
-                    .expect(ERR_POISONED_LOCK)
-                    .remove(self.event);
+                self.pool_ref.pool.lock().remove(self.event);
             }
         }
     }
@@ -772,11 +765,7 @@ where
                 // SAFETY: The handle belongs to this pool (created via insert_with()) and the event
                 // state machine ensures this is the only removal path for this event instance.
                 unsafe {
-                    self.pool_ref
-                        .pool
-                        .lock()
-                        .expect(ERR_POISONED_LOCK)
-                        .remove(event_handle);
+                    self.pool_ref.pool.lock().remove(event_handle);
                 }
                 Ok(Ok(value))
             }
@@ -790,11 +779,7 @@ where
                 // SAFETY: The handle belongs to this pool (created via insert_with()) and the event
                 // state machine ensures this is the only removal path for this event instance.
                 unsafe {
-                    self.pool_ref
-                        .pool
-                        .lock()
-                        .expect(ERR_POISONED_LOCK)
-                        .remove(event_handle);
+                    self.pool_ref.pool.lock().remove(event_handle);
                 }
                 Ok(Err(Disconnected))
             }
@@ -824,11 +809,7 @@ where
                 // SAFETY: The handle belongs to this pool (created via insert_with()) and the event
                 // state machine ensures this is the only removal path for this event instance.
                 unsafe {
-                    self.pool_ref
-                        .pool
-                        .lock()
-                        .expect(ERR_POISONED_LOCK)
-                        .remove(event_handle);
+                    self.pool_ref.pool.lock().remove(event_handle);
                 }
 
                 Some(value)
@@ -844,11 +825,7 @@ where
                 // SAFETY: The handle belongs to this pool (created via insert_with()) and the event
                 // state machine ensures this is the only removal path for this event instance.
                 unsafe {
-                    self.pool_ref
-                        .pool
-                        .lock()
-                        .expect(ERR_POISONED_LOCK)
-                        .remove(event_handle);
+                    self.pool_ref.pool.lock().remove(event_handle);
                 }
 
                 None
@@ -887,11 +864,7 @@ where
                 // SAFETY: The handle belongs to this pool (created via insert_with()) and the event
                 // state machine ensures this is the only removal path for this event instance.
                 unsafe {
-                    this.pool_ref
-                        .pool
-                        .lock()
-                        .expect(ERR_POISONED_LOCK)
-                        .remove(event_handle);
+                    this.pool_ref.pool.lock().remove(event_handle);
                 }
 
                 // The cleanup is already all done by poll() when it returns a result.
@@ -1243,7 +1216,7 @@ mod tests {
 
         // Pool should be cleaned up - all events should be removed
         // If Drop implementations don't work, pool will retain unused events
-        let mut pool_guard = pool.pool.lock().unwrap();
+        let mut pool_guard = pool.pool.lock();
         assert_eq!(
             pool_guard.len(),
             0,
@@ -1270,7 +1243,7 @@ mod tests {
         }
 
         // Pool should be cleaned up - all events should be removed
-        let mut pool_guard = pool.pool.lock().unwrap();
+        let mut pool_guard = pool.pool.lock();
         assert_eq!(
             pool_guard.len(),
             0,
@@ -1309,7 +1282,7 @@ mod tests {
 
         // Test 1: Check that events are added to pool
         let pool_len_before = {
-            let pool_guard = pool.pool.lock().unwrap();
+            let pool_guard = pool.pool.lock();
             pool_guard.len()
         };
 
@@ -1325,7 +1298,7 @@ mod tests {
 
         // Now check that cleanup worked
         let pool_len_after = {
-            let pool_guard = pool.pool.lock().unwrap();
+            let pool_guard = pool.pool.lock();
             pool_guard.len()
         };
         assert_eq!(
@@ -1350,7 +1323,7 @@ mod tests {
         pool.shrink_to_fit();
 
         assert_eq!(
-            pool.pool.lock().unwrap().capacity(),
+            pool.pool.lock().capacity(),
             0,
             "Empty pool should shrink to capacity 0"
         );

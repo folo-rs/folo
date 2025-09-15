@@ -15,14 +15,15 @@ use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
-#[cfg(debug_assertions)]
-use std::sync::Mutex;
 use std::sync::atomic::{self, AtomicU8};
 use std::task;
 use std::task::Waker;
 
 #[cfg(debug_assertions)]
-use crate::{BacktraceType, ERR_POISONED_LOCK, capture_backtrace};
+use parking_lot::Mutex;
+
+#[cfg(debug_assertions)]
+use crate::{BacktraceType, capture_backtrace};
 use crate::{
     Disconnected, EVENT_AWAITING, EVENT_BOUND, EVENT_DISCONNECTED, EVENT_SET, EVENT_SIGNALING,
     EVENT_UNBOUND, ReflectiveTSend, Sealed,
@@ -622,7 +623,7 @@ where
     /// The closure receives `None` if no one is awaiting the event.
     #[cfg(debug_assertions)]
     pub fn inspect_awaiter(&self, f: impl FnOnce(Option<&Backtrace>)) {
-        let backtrace = self.backtrace.lock().expect(ERR_POISONED_LOCK);
+        let backtrace = self.backtrace.lock();
         f(backtrace.as_ref());
     }
 
@@ -722,10 +723,7 @@ where
     /// for cleaning up the event.
     pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         #[cfg(debug_assertions)]
-        self.backtrace
-            .lock()
-            .expect(ERR_POISONED_LOCK)
-            .replace(capture_backtrace());
+        self.backtrace.lock().replace(capture_backtrace());
 
         // We use Acquire because we are (depending on the state) acquiring the synchronization
         // block for `value` and/or `awaiter`.
