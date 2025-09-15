@@ -58,7 +58,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             // Pre-allocate per-iteration vectors outside timed span
             for _ in 0..iters {
                 all_boxes.push(Vec::<Pin<Box<u64>>>::with_capacity(
-                    (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
+                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
                 ));
             }
 
@@ -102,7 +102,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             // Pre-allocate per-iteration vectors outside timed span
             for _ in 0..iters {
                 all_rcs.push(Vec::<Pin<Rc<u64>>>::with_capacity(
-                    (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
+                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
                 ));
             }
 
@@ -146,7 +146,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             // Pre-allocate per-iteration vectors outside timed span
             for _ in 0..iters {
                 all_arcs.push(Vec::<Pin<Arc<u64>>>::with_capacity(
-                    (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
+                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
                 ));
             }
 
@@ -193,7 +193,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 let pool = PinnedPool::<u64>::new();
                 all_pools.push(pool);
                 all_handles.push(Vec::with_capacity(
-                    (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
+                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
                 ));
             }
 
@@ -240,7 +240,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 let pool = LocalPinnedPool::<u64>::new();
                 all_pools.push(pool);
                 all_handles.push(Vec::with_capacity(
-                    (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
+                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
                 ));
             }
 
@@ -287,7 +287,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 let pool = RawPinnedPool::<u64>::new();
                 all_pools.push(pool);
                 all_handles.push(Vec::with_capacity(
-                    (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
+                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
                 ));
             }
 
@@ -335,7 +335,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 let pool = OpaquePool::with_layout_of::<u64>();
                 all_pools.push(pool);
                 all_handles.push(Vec::with_capacity(
-                    (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
+                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
                 ));
             }
 
@@ -382,7 +382,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 let pool = LocalOpaquePool::with_layout_of::<u64>();
                 all_pools.push(pool);
                 all_handles.push(Vec::with_capacity(
-                    (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
+                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
                 ));
             }
 
@@ -429,7 +429,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 let pool = RawOpaquePool::with_layout_of::<u64>();
                 all_pools.push(pool);
                 all_handles.push(Vec::with_capacity(
-                    (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
+                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
                 ));
             }
 
@@ -477,7 +477,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 let pool = BlindPool::new();
                 all_pools.push(pool);
                 all_handles.push(Vec::with_capacity(
-                    (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
+                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
                 ));
             }
 
@@ -524,7 +524,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 let pool = LocalBlindPool::new();
                 all_pools.push(pool);
                 all_handles.push(Vec::with_capacity(
-                    (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
+                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
                 ));
             }
 
@@ -571,7 +571,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                 let pool = RawBlindPool::new();
                 all_pools.push(pool);
                 all_handles.push(Vec::with_capacity(
-                    (INITIAL_ITEMS + BATCH_COUNT * BATCH_SIZE) as usize,
+                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
                 ));
             }
 
