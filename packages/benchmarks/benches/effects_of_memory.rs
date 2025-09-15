@@ -358,7 +358,9 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
         self.map = scc::HashMap::with_capacity(MAP_ENTRY_COUNT);
 
         for i in 0..MAP_ENTRY_COUNT {
-            self.map.insert_sync(i as u64, i.wrapping_mul(2) as u64).unwrap();
+            self.map
+                .insert_sync(i as u64, i.wrapping_mul(2) as u64)
+                .unwrap();
         }
     }
 
@@ -405,7 +407,9 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
         }
 
         for i in 0..MAP_ENTRY_COUNT {
-            self.map.insert_sync(i as u64, i.wrapping_mul(2) as u64).unwrap();
+            self.map
+                .insert_sync(i as u64, i.wrapping_mul(2) as u64)
+                .unwrap();
         }
     }
 
@@ -463,7 +467,9 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
         }
 
         for i in 0..MAP_ENTRY_COUNT {
-            self.map.insert_sync(i as u64, i.wrapping_mul(2) as u64).unwrap();
+            self.map
+                .insert_sync(i as u64, i.wrapping_mul(2) as u64)
+                .unwrap();
         }
     }
 

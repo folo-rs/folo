@@ -192,9 +192,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             for _ in 0..iters {
                 let pool = PinnedPool::<u64>::new();
                 all_pools.push(pool);
-                all_handles.push(Vec::with_capacity(
-                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
-                ));
+                all_handles.push(Vec::with_capacity((INITIAL_ITEMS + BATCH_SIZE) as usize));
             }
 
             // Pre-fill with initial items outside timed span
@@ -239,9 +237,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             for _ in 0..iters {
                 let pool = LocalPinnedPool::<u64>::new();
                 all_pools.push(pool);
-                all_handles.push(Vec::with_capacity(
-                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
-                ));
+                all_handles.push(Vec::with_capacity((INITIAL_ITEMS + BATCH_SIZE) as usize));
             }
 
             // Pre-fill with initial items outside timed span
@@ -286,9 +282,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             for _ in 0..iters {
                 let pool = RawPinnedPool::<u64>::new();
                 all_pools.push(pool);
-                all_handles.push(Vec::with_capacity(
-                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
-                ));
+                all_handles.push(Vec::with_capacity((INITIAL_ITEMS + BATCH_SIZE) as usize));
             }
 
             // Pre-fill with initial items outside timed span
@@ -334,9 +328,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             for _ in 0..iters {
                 let pool = OpaquePool::with_layout_of::<u64>();
                 all_pools.push(pool);
-                all_handles.push(Vec::with_capacity(
-                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
-                ));
+                all_handles.push(Vec::with_capacity((INITIAL_ITEMS + BATCH_SIZE) as usize));
             }
 
             // Pre-fill with initial items outside timed span
@@ -381,9 +373,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             for _ in 0..iters {
                 let pool = LocalOpaquePool::with_layout_of::<u64>();
                 all_pools.push(pool);
-                all_handles.push(Vec::with_capacity(
-                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
-                ));
+                all_handles.push(Vec::with_capacity((INITIAL_ITEMS + BATCH_SIZE) as usize));
             }
 
             // Pre-fill with initial items outside timed span
@@ -428,9 +418,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             for _ in 0..iters {
                 let pool = RawOpaquePool::with_layout_of::<u64>();
                 all_pools.push(pool);
-                all_handles.push(Vec::with_capacity(
-                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
-                ));
+                all_handles.push(Vec::with_capacity((INITIAL_ITEMS + BATCH_SIZE) as usize));
             }
 
             // Pre-fill with initial items outside timed span
@@ -476,9 +464,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             for _ in 0..iters {
                 let pool = BlindPool::new();
                 all_pools.push(pool);
-                all_handles.push(Vec::with_capacity(
-                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
-                ));
+                all_handles.push(Vec::with_capacity((INITIAL_ITEMS + BATCH_SIZE) as usize));
             }
 
             // Pre-fill with initial items outside timed span
@@ -523,9 +509,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             for _ in 0..iters {
                 let pool = LocalBlindPool::new();
                 all_pools.push(pool);
-                all_handles.push(Vec::with_capacity(
-                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
-                ));
+                all_handles.push(Vec::with_capacity((INITIAL_ITEMS + BATCH_SIZE) as usize));
             }
 
             // Pre-fill with initial items outside timed span
@@ -570,9 +554,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
             for _ in 0..iters {
                 let pool = RawBlindPool::new();
                 all_pools.push(pool);
-                all_handles.push(Vec::with_capacity(
-                    (INITIAL_ITEMS + BATCH_SIZE) as usize,
-                ));
+                all_handles.push(Vec::with_capacity((INITIAL_ITEMS + BATCH_SIZE) as usize));
             }
 
             // Pre-fill with initial items outside timed span

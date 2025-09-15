@@ -516,7 +516,7 @@ impl RawOpaquePool {
     ///
     /// The caller must ensure that the handle belongs to this pool and that the object it
     /// references has not already been removed from the pool.
-     pub(crate) unsafe fn remove_unpin_unchecked<T: Unpin>(&mut self, handle: RawPooled<T>) -> T {
+    pub(crate) unsafe fn remove_unpin_unchecked<T: Unpin>(&mut self, handle: RawPooled<T>) -> T {
         // SAFETY: Caller guarantees the handle is valid for this pool.
         let slab = unsafe { self.slabs.get_unchecked_mut(handle.slab_index()) };
 
