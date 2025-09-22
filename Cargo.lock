@@ -202,7 +202,7 @@ dependencies = [
 
 [[package]]
 name = "blind_pool"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -331,7 +331,7 @@ dependencies = [
 
 [[package]]
 name = "cpulist"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "itertools 0.14.0",
  "new_zealand",
@@ -441,7 +441,7 @@ dependencies = [
 
 [[package]]
 name = "events"
-version = "0.3.17"
+version = "0.4.0"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -806,7 +806,7 @@ dependencies = [
 
 [[package]]
 name = "infinity_pool"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "alloc_tracker",
  "bitvec",
@@ -912,7 +912,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "cpulist",
  "criterion",
@@ -937,7 +937,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_benchmarking"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "cpulist",
  "criterion",
@@ -1033,11 +1033,11 @@ dependencies = [
 
 [[package]]
 name = "new_zealand"
-version = "1.0.0"
+version = "1.0.1"
 
 [[package]]
 name = "nm"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "criterion",
  "foldhash 0.2.0",
@@ -1102,7 +1102,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "opaque_pool"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -1113,7 +1113,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.16"
+version = "0.2.17"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -1348,7 +1348,7 @@ checksum = "caf4aa5b0f434c91fe5c7f1ecb6a5ece2130b02ad2a590589dda5146df959001"
 
 [[package]]
 name = "region_cached"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1369,7 +1369,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "arc-swap",
  "axum",
