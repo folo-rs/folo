@@ -1825,6 +1825,7 @@ version = "0.0.0-never"
 dependencies = [
  "blind_pool",
  "infinity_pool",
+ "new_zealand",
  "trybuild",
 ]
 
