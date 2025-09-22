@@ -1,7 +1,7 @@
 //! Utilizing for working with non-zero integers.
 //!
 //! Currently this implements a shorthand macro for creating non-zero integers
-//! from literals at compile time:
+//! from expressions at compile time:
 //!
 //! ```
 //! use std::num::NonZero;
@@ -13,13 +13,14 @@
 //! }
 //!
 //! foo(nz!(42));
+//! foo(nz!(3 * 8));
 //! ```
 
-/// A macro to create a `NonZero` constant from a literal value.
+/// A macro to create a `NonZero` constant from an expression.
 #[macro_export]
 macro_rules! nz {
-    ($x:literal) => {
-        const { ::std::num::NonZero::new($x).expect("literal must have non-zero value") }
+    ($x:expr) => {
+        const { ::std::num::NonZero::new($x).expect("expression must evaluate to non-zero value") }
     };
 }
 
@@ -125,5 +126,66 @@ mod tests {
         let inferred = nz!(42);
         let _: NonZero<u32> = inferred;
         assert_eq!(inferred.get(), 42);
+    }
+
+    #[test]
+    fn expressions() {
+        // Test that the macro works with basic arithmetic expressions
+        let multiplication: NonZero<u64> = nz!(3 * 8);
+        assert_eq!(multiplication.get(), 24);
+
+        let addition: NonZero<u32> = nz!(10 + 5);
+        assert_eq!(addition.get(), 15);
+
+        let subtraction: NonZero<i32> = nz!(20 - 5);
+        assert_eq!(subtraction.get(), 15);
+
+        #[allow(
+            clippy::integer_division,
+            reason = "intentional for testing division expressions"
+        )]
+        let division: NonZero<u32> = nz!(100 / 4);
+        assert_eq!(division.get(), 25);
+
+        // Test with parentheses
+        let complex: NonZero<u32> = nz!((2 + 3) * (4 + 2));
+        assert_eq!(complex.get(), 30);
+    }
+
+    #[test]
+    fn const_expressions() {
+        const FACTOR: u64 = 4;
+        const BASE: u32 = 5;
+        const MULTIPLIER: u32 = 3;
+
+        // Test that the macro works with const expressions
+        let const_expr: NonZero<u64> = nz!(FACTOR * 2);
+        assert_eq!(const_expr.get(), 8);
+
+        let multi_const: NonZero<u32> = nz!(BASE * MULTIPLIER);
+        assert_eq!(multi_const.get(), 15);
+    }
+
+    #[test]
+    fn method_expressions() {
+        // Test that the macro works with method calls that are const
+        let power: NonZero<u64> = nz!(2_u64.pow(3));
+        assert_eq!(power.get(), 8);
+
+        let checked_power: NonZero<u32> = nz!(3_u32.saturating_pow(2));
+        assert_eq!(checked_power.get(), 9);
+    }
+
+    #[test]
+    fn const_evaluation_expressions() {
+        // Test that expression-based values work in const contexts
+        const EXPR_VALUE: NonZero<u32> = nz!(6 * 7);
+        const CONST_EXPR_VALUE: NonZero<u64> = nz!({
+            const INNER: u64 = 5;
+            INNER * 8
+        });
+
+        assert_eq!(EXPR_VALUE.get(), 42);
+        assert_eq!(CONST_EXPR_VALUE.get(), 40);
     }
 }
