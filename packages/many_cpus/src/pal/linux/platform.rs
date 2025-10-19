@@ -282,6 +282,8 @@ impl BuildTargetPlatform {
                             .map(|(key, value)| (key.trim(), value.trim()))
                             .expect("/proc/cpuinfo line was not a key:value pair");
 
+                        // The Linux kernel may use different casing for keys depending on the processor
+                        // architecture and kernel version. We normalize to lowercase for consistent matching.
                         #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation, reason = "we expect small positive numbers for bogomips, which can have their integer part losslessly converted to u32")]
                         match key.to_ascii_lowercase().as_str() {
                             "processor" => index = value.parse::<ProcessorId>().ok(),
@@ -1533,11 +1535,12 @@ mod tests {
     }
 
     #[test]
-    fn arm_style_cpuinfo_with_capital_bogomips() {
+    fn cpuinfo_with_nonstandard_key_casing() {
         let mut fs = MockFilesystem::new();
 
-        // ARM processors report "BogoMIPS" with capital letters instead of lowercase "bogomips".
-        // This test ensures we handle this case-insensitive key matching properly.
+        // The Linux kernel may report keys with different casing depending on the processor
+        // architecture and kernel version. This test uses capital "BogoMIPS" instead of lowercase
+        // "bogomips" to verify case-insensitive key matching.
         let cpuinfo = "processor       : 0
 BogoMIPS        : 50.00
 Features        : fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
