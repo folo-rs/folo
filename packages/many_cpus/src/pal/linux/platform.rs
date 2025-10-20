@@ -282,8 +282,10 @@ impl BuildTargetPlatform {
                             .map(|(key, value)| (key.trim(), value.trim()))
                             .expect("/proc/cpuinfo line was not a key:value pair");
 
+                        // The Linux kernel may use different casing for keys depending on the processor
+                        // architecture and kernel version. We normalize to lowercase for consistent matching.
                         #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation, reason = "we expect small positive numbers for bogomips, which can have their integer part losslessly converted to u32")]
-                        match key {
+                        match key.to_ascii_lowercase().as_str() {
                             "processor" => index = value.parse::<ProcessorId>().ok(),
                             "bogomips" => {
                                 bogomips = value.parse::<f32>().map(|f| f.round() as u32).ok();
@@ -1530,5 +1532,78 @@ mod tests {
         assert_eq!(platform.current_processor_id(), 5);
         assert_eq!(platform.max_processor_id(), 8);
         assert_eq!(platform.max_memory_region_id(), 2);
+    }
+
+    #[test]
+    fn cpuinfo_with_nonstandard_key_casing() {
+        let mut fs = MockFilesystem::new();
+
+        // The Linux kernel may report keys with different casing depending on the processor
+        // architecture and kernel version. This test uses capital "BogoMIPS" instead of lowercase
+        // "bogomips" to verify case-insensitive key matching.
+        let cpuinfo = "processor       : 0
+BogoMIPS        : 50.00
+Features        : fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer : 0x41
+CPU architecture: 8
+CPU variant     : 0x3
+CPU part        : 0xd0c
+CPU revision    : 1
+
+processor       : 1
+BogoMIPS        : 50.00
+Features        : fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer : 0x41
+CPU architecture: 8
+CPU variant     : 0x3
+CPU part        : 0xd0c
+CPU revision    : 1
+";
+
+        fs.expect_get_cpuinfo_contents()
+            .times(1)
+            .return_const(cpuinfo.to_string());
+
+        fs.expect_get_numa_node_possible_contents()
+            .times(1)
+            .return_const(Some("0\n".to_string()));
+
+        fs.expect_get_numa_node_cpulist_contents()
+            .withf(move |n| *n == 0)
+            .times(1)
+            .return_const("0,1\n".to_string());
+
+        fs.expect_get_cpu_online_contents()
+            .withf(move |p| *p == 0)
+            .times(1)
+            .return_const(Some("1\n".to_string()));
+
+        fs.expect_get_cpu_online_contents()
+            .withf(move |p| *p == 1)
+            .times(1)
+            .return_const(Some("1\n".to_string()));
+
+        fs.expect_get_proc_self_status_contents()
+            .times(1)
+            .return_const("Cpus_allowed_list: 0-1".to_string());
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        let processors = platform.get_all_processors();
+
+        assert_eq!(processors.len(), 2);
+
+        let p0 = &processors[0];
+        assert_eq!(p0.as_real().id, 0);
+        assert_eq!(p0.as_real().memory_region_id, 0);
+        assert_eq!(p0.as_real().efficiency_class, EfficiencyClass::Performance);
+
+        let p1 = &processors[1];
+        assert_eq!(p1.as_real().id, 1);
+        assert_eq!(p1.as_real().memory_region_id, 0);
+        assert_eq!(p1.as_real().efficiency_class, EfficiencyClass::Performance);
     }
 }
