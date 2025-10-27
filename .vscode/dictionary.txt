@@ -19,6 +19,7 @@ libc
 lifecycles
 metas
 miri
+MIRIFLAGS
 mockall
 nanos
 nextest
@@ -36,3 +37,4 @@ timespec
 trybuild
 Uninit
 withf
+Zmiri

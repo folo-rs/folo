@@ -15,7 +15,7 @@ use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
-use std::sync::atomic::{self, AtomicU8, fence};
+use std::sync::atomic::{self, AtomicU8};
 use std::task;
 use std::task::Waker;
 
@@ -731,7 +731,7 @@ where
             EVENT_BOUND => self.poll_bound(waker),
             EVENT_SET => Some(Ok(self.poll_set())),
             EVENT_AWAITING => self.poll_awaiting(waker),
-            EVENT_SIGNALING => self.poll_signaling(waker),
+            EVENT_SIGNALING => Some(self.poll_signaling()),
             EVENT_DISCONNECTED => {
                 // There is no result coming, ever! This is the end.
                 Some(Err(Disconnected))
@@ -901,8 +901,7 @@ where
                 // waker, so we cannot touch it any more. We really cannot do anything here
                 // except wait for the sender to complete its state transition into
                 // EVENT_SET or EVENT_DISCONNECTED.
-
-                self.poll_signaling(waker)
+                Some(self.poll_signaling())
             }
             Err(state) => {
                 unreachable!(
@@ -913,23 +912,46 @@ where
     }
 
     /// `poll()` impl for `EVENT_SIGNALING` state.
-    fn poll_signaling(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
+    fn poll_signaling(&self) -> Result<T, Disconnected> {
         // This is pretty much a mutex - we are locked out of touching the event state until
         // the sender completes its state transition into either EVENT_SET or EVENT_DISCONNECTED.
 
-        while self.state.load(atomic::Ordering::Relaxed) == EVENT_SIGNALING {
+        let state = loop {
+            let state = self.state.load(atomic::Ordering::Relaxed);
+
+            if state != EVENT_SIGNALING {
+                break state;
+            }
+
             // The sender-side transition is just a few instructions,
             // which should be near-instantaneous so we just spin.
             spin_loop();
+        };
+
+        // The store that brings us out of the SIGNALING state has Release semantics,
+        // so we must have an Acquire fence here to ensure we observe all its effects.
+        atomic::fence(atomic::Ordering::Acquire);
+
+        // After the sender-side transition, we continue, knowing now that the event must
+        // either by in SET or DISCONNECTED state, as those are the only valid sender-side
+        // transitions from SIGNALING.
+        match state {
+            EVENT_SET => {
+                let value = self.poll_set();
+
+                // The receiver will clean up.
+                Ok(value)
+            }
+            EVENT_DISCONNECTED => {
+                // The receiver is the last endpoint remaining, so it will clean up.
+                Err(Disconnected)
+            }
+            _ => {
+                unreachable!(
+                    "unreachable OnceEvent post-signaling state on receiver disconnect: {state}"
+                )
+            }
         }
-
-        // We left the above loop via a Relaxed load. However, the store on the sender side
-        // was a Release store, so we need to perform an Acquire fence here to ensure
-        // that we see all the effects of the sender-side transition before we proceed.
-        fence(atomic::Ordering::Acquire);
-
-        // After the sender-side transition, we go back to the start and repeat the entire poll.
-        self.poll(waker)
     }
 
     /// Drops the current awaiter.
@@ -1098,6 +1120,15 @@ where
 
                 // The sender will clean up the event later.
                 Ok(None)
+            }
+            EVENT_SIGNALING => {
+                // We had started listening for the value and the sender is currently in the
+                // middle of signaling us that it has set the value or disconnected.
+                // We need to wait for the sender to finish its work first.
+                match self.poll_signaling() {
+                    Ok(value) => Ok(Some(value)),
+                    Err(Disconnected) => Err(Disconnected),
+                }
             }
             EVENT_DISCONNECTED => {
                 // The receiver is the last endpoint remaining, so it will clean up.
