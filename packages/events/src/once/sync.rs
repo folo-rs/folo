@@ -15,7 +15,7 @@ use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
-use std::sync::atomic::{self, AtomicU8};
+use std::sync::atomic::{self, AtomicU8, fence};
 use std::task;
 use std::task::Waker;
 
@@ -922,6 +922,11 @@ where
             // which should be near-instantaneous so we just spin.
             spin_loop();
         }
+
+        // We left the above loop via a Relaxed load. However, the store on the sender side
+        // was a Release store, so we need to perform an Acquire fence here to ensure
+        // that we see all the effects of the sender-side transition before we proceed.
+        fence(atomic::Ordering::Acquire);
 
         // After the sender-side transition, we go back to the start and repeat the entire poll.
         self.poll(waker)
