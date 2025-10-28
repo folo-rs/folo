@@ -39,21 +39,5 @@ testing = { path = "../testing" }
 workspace = true
 
 [[bench]]
-name = "events_send_receive_comparison"
-harness = false
-
-[[bench]]
-name = "events_overhead_comparison"
-harness = false
-
-[[bench]]
-name = "events_full_cycle_comparison"
-harness = false
-
-[[bench]]
-name = "events_10k_comparison"
-harness = false
-
-[[bench]]
 name = "events_vs_3p"
 harness = false
