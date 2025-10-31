@@ -3,19 +3,19 @@
 //! These tests demonstrate that `ResourceUsageOutput` actually returns useful data from
 //! allocation and processor time tracking. They are written as integration tests so we
 //! can safely use a custom global allocator without interfering with other tests.
+#![cfg(all(not(miri), feature = "alloc_tracker"))]
 
+#[cfg(feature = "all_the_time")]
 use std::time::Duration;
 
 use many_cpus::ProcessorSet;
 use par_bench::{ResourceUsageExt, Run, ThreadPool};
 
 // Set up global allocator for allocation tracking tests
-#[cfg(feature = "alloc_tracker")]
 #[global_allocator]
 static ALLOCATOR: alloc_tracker::Allocator<std::alloc::System> = alloc_tracker::Allocator::system();
 
 #[test]
-#[cfg(all(not(miri), feature = "alloc_tracker"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
 fn resource_usage_output_provides_meaningful_allocation_data() {
     let allocs = alloc_tracker::Session::new();
     let mut pool = ThreadPool::new(ProcessorSet::single());
@@ -82,7 +82,7 @@ fn resource_usage_output_provides_meaningful_allocation_data() {
 }
 
 #[test]
-#[cfg(all(not(miri), feature = "all_the_time"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
+#[cfg(feature = "all_the_time")]
 fn resource_usage_output_provides_meaningful_processor_time_data() {
     let processor_time = all_the_time::Session::new();
     let mut pool = ThreadPool::new(ProcessorSet::single());
@@ -163,7 +163,7 @@ fn resource_usage_output_provides_meaningful_processor_time_data() {
 }
 
 #[test]
-#[cfg(all(not(miri), feature = "alloc_tracker", feature = "all_the_time"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
+#[cfg(feature = "all_the_time")]
 fn resource_usage_output_provides_meaningful_combined_data() {
     let allocs = alloc_tracker::Session::new();
     let processor_time = all_the_time::Session::new();
@@ -270,7 +270,6 @@ fn resource_usage_output_provides_meaningful_combined_data() {
 }
 
 #[test]
-#[cfg(all(not(miri), feature = "alloc_tracker"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
 fn resource_usage_output_handles_no_allocations_gracefully() {
     let allocs = alloc_tracker::Session::new();
     let mut pool = ThreadPool::new(ProcessorSet::single());
@@ -315,7 +314,6 @@ fn resource_usage_output_handles_no_allocations_gracefully() {
 }
 
 #[test]
-#[cfg(all(not(miri), feature = "alloc_tracker"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
 fn resource_usage_output_tracks_multiple_operations() {
     let allocs = alloc_tracker::Session::new();
     let mut pool = ThreadPool::new(ProcessorSet::single());
