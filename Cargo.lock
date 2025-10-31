@@ -443,18 +443,14 @@ dependencies = [
 name = "events"
 version = "0.4.1"
 dependencies = [
- "all_the_time",
  "alloc_tracker",
  "criterion",
  "futures",
  "infinity_pool",
- "many_cpus",
  "new_zealand",
  "oneshot",
- "par_bench",
  "parking_lot",
  "rand 0.9.2",
- "spin_on",
  "static_assertions",
  "testing",
 ]
@@ -1582,15 +1578,6 @@ checksum = "233504af464074f9d066d7b5416c5f9b894a5862a6506e306f7b816cdd6f1807"
 dependencies = [
  "libc",
  "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "spin_on"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "076e103ed41b9864aa838287efe5f4e3a7a0362dd00671ae62a212e5e4612da2"
-dependencies = [
- "pin-utils",
 ]
 
 [[package]]
