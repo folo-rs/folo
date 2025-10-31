@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 #[cfg(test)]
 use crate::pal::MockPlatform;
+#[cfg(any(miri, not(any(target_os = "linux", windows))))]
 use crate::pal::RustPlatform;
 #[cfg(all(any(target_os = "linux", windows), not(miri)))]
 use crate::pal::{BUILD_TARGET_PLATFORM, BuildTargetPlatform};
@@ -12,8 +13,9 @@ use crate::pal::{Platform, TimeSourceFacade};
 #[derive(Clone)]
 pub(crate) enum PlatformFacade {
     #[cfg(all(any(target_os = "linux", windows), not(miri)))]
-    Real(&'static BuildTargetPlatform),
+    BuildTarget(&'static BuildTargetPlatform),
 
+    #[cfg(any(miri, not(any(target_os = "linux", windows))))]
     Rust(&'static RustPlatform),
 
     #[cfg(test)]
@@ -23,7 +25,7 @@ pub(crate) enum PlatformFacade {
 impl PlatformFacade {
     #[cfg(all(any(target_os = "linux", windows), not(miri)))]
     pub(crate) fn real() -> Self {
-        Self::Real(&BUILD_TARGET_PLATFORM)
+        Self::BuildTarget(&BUILD_TARGET_PLATFORM)
     }
 
     #[cfg(any(miri, not(any(target_os = "linux", windows))))]
@@ -38,7 +40,8 @@ impl Platform for PlatformFacade {
     fn new_time_source(&self) -> TimeSourceFacade {
         match self {
             #[cfg(all(any(target_os = "linux", windows), not(miri)))]
-            Self::Real(p) => p.new_time_source().into(),
+            Self::BuildTarget(p) => p.new_time_source().into(),
+            #[cfg(any(miri, not(any(target_os = "linux", windows))))]
             Self::Rust(p) => p.new_time_source().into(),
             #[cfg(test)]
             Self::Mock(p) => p.new_time_source().into(),
@@ -49,10 +52,11 @@ impl Platform for PlatformFacade {
 #[cfg(all(any(target_os = "linux", windows), not(miri)))]
 impl From<&'static BuildTargetPlatform> for PlatformFacade {
     fn from(p: &'static BuildTargetPlatform) -> Self {
-        Self::Real(p)
+        Self::BuildTarget(p)
     }
 }
 
+#[cfg(any(miri, not(any(target_os = "linux", windows))))]
 impl From<&'static RustPlatform> for PlatformFacade {
     fn from(p: &'static RustPlatform) -> Self {
         Self::Rust(p)
@@ -70,7 +74,8 @@ impl Debug for PlatformFacade {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             #[cfg(all(any(target_os = "linux", windows), not(miri)))]
-            Self::Real(p) => p.fmt(f),
+            Self::BuildTarget(p) => p.fmt(f),
+            #[cfg(any(miri, not(any(target_os = "linux", windows))))]
             Self::Rust(p) => p.fmt(f),
             #[cfg(test)]
             Self::Mock(p) => p.fmt(f),

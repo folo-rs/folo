@@ -21,4 +21,5 @@ pub(crate) use mock::*;
 
 // We do not cfg(miri) this simply because that disables IDE editor support, which is annoying.
 mod rust;
+#[cfg(any(miri, not(any(target_os = "linux", windows))))]
 pub(crate) use rust::*;

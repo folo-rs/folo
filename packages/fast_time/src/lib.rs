@@ -76,8 +76,8 @@
 //!
 //! This crate provides optimized implementations for:
 //!
-//! * Windows 11
-//! * Ubuntu 24 (Linux)
+//! * Windows
+//! * Linux
 //!
 //! On other platforms, the crate functions as a lightweight wrapper around the
 //! Rust standard library's `Instant` type, ensuring the crate compiles on all
