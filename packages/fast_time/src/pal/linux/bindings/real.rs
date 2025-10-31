@@ -13,6 +13,16 @@ use crate::pal::linux::Bindings;
 pub(crate) struct BuildTargetBindings;
 
 impl Bindings for BuildTargetBindings {
+    /// Returns the current monotonic time in nanoseconds.
+    ///
+    /// Uses `CLOCK_MONOTONIC_COARSE` which provides a faster but less precise clock
+    /// compared to `CLOCK_MONOTONIC`. This is appropriate for high-frequency timestamp
+    /// capture where absolute precision is less important than low overhead.
+    ///
+    /// The arithmetic is guaranteed not to overflow because:
+    /// - `tv_sec` represents seconds since an epoch and will not exceed the range of u128
+    ///   for any realistic timestamp within the lifespan of the universe.
+    /// - The multiplication by `1_000_000_000` converts seconds to nanoseconds.
     #[expect(
         clippy::cast_sign_loss,
         clippy::arithmetic_side_effects,
