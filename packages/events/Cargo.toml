@@ -18,20 +18,12 @@ infinity_pool = { workspace = true }
 parking_lot = { workspace = true }
 
 [dev-dependencies]
-all_the_time = { path = "../all_the_time" }
 alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
 futures = { workspace = true }
-many_cpus = { path = "../many_cpus" }
 new_zealand = { path = "../new_zealand" }
 oneshot = { workspace = true }
-par_bench = { path = "../par_bench", features = [
-    "criterion",
-    "alloc_tracker",
-    "all_the_time",
-] }
 rand = { workspace = true, features = ["small_rng"] }
-spin_on = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
 
