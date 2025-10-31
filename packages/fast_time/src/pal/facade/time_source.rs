@@ -5,11 +5,11 @@ use std::time::Instant;
 use crate::pal::MockTimeSource;
 use crate::pal::RustTimeSource;
 use crate::pal::TimeSource;
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(all(any(target_os = "linux", windows), not(miri)))]
 use crate::pal::TimeSourceImpl;
 
 pub(crate) enum TimeSourceFacade {
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(all(any(target_os = "linux", windows), not(miri)))]
     Real(TimeSourceImpl),
 
     Rust(RustTimeSource),
@@ -18,7 +18,7 @@ pub(crate) enum TimeSourceFacade {
     Mock(MockTimeSource),
 }
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(all(any(target_os = "linux", windows), not(miri)))]
 impl From<TimeSourceImpl> for TimeSourceFacade {
     fn from(ts: TimeSourceImpl) -> Self {
         Self::Real(ts)
@@ -41,7 +41,7 @@ impl From<MockTimeSource> for TimeSourceFacade {
 impl TimeSource for TimeSourceFacade {
     fn now(&mut self) -> Instant {
         match self {
-            #[cfg(any(target_os = "linux", windows))]
+            #[cfg(all(any(target_os = "linux", windows), not(miri)))]
             Self::Real(ts) => ts.now(),
             Self::Rust(ts) => ts.now(),
             #[cfg(test)]
@@ -53,7 +53,7 @@ impl TimeSource for TimeSourceFacade {
 impl Debug for TimeSourceFacade {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            #[cfg(any(target_os = "linux", windows))]
+            #[cfg(all(any(target_os = "linux", windows), not(miri)))]
             Self::Real(ts) => ts.fmt(f),
             Self::Rust(ts) => ts.fmt(f),
             #[cfg(test)]

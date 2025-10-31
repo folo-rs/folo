@@ -5,13 +5,13 @@ use std::sync::Arc;
 #[cfg(test)]
 use crate::pal::MockPlatform;
 use crate::pal::RustPlatform;
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(all(any(target_os = "linux", windows), not(miri)))]
 use crate::pal::{BUILD_TARGET_PLATFORM, BuildTargetPlatform};
 use crate::pal::{Platform, TimeSourceFacade};
 
 #[derive(Clone)]
 pub(crate) enum PlatformFacade {
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(all(any(target_os = "linux", windows), not(miri)))]
     Real(&'static BuildTargetPlatform),
 
     Rust(&'static RustPlatform),
@@ -37,7 +37,7 @@ impl Platform for PlatformFacade {
 
     fn new_time_source(&self) -> TimeSourceFacade {
         match self {
-            #[cfg(any(target_os = "linux", windows))]
+            #[cfg(all(any(target_os = "linux", windows), not(miri)))]
             Self::Real(p) => p.new_time_source().into(),
             Self::Rust(p) => p.new_time_source().into(),
             #[cfg(test)]
@@ -46,7 +46,7 @@ impl Platform for PlatformFacade {
     }
 }
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(all(any(target_os = "linux", windows), not(miri)))]
 impl From<&'static BuildTargetPlatform> for PlatformFacade {
     fn from(p: &'static BuildTargetPlatform) -> Self {
         Self::Real(p)
@@ -69,7 +69,7 @@ impl From<MockPlatform> for PlatformFacade {
 impl Debug for PlatformFacade {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            #[cfg(any(target_os = "linux", windows))]
+            #[cfg(all(any(target_os = "linux", windows), not(miri)))]
             Self::Real(p) => p.fmt(f),
             Self::Rust(p) => p.fmt(f),
             #[cfg(test)]
