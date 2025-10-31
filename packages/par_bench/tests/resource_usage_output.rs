@@ -3,9 +3,8 @@
 //! These tests demonstrate that `ResourceUsageOutput` actually returns useful data from
 //! allocation and processor time tracking. They are written as integration tests so we
 //! can safely use a custom global allocator without interfering with other tests.
-#![cfg(all(not(miri), feature = "alloc_tracker"))]
+#![cfg(all(not(miri), feature = "alloc_tracker", feature = "all_the_time"))]
 
-#[cfg(feature = "all_the_time")]
 use std::time::Duration;
 
 use many_cpus::ProcessorSet;
@@ -82,7 +81,6 @@ fn resource_usage_output_provides_meaningful_allocation_data() {
 }
 
 #[test]
-#[cfg(feature = "all_the_time")]
 fn resource_usage_output_provides_meaningful_processor_time_data() {
     let processor_time = all_the_time::Session::new();
     let mut pool = ThreadPool::new(ProcessorSet::single());
@@ -163,7 +161,6 @@ fn resource_usage_output_provides_meaningful_processor_time_data() {
 }
 
 #[test]
-#[cfg(feature = "all_the_time")]
 fn resource_usage_output_provides_meaningful_combined_data() {
     let allocs = alloc_tracker::Session::new();
     let processor_time = all_the_time::Session::new();
