@@ -15,7 +15,7 @@ default = []
 
 [dependencies]
 
-[target.'cfg(unix)'.dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 libc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]

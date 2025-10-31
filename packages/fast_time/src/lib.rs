@@ -7,18 +7,22 @@
 //!
 //! # Key Features
 //!
-//! - **Low overhead**: Optimized for rapid, repeated timestamp capture
+//! - **Low overhead**: Optimized for rapid, repeated timestamp capture on supported platforms
 //! - **Monotonic timestamps**: Guarantees that timestamps always increase
-//! - **Cross-platform**: Works on both Windows and Linux
+//! - **Cross-platform**: Works on all platforms, with optimizations for Windows and Linux
 //! - **Standard library compatibility**: Converts to/from [`std::time::Instant`]
 //!
 //! # Trade-offs
+//!
+//! On optimized platforms (Windows, Linux):
 //!
 //! - May lag behind wall-clock time by a few milliseconds
 //! - May not reflect explicit wall clock adjustments (e.g., NTP synchronization)
 //! - Optimized for frequency over precision
 //!
-//! # Hot loop performance comparison
+//! On other platforms, performance is equivalent to `std::time::Instant`.
+//!
+//! # Hot loop performance comparison (optimized platforms)
 //!
 //! | Platform                 | `fast_time` | `std::time` |
 //! |--------------------------|-------------|-------------|
@@ -70,10 +74,14 @@
 //!
 //! # Supported platforms
 //!
-//! This crate is tested on:
+//! This crate provides optimized implementations for:
 //!
-//! * Windows 11
-//! * Ubuntu 24
+//! * Windows
+//! * Linux
+//!
+//! On other platforms, the crate functions as a lightweight wrapper around the
+//! Rust standard library's `Instant` type, ensuring the crate compiles on all
+//! platforms without requiring platform-specific optimizations.
 
 mod pal;
 
