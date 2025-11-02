@@ -151,7 +151,7 @@ where
     }
 
     /// Sets the value of the event and notifies the awaiter, if there is one.
-    /// 
+    ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
     fn set(&self, result: T) -> Result<(), Disconnected> {
         let value_cell = self.value.get();
@@ -511,12 +511,9 @@ where
     /// Assumes there is a value in `value`.
     unsafe fn destroy_value(&self) {
         // SAFETY: Forwarding guarantees from the caller.
-        let value_cell = unsafe {
-            self.value
-                .get()
-                .as_mut()
-                .expect("UnsafeCell pointer is never null")
-        };
+        let value_cell_maybe = unsafe { self.value.get().as_mut() };
+        // SAFETY: UnsafeCell pointer is never null.
+        let value_cell = unsafe { value_cell_maybe.unwrap_unchecked() };
 
         // SAFETY: Forwarding guarantees from the caller.
         unsafe {
@@ -554,12 +551,9 @@ where
                 // references in this type, which cannot exist at the moment because
                 // we are in the `EVENT_SIGNALING` state that acts as a mutex to block access
                 // to the `awaiter` field.
-                let awaiter_cell = unsafe {
-                    self.awaiter
-                        .get()
-                        .as_mut()
-                        .expect("UnsafeCell pointer is never null")
-                };
+                let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
+                // SAFETY: UnsafeCell pointer is never null.
+                let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
 
                 // We extract the waker and consider the field uninitialized again.
                 // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.

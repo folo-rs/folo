@@ -192,12 +192,9 @@ impl<T> LocalEvent<T> {
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
                 // the type is single-threaded and does not let any references escape.
-                let awaiter_cell = unsafe {
-                    self.awaiter
-                        .get()
-                        .as_mut()
-                        .expect("UnsafeCell pointer is never null")
-                };
+                let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
+                // SAFETY: UnsafeCell pointer is never null.
+                let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
 
                 // We extract the waker and consider the field uninitialized again.
                 // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
@@ -259,12 +256,9 @@ impl<T> LocalEvent<T> {
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
                 // the type is single-threaded and does not let any references escape.
-                let awaiter_cell = unsafe {
-                    self.awaiter
-                        .get()
-                        .as_mut()
-                        .expect("UnsafeCell pointer is never null")
-                };
+                let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
+                // SAFETY: UnsafeCell pointer is never null.
+                let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
 
                 awaiter_cell.write(waker.clone());
 
@@ -278,12 +272,9 @@ impl<T> LocalEvent<T> {
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
                 // the type is single-threaded and does not let any references escape.
-                let value_cell = unsafe {
-                    self.value
-                        .get()
-                        .as_ref()
-                        .expect("UnsafeCell pointer is never null")
-                };
+                let value_cell_maybe = unsafe { self.value.get().as_ref() };
+                // SAFETY: UnsafeCell pointer is never null.
+                let value_cell = unsafe { value_cell_maybe.unwrap_unchecked() };
 
                 // We extract the value and consider the cell uninitialized.
                 //
@@ -300,12 +291,9 @@ impl<T> LocalEvent<T> {
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
                 // the type is single-threaded and does not let any references escape.
-                let awaiter_cell = unsafe {
-                    self.awaiter
-                        .get()
-                        .as_mut()
-                        .expect("UnsafeCell pointer is never null")
-                };
+                let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
+                // SAFETY: UnsafeCell pointer is never null.
+                let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
 
                 awaiter_cell.write(waker.clone());
                 None
@@ -343,12 +331,9 @@ impl<T> LocalEvent<T> {
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
                 // the type is single-threaded and does not let any references escape.
-                let awaiter_cell = unsafe {
-                    self.awaiter
-                        .get()
-                        .as_mut()
-                        .expect("UnsafeCell pointer is never null")
-                };
+                let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
+                // SAFETY: UnsafeCell pointer is never null.
+                let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
 
                 // We extract the waker and consider the field uninitialized again.
                 // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
@@ -405,12 +390,9 @@ impl<T> LocalEvent<T> {
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
                 // the type is single-threaded and does not let any references escape.
-                let value_cell = unsafe {
-                    self.value
-                        .get()
-                        .as_mut()
-                        .expect("UnsafeCell pointer is never null")
-                };
+                let value_cell_maybe = unsafe { self.value.get().as_mut() };
+                // SAFETY: UnsafeCell pointer is never null.
+                let value_cell = unsafe { value_cell_maybe.unwrap_unchecked() };
 
                 // We extract the value and consider the cell uninitialized.
                 //
@@ -429,12 +411,9 @@ impl<T> LocalEvent<T> {
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
                 // the type is single-threaded and does not let any references escape.
-                let awaiter_cell = unsafe {
-                    self.awaiter
-                        .get()
-                        .as_mut()
-                        .expect("UnsafeCell pointer is never null")
-                };
+                let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
+                // SAFETY: UnsafeCell pointer is never null.
+                let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
 
                 // We drop the waker and consider the field uninitialized again.
                 // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
