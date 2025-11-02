@@ -151,7 +151,7 @@ where
     }
 
     /// Sets the value of the event and notifies the awaiter, if there is one.
-    ///
+    /// 
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
     fn set(&self, result: T) -> Result<(), Disconnected> {
         let value_cell = self.value.get();
@@ -176,13 +176,13 @@ where
         match previous_state {
             EVENT_BOUND => {
                 // Current state: EVENT_SET
-                // There was nobody listening via the receiver - our work here is done.
+                // There was nobody polling via the receiver - our work here is done.
                 // The receiver was still connected, so it will clean up the event.
                 Ok(())
             }
             EVENT_AWAITING => {
                 // Current state: EVENT_SIGNALING
-                // There was someone listening via the receiver. We need to
+                // There was someone polling via the receiver. We need to
                 // notify the awaiter that they can come back for the value now.
 
                 // We need to acquire the synchronization block for the `awaiter`.
@@ -221,7 +221,7 @@ where
                 Ok(())
             }
             EVENT_DISCONNECTED => {
-                // The receiver has been dropped, so we need to clean up the event.
+                // The receiver has already been dropped, so we need to clean up the event.
                 // We have to first drop the value that we inserted into the event, though.
 
                 // SAFETY: The receiver is gone - there is nobody else who might be touching
@@ -231,6 +231,11 @@ where
                 unsafe {
                     self.destroy_value();
                 }
+
+                // Before it is safe to destroy the event, we need to synchronize with whatever
+                // writes the receiver may have done into its state (e.g. it may have removed
+                // its waker before it marked the event as disconnected).
+                atomic::fence(atomic::Ordering::Acquire);
 
                 Err(Disconnected)
             }
@@ -332,7 +337,7 @@ where
             }
             Err(state) => {
                 unreachable!(
-                    "unreachable OnceEvent state on poll state transition that followed EVENT_BOUND: {state}"
+                    "unreachable Event state on poll state transition that followed EVENT_BOUND: {state}"
                 );
             }
         }
