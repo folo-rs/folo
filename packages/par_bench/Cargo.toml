@@ -45,5 +45,9 @@ harness = false
 name = "par_bench_manual"
 harness = false
 
+[[example]]
+name = "resource_usage_ext_example"
+required-features = ["alloc_tracker"]
+
 [lints]
 workspace = true
