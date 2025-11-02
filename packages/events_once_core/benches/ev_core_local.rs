@@ -19,15 +19,29 @@ fn entrypoint(c: &mut Criterion) {
     let mut g = c.benchmark_group("events_once_core_local");
 
     g.bench_function("send_receive", |b| {
-        b.iter(|| {
-            let mut event = pin!(MaybeUninit::<LocalEvent<i32>>::uninit());
-            let (sender, receiver) = unsafe { LocalEvent::placed(event.as_mut()) };
-            let mut receiver = pin!(receiver);
+        b.iter_custom(|iterations| {
+            let mut events =
+                iter::repeat_with(|| Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit()))
+                    .take(iterations as usize)
+                    .collect::<Vec<_>>();
 
-            sender.send(42);
+            let endpoints = events
+                .iter_mut()
+                .map(|event| unsafe { LocalEvent::placed(event.as_mut()) })
+                .collect::<Vec<_>>();
 
-            let mut cx = task::Context::from_waker(Waker::noop());
-            _ = black_box(receiver.as_mut().poll(&mut cx));
+            let start = Instant::now();
+
+            for (sender, receiver) in endpoints {
+                let mut receiver = pin!(receiver);
+
+                sender.send(42);
+
+                let mut cx = task::Context::from_waker(Waker::noop());
+                _ = black_box(receiver.as_mut().poll(&mut cx));
+            }
+
+            start.elapsed()
         });
     });
 
