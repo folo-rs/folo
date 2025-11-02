@@ -10,8 +10,7 @@ use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{self, AtomicU8};
-use std::task;
-use std::task::Waker;
+use std::task::{self, Poll, Waker};
 
 #[cfg(debug_assertions)]
 use parking_lot::Mutex;
@@ -964,7 +963,7 @@ where
 {
     type Output = Result<E::T, Disconnected>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
         let event_ref = self
             .event_ref
             .as_ref()
@@ -985,7 +984,7 @@ where
             this.event_ref = None;
         }
 
-        inner_poll_result.map_or_else(|| task::Poll::Pending, task::Poll::Ready)
+        inner_poll_result.map_or_else(|| Poll::Pending, Poll::Ready)
     }
 }
 
@@ -1006,5 +1005,707 @@ where
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
+mod tests {
+    use std::pin::pin;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    use futures::executor::block_on;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+    use super::*;
+
+    assert_impl_all!(Event<u32>: Send, Sync);
+
+    assert_impl_all!(BoxedRef<u32>: Send);
+    assert_not_impl_any!(BoxedRef<u32>: Sync);
+
+    assert_impl_all!(PtrRef<u32>: Send);
+    assert_not_impl_any!(PtrRef<u32>: Sync);
+
+    assert_impl_all!(Sender<BoxedRef<u32>>: Send);
+    assert_not_impl_any!(Sender<BoxedRef<u32>>: Sync);
+
+    assert_impl_all!(Receiver<BoxedRef<u32>>: Send);
+    assert_not_impl_any!(Receiver<BoxedRef<u32>>: Sync);
+
+    assert_impl_all!(Sender<PtrRef<u32>>: Send);
+    assert_not_impl_any!(Sender<PtrRef<u32>>: Sync);
+
+    assert_impl_all!(Receiver<PtrRef<u32>>: Send);
+    assert_not_impl_any!(Receiver<PtrRef<u32>>: Sync);
+
+    #[test]
+    fn boxed_send_receive() {
+        let (sender, receiver) = Event::<i32>::boxed();
+        let mut receiver = pin!(receiver);
+
+        sender.send(42);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+    }
+
+    #[test]
+    fn boxed_receive_send_receive() {
+        let (sender, receiver) = Event::<i32>::boxed();
+        let mut receiver = pin!(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Pending));
+
+        sender.send(42);
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+    }
+
+    #[test]
+    fn boxed_drop_send() {
+        let (sender, _) = Event::<i32>::boxed();
+
+        sender.send(42);
+    }
+
+    #[test]
+    fn boxed_drop_receive() {
+        let (_, receiver) = Event::<i32>::boxed();
+        let mut receiver = pin!(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
+    }
+
+    #[test]
+    fn boxed_receive_drop_receive() {
+        let (sender, receiver) = Event::<i32>::boxed();
+        let mut receiver = pin!(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Pending));
+
+        drop(sender);
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
+    }
+
+    #[test]
+    fn boxed_receive_drop_send() {
+        let (sender, receiver) = Event::<i32>::boxed();
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Pending));
+
+        drop(receiver);
+
+        sender.send(42);
+    }
+
+    #[test]
+    fn boxed_receive_drop_drop_receiver_first() {
+        let (sender, receiver) = Event::<i32>::boxed();
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Pending));
+
+        drop(receiver);
+        drop(sender);
+    }
+
+    #[test]
+    fn boxed_receive_drop_drop_sender_first() {
+        let (sender, receiver) = Event::<i32>::boxed();
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Pending));
+
+        drop(sender);
+        drop(receiver);
+    }
+
+    #[test]
+    fn boxed_drop_drop_receiver_first() {
+        let (sender, receiver) = Event::<i32>::boxed();
+
+        drop(receiver);
+        drop(sender);
+    }
+
+    #[test]
+    fn boxed_drop_drop_sender_first() {
+        let (sender, receiver) = Event::<i32>::boxed();
+
+        drop(sender);
+        drop(receiver);
+    }
+
+    #[test]
+    fn boxed_is_ready() {
+        let (sender, receiver) = Event::<i32>::boxed();
+        let mut receiver = pin!(receiver);
+
+        assert!(!receiver.is_ready());
+
+        sender.send(42);
+
+        assert!(receiver.is_ready());
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+    }
+
+    #[test]
+    fn boxed_drop_is_ready() {
+        let (sender, receiver) = Event::<i32>::boxed();
+        let mut receiver = pin!(receiver);
+
+        assert!(!receiver.is_ready());
+
+        drop(sender);
+
+        assert!(receiver.is_ready());
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
+    }
+
+    #[test]
+    fn boxed_into_value() {
+        let (sender, receiver) = Event::<i32>::boxed();
+
+        let Err(receiver) = receiver.into_value() else {
+            panic!("expected no value yet");
+        };
+
+        sender.send(42);
+
+        assert!(matches!(receiver.into_value(), Ok(Ok(42))));
+    }
+
+    #[test]
+    fn boxed_drop_into_value() {
+        let (sender, receiver) = Event::<i32>::boxed();
+
+        drop(sender);
+
+        assert!(matches!(receiver.into_value(), Ok(Err(Disconnected))));
+    }
+
+    #[test]
+    #[should_panic]
+    fn boxed_panic_poll_after_completion() {
+        let (sender, receiver) = Event::<i32>::boxed();
+        let mut receiver = pin!(receiver);
+
+        sender.send(42);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        assert!(matches!(
+            receiver.as_mut().poll(&mut cx),
+            Poll::Ready(Ok(42))
+        ));
+
+        // Should panic - invalid to access receiver after it completes.
+        _ = receiver.as_mut().poll(&mut cx);
+    }
+
+    #[test]
+    #[should_panic]
+    fn boxed_panic_is_ready_after_completion() {
+        let (sender, receiver) = Event::<i32>::boxed();
+        let mut receiver = pin!(receiver);
+
+        sender.send(42);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        assert!(matches!(
+            receiver.as_mut().poll(&mut cx),
+            Poll::Ready(Ok(42))
+        ));
+
+        // Should panic - invalid to access receiver after it completes.
+        _ = receiver.is_ready();
+    }
+
+    #[test]
+    fn placed_send_receive() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let mut receiver = pin!(receiver);
+
+        sender.send(42);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+    }
+
+    #[test]
+    fn placed_receive_send_receive() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let mut receiver = pin!(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Pending));
+
+        sender.send(42);
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+    }
+
+    #[test]
+    fn placed_drop_send() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, _) = unsafe { Event::<i32>::placed(place.as_mut()) };
+
+        sender.send(42);
+    }
+
+    #[test]
+    fn placed_drop_receive() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (_, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let mut receiver = pin!(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
+    }
+
+    #[test]
+    fn placed_receive_drop_receive() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let mut receiver = pin!(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Pending));
+
+        drop(sender);
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
+    }
+
+    #[test]
+    fn placed_receive_drop_send() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Pending));
+
+        drop(receiver);
+
+        sender.send(42);
+    }
+
+    #[test]
+    fn placed_receive_drop_drop_receiver_first() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Pending));
+
+        drop(receiver);
+        drop(sender);
+    }
+
+    #[test]
+    fn placed_receive_drop_drop_sender_first() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Pending));
+
+        drop(sender);
+        drop(receiver);
+    }
+
+    #[test]
+    fn placed_drop_drop_receiver_first() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+
+        drop(receiver);
+        drop(sender);
+    }
+
+    #[test]
+    fn placed_drop_drop_sender_first() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+
+        drop(sender);
+        drop(receiver);
+    }
+
+    #[test]
+    fn placed_is_ready() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let mut receiver = pin!(receiver);
+
+        assert!(!receiver.is_ready());
+
+        sender.send(42);
+
+        assert!(receiver.is_ready());
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+    }
+
+    #[test]
+    fn placed_drop_is_ready() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let mut receiver = pin!(receiver);
+
+        assert!(!receiver.is_ready());
+
+        drop(sender);
+
+        assert!(receiver.is_ready());
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
+    }
+
+    #[test]
+    fn placed_into_value() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+
+        let Err(receiver) = receiver.into_value() else {
+            panic!("expected no value yet");
+        };
+
+        sender.send(42);
+
+        assert!(matches!(receiver.into_value(), Ok(Ok(42))));
+    }
+
+    #[test]
+    fn placed_drop_into_value() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+
+        drop(sender);
+
+        assert!(matches!(receiver.into_value(), Ok(Err(Disconnected))));
+    }
+
+    #[test]
+    #[should_panic]
+    fn placed_panic_poll_after_completion() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let mut receiver = pin!(receiver);
+
+        sender.send(42);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        assert!(matches!(
+            receiver.as_mut().poll(&mut cx),
+            Poll::Ready(Ok(42))
+        ));
+
+        // Should panic - invalid to access receiver after it completes.
+        _ = receiver.as_mut().poll(&mut cx);
+    }
+
+    #[test]
+    #[should_panic]
+    fn placed_panic_is_ready_after_completion() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let mut receiver = pin!(receiver);
+
+        sender.send(42);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        assert!(matches!(
+            receiver.as_mut().poll(&mut cx),
+            Poll::Ready(Ok(42))
+        ));
+
+        // Should panic - invalid to access receiver after it completes.
+        _ = receiver.is_ready();
+    }
+
+    #[test]
+    fn boxed_send_receive_mt() {
+        let (sender, receiver) = Event::<i32>::boxed();
+
+        thread::spawn(move || {
+            sender.send(42);
+        })
+        .join()
+        .unwrap();
+
+        thread::spawn(move || {
+            let mut receiver = pin!(receiver);
+            let mut cx = task::Context::from_waker(Waker::noop());
+
+            let poll_result = receiver.as_mut().poll(&mut cx);
+            assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn boxed_receive_send_receive_mt() {
+        let (sender, receiver) = Event::<i32>::boxed();
+
+        let first_poll_completed = Arc::new(Barrier::new(2));
+        let first_poll_completed_clone = Arc::clone(&first_poll_completed);
+
+        let send_thread = thread::spawn(move || {
+            first_poll_completed.wait();
+
+            sender.send(42);
+        });
+
+        let receive_thread = thread::spawn(move || {
+            let mut receiver = pin!(receiver);
+            let mut cx = task::Context::from_waker(Waker::noop());
+
+            let poll_result = receiver.as_mut().poll(&mut cx);
+            assert!(matches!(poll_result, Poll::Pending));
+
+            first_poll_completed_clone.wait();
+
+            // We do not know how many polls this will take, so we switch into real async.
+            block_on(async {
+                let result = &mut receiver.await;
+                assert!(matches!(result, Ok(42)));
+            });
+        });
+
+        send_thread.join().unwrap();
+        receive_thread.join().unwrap();
+    }
+
+    #[test]
+    fn boxed_send_receive_unbiased_mt() {
+        let (sender, receiver) = Event::<i32>::boxed();
+
+        let receive_thread = thread::spawn(move || {
+            block_on(async {
+                let result = &mut receiver.await;
+                assert!(matches!(result, Ok(42)));
+            });
+        });
+
+        let send_thread = thread::spawn(move || {
+            sender.send(42);
+        });
+
+        send_thread.join().unwrap();
+        receive_thread.join().unwrap();
+    }
+
+    #[test]
+    fn boxed_drop_receive_unbiased_mt() {
+        let (sender, receiver) = Event::<i32>::boxed();
+
+        let receive_thread = thread::spawn(move || {
+            block_on(async {
+                let result = &mut receiver.await;
+                assert!(matches!(result, Err(Disconnected)));
+            });
+        });
+
+        let send_thread = thread::spawn(move || {
+            drop(sender);
+        });
+
+        send_thread.join().unwrap();
+        receive_thread.join().unwrap();
+    }
+
+    #[test]
+    fn boxed_drop_send_unbiased_mt() {
+        let (sender, receiver) = Event::<i32>::boxed();
+
+        let receive_thread = thread::spawn(move || {
+            drop(receiver);
+        });
+
+        let send_thread = thread::spawn(move || {
+            sender.send(42);
+        });
+
+        send_thread.join().unwrap();
+        receive_thread.join().unwrap();
+    }
+
+    #[test]
+    fn placed_send_receive_mt() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+
+        thread::spawn(move || {
+            sender.send(42);
+        })
+        .join()
+        .unwrap();
+
+        thread::spawn(move || {
+            let mut receiver = pin!(receiver);
+            let mut cx = task::Context::from_waker(Waker::noop());
+
+            let poll_result = receiver.as_mut().poll(&mut cx);
+            assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn placed_receive_send_receive_mt() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+
+        let first_poll_completed = Arc::new(Barrier::new(2));
+        let first_poll_completed_clone = Arc::clone(&first_poll_completed);
+
+        let send_thread = thread::spawn(move || {
+            first_poll_completed.wait();
+
+            sender.send(42);
+        });
+
+        let receive_thread = thread::spawn(move || {
+            let mut receiver = pin!(receiver);
+            let mut cx = task::Context::from_waker(Waker::noop());
+
+            let poll_result = receiver.as_mut().poll(&mut cx);
+            assert!(matches!(poll_result, Poll::Pending));
+
+            first_poll_completed_clone.wait();
+
+            // We do not know how many polls this will take, so we switch into real async.
+            block_on(async {
+                let result = &mut receiver.await;
+                assert!(matches!(result, Ok(42)));
+            });
+        });
+
+        send_thread.join().unwrap();
+        receive_thread.join().unwrap();
+    }
+
+    #[test]
+    fn placed_send_receive_unbiased_mt() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+
+        let receive_thread = thread::spawn(move || {
+            block_on(async {
+                let result = &mut receiver.await;
+                assert!(matches!(result, Ok(42)));
+            });
+        });
+
+        let send_thread = thread::spawn(move || {
+            sender.send(42);
+        });
+
+        send_thread.join().unwrap();
+        receive_thread.join().unwrap();
+    }
+
+    #[test]
+    fn placed_drop_receive_unbiased_mt() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+
+        let receive_thread = thread::spawn(move || {
+            block_on(async {
+                let result = &mut receiver.await;
+                assert!(matches!(result, Err(Disconnected)));
+            });
+        });
+
+        let send_thread = thread::spawn(move || {
+            drop(sender);
+        });
+
+        send_thread.join().unwrap();
+        receive_thread.join().unwrap();
+    }
+
+    #[test]
+    fn placed_drop_send_unbiased_mt() {
+        let mut place = Box::pin(MaybeUninit::<Event<i32>>::uninit());
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+
+        let receive_thread = thread::spawn(move || {
+            drop(receiver);
+        });
+
+        let send_thread = thread::spawn(move || {
+            sender.send(42);
+        });
+
+        send_thread.join().unwrap();
+        receive_thread.join().unwrap();
     }
 }
