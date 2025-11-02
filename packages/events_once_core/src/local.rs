@@ -24,7 +24,7 @@ pub struct LocalEvent<T> {
     /// The logical state of the event; see constants in `state.rs`.
     state: Cell<u8>,
 
-    /// If `state` is [`EVENT_AWAITING`] or [`EVENT_SIGNALING`], this field is initialized with the
+    /// If `state` is [`EVENT_AWAITING`], this field is initialized with the
     /// waker of whoever most recently awaited the receiver. In other states, this field is not
     /// initialized.
     ///
@@ -168,24 +168,17 @@ impl<T> LocalEvent<T> {
             value_cell.write(MaybeUninit::new(result));
         }
 
-        // TODO: This "add" operation only matters for thread-safe events. In fact, it causes us
-        // to do an unnecessary state transition for the local case because the SIGNALING state
-        // cannot actually be observed yet we enter it anyway. We should switch to a direct
-        // match and assignment for the single-threaded implementation here.
-
-        // A "set" operation is always a state increment. See `state.rs`.
         let previous_state = self.state.get();
-        self.state.set(previous_state.wrapping_add(1));
 
         match previous_state {
             EVENT_BOUND => {
-                // Current state: EVENT_SET
+                self.state.set(EVENT_SET);
+
                 // There was nobody listening via the receiver - our work here is done.
                 // The receiver is still connected, so it will clean up.
                 Ok(())
             }
             EVENT_AWAITING => {
-                // Current state: EVENT_SIGNALING
                 // There was someone listening via the receiver. We need to
                 // notify the awaiter that they can come back for the value now.
 
@@ -218,12 +211,9 @@ impl<T> LocalEvent<T> {
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
                 // the type is single-threaded and does not let any references escape.
-                let value_cell = unsafe {
-                    self.value
-                        .get()
-                        .as_mut()
-                        .expect("UnsafeCell pointer is never null")
-                };
+                let value_cell_maybe = unsafe { self.value.get().as_mut() };
+                // SAFETY: UnsafeCell pointer is never null.
+                let value_cell = unsafe { value_cell_maybe.unwrap_unchecked() };
 
                 // We drop the value and consider the cell uninitialized.
                 //
@@ -235,7 +225,7 @@ impl<T> LocalEvent<T> {
                 Err(Disconnected)
             }
             _ => {
-                unreachable!("unreachable LocalOnceEvent state on set: {previous_state}");
+                unreachable!("unreachable LocalEvent state on set: {previous_state}");
             }
         }
     }
@@ -303,7 +293,7 @@ impl<T> LocalEvent<T> {
                 Some(Err(Disconnected))
             }
             state => {
-                unreachable!("unreachable LocalOnceEvent state on poll: {state}");
+                unreachable!("unreachable LocalEvent state on poll: {state}");
             }
         }
     }
@@ -350,9 +340,7 @@ impl<T> LocalEvent<T> {
                 Err(Disconnected)
             }
             _ => {
-                unreachable!(
-                    "unreachable LocalOnceEvent state on sender disconnect: {previous_state}"
-                );
+                unreachable!("unreachable LocalEvent state on sender disconnect: {previous_state}");
             }
         }
     }
@@ -430,7 +418,7 @@ impl<T> LocalEvent<T> {
             }
             _ => {
                 unreachable!(
-                    "unreachable LocalOnceEvent state on receiver disconnect: {previous_state}"
+                    "unreachable LocalEvent state on receiver disconnect: {previous_state}"
                 );
             }
         }
