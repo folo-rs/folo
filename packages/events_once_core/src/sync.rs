@@ -374,6 +374,7 @@ where
         // We use Relaxed on both success and failure because we do not yet change
         // externally visible state, merely continue to use our already acquired `awaiter`
         // field that purely sender-side transitions cannot acquire on their own.
+        // For the transitions where we do care about synchronization, we use fences.
         match self.state.compare_exchange(
             EVENT_AWAITING,
             EVENT_BOUND,
@@ -384,6 +385,10 @@ where
                 // We have successfully transitioned into EVENT_BOUND.
                 // We must destroy the old awaiter and then act as if we were never in
                 // EVENT_AWAITING in the first place, going through the EVENT_BOUND path.
+
+                // We are about to touch the `awaiter`, so we need to acquire its synchronization
+                // block - the load above was relaxed, so we may not yet have access to the awaiter.
+                atomic::fence(atomic::Ordering::Acquire);
 
                 // SAFETY: We have entered the `EVENT_BOUND` state which makes it invalid
                 // for the sender to touch `awaiter`. The receiver is !Sync, so we have
@@ -402,6 +407,10 @@ where
                 // doing our thing. This is fine - we can destroy the old awaiter and
                 // simply continue as if we were never in EVENT_AWAITING, going through
                 // the EVENT_SET path instead.
+
+                // We are about to touch the `awaiter`, so we need to acquire its synchronization
+                // block - the load above was relaxed, so we may not yet have access to the awaiter.
+                atomic::fence(atomic::Ordering::Acquire);
 
                 // SAFETY: We have entered the `EVENT_SET` state which makes it invalid
                 // for the sender to touch `awaiter`. The receiver is !Sync, so we have
