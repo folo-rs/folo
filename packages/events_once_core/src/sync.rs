@@ -235,7 +235,7 @@ where
                 Err(Disconnected)
             }
             _ => {
-                unreachable!("unreachable OnceEvent state on set: {previous_state}");
+                unreachable!("unreachable Event state on set: {previous_state}");
             }
         }
     }
@@ -260,7 +260,7 @@ where
                 Some(Err(Disconnected))
             }
             state => {
-                unreachable!("unreachable OnceEvent state on poll: {state}");
+                unreachable!("unreachable Event state on poll: {state}");
             }
         }
     }
@@ -523,27 +523,27 @@ where
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
     fn sender_dropped_without_set(&self) -> Result<(), Disconnected> {
-        // We use Relaxed because we use fences to synchronize below.
-        let previous_state = self
-            .state
-            .swap(EVENT_DISCONNECTED, atomic::Ordering::Relaxed);
+        // We first need to switch into the SIGNALING state, which acquires exclusive access
+        // of the awaiter field, so we can send the wake signal if there is an awaiter.
+        // Only after that can we transition into the DISCONNECTED state (because that must
+        // be our last action - the receiver may clean up the event at any point after we do that).
+
+        let previous_state = self.state.swap(EVENT_SIGNALING, atomic::Ordering::Relaxed);
 
         match previous_state {
             EVENT_BOUND => {
-                // There was nobody listening via the receiver - our work here is done.
-                // The receiver still exists, so it will clean up.
+                // There was nobody polling via the receiver - our work here is done.
+                self.state
+                    .store(EVENT_DISCONNECTED, atomic::Ordering::Release);
+
+                // The receiver is the last endpoint remaining, so it will clean up.
                 Ok(())
             }
             EVENT_AWAITING => {
-                // There was someone listening via the receiver. We need to
-                // notify the awaiter that they can come back for the disconnect signal now.
+                // There is an awaiter that we need to wake up.
 
                 // We need to acquire the synchronization block for the `awaiter`.
                 atomic::fence(atomic::Ordering::Acquire);
-
-                // Note that we do not need to go into the `EVENT_SIGNALING` state here
-                // because the receiver will never set a new awaiter in the `EVENT_DISCONNECTED`
-                // state.
 
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
@@ -567,6 +567,10 @@ where
                 // is simply a no-op.
                 waker.wake();
 
+                // We are all done here.
+                self.state
+                    .store(EVENT_DISCONNECTED, atomic::Ordering::Release);
+
                 // The receiver is the last endpoint remaining, so it will clean up.
                 Ok(())
             }
@@ -575,7 +579,7 @@ where
                 Err(Disconnected)
             }
             _ => {
-                unreachable!("unreachable OnceEvent state on sender disconnect: {previous_state}");
+                unreachable!("unreachable Event state on sender disconnect: {previous_state}");
             }
         }
     }
@@ -601,9 +605,34 @@ where
     /// Returns `Err` if the sender has already disconnected without sending a value.
     /// In both of these cases, the receiver must clean up the event now.
     fn final_poll(&self) -> Result<Option<T>, Disconnected> {
+        #[cfg(debug_assertions)]
+        self.backtrace.lock().replace(capture_backtrace());
+
+        // The receiver (who is calling this) may still own the waker if the waker has not
+        // been used. If this is the case, we need to destroy the waker before proceeding.
+        // This is only the case if we are in the AWAITING state - in all other states, we
+        // either do not have a waker or the sender will destroy it.
+        // We implement this check by attempting to revert ourselves back to the BOUND state.
+        // If successful, we know we were in AWAITING and can destroy the waker.
+        if self
+            .state
+            .compare_exchange(
+                EVENT_AWAITING,
+                EVENT_BOUND,
+                atomic::Ordering::Acquire,
+                atomic::Ordering::Relaxed,
+            )
+            .is_ok()
+        {
+            // SAFETY: The `awaiter` is guaranteed to be present because we just came from
+            // `EVENT_AWAITING`. The sender will only touch the awaiter in `EVENT_SIGNALING`,
+            // which never entered. Therefore, we are the only one who can touch the awaiter now.
+            unsafe {
+                self.destroy_awaiter();
+            }
+        }
+
         // We use Release because we are releasing the synchronization block of the event.
-        // We may re-acquire it below if it looks like we need to do further work but unless
-        // we do, this is the last interaction between us and the event.
         let previous_state = self
             .state
             .swap(EVENT_DISCONNECTED, atomic::Ordering::Release);
@@ -625,29 +654,12 @@ where
                 // The receiver will clean up.
                 Ok(Some(value))
             }
-            EVENT_AWAITING => {
-                // We had previously started listening for the value but have not received one,
-                // so the sender is the last endpoint remaining. We need to make sure we clean
-                // up our old waker first, though, as the sender knows nothing about the waker
-                // being present.
-
-                // We need to acquire the synchronization block for the `awaiter`.
-                atomic::fence(atomic::Ordering::Acquire);
-
-                // SAFETY: The sender is gone and there is nobody else who might be touching
-                // the event anymore, we are essentially in a single-threaded mode now.
-                // We are in `EVENT_AWAITING` which guarantees there is a waker in there.
-                unsafe {
-                    self.destroy_awaiter();
-                }
-
-                // The sender will clean up the event later.
-                Ok(None)
-            }
             EVENT_SIGNALING => {
                 // We had started listening for the value and the sender is currently in the
                 // middle of signaling us that it has set the value or disconnected.
-                // We need to wait for the sender to finish its work first.
+                // We need to wait for the sender to finish its work first so we can identify
+                // which one of us needs to clean up (the sender is going to overwrite
+                // the DISCONNECTED state that we wrote because we wrote it during signaling).
                 match self.poll_signaling() {
                     Ok(value) => Ok(Some(value)),
                     Err(Disconnected) => Err(Disconnected),
