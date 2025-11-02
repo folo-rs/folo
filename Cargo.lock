@@ -460,6 +460,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "events_once_core"
+version = "0.0.0"
+dependencies = [
+ "all_the_time",
+ "alloc_tracker",
+ "criterion",
+ "futures",
+ "infinity_pool",
+ "many_cpus",
+ "new_zealand",
+ "oneshot",
+ "par_bench",
+ "parking_lot",
+ "rand 0.9.2",
+ "spin_on",
+ "static_assertions",
+ "testing",
+]
+
+[[package]]
 name = "fake_headers"
 version = "0.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
