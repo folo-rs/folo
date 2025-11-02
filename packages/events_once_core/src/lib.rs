@@ -9,6 +9,7 @@ mod reflective_t;
 mod state;
 mod sync;
 
+#[cfg(debug_assertions)]
 pub(crate) use backtrace::*;
 pub use disconnected::*;
 pub use local::*;

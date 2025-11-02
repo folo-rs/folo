@@ -37,3 +37,11 @@ testing = { path = "../testing" }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "ev_core_local"
+harness = false
+
+[[bench]]
+name = "ev_core_sync"
+harness = false
