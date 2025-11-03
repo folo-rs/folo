@@ -19,7 +19,7 @@ use crate::{
 };
 
 /// Coordinates delivery of a `T` at most once from a sender to a receiver on the same thread.
-/// 
+///
 /// This is a low level synchronization primitive intended for building higher-level synchronization
 /// primitives, so the API is quite raw and non-ergonomic. Real end-users are expected to use the
 /// next level of abstraction instead, such as the ones in the `events` package.
@@ -1189,5 +1189,81 @@ mod tests {
 
         // Should panic - invalid to access receiver after it completes.
         _ = receiver.is_ready();
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn inspect_awaiter_no_awaiter() {
+        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let _endpoints = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+
+        let mut called = false;
+        unsafe { place.as_ref().get_ref().assume_init_ref() }.inspect_awaiter(|backtrace| {
+            called = true;
+            assert!(backtrace.is_none());
+        });
+
+        assert!(called);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn inspect_awaiter_with_awaiter() {
+        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let (_sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        let mut receiver = pin!(receiver);
+        _ = receiver.as_mut().poll(&mut cx);
+
+        let mut called = false;
+        unsafe { place.as_ref().get_ref().assume_init_ref() }.inspect_awaiter(|backtrace| {
+            called = true;
+            assert!(backtrace.is_some());
+        });
+
+        assert!(called);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn inspect_awaiter_after_sender_drop() {
+        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        let mut receiver = pin!(receiver);
+        _ = receiver.as_mut().poll(&mut cx);
+
+        drop(sender);
+
+        let mut called = false;
+        unsafe { place.as_ref().get_ref().assume_init_ref() }.inspect_awaiter(|backtrace| {
+            called = true;
+            assert!(backtrace.is_some());
+        });
+
+        assert!(called);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn inspect_awaiter_after_receiver_drop() {
+        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let (_sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        let mut receiver = Box::pin(receiver);
+        _ = receiver.as_mut().poll(&mut cx);
+
+        drop(receiver);
+
+        let mut called = false;
+        unsafe { place.as_ref().get_ref().assume_init_ref() }.inspect_awaiter(|backtrace| {
+            called = true;
+            assert!(backtrace.is_some());
+        });
+
+        assert!(called);
     }
 }

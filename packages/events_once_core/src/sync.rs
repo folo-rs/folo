@@ -159,7 +159,7 @@ where
     ///
     /// The closure receives `None` if no one is awaiting the event.
     #[cfg(debug_assertions)]
-    fn inspect_awaiter(&self, f: impl FnOnce(Option<&Backtrace>)) {
+    pub fn inspect_awaiter(&self, f: impl FnOnce(Option<&Backtrace>)) {
         let backtrace = self.backtrace.lock();
         f(backtrace.as_ref());
     }
@@ -564,7 +564,7 @@ where
                 // We must also ensure that we observe any writes done by the sender
                 // before we destroy the event, so we synchronize here.
                 atomic::fence(atomic::Ordering::Acquire);
-                
+
                 Some(Err(Disconnected))
             }
             Err(state) => {
@@ -1132,7 +1132,11 @@ where
 }
 
 #[cfg(test)]
-#[expect(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
+#[expect(
+    clippy::undocumented_unsafe_blocks,
+    clippy::multiple_unsafe_ops_per_block,
+    reason = "test code, be concise"
+)]
 mod tests {
     use std::pin::pin;
     use std::sync::{Arc, Barrier};
@@ -1742,6 +1746,33 @@ mod tests {
     }
 
     #[test]
+    fn placed_send_receive_reused_mt() {
+        const ITERATIONS: usize = 123;
+
+        let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
+
+        for _ in 0..ITERATIONS {
+            let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+
+            thread::spawn(move || {
+                sender.send(42);
+            })
+            .join()
+            .unwrap();
+
+            thread::spawn(move || {
+                let mut receiver = pin!(receiver);
+                let mut cx = task::Context::from_waker(Waker::noop());
+
+                let poll_result = receiver.as_mut().poll(&mut cx);
+                assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+            })
+            .join()
+            .unwrap();
+        }
+    }
+
+    #[test]
     fn placed_receive_send_receive_mt() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
         let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
@@ -1830,5 +1861,81 @@ mod tests {
 
         send_thread.join().unwrap();
         receive_thread.join().unwrap();
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn inspect_awaiter_no_awaiter() {
+        let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
+        let _endpoints = unsafe { Event::<i32>::placed(place.as_mut()) };
+
+        let mut called = false;
+        unsafe { place.get().as_ref().unwrap().assume_init_ref() }.inspect_awaiter(|backtrace| {
+            called = true;
+            assert!(backtrace.is_none());
+        });
+
+        assert!(called);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn inspect_awaiter_with_awaiter() {
+        let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
+        let (_sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        let mut receiver = pin!(receiver);
+        _ = receiver.as_mut().poll(&mut cx);
+
+        let mut called = false;
+        unsafe { place.get().as_ref().unwrap().assume_init_ref() }.inspect_awaiter(|backtrace| {
+            called = true;
+            assert!(backtrace.is_some());
+        });
+
+        assert!(called);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn inspect_awaiter_after_sender_drop() {
+        let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        let mut receiver = pin!(receiver);
+        _ = receiver.as_mut().poll(&mut cx);
+
+        drop(sender);
+
+        let mut called = false;
+        unsafe { place.get().as_ref().unwrap().assume_init_ref() }.inspect_awaiter(|backtrace| {
+            called = true;
+            assert!(backtrace.is_some());
+        });
+
+        assert!(called);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn inspect_awaiter_after_receiver_drop() {
+        let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
+        let (_sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        let mut receiver = Box::pin(receiver);
+        _ = receiver.as_mut().poll(&mut cx);
+
+        drop(receiver);
+
+        let mut called = false;
+        unsafe { place.get().as_ref().unwrap().assume_init_ref() }.inspect_awaiter(|backtrace| {
+            called = true;
+            assert!(backtrace.is_some());
+        });
+
+        assert!(called);
     }
 }
