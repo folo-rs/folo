@@ -757,6 +757,45 @@ mod tests {
     }
 
     #[test]
+    fn boxed_send_receive_unit() {
+        let (sender, receiver) = LocalEvent::<()>::boxed();
+        let mut receiver = pin!(receiver);
+
+        sender.send(());
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Ok(()))));
+    }
+
+    #[test]
+    fn boxed_send_receive_u128() {
+        let (sender, receiver) = LocalEvent::<u128>::boxed();
+        let mut receiver = pin!(receiver);
+
+        sender.send(42);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+    }
+
+    #[test]
+    fn boxed_send_receive_array() {
+        let (sender, receiver) = LocalEvent::<[u128; 4]>::boxed();
+        let mut receiver = pin!(receiver);
+
+        sender.send([42, 43, 44, 45]);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Ok([42, 43, 44, 45]))));
+    }
+
+    #[test]
     fn boxed_receive_send_receive() {
         let (sender, receiver) = LocalEvent::<i32>::boxed();
         let mut receiver = pin!(receiver);
