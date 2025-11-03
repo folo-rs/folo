@@ -5,6 +5,7 @@
     reason = "benchmarks"
 )]
 
+use std::cell::UnsafeCell;
 use std::hint::black_box;
 use std::mem::MaybeUninit;
 use std::pin::pin;
@@ -20,9 +21,11 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("send_receive", |b| {
         b.iter_custom(|iterations| {
-            let mut events = iter::repeat_with(|| Box::pin(MaybeUninit::<Event<i32>>::uninit()))
-                .take(iterations as usize)
-                .collect::<Vec<_>>();
+            let mut events = iter::repeat_with(|| {
+                Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()))
+            })
+            .take(iterations as usize)
+            .collect::<Vec<_>>();
 
             let endpoints = events
                 .iter_mut()
@@ -46,9 +49,11 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("poll_connected", |b| {
         b.iter_custom(|iterations| {
-            let mut events = iter::repeat_with(|| Box::pin(MaybeUninit::<Event<i32>>::uninit()))
-                .take(iterations as usize)
-                .collect::<Vec<_>>();
+            let mut events = iter::repeat_with(|| {
+                Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()))
+            })
+            .take(iterations as usize)
+            .collect::<Vec<_>>();
 
             let endpoints = events
                 .iter_mut()
@@ -75,9 +80,11 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("poll_disconnected", |b| {
         b.iter_custom(|iterations| {
-            let mut events = iter::repeat_with(|| Box::pin(MaybeUninit::<Event<i32>>::uninit()))
-                .take(iterations as usize)
-                .collect::<Vec<_>>();
+            let mut events = iter::repeat_with(|| {
+                Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()))
+            })
+            .take(iterations as usize)
+            .collect::<Vec<_>>();
 
             let endpoints = events
                 .iter_mut()
@@ -107,9 +114,11 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("set_connected", |b| {
         b.iter_custom(|iterations| {
-            let mut events = iter::repeat_with(|| Box::pin(MaybeUninit::<Event<i32>>::uninit()))
-                .take(iterations as usize)
-                .collect::<Vec<_>>();
+            let mut events = iter::repeat_with(|| {
+                Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()))
+            })
+            .take(iterations as usize)
+            .collect::<Vec<_>>();
 
             let endpoints = events
                 .iter_mut()
@@ -131,9 +140,11 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("set_disconnected", |b| {
         b.iter_custom(|iterations| {
-            let mut events = iter::repeat_with(|| Box::pin(MaybeUninit::<Event<i32>>::uninit()))
-                .take(iterations as usize)
-                .collect::<Vec<_>>();
+            let mut events = iter::repeat_with(|| {
+                Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()))
+            })
+            .take(iterations as usize)
+            .collect::<Vec<_>>();
 
             let endpoints = events
                 .iter_mut()

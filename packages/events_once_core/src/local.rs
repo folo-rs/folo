@@ -19,6 +19,10 @@ use crate::{
 };
 
 /// Coordinates delivery of a `T` at most once from a sender to a receiver on the same thread.
+/// 
+/// This is a low level synchronization primitive intended for building higher-level synchronization
+/// primitives, so the API is quite raw and non-ergonomic. Real end-users are expected to use the
+/// next level of abstraction instead, such as the ones in the `events` package.
 #[derive(Debug)]
 pub struct LocalEvent<T> {
     /// The logical state of the event; see constants in `state.rs`.
