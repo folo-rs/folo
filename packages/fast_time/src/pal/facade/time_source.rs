@@ -11,10 +11,10 @@ use crate::pal::TimeSourceImpl;
 
 pub(crate) enum TimeSourceFacade {
     #[cfg(all(any(target_os = "linux", windows), not(miri)))]
-    Real(TimeSourceImpl),
+    Optimized(TimeSourceImpl),
 
     #[cfg(any(miri, not(any(target_os = "linux", windows))))]
-    Rust(RustTimeSource),
+    Passthrough(RustTimeSource),
 
     #[cfg(test)]
     Mock(MockTimeSource),
@@ -23,14 +23,14 @@ pub(crate) enum TimeSourceFacade {
 #[cfg(all(any(target_os = "linux", windows), not(miri)))]
 impl From<TimeSourceImpl> for TimeSourceFacade {
     fn from(ts: TimeSourceImpl) -> Self {
-        Self::Real(ts)
+        Self::Optimized(ts)
     }
 }
 
 #[cfg(any(miri, not(any(target_os = "linux", windows))))]
 impl From<RustTimeSource> for TimeSourceFacade {
     fn from(ts: RustTimeSource) -> Self {
-        Self::Rust(ts)
+        Self::Passthrough(ts)
     }
 }
 
@@ -45,9 +45,9 @@ impl TimeSource for TimeSourceFacade {
     fn now(&mut self) -> Instant {
         match self {
             #[cfg(all(any(target_os = "linux", windows), not(miri)))]
-            Self::Real(ts) => ts.now(),
+            Self::Optimized(ts) => ts.now(),
             #[cfg(any(miri, not(any(target_os = "linux", windows))))]
-            Self::Rust(ts) => ts.now(),
+            Self::Passthrough(ts) => ts.now(),
             #[cfg(test)]
             Self::Mock(ts) => ts.now(),
         }
@@ -58,9 +58,9 @@ impl Debug for TimeSourceFacade {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             #[cfg(all(any(target_os = "linux", windows), not(miri)))]
-            Self::Real(ts) => ts.fmt(f),
+            Self::Optimized(ts) => ts.fmt(f),
             #[cfg(any(miri, not(any(target_os = "linux", windows))))]
-            Self::Rust(ts) => ts.fmt(f),
+            Self::Passthrough(ts) => ts.fmt(f),
             #[cfg(test)]
             Self::Mock(ts) => ts.fmt(f),
         }
