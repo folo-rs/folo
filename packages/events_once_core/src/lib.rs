@@ -18,3 +18,5 @@ pub(crate) use state::*;
 pub use sync::*;
 
 trait Sealed {}
+
+const ERR_POISONED_LOCK: &str = "encountered poisoned lock - program validity cannot be guaranteed";

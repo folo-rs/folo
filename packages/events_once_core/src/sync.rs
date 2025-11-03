@@ -9,12 +9,13 @@ use std::mem::{ManuallyDrop, MaybeUninit, offset_of};
 use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::{self, NonNull};
+#[cfg(debug_assertions)]
+use std::sync::Mutex;
 use std::sync::atomic::{self, AtomicU8};
 use std::task::{self, Poll, Waker};
 
 #[cfg(debug_assertions)]
-use parking_lot::Mutex;
-
+use crate::ERR_POISONED_LOCK;
 #[cfg(debug_assertions)]
 use crate::{BacktraceType, capture_backtrace};
 use crate::{
@@ -160,7 +161,7 @@ where
     /// The closure receives `None` if no one is awaiting the event.
     #[cfg(debug_assertions)]
     pub fn inspect_awaiter(&self, f: impl FnOnce(Option<&Backtrace>)) {
-        let backtrace = self.backtrace.lock();
+        let backtrace = self.backtrace.lock().expect(ERR_POISONED_LOCK);
         f(backtrace.as_ref());
     }
 
@@ -363,7 +364,10 @@ where
     /// for cleaning up the event.
     fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         #[cfg(debug_assertions)]
-        self.backtrace.lock().replace(capture_backtrace());
+        self.backtrace
+            .lock()
+            .expect(ERR_POISONED_LOCK)
+            .replace(capture_backtrace());
 
         // We use Acquire because we are (depending on the state) acquiring the synchronization
         // block for `value` and/or `awaiter`.
@@ -646,7 +650,11 @@ where
         let event = unsafe { event_maybe.unwrap_unchecked() };
 
         #[cfg(debug_assertions)]
-        event.backtrace.lock().replace(capture_backtrace());
+        event
+            .backtrace
+            .lock()
+            .expect(ERR_POISONED_LOCK)
+            .replace(capture_backtrace());
 
         // The receiver (who is calling this) may still own the waker if the waker has not
         // been used. If this is the case, we need to destroy the waker before proceeding.
