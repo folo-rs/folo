@@ -2,6 +2,7 @@ use std::alloc::{Layout, alloc, dealloc};
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
 use std::cell::{Cell, UnsafeCell};
+use std::fmt;
 use std::future::Future;
 use std::hint::spin_loop;
 use std::marker::{PhantomData, PhantomPinned};
@@ -33,7 +34,6 @@ use crate::{
 /// an `UnsafeCell`, which is required around the entire data structure to guarantee proper
 /// lifecycle permissions such as "destroy object when still referenced via function args" which
 /// are only available to `UnsafeCell` contents.
-#[derive(Debug)]
 pub struct Event<T>
 where
     T: Send,
@@ -362,6 +362,7 @@ where
     ///
     /// If `Some` is returned, the caller is the last remaining endpoint and responsible
     /// for cleaning up the event.
+    #[must_use]
     fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         #[cfg(debug_assertions)]
         self.backtrace
@@ -389,6 +390,7 @@ where
     /// `poll()` impl for `EVENT_BOUND` state.
     ///
     /// Assumes acquired synchronization block for `awaiter`.
+    #[must_use]
     fn poll_bound(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         // The sender has not yet set any value, so we will have to wait.
 
@@ -469,6 +471,7 @@ where
     /// `poll()` impl for `EVENT_SET` state.
     ///
     /// Assumes acquired synchronization block for `value`.
+    #[must_use]
     fn poll_set(&self) -> T {
         // The sender has delivered a value and we can complete the event.
         // We know that the sender will have gone away by this point.
@@ -488,6 +491,7 @@ where
     /// `poll()` impl for `EVENT_AWAITING` state.
     ///
     /// Assumes acquired synchronization block for `awaiter`.
+    #[must_use]
     fn poll_awaiting(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         // We are re-polling after previously starting a wait. This is fine
         // and we just need to clean up the previous waker, replacing it with
@@ -622,6 +626,7 @@ where
         }
     }
 
+    #[must_use]
     fn is_set(&self) -> bool {
         // We use Relaxed ordering because this is independent of any other data.
         // If something wishes to actually obtain the value from the event, that
@@ -774,12 +779,30 @@ where
 // SAFETY: We are a synchronization primitive, so we do our own synchronization.
 unsafe impl<T: Send> Sync for Event<T> {}
 
+#[expect(clippy::missing_fields_in_debug, reason = "phantoms are boring")]
+impl<T: Send> fmt::Debug for Event<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = f.debug_struct("Event");
+
+        debug.field("state", &self.state);
+        debug.field("awaiter", &self.awaiter);
+        debug.field("value", &self.value);
+
+        #[cfg(debug_assertions)]
+        {
+            debug.field("backtrace", &self.backtrace);
+        }
+
+        debug.finish()
+    }
+}
+
 /// Enables a sender or receiver to reference the event that connects them.
 ///
 /// This is a sealed trait and exists for internal use only. User code never needs to use it.
 #[expect(private_bounds, reason = "intentional - sealed trait")]
 pub trait EventRef<T>:
-    Deref<Target = UnsafeCell<Event<T>>> + ReflectiveTSend + RefPrivate<T> + Sealed
+    Deref<Target = UnsafeCell<Event<T>>> + ReflectiveTSend + RefPrivate<T> + Sealed + fmt::Debug
 where
     T: Send,
 {
@@ -797,7 +820,6 @@ where
 /// References an event stored anywhere, via raw pointer.
 ///
 /// Only used in type names. Instances are created internally by [`Event`].
-#[derive(Debug)]
 pub struct PtrRef<T>
 where
     T: Send,
@@ -829,11 +851,17 @@ impl<T: Send> ReflectiveTSend for PtrRef<T> {
 }
 // SAFETY: This is only used with the thread-safe event (the event is Sync).
 unsafe impl<T> Send for PtrRef<T> where T: Send {}
+impl<T: Send> fmt::Debug for PtrRef<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PtrRef")
+            .field("event", &self.event)
+            .finish()
+    }
+}
 
 /// References an event stored on the heap.
 ///
 /// Only used in type names. Instances are created internally by [`Event`].
-#[derive(Debug)]
 pub struct BoxedRef<T>
 where
     T: Send,
@@ -845,6 +873,7 @@ impl<T> BoxedRef<T>
 where
     T: Send,
 {
+    #[must_use]
     fn new_pair() -> (Self, Self) {
         // SAFETY: The layout is correct for the type we are using - all is well.
         let event = NonNull::new(unsafe { alloc(Self::layout()) })
@@ -905,6 +934,13 @@ where
 }
 // SAFETY: This is only used with the thread-safe event (the event is Sync).
 unsafe impl<T> Send for BoxedRef<T> where T: Send {}
+impl<T: Send> fmt::Debug for BoxedRef<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BoxedRef")
+            .field("event", &self.event)
+            .finish()
+    }
+}
 
 /// Delivers a single value to the receiver connected to the same event.
 ///
@@ -914,7 +950,6 @@ unsafe impl<T> Send for BoxedRef<T> where T: Send {}
 /// The outer type parameter determines the mechanism by which the endpoint is bound to the event.
 /// Different binding mechanisms offer different performance characteristics and resource
 /// management patterns.
-#[derive(Debug)]
 pub struct Sender<E>
 where
     E: EventRef<<E as ReflectiveTSend>::T>,
@@ -929,6 +964,7 @@ impl<E> Sender<E>
 where
     E: EventRef<<E as ReflectiveTSend>::T>,
 {
+    #[must_use]
     fn new(event_ref: E) -> Self {
         Self {
             event_ref,
@@ -969,6 +1005,17 @@ where
     }
 }
 
+impl<E> fmt::Debug for Sender<E>
+where
+    E: EventRef<<E as ReflectiveTSend>::T>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Sender")
+            .field("event_ref", &self.event_ref)
+            .finish()
+    }
+}
+
 /// Receives a single value from the sender connected to the same event.
 ///
 /// The type of the value is the inner type parameter,
@@ -977,7 +1024,6 @@ where
 /// The outer type parameter determines the mechanism by which the endpoint is bound to the event.
 /// Different binding mechanisms offer different performance characteristics and resource
 /// management patterns.
-#[derive(Debug)]
 pub struct Receiver<E>
 where
     E: EventRef<<E as ReflectiveTSend>::T>,
@@ -994,6 +1040,7 @@ impl<E> Receiver<E>
 where
     E: EventRef<<E as ReflectiveTSend>::T>,
 {
+    #[must_use]
     fn new(event_ref: E) -> Self {
         Self {
             event_ref: Some(event_ref),
@@ -1009,6 +1056,7 @@ where
     /// # Panics
     ///
     /// Panics if called after `poll()` has returned `Ready`.
+    #[must_use]
     pub fn is_ready(&self) -> bool {
         let Some(event_ref) = &self.event_ref else {
             panic!("receiver queried after completion");
@@ -1136,6 +1184,17 @@ where
                 }
             }
         }
+    }
+}
+
+impl<E> fmt::Debug for Receiver<E>
+where
+    E: EventRef<<E as ReflectiveTSend>::T>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Receiver")
+            .field("event_ref", &self.event_ref)
+            .finish()
     }
 }
 

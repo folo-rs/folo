@@ -4,6 +4,7 @@ use std::backtrace::Backtrace;
 #[cfg(debug_assertions)]
 use std::cell::RefCell;
 use std::cell::{Cell, UnsafeCell};
+use std::fmt;
 use std::future::Future;
 use std::marker::{PhantomData, PhantomPinned};
 use std::mem::{ManuallyDrop, MaybeUninit, offset_of};
@@ -23,7 +24,6 @@ use crate::{
 /// This is a low level synchronization primitive intended for building higher-level synchronization
 /// primitives, so the API is quite raw and non-ergonomic. Real end-users are expected to use the
 /// next level of abstraction instead, such as the ones in the `events` package.
-#[derive(Debug)]
 pub struct LocalEvent<T> {
     /// The logical state of the event; see constants in `state.rs`.
     state: Cell<u8>,
@@ -239,6 +239,7 @@ impl<T> LocalEvent<T> {
     ///
     /// If `Some` result is returned, the caller is the last remaining endpoint and responsible
     /// for cleaning up the event.
+    #[must_use]
     fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         #[cfg(debug_assertions)]
         self.backtrace.replace(Some(capture_backtrace()));
@@ -350,6 +351,7 @@ impl<T> LocalEvent<T> {
     }
 
     /// Checks whether the event has been set (either with a value or with a disconnect signal).
+    #[must_use]
     fn is_set(&self) -> bool {
         matches!(self.state.get(), EVENT_SET | EVENT_DISCONNECTED)
     }
@@ -429,12 +431,30 @@ impl<T> LocalEvent<T> {
     }
 }
 
+#[expect(clippy::missing_fields_in_debug, reason = "phantoms are boring")]
+impl<T> fmt::Debug for LocalEvent<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = f.debug_struct("LocalEvent");
+
+        debug.field("state", &self.state);
+        debug.field("awaiter", &self.awaiter);
+        debug.field("value", &self.value);
+
+        #[cfg(debug_assertions)]
+        {
+            debug.field("backtrace", &self.backtrace);
+        }
+
+        debug.finish()
+    }
+}
+
 /// Enables a sender or receiver to reference the event that connects them.
 ///
 /// This is a sealed trait and exists for internal use only. User code never needs to use it.
 #[expect(private_bounds, reason = "intentional - sealed trait")]
 pub trait LocalRef<T>:
-    Deref<Target = LocalEvent<T>> + ReflectiveT + LocalRefPrivate<T> + Sealed
+    Deref<Target = LocalEvent<T>> + ReflectiveT + LocalRefPrivate<T> + Sealed + fmt::Debug
 {
 }
 
@@ -447,7 +467,6 @@ trait LocalRefPrivate<T> {
 /// References an event stored anywhere, via raw pointer.
 ///
 /// Only used in type names. Instances are created by [`LocalEvent`].
-#[derive(Debug)]
 pub struct PtrLocalRef<T> {
     event: NonNull<LocalEvent<T>>,
 }
@@ -468,16 +487,23 @@ impl<T> Deref for PtrLocalRef<T> {
 impl<T> ReflectiveT for PtrLocalRef<T> {
     type T = T;
 }
+impl<T> fmt::Debug for PtrLocalRef<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PtrLocalRef")
+            .field("event", &self.event)
+            .finish()
+    }
+}
 
 /// References an event stored on the heap.
 ///
 /// Only used in type names. Instances are created internally by [`LocalEvent`].
-#[derive(Debug)]
 pub struct BoxedLocalRef<T> {
     event: NonNull<LocalEvent<T>>,
 }
 
 impl<T> BoxedLocalRef<T> {
+    #[must_use]
     fn new_pair() -> (Self, Self) {
         // SAFETY: The layout is correct for the type we are using - all is well.
         let event = NonNull::new(unsafe { alloc(Self::layout()) })
@@ -525,6 +551,13 @@ impl<T> Deref for BoxedLocalRef<T> {
 impl<T> ReflectiveT for BoxedLocalRef<T> {
     type T = T;
 }
+impl<T> fmt::Debug for BoxedLocalRef<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BoxedLocalRef")
+            .field("event", &self.event)
+            .finish()
+    }
+}
 
 /// Delivers a single value to the receiver connected to the same event.
 ///
@@ -534,7 +567,6 @@ impl<T> ReflectiveT for BoxedLocalRef<T> {
 /// The outer type parameter determines the mechanism by which the endpoint is bound to the event.
 /// Different binding mechanisms offer different performance characteristics and resource
 /// management patterns.
-#[derive(Debug)]
 pub struct LocalSender<E>
 where
     E: LocalRef<<E as ReflectiveT>::T>,
@@ -546,6 +578,7 @@ impl<E> LocalSender<E>
 where
     E: LocalRef<<E as ReflectiveT>::T>,
 {
+    #[must_use]
     fn new(event_ref: E) -> Self {
         Self { event_ref }
     }
@@ -583,6 +616,17 @@ where
     }
 }
 
+impl<E> fmt::Debug for LocalSender<E>
+where
+    E: LocalRef<<E as ReflectiveT>::T>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocalSender")
+            .field("event_ref", &self.event_ref)
+            .finish()
+    }
+}
+
 /// Receives a single value from the sender connected to the same event.
 ///
 /// The type of the value is the inner type parameter,
@@ -591,7 +635,6 @@ where
 /// The outer type parameter determines the mechanism by which the endpoint is bound to the event.
 /// Different binding mechanisms offer different performance characteristics and resource
 /// management patterns.
-#[derive(Debug)]
 pub struct LocalReceiver<E>
 where
     E: LocalRef<<E as ReflectiveT>::T>,
@@ -616,6 +659,7 @@ where
     /// # Panics
     ///
     /// Panics if called after `poll()` has returned `Ready`.
+    #[must_use]
     pub fn is_ready(&self) -> bool {
         let Some(event_ref) = &self.event_ref else {
             panic!("receiver queried after completion");
@@ -723,6 +767,17 @@ where
                 }
             }
         }
+    }
+}
+
+impl<E> fmt::Debug for LocalReceiver<E>
+where
+    E: LocalRef<<E as ReflectiveT>::T>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocalReceiver")
+            .field("event_ref", &self.event_ref)
+            .finish()
     }
 }
 

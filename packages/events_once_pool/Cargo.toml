@@ -1,0 +1,28 @@
+[package]
+name = "events_once_pool"
+description = "Internal dependency of `events`. No public API."
+publish = false
+version = "0.0.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+events_once_core = { workspace = true }
+infinity_pool = { workspace = true }
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+oneshot = { workspace = true }
+spin_on = { workspace = true }
+static_assertions = { workspace = true }
+
+[lints]
+workspace = true
