@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use crate::pal::TimeSource;
-use crate::pal::unix::{Bindings, BindingsFacade};
+use crate::pal::linux::{Bindings, BindingsFacade};
 
 #[derive(Debug)]
 pub(crate) struct TimeSourceImpl {
@@ -60,7 +60,7 @@ mod tests {
     use mockall::Sequence;
 
     use super::*;
-    use crate::pal::unix::bindings::MockBindings;
+    use crate::pal::linux::bindings::MockBindings;
 
     #[test]
     fn smoke_test() {

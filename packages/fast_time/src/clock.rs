@@ -85,9 +85,9 @@ impl Clock {
     /// ```
     #[must_use]
     pub fn new() -> Self {
-        #[cfg(not(miri))]
+        #[cfg(all(any(target_os = "linux", windows), not(miri)))]
         return Self::from_pal(PlatformFacade::real());
-        #[cfg(miri)]
+        #[cfg(any(miri, not(any(target_os = "linux", windows))))]
         return Self::from_pal(PlatformFacade::rust());
     }
 
