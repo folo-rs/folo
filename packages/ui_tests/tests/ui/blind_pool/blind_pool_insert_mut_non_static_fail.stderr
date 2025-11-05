@@ -1,9 +1,9 @@
 error[E0597]: `value` does not live long enough
   --> tests/ui/blind_pool/blind_pool_insert_mut_non_static_fail.rs:7:21
    |
-6  |     let value = 42;
+ 6 |     let value = 42;
    |         ----- binding `value` declared here
-7  |     let reference = &value; // This is not 'static
+ 7 |     let reference = &value; // This is not 'static
    |                     ^^^^^^ borrowed value does not live long enough
 ...
 10 |     let _handle = pool.insert_mut(reference);

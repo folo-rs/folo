@@ -11,7 +11,7 @@ error[E0277]: `Cell<i32>` cannot be shared between threads safely
 note: required because it appears within the type `SendNotSync`
   --> tests/ui/infinity_pool/shared_handle_requires_sync.rs:8:8
    |
-8  | struct SendNotSync {
+ 8 | struct SendNotSync {
    |        ^^^^^^^^^^^
    = note: required for `infinity_pool::opaque::slab_handle::SlabHandle<SendNotSync>` to implement `Send`
 note: required because it appears within the type `RawPooled<SendNotSync>`
