@@ -4,33 +4,33 @@ use std::sync::Arc;
 
 #[cfg(test)]
 use crate::pal::MockPlatform;
-#[cfg(miri)]
+#[cfg(any(miri, not(any(target_os = "linux", windows))))]
 use crate::pal::RustPlatform;
-#[cfg(not(miri))]
+#[cfg(all(any(target_os = "linux", windows), not(miri)))]
 use crate::pal::{BUILD_TARGET_PLATFORM, BuildTargetPlatform};
 use crate::pal::{Platform, TimeSourceFacade};
 
 #[derive(Clone)]
 pub(crate) enum PlatformFacade {
-    #[cfg(not(miri))]
-    Real(&'static BuildTargetPlatform),
+    #[cfg(all(any(target_os = "linux", windows), not(miri)))]
+    Optimized(&'static BuildTargetPlatform),
 
-    #[cfg(miri)]
-    Rust(&'static RustPlatform),
+    #[cfg(any(miri, not(any(target_os = "linux", windows))))]
+    Passthrough(&'static RustPlatform),
 
     #[cfg(test)]
     Mock(Arc<MockPlatform>),
 }
 
 impl PlatformFacade {
-    #[cfg(not(miri))]
+    #[cfg(all(any(target_os = "linux", windows), not(miri)))]
     pub(crate) fn real() -> Self {
-        Self::Real(&BUILD_TARGET_PLATFORM)
+        Self::Optimized(&BUILD_TARGET_PLATFORM)
     }
 
-    #[cfg(miri)]
+    #[cfg(any(miri, not(any(target_os = "linux", windows))))]
     pub(crate) fn rust() -> Self {
-        Self::Rust(&RustPlatform)
+        Self::Passthrough(&RustPlatform)
     }
 }
 
@@ -39,27 +39,27 @@ impl Platform for PlatformFacade {
 
     fn new_time_source(&self) -> TimeSourceFacade {
         match self {
-            #[cfg(not(miri))]
-            Self::Real(p) => p.new_time_source().into(),
-            #[cfg(miri)]
-            Self::Rust(p) => p.new_time_source().into(),
+            #[cfg(all(any(target_os = "linux", windows), not(miri)))]
+            Self::Optimized(p) => p.new_time_source().into(),
+            #[cfg(any(miri, not(any(target_os = "linux", windows))))]
+            Self::Passthrough(p) => p.new_time_source().into(),
             #[cfg(test)]
             Self::Mock(p) => p.new_time_source().into(),
         }
     }
 }
 
-#[cfg(not(miri))]
+#[cfg(all(any(target_os = "linux", windows), not(miri)))]
 impl From<&'static BuildTargetPlatform> for PlatformFacade {
     fn from(p: &'static BuildTargetPlatform) -> Self {
-        Self::Real(p)
+        Self::Optimized(p)
     }
 }
 
-#[cfg(miri)]
+#[cfg(any(miri, not(any(target_os = "linux", windows))))]
 impl From<&'static RustPlatform> for PlatformFacade {
     fn from(p: &'static RustPlatform) -> Self {
-        Self::Rust(p)
+        Self::Passthrough(p)
     }
 }
 
@@ -73,10 +73,10 @@ impl From<MockPlatform> for PlatformFacade {
 impl Debug for PlatformFacade {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            #[cfg(not(miri))]
-            Self::Real(p) => p.fmt(f),
-            #[cfg(miri)]
-            Self::Rust(p) => p.fmt(f),
+            #[cfg(all(any(target_os = "linux", windows), not(miri)))]
+            Self::Optimized(p) => p.fmt(f),
+            #[cfg(any(miri, not(any(target_os = "linux", windows))))]
+            Self::Passthrough(p) => p.fmt(f),
             #[cfg(test)]
             Self::Mock(p) => p.fmt(f),
         }

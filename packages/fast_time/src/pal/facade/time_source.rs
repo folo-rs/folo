@@ -3,34 +3,34 @@ use std::time::Instant;
 
 #[cfg(test)]
 use crate::pal::MockTimeSource;
-#[cfg(miri)]
+#[cfg(any(miri, not(any(target_os = "linux", windows))))]
 use crate::pal::RustTimeSource;
 use crate::pal::TimeSource;
-#[cfg(not(miri))]
+#[cfg(all(any(target_os = "linux", windows), not(miri)))]
 use crate::pal::TimeSourceImpl;
 
 pub(crate) enum TimeSourceFacade {
-    #[cfg(not(miri))]
-    Real(TimeSourceImpl),
+    #[cfg(all(any(target_os = "linux", windows), not(miri)))]
+    Optimized(TimeSourceImpl),
 
-    #[cfg(miri)]
-    Rust(RustTimeSource),
+    #[cfg(any(miri, not(any(target_os = "linux", windows))))]
+    Passthrough(RustTimeSource),
 
     #[cfg(test)]
     Mock(MockTimeSource),
 }
 
-#[cfg(not(miri))]
+#[cfg(all(any(target_os = "linux", windows), not(miri)))]
 impl From<TimeSourceImpl> for TimeSourceFacade {
     fn from(ts: TimeSourceImpl) -> Self {
-        Self::Real(ts)
+        Self::Optimized(ts)
     }
 }
 
-#[cfg(miri)]
+#[cfg(any(miri, not(any(target_os = "linux", windows))))]
 impl From<RustTimeSource> for TimeSourceFacade {
     fn from(ts: RustTimeSource) -> Self {
-        Self::Rust(ts)
+        Self::Passthrough(ts)
     }
 }
 
@@ -44,10 +44,10 @@ impl From<MockTimeSource> for TimeSourceFacade {
 impl TimeSource for TimeSourceFacade {
     fn now(&mut self) -> Instant {
         match self {
-            #[cfg(not(miri))]
-            Self::Real(ts) => ts.now(),
-            #[cfg(miri)]
-            Self::Rust(ts) => ts.now(),
+            #[cfg(all(any(target_os = "linux", windows), not(miri)))]
+            Self::Optimized(ts) => ts.now(),
+            #[cfg(any(miri, not(any(target_os = "linux", windows))))]
+            Self::Passthrough(ts) => ts.now(),
             #[cfg(test)]
             Self::Mock(ts) => ts.now(),
         }
@@ -57,10 +57,10 @@ impl TimeSource for TimeSourceFacade {
 impl Debug for TimeSourceFacade {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            #[cfg(not(miri))]
-            Self::Real(ts) => ts.fmt(f),
-            #[cfg(miri)]
-            Self::Rust(ts) => ts.fmt(f),
+            #[cfg(all(any(target_os = "linux", windows), not(miri)))]
+            Self::Optimized(ts) => ts.fmt(f),
+            #[cfg(any(miri, not(any(target_os = "linux", windows))))]
+            Self::Passthrough(ts) => ts.fmt(f),
             #[cfg(test)]
             Self::Mock(ts) => ts.fmt(f),
         }
