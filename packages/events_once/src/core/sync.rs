@@ -1,45 +1,33 @@
-use std::alloc::{Layout, alloc, dealloc};
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
-use std::cell::{Cell, UnsafeCell};
+use std::cell::UnsafeCell;
 use std::fmt;
-use std::future::Future;
 use std::hint::spin_loop;
-use std::marker::{PhantomData, PhantomPinned};
-use std::mem::{ManuallyDrop, MaybeUninit, offset_of};
-use std::ops::Deref;
+use std::marker::PhantomPinned;
+use std::mem::{MaybeUninit, offset_of};
 use std::pin::Pin;
-use std::ptr::{self, NonNull};
-#[cfg(debug_assertions)]
-use std::sync::Mutex;
+use std::ptr::NonNull;
 use std::sync::atomic::{self, AtomicU8};
-use std::task::{self, Poll, Waker};
+use std::task::Waker;
 
 #[cfg(debug_assertions)]
-use crate::ERR_POISONED_LOCK;
+use parking_lot::Mutex;
+
 #[cfg(debug_assertions)]
 use crate::{BacktraceType, capture_backtrace};
 use crate::{
-    Disconnected, EVENT_AWAITING, EVENT_BOUND, EVENT_DISCONNECTED, EVENT_SET, EVENT_SIGNALING,
-    ReflectiveTSend, Sealed,
+    BoxedReceiver, BoxedRef, BoxedSender, Disconnected, EVENT_AWAITING, EVENT_BOUND,
+    EVENT_DISCONNECTED, EVENT_SET, EVENT_SIGNALING, PtrRef, RawReceiver, RawSender, ReceiverCore,
+    SenderCore,
 };
 
 /// Coordinates delivery of a `T` at most once from a sender to a receiver on any thread.
-///
-/// This is a low level synchronization primitive intended for building higher-level synchronization
-/// primitives, so the API is quite raw and non-ergonomic. Real end-users are expected to use the
-/// next level of abstraction instead, such as the ones in the `events` package.
-///
-/// As a side-effect of this, whenever this type is seen by code outside its package, it is inside
-/// an `UnsafeCell`, which is required around the entire data structure to guarantee proper
-/// lifecycle permissions such as "destroy object when still referenced via function args" which
-/// are only available to `UnsafeCell` contents.
 pub struct Event<T>
 where
     T: Send,
 {
     /// The logical state of the event; see constants in `state.rs`.
-    state: AtomicU8,
+    pub(crate) state: AtomicU8,
 
     /// If `state` is [`EVENT_AWAITING`] or [`EVENT_SIGNALING`], this field is initialized with the
     /// waker of whoever most recently awaited the receiver. In other states, this field is not
@@ -82,7 +70,7 @@ where
     /// This is for internal use only and is wrapped by public methods that also
     /// wire up the sender and receiver after doing the initialization. An event
     /// without a sender and receiver is invalid.
-    fn new_in_inner(place: &mut UnsafeCell<MaybeUninit<Self>>) {
+    pub(crate) fn new_in_inner(place: &mut UnsafeCell<MaybeUninit<Self>>) {
         // The key here is that we can skip initializing the MaybeUninit fields because
         // they start uninitialized by design and the UnsafeCell wrapper is transparent,
         // only affecting accesses and not the contents.
@@ -109,19 +97,47 @@ where
         }
     }
 
+    #[must_use]
+    pub(crate) fn boxed_core() -> (SenderCore<BoxedRef<T>>, ReceiverCore<BoxedRef<T>>) {
+        let (sender_event_ref, receiver_event_ref) = BoxedRef::new_pair();
+
+        (
+            SenderCore::new(sender_event_ref),
+            ReceiverCore::new(receiver_event_ref),
+        )
+    }
+
     /// Heap-allocates a new instance and returns the endpoints.
     ///
     /// The memory used is released when both endpoints are dropped.
     ///
-    /// For more efficiency, consider using [`new_in`][Self::new_in], which allows you to
+    /// For more efficiency, consider using [`placed`][Self::placed], which allows you to
     /// initialize the event in preallocated storage as part of a larger structure.
     #[must_use]
-    pub fn boxed() -> (Sender<BoxedRef<T>>, Receiver<BoxedRef<T>>) {
-        let (sender_event_ref, receiver_event_ref) = BoxedRef::new_pair();
+    pub fn boxed() -> (BoxedSender<T>, BoxedReceiver<T>) {
+        let (sender_core, receiver_core) = Self::boxed_core();
 
         (
-            Sender::new(sender_event_ref),
-            Receiver::new(receiver_event_ref),
+            BoxedSender::new(sender_core),
+            BoxedReceiver::new(receiver_core),
+        )
+    }
+
+    #[must_use]
+    pub(crate) unsafe fn placed_core(
+        place: Pin<&mut UnsafeCell<MaybeUninit<Self>>>,
+    ) -> (SenderCore<PtrRef<T>>, ReceiverCore<PtrRef<T>>) {
+        // SAFETY: Nothing is getting moved, we just temporarily unwrap the Pin wrapper.
+        let place_mut = unsafe { place.get_unchecked_mut() };
+
+        Self::new_in_inner(place_mut);
+
+        // We cast away the MaybeUninit wrapper because it is now initialized.
+        let event = NonNull::from(place_mut).cast::<UnsafeCell<Self>>();
+
+        (
+            SenderCore::new(PtrRef::new(event)),
+            ReceiverCore::new(PtrRef::new(event)),
         )
     }
 
@@ -137,19 +153,11 @@ where
     #[must_use]
     pub unsafe fn placed(
         place: Pin<&mut UnsafeCell<MaybeUninit<Self>>>,
-    ) -> (Sender<PtrRef<T>>, Receiver<PtrRef<T>>) {
-        // SAFETY: Nothing is getting moved, we just temporarily unwrap the Pin wrapper.
-        let place_mut = unsafe { place.get_unchecked_mut() };
+    ) -> (RawSender<T>, RawReceiver<T>) {
+        // SAFETY: Forwarding safety guarantees from the caller.
+        let (sender_core, receiver_core) = unsafe { Self::placed_core(place) };
 
-        Self::new_in_inner(place_mut);
-
-        // We cast away the MaybeUninit wrapper because it is now initialized.
-        let event = NonNull::from(place_mut).cast::<UnsafeCell<Self>>();
-
-        (
-            Sender::new(PtrRef { event }),
-            Receiver::new(PtrRef { event }),
-        )
+        (RawSender::new(sender_core), RawReceiver::new(receiver_core))
     }
 
     /// Uses the provided closure to inspect the backtrace of the current awaiter,
@@ -161,14 +169,14 @@ where
     /// The closure receives `None` if no one is awaiting the event.
     #[cfg(debug_assertions)]
     pub fn inspect_awaiter(&self, f: impl FnOnce(Option<&Backtrace>)) {
-        let backtrace = self.backtrace.lock().expect(ERR_POISONED_LOCK);
+        let backtrace = self.backtrace.lock();
         f(backtrace.as_ref());
     }
 
     /// Sets the value of the event and notifies the receiver's awaiter, if there is one.
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
-    fn set(event_cell: &UnsafeCell<Self>, value: T) -> Result<(), Disconnected> {
+    pub(crate) fn set(event_cell: &UnsafeCell<Self>, value: T) -> Result<(), Disconnected> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
         // still exist because something was able to call this method.
@@ -280,7 +288,9 @@ where
     /// Marks the event as having been disconnected early from the sender side.
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
-    fn sender_dropped_without_set(event_cell: &UnsafeCell<Self>) -> Result<(), Disconnected> {
+    pub(crate) fn sender_dropped_without_set(
+        event_cell: &UnsafeCell<Self>,
+    ) -> Result<(), Disconnected> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
         // still exist because something was able to call this method.
@@ -363,12 +373,9 @@ where
     /// If `Some` is returned, the caller is the last remaining endpoint and responsible
     /// for cleaning up the event.
     #[must_use]
-    fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
+    pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         #[cfg(debug_assertions)]
-        self.backtrace
-            .lock()
-            .expect(ERR_POISONED_LOCK)
-            .replace(capture_backtrace());
+        self.backtrace.lock().replace(capture_backtrace());
 
         // We use Acquire because we are (depending on the state) acquiring the synchronization
         // block for `value` and/or `awaiter`.
@@ -627,7 +634,7 @@ where
     }
 
     #[must_use]
-    fn is_set(&self) -> bool {
+    pub(crate) fn is_set(&self) -> bool {
         // We use Relaxed ordering because this is independent of any other data.
         // If something wishes to actually obtain the value from the event, that
         // logic will perform its own synchronization.
@@ -646,7 +653,7 @@ where
     /// Returns `Ok(Some(value))` if the sender sender has already sent a value.
     /// Returns `Err` if the sender has already disconnected without sending a value.
     /// In both of these cases, the receiver must clean up the event now.
-    fn final_poll(event_cell: &UnsafeCell<Self>) -> Result<Option<T>, Disconnected> {
+    pub(crate) fn final_poll(event_cell: &UnsafeCell<Self>) -> Result<Option<T>, Disconnected> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
         // still exist because something was able to call this method.
@@ -655,11 +662,7 @@ where
         let event = unsafe { event_maybe.unwrap_unchecked() };
 
         #[cfg(debug_assertions)]
-        event
-            .backtrace
-            .lock()
-            .expect(ERR_POISONED_LOCK)
-            .replace(capture_backtrace());
+        event.backtrace.lock().replace(capture_backtrace());
 
         // The receiver (who is calling this) may still own the waker if the waker has not
         // been used. If this is the case, we need to destroy the waker before proceeding.
@@ -797,407 +800,6 @@ impl<T: Send> fmt::Debug for Event<T> {
     }
 }
 
-/// Enables a sender or receiver to reference the event that connects them.
-///
-/// This is a sealed trait and exists for internal use only. User code never needs to use it.
-#[expect(private_bounds, reason = "intentional - sealed trait")]
-pub trait EventRef<T>:
-    Deref<Target = UnsafeCell<Event<T>>> + ReflectiveTSend + RefPrivate<T> + Sealed + fmt::Debug
-where
-    T: Send,
-{
-}
-
-trait RefPrivate<T>
-where
-    T: Send,
-{
-    /// Releases the event, asserting that the last endpoint has been dropped
-    /// and nothing will access the event after this call.
-    fn release_event(&self);
-}
-
-/// References an event stored anywhere, via raw pointer.
-///
-/// Only used in type names. Instances are created internally by [`Event`].
-pub struct PtrRef<T>
-where
-    T: Send,
-{
-    event: NonNull<UnsafeCell<Event<T>>>,
-}
-
-impl<T> Sealed for PtrRef<T> where T: Send {}
-impl<T> EventRef<T> for PtrRef<T> where T: Send {}
-impl<T> RefPrivate<T> for PtrRef<T>
-where
-    T: Send,
-{
-    fn release_event(&self) {}
-}
-impl<T> Deref for PtrRef<T>
-where
-    T: Send,
-{
-    type Target = UnsafeCell<Event<T>>;
-
-    fn deref(&self) -> &Self::Target {
-        // SAFETY: The creator of the reference is responsible for ensuring the event outlives it.
-        unsafe { self.event.as_ref() }
-    }
-}
-impl<T: Send> ReflectiveTSend for PtrRef<T> {
-    type T = T;
-}
-// SAFETY: This is only used with the thread-safe event (the event is Sync).
-unsafe impl<T> Send for PtrRef<T> where T: Send {}
-impl<T: Send> fmt::Debug for PtrRef<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PtrRef")
-            .field("event", &self.event)
-            .finish()
-    }
-}
-
-/// References an event stored on the heap.
-///
-/// Only used in type names. Instances are created internally by [`Event`].
-pub struct BoxedRef<T>
-where
-    T: Send,
-{
-    event: NonNull<UnsafeCell<Event<T>>>,
-}
-
-impl<T> BoxedRef<T>
-where
-    T: Send,
-{
-    #[must_use]
-    fn new_pair() -> (Self, Self) {
-        // SAFETY: The layout is correct for the type we are using - all is well.
-        let event = NonNull::new(unsafe { alloc(Self::layout()) })
-            .expect("memory allocation failed - fatal error")
-            .cast();
-
-        // SAFETY: MaybeUninit is a transparent wrapper, so the layout matches.
-        // This is the only reference, so we have exclusive access rights.
-        let event_as_maybe_uninit =
-            unsafe { event.cast::<UnsafeCell<MaybeUninit<Event<T>>>>().as_mut() };
-
-        Event::new_in_inner(event_as_maybe_uninit);
-
-        (Self { event }, Self { event })
-    }
-
-    const fn layout() -> Layout {
-        Layout::new::<Event<T>>()
-    }
-}
-
-impl<T> RefPrivate<T> for BoxedRef<T>
-where
-    T: Send,
-{
-    fn release_event(&self) {
-        // The caller tells us that they are the last endpoint, so nothing else can possibly
-        // be accessing the event any more. We can safely release the memory.
-
-        // SAFETY: Still the same type - all is well. We rely on the event state machine
-        // to ensure that there is no double-release happening.
-        unsafe {
-            dealloc(self.event.as_ptr().cast(), Self::layout());
-        }
-    }
-}
-
-impl<T> Sealed for BoxedRef<T> where T: Send {}
-impl<T> EventRef<T> for BoxedRef<T> where T: Send {}
-
-impl<T> Deref for BoxedRef<T>
-where
-    T: Send,
-{
-    type Target = UnsafeCell<Event<T>>;
-
-    fn deref(&self) -> &Self::Target {
-        // SAFETY: Storage is automatically managed - as long as either sender/receiver
-        // are alive, we are guaranteed that the event is alive.
-        unsafe { self.event.as_ref() }
-    }
-}
-impl<T> ReflectiveTSend for BoxedRef<T>
-where
-    T: Send,
-{
-    type T = T;
-}
-// SAFETY: This is only used with the thread-safe event (the event is Sync).
-unsafe impl<T> Send for BoxedRef<T> where T: Send {}
-impl<T: Send> fmt::Debug for BoxedRef<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BoxedRef")
-            .field("event", &self.event)
-            .finish()
-    }
-}
-
-/// Delivers a single value to the receiver connected to the same event.
-///
-/// The type of the value is the inner type parameter,
-/// i.e. the `T` in `Sender<BoxedRef<T>>`.
-///
-/// The outer type parameter determines the mechanism by which the endpoint is bound to the event.
-/// Different binding mechanisms offer different performance characteristics and resource
-/// management patterns.
-pub struct Sender<E>
-where
-    E: EventRef<<E as ReflectiveTSend>::T>,
-{
-    event_ref: E,
-
-    // We are not compatible with concurrent sender use from multiple threads.
-    _not_sync: PhantomData<Cell<()>>,
-}
-
-impl<E> Sender<E>
-where
-    E: EventRef<<E as ReflectiveTSend>::T>,
-{
-    #[must_use]
-    fn new(event_ref: E) -> Self {
-        Self {
-            event_ref,
-            _not_sync: PhantomData,
-        }
-    }
-
-    /// Sends a value to the receiver connected to the same event.
-    ///
-    /// This method consumes the sender and always succeeds, regardless of whether
-    /// there is a receiver waiting.
-    pub fn send(self, value: E::T) {
-        // The drop logic is different before/after set(), so we switch to manual drop here.
-        let mut this = ManuallyDrop::new(self);
-
-        if Event::set(&this.event_ref, value) == Err(Disconnected) {
-            // The other endpoint has disconnected, so we need to clean up the event.
-            this.event_ref.release_event();
-        }
-
-        // SAFETY: The field contains a valid object of the right type. We avoid a double-drop
-        // via ManuallyDrop above. We consume `self` so nothing further can happen.
-        unsafe {
-            ptr::drop_in_place(&raw mut this.event_ref);
-        }
-    }
-}
-
-impl<E> Drop for Sender<E>
-where
-    E: EventRef<<E as ReflectiveTSend>::T>,
-{
-    fn drop(&mut self) {
-        if Event::sender_dropped_without_set(&self.event_ref) == Err(Disconnected) {
-            // The other endpoint has disconnected, so we need to clean up the event.
-            self.event_ref.release_event();
-        }
-    }
-}
-
-impl<E> fmt::Debug for Sender<E>
-where
-    E: EventRef<<E as ReflectiveTSend>::T>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Sender")
-            .field("event_ref", &self.event_ref)
-            .finish()
-    }
-}
-
-/// Receives a single value from the sender connected to the same event.
-///
-/// The type of the value is the inner type parameter,
-/// i.e. the `T` in `Receiver<BoxedRef<T>>`.
-///
-/// The outer type parameter determines the mechanism by which the endpoint is bound to the event.
-/// Different binding mechanisms offer different performance characteristics and resource
-/// management patterns.
-pub struct Receiver<E>
-where
-    E: EventRef<<E as ReflectiveTSend>::T>,
-{
-    // This is `None` if the receiver has already been polled to completion. We need to guard
-    // against that because the event will be cleaned up after the first poll that signals "ready".
-    event_ref: Option<E>,
-
-    // We are not compatible with concurrent receiver use from multiple threads.
-    _not_sync: PhantomData<Cell<()>>,
-}
-
-impl<E> Receiver<E>
-where
-    E: EventRef<<E as ReflectiveTSend>::T>,
-{
-    #[must_use]
-    fn new(event_ref: E) -> Self {
-        Self {
-            event_ref: Some(event_ref),
-            _not_sync: PhantomData,
-        }
-    }
-
-    /// Checks whether a value is ready to be received.
-    ///
-    /// Both a real value and a "disconnected" signal count,
-    /// as they are just different kinds of values.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called after `poll()` has returned `Ready`.
-    #[must_use]
-    pub fn is_ready(&self) -> bool {
-        let Some(event_ref) = &self.event_ref else {
-            panic!("receiver queried after completion");
-        };
-
-        // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
-        // The event lives until both sender and receiver are dropped or inert, so we know it must
-        // still exist because something was able to call this method with `Some(event_ref)`.
-        let event_maybe = unsafe { event_ref.get().as_ref() };
-        // SAFETY: UnsafeCell pointer is never null.
-        let event = unsafe { event_maybe.unwrap_unchecked() };
-
-        event.is_set()
-    }
-
-    /// Consumes the receiver and transforms it into the received value, if the value is available.
-    ///
-    /// This method provides an alternative to awaiting the receiver when you want to check for
-    /// an immediately available value without blocking. It returns `Some(value)` if a value has
-    /// already been sent, or `None` if no value is currently available.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the value has already been received via `Future::poll()`.
-    pub fn into_value(self) -> Result<Result<E::T, Disconnected>, Self> {
-        let event_ref = self
-            .event_ref
-            .as_ref()
-            .expect("Receiver polled after completion");
-
-        // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
-        // The event lives until both sender and receiver are dropped or inert, so we know it must
-        // still exist because something was able to call this method with `Some(event_ref)`.
-        let event_maybe = unsafe { event_ref.get().as_ref() };
-        // SAFETY: UnsafeCell pointer is never null.
-        let event = unsafe { event_maybe.unwrap_unchecked() };
-
-        let current_state = event.state.load(atomic::Ordering::Acquire);
-
-        match current_state {
-            EVENT_BOUND | EVENT_AWAITING | EVENT_SIGNALING => {
-                // No value available yet - return the receiver
-                Err(self)
-            }
-            EVENT_SET | EVENT_DISCONNECTED => {
-                // Value available or disconnected - consume self and
-                // let final_poll decide which endpoint performs the cleanup.
-                let mut this = ManuallyDrop::new(self);
-                let event_ref = this.event_ref.take().unwrap();
-
-                match Event::final_poll(&event_ref) {
-                    Ok(Some(value)) => {
-                        event_ref.release_event();
-                        Ok(Ok(value))
-                    }
-                    Ok(None) => {
-                        // This shouldn't happen - final_poll should return Some(value) or Err(Disconnected)
-                        unreachable!("final_poll returned None")
-                    }
-                    Err(Disconnected) => {
-                        event_ref.release_event();
-                        Ok(Err(Disconnected))
-                    }
-                }
-            }
-            _ => {
-                unreachable!("Invalid event state: {}", current_state)
-            }
-        }
-    }
-}
-
-impl<E> Future for Receiver<E>
-where
-    E: EventRef<<E as ReflectiveTSend>::T>,
-{
-    type Output = Result<E::T, Disconnected>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        let event_ref = self
-            .event_ref
-            .as_ref()
-            .expect("Receiver polled after completion");
-
-        // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
-        // The event lives until both sender and receiver are dropped or inert, so we know it must
-        // still exist because something was able to call this method with `Some(event_ref)`.
-        let event_maybe = unsafe { event_ref.get().as_ref() };
-        // SAFETY: UnsafeCell pointer is never null.
-        let event = unsafe { event_maybe.unwrap_unchecked() };
-
-        let inner_poll_result = event.poll(cx.waker());
-
-        // If the poll returns `Some`, we need to clean up the event.
-        if inner_poll_result.is_some() {
-            // We have a slight problem here, though, because if we release the event here and
-            // the memory is freed, what happens if someone foolishly tries to poll again? That
-            // could lead to a memory safety violation if we did it naively. Therefore, we have
-            // to guard against double polling via an `Option`.
-            event_ref.release_event();
-
-            // SAFETY: We are not moving anything, merely updating a field.
-            let this = unsafe { self.get_unchecked_mut() };
-            this.event_ref = None;
-        }
-
-        inner_poll_result.map_or_else(|| Poll::Pending, Poll::Ready)
-    }
-}
-
-impl<E> Drop for Receiver<E>
-where
-    E: EventRef<<E as ReflectiveTSend>::T>,
-{
-    fn drop(&mut self) {
-        if let Some(event_ref) = self.event_ref.take() {
-            match Event::final_poll(&event_ref) {
-                Ok(None) => {
-                    // Nothing for us to do - the sender was still connected and had not
-                    // sent any value, so it will perform the cleanup on its own.
-                }
-                _ => {
-                    // The sender has already disconnected, so we need to clean up the event.
-                    event_ref.release_event();
-                }
-            }
-        }
-    }
-}
-
-impl<E> fmt::Debug for Receiver<E>
-where
-    E: EventRef<<E as ReflectiveTSend>::T>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Receiver")
-            .field("event_ref", &self.event_ref)
-            .finish()
-    }
-}
-
 #[cfg(test)]
 #[expect(
     clippy::undocumented_unsafe_blocks,
@@ -1207,7 +809,8 @@ where
 mod tests {
     use std::pin::pin;
     use std::sync::{Arc, Barrier};
-    use std::thread;
+    use std::task::Poll;
+    use std::{task, thread};
 
     use spin_on::spin_on;
     use static_assertions::{assert_impl_all, assert_not_impl_any};
@@ -1222,21 +825,21 @@ mod tests {
     assert_impl_all!(PtrRef<u32>: Send);
     assert_not_impl_any!(PtrRef<u32>: Sync);
 
-    assert_impl_all!(Sender<BoxedRef<u32>>: Send);
-    assert_not_impl_any!(Sender<BoxedRef<u32>>: Sync);
+    assert_impl_all!(SenderCore<BoxedRef<u32>>: Send);
+    assert_not_impl_any!(SenderCore<BoxedRef<u32>>: Sync);
 
-    assert_impl_all!(Receiver<BoxedRef<u32>>: Send);
-    assert_not_impl_any!(Receiver<BoxedRef<u32>>: Sync);
+    assert_impl_all!(ReceiverCore<BoxedRef<u32>>: Send);
+    assert_not_impl_any!(ReceiverCore<BoxedRef<u32>>: Sync);
 
-    assert_impl_all!(Sender<PtrRef<u32>>: Send);
-    assert_not_impl_any!(Sender<PtrRef<u32>>: Sync);
+    assert_impl_all!(SenderCore<PtrRef<u32>>: Send);
+    assert_not_impl_any!(SenderCore<PtrRef<u32>>: Sync);
 
-    assert_impl_all!(Receiver<PtrRef<u32>>: Send);
-    assert_not_impl_any!(Receiver<PtrRef<u32>>: Sync);
+    assert_impl_all!(ReceiverCore<PtrRef<u32>>: Send);
+    assert_not_impl_any!(ReceiverCore<PtrRef<u32>>: Sync);
 
     #[test]
     fn boxed_send_receive() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -1249,7 +852,7 @@ mod tests {
 
     #[test]
     fn boxed_send_receive_unit() {
-        let (sender, receiver) = Event::<()>::boxed();
+        let (sender, receiver) = Event::<()>::boxed_core();
         let mut receiver = pin!(receiver);
 
         sender.send(());
@@ -1262,7 +865,7 @@ mod tests {
 
     #[test]
     fn boxed_send_receive_u128() {
-        let (sender, receiver) = Event::<u128>::boxed();
+        let (sender, receiver) = Event::<u128>::boxed_core();
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -1275,7 +878,7 @@ mod tests {
 
     #[test]
     fn boxed_send_receive_array() {
-        let (sender, receiver) = Event::<[u128; 4]>::boxed();
+        let (sender, receiver) = Event::<[u128; 4]>::boxed_core();
         let mut receiver = pin!(receiver);
 
         sender.send([42, 43, 44, 45]);
@@ -1288,7 +891,7 @@ mod tests {
 
     #[test]
     fn boxed_receive_send_receive() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
         let mut receiver = pin!(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1304,14 +907,14 @@ mod tests {
 
     #[test]
     fn boxed_drop_send() {
-        let (sender, _) = Event::<i32>::boxed();
+        let (sender, _) = Event::<i32>::boxed_core();
 
         sender.send(42);
     }
 
     #[test]
     fn boxed_drop_receive() {
-        let (_, receiver) = Event::<i32>::boxed();
+        let (_, receiver) = Event::<i32>::boxed_core();
         let mut receiver = pin!(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1322,7 +925,7 @@ mod tests {
 
     #[test]
     fn boxed_receive_drop_receive() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
         let mut receiver = pin!(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1338,7 +941,7 @@ mod tests {
 
     #[test]
     fn boxed_receive_drop_send() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
         let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1353,7 +956,7 @@ mod tests {
 
     #[test]
     fn boxed_receive_drop_drop_receiver_first() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
         let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1367,7 +970,7 @@ mod tests {
 
     #[test]
     fn boxed_receive_drop_drop_sender_first() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
         let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1381,7 +984,7 @@ mod tests {
 
     #[test]
     fn boxed_drop_drop_receiver_first() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
 
         drop(receiver);
         drop(sender);
@@ -1389,7 +992,7 @@ mod tests {
 
     #[test]
     fn boxed_drop_drop_sender_first() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
 
         drop(sender);
         drop(receiver);
@@ -1397,7 +1000,7 @@ mod tests {
 
     #[test]
     fn boxed_is_ready() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
         let mut receiver = pin!(receiver);
 
         assert!(!receiver.is_ready());
@@ -1414,7 +1017,7 @@ mod tests {
 
     #[test]
     fn boxed_drop_is_ready() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
         let mut receiver = pin!(receiver);
 
         assert!(!receiver.is_ready());
@@ -1431,7 +1034,7 @@ mod tests {
 
     #[test]
     fn boxed_into_value() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
 
         let Err(receiver) = receiver.into_value() else {
             panic!("expected no value yet");
@@ -1444,7 +1047,7 @@ mod tests {
 
     #[test]
     fn boxed_drop_into_value() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
 
         drop(sender);
 
@@ -1454,7 +1057,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn boxed_panic_poll_after_completion() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -1473,7 +1076,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn boxed_panic_is_ready_after_completion() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -1492,7 +1095,7 @@ mod tests {
     #[test]
     fn placed_send_receive() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -1506,7 +1109,7 @@ mod tests {
     #[test]
     fn placed_receive_send_receive() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1523,7 +1126,7 @@ mod tests {
     #[test]
     fn placed_drop_send() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, _) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, _) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
 
         sender.send(42);
     }
@@ -1531,7 +1134,7 @@ mod tests {
     #[test]
     fn placed_drop_receive() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (_, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (_, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1543,7 +1146,7 @@ mod tests {
     #[test]
     fn placed_receive_drop_receive() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1560,7 +1163,7 @@ mod tests {
     #[test]
     fn placed_receive_drop_send() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1576,7 +1179,7 @@ mod tests {
     #[test]
     fn placed_receive_drop_drop_receiver_first() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1591,7 +1194,7 @@ mod tests {
     #[test]
     fn placed_receive_drop_drop_sender_first() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1606,7 +1209,7 @@ mod tests {
     #[test]
     fn placed_drop_drop_receiver_first() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
 
         drop(receiver);
         drop(sender);
@@ -1615,7 +1218,7 @@ mod tests {
     #[test]
     fn placed_drop_drop_sender_first() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
 
         drop(sender);
         drop(receiver);
@@ -1624,7 +1227,7 @@ mod tests {
     #[test]
     fn placed_is_ready() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         assert!(!receiver.is_ready());
@@ -1642,7 +1245,7 @@ mod tests {
     #[test]
     fn placed_drop_is_ready() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         assert!(!receiver.is_ready());
@@ -1660,7 +1263,7 @@ mod tests {
     #[test]
     fn placed_into_value() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
 
         let Err(receiver) = receiver.into_value() else {
             panic!("expected no value yet");
@@ -1674,7 +1277,7 @@ mod tests {
     #[test]
     fn placed_drop_into_value() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
 
         drop(sender);
 
@@ -1685,7 +1288,7 @@ mod tests {
     #[should_panic]
     fn placed_panic_poll_after_completion() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -1705,7 +1308,7 @@ mod tests {
     #[should_panic]
     fn placed_panic_is_ready_after_completion() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -1723,7 +1326,7 @@ mod tests {
 
     #[test]
     fn boxed_send_receive_mt() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
 
         thread::spawn(move || {
             sender.send(42);
@@ -1744,7 +1347,7 @@ mod tests {
 
     #[test]
     fn boxed_receive_send_receive_mt() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
 
         let first_poll_completed = Arc::new(Barrier::new(2));
         let first_poll_completed_clone = Arc::clone(&first_poll_completed);
@@ -1777,7 +1380,7 @@ mod tests {
 
     #[test]
     fn boxed_send_receive_unbiased_mt() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
 
         let receive_thread = thread::spawn(move || {
             spin_on(async {
@@ -1796,7 +1399,7 @@ mod tests {
 
     #[test]
     fn boxed_drop_receive_unbiased_mt() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
 
         let receive_thread = thread::spawn(move || {
             spin_on(async {
@@ -1815,7 +1418,7 @@ mod tests {
 
     #[test]
     fn boxed_drop_send_unbiased_mt() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        let (sender, receiver) = Event::<i32>::boxed_core();
 
         let receive_thread = thread::spawn(move || {
             drop(receiver);
@@ -1832,7 +1435,7 @@ mod tests {
     #[test]
     fn placed_send_receive_mt() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
 
         thread::spawn(move || {
             sender.send(42);
@@ -1858,7 +1461,7 @@ mod tests {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
 
         for _ in 0..ITERATIONS {
-            let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+            let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
 
             thread::spawn(move || {
                 sender.send(42);
@@ -1881,7 +1484,7 @@ mod tests {
     #[test]
     fn placed_receive_send_receive_mt() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
 
         let first_poll_completed = Arc::new(Barrier::new(2));
         let first_poll_completed_clone = Arc::clone(&first_poll_completed);
@@ -1915,7 +1518,7 @@ mod tests {
     #[test]
     fn placed_send_receive_unbiased_mt() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
 
         let receive_thread = thread::spawn(move || {
             spin_on(async {
@@ -1935,7 +1538,7 @@ mod tests {
     #[test]
     fn placed_drop_receive_unbiased_mt() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
 
         let receive_thread = thread::spawn(move || {
             spin_on(async {
@@ -1955,7 +1558,7 @@ mod tests {
     #[test]
     fn placed_drop_send_unbiased_mt() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
 
         let receive_thread = thread::spawn(move || {
             drop(receiver);
@@ -1973,7 +1576,7 @@ mod tests {
     #[test]
     fn inspect_awaiter_no_awaiter() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let _endpoints = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let _endpoints = unsafe { Event::<i32>::placed_core(place.as_mut()) };
 
         let mut called = false;
         unsafe { place.get().as_ref().unwrap().assume_init_ref() }.inspect_awaiter(|backtrace| {
@@ -1988,7 +1591,7 @@ mod tests {
     #[test]
     fn inspect_awaiter_with_awaiter() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (_sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (_sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
 
         let mut cx = task::Context::from_waker(Waker::noop());
         let mut receiver = pin!(receiver);
@@ -2007,7 +1610,7 @@ mod tests {
     #[test]
     fn inspect_awaiter_after_sender_drop() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
 
         let mut cx = task::Context::from_waker(Waker::noop());
         let mut receiver = pin!(receiver);
@@ -2028,7 +1631,7 @@ mod tests {
     #[test]
     fn inspect_awaiter_after_receiver_drop() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (_sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+        let (_sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
 
         let mut cx = task::Context::from_waker(Waker::noop());
         let mut receiver = Box::pin(receiver);

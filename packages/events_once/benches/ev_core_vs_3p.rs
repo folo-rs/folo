@@ -6,10 +6,10 @@ use std::task;
 use std::task::Waker;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use events_once_core::{Event, LocalEvent};
+use events_once::{Event, LocalEvent};
 
 fn entrypoint(c: &mut Criterion) {
-    let mut g = c.benchmark_group("events_once_core_vs_3p");
+    let mut g = c.benchmark_group("events_once_vs_3p");
 
     g.bench_function("local_boxed_send_receive", |b| {
         b.iter(|| {

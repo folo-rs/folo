@@ -583,3 +583,7 @@ Package dependencies of UI tests must be excluded from `udeps` scanner logic via
 
 Tests that use `#[should_panic]` or use `Display` output of error types must not check for specific
 panic or error messages - these messages are not an API contract and may change at any time.
+
+# Type names
+
+Do not hardcode type names in string literals. Instead use `type_name::<Self>()` or similar.

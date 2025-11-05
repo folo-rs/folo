@@ -5,6 +5,7 @@
     reason = "benchmarks"
 )]
 
+use std::cell::UnsafeCell;
 use std::hint::black_box;
 use std::mem::MaybeUninit;
 use std::pin::pin;
@@ -13,21 +14,22 @@ use std::time::Instant;
 use std::{iter, task};
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use events_once_core::LocalEvent;
+use events_once::Event;
 
 fn entrypoint(c: &mut Criterion) {
-    let mut g = c.benchmark_group("events_once_core_local");
+    let mut g = c.benchmark_group("events_once_sync");
 
     g.bench_function("send_receive", |b| {
         b.iter_custom(|iterations| {
-            let mut events =
-                iter::repeat_with(|| Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit()))
-                    .take(iterations as usize)
-                    .collect::<Vec<_>>();
+            let mut events = iter::repeat_with(|| {
+                Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()))
+            })
+            .take(iterations as usize)
+            .collect::<Vec<_>>();
 
             let endpoints = events
                 .iter_mut()
-                .map(|event| unsafe { LocalEvent::placed(event.as_mut()) })
+                .map(|event| unsafe { Event::placed(event.as_mut()) })
                 .collect::<Vec<_>>();
 
             let start = Instant::now();
@@ -47,14 +49,15 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("poll_connected", |b| {
         b.iter_custom(|iterations| {
-            let mut events =
-                iter::repeat_with(|| Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit()))
-                    .take(iterations as usize)
-                    .collect::<Vec<_>>();
+            let mut events = iter::repeat_with(|| {
+                Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()))
+            })
+            .take(iterations as usize)
+            .collect::<Vec<_>>();
 
             let endpoints = events
                 .iter_mut()
-                .map(|event| unsafe { LocalEvent::placed(event.as_mut()) })
+                .map(|event| unsafe { Event::placed(event.as_mut()) })
                 .collect::<Vec<_>>();
 
             let (_senders, receivers) = endpoints.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
@@ -77,14 +80,15 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("poll_disconnected", |b| {
         b.iter_custom(|iterations| {
-            let mut events =
-                iter::repeat_with(|| Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit()))
-                    .take(iterations as usize)
-                    .collect::<Vec<_>>();
+            let mut events = iter::repeat_with(|| {
+                Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()))
+            })
+            .take(iterations as usize)
+            .collect::<Vec<_>>();
 
             let endpoints = events
                 .iter_mut()
-                .map(|event| unsafe { LocalEvent::placed(event.as_mut()) })
+                .map(|event| unsafe { Event::placed(event.as_mut()) })
                 .collect::<Vec<_>>();
 
             let (senders, receivers) = endpoints.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
@@ -110,14 +114,15 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("set_connected", |b| {
         b.iter_custom(|iterations| {
-            let mut events =
-                iter::repeat_with(|| Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit()))
-                    .take(iterations as usize)
-                    .collect::<Vec<_>>();
+            let mut events = iter::repeat_with(|| {
+                Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()))
+            })
+            .take(iterations as usize)
+            .collect::<Vec<_>>();
 
             let endpoints = events
                 .iter_mut()
-                .map(|event| unsafe { LocalEvent::placed(event.as_mut()) })
+                .map(|event| unsafe { Event::placed(event.as_mut()) })
                 .collect::<Vec<_>>();
 
             let (senders, _receivers) = endpoints.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
@@ -135,14 +140,15 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("set_disconnected", |b| {
         b.iter_custom(|iterations| {
-            let mut events =
-                iter::repeat_with(|| Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit()))
-                    .take(iterations as usize)
-                    .collect::<Vec<_>>();
+            let mut events = iter::repeat_with(|| {
+                Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()))
+            })
+            .take(iterations as usize)
+            .collect::<Vec<_>>();
 
             let endpoints = events
                 .iter_mut()
-                .map(|event| unsafe { LocalEvent::placed(event.as_mut()) })
+                .map(|event| unsafe { Event::placed(event.as_mut()) })
                 .collect::<Vec<_>>();
 
             let (senders, receivers) = endpoints.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();

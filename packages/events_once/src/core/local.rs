@@ -1,32 +1,27 @@
-use std::alloc::{Layout, alloc, dealloc};
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
 #[cfg(debug_assertions)]
 use std::cell::RefCell;
 use std::cell::{Cell, UnsafeCell};
 use std::fmt;
-use std::future::Future;
 use std::marker::{PhantomData, PhantomPinned};
-use std::mem::{ManuallyDrop, MaybeUninit, offset_of};
-use std::ops::Deref;
+use std::mem::{MaybeUninit, offset_of};
 use std::pin::Pin;
-use std::ptr::{self, NonNull};
-use std::task::{self, Poll, Waker};
+use std::ptr::NonNull;
+use std::task::Waker;
 
 #[cfg(debug_assertions)]
 use crate::{BacktraceType, capture_backtrace};
 use crate::{
-    Disconnected, EVENT_AWAITING, EVENT_BOUND, EVENT_DISCONNECTED, EVENT_SET, ReflectiveT, Sealed,
+    BoxedLocalReceiver, BoxedLocalRef, BoxedLocalSender, Disconnected, EVENT_AWAITING, EVENT_BOUND,
+    EVENT_DISCONNECTED, EVENT_SET, LocalReceiverCore, LocalSenderCore, PtrLocalRef,
+    RawLocalReceiver, RawLocalSender,
 };
 
 /// Coordinates delivery of a `T` at most once from a sender to a receiver on the same thread.
-///
-/// This is a low level synchronization primitive intended for building higher-level synchronization
-/// primitives, so the API is quite raw and non-ergonomic. Real end-users are expected to use the
-/// next level of abstraction instead, such as the ones in the `events` package.
 pub struct LocalEvent<T> {
     /// The logical state of the event; see constants in `state.rs`.
-    state: Cell<u8>,
+    pub(crate) state: Cell<u8>,
 
     /// If `state` is [`EVENT_AWAITING`], this field is initialized with the
     /// waker of whoever most recently awaited the receiver. In other states, this field is not
@@ -70,7 +65,7 @@ impl<T> LocalEvent<T> {
     /// This is for internal use only and is wrapped by public methods that also
     /// wire up the sender and receiver after doing the initialization. An event
     /// without a sender and receiver is invalid.
-    fn new_in_inner(place: &mut MaybeUninit<Self>) -> NonNull<Self> {
+    pub(crate) fn new_in_inner(place: &mut MaybeUninit<Self>) -> NonNull<Self> {
         // We can skip initializing the MaybeUninit fields because they start uninitialized
         // by design and the UnsafeCell wrapper is transparent, only affecting accesses and
         // not the contents.
@@ -100,26 +95,52 @@ impl<T> LocalEvent<T> {
         unsafe { NonNull::new_unchecked(base_ptr) }
     }
 
-    /// Heap-allocates a new instance and returns the endpoints.
-    ///
-    /// The memory used is released when both endpoints are dropped.
-    ///
-    /// For more efficiency, consider using [`new_in`][Self::new_in], which allows you to
-    /// initialize the event in preallocated storage as part of a larger structure.
     #[must_use]
-    pub fn boxed() -> (
-        LocalSender<BoxedLocalRef<T>>,
-        LocalReceiver<BoxedLocalRef<T>>,
+    pub(crate) fn boxed_core() -> (
+        LocalSenderCore<BoxedLocalRef<T>>,
+        LocalReceiverCore<BoxedLocalRef<T>>,
     ) {
         let (sender_event, receiver_event) = BoxedLocalRef::new_pair();
 
         (
-            LocalSender::new(sender_event),
-            LocalReceiver::new(receiver_event),
+            LocalSenderCore::new(sender_event),
+            LocalReceiverCore::new(receiver_event),
         )
     }
 
-    /// Initializes the event in-place, returning the endpoints.
+    /// Heap-allocates a new instance and returns the endpoints.
+    ///
+    /// The memory used is released when both endpoints are dropped.
+    ///
+    /// For more efficiency, consider using [`placed`][Self::placed], which allows you to
+    /// initialize the event in preallocated storage as part of a larger structure.
+    #[must_use]
+    pub fn boxed() -> (BoxedLocalSender<T>, BoxedLocalReceiver<T>) {
+        let (sender_core, receiver_core) = Self::boxed_core();
+
+        (
+            BoxedLocalSender::new(sender_core),
+            BoxedLocalReceiver::new(receiver_core),
+        )
+    }
+
+    #[must_use]
+    pub(crate) unsafe fn placed_core(
+        place: Pin<&mut MaybeUninit<Self>>,
+    ) -> (
+        LocalSenderCore<PtrLocalRef<T>>,
+        LocalReceiverCore<PtrLocalRef<T>>,
+    ) {
+        // SAFETY: Nothing is getting moved, we just temporarily unwrap the Pin wrapper.
+        let event = Self::new_in_inner(unsafe { place.get_unchecked_mut() });
+
+        (
+            LocalSenderCore::new(PtrLocalRef::new(event)),
+            LocalReceiverCore::new(PtrLocalRef::new(event)),
+        )
+    }
+
+    // Initializes the event in-place, returning the endpoints.
     ///
     /// # Safety
     ///
@@ -131,13 +152,13 @@ impl<T> LocalEvent<T> {
     #[must_use]
     pub unsafe fn placed(
         place: Pin<&mut MaybeUninit<Self>>,
-    ) -> (LocalSender<PtrLocalRef<T>>, LocalReceiver<PtrLocalRef<T>>) {
-        // SAFETY: Nothing is getting moved, we just temporarily unwrap the Pin wrapper.
-        let event = Self::new_in_inner(unsafe { place.get_unchecked_mut() });
+    ) -> (RawLocalSender<T>, RawLocalReceiver<T>) {
+        // SAFETY: Forwarding safety guarantees from the caller.
+        let (sender_core, receiver_core) = unsafe { Self::placed_core(place) };
 
         (
-            LocalSender::new(PtrLocalRef { event }),
-            LocalReceiver::new(PtrLocalRef { event }),
+            RawLocalSender::new(sender_core),
+            RawLocalReceiver::new(receiver_core),
         )
     }
 
@@ -157,7 +178,7 @@ impl<T> LocalEvent<T> {
     /// Sets the value of the event and notifies the awaiter, if there is one.
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
-    fn set(&self, result: T) -> Result<(), Disconnected> {
+    pub(crate) fn set(&self, result: T) -> Result<(), Disconnected> {
         let value_cell = self.value.get();
 
         // We can start by setting the value - this has to happen no matter what.
@@ -240,7 +261,7 @@ impl<T> LocalEvent<T> {
     /// If `Some` result is returned, the caller is the last remaining endpoint and responsible
     /// for cleaning up the event.
     #[must_use]
-    fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
+    pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         #[cfg(debug_assertions)]
         self.backtrace.replace(Some(capture_backtrace()));
 
@@ -306,7 +327,7 @@ impl<T> LocalEvent<T> {
     /// Marks the event as having been disconnected early from the sender side.
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
-    fn sender_dropped_without_set(&self) -> Result<(), Disconnected> {
+    pub(crate) fn sender_dropped_without_set(&self) -> Result<(), Disconnected> {
         let previous_state = self.state.get();
 
         // We can immediately set this because this is a single-threaded event, so there cannot
@@ -352,7 +373,7 @@ impl<T> LocalEvent<T> {
 
     /// Checks whether the event has been set (either with a value or with a disconnect signal).
     #[must_use]
-    fn is_set(&self) -> bool {
+    pub(crate) fn is_set(&self) -> bool {
         matches!(self.state.get(), EVENT_SET | EVENT_DISCONNECTED)
     }
 
@@ -365,7 +386,7 @@ impl<T> LocalEvent<T> {
     /// Returns `Ok(Some(value))` if the sender sender has already sent a value.
     /// Returns `Err` if the sender has already disconnected without sending a value.
     /// In both of these cases, the receiver must clean up the event now.
-    fn final_poll(&self) -> Result<Option<T>, Disconnected> {
+    pub(crate) fn final_poll(&self) -> Result<Option<T>, Disconnected> {
         let previous_state = self.state.get();
 
         // We can immediately set this because this is a single-threaded event, so there cannot
@@ -449,358 +470,21 @@ impl<T> fmt::Debug for LocalEvent<T> {
     }
 }
 
-/// Enables a sender or receiver to reference the event that connects them.
-///
-/// This is a sealed trait and exists for internal use only. User code never needs to use it.
-#[expect(private_bounds, reason = "intentional - sealed trait")]
-pub trait LocalRef<T>:
-    Deref<Target = LocalEvent<T>> + ReflectiveT + LocalRefPrivate<T> + Sealed + fmt::Debug
-{
-}
-
-trait LocalRefPrivate<T> {
-    /// Releases the event, asserting that the last endpoint has been dropped
-    /// and nothing will access the event after this call.
-    fn release_event(&self);
-}
-
-/// References an event stored anywhere, via raw pointer.
-///
-/// Only used in type names. Instances are created by [`LocalEvent`].
-pub struct PtrLocalRef<T> {
-    event: NonNull<LocalEvent<T>>,
-}
-
-impl<T> Sealed for PtrLocalRef<T> {}
-impl<T> LocalRefPrivate<T> for PtrLocalRef<T> {
-    fn release_event(&self) {}
-}
-impl<T> LocalRef<T> for PtrLocalRef<T> {}
-impl<T> Deref for PtrLocalRef<T> {
-    type Target = LocalEvent<T>;
-
-    fn deref(&self) -> &Self::Target {
-        // SAFETY: The creator of the reference is responsible for ensuring the event outlives it.
-        unsafe { self.event.as_ref() }
-    }
-}
-impl<T> ReflectiveT for PtrLocalRef<T> {
-    type T = T;
-}
-impl<T> fmt::Debug for PtrLocalRef<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PtrLocalRef")
-            .field("event", &self.event)
-            .finish()
-    }
-}
-
-/// References an event stored on the heap.
-///
-/// Only used in type names. Instances are created internally by [`LocalEvent`].
-pub struct BoxedLocalRef<T> {
-    event: NonNull<LocalEvent<T>>,
-}
-
-impl<T> BoxedLocalRef<T> {
-    #[must_use]
-    fn new_pair() -> (Self, Self) {
-        // SAFETY: The layout is correct for the type we are using - all is well.
-        let event = NonNull::new(unsafe { alloc(Self::layout()) })
-            .expect("memory allocation failed - fatal error")
-            .cast();
-
-        // SAFETY: MaybeUninit is a transparent wrapper, so the layout matches.
-        // This is the only reference, so we have exclusive access rights.
-        let event_as_maybe_uninit = unsafe { event.cast::<MaybeUninit<LocalEvent<T>>>().as_mut() };
-
-        LocalEvent::new_in_inner(event_as_maybe_uninit);
-
-        (Self { event }, Self { event })
-    }
-
-    const fn layout() -> Layout {
-        Layout::new::<LocalEvent<T>>()
-    }
-}
-
-impl<T> LocalRefPrivate<T> for BoxedLocalRef<T> {
-    fn release_event(&self) {
-        // The caller tells us that they are the last endpoint, so nothing else can possibly
-        // be accessing the event any more. We can safely release the memory.
-
-        // SAFETY: Still the same type - all is well. We rely on the event state machine
-        // to ensure that there is no double-release happening.
-        unsafe {
-            dealloc(self.event.as_ptr().cast(), Self::layout());
-        }
-    }
-}
-
-impl<T> Sealed for BoxedLocalRef<T> {}
-impl<T> LocalRef<T> for BoxedLocalRef<T> {}
-impl<T> Deref for BoxedLocalRef<T> {
-    type Target = LocalEvent<T>;
-
-    fn deref(&self) -> &Self::Target {
-        // SAFETY: Storage is automatically managed - as long as either sender/receiver
-        // are alive, we are guaranteed that the event is alive.
-        unsafe { self.event.as_ref() }
-    }
-}
-impl<T> ReflectiveT for BoxedLocalRef<T> {
-    type T = T;
-}
-impl<T> fmt::Debug for BoxedLocalRef<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BoxedLocalRef")
-            .field("event", &self.event)
-            .finish()
-    }
-}
-
-/// Delivers a single value to the receiver connected to the same event.
-///
-/// The type of the value is the inner type parameter,
-/// i.e. the `T` in `LocalSender<BoxedLocalRef<T>>`.
-///
-/// The outer type parameter determines the mechanism by which the endpoint is bound to the event.
-/// Different binding mechanisms offer different performance characteristics and resource
-/// management patterns.
-pub struct LocalSender<E>
-where
-    E: LocalRef<<E as ReflectiveT>::T>,
-{
-    event_ref: E,
-}
-
-impl<E> LocalSender<E>
-where
-    E: LocalRef<<E as ReflectiveT>::T>,
-{
-    #[must_use]
-    fn new(event_ref: E) -> Self {
-        Self { event_ref }
-    }
-
-    /// Sends a value to the receiver connected to the same event.
-    ///
-    /// This method consumes the sender and always succeeds, regardless of whether
-    /// there is a receiver waiting.
-    pub fn send(self, value: E::T) {
-        // The drop logic is different before/after set(), so we switch to manual drop here.
-        let mut this = ManuallyDrop::new(self);
-
-        if this.event_ref.set(value) == Err(Disconnected) {
-            // The other endpoint has disconnected, so we need to clean up the event.
-            this.event_ref.release_event();
-        }
-
-        // SAFETY: The field contains a valid object of the right type. We avoid a double-drop
-        // via ManuallyDrop above. We consume `self` so nothing further can happen.
-        unsafe {
-            ptr::drop_in_place(&raw mut this.event_ref);
-        }
-    }
-}
-
-impl<E> Drop for LocalSender<E>
-where
-    E: LocalRef<<E as ReflectiveT>::T>,
-{
-    fn drop(&mut self) {
-        if self.event_ref.sender_dropped_without_set() == Err(Disconnected) {
-            // The other endpoint has disconnected, so we need to clean up the event.
-            self.event_ref.release_event();
-        }
-    }
-}
-
-impl<E> fmt::Debug for LocalSender<E>
-where
-    E: LocalRef<<E as ReflectiveT>::T>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LocalSender")
-            .field("event_ref", &self.event_ref)
-            .finish()
-    }
-}
-
-/// Receives a single value from the sender connected to the same event.
-///
-/// The type of the value is the inner type parameter,
-/// i.e. the `T` in `LocalReceiver<BoxedLocalRef<T>>`.
-///
-/// The outer type parameter determines the mechanism by which the endpoint is bound to the event.
-/// Different binding mechanisms offer different performance characteristics and resource
-/// management patterns.
-pub struct LocalReceiver<E>
-where
-    E: LocalRef<<E as ReflectiveT>::T>,
-{
-    // This is `None` if the receiver has already been polled to completion. We need to guard
-    // against that because the event will be cleaned up after the first poll that signals "ready".
-    event_ref: Option<E>,
-}
-
-impl<E> LocalReceiver<E>
-where
-    E: LocalRef<<E as ReflectiveT>::T>,
-{
-    fn new(event_ref: E) -> Self {
-        Self {
-            event_ref: Some(event_ref),
-        }
-    }
-
-    /// Checks whether a value is ready to be received.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called after `poll()` has returned `Ready`.
-    #[must_use]
-    pub fn is_ready(&self) -> bool {
-        let Some(event_ref) = &self.event_ref else {
-            panic!("receiver queried after completion");
-        };
-
-        event_ref.is_set()
-    }
-
-    /// Consumes the receiver and transforms it into the received value, if the value is available.
-    ///
-    /// This method provides an alternative to awaiting the receiver when you want to check for
-    /// an immediately available value without blocking. It returns `Ok(value)` if a value has
-    /// already been sent, or returns the receiver if no value is currently available.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the value has already been received via `Future::poll()`.
-    pub fn into_value(self) -> Result<Result<E::T, Disconnected>, Self> {
-        let event_ref = self
-            .event_ref
-            .as_ref()
-            .expect("LocalOnceReceiver polled after completion");
-
-        // Check the current state directly to decide what to do
-        let current_state = event_ref.state.get();
-
-        match current_state {
-            EVENT_BOUND | EVENT_AWAITING => {
-                // No value available yet - return the receiver
-                Err(self)
-            }
-            EVENT_SET | EVENT_DISCONNECTED => {
-                // Value available or disconnected - consume self and let final_poll decide
-                let mut this = ManuallyDrop::new(self);
-                let event_ref = this.event_ref.take().unwrap();
-
-                match event_ref.final_poll() {
-                    Ok(Some(value)) => {
-                        event_ref.release_event();
-                        Ok(Ok(value))
-                    }
-                    Ok(None) => {
-                        // This shouldn't happen - final_poll should return Some(value) or Err(Disconnected)
-                        unreachable!("final_poll returned None")
-                    }
-                    Err(Disconnected) => {
-                        event_ref.release_event();
-                        Ok(Err(Disconnected))
-                    }
-                }
-            }
-            _ => {
-                unreachable!("Invalid event state: {}", current_state)
-            }
-        }
-    }
-}
-
-impl<E> Future for LocalReceiver<E>
-where
-    E: LocalRef<<E as ReflectiveT>::T>,
-{
-    type Output = Result<E::T, Disconnected>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        let event_ref = self
-            .event_ref
-            .as_ref()
-            .expect("LocalOnceReceiver polled after completion");
-
-        let inner_poll_result = event_ref.poll(cx.waker());
-
-        // If the poll returns `Some`, we need to clean up the event.
-        if inner_poll_result.is_some() {
-            // We have a slight problem here, though, because if we release the event here and
-            // the memory is freed, what happens if someone foolishly tries to poll again? That
-            // could lead to a memory safety violation if we did it naively. Therefore, we have
-            // to guard against double polling via an `Option`.
-            event_ref.release_event();
-
-            // SAFETY: We are not moving anything, merely updating a field.
-            let this = unsafe { self.get_unchecked_mut() };
-            // This makes `drop()` a no-op.
-            this.event_ref = None;
-        }
-
-        inner_poll_result.map_or_else(|| Poll::Pending, Poll::Ready)
-    }
-}
-
-impl<E> Drop for LocalReceiver<E>
-where
-    E: LocalRef<<E as ReflectiveT>::T>,
-{
-    fn drop(&mut self) {
-        if let Some(event_ref) = self.event_ref.take() {
-            match event_ref.final_poll() {
-                Ok(None) => {
-                    // Nothing for us to do - the sender was still connected and had not
-                    // sent any value, so it will perform the cleanup on its own.
-                }
-                _ => {
-                    // The sender has already disconnected, so we need to clean up the event.
-                    event_ref.release_event();
-                }
-            }
-        }
-    }
-}
-
-impl<E> fmt::Debug for LocalReceiver<E>
-where
-    E: LocalRef<<E as ReflectiveT>::T>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LocalReceiver")
-            .field("event_ref", &self.event_ref)
-            .finish()
-    }
-}
-
 #[cfg(test)]
 #[expect(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
 mod tests {
     use std::pin::pin;
+    use std::task::{self, Poll};
 
     use static_assertions::assert_not_impl_any;
 
     use super::*;
 
     assert_not_impl_any!(LocalEvent<i32>: Send, Sync);
-    assert_not_impl_any!(BoxedLocalRef<i32>: Send, Sync);
-    assert_not_impl_any!(PtrLocalRef<i32>: Send, Sync);
-    assert_not_impl_any!(LocalSender<BoxedLocalRef<i32>>: Send, Sync);
-    assert_not_impl_any!(LocalReceiver<BoxedLocalRef<i32>>: Send, Sync);
-    assert_not_impl_any!(LocalSender<PtrLocalRef<i32>>: Send, Sync);
-    assert_not_impl_any!(LocalReceiver<PtrLocalRef<i32>>: Send, Sync);
 
     #[test]
     fn boxed_send_receive() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let (sender, receiver) = LocalEvent::<i32>::boxed_core();
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -813,7 +497,7 @@ mod tests {
 
     #[test]
     fn boxed_send_receive_unit() {
-        let (sender, receiver) = LocalEvent::<()>::boxed();
+        let (sender, receiver) = LocalEvent::<()>::boxed_core();
         let mut receiver = pin!(receiver);
 
         sender.send(());
@@ -826,7 +510,7 @@ mod tests {
 
     #[test]
     fn boxed_send_receive_u128() {
-        let (sender, receiver) = LocalEvent::<u128>::boxed();
+        let (sender, receiver) = LocalEvent::<u128>::boxed_core();
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -839,7 +523,7 @@ mod tests {
 
     #[test]
     fn boxed_send_receive_array() {
-        let (sender, receiver) = LocalEvent::<[u128; 4]>::boxed();
+        let (sender, receiver) = LocalEvent::<[u128; 4]>::boxed_core();
         let mut receiver = pin!(receiver);
 
         sender.send([42, 43, 44, 45]);
@@ -852,7 +536,7 @@ mod tests {
 
     #[test]
     fn boxed_receive_send_receive() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let (sender, receiver) = LocalEvent::<i32>::boxed_core();
         let mut receiver = pin!(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -868,14 +552,14 @@ mod tests {
 
     #[test]
     fn boxed_drop_send() {
-        let (sender, _) = LocalEvent::<i32>::boxed();
+        let (sender, _) = LocalEvent::<i32>::boxed_core();
 
         sender.send(42);
     }
 
     #[test]
     fn boxed_drop_receive() {
-        let (_, receiver) = LocalEvent::<i32>::boxed();
+        let (_, receiver) = LocalEvent::<i32>::boxed_core();
         let mut receiver = pin!(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -886,7 +570,7 @@ mod tests {
 
     #[test]
     fn boxed_receive_drop_receive() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let (sender, receiver) = LocalEvent::<i32>::boxed_core();
         let mut receiver = pin!(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -902,7 +586,7 @@ mod tests {
 
     #[test]
     fn boxed_receive_drop_send() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let (sender, receiver) = LocalEvent::<i32>::boxed_core();
         let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -917,7 +601,7 @@ mod tests {
 
     #[test]
     fn boxed_receive_drop_drop_receiver_first() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let (sender, receiver) = LocalEvent::<i32>::boxed_core();
         let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -931,7 +615,7 @@ mod tests {
 
     #[test]
     fn boxed_receive_drop_drop_sender_first() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let (sender, receiver) = LocalEvent::<i32>::boxed_core();
         let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -945,7 +629,7 @@ mod tests {
 
     #[test]
     fn boxed_drop_drop_receiver_first() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let (sender, receiver) = LocalEvent::<i32>::boxed_core();
 
         drop(receiver);
         drop(sender);
@@ -953,7 +637,7 @@ mod tests {
 
     #[test]
     fn boxed_drop_drop_sender_first() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let (sender, receiver) = LocalEvent::<i32>::boxed_core();
 
         drop(sender);
         drop(receiver);
@@ -961,7 +645,7 @@ mod tests {
 
     #[test]
     fn boxed_is_ready() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let (sender, receiver) = LocalEvent::<i32>::boxed_core();
         let mut receiver = pin!(receiver);
 
         assert!(!receiver.is_ready());
@@ -978,7 +662,7 @@ mod tests {
 
     #[test]
     fn boxed_drop_is_ready() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let (sender, receiver) = LocalEvent::<i32>::boxed_core();
         let mut receiver = pin!(receiver);
 
         assert!(!receiver.is_ready());
@@ -995,7 +679,7 @@ mod tests {
 
     #[test]
     fn boxed_into_value() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let (sender, receiver) = LocalEvent::<i32>::boxed_core();
 
         let Err(receiver) = receiver.into_value() else {
             panic!("expected no value yet");
@@ -1008,7 +692,7 @@ mod tests {
 
     #[test]
     fn boxed_drop_into_value() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let (sender, receiver) = LocalEvent::<i32>::boxed_core();
 
         drop(sender);
 
@@ -1018,7 +702,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn boxed_panic_poll_after_completion() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let (sender, receiver) = LocalEvent::<i32>::boxed_core();
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -1037,7 +721,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn boxed_panic_is_ready_after_completion() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let (sender, receiver) = LocalEvent::<i32>::boxed_core();
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -1056,7 +740,7 @@ mod tests {
     #[test]
     fn placed_send_receive() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -1070,7 +754,7 @@ mod tests {
     #[test]
     fn placed_receive_send_receive() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1087,7 +771,7 @@ mod tests {
     #[test]
     fn placed_drop_send() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (sender, _) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (sender, _) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
 
         sender.send(42);
     }
@@ -1095,7 +779,7 @@ mod tests {
     #[test]
     fn placed_drop_receive() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (_, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (_, receiver) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1107,7 +791,7 @@ mod tests {
     #[test]
     fn placed_receive_drop_receive() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1124,7 +808,7 @@ mod tests {
     #[test]
     fn placed_receive_drop_send() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1140,7 +824,7 @@ mod tests {
     #[test]
     fn placed_receive_drop_drop_receiver_first() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1155,7 +839,7 @@ mod tests {
     #[test]
     fn placed_receive_drop_drop_sender_first() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1170,7 +854,7 @@ mod tests {
     #[test]
     fn placed_drop_drop_receiver_first() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
 
         drop(receiver);
         drop(sender);
@@ -1179,7 +863,7 @@ mod tests {
     #[test]
     fn placed_drop_drop_sender_first() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
 
         drop(sender);
         drop(receiver);
@@ -1188,7 +872,7 @@ mod tests {
     #[test]
     fn placed_is_ready() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         assert!(!receiver.is_ready());
@@ -1206,7 +890,7 @@ mod tests {
     #[test]
     fn placed_drop_is_ready() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         assert!(!receiver.is_ready());
@@ -1224,7 +908,7 @@ mod tests {
     #[test]
     fn placed_into_value() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
 
         let Err(receiver) = receiver.into_value() else {
             panic!("expected no value yet");
@@ -1238,7 +922,7 @@ mod tests {
     #[test]
     fn placed_drop_into_value() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
 
         drop(sender);
 
@@ -1249,7 +933,7 @@ mod tests {
     #[should_panic]
     fn placed_panic_poll_after_completion() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -1269,7 +953,7 @@ mod tests {
     #[should_panic]
     fn placed_panic_is_ready_after_completion() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -1289,7 +973,7 @@ mod tests {
     #[test]
     fn inspect_awaiter_no_awaiter() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let _endpoints = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let _endpoints = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
 
         let mut called = false;
         unsafe { place.as_ref().get_ref().assume_init_ref() }.inspect_awaiter(|backtrace| {
@@ -1304,7 +988,7 @@ mod tests {
     #[test]
     fn inspect_awaiter_with_awaiter() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (_sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (_sender, receiver) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
 
         let mut cx = task::Context::from_waker(Waker::noop());
         let mut receiver = pin!(receiver);
@@ -1323,7 +1007,7 @@ mod tests {
     #[test]
     fn inspect_awaiter_after_sender_drop() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
 
         let mut cx = task::Context::from_waker(Waker::noop());
         let mut receiver = pin!(receiver);
@@ -1344,7 +1028,7 @@ mod tests {
     #[test]
     fn inspect_awaiter_after_receiver_drop() {
         let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
-        let (_sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+        let (_sender, receiver) = unsafe { LocalEvent::<i32>::placed_core(place.as_mut()) };
 
         let mut cx = task::Context::from_waker(Waker::noop());
         let mut receiver = Box::pin(receiver);

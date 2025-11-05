@@ -456,21 +456,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "events_once_core"
+name = "events_once"
 version = "0.0.0"
 dependencies = [
  "criterion",
- "oneshot",
- "spin_on",
- "static_assertions",
-]
-
-[[package]]
-name = "events_once_pool"
-version = "0.0.0"
-dependencies = [
- "criterion",
- "events_once_core",
  "infinity_pool",
  "oneshot",
  "parking_lot",

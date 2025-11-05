@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{self, Poll};
 
-use events_once_core::{Disconnected, LocalEvent, PtrLocalRef};
+use crate::{Disconnected, LocalEvent, PtrLocalRef};
 use infinity_pool::RawPinnedPool;
 
 pub struct LocalEventPool<T> {

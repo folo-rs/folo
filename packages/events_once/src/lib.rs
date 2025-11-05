@@ -3,20 +3,15 @@
 //! This is further wrapped by more ergonomic types in the `events` package, adding more value.
 
 mod backtrace;
+mod core;
 mod disconnected;
-mod local;
+mod pool;
 mod reflective_t;
-mod state;
-mod sync;
+
+pub use core::*;
 
 #[cfg(debug_assertions)]
 pub(crate) use backtrace::*;
 pub use disconnected::*;
-pub use local::*;
+pub use pool::*;
 pub use reflective_t::*;
-pub(crate) use state::*;
-pub use sync::*;
-
-trait Sealed {}
-
-const ERR_POISONED_LOCK: &str = "encountered poisoned lock - program validity cannot be guaranteed";

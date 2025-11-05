@@ -1,5 +1,5 @@
 [package]
-name = "events_once_pool"
+name = "events_once"
 description = "Internal dependency of `events`. No public API."
 publish = false
 version = "0.0.0"
@@ -14,7 +14,6 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
-events_once_core = { workspace = true }
 infinity_pool = { workspace = true }
 parking_lot = { workspace = true }
 
@@ -26,3 +25,15 @@ static_assertions = { workspace = true }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "ev_core_local"
+harness = false
+
+[[bench]]
+name = "ev_core_sync"
+harness = false
+
+[[bench]]
+name = "ev_core_vs_3p"
+harness = false
