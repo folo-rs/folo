@@ -1,9 +1,9 @@
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
 use std::cell::UnsafeCell;
-use std::fmt;
+use std::{fmt, mem, ptr};
 use std::marker::PhantomData;
-use std::mem::MaybeUninit;
+use std::mem::{ManuallyDrop, MaybeUninit};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{self, Poll};
@@ -48,11 +48,15 @@ impl<T: Send> EventPool<T> {
     /// The event will be returned to the pool when both endpoints are dropped.
     #[must_use]
     pub fn rent(&self) -> (Sender<T>, Receiver<T>) {
-        let mut pool = self.core.pool.lock();
+        let mut storage = {
+            let mut pool = self.core.pool.lock();
 
-        // SAFETY: We are required to initialize the storage of the item we store in the pool.
-        // Funny thing is, the storage is actually going to start off completely uninitialized!
-        let mut storage = unsafe { pool.insert_with(|_| {}) };
+            // SAFETY: We are required to initialize the storage of the item we store in the pool.
+            // Funny thing is, the storage is actually going to start off completely uninitialized!
+            // That is because it is just a great big UnsafeCell<MaybeUninit> that we will manually
+            // initialize later on.
+            unsafe { pool.insert_with(|_| {}) }
+        };
 
         // SAFETY: We must guarantee that the inner pool remains alive as long as the storage
         // is used. We do that - all our senders/receivers hold an Arc to the core, which
@@ -65,7 +69,20 @@ impl<T: Send> EventPool<T> {
         // into the pool, so we know it is not already in use by anything else.
         let (sender, receiver) = unsafe { Event::<T>::placed(storage_as_pin_mut) };
 
-        todo!()
+        let storage = storage.into_shared();
+
+        (
+            Sender {
+                core: Arc::clone(&self.core),
+                inner: sender,
+                storage,
+            },
+            Receiver {
+                core: Arc::clone(&self.core),
+                inner: receiver,
+                storage,
+            },
+        )
     }
 
     /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
@@ -116,7 +133,20 @@ impl<T: Send> Sender<T> {
     /// This method consumes the sender and always succeeds, regardless of whether
     /// there is a receiver waiting.
     pub fn send(self, value: T) {
-        todo!()
+        // We need to manually destructure the object here because we want to avoid running
+        // the Drop impl but also at the same time need to consume the inner sender.
+        let this = ManuallyDrop::new(self);
+
+        // SAFETY: We are manually destructuring `this`, so we can read out its fields.
+        let core = unsafe { ptr::read(&raw const this.core) };
+        // SAFETY: We are manually destructuring `this`, so we can read out its fields.
+        let inner = unsafe { ptr::read(&raw const this.inner)  };
+        // SAFETY: We are manually destructuring `this`, so we can read out its fields.
+        let storage = unsafe { ptr::read(&raw const this.storage) };
+
+        // TODO: Only the event itself knows when it is time to clean up.
+        // This means we actually need to implement a custom EventRef that
+        // triggers the drop, instead of doing it like this. Sad trombone!
     }
 }
 
