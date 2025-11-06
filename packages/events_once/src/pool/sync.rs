@@ -52,9 +52,7 @@ impl<T: Send> EventPool<T> {
             let mut pool = self.core.pool.lock();
 
             // SAFETY: We are required to initialize the storage of the item we store in the pool.
-            // Funny thing is, the storage is actually going to start off completely uninitialized!
-            // That is because it is just a great big UnsafeCell<MaybeUninit> that we will manually
-            // initialize later on.
+            // We do - that is what new_in_inner is for.
             #[expect(
                 clippy::multiple_unsafe_ops_per_block,
                 unused_unsafe,

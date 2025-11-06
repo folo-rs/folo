@@ -1,37 +1,76 @@
+use std::any::type_name;
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
 use std::cell::RefCell;
+use std::fmt;
 use std::marker::PhantomData;
-use std::mem::MaybeUninit;
-use std::pin::Pin;
 use std::rc::Rc;
-use std::task::{self, Poll};
 
-use crate::{Disconnected, LocalEvent, PtrLocalRef};
 use infinity_pool::RawPinnedPool;
 
+use crate::{
+    LocalEvent, LocalReceiverCore, LocalSenderCore, PooledLocalReceiver, PooledLocalRef,
+    PooledLocalSender,
+};
+
+/// A pool of reusable one-time single-threaded events.
 pub struct LocalEventPool<T> {
-    core: Rc<Core<T>>,
+    core: Rc<LocalPoolCore<T>>,
 
     _owns_some: PhantomData<T>,
 }
 
-struct Core<T> {
-    pool: RefCell<RawPinnedPool<MaybeUninit<LocalEvent<T>>>>,
+impl<T> fmt::Debug for LocalEventPool<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct(type_name::<Self>())
+            .field("core", &self.core)
+            .finish()
+    }
+}
+
+pub(crate) struct LocalPoolCore<T> {
+    pub(crate) pool: RefCell<RawPinnedPool<LocalEvent<T>>>,
 }
 
 impl<T> LocalEventPool<T> {
+    /// Creates a new empty event pool.
+    #[must_use]
     pub fn new() -> Self {
         Self {
-            core: Rc::new(Core {
+            core: Rc::new(LocalPoolCore {
                 pool: RefCell::new(RawPinnedPool::new()),
             }),
             _owns_some: PhantomData,
         }
     }
 
-    pub fn rent(&self) -> (LocalSender<T>, LocalReceiver<T>) {
-        todo!()
+    /// Rents an event from the pool, returning its endpoints.
+    ///
+    /// The event will be returned to the pool when both endpoints are dropped.
+    #[must_use]
+    pub fn rent(&self) -> (PooledLocalSender<T>, PooledLocalReceiver<T>) {
+        let storage = {
+            let mut pool = self.core.pool.borrow_mut();
+
+            // SAFETY: We are required to initialize the storage of the item we store in the pool.
+            // We do - that is what new_in_inner is for.
+            unsafe {
+                pool.insert_with(|place| {
+                    LocalEvent::new_in_inner(place);
+                })
+            }
+        }
+        .into_shared();
+
+        let event_ref = PooledLocalRef::new(Rc::clone(&self.core), storage);
+
+        let inner_sender = LocalSenderCore::new(event_ref.clone());
+        let inner_receiver = LocalReceiverCore::new(event_ref);
+
+        (
+            PooledLocalSender::new(inner_sender),
+            PooledLocalReceiver::new(inner_receiver),
+        )
     }
 
     /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
@@ -44,73 +83,43 @@ impl<T> LocalEventPool<T> {
     /// in the past.
     #[cfg(debug_assertions)]
     pub fn inspect_awaiters(&self, mut f: impl FnMut(&Backtrace)) {
-        todo!()
+        let pool = self.core.pool.borrow_mut();
+
+        for event_ptr in pool.iter() {
+            // SAFETY: The pool remains alive for the duration of this function call, satisfying
+            // the lifetime requirement. The pointer is valid as it comes from the pool's iterator.
+            // We only ever create shared references to the events, so no conflicting exclusive
+            // references can exist.
+            let event = unsafe { event_ptr.as_ref() };
+
+            event.inspect_awaiter(|bt| {
+                if let Some(bt) = bt {
+                    f(bt);
+                }
+            });
+        }
     }
 }
 
-pub struct LocalSender<T> {
-    core: Rc<Core<T>>,
-    inner: PtrLocalRef<T>,
-}
-
-impl<T> LocalSender<T> {
-    /// Sends a value to the receiver connected to the same event.
-    ///
-    /// This method consumes the sender and always succeeds, regardless of whether
-    /// there is a receiver waiting.
-    pub fn send(self, value: T) {
-        todo!()
+impl<T> Default for LocalEventPool<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-impl<T> Drop for LocalSender<T> {
-    fn drop(&mut self) {
-        todo!()
+impl<T> Clone for LocalEventPool<T> {
+    fn clone(&self) -> Self {
+        Self {
+            core: Rc::clone(&self.core),
+            _owns_some: PhantomData,
+        }
     }
 }
 
-pub struct LocalReceiver<T> {
-    core: Rc<Core<T>>,
-    inner: PtrLocalRef<T>,
-}
-
-impl<T> LocalReceiver<T> {
-    /// Checks whether a value is ready to be received.
-    ///
-    /// Both a real value and a "disconnected" signal count,
-    /// as they are just different kinds of values.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called after `poll()` has returned `Ready`.
-    pub fn is_ready(&self) -> bool {
-        todo!()
-    }
-
-    /// Consumes the receiver and transforms it into the received value, if the value is available.
-    ///
-    /// This method provides an alternative to awaiting the receiver when you want to check for
-    /// an immediately available value without blocking. It returns `Some(value)` if a value has
-    /// already been sent, or `None` if no value is currently available.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the value has already been received via `Future::poll()`.
-    pub fn into_value(self) -> Result<Result<T, Disconnected>, Self> {
-        todo!()
-    }
-}
-
-impl<T> Future for LocalReceiver<T> {
-    type Output = Result<T, Disconnected>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        todo!()
-    }
-}
-
-impl<T> Drop for LocalReceiver<T> {
-    fn drop(&mut self) {
-        todo!()
+impl<T> fmt::Debug for LocalPoolCore<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct(type_name::<Self>())
+            .field("pool", &self.pool)
+            .finish()
     }
 }

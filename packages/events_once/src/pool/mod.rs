@@ -1,9 +1,13 @@
 mod local;
+mod local_endpoints_nice;
+mod local_ref;
 mod sync;
 mod sync_endpoints_nice;
 mod sync_ref;
 
 pub use local::*;
+pub use local_endpoints_nice::*;
+pub(crate) use local_ref::*;
 pub use sync::*;
 pub use sync_endpoints_nice::*;
 pub(crate) use sync_ref::*;
