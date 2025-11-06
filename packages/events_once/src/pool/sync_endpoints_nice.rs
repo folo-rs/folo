@@ -93,3 +93,16 @@ impl<T: Send> fmt::Debug for PooledReceiver<T> {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+    use super::*;
+
+    assert_impl_all!(PooledSender<u32>: Send);
+    assert_not_impl_any!(PooledSender<u32>: Sync);
+
+    assert_impl_all!(PooledReceiver<u32>: Send);
+    assert_not_impl_any!(PooledReceiver<u32>: Sync);
+}

@@ -79,3 +79,17 @@ where
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+    use super::*;
+    use crate::{BoxedRef, PtrRef};
+
+    assert_impl_all!(SenderCore<BoxedRef<u32>>: Send);
+    assert_not_impl_any!(SenderCore<BoxedRef<u32>>: Sync);
+
+    assert_impl_all!(SenderCore<PtrRef<u32>>: Send);
+    assert_not_impl_any!(SenderCore<PtrRef<u32>>: Sync);
+}

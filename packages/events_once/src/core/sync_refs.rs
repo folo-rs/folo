@@ -148,3 +148,16 @@ impl<T: Send> fmt::Debug for BoxedRef<T> {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+    use super::*;
+
+    assert_impl_all!(BoxedRef<u32>: Send);
+    assert_not_impl_any!(BoxedRef<u32>: Sync);
+
+    assert_impl_all!(PtrRef<u32>: Send);
+    assert_not_impl_any!(PtrRef<u32>: Sync);
+}

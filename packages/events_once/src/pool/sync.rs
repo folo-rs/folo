@@ -144,3 +144,416 @@ impl<T: Send> fmt::Debug for EventPoolCore<T> {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::pin::pin;
+    use std::sync::Barrier;
+    use std::task::{self, Poll, Waker};
+    use std::{iter, thread};
+
+    use spin_on::spin_on;
+    use static_assertions::assert_impl_all;
+
+    use super::*;
+    use crate::Disconnected;
+
+    assert_impl_all!(EventPool<u32>: Send, Sync);
+
+    #[test]
+    fn send_receive() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+        let mut receiver = pin!(receiver);
+
+        sender.send(42);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+    }
+
+    #[test]
+    fn send_receive_reused() {
+        const ITERATIONS: usize = 32;
+
+        let pool = EventPool::<i32>::new();
+
+        for _ in 0..ITERATIONS {
+            let (sender, receiver) = pool.rent();
+            let mut receiver = pin!(receiver);
+
+            sender.send(42);
+
+            let mut cx = task::Context::from_waker(Waker::noop());
+
+            let poll_result = receiver.as_mut().poll(&mut cx);
+            assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+        }
+    }
+
+    #[test]
+    fn send_receive_reused_batches() {
+        const ITERATIONS: usize = 4;
+        const BATCH_SIZE: usize = 8;
+
+        let pool = EventPool::<i32>::new();
+
+        for _ in 0..ITERATIONS {
+            let endpoints = iter::repeat_with(|| pool.rent())
+                .take(BATCH_SIZE)
+                .collect::<Vec<_>>();
+
+            for (sender, receiver) in endpoints {
+                let mut receiver = pin!(receiver);
+
+                sender.send(42);
+
+                let mut cx = task::Context::from_waker(Waker::noop());
+
+                let poll_result = receiver.as_mut().poll(&mut cx);
+                assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+            }
+        }
+    }
+
+    #[test]
+    fn drop_send() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, _) = pool.rent();
+
+        sender.send(42);
+    }
+
+    #[test]
+    fn drop_receive() {
+        let pool = EventPool::<i32>::new();
+
+        let (_, receiver) = pool.rent();
+        let mut receiver = pin!(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
+    }
+
+    #[test]
+    fn receive_drop_receive() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+        let mut receiver = pin!(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Pending));
+
+        drop(sender);
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
+    }
+
+    #[test]
+    fn receive_drop_send() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Pending));
+
+        drop(receiver);
+
+        sender.send(42);
+    }
+
+    #[test]
+    fn receive_drop_drop_receiver_first() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Pending));
+
+        drop(receiver);
+        drop(sender);
+    }
+
+    #[test]
+    fn receive_drop_drop_sender_first() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Pending));
+
+        drop(sender);
+        drop(receiver);
+    }
+
+    #[test]
+    fn drop_drop_receiver_first() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+
+        drop(receiver);
+        drop(sender);
+    }
+
+    #[test]
+    fn drop_drop_sender_first() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+
+        drop(sender);
+        drop(receiver);
+    }
+
+    #[test]
+    fn is_ready() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+        let mut receiver = pin!(receiver);
+
+        assert!(!receiver.is_ready());
+
+        sender.send(42);
+
+        assert!(receiver.is_ready());
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+    }
+
+    #[test]
+    fn drop_is_ready() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+        let mut receiver = pin!(receiver);
+
+        assert!(!receiver.is_ready());
+
+        drop(sender);
+
+        assert!(receiver.is_ready());
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
+    }
+
+    #[test]
+    fn into_value() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+
+        let Err(receiver) = receiver.into_value() else {
+            panic!("Expected receiver to not be ready");
+        };
+
+        sender.send(42);
+
+        assert!(matches!(receiver.into_value(), Ok(Ok(42))));
+    }
+
+    #[test]
+    #[should_panic]
+    fn panic_poll_after_completion() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+        let mut receiver = pin!(receiver);
+
+        sender.send(42);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        assert!(matches!(
+            receiver.as_mut().poll(&mut cx),
+            Poll::Ready(Ok(42))
+        ));
+
+        _ = receiver.as_mut().poll(&mut cx);
+    }
+
+    #[test]
+    #[should_panic]
+    fn panic_is_ready_after_completion() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+        let mut receiver = pin!(receiver);
+
+        sender.send(42);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        assert!(matches!(
+            receiver.as_mut().poll(&mut cx),
+            Poll::Ready(Ok(42))
+        ));
+
+        _ = receiver.is_ready();
+    }
+
+    #[test]
+    fn send_receive_mt() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+
+        thread::spawn(move || {
+            sender.send(42);
+        })
+        .join()
+        .unwrap();
+
+        thread::spawn(move || {
+            let mut receiver = pin!(receiver);
+            let mut cx = task::Context::from_waker(Waker::noop());
+
+            let poll_result = receiver.as_mut().poll(&mut cx);
+            assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn receive_send_receive_mt() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+
+        let first_poll_completed = Arc::new(Barrier::new(2));
+        let first_poll_completed_clone = Arc::clone(&first_poll_completed);
+
+        let send_thread = thread::spawn(move || {
+            first_poll_completed.wait();
+
+            sender.send(42);
+        });
+
+        let receive_thread = thread::spawn(move || {
+            let mut receiver = pin!(receiver);
+            let mut cx = task::Context::from_waker(Waker::noop());
+
+            let poll_result = receiver.as_mut().poll(&mut cx);
+            assert!(matches!(poll_result, Poll::Pending));
+
+            first_poll_completed_clone.wait();
+
+            // We do not know how many polls this will take, so we switch into real async.
+            spin_on(async {
+                let result = &mut receiver.await;
+                assert!(matches!(result, Ok(42)));
+            });
+        });
+
+        send_thread.join().unwrap();
+        receive_thread.join().unwrap();
+    }
+
+    #[test]
+    fn send_receive_unbiased_mt() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+
+        let receive_thread = thread::spawn(move || {
+            spin_on(async {
+                let result = &mut receiver.await;
+                assert!(matches!(result, Ok(42)));
+            });
+        });
+
+        let send_thread = thread::spawn(move || {
+            sender.send(42);
+        });
+
+        send_thread.join().unwrap();
+        receive_thread.join().unwrap();
+    }
+
+    #[test]
+    fn drop_receive_unbiased_mt() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+
+        let receive_thread = thread::spawn(move || {
+            spin_on(async {
+                let result = &mut receiver.await;
+                assert!(matches!(result, Err(Disconnected)));
+            });
+        });
+
+        let send_thread = thread::spawn(move || {
+            drop(sender);
+        });
+
+        send_thread.join().unwrap();
+        receive_thread.join().unwrap();
+    }
+
+    #[test]
+    fn drop_send_unbiased_mt() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+
+        let receive_thread = thread::spawn(move || {
+            drop(receiver);
+        });
+
+        let send_thread = thread::spawn(move || {
+            sender.send(42);
+        });
+
+        send_thread.join().unwrap();
+        receive_thread.join().unwrap();
+    }
+
+    #[test]
+    fn drop_pool_send_receive() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+
+        drop(pool);
+
+        let mut receiver = pin!(receiver);
+
+        sender.send(42);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+    }
+}

@@ -813,29 +813,11 @@ mod tests {
     use std::{task, thread};
 
     use spin_on::spin_on;
-    use static_assertions::{assert_impl_all, assert_not_impl_any};
+    use static_assertions::assert_impl_all;
 
     use super::*;
 
     assert_impl_all!(Event<u32>: Send, Sync);
-
-    assert_impl_all!(BoxedRef<u32>: Send);
-    assert_not_impl_any!(BoxedRef<u32>: Sync);
-
-    assert_impl_all!(PtrRef<u32>: Send);
-    assert_not_impl_any!(PtrRef<u32>: Sync);
-
-    assert_impl_all!(SenderCore<BoxedRef<u32>>: Send);
-    assert_not_impl_any!(SenderCore<BoxedRef<u32>>: Sync);
-
-    assert_impl_all!(ReceiverCore<BoxedRef<u32>>: Send);
-    assert_not_impl_any!(ReceiverCore<BoxedRef<u32>>: Sync);
-
-    assert_impl_all!(SenderCore<PtrRef<u32>>: Send);
-    assert_not_impl_any!(SenderCore<PtrRef<u32>>: Sync);
-
-    assert_impl_all!(ReceiverCore<PtrRef<u32>>: Send);
-    assert_not_impl_any!(ReceiverCore<PtrRef<u32>>: Sync);
 
     #[test]
     fn boxed_send_receive() {

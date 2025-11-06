@@ -61,3 +61,12 @@ impl<T> fmt::Debug for PooledLocalRef<T> {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use static_assertions::assert_not_impl_any;
+
+    use super::*;
+
+    assert_not_impl_any!(PooledLocalRef<u32>: Send, Sync);
+}
