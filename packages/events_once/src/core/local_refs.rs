@@ -29,6 +29,7 @@ impl<T> PtrLocalRef<T> {
 }
 
 impl<T> LocalRef<T> for PtrLocalRef<T> {
+    #[cfg_attr(test, mutants::skip)] // Does nothing, so nothing to test.
     fn release_event(&self) {}
 }
 
@@ -81,6 +82,7 @@ impl<T> BoxedLocalRef<T> {
 }
 
 impl<T> LocalRef<T> for BoxedLocalRef<T> {
+    #[cfg_attr(test, mutants::skip)] // Impractical to test that memory is released. Miri will tell us about leaks.
     fn release_event(&self) {
         // The caller tells us that they are the last endpoint, so nothing else can possibly
         // be accessing the event any more. We can safely release the memory.

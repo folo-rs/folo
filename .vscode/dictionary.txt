@@ -36,5 +36,6 @@ threadpool
 timespec
 trybuild
 Uninit
+unviable
 withf
 Zmiri

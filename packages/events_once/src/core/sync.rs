@@ -70,6 +70,7 @@ where
     /// This is for internal use only and is wrapped by public methods that also
     /// wire up the sender and receiver after doing the initialization. An event
     /// without a sender and receiver is invalid.
+    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     pub(crate) fn new_in_inner(place: &mut UnsafeCell<MaybeUninit<Self>>) {
         // The key here is that we can skip initializing the MaybeUninit fields because
         // they start uninitialized by design and the UnsafeCell wrapper is transparent,
@@ -98,6 +99,7 @@ where
     }
 
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub(crate) fn boxed_core() -> (SenderCore<BoxedRef<T>>, ReceiverCore<BoxedRef<T>>) {
         let (sender_event_ref, receiver_event_ref) = BoxedRef::new_pair();
 
@@ -114,6 +116,7 @@ where
     /// For more efficiency, consider using [`placed`][Self::placed], which allows you to
     /// initialize the event in preallocated storage as part of a larger structure.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub fn boxed() -> (BoxedSender<T>, BoxedReceiver<T>) {
         let (sender_core, receiver_core) = Self::boxed_core();
 
@@ -124,6 +127,7 @@ where
     }
 
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub(crate) unsafe fn placed_core(
         place: Pin<&mut UnsafeCell<MaybeUninit<Self>>>,
     ) -> (SenderCore<PtrRef<T>>, ReceiverCore<PtrRef<T>>) {
@@ -151,6 +155,7 @@ where
     ///   the sender and receiver returned by this function.
     /// * The referenced place is not already in use by another instance of the event.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub unsafe fn placed(
         place: Pin<&mut UnsafeCell<MaybeUninit<Self>>>,
     ) -> (RawSender<T>, RawReceiver<T>) {
@@ -176,6 +181,7 @@ where
     /// Sets the value of the event and notifies the receiver's awaiter, if there is one.
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
+    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     pub(crate) fn set(event_cell: &UnsafeCell<Self>, value: T) -> Result<(), Disconnected> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
@@ -288,6 +294,7 @@ where
     /// Marks the event as having been disconnected early from the sender side.
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
+    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     pub(crate) fn sender_dropped_without_set(
         event_cell: &UnsafeCell<Self>,
     ) -> Result<(), Disconnected> {
@@ -373,6 +380,7 @@ where
     /// If `Some` is returned, the caller is the last remaining endpoint and responsible
     /// for cleaning up the event.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         #[cfg(debug_assertions)]
         self.backtrace.lock().replace(capture_backtrace());
@@ -398,6 +406,7 @@ where
     ///
     /// Assumes acquired synchronization block for `awaiter`.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn poll_bound(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         // The sender has not yet set any value, so we will have to wait.
 
@@ -479,6 +488,7 @@ where
     ///
     /// Assumes acquired synchronization block for `value`.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn poll_set(&self) -> T {
         // The sender has delivered a value and we can complete the event.
         // We know that the sender will have gone away by this point.
@@ -499,6 +509,7 @@ where
     ///
     /// Assumes acquired synchronization block for `awaiter`.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn poll_awaiting(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         // We are re-polling after previously starting a wait. This is fine
         // and we just need to clean up the previous waker, replacing it with
@@ -591,6 +602,7 @@ where
     }
 
     /// `poll()` impl for `EVENT_SIGNALING` state.
+    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn poll_signaling(&self) -> Result<T, Disconnected> {
         // This is pretty much a mutex - we are locked out of touching the event state until
         // the sender completes its state transition into either EVENT_SET or EVENT_DISCONNECTED.
@@ -653,6 +665,7 @@ where
     /// Returns `Ok(Some(value))` if the sender sender has already sent a value.
     /// Returns `Err` if the sender has already disconnected without sending a value.
     /// In both of these cases, the receiver must clean up the event now.
+    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     pub(crate) fn final_poll(event_cell: &UnsafeCell<Self>) -> Result<Option<T>, Disconnected> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
@@ -821,7 +834,7 @@ mod tests {
 
     #[test]
     fn boxed_send_receive() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -834,7 +847,7 @@ mod tests {
 
     #[test]
     fn boxed_send_receive_unit() {
-        let (sender, receiver) = Event::<()>::boxed_core();
+        let (sender, receiver) = Event::<()>::boxed();
         let mut receiver = pin!(receiver);
 
         sender.send(());
@@ -847,7 +860,7 @@ mod tests {
 
     #[test]
     fn boxed_send_receive_u128() {
-        let (sender, receiver) = Event::<u128>::boxed_core();
+        let (sender, receiver) = Event::<u128>::boxed();
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -860,7 +873,7 @@ mod tests {
 
     #[test]
     fn boxed_send_receive_array() {
-        let (sender, receiver) = Event::<[u128; 4]>::boxed_core();
+        let (sender, receiver) = Event::<[u128; 4]>::boxed();
         let mut receiver = pin!(receiver);
 
         sender.send([42, 43, 44, 45]);
@@ -873,7 +886,7 @@ mod tests {
 
     #[test]
     fn boxed_receive_send_receive() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
         let mut receiver = pin!(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -889,14 +902,14 @@ mod tests {
 
     #[test]
     fn boxed_drop_send() {
-        let (sender, _) = Event::<i32>::boxed_core();
+        let (sender, _) = Event::<i32>::boxed();
 
         sender.send(42);
     }
 
     #[test]
     fn boxed_drop_receive() {
-        let (_, receiver) = Event::<i32>::boxed_core();
+        let (_, receiver) = Event::<i32>::boxed();
         let mut receiver = pin!(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -907,7 +920,7 @@ mod tests {
 
     #[test]
     fn boxed_receive_drop_receive() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
         let mut receiver = pin!(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -923,7 +936,7 @@ mod tests {
 
     #[test]
     fn boxed_receive_drop_send() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
         let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -938,7 +951,7 @@ mod tests {
 
     #[test]
     fn boxed_receive_drop_drop_receiver_first() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
         let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -952,7 +965,7 @@ mod tests {
 
     #[test]
     fn boxed_receive_drop_drop_sender_first() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
         let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -966,7 +979,7 @@ mod tests {
 
     #[test]
     fn boxed_drop_drop_receiver_first() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
 
         drop(receiver);
         drop(sender);
@@ -974,7 +987,7 @@ mod tests {
 
     #[test]
     fn boxed_drop_drop_sender_first() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
 
         drop(sender);
         drop(receiver);
@@ -982,7 +995,7 @@ mod tests {
 
     #[test]
     fn boxed_is_ready() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
         let mut receiver = pin!(receiver);
 
         assert!(!receiver.is_ready());
@@ -999,7 +1012,7 @@ mod tests {
 
     #[test]
     fn boxed_drop_is_ready() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
         let mut receiver = pin!(receiver);
 
         assert!(!receiver.is_ready());
@@ -1016,7 +1029,7 @@ mod tests {
 
     #[test]
     fn boxed_into_value() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
 
         let Err(receiver) = receiver.into_value() else {
             panic!("expected no value yet");
@@ -1029,7 +1042,7 @@ mod tests {
 
     #[test]
     fn boxed_drop_into_value() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
 
         drop(sender);
 
@@ -1039,7 +1052,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn boxed_panic_poll_after_completion() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -1058,7 +1071,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn boxed_panic_is_ready_after_completion() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -1077,7 +1090,7 @@ mod tests {
     #[test]
     fn placed_send_receive() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -1091,7 +1104,7 @@ mod tests {
     #[test]
     fn placed_receive_send_receive() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1108,7 +1121,7 @@ mod tests {
     #[test]
     fn placed_drop_send() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, _) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, _) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         sender.send(42);
     }
@@ -1116,7 +1129,7 @@ mod tests {
     #[test]
     fn placed_drop_receive() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (_, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (_, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1128,7 +1141,7 @@ mod tests {
     #[test]
     fn placed_receive_drop_receive() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1145,7 +1158,7 @@ mod tests {
     #[test]
     fn placed_receive_drop_send() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1161,7 +1174,7 @@ mod tests {
     #[test]
     fn placed_receive_drop_drop_receiver_first() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1176,7 +1189,7 @@ mod tests {
     #[test]
     fn placed_receive_drop_drop_sender_first() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1191,7 +1204,7 @@ mod tests {
     #[test]
     fn placed_drop_drop_receiver_first() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         drop(receiver);
         drop(sender);
@@ -1200,7 +1213,7 @@ mod tests {
     #[test]
     fn placed_drop_drop_sender_first() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         drop(sender);
         drop(receiver);
@@ -1209,7 +1222,7 @@ mod tests {
     #[test]
     fn placed_is_ready() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         assert!(!receiver.is_ready());
@@ -1227,7 +1240,7 @@ mod tests {
     #[test]
     fn placed_drop_is_ready() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         assert!(!receiver.is_ready());
@@ -1245,7 +1258,7 @@ mod tests {
     #[test]
     fn placed_into_value() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         let Err(receiver) = receiver.into_value() else {
             panic!("expected no value yet");
@@ -1259,7 +1272,7 @@ mod tests {
     #[test]
     fn placed_drop_into_value() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         drop(sender);
 
@@ -1270,7 +1283,7 @@ mod tests {
     #[should_panic]
     fn placed_panic_poll_after_completion() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -1290,7 +1303,7 @@ mod tests {
     #[should_panic]
     fn placed_panic_is_ready_after_completion() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
         sender.send(42);
@@ -1308,7 +1321,7 @@ mod tests {
 
     #[test]
     fn boxed_send_receive_mt() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
 
         thread::spawn(move || {
             sender.send(42);
@@ -1329,7 +1342,7 @@ mod tests {
 
     #[test]
     fn boxed_receive_send_receive_mt() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
 
         let first_poll_completed = Arc::new(Barrier::new(2));
         let first_poll_completed_clone = Arc::clone(&first_poll_completed);
@@ -1362,7 +1375,7 @@ mod tests {
 
     #[test]
     fn boxed_send_receive_unbiased_mt() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
 
         let receive_thread = thread::spawn(move || {
             spin_on(async {
@@ -1381,7 +1394,7 @@ mod tests {
 
     #[test]
     fn boxed_drop_receive_unbiased_mt() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
 
         let receive_thread = thread::spawn(move || {
             spin_on(async {
@@ -1400,7 +1413,7 @@ mod tests {
 
     #[test]
     fn boxed_drop_send_unbiased_mt() {
-        let (sender, receiver) = Event::<i32>::boxed_core();
+        let (sender, receiver) = Event::<i32>::boxed();
 
         let receive_thread = thread::spawn(move || {
             drop(receiver);
@@ -1417,7 +1430,7 @@ mod tests {
     #[test]
     fn placed_send_receive_mt() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         thread::spawn(move || {
             sender.send(42);
@@ -1443,7 +1456,7 @@ mod tests {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
 
         for _ in 0..ITERATIONS {
-            let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+            let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
             thread::spawn(move || {
                 sender.send(42);
@@ -1466,7 +1479,7 @@ mod tests {
     #[test]
     fn placed_receive_send_receive_mt() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         let first_poll_completed = Arc::new(Barrier::new(2));
         let first_poll_completed_clone = Arc::clone(&first_poll_completed);
@@ -1500,7 +1513,7 @@ mod tests {
     #[test]
     fn placed_send_receive_unbiased_mt() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         let receive_thread = thread::spawn(move || {
             spin_on(async {
@@ -1520,7 +1533,7 @@ mod tests {
     #[test]
     fn placed_drop_receive_unbiased_mt() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         let receive_thread = thread::spawn(move || {
             spin_on(async {
@@ -1540,7 +1553,7 @@ mod tests {
     #[test]
     fn placed_drop_send_unbiased_mt() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         let receive_thread = thread::spawn(move || {
             drop(receiver);
@@ -1558,7 +1571,7 @@ mod tests {
     #[test]
     fn inspect_awaiter_no_awaiter() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let _endpoints = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let _endpoints = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         let mut called = false;
         unsafe { place.get().as_ref().unwrap().assume_init_ref() }.inspect_awaiter(|backtrace| {
@@ -1573,7 +1586,7 @@ mod tests {
     #[test]
     fn inspect_awaiter_with_awaiter() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (_sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (_sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         let mut cx = task::Context::from_waker(Waker::noop());
         let mut receiver = pin!(receiver);
@@ -1592,7 +1605,7 @@ mod tests {
     #[test]
     fn inspect_awaiter_after_sender_drop() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         let mut cx = task::Context::from_waker(Waker::noop());
         let mut receiver = pin!(receiver);
@@ -1613,7 +1626,7 @@ mod tests {
     #[test]
     fn inspect_awaiter_after_receiver_drop() {
         let mut place = Box::pin(UnsafeCell::new(MaybeUninit::<Event<i32>>::uninit()));
-        let (_sender, receiver) = unsafe { Event::<i32>::placed_core(place.as_mut()) };
+        let (_sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         let mut cx = task::Context::from_waker(Waker::noop());
         let mut receiver = Box::pin(receiver);

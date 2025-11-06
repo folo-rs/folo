@@ -48,6 +48,7 @@ impl<T> LocalEventPool<T> {
     ///
     /// The event will be returned to the pool when both endpoints are dropped.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub fn rent(&self) -> (PooledLocalSender<T>, PooledLocalReceiver<T>) {
         let storage = {
             let mut pool = self.core.pool.borrow_mut();
@@ -414,5 +415,74 @@ mod tests {
 
         let poll_result = receiver.as_mut().poll(&mut cx);
         assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+    }
+
+    #[test]
+    fn inspect_awaiters_inspects_only_awaited() {
+        let pool = LocalEventPool::<i32>::new();
+
+        let (_sender1, receiver1) = pool.rent();
+        let (sender2, receiver2) = pool.rent();
+        let (_sender3, _receiver3) = pool.rent();
+
+        let mut receiver1 = pin!(receiver1);
+        let mut receiver2 = Box::pin(receiver2);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = receiver1.as_mut().poll(&mut cx);
+        _ = receiver2.as_mut().poll(&mut cx);
+
+        let mut inspected_count = 0;
+
+        pool.inspect_awaiters(|_bt| {
+            inspected_count += 1;
+        });
+
+        assert_eq!(inspected_count, 2);
+
+        drop(sender2);
+        drop(receiver2);
+
+        let mut inspected_count = 0;
+
+        pool.inspect_awaiters(|_bt| {
+            inspected_count += 1;
+        });
+
+        assert_eq!(inspected_count, 1);
+    }
+
+    #[test]
+    fn clones_are_equivalent() {
+        let pool1 = LocalEventPool::<i32>::new();
+        let pool2 = pool1.clone();
+
+        let (_sender1, receiver1) = pool1.rent();
+        let (_sender2, receiver2) = pool2.rent();
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let mut receiver1 = pin!(receiver1);
+        let mut receiver2 = pin!(receiver2);
+
+        _ = receiver1.as_mut().poll(&mut cx);
+        _ = receiver2.as_mut().poll(&mut cx);
+
+        // The inspect_awaiters() logic is sticky, so we can use that to validate.
+        let mut inspected_count = 0;
+
+        pool1.inspect_awaiters(|_bt| {
+            inspected_count += 1;
+        });
+
+        assert_eq!(inspected_count, 2);
+
+        let mut inspected_count = 0;
+
+        pool2.inspect_awaiters(|_bt| {
+            inspected_count += 1;
+        });
+
+        assert_eq!(inspected_count, 2);
     }
 }

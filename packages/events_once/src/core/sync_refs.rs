@@ -38,6 +38,7 @@ impl<T> EventRef<T> for PtrRef<T>
 where
     T: Send,
 {
+    #[cfg_attr(test, mutants::skip)] // Does nothing, so nothing to test.
     fn release_event(&self) {}
 }
 
