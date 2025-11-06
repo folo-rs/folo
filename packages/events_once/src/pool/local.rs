@@ -417,6 +417,7 @@ mod tests {
         assert!(matches!(poll_result, Poll::Ready(Ok(42))));
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     fn inspect_awaiters_inspects_only_awaited() {
         let pool = LocalEventPool::<i32>::new();
@@ -452,6 +453,7 @@ mod tests {
         assert_eq!(inspected_count, 1);
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     fn clones_are_equivalent() {
         let pool1 = LocalEventPool::<i32>::new();
