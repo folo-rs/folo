@@ -14,6 +14,7 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
+hash_hasher = { workspace = true }
 infinity_pool = { workspace = true }
 parking_lot = { workspace = true }
 

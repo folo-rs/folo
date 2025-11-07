@@ -5,6 +5,7 @@
 mod backtrace;
 mod core;
 mod disconnected;
+mod lake;
 mod pool;
 mod reflective_t;
 
@@ -13,5 +14,6 @@ pub use core::*;
 #[cfg(debug_assertions)]
 pub(crate) use backtrace::*;
 pub use disconnected::*;
+pub use lake::*;
 pub use pool::*;
 pub use reflective_t::*;

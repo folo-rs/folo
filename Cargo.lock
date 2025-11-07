@@ -460,6 +460,7 @@ name = "events_once"
 version = "0.0.0"
 dependencies = [
  "criterion",
+ "hash_hasher",
  "infinity_pool",
  "mutants",
  "oneshot",
