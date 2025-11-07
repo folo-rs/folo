@@ -6,13 +6,15 @@ use std::task;
 use std::task::{Poll, Waker};
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use events_once::{Event, EventPool, LocalEvent, LocalEventPool};
+use events_once::{Event, EventLake, EventPool, LocalEvent, LocalEventLake, LocalEventPool};
 
 fn entrypoint(c: &mut Criterion) {
     let mut g = c.benchmark_group("events_once_vs_3p");
 
     let local_pool = LocalEventPool::<i32>::new();
     let sync_pool = EventPool::<i32>::new();
+    let local_lake = LocalEventLake::new();
+    let sync_lake = EventLake::new();
 
     g.bench_function("local_boxed_send_receive", |b| {
         b.iter(|| {
@@ -62,6 +64,36 @@ fn entrypoint(c: &mut Criterion) {
     g.bench_function("sync_pooled_send_receive", |b| {
         b.iter(|| {
             let (sender, receiver) = black_box(sync_pool.rent());
+            let mut receiver = pin!(receiver);
+
+            sender.send(black_box(42));
+
+            let mut cx = task::Context::from_waker(Waker::noop());
+            assert_eq!(
+                black_box(receiver.as_mut().poll(&mut cx)),
+                Poll::Ready(Ok(42))
+            );
+        });
+    });
+
+    g.bench_function("local_lake_send_receive", |b| {
+        b.iter(|| {
+            let (sender, receiver) = black_box(local_lake.rent());
+            let mut receiver = pin!(receiver);
+
+            sender.send(black_box(42));
+
+            let mut cx = task::Context::from_waker(Waker::noop());
+            assert_eq!(
+                black_box(receiver.as_mut().poll(&mut cx)),
+                Poll::Ready(Ok(42))
+            );
+        });
+    });
+
+    g.bench_function("sync_lake_send_receive", |b| {
+        b.iter(|| {
+            let (sender, receiver) = black_box(sync_lake.rent());
             let mut receiver = pin!(receiver);
 
             sender.send(black_box(42));
@@ -146,6 +178,42 @@ fn entrypoint(c: &mut Criterion) {
     g.bench_function("sync_pooled_send_receive_2poll", |b| {
         b.iter(|| {
             let (sender, receiver) = black_box(sync_pool.rent());
+            let mut receiver = pin!(receiver);
+
+            let mut cx = task::Context::from_waker(Waker::noop());
+
+            _ = black_box(receiver.as_mut().poll(&mut cx));
+
+            sender.send(black_box(42));
+
+            assert_eq!(
+                black_box(receiver.as_mut().poll(&mut cx)),
+                Poll::Ready(Ok(42))
+            );
+        });
+    });
+
+    g.bench_function("local_lake_send_receive_2poll", |b| {
+        b.iter(|| {
+            let (sender, receiver) = black_box(local_lake.rent());
+            let mut receiver = pin!(receiver);
+
+            let mut cx = task::Context::from_waker(Waker::noop());
+
+            _ = black_box(receiver.as_mut().poll(&mut cx));
+
+            sender.send(black_box(42));
+
+            assert_eq!(
+                black_box(receiver.as_mut().poll(&mut cx)),
+                Poll::Ready(Ok(42))
+            );
+        });
+    });
+
+    g.bench_function("sync_lake_send_receive_2poll", |b| {
+        b.iter(|| {
+            let (sender, receiver) = black_box(sync_lake.rent());
             let mut receiver = pin!(receiver);
 
             let mut cx = task::Context::from_waker(Waker::noop());

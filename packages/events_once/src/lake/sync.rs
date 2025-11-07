@@ -1,4 +1,5 @@
 use std::any::{Any, TypeId};
+#[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
 use std::fmt;
 use std::sync::Arc;
@@ -115,6 +116,8 @@ impl<T: Send + 'static> fmt::Debug for PoolWrapper<T> {
 /// We downcast from this to a specific pool wrapper when we need to rent events.
 trait ErasedPool: fmt::Debug + Send {
     fn as_any(&self) -> &dyn Any;
+
+    #[cfg(debug_assertions)]
     fn inspect_awaiters(&self, f: &mut dyn FnMut(&Backtrace));
 }
 
@@ -123,6 +126,7 @@ impl<T: Send + 'static> ErasedPool for PoolWrapper<T> {
         self
     }
 
+    #[cfg(debug_assertions)]
     fn inspect_awaiters(&self, f: &mut dyn FnMut(&Backtrace)) {
         self.inner.inspect_awaiters(|bt| f(bt));
     }
@@ -187,6 +191,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
     fn inspect_awaiters_inspects_awaiters() {
         let lake = EventLake::new();
 
