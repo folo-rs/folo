@@ -127,3 +127,100 @@ impl<T: Send + 'static> ErasedPool for PoolWrapper<T> {
         self.inner.inspect_awaiters(|bt| f(bt));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use core::task;
+    use std::pin::pin;
+    use std::task::Waker;
+
+    use static_assertions::assert_impl_all;
+
+    use super::*;
+
+    assert_impl_all!(EventLake: Clone, Send, Sync);
+
+    #[test]
+    fn send_receive_multiple_types() {
+        let lake = EventLake::new();
+
+        let (sender1, receiver1) = lake.rent::<String>();
+        let (sender2, receiver2) = lake.rent::<i32>();
+
+        sender1.send("Hello".to_string());
+        sender2.send(42);
+
+        let receiver1 = pin!(receiver1);
+        let receiver2 = pin!(receiver2);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        assert_eq!(
+            receiver1.poll(&mut cx),
+            task::Poll::Ready(Ok("Hello".to_string()))
+        );
+        assert_eq!(receiver2.poll(&mut cx), task::Poll::Ready(Ok(42)));
+    }
+
+    #[test]
+    fn send_receive_after_lake_dropped() {
+        let lake = EventLake::new();
+
+        let (sender1, receiver1) = lake.rent::<String>();
+        let (sender2, receiver2) = lake.rent::<i32>();
+
+        drop(lake);
+
+        sender1.send("Hello".to_string());
+        sender2.send(42);
+
+        let receiver1 = pin!(receiver1);
+        let receiver2 = pin!(receiver2);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        assert_eq!(
+            receiver1.poll(&mut cx),
+            task::Poll::Ready(Ok("Hello".to_string()))
+        );
+        assert_eq!(receiver2.poll(&mut cx), task::Poll::Ready(Ok(42)));
+    }
+
+    #[test]
+    fn inspect_awaiters_inspects_awaiters() {
+        let lake = EventLake::new();
+
+        // 2 events that are awaited and one that is not.
+        let (sender1, receiver1) = lake.rent::<String>();
+        let (_sender2, receiver2) = lake.rent::<i32>();
+        let (_sender3, _receiver3) = lake.rent::<f64>();
+
+        let mut receiver1 = Box::pin(receiver1);
+        let mut receiver2 = pin!(receiver2);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        assert_eq!(receiver1.as_mut().poll(&mut cx), task::Poll::Pending);
+        assert_eq!(receiver2.as_mut().poll(&mut cx), task::Poll::Pending);
+
+        let mut call_count = 0;
+
+        lake.inspect_awaiters(|_| {
+            call_count += 1;
+        });
+
+        assert_eq!(call_count, 2);
+
+        // The first event is dropped, so no longer represented in awaiter inspection.
+        drop(sender1);
+        drop(receiver1);
+
+        let mut call_count = 0;
+
+        lake.inspect_awaiters(|_| {
+            call_count += 1;
+        });
+
+        assert_eq!(call_count, 1);
+    }
+}
