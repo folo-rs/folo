@@ -14,6 +14,26 @@ use crate::{
 };
 
 /// A pool of reusable one-time single-threaded events.
+///
+/// # Examples
+///
+/// ```
+/// use events_once::LocalEventPool;
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() {
+/// let pool = LocalEventPool::<String>::new();
+///
+/// for i in 0..3 {
+///     let (tx, rx) = pool.rent();
+///
+///     tx.send(format!("Message {i}"));
+///
+///     let message = rx.await.unwrap();
+///     println!("{message}");
+/// }
+/// # }
+/// ```
 pub struct LocalEventPool<T> {
     core: Rc<LocalPoolCore<T>>,
 

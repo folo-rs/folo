@@ -13,6 +13,26 @@ use parking_lot::Mutex;
 use crate::{Event, PooledReceiver, PooledRef, PooledSender, ReceiverCore, SenderCore};
 
 /// A pool of reusable one-time thread-safe events.
+///
+/// # Examples
+///
+/// ```
+/// use events_once::EventPool;
+///
+/// # #[tokio::main]
+/// # async fn main() {
+/// let pool = EventPool::<String>::new();
+///
+/// for i in 0..3 {
+///     let (tx, rx) = pool.rent();
+///
+///     tx.send(format!("Message {i}"));
+///
+///     let message = rx.await.unwrap();
+///     println!("{message}");
+/// }
+/// # }
+/// ```
 pub struct EventPool<T: Send> {
     core: Arc<EventPoolCore<T>>,
 

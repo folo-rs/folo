@@ -9,6 +9,37 @@ use crate::LocalEvent;
 /// An event can be placed into the container using [`LocalEvent::placed()`][1]. A single event
 /// container may be reused for multiple events with non-overlapping lifetimes.
 ///
+/// # Examples
+///
+/// ```
+/// use events_once::{EmbeddedLocalEvent, LocalEvent};
+/// use pin_project::pin_project;
+///
+/// #[pin_project]
+/// struct Task {
+///     id: u64,
+///
+///     #[pin]
+///     ready: EmbeddedLocalEvent<()>,
+/// }
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() {
+/// let mut task = Box::pin(Task {
+///     id: 42,
+///     ready: EmbeddedLocalEvent::new(),
+/// });
+///
+/// // SAFETY: We promise that `task` lives longer than the endpoints.
+/// let (ready_tx, ready_rx) = unsafe { LocalEvent::placed(task.as_mut().project().ready) };
+///
+/// ready_tx.send(());
+/// ready_rx.await.unwrap();
+///
+/// println!("Task {} is ready!", task.id);
+/// # }
+/// ```
+///
 /// [1]: crate::LocalEvent::placed
 pub struct EmbeddedLocalEvent<T> {
     pub(crate) inner: MaybeUninit<LocalEvent<T>>,

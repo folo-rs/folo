@@ -13,6 +13,32 @@ use crate::{EventPool, PooledReceiver, PooledSender};
 ///
 /// You can use this if you need to constantly create events with different/unknown payload types.
 /// Functionally, it is similar to [`EventPool`] but does not require any generic type parameters.
+///
+/// # Examples
+///
+/// ```
+/// use events_once::EventLake;
+/// use std::fmt::Debug;
+///
+/// # #[tokio::main]
+/// # async fn main() {
+/// let lake = EventLake::new();
+///
+/// deliver_payload("Hello from the lake!", &lake).await;
+/// deliver_payload(42, &lake).await;
+/// # }
+///
+/// async fn deliver_payload<T>(payload: T, lake: &EventLake)
+/// where
+///     T: Send + Debug + 'static,
+/// {
+///     let (tx, rx) = lake.rent::<T>();
+///
+///     tx.send(payload);
+///     let payload = rx.await.unwrap();
+///     println!("Received payload: {payload:?}");
+/// }
+/// ```
 #[derive(Clone, Debug)]
 pub struct EventLake {
     core: Arc<Core>,

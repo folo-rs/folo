@@ -10,6 +10,37 @@ use crate::Event;
 /// An event can be placed into the container using [`Event::placed()`][1]. A single event
 /// container may be reused for multiple events with non-overlapping lifetimes.
 ///
+/// # Examples
+///
+/// ```
+/// use events_once::{EmbeddedEvent, Event};
+/// use pin_project::pin_project;
+///
+/// #[pin_project]
+/// struct Task {
+///     id: u64,
+///
+///     #[pin]
+///     ready: EmbeddedEvent<()>,
+/// }
+///
+/// # #[tokio::main]
+/// # async fn main() {
+/// let mut task = Box::pin(Task {
+///     id: 42,
+///     ready: EmbeddedEvent::new(),
+/// });
+///
+/// // SAFETY: We promise that `task` lives longer than the endpoints.
+/// let (ready_tx, ready_rx) = unsafe { Event::placed(task.as_mut().project().ready) };
+///
+/// ready_tx.send(());
+/// ready_rx.await.unwrap();
+///
+/// println!("Task {} is ready!", task.id);
+/// # }
+/// ```
+///
 /// [1]: crate::Event::placed
 pub struct EmbeddedEvent<T: Send> {
     pub(crate) inner: UnsafeCell<MaybeUninit<Event<T>>>,

@@ -15,6 +15,27 @@ use crate::{
 };
 
 /// A pool of reusable single-threaded one-time events with manual pool lifecycle management.
+///
+/// # Examples
+///
+/// ```
+/// use events_once::RawLocalEventPool;
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() {
+/// let pool = Box::pin(RawLocalEventPool::<String>::new());
+///
+/// for i in 0..3 {
+///     // SAFETY: We promise the pool outlives both the returned endpoints.
+///     let (tx, rx) = unsafe { pool.as_ref().rent() };
+///
+///     tx.send(format!("Message {i}"));
+///
+///     let message = rx.await.unwrap();
+///     println!("{message}");
+/// }
+/// # }
+/// ```
 pub struct RawLocalEventPool<T> {
     // This is in an UnsafeCell to logically "detach" it from the parent object.
     // We will create direct (shared) references to the contents of the cell not only from

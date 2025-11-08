@@ -16,6 +16,33 @@ use crate::{RawEventPool, RawPooledReceiver, RawPooledSender};
 /// You can use this if you need to constantly create events with different/unknown payload types.
 /// Functionally, it is similar to [`EventPool`][crate::EventPool] but does not require any generic
 /// type parameters.
+///
+/// # Examples
+///
+/// ```
+/// use events_once::RawEventLake;
+/// use std::fmt::Debug;
+///
+/// # #[tokio::main]
+/// # async fn main() {
+/// let lake = Box::pin(RawEventLake::new());
+///
+/// deliver_payload("Hello from the lake!", &lake).await;
+/// deliver_payload(42, &lake).await;
+/// # }
+///
+/// async fn deliver_payload<T>(payload: T, lake: &RawEventLake)
+/// where
+///     T: Send + Debug + 'static,
+/// {
+///     // SAFETY: We promise the lake outlives both the returned endpoints.
+///     let (tx, rx) = unsafe { lake.rent::<T>() };
+///
+///     tx.send(payload);
+///     let payload = rx.await.unwrap();
+///     println!("Received payload: {payload:?}");
+/// }
+/// ```
 #[derive(Debug)]
 pub struct RawEventLake {
     // This is in an UnsafeCell to logically "detach" it from the parent object.

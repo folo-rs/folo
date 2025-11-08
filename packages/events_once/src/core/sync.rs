@@ -115,6 +115,22 @@ where
     ///
     /// For more efficiency, consider using [`placed`][Self::placed], which allows you to
     /// initialize the event in preallocated storage as part of a larger structure.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use events_once::Event;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let (sender, receiver) = Event::<String>::boxed();
+    ///
+    /// sender.send("Hello, world!".to_string());
+    ///
+    /// let message = receiver.await.unwrap();
+    /// assert_eq!(message, "Hello, world!");
+    /// # }
+    /// ```
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub fn boxed() -> (BoxedSender<T>, BoxedReceiver<T>) {
@@ -156,6 +172,25 @@ where
     /// * The referenced place remains pinned for the entire lifetime of
     ///   the sender and receiver returned by this function.
     /// * The referenced place is not already in use by another instance of the event.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use events_once::{EmbeddedEvent, Event};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut place = Box::pin(EmbeddedEvent::<String>::new());
+    ///
+    /// // SAFETY: We promise that `place` lives longer than the endpoints.
+    /// let (sender, receiver) = unsafe { Event::placed(place.as_mut()) };
+    ///
+    /// sender.send("Hello from embedded event!".to_string());
+    ///
+    /// let message = receiver.await.unwrap();
+    /// assert_eq!(message, "Hello from embedded event!");
+    /// # }
+    /// ```
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub unsafe fn placed(place: Pin<&mut EmbeddedEvent<T>>) -> (RawSender<T>, RawReceiver<T>) {

@@ -14,6 +14,32 @@ use crate::{LocalEventPool, PooledLocalReceiver, PooledLocalSender};
 /// You can use this if you need to constantly create single-threaded events with different/unknown
 /// payload types. Functionally, it is similar to [`LocalEventPool`] but does not require any
 /// generic type parameters.
+///
+/// # Examples
+///
+/// ```
+/// use events_once::LocalEventLake;
+/// use std::fmt::Debug;
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() {
+/// let lake = LocalEventLake::new();
+///
+/// deliver_payload("Hello from the lake!", &lake).await;
+/// deliver_payload(42, &lake).await;
+/// # }
+///
+/// async fn deliver_payload<T>(payload: T, lake: &LocalEventLake)
+/// where
+///     T: Debug + 'static,
+/// {
+///     let (tx, rx) = lake.rent::<T>();
+///
+///     tx.send(payload);
+///     let payload = rx.await.unwrap();
+///     println!("Received payload: {payload:?}");
+/// }
+/// ```
 #[derive(Clone, Debug)]
 pub struct LocalEventLake {
     core: Rc<Core>,
