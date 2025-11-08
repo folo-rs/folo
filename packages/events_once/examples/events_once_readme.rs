@@ -11,7 +11,9 @@ async fn main() {
     // Events are thread-safe by default and their endpoints
     // may be freely moved to other threads or tasks.
     let result = tokio::spawn(async move {
-        let message = receiver.await.expect("Failed to receive message from sender");
+        let message = receiver
+            .await
+            .expect("Failed to receive message from sender");
         println!("{message}");
     })
     .await;
