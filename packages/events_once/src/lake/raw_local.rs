@@ -13,7 +13,8 @@ use crate::{RawLocalEventPool, RawLocalPooledReceiver, RawLocalPooledSender};
 /// Rents out single-threaded events of different payloads.
 ///
 /// You can use this if you need to constantly create events with different/unknown payload types.
-/// Functionally, it is similar to [`LocalEventPool`] but does not require any generic type parameters.
+/// Functionally, it is similar to [`LocalEventPool`][crate::LocalEventPool] but does not require
+/// any generic type parameters.
 #[derive(Debug)]
 pub struct RawLocalEventLake {
     // This is in an UnsafeCell to logically "detach" it from the parent object.
