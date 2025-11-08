@@ -38,6 +38,8 @@ impl<T> fmt::Debug for PooledLocalSender<T> {
 }
 
 /// Receives a single value from the sender connected to the same event.
+/// 
+/// Awaiting the receiver will yield either the payload of type `T` or a [`Disconnected`] error.
 ///
 /// This kind of endpoint is used for events stored in a single-threaded event pool or event lake.
 pub struct PooledLocalReceiver<T> {

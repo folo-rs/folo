@@ -39,6 +39,8 @@ impl<T> fmt::Debug for BoxedLocalSender<T> {
 }
 
 /// Receives a single value from the sender connected to the same event.
+/// 
+/// Awaiting the receiver will yield either the payload of type `T` or a [`Disconnected`] error.
 ///
 /// This kind of endpoint is used for boxed events, which are heap-allocated and automatically
 /// destroyed when both the sender and receiver are dropped.
@@ -173,6 +175,8 @@ impl<T> fmt::Debug for RawLocalSender<T> {
 }
 
 /// Receives a single value from the sender connected to the same event.
+/// 
+/// Awaiting the receiver will yield either the payload of type `T` or a [`Disconnected`] error.
 ///
 /// This kind of endpoint is used with events for which the storage is provided by the
 /// owner of the endpoint. They are also responsible for ensuring that the event that
