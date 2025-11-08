@@ -151,7 +151,9 @@ where
     ///
     /// The caller must guarantee that:
     ///
-    /// * The referenced place remains pinned and valid for writes for the entire lifetime of
+    /// * The referenced place remains valid for writes for the entire lifetime of
+    ///   the sender and receiver returned by this function.
+    /// * The referenced place remains pinned for the entire lifetime of
     ///   the sender and receiver returned by this function.
     /// * The referenced place is not already in use by another instance of the event.
     #[must_use]
