@@ -160,6 +160,10 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
+    g.finish();
+
+    let mut g = c.benchmark_group("events_once_vs_3p_2poll");
+
     g.bench_function("local_boxed_send_receive_2poll", |b| {
         b.iter(|| {
             let (sender, receiver) = black_box(LocalEvent::<i32>::boxed());
