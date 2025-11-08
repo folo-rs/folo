@@ -70,6 +70,7 @@ futures = { version = "0.3", default-features = false, features = [
     "std",
     "executor",
 ] }
+futures-executor = { version = "0.3", default-features = false }
 hash_hasher = { version = "2.0", default-features = false }
 heapless = { version = "0.9", default-features = false }
 http = { version = "1.2", default-features = false, features = ["std"] }
@@ -89,6 +90,7 @@ oneshot = { version = "0.1", default-features = false, features = [
 ] }
 parking_lot = { version = "0.12", default-features = false }
 pastey = { version = "0.1.1", default-features = false }
+pin-project = { version = "1.1", default-features = false }
 proc-macro2 = { version = "1.0", default-features = false }
 quote = { version = "1.0", default-features = false }
 rand = { version = "0.9", default-features = false, features = ["std"] }

@@ -6,24 +6,22 @@
 )]
 
 use std::hint::black_box;
-use std::mem::MaybeUninit;
 use std::pin::pin;
 use std::task::Waker;
 use std::time::Instant;
 use std::{iter, task};
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use events_once::LocalEvent;
+use events_once::{LocalEvent, EmbeddedLocalEvent};
 
 fn entrypoint(c: &mut Criterion) {
-    let mut g = c.benchmark_group("events_once_local");
+    let mut g = c.benchmark_group("ev_once_local");
 
     g.bench_function("send_receive", |b| {
         b.iter_custom(|iterations| {
-            let mut events =
-                iter::repeat_with(|| Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit()))
-                    .take(iterations as usize)
-                    .collect::<Vec<_>>();
+            let mut events = iter::repeat_with(|| Box::pin(EmbeddedLocalEvent::<i32>::new()))
+                .take(iterations as usize)
+                .collect::<Vec<_>>();
 
             let endpoints = events
                 .iter_mut()
@@ -47,10 +45,9 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("poll_connected", |b| {
         b.iter_custom(|iterations| {
-            let mut events =
-                iter::repeat_with(|| Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit()))
-                    .take(iterations as usize)
-                    .collect::<Vec<_>>();
+            let mut events = iter::repeat_with(|| Box::pin(EmbeddedLocalEvent::<i32>::new()))
+                .take(iterations as usize)
+                .collect::<Vec<_>>();
 
             let endpoints = events
                 .iter_mut()
@@ -77,10 +74,9 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("poll_disconnected", |b| {
         b.iter_custom(|iterations| {
-            let mut events =
-                iter::repeat_with(|| Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit()))
-                    .take(iterations as usize)
-                    .collect::<Vec<_>>();
+            let mut events = iter::repeat_with(|| Box::pin(EmbeddedLocalEvent::<i32>::new()))
+                .take(iterations as usize)
+                .collect::<Vec<_>>();
 
             let endpoints = events
                 .iter_mut()
@@ -110,10 +106,9 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("set_connected", |b| {
         b.iter_custom(|iterations| {
-            let mut events =
-                iter::repeat_with(|| Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit()))
-                    .take(iterations as usize)
-                    .collect::<Vec<_>>();
+            let mut events = iter::repeat_with(|| Box::pin(EmbeddedLocalEvent::<i32>::new()))
+                .take(iterations as usize)
+                .collect::<Vec<_>>();
 
             let endpoints = events
                 .iter_mut()
@@ -135,10 +130,9 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("set_disconnected", |b| {
         b.iter_custom(|iterations| {
-            let mut events =
-                iter::repeat_with(|| Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit()))
-                    .take(iterations as usize)
-                    .collect::<Vec<_>>();
+            let mut events = iter::repeat_with(|| Box::pin(EmbeddedLocalEvent::<i32>::new()))
+                .take(iterations as usize)
+                .collect::<Vec<_>>();
 
             let endpoints = events
                 .iter_mut()

@@ -14,8 +14,8 @@ use std::task::Waker;
 use crate::{BacktraceType, capture_backtrace};
 use crate::{
     BoxedLocalReceiver, BoxedLocalRef, BoxedLocalSender, Disconnected, EVENT_AWAITING, EVENT_BOUND,
-    EVENT_DISCONNECTED, EVENT_SET, LocalReceiverCore, LocalSenderCore, PtrLocalRef,
-    RawLocalReceiver, RawLocalSender,
+    EVENT_DISCONNECTED, EVENT_SET, EmbeddedLocalEvent, LocalReceiverCore, LocalSenderCore,
+    PtrLocalRef, RawLocalReceiver, RawLocalSender,
 };
 
 /// Coordinates delivery of a `T` at most once from a sender to a receiver on the same thread.
@@ -156,8 +156,11 @@ impl<T> LocalEvent<T> {
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub unsafe fn placed(
-        place: Pin<&mut MaybeUninit<Self>>,
+        place: Pin<&mut EmbeddedLocalEvent<T>>,
     ) -> (RawLocalSender<T>, RawLocalReceiver<T>) {
+        // SAFETY: Not moving anything, just breaking through the public wrapper API.
+        let place = unsafe { place.map_unchecked_mut(|container| &mut container.inner) };
+
         // SAFETY: Forwarding safety guarantees from the caller.
         let (sender_core, receiver_core) = unsafe { Self::placed_core(place) };
 
@@ -175,7 +178,7 @@ impl<T> LocalEvent<T> {
     ///
     /// The closure receives `None` if no one is awaiting the event.
     #[cfg(debug_assertions)]
-    pub fn inspect_awaiter(&self, f: impl FnOnce(Option<&Backtrace>)) {
+    pub(crate) fn inspect_awaiter(&self, f: impl FnOnce(Option<&Backtrace>)) {
         let backtrace = self.backtrace.borrow();
         f(backtrace.as_ref());
     }
@@ -748,7 +751,7 @@ mod tests {
 
     #[test]
     fn placed_send_receive() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
@@ -762,7 +765,7 @@ mod tests {
 
     #[test]
     fn placed_receive_send_receive() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
@@ -779,7 +782,7 @@ mod tests {
 
     #[test]
     fn placed_drop_send() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, _) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
 
         sender.send(42);
@@ -787,7 +790,7 @@ mod tests {
 
     #[test]
     fn placed_drop_receive() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (_, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
@@ -799,7 +802,7 @@ mod tests {
 
     #[test]
     fn placed_receive_drop_receive() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
@@ -816,7 +819,7 @@ mod tests {
 
     #[test]
     fn placed_receive_drop_send() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
@@ -832,7 +835,7 @@ mod tests {
 
     #[test]
     fn placed_receive_drop_drop_receiver_first() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
@@ -847,7 +850,7 @@ mod tests {
 
     #[test]
     fn placed_receive_drop_drop_sender_first() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
@@ -862,7 +865,7 @@ mod tests {
 
     #[test]
     fn placed_drop_drop_receiver_first() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
 
         drop(receiver);
@@ -871,7 +874,7 @@ mod tests {
 
     #[test]
     fn placed_drop_drop_sender_first() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
 
         drop(sender);
@@ -880,7 +883,7 @@ mod tests {
 
     #[test]
     fn placed_is_ready() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
@@ -898,7 +901,7 @@ mod tests {
 
     #[test]
     fn placed_drop_is_ready() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
@@ -916,7 +919,7 @@ mod tests {
 
     #[test]
     fn placed_into_value() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
 
         let Err(receiver) = receiver.into_value() else {
@@ -930,7 +933,7 @@ mod tests {
 
     #[test]
     fn placed_drop_into_value() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
 
         drop(sender);
@@ -941,7 +944,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn placed_panic_poll_after_completion() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
@@ -961,7 +964,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn placed_panic_is_ready_after_completion() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
         let mut receiver = pin!(receiver);
 
@@ -981,11 +984,11 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn inspect_awaiter_no_awaiter() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let _endpoints = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
 
         let mut called = false;
-        unsafe { place.as_ref().get_ref().assume_init_ref() }.inspect_awaiter(|backtrace| {
+        unsafe { place.inner.assume_init_ref() }.inspect_awaiter(|backtrace| {
             called = true;
             assert!(backtrace.is_none());
         });
@@ -996,7 +999,7 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn inspect_awaiter_with_awaiter() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (_sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1004,7 +1007,7 @@ mod tests {
         _ = receiver.as_mut().poll(&mut cx);
 
         let mut called = false;
-        unsafe { place.as_ref().get_ref().assume_init_ref() }.inspect_awaiter(|backtrace| {
+        unsafe { place.inner.assume_init_ref() }.inspect_awaiter(|backtrace| {
             called = true;
             assert!(backtrace.is_some());
         });
@@ -1015,7 +1018,7 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn inspect_awaiter_after_sender_drop() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1025,7 +1028,7 @@ mod tests {
         drop(sender);
 
         let mut called = false;
-        unsafe { place.as_ref().get_ref().assume_init_ref() }.inspect_awaiter(|backtrace| {
+        unsafe { place.inner.assume_init_ref() }.inspect_awaiter(|backtrace| {
             called = true;
             assert!(backtrace.is_some());
         });
@@ -1036,7 +1039,7 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn inspect_awaiter_after_receiver_drop() {
-        let mut place = Box::pin(MaybeUninit::<LocalEvent<i32>>::uninit());
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (_sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1046,7 +1049,7 @@ mod tests {
         drop(receiver);
 
         let mut called = false;
-        unsafe { place.as_ref().get_ref().assume_init_ref() }.inspect_awaiter(|backtrace| {
+        unsafe { place.inner.assume_init_ref() }.inspect_awaiter(|backtrace| {
             called = true;
             assert!(backtrace.is_some());
         });

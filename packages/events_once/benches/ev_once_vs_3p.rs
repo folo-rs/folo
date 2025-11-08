@@ -16,7 +16,7 @@ use events_once::{
 };
 
 fn entrypoint(c: &mut Criterion) {
-    let mut g = c.benchmark_group("events_once_vs_3p");
+    let mut g = c.benchmark_group("ev_once_vs_3p");
 
     let local_pool = LocalEventPool::<i32>::new();
     let sync_pool = EventPool::<i32>::new();
@@ -194,7 +194,7 @@ fn entrypoint(c: &mut Criterion) {
 
     g.finish();
 
-    let mut g = c.benchmark_group("events_once_vs_3p_2poll");
+    let mut g = c.benchmark_group("ev_once_vs_3p_2poll");
 
     g.bench_function("local_boxed_send_receive_2poll", |b| {
         b.iter(|| {

@@ -1,6 +1,6 @@
 [package]
 name = "events_once"
-description = "Internal dependency of `events`. No public API."
+description = "Highly efficient oneshot events (channels) with support for single-threaded events, object embedding, event pools and event lakes"
 publish = false
 version = "0.0.0"
 
@@ -22,20 +22,22 @@ parking_lot = { workspace = true }
 criterion = { workspace = true }
 mutants = { workspace = true }
 oneshot = { workspace = true }
+pin-project = { workspace = true }
 spin_on = { workspace = true }
 static_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
 
 [lints]
 workspace = true
 
 [[bench]]
-name = "ev_core_local"
+name = "ev_once_local"
 harness = false
 
 [[bench]]
-name = "ev_core_sync"
+name = "ev_once_sync"
 harness = false
 
 [[bench]]
-name = "ev_core_vs_3p"
+name = "ev_once_vs_3p"
 harness = false
