@@ -5,13 +5,6 @@ use std::{fmt, ptr};
 use crate::{Disconnected, LocalRef};
 
 /// Delivers a single value to the receiver connected to the same event.
-///
-/// The type of the value is the inner type parameter,
-/// i.e. the `T` in `LocalSender<BoxedLocalRef<T>>`.
-///
-/// The outer type parameter determines the mechanism by which the endpoint is bound to the event.
-/// Different binding mechanisms offer different performance characteristics and resource
-/// management patterns.
 pub(crate) struct LocalSenderCore<E, T>
 where
     E: LocalRef<T>,

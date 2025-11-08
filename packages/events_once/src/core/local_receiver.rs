@@ -9,13 +9,6 @@ use std::task::{self, Poll};
 use crate::{Disconnected, EVENT_AWAITING, EVENT_BOUND, EVENT_DISCONNECTED, EVENT_SET, LocalRef};
 
 /// Receives a single value from the sender connected to the same event.
-///
-/// The type of the value is the inner type parameter,
-/// i.e. the `T` in `LocalReceiver<BoxedLocalRef<T>>`.
-///
-/// The outer type parameter determines the mechanism by which the endpoint is bound to the event.
-/// Different binding mechanisms offer different performance characteristics and resource
-/// management patterns.
 pub(crate) struct LocalReceiverCore<E, T>
 where
     E: LocalRef<T>,
