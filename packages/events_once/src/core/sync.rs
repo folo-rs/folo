@@ -815,7 +815,7 @@ impl<T: Send> fmt::Debug for Event<T> {
 }
 
 #[cfg(test)]
-#[expect(
+#[allow(
     clippy::undocumented_unsafe_blocks,
     clippy::multiple_unsafe_ops_per_block,
     reason = "test code, be concise"
