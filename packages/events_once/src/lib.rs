@@ -1,4 +1,4 @@
-//! Highly efficient oneshot events (channels) with support for single-threaded events,
+//! Efficient oneshot events (channels) with support for single-threaded events,
 //! object embedding, event pools and event lakes
 //!
 //! An event is a pair of a sender and receiver, where the sender can be used at most once. When

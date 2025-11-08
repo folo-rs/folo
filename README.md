@@ -96,9 +96,10 @@ cut 10 times.
 A surprising source of memory allocations in high-performance code can be signaling. We are used
 to thinking of oneshot channels as cheap and efficient things and while this is true, they are
 still built upon shared memory allocated from the heap. Every signaling channel you create is a
-heap allocation and they can add up fast! [`events`][events] provides you with pooled signaling
-channels that take advantage of `infinity_pool` to reuse memory allocations, as well as providing
-single-threaded and unsafe-code-managed events for lower overhead in specialized scenarios.
+heap allocation and they can add up fast! [`events_once`][events_once] provides you with pooled
+signaling channels that take advantage of `infinity_pool` to reuse memory allocations, as well
+as providing single-threaded and unsafe-code-managed events for lower overhead in specialized
+scenarios.
 
 ```
 bagels_cooked_weight_grams: 2300; sum 744000; mean 323
@@ -150,6 +151,7 @@ Packages present in the repo but not relevant to a general audience:
 
 Deprecated packages:
 
+* `events` - deprecated, use `events_once` which offers more refined API surface, as well as improved correctness and performance.
 * `blind_pool` - deprecated, use `infinity_pool` which offers a similar API but is internally structured in a more maintainable manner.
 * `opaque_pool` - deprecated, use `infinity_pool` which offers a similar API but is internally structured in a more maintainable manner.
 * `pinned_pool` - deprecated, use `infinity_pool` which offers a similar API but is internally structured in a more maintainable manner.
@@ -158,6 +160,7 @@ Deprecated packages:
 [alloc_tracker]: packages/alloc_tracker/README.md
 [criterion]: https://bheisler.github.io/criterion.rs/book/criterion_rs.html
 [events]: packages/events/README.md
+[events_once]: packages/events_once/README.md
 [fast_time]: packages/fast_time/README.md
 [infinity_pool]: packages/infinity_pool/README.md
 [linked]: packages/linked/README.md
