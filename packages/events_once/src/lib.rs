@@ -46,125 +46,125 @@
 //!     .unwrap();
 //! }
 //! ```
-//! 
+//!
 //! # Reusing event resources
-//! 
+//!
 //! One-time events have high churn by design - they can only be used once, so new events must
 //! constantly be created and old ones destroyed in a busy program. If the events live on the
 //! heap, this can be quite expensive as memory allocation is costly.
-//! 
+//!
 //! It can often be more efficient to reuse the resources used by the events, keeping around
 //! a pool of events that can be reused over and over again, without allocating them anew
 //! each time. To do this, create an [`EventPool<T>`] for the desired payload type `T`
 //! and rent events from it on-demand.
-//! 
+//!
 //! ```rust
 //! use events_once::EventPool;
-//! 
+//!
 //! #[tokio::main]
 //! async fn main() {
 //!     const CUSTOMER_COUNT: usize = 5;
-//! 
+//!
 //!     let pool = EventPool::<String>::new();
-//! 
+//!
 //!     for customer_index in 0..CUSTOMER_COUNT {
 //!         let (tx, rx) = pool.rent();
-//! 
+//!
 //!         tx.send(format!(
 //!             "Customer {customer_index} has entered the building"
 //!         ));
-//! 
+//!
 //!         let message = rx.await.unwrap();
 //!         println!("{message}");
-//! 
+//!
 //!         // Both endpoints are dropped now and the event is returned to the pool.
 //!         // The next iteration will reuse the resources associated with the first event.
 //!     }
 //! }
 //! ```
-//! 
+//!
 //! The `EventPool<T>` itself acts as a handle to a resource pool. You can cheaply clone it;
 //! each clone from the same family will share the same pool of resources. It does not need
 //! to outlive the rented events.
-//! 
+//!
 //! # Reusing events with unknown payload types
-//! 
+//!
 //! Similarly to pooling of events with a known payload type, it is also possible to pool events
 //! when you do not know the payload types in advance (e.g. because they are defined via generic
 //! type parameters).
-//! 
+//!
 //! This is facilitated by [`EventLake`], which acts similar to an [`EventPool<T>`] but without
 //! the `T` type parameter.
-//! 
+//!
 //! ```rust
 //! use std::fmt::Debug;
-//! 
+//!
 //! use events_once::EventLake;
-//! 
+//!
 //! #[tokio::main]
 //! async fn main() {
 //!     let lake = EventLake::new();
-//! 
+//!
 //!     deliver_payload("Hello from the lake!", &lake).await;
 //!     deliver_payload(42, &lake).await;
 //! }
-//! 
+//!
 //! async fn deliver_payload<T>(payload: T, lake: &EventLake)
 //! where
 //!     T: Send + Debug + 'static,
 //! {
 //!     let (tx, rx) = lake.rent::<T>();
-//! 
+//!
 //!     tx.send(payload);
 //!     let payload = rx.await.unwrap();
 //!     println!("Received payload: {payload:?}");
 //! }
 //! ```
-//! 
+//!
 //! The `EventLake` itself acts as a handle to a resource pool. You can cheaply clone it;
 //! each clone from the same family will share the same pool of resources. It does not need
 //! to outlive the rented events.
-//! 
+//!
 //! # Manual event or lake lifetime management
-//! 
+//!
 //! In high-performance scenarios, it can be beneficial to reduce the lifetime management overhead
 //! associated with [`EventPool<T>`] and [`EventLake`] by providing guarantees about their lifetime
 //! via unsafe code.
-//! 
+//!
 //! If you are willing to guarantee that the pool/lake outlives all rented events, you can use the
 //! [`RawEventPool<T>`] and [`RawEventLake`] types instead. These types offer an equivalent API as
 //! their safe counterparts but come with lower overhead, as well as requiring unsafe code to rent
 //! events.
-//! 
+//!
 //! ```rust
 //! use events_once::RawEventPool;
-//! 
+//!
 //! #[tokio::main]
 //! async fn main() {
 //!     const CUSTOMER_COUNT: usize = 5;
-//! 
+//!
 //!     let pool = Box::pin(RawEventPool::<String>::new());
-//! 
+//!
 //!     for customer_index in 0..CUSTOMER_COUNT {
 //!         // SAFETY: We promise the pool outlives both the returned endpoints.
 //!         let (tx, rx) = unsafe { pool.as_ref().rent() };
-//! 
+//!
 //!         tx.send(format!(
 //!             "Customer {customer_index} has entered the building"
 //!         ));
-//! 
+//!
 //!         let message = rx.await.unwrap();
 //!         println!("{message}");
-//! 
+//!
 //!         // Both endpoints are dropped now and the event is returned to the pool.
 //!         // The next iteration will reuse the resources associated with the first event.
 //!     }
 //! }
 //! ```
-//! 
+//!
 //! Unlike the regular [`EventPool`] and [`EventLake`], the raw variants do not implement `Clone`
 //! and have unique ownership over the resources contained within.
-//! 
+//!
 //! # Single-threaded events
 //!
 //! If you do not need thread-safety, you can use single-threaded events for additional efficiency.
@@ -184,7 +184,7 @@
 //!     println!("{message}");
 //! }
 //! ```
-//! 
+//!
 //! # Embedding events in objects
 //!
 //! If the lifetime of an event is constrained to the lifetime of another object, it can be

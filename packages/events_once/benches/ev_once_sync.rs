@@ -12,7 +12,7 @@ use std::time::Instant;
 use std::{iter, task};
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use events_once::{Event, EmbeddedEvent};
+use events_once::{EmbeddedEvent, Event};
 
 fn entrypoint(c: &mut Criterion) {
     let mut g = c.benchmark_group("ev_once_sync");

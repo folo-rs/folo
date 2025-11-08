@@ -12,7 +12,7 @@
 //!                 we transition into the "set" state from this state, at which point the receiver
 //!                 is welcome to receive the payload.
 //! 4 - disconnected - one of the endpoints has disconnected before completing the send/receive.
-//! 
+//!
 //! A key optimization is that the "send" transition is a simple `+= 1` operation:
 //!
 //! * If nobody is listening, we get `bound + 1 = set`
