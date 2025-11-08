@@ -9,7 +9,7 @@ use std::{fmt, task};
 use crate::{Disconnected, PooledRef, ReceiverCore, SenderCore};
 /// Delivers a single value to the receiver connected to the same event.
 ///
-/// This kind of endpoint is used for events stored in an event pool.
+/// This kind of endpoint is used for events stored in an event pool or event lake.
 pub struct PooledSender<T: Send> {
     inner: SenderCore<PooledRef<T>, T>,
 }
@@ -38,7 +38,7 @@ impl<T: Send> fmt::Debug for PooledSender<T> {
 
 /// Receives a single value from the sender connected to the same event.
 ///
-/// This kind of endpoint is used for events stored in an event pool.
+/// This kind of endpoint is used for events stored in an event pool or event lake.
 pub struct PooledReceiver<T: Send> {
     inner: ReceiverCore<PooledRef<T>, T>,
 }
@@ -67,6 +67,51 @@ impl<T: Send> PooledReceiver<T> {
     /// # Panics
     ///
     /// Panics if the value has already been received via `Future::poll()`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use events_once::{Disconnected, EventPool};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let pool = EventPool::<String>::new();
+    /// let (sender, receiver) = pool.rent();
+    ///
+    /// let receiver = match receiver.into_value() {
+    ///     Ok(result) => {
+    ///         match result {
+    ///             Ok(message) => {
+    ///                 println!("Received message: {message}");
+    ///                 return;
+    ///             }
+    ///             Err(Disconnected) => {
+    ///                 panic!("The sender was disconnected before sending a message.");
+    ///             }
+    ///         }
+    ///     }
+    ///     Err(receiver) => receiver,
+    /// };
+    ///
+    /// sender.send("Hello, world!".to_string());
+    ///
+    /// match receiver.into_value() {
+    ///     Ok(result) => {
+    ///         match result {
+    ///             Ok(message) => {
+    ///                 println!("Received message: {message}");
+    ///             }
+    ///             Err(Disconnected) => {
+    ///                 panic!("The sender was disconnected before sending a message.");
+    ///             }
+    ///         }
+    ///     }
+    ///     Err(_) => {
+    ///         panic!("No value was received even after send(). This should never happen.");
+    ///     }
+    /// };
+    /// # }
+    /// ```
     pub fn into_value(self) -> Result<Result<T, Disconnected>, Self> {
         match self.inner.into_value() {
             Ok(value) => Ok(value),

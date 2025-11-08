@@ -70,6 +70,50 @@ impl<T> BoxedLocalReceiver<T> {
     /// # Panics
     ///
     /// Panics if the value has already been received via `Future::poll()`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use events_once::{Disconnected, LocalEvent};
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() {
+    /// let (sender, receiver) = LocalEvent::<String>::boxed();
+    ///
+    /// let receiver = match receiver.into_value() {
+    ///     Ok(result) => {
+    ///         match result {
+    ///             Ok(message) => {
+    ///                 println!("Received message: {message}");
+    ///                 return;
+    ///             }
+    ///             Err(Disconnected) => {
+    ///                 panic!("The sender was disconnected before sending a message.");
+    ///             }
+    ///         }
+    ///     }
+    ///     Err(receiver) => receiver,
+    /// };
+    ///
+    /// sender.send("Hello, world!".to_string());
+    ///
+    /// match receiver.into_value() {
+    ///     Ok(result) => {
+    ///         match result {
+    ///             Ok(message) => {
+    ///                 println!("Received message: {message}");
+    ///             }
+    ///             Err(Disconnected) => {
+    ///                 panic!("The sender was disconnected before sending a message.");
+    ///             }
+    ///         }
+    ///     }
+    ///     Err(_) => {
+    ///         panic!("No value was received even after send(). This should never happen.");
+    ///     }
+    /// };
+    /// # }
+    /// ```
     pub fn into_value(self) -> Result<Result<T, Disconnected>, Self> {
         match self.inner.into_value() {
             Ok(value) => Ok(value),
@@ -161,6 +205,53 @@ impl<T> RawLocalReceiver<T> {
     /// # Panics
     ///
     /// Panics if the value has already been received via `Future::poll()`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use events_once::{Disconnected, EmbeddedLocalEvent, LocalEvent};
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() {
+    /// let mut event = Box::pin(EmbeddedLocalEvent::<String>::new());
+    ///
+    /// // SAFETY: We promise that `event` lives longer than any of the endpoints returned.
+    /// let (sender, receiver) = unsafe { LocalEvent::placed(event.as_mut()) };
+    ///
+    /// let receiver = match receiver.into_value() {
+    ///     Ok(result) => {
+    ///         match result {
+    ///             Ok(message) => {
+    ///                 println!("Received message: {message}");
+    ///                 return;
+    ///             }
+    ///             Err(Disconnected) => {
+    ///                 panic!("The sender was disconnected before sending a message.");
+    ///             }
+    ///         }
+    ///     }
+    ///     Err(receiver) => receiver,
+    /// };
+    ///
+    /// sender.send("Hello, world!".to_string());
+    ///
+    /// match receiver.into_value() {
+    ///     Ok(result) => {
+    ///         match result {
+    ///             Ok(message) => {
+    ///                 println!("Received message: {message}");
+    ///             }
+    ///             Err(Disconnected) => {
+    ///                 panic!("The sender was disconnected before sending a message.");
+    ///             }
+    ///         }
+    ///     }
+    ///     Err(_) => {
+    ///         panic!("No value was received even after send(). This should never happen.");
+    ///     }
+    /// };
+    /// # }
+    /// ```
     pub fn into_value(self) -> Result<Result<T, Disconnected>, Self> {
         match self.inner.into_value() {
             Ok(value) => Ok(value),

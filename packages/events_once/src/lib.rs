@@ -252,6 +252,67 @@
 //!     drop(use_account_task.await);
 //! }
 //! ```
+//! 
+//! # Synchronous polling
+//! 
+//! While the primary API is intended for `receiver.await` usage, there are scenarios where
+//! synchronous polling is desirable. For these cases, the receiver provides the `into_value()`
+//! method, which allows you to attempt to retrieve the value without awaiting.
+//! 
+//! This method consumes the receiver. If there is no value available, it returns the original
+//! receiver back to you for later use.
+//! 
+//! ```rust
+//! use events_once::{Disconnected, Event};
+//! 
+//! #[tokio::main]
+//! async fn main() {
+//!     let (sender, receiver) = Event::<String>::boxed();
+//! 
+//!     // into_value() is designed for synchronous scenarios where you do not want to wait but
+//!     // simply want to either obtain the received value or do nothing. First, we do nothing.
+//!     let receiver = match receiver.into_value() {
+//!         Ok(result) => {
+//!             // The result is either Ok(payload) or Err(Disconnected).
+//!             match result {
+//!                 Ok(message) => {
+//!                     // Just for demonstration. In reality, we know this line of code
+//!                     // will never be reached because no message is sent yet.
+//!                     println!("Received message: {message}");
+//!                     return;
+//!                 }
+//!                 Err(Disconnected) => {
+//!                     panic!("The sender was disconnected before sending a message.")
+//!                 }
+//!             }
+//!         }
+//!         Err(receiver) => {
+//!             // If no value is available, the original receiver is returned.
+//!             receiver
+//!         }
+//!     };
+//! 
+//!     sender.send("Hello, world!".to_string());
+//! 
+//!     match receiver.into_value() {
+//!         Ok(result) => {
+//!             // The result is either Ok(payload) or Err(Disconnected).
+//!             match result {
+//!                 Ok(message) => {
+//!                     println!("Received message: {message}");
+//!                     return;
+//!                 }
+//!                 Err(Disconnected) => {
+//!                     panic!("The sender was disconnected before sending a message.")
+//!                 }
+//!             }
+//!         }
+//!         Err(_) => {
+//!             panic!("No value was received even after send(). This should never happen.");
+//!         }
+//!     };
+//! }
+//! ```
 //!
 //! [1]: https://crates.io/crates/oneshot
 
