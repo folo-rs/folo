@@ -62,11 +62,11 @@ impl<T: Send> RawEventPool<T> {
             pool: Mutex::new(RawPinnedPool::new()),
         };
 
-        let core = Box::into_raw(Box::new(UnsafeCell::new(core)));
+        let core_ptr = Box::into_raw(Box::new(UnsafeCell::new(core)));
 
         Self {
             // SAFETY: Boxed object is never null.
-            core: unsafe { NonNull::new(core).unwrap_unchecked() },
+            core: unsafe { NonNull::new_unchecked(core_ptr) },
             _owns_some: PhantomData,
         }
     }
@@ -182,7 +182,7 @@ impl<T: Send> Default for RawEventPool<T> {
 }
 
 // SAFETY: The pool is thread-safe - the only reason it does not have it via auto traits is that
-// we have the NonNUll pointer that disables thread safety auto traits. However, all the logic is
+// we have the NonNull pointer that disables thread safety auto traits. However, all the logic is
 // actually protected via the core Mutex, so all is well.
 unsafe impl<T: Send> Send for RawEventPool<T> {}
 // SAFETY: See above.

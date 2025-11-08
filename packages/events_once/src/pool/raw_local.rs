@@ -44,7 +44,6 @@ impl<T> Drop for RawLocalEventPool<T> {
 }
 
 pub(crate) struct RawLocalEventPoolCore<T> {
-    // TODO: This could just be an UnsafeCell.
     pub(crate) pool: RefCell<RawPinnedPool<LocalEvent<T>>>,
 }
 
@@ -64,11 +63,11 @@ impl<T> RawLocalEventPool<T> {
             pool: RefCell::new(RawPinnedPool::new()),
         };
 
-        let core = Box::into_raw(Box::new(UnsafeCell::new(core)));
+        let core_ptr = Box::into_raw(Box::new(UnsafeCell::new(core)));
 
         Self {
             // SAFETY: Boxed object is never null.
-            core: unsafe { NonNull::new(core).unwrap_unchecked() },
+            core: unsafe { NonNull::new_unchecked(core_ptr) },
             _owns_some: PhantomData,
         }
     }

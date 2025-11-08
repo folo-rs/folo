@@ -1,28 +1,33 @@
 use std::any::{Any, TypeId, type_name};
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
-use std::cell::RefCell;
+use std::cell::{RefCell, UnsafeCell};
 use std::fmt;
-use std::rc::Rc;
+use std::pin::Pin;
+use std::ptr::NonNull;
 
 use hash_hasher::HashedMap;
 
-use crate::{LocalEventPool, PooledLocalReceiver, PooledLocalSender};
+use crate::{RawLocalEventPool, RawLocalPooledReceiver, RawLocalPooledSender};
 
 /// Rents out single-threaded events of different payloads.
 ///
-/// You can use this if you need to constantly create single-threaded events with different/unknown
-/// payload types. Functionally, it is similar to [`LocalEventPool`] but does not require any
-/// generic type parameters.
-#[derive(Clone, Debug)]
-pub struct LocalEventLake {
-    core: Rc<Core>,
+/// You can use this if you need to constantly create events with different/unknown payload types.
+/// Functionally, it is similar to [`LocalEventPool`] but does not require any generic type parameters.
+#[derive(Debug)]
+pub struct RawLocalEventLake {
+    // This is in an UnsafeCell to logically "detach" it from the parent object.
+    // We will create direct (shared) references to the contents of the cell not only from
+    // the pool but also from the event references themselves. This is safe as long as
+    // we never create conflicting references. We could not guarantee that for the parent
+    // object but we can guarantee it for the cell contents.
+    core: NonNull<UnsafeCell<Core>>,
 }
 
 struct Core {
     // This is a transparent HashMap, meaning it does not do any hashing.
     // The reason is that the TypeId is already a hash, so hashing it again is redundant.
-    pools: RefCell<HashedMap<TypeId, Box<dyn ErasedPool>>>,
+    pools: RefCell<HashedMap<TypeId, Pin<Box<dyn ErasedPool>>>>,
 }
 
 impl fmt::Debug for Core {
@@ -33,35 +38,57 @@ impl fmt::Debug for Core {
     }
 }
 
-impl LocalEventLake {
+impl RawLocalEventLake {
     /// Creates a new empty event lake.
     #[must_use]
     pub fn new() -> Self {
+        let core = Core {
+            pools: RefCell::new(HashedMap::default()),
+        };
+
+        let core_ptr = Box::into_raw(Box::new(UnsafeCell::new(core)));
+
         Self {
-            core: Rc::new(Core {
-                pools: RefCell::new(HashedMap::default()),
-            }),
+            // SAFETY: Boxed object is never null.
+            core: unsafe { NonNull::new_unchecked(core_ptr) },
         }
     }
 
     /// Rents an event from the lake, returning its endpoints.
     ///
     /// The event will be returned to the lake when both endpoints are dropped.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the lake outlives the endpoints.
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
-    pub fn rent<T: 'static>(&self) -> (PooledLocalSender<T>, PooledLocalReceiver<T>) {
+    pub unsafe fn rent<T: 'static>(&self) -> (RawLocalPooledSender<T>, RawLocalPooledReceiver<T>) {
         let type_id = TypeId::of::<T>();
 
-        let mut pools = self.core.pools.borrow_mut();
+        // SAFETY: We are the owner of the core, so we know it remains valid. We only ever
+        // create shared references to it, so no conflicting exclusive references can exist.
+        let core_cell = unsafe { self.core.as_ref() };
+
+        // SAFETY: See above.
+        let core_maybe = unsafe { core_cell.get().as_ref() };
+
+        // SAFETY: UnsafeCell pointer is never null.
+        let core = unsafe { core_maybe.unwrap_unchecked() };
+
+        let mut pools = core.pools.borrow_mut();
 
         let entry = pools
             .entry(type_id)
-            .or_insert_with(|| Box::new(PoolWrapper::<T>::new()));
+            .or_insert_with(|| Box::pin(PoolWrapper::<T>::new()));
 
         let pool = entry
             .as_any()
             .downcast_ref::<PoolWrapper<T>>()
             .expect("guarded by TypeId");
+
+        // SAFETY: All the pools are pinned, the wrapper just got lost in the downcast.
+        let pool = unsafe { Pin::new_unchecked(pool) };
 
         pool.rent()
     }
@@ -76,7 +103,17 @@ impl LocalEventLake {
     /// in the past.
     #[cfg(debug_assertions)]
     pub fn inspect_awaiters(&self, mut f: impl FnMut(&Backtrace)) {
-        let pools = self.core.pools.borrow();
+        // SAFETY: We are the owner of the core, so we know it remains valid. We only ever
+        // create shared references to it, so no conflicting exclusive references can exist.
+        let core_cell = unsafe { self.core.as_ref() };
+
+        // SAFETY: See above.
+        let core_maybe = unsafe { core_cell.get().as_ref() };
+
+        // SAFETY: UnsafeCell pointer is never null.
+        let core = unsafe { core_maybe.unwrap_unchecked() };
+
+        let pools = core.pools.borrow();
 
         for entry in pools.values() {
             entry.inspect_awaiters(&mut f);
@@ -84,25 +121,38 @@ impl LocalEventLake {
     }
 }
 
-impl Default for LocalEventLake {
+impl Default for RawLocalEventLake {
     fn default() -> Self {
         Self::new()
     }
 }
 
+impl Drop for RawLocalEventLake {
+    fn drop(&mut self) {
+        // SAFETY: We are the owner of the core, so we know it remains valid.
+        // Anyone calling rent() has to promise that we outlive the rented event
+        // which means that we must be the last remaining user of the core.
+        drop(unsafe { Box::from_raw(self.core.as_ptr()) });
+    }
+}
+
 struct PoolWrapper<T: 'static> {
-    inner: LocalEventPool<T>,
+    inner: RawLocalEventPool<T>,
 }
 
 impl<T: 'static> PoolWrapper<T> {
     fn new() -> Self {
         Self {
-            inner: LocalEventPool::new(),
+            inner: RawLocalEventPool::new(),
         }
     }
 
-    fn rent(&self) -> (PooledLocalSender<T>, PooledLocalReceiver<T>) {
-        self.inner.rent()
+    fn rent(self: Pin<&Self>) -> (RawLocalPooledSender<T>, RawLocalPooledReceiver<T>) {
+        // SAFETY: Nothing is being moved here, we are just using the inner pinned value.
+        let inner = unsafe { self.map_unchecked(|s| &s.inner) };
+
+        // SAFETY: Forwarding safety guarantees from caller of top-level rent().
+        unsafe { inner.rent() }
     }
 }
 
@@ -136,48 +186,24 @@ impl<T: 'static> ErasedPool for PoolWrapper<T> {
 }
 
 #[cfg(test)]
+#[allow(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
 mod tests {
     use core::task;
     use std::pin::pin;
     use std::task::Waker;
 
-    use static_assertions::{assert_impl_all, assert_not_impl_any};
+    use static_assertions::assert_not_impl_any;
 
     use super::*;
 
-    assert_impl_all!(LocalEventLake: Clone);
-    assert_not_impl_any!(LocalEventLake: Send, Sync);
+    assert_not_impl_any!(RawLocalEventLake: Send, Sync);
 
     #[test]
     fn send_receive_multiple_types() {
-        let lake = LocalEventLake::new();
+        let lake = RawLocalEventLake::new();
 
-        let (sender1, receiver1) = lake.rent::<String>();
-        let (sender2, receiver2) = lake.rent::<i32>();
-
-        sender1.send("Hello".to_string());
-        sender2.send(42);
-
-        let receiver1 = pin!(receiver1);
-        let receiver2 = pin!(receiver2);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        assert_eq!(
-            receiver1.poll(&mut cx),
-            task::Poll::Ready(Ok("Hello".to_string()))
-        );
-        assert_eq!(receiver2.poll(&mut cx), task::Poll::Ready(Ok(42)));
-    }
-
-    #[test]
-    fn send_receive_after_lake_dropped() {
-        let lake = LocalEventLake::new();
-
-        let (sender1, receiver1) = lake.rent::<String>();
-        let (sender2, receiver2) = lake.rent::<i32>();
-
-        drop(lake);
+        let (sender1, receiver1) = unsafe { lake.rent::<String>() };
+        let (sender2, receiver2) = unsafe { lake.rent::<i32>() };
 
         sender1.send("Hello".to_string());
         sender2.send(42);
@@ -197,12 +223,12 @@ mod tests {
     #[test]
     #[cfg(debug_assertions)]
     fn inspect_awaiters_inspects_awaiters() {
-        let lake = LocalEventLake::new();
+        let lake = RawLocalEventLake::new();
 
         // 2 events that are awaited and one that is not.
-        let (sender1, receiver1) = lake.rent::<String>();
-        let (_sender2, receiver2) = lake.rent::<i32>();
-        let (_sender3, _receiver3) = lake.rent::<f64>();
+        let (sender1, receiver1) = unsafe { lake.rent::<String>() };
+        let (_sender2, receiver2) = unsafe { lake.rent::<i32>() };
+        let (_sender3, _receiver3) = unsafe { lake.rent::<f64>() };
 
         let mut receiver1 = Box::pin(receiver1);
         let mut receiver2 = pin!(receiver2);
