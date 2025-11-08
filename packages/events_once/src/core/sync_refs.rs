@@ -6,11 +6,10 @@ use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::ptr::NonNull;
 
-use crate::{Event, ReflectiveTSend};
+use crate::Event;
 
 /// Enables a sender or receiver to reference the event that connects them.
-pub(crate) trait EventRef<T>:
-    Deref<Target = UnsafeCell<Event<T>>> + ReflectiveTSend + fmt::Debug
+pub(crate) trait EventRef<T>: Deref<Target = UnsafeCell<Event<T>>> + fmt::Debug
 where
     T: Send,
 {
@@ -52,10 +51,6 @@ where
         // SAFETY: The creator of the reference is responsible for ensuring the event outlives it.
         unsafe { self.event.as_ref() }
     }
-}
-
-impl<T: Send> ReflectiveTSend for PtrRef<T> {
-    type T = T;
 }
 
 // SAFETY: This is only used with the thread-safe event (the event is Sync).
@@ -131,13 +126,6 @@ where
         // are alive, we are guaranteed that the event is alive.
         unsafe { self.event.as_ref() }
     }
-}
-
-impl<T> ReflectiveTSend for BoxedRef<T>
-where
-    T: Send,
-{
-    type T = T;
 }
 
 // SAFETY: This is only used with the thread-safe event (the event is Sync).

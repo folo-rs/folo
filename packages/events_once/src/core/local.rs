@@ -99,8 +99,8 @@ impl<T> LocalEvent<T> {
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub(crate) fn boxed_core() -> (
-        LocalSenderCore<BoxedLocalRef<T>>,
-        LocalReceiverCore<BoxedLocalRef<T>>,
+        LocalSenderCore<BoxedLocalRef<T>, T>,
+        LocalReceiverCore<BoxedLocalRef<T>, T>,
     ) {
         let (sender_event, receiver_event) = BoxedLocalRef::new_pair();
 
@@ -132,8 +132,8 @@ impl<T> LocalEvent<T> {
     pub(crate) unsafe fn placed_core(
         place: Pin<&mut MaybeUninit<Self>>,
     ) -> (
-        LocalSenderCore<PtrLocalRef<T>>,
-        LocalReceiverCore<PtrLocalRef<T>>,
+        LocalSenderCore<PtrLocalRef<T>, T>,
+        LocalReceiverCore<PtrLocalRef<T>, T>,
     ) {
         // SAFETY: Nothing is getting moved, we just temporarily unwrap the Pin wrapper.
         let event = Self::new_in_inner(unsafe { place.get_unchecked_mut() });

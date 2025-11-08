@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::{fmt, ptr};
 
-use crate::{Disconnected, Event, EventRef, ReflectiveTSend};
+use crate::{Disconnected, Event, EventRef};
 
 /// Delivers a single value to the receiver connected to the same event.
 ///
@@ -14,24 +14,29 @@ use crate::{Disconnected, Event, EventRef, ReflectiveTSend};
 /// The outer type parameter determines the mechanism by which the endpoint is bound to the event.
 /// Different binding mechanisms offer different performance characteristics and resource
 /// management patterns.
-pub(crate) struct SenderCore<E>
+pub(crate) struct SenderCore<E, T>
 where
-    E: EventRef<<E as ReflectiveTSend>::T>,
+    E: EventRef<T>,
+    T: Send,
 {
     event_ref: E,
+
+    _t: PhantomData<T>,
 
     // We are not compatible with concurrent sender use from multiple threads.
     _not_sync: PhantomData<Cell<()>>,
 }
 
-impl<E> SenderCore<E>
+impl<E, T> SenderCore<E, T>
 where
-    E: EventRef<<E as ReflectiveTSend>::T>,
+    E: EventRef<T>,
+    T: Send,
 {
     #[must_use]
     pub(crate) fn new(event_ref: E) -> Self {
         Self {
             event_ref,
+            _t: PhantomData,
             _not_sync: PhantomData,
         }
     }
@@ -41,7 +46,7 @@ where
     /// This method consumes the sender and always succeeds, regardless of whether
     /// there is a receiver waiting.
     #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
-    pub(crate) fn send(self, value: E::T) {
+    pub(crate) fn send(self, value: T) {
         // The drop logic is different before/after set(), so we switch to manual drop here.
         let mut this = ManuallyDrop::new(self);
 
@@ -58,9 +63,10 @@ where
     }
 }
 
-impl<E> Drop for SenderCore<E>
+impl<E, T> Drop for SenderCore<E, T>
 where
-    E: EventRef<<E as ReflectiveTSend>::T>,
+    E: EventRef<T>,
+    T: Send,
 {
     #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn drop(&mut self) {
@@ -71,9 +77,10 @@ where
     }
 }
 
-impl<E> fmt::Debug for SenderCore<E>
+impl<E, T> fmt::Debug for SenderCore<E, T>
 where
-    E: EventRef<<E as ReflectiveTSend>::T>,
+    E: EventRef<T>,
+    T: Send,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
@@ -89,9 +96,9 @@ mod tests {
     use super::*;
     use crate::{BoxedRef, PtrRef};
 
-    assert_impl_all!(SenderCore<BoxedRef<u32>>: Send);
-    assert_not_impl_any!(SenderCore<BoxedRef<u32>>: Sync);
+    assert_impl_all!(SenderCore<BoxedRef<u32>, u32>: Send);
+    assert_not_impl_any!(SenderCore<BoxedRef<u32>, u32>: Sync);
 
-    assert_impl_all!(SenderCore<PtrRef<u32>>: Send);
-    assert_not_impl_any!(SenderCore<PtrRef<u32>>: Sync);
+    assert_impl_all!(SenderCore<PtrRef<u32>, u32>: Send);
+    assert_not_impl_any!(SenderCore<PtrRef<u32>, u32>: Sync);
 }

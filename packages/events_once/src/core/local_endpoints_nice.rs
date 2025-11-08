@@ -13,11 +13,11 @@ use crate::{BoxedLocalRef, Disconnected, LocalReceiverCore, LocalSenderCore, Ptr
 /// This kind of endpoint is used for boxed events, which are heap-allocated and automatically
 /// destroyed when both the sender and receiver are dropped.
 pub struct BoxedLocalSender<T> {
-    inner: LocalSenderCore<BoxedLocalRef<T>>,
+    inner: LocalSenderCore<BoxedLocalRef<T>, T>,
 }
 
 impl<T> BoxedLocalSender<T> {
-    pub(crate) fn new(inner: LocalSenderCore<BoxedLocalRef<T>>) -> Self {
+    pub(crate) fn new(inner: LocalSenderCore<BoxedLocalRef<T>, T>) -> Self {
         Self { inner }
     }
 
@@ -43,11 +43,11 @@ impl<T> fmt::Debug for BoxedLocalSender<T> {
 /// This kind of endpoint is used for boxed events, which are heap-allocated and automatically
 /// destroyed when both the sender and receiver are dropped.
 pub struct BoxedLocalReceiver<T> {
-    inner: LocalReceiverCore<BoxedLocalRef<T>>,
+    inner: LocalReceiverCore<BoxedLocalRef<T>, T>,
 }
 
 impl<T> BoxedLocalReceiver<T> {
-    pub(crate) fn new(inner: LocalReceiverCore<BoxedLocalRef<T>>) -> Self {
+    pub(crate) fn new(inner: LocalReceiverCore<BoxedLocalRef<T>, T>) -> Self {
         Self { inner }
     }
 
@@ -103,11 +103,11 @@ impl<T> fmt::Debug for BoxedLocalReceiver<T> {
 /// owner of the endpoint. They are also responsible for ensuring that the event that
 /// connects the sender-receiver pair outlives both endpoints.
 pub struct RawLocalSender<T> {
-    inner: LocalSenderCore<PtrLocalRef<T>>,
+    inner: LocalSenderCore<PtrLocalRef<T>, T>,
 }
 
 impl<T> RawLocalSender<T> {
-    pub(crate) fn new(inner: LocalSenderCore<PtrLocalRef<T>>) -> Self {
+    pub(crate) fn new(inner: LocalSenderCore<PtrLocalRef<T>, T>) -> Self {
         Self { inner }
     }
 
@@ -134,11 +134,11 @@ impl<T> fmt::Debug for RawLocalSender<T> {
 /// owner of the endpoint. They are also responsible for ensuring that the event that
 /// connects the sender-receiver pair outlives both endpoints.
 pub struct RawLocalReceiver<T> {
-    inner: LocalReceiverCore<PtrLocalRef<T>>,
+    inner: LocalReceiverCore<PtrLocalRef<T>, T>,
 }
 
 impl<T> RawLocalReceiver<T> {
-    pub(crate) fn new(inner: LocalReceiverCore<PtrLocalRef<T>>) -> Self {
+    pub(crate) fn new(inner: LocalReceiverCore<PtrLocalRef<T>, T>) -> Self {
         Self { inner }
     }
 

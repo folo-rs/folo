@@ -10,7 +10,7 @@ use std::task::{self, Poll};
 
 use crate::{
     Disconnected, EVENT_AWAITING, EVENT_BOUND, EVENT_DISCONNECTED, EVENT_SET, EVENT_SIGNALING,
-    Event, EventRef, ReflectiveTSend,
+    Event, EventRef,
 };
 
 /// Receives a single value from the sender connected to the same event.
@@ -21,26 +21,31 @@ use crate::{
 /// The outer type parameter determines the mechanism by which the endpoint is bound to the event.
 /// Different binding mechanisms offer different performance characteristics and resource
 /// management patterns.
-pub(crate) struct ReceiverCore<E>
+pub(crate) struct ReceiverCore<E, T>
 where
-    E: EventRef<<E as ReflectiveTSend>::T>,
+    E: EventRef<T>,
+    T: Send,
 {
     // This is `None` if the receiver has already been polled to completion. We need to guard
     // against that because the event will be cleaned up after the first poll that signals "ready".
     event_ref: Option<E>,
 
+    _t: PhantomData<T>,
+
     // We are not compatible with concurrent receiver use from multiple threads.
     _not_sync: PhantomData<Cell<()>>,
 }
 
-impl<E> ReceiverCore<E>
+impl<E, T> ReceiverCore<E, T>
 where
-    E: EventRef<<E as ReflectiveTSend>::T>,
+    E: EventRef<T>,
+    T: Send,
 {
     #[must_use]
     pub(crate) fn new(event_ref: E) -> Self {
         Self {
             event_ref: Some(event_ref),
+            _t: PhantomData,
             _not_sync: PhantomData,
         }
     }
@@ -79,7 +84,7 @@ where
     ///
     /// Panics if the value has already been received via `Future::poll()`.
     #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
-    pub(crate) fn into_value(self) -> Result<Result<E::T, Disconnected>, Self> {
+    pub(crate) fn into_value(self) -> Result<Result<T, Disconnected>, Self> {
         let event_ref = self
             .event_ref
             .as_ref()
@@ -127,11 +132,12 @@ where
     }
 }
 
-impl<E> Future for ReceiverCore<E>
+impl<E, T> Future for ReceiverCore<E, T>
 where
-    E: EventRef<<E as ReflectiveTSend>::T>,
+    E: EventRef<T>,
+    T: Send,
 {
-    type Output = Result<E::T, Disconnected>;
+    type Output = Result<T, Disconnected>;
 
     #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
@@ -166,9 +172,10 @@ where
     }
 }
 
-impl<E> Drop for ReceiverCore<E>
+impl<E, T> Drop for ReceiverCore<E, T>
 where
-    E: EventRef<<E as ReflectiveTSend>::T>,
+    E: EventRef<T>,
+    T: Send,
 {
     #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn drop(&mut self) {
@@ -187,9 +194,10 @@ where
     }
 }
 
-impl<E> fmt::Debug for ReceiverCore<E>
+impl<E, T> fmt::Debug for ReceiverCore<E, T>
 where
-    E: EventRef<<E as ReflectiveTSend>::T>,
+    E: EventRef<T>,
+    T: Send,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
@@ -205,9 +213,9 @@ mod tests {
     use super::*;
     use crate::{BoxedRef, PtrRef};
 
-    assert_impl_all!(ReceiverCore<BoxedRef<u32>>: Send);
-    assert_not_impl_any!(ReceiverCore<BoxedRef<u32>>: Sync);
+    assert_impl_all!(ReceiverCore<BoxedRef<u32>, u32>: Send);
+    assert_not_impl_any!(ReceiverCore<BoxedRef<u32>, u32>: Sync);
 
-    assert_impl_all!(ReceiverCore<PtrRef<u32>>: Send);
-    assert_not_impl_any!(ReceiverCore<PtrRef<u32>>: Sync);
+    assert_impl_all!(ReceiverCore<PtrRef<u32>, u32>: Send);
+    assert_not_impl_any!(ReceiverCore<PtrRef<u32>, u32>: Sync);
 }

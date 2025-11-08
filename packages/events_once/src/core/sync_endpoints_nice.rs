@@ -13,11 +13,11 @@ use crate::{BoxedRef, Disconnected, PtrRef, ReceiverCore, SenderCore};
 /// This kind of endpoint is used for boxed events, which are heap-allocated and automatically
 /// destroyed when both the sender and receiver are dropped.
 pub struct BoxedSender<T: Send> {
-    inner: SenderCore<BoxedRef<T>>,
+    inner: SenderCore<BoxedRef<T>, T>,
 }
 
 impl<T: Send> BoxedSender<T> {
-    pub(crate) fn new(inner: SenderCore<BoxedRef<T>>) -> Self {
+    pub(crate) fn new(inner: SenderCore<BoxedRef<T>, T>) -> Self {
         Self { inner }
     }
 
@@ -43,11 +43,11 @@ impl<T: Send> fmt::Debug for BoxedSender<T> {
 /// This kind of endpoint is used for boxed events, which are heap-allocated and automatically
 /// destroyed when both the sender and receiver are dropped.
 pub struct BoxedReceiver<T: Send> {
-    inner: ReceiverCore<BoxedRef<T>>,
+    inner: ReceiverCore<BoxedRef<T>, T>,
 }
 
 impl<T: Send> BoxedReceiver<T> {
-    pub(crate) fn new(inner: ReceiverCore<BoxedRef<T>>) -> Self {
+    pub(crate) fn new(inner: ReceiverCore<BoxedRef<T>, T>) -> Self {
         Self { inner }
     }
 
@@ -103,11 +103,11 @@ impl<T: Send> fmt::Debug for BoxedReceiver<T> {
 /// owner of the endpoint. They are also responsible for ensuring that the event that
 /// connects the sender-receiver pair outlives both endpoints.
 pub struct RawSender<T: Send> {
-    inner: SenderCore<PtrRef<T>>,
+    inner: SenderCore<PtrRef<T>, T>,
 }
 
 impl<T: Send> RawSender<T> {
-    pub(crate) fn new(inner: SenderCore<PtrRef<T>>) -> Self {
+    pub(crate) fn new(inner: SenderCore<PtrRef<T>, T>) -> Self {
         Self { inner }
     }
 
@@ -134,11 +134,11 @@ impl<T: Send> fmt::Debug for RawSender<T> {
 /// owner of the endpoint. They are also responsible for ensuring that the event that
 /// connects the sender-receiver pair outlives both endpoints.
 pub struct RawReceiver<T: Send> {
-    inner: ReceiverCore<PtrRef<T>>,
+    inner: ReceiverCore<PtrRef<T>, T>,
 }
 
 impl<T: Send> RawReceiver<T> {
-    pub(crate) fn new(inner: ReceiverCore<PtrRef<T>>) -> Self {
+    pub(crate) fn new(inner: ReceiverCore<PtrRef<T>, T>) -> Self {
         Self { inner }
     }
 

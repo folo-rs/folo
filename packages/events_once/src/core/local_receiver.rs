@@ -1,13 +1,12 @@
 use std::any::type_name;
 use std::fmt;
 use std::future::Future;
+use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::pin::Pin;
 use std::task::{self, Poll};
 
-use crate::{
-    Disconnected, EVENT_AWAITING, EVENT_BOUND, EVENT_DISCONNECTED, EVENT_SET, LocalRef, ReflectiveT,
-};
+use crate::{Disconnected, EVENT_AWAITING, EVENT_BOUND, EVENT_DISCONNECTED, EVENT_SET, LocalRef};
 
 /// Receives a single value from the sender connected to the same event.
 ///
@@ -17,23 +16,26 @@ use crate::{
 /// The outer type parameter determines the mechanism by which the endpoint is bound to the event.
 /// Different binding mechanisms offer different performance characteristics and resource
 /// management patterns.
-pub(crate) struct LocalReceiverCore<E>
+pub(crate) struct LocalReceiverCore<E, T>
 where
-    E: LocalRef<<E as ReflectiveT>::T>,
+    E: LocalRef<T>,
 {
     // This is `None` if the receiver has already been polled to completion. We need to guard
     // against that because the event will be cleaned up after the first poll that signals "ready".
     event_ref: Option<E>,
+
+    _t: PhantomData<T>,
 }
 
-impl<E> LocalReceiverCore<E>
+impl<E, T> LocalReceiverCore<E, T>
 where
-    E: LocalRef<<E as ReflectiveT>::T>,
+    E: LocalRef<T>,
 {
     #[must_use]
     pub(crate) fn new(event_ref: E) -> Self {
         Self {
             event_ref: Some(event_ref),
+            _t: PhantomData,
         }
     }
 
@@ -61,7 +63,7 @@ where
     ///
     /// Panics if the value has already been received via `Future::poll()`.
     #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
-    pub(crate) fn into_value(self) -> Result<Result<E::T, Disconnected>, Self> {
+    pub(crate) fn into_value(self) -> Result<Result<T, Disconnected>, Self> {
         let event_ref = self
             .event_ref
             .as_ref()
@@ -102,11 +104,11 @@ where
     }
 }
 
-impl<E> Future for LocalReceiverCore<E>
+impl<E, T> Future for LocalReceiverCore<E, T>
 where
-    E: LocalRef<<E as ReflectiveT>::T>,
+    E: LocalRef<T>,
 {
-    type Output = Result<E::T, Disconnected>;
+    type Output = Result<T, Disconnected>;
 
     #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
@@ -135,9 +137,9 @@ where
     }
 }
 
-impl<E> Drop for LocalReceiverCore<E>
+impl<E, T> Drop for LocalReceiverCore<E, T>
 where
-    E: LocalRef<<E as ReflectiveT>::T>,
+    E: LocalRef<T>,
 {
     #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn drop(&mut self) {
@@ -156,9 +158,9 @@ where
     }
 }
 
-impl<E> fmt::Debug for LocalReceiverCore<E>
+impl<E, T> fmt::Debug for LocalReceiverCore<E, T>
 where
-    E: LocalRef<<E as ReflectiveT>::T>,
+    E: LocalRef<T>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
@@ -174,6 +176,6 @@ mod tests {
     use super::*;
     use crate::{BoxedLocalRef, PtrLocalRef};
 
-    assert_not_impl_any!(LocalReceiverCore<BoxedLocalRef<i32>>: Send, Sync);
-    assert_not_impl_any!(LocalReceiverCore<PtrLocalRef<i32>>: Send, Sync);
+    assert_not_impl_any!(LocalReceiverCore<BoxedLocalRef<i32>, i32>: Send, Sync);
+    assert_not_impl_any!(LocalReceiverCore<PtrLocalRef<i32>, i32>: Send, Sync);
 }

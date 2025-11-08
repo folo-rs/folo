@@ -1,7 +1,8 @@
+use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::{fmt, ptr};
 
-use crate::{Disconnected, LocalRef, ReflectiveT};
+use crate::{Disconnected, LocalRef};
 
 /// Delivers a single value to the receiver connected to the same event.
 ///
@@ -11,20 +12,25 @@ use crate::{Disconnected, LocalRef, ReflectiveT};
 /// The outer type parameter determines the mechanism by which the endpoint is bound to the event.
 /// Different binding mechanisms offer different performance characteristics and resource
 /// management patterns.
-pub(crate) struct LocalSenderCore<E>
+pub(crate) struct LocalSenderCore<E, T>
 where
-    E: LocalRef<<E as ReflectiveT>::T>,
+    E: LocalRef<T>,
 {
     event_ref: E,
+
+    _t: PhantomData<T>,
 }
 
-impl<E> LocalSenderCore<E>
+impl<E, T> LocalSenderCore<E, T>
 where
-    E: LocalRef<<E as ReflectiveT>::T>,
+    E: LocalRef<T>,
 {
     #[must_use]
     pub(crate) fn new(event_ref: E) -> Self {
-        Self { event_ref }
+        Self {
+            event_ref,
+            _t: PhantomData,
+        }
     }
 
     /// Sends a value to the receiver connected to the same event.
@@ -32,7 +38,7 @@ where
     /// This method consumes the sender and always succeeds, regardless of whether
     /// there is a receiver waiting.
     #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
-    pub(crate) fn send(self, value: E::T) {
+    pub(crate) fn send(self, value: T) {
         // The drop logic is different before/after set(), so we switch to manual drop here.
         let mut this = ManuallyDrop::new(self);
 
@@ -49,9 +55,9 @@ where
     }
 }
 
-impl<E> Drop for LocalSenderCore<E>
+impl<E, T> Drop for LocalSenderCore<E, T>
 where
-    E: LocalRef<<E as ReflectiveT>::T>,
+    E: LocalRef<T>,
 {
     #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn drop(&mut self) {
@@ -62,9 +68,9 @@ where
     }
 }
 
-impl<E> fmt::Debug for LocalSenderCore<E>
+impl<E, T> fmt::Debug for LocalSenderCore<E, T>
 where
-    E: LocalRef<<E as ReflectiveT>::T>,
+    E: LocalRef<T>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalSender")
@@ -80,6 +86,6 @@ mod tests {
     use super::*;
     use crate::{BoxedLocalRef, PtrLocalRef};
 
-    assert_not_impl_any!(LocalSenderCore<BoxedLocalRef<i32>>: Send, Sync);
-    assert_not_impl_any!(LocalSenderCore<PtrLocalRef<i32>>: Send, Sync);
+    assert_not_impl_any!(LocalSenderCore<BoxedLocalRef<i32>, i32>: Send, Sync);
+    assert_not_impl_any!(LocalSenderCore<PtrLocalRef<i32>, i32>: Send, Sync);
 }

@@ -7,7 +7,7 @@ use std::{fmt, mem};
 
 use infinity_pool::RawPooled;
 
-use crate::{Event, EventPoolCore, EventRef, ReflectiveTSend};
+use crate::{Event, EventPoolCore, EventRef};
 
 pub(crate) struct PooledRef<T: Send> {
     core: Arc<EventPoolCore<T>>,
@@ -59,10 +59,6 @@ impl<T: Send> Deref for PooledRef<T> {
             mem::transmute::<&UnsafeCell<MaybeUninit<Event<T>>>, &UnsafeCell<Event<T>>>(event_cell)
         }
     }
-}
-
-impl<T: Send> ReflectiveTSend for PooledRef<T> {
-    type T = T;
 }
 
 impl<T: Send> fmt::Debug for PooledRef<T> {

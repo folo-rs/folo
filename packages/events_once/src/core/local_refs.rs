@@ -5,12 +5,10 @@ use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::ptr::NonNull;
 
-use crate::{LocalEvent, ReflectiveT};
+use crate::LocalEvent;
 
 /// Enables a sender or receiver to reference the event that connects them.
-pub(crate) trait LocalRef<T>:
-    Deref<Target = LocalEvent<T>> + ReflectiveT + fmt::Debug
-{
+pub(crate) trait LocalRef<T>: Deref<Target = LocalEvent<T>> + fmt::Debug {
     /// Releases the event, asserting that the last endpoint has been dropped
     /// and nothing will access the event after this call.
     fn release_event(&self);
@@ -40,10 +38,6 @@ impl<T> Deref for PtrLocalRef<T> {
         // SAFETY: The creator of the reference is responsible for ensuring the event outlives it.
         unsafe { self.event.as_ref() }
     }
-}
-
-impl<T> ReflectiveT for PtrLocalRef<T> {
-    type T = T;
 }
 
 impl<T> fmt::Debug for PtrLocalRef<T> {
@@ -103,10 +97,6 @@ impl<T> Deref for BoxedLocalRef<T> {
         // are alive, we are guaranteed that the event is alive.
         unsafe { self.event.as_ref() }
     }
-}
-
-impl<T> ReflectiveT for BoxedLocalRef<T> {
-    type T = T;
 }
 
 impl<T> fmt::Debug for BoxedLocalRef<T> {

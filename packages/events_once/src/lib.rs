@@ -7,7 +7,6 @@ mod core;
 mod disconnected;
 mod lake;
 mod pool;
-mod reflective_t;
 
 pub use core::*;
 
@@ -16,4 +15,3 @@ pub(crate) use backtrace::*;
 pub use disconnected::*;
 pub use lake::*;
 pub use pool::*;
-pub use reflective_t::*;

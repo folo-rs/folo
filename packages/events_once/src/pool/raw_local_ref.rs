@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 
 use infinity_pool::RawPooled;
 
-use crate::{LocalEvent, LocalRef, RawLocalEventPoolCore, ReflectiveT};
+use crate::{LocalEvent, LocalRef, RawLocalEventPoolCore};
 
 pub(crate) struct RawLocalPooledRef<T> {
     core: NonNull<UnsafeCell<RawLocalEventPoolCore<T>>>,
@@ -62,10 +62,6 @@ impl<T> Deref for RawLocalPooledRef<T> {
         // SAFETY: The event state machine guarantees that the event remains in the pool.
         unsafe { self.event.as_ref() }
     }
-}
-
-impl<T> ReflectiveT for RawLocalPooledRef<T> {
-    type T = T;
 }
 
 impl<T> fmt::Debug for RawLocalPooledRef<T> {

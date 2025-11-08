@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use infinity_pool::RawPooled;
 
-use crate::{LocalEvent, LocalPoolCore, LocalRef, ReflectiveT};
+use crate::{LocalEvent, LocalPoolCore, LocalRef};
 
 pub(crate) struct PooledLocalRef<T> {
     core: Rc<LocalPoolCore<T>>,
@@ -47,10 +47,6 @@ impl<T> Deref for PooledLocalRef<T> {
         // SAFETY: The event state machine guarantees that the event remains in the pool.
         unsafe { self.event.as_ref() }
     }
-}
-
-impl<T> ReflectiveT for PooledLocalRef<T> {
-    type T = T;
 }
 
 impl<T> fmt::Debug for PooledLocalRef<T> {

@@ -11,11 +11,11 @@ use crate::{Disconnected, RawPooledRef, ReceiverCore, SenderCore};
 ///
 /// This kind of endpoint is used for events stored in a raw event pool.
 pub struct RawPooledSender<T: Send> {
-    inner: SenderCore<RawPooledRef<T>>,
+    inner: SenderCore<RawPooledRef<T>, T>,
 }
 
 impl<T: Send> RawPooledSender<T> {
-    pub(crate) fn new(inner: SenderCore<RawPooledRef<T>>) -> Self {
+    pub(crate) fn new(inner: SenderCore<RawPooledRef<T>, T>) -> Self {
         Self { inner }
     }
 
@@ -40,11 +40,11 @@ impl<T: Send> fmt::Debug for RawPooledSender<T> {
 ///
 /// This kind of endpoint is used for events stored in an event pool.
 pub struct RawPooledReceiver<T: Send> {
-    inner: ReceiverCore<RawPooledRef<T>>,
+    inner: ReceiverCore<RawPooledRef<T>, T>,
 }
 
 impl<T: Send> RawPooledReceiver<T> {
-    pub(crate) fn new(inner: ReceiverCore<RawPooledRef<T>>) -> Self {
+    pub(crate) fn new(inner: ReceiverCore<RawPooledRef<T>, T>) -> Self {
         Self { inner }
     }
 

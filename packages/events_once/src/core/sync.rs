@@ -100,7 +100,7 @@ where
 
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
-    pub(crate) fn boxed_core() -> (SenderCore<BoxedRef<T>>, ReceiverCore<BoxedRef<T>>) {
+    pub(crate) fn boxed_core() -> (SenderCore<BoxedRef<T>, T>, ReceiverCore<BoxedRef<T>, T>) {
         let (sender_event_ref, receiver_event_ref) = BoxedRef::new_pair();
 
         (
@@ -130,7 +130,7 @@ where
     #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub(crate) unsafe fn placed_core(
         place: Pin<&mut UnsafeCell<MaybeUninit<Self>>>,
-    ) -> (SenderCore<PtrRef<T>>, ReceiverCore<PtrRef<T>>) {
+    ) -> (SenderCore<PtrRef<T>, T>, ReceiverCore<PtrRef<T>, T>) {
         // SAFETY: Nothing is getting moved, we just temporarily unwrap the Pin wrapper.
         let place_mut = unsafe { place.get_unchecked_mut() };
 
