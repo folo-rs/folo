@@ -6,11 +6,11 @@
 #![cfg(not(miri))]
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Path to the cargo-detect-package binary.
-fn get_binary_path() -> String {
+fn get_binary_path() -> PathBuf {
     // For Windows, include the .exe extension
     let binary_name = if cfg!(windows) {
         "cargo-detect-package.exe"
@@ -18,10 +18,19 @@ fn get_binary_path() -> String {
         "cargo-detect-package"
     };
 
+    // Honor explicit target override via CARGO_TARGET_DIR.
+    if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
+        return PathBuf::from(target_dir).join("debug").join(binary_name);
+    }
+
     // Try to find the binary in the standard Cargo target directory
     std::env::var("CARGO_MANIFEST_DIR").map_or_else(
-        |_| format!("../../target/debug/{binary_name}"),
-        |manifest_dir| format!("{manifest_dir}/../../target/debug/{binary_name}"),
+        |_| PathBuf::from("../../target/debug").join(binary_name),
+        |manifest_dir| {
+            PathBuf::from(manifest_dir)
+                .join("../../target/debug")
+                .join(binary_name)
+        },
     )
 }
 
@@ -30,9 +39,10 @@ fn run_tool(working_dir: &Path, args: &[&str]) -> Result<std::process::Output, s
     let binary_path = get_binary_path();
 
     // Normalize the path to handle mixed separators
-    let normalized_binary_path = Path::new(&binary_path)
-        .canonicalize()
-        .unwrap_or_else(|_| Path::new(&binary_path).to_path_buf());
+    let normalized_binary_path = match binary_path.canonicalize() {
+        Ok(path) => path,
+        Err(_) => binary_path,
+    };
 
     // Convert UNC paths back to regular Windows paths to avoid Command issues
     let binary_str = normalized_binary_path.to_string_lossy();
