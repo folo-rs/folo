@@ -34,6 +34,7 @@ impl<T: Send> fmt::Debug for RawEventPool<T> {
 }
 
 impl<T: Send> Drop for RawEventPool<T> {
+    #[cfg_attr(test, mutants::skip)] // Impractical to test deallocation - Miri will complain if we leak.
     fn drop(&mut self) {
         // SAFETY: We are the owner of the core, so we know it remains valid.
         // Anyone calling rent() has to promise that we outlive the rented event

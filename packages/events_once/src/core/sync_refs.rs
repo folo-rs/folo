@@ -107,6 +107,7 @@ impl<T> EventRef<T> for BoxedRef<T>
 where
     T: Send,
 {
+    #[cfg_attr(test, mutants::skip)] // Impractical to test deallocation - Miri will complain if we leak.
     fn release_event(&self) {
         // The caller tells us that they are the last endpoint, so nothing else can possibly
         // be accessing the event any more. We can safely release the memory.
