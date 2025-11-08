@@ -203,11 +203,10 @@ impl<T> LocalEvent<T> {
         }
 
         let previous_state = self.state.get();
+        self.state.set(previous_state.wrapping_add(1));
 
         match previous_state {
             EVENT_BOUND => {
-                self.state.set(EVENT_SET);
-
                 // There was nobody listening via the receiver - our work here is done.
                 // The receiver is still connected, so it will clean up.
                 Ok(())

@@ -13,9 +13,6 @@
 //!                 is welcome to receive the payload.
 //! 4 - disconnected - one of the endpoints has disconnected before completing the send/receive.
 //! 
-//! The "signaling" state is not used with single-threaded events, as they do not need any
-//! mutual exclusion - it would be impossible for anyone to observe this state if it were used.
-//!
 //! A key optimization is that the "send" transition is a simple `+= 1` operation:
 //!
 //! * If nobody is listening, we get `bound + 1 = set`
