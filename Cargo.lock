@@ -227,7 +227,7 @@ checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
 name = "cargo-detect-package"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "argh",
  "serial_test",
@@ -441,7 +441,7 @@ dependencies = [
 
 [[package]]
 name = "events"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -482,7 +482,7 @@ dependencies = [
 
 [[package]]
 name = "fast_time"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "criterion",
  "libc",
@@ -1125,7 +1125,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
