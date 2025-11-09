@@ -1,6 +1,6 @@
 # The basics
 
-This is a multiplatform project supporting both Windows and Linux. Development of the Linux
+This is a multiplatform project supporting Windows, Linux, and macOS. Development of the Linux
 functionality takes place in a Windows Subsystem for Linux (WSL) virtual machine.
 
 See `rust-toolchain.toml` for the required stable Rust toolchain version. The `nightly` toolchain
@@ -68,6 +68,34 @@ Setup:
 1. If first time setup, install required Visual Studio Code extensions:
     * C/C++
     * rust-analyzer
+
+Validation:
+
+1. Execute from task palette (F1):
+    * `Tasks: Run Build Task`
+    * `Tasks: Run Test Task`
+1. Execute `just validate-local` in terminal.
+
+# Development environment setup (macOS)
+
+Prerequisites:
+
+* macOS 14 or newer
+* Xcode command-line tools (`xcode-select --install`)
+* Homebrew
+* `brew install git git-lfs cmake pkg-config`
+* Git LFS setup: `git lfs install`
+* PowerShell 7: `brew install --cask powershell`
+* Rust development tools for version listed in `rust-toolchain.toml`
+* `rustup toolchain install nightly --component miri`
+* `rustup toolchain install nightly --component rustfmt`
+* `cargo install just`
+
+Setup:
+
+1. Clone the repo to a directory of your choosing.
+1. Execute `git config --local include.path ./.gitconfig` to attach the repo-specific Git configuration.
+1. Execute `just install-tools` to install development tools.
 
 Validation:
 

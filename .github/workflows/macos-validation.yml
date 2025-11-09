@@ -1,0 +1,21 @@
+name: macOS Validation
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  macos-validation:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup environment
+      uses: ./.github/actions/setup-environment
+
+    - name: Run validation
+      run: just validate-local

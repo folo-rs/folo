@@ -188,7 +188,7 @@ This project aims for high quality standards:
 ✅ **High test coverage** - Test coverage measured and maintained via `cargo-llvm-cov`  
 ✅ **Zero warnings policy** - All code must compile without any compiler or Clippy warnings  
 ✅ **Extensive Clippy rules** - 100+ custom Clippy lint rules enforced across the workspace  
-✅ **Cross-platform validation** - All code tested on both Windows and Linux platforms  
+✅ **Cross-platform validation** - All code tested on Windows, Linux, and macOS platforms  
 ✅ **Automated CI/CD** - Continuous integration runs full validation suite on every commit  
 ✅ **API documentation** - Complete API documentation with inline examples for all public APIs  
 ✅ **Dependency auditing** - Regular security audits of all dependencies via `cargo-audit`  
