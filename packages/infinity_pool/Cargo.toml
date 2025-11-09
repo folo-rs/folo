@@ -14,7 +14,6 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
-bitvec = { workspace = true }
 new_zealand = { workspace = true }
 num-integer = { workspace = true }
 parking_lot = { workspace = true }

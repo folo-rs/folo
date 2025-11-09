@@ -1,4 +1,4 @@
-use bitvec::vec::BitVec;
+use crate::VacancyMap;
 
 /// Tracks which slab in a pool has the next vacant slot.
 ///
@@ -25,8 +25,8 @@ use bitvec::vec::BitVec;
 /// whenever a vacancy-affecting operation occurs, and we update our cache accordingly.
 #[derive(Debug)]
 pub(crate) struct VacancyTracker {
-    // Slot index to vacancy status.
-    has_vacancy: BitVec,
+    // Slab index to vacancy status.
+    has_vacancy: VacancyMap,
 
     // Index of the lowest-index slab with a vacancy, if any.
     next_vacancy: Option<usize>,
@@ -35,7 +35,7 @@ pub(crate) struct VacancyTracker {
 impl VacancyTracker {
     pub(crate) fn new() -> Self {
         Self {
-            has_vacancy: BitVec::new(),
+            has_vacancy: VacancyMap::new(),
             next_vacancy: None,
         }
     }

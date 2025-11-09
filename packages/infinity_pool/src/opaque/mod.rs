@@ -7,6 +7,7 @@ mod slab;
 mod slab_handle;
 mod slab_layout;
 mod slot_meta;
+mod vacancy_map;
 mod vacancy_tracker;
 
 pub(crate) use dropper::*;
@@ -18,4 +19,5 @@ pub(crate) use slab::*;
 pub(crate) use slab_handle::*;
 pub(crate) use slab_layout::*;
 pub(crate) use slot_meta::*;
+pub(crate) use vacancy_map::*;
 pub(crate) use vacancy_tracker::*;
