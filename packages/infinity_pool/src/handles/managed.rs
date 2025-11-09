@@ -41,6 +41,7 @@ impl<T: ?Sized> Pooled<T> {
     #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
     #[must_use]
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     pub fn ptr(&self) -> NonNull<T> {
         self.inner.ptr()
     }
@@ -48,6 +49,7 @@ impl<T: ?Sized> Pooled<T> {
     #[doc = include_str!("../../doc/snippets/ref_counted_as_pin.md")]
     #[must_use]
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     pub fn as_pin(&self) -> Pin<&T> {
         // SAFETY: Pooled items are always pinned.
         unsafe { Pin::new_unchecked(self) }

@@ -54,6 +54,7 @@ impl<T: ?Sized> SlabHandle<T> {
     /// It is the responsibility of the caller to ensure that the pointer is not used
     /// after the object has been removed from the slab.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     pub(crate) fn ptr(&self) -> NonNull<T> {
         self.ptr
     }
@@ -130,6 +131,7 @@ impl<T: ?Sized> SlabHandle<T> {
     /// of handles with different types, particularly for shared handle cleanup where
     /// different trait object casts would otherwise create incompatible remover types.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     pub(crate) fn erase(self) -> SlabHandle<()> {
         SlabHandle {
             index: self.index,

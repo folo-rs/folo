@@ -29,6 +29,7 @@ impl<T: ?Sized> LocalPooledMut<T> {
     #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
     #[must_use]
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     pub fn ptr(&self) -> NonNull<T> {
         self.inner.ptr()
     }
@@ -36,12 +37,14 @@ impl<T: ?Sized> LocalPooledMut<T> {
     #[doc = include_str!("../../doc/snippets/handle_into_shared.md")]
     #[must_use]
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     pub fn into_shared(self) -> LocalPooled<T> {
         let (inner, pool) = self.into_parts();
 
         LocalPooled::new(inner, pool)
     }
 
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     fn into_parts(self) -> (RawPooledMut<T>, Rc<RefCell<RawOpaquePool>>) {
         // We transfer these fields to the caller, so we do not want the current handle
         // to be dropped. Hence we perform raw reads to extract the fields directly.
@@ -60,6 +63,7 @@ impl<T: ?Sized> LocalPooledMut<T> {
     #[doc = include_str!("../../doc/snippets/ref_counted_as_pin.md")]
     #[must_use]
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     pub fn as_pin(&self) -> Pin<&T> {
         // SAFETY: Pooled items are always pinned.
         unsafe { Pin::new_unchecked(self) }
@@ -68,6 +72,7 @@ impl<T: ?Sized> LocalPooledMut<T> {
     #[doc = include_str!("../../doc/snippets/ref_counted_as_pin_mut.md")]
     #[must_use]
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     pub fn as_pin_mut(&mut self) -> Pin<&mut T> {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself.

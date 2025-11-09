@@ -52,6 +52,7 @@ impl<T: ?Sized> RawPooled<T> {
     #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
     #[must_use]
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     pub fn ptr(&self) -> NonNull<T> {
         self.slab_handle.ptr()
     }
@@ -59,6 +60,7 @@ impl<T: ?Sized> RawPooled<T> {
     /// Erase the type information from this handle for internal use by remover logic.
     #[must_use]
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     pub(crate) fn erase(self) -> RawPooled<()> {
         RawPooled {
             slab_index: self.slab_index,
@@ -69,6 +71,7 @@ impl<T: ?Sized> RawPooled<T> {
     #[doc = include_str!("../../doc/snippets/raw_as_pin.md")]
     #[must_use]
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     pub unsafe fn as_pin(&self) -> Pin<&T> {
         // SAFETY: Forwarding safety guarantees from the caller.
         let as_ref = unsafe { self.as_ref() };
@@ -80,6 +83,7 @@ impl<T: ?Sized> RawPooled<T> {
     #[doc = include_str!("../../doc/snippets/raw_as_ref.md")]
     #[must_use]
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     pub unsafe fn as_ref(&self) -> &T {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself. Pointer validity

@@ -36,6 +36,7 @@ impl<T: ?Sized> RawPooledMut<T> {
     #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
     #[must_use]
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     pub fn ptr(&self) -> NonNull<T> {
         self.slab_handle.ptr()
     }
@@ -43,6 +44,7 @@ impl<T: ?Sized> RawPooledMut<T> {
     #[doc = include_str!("../../doc/snippets/handle_into_shared.md")]
     #[must_use]
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     pub fn into_shared(self) -> RawPooled<T> {
         RawPooled::new(self.slab_index, self.slab_handle)
     }
@@ -50,6 +52,7 @@ impl<T: ?Sized> RawPooledMut<T> {
     #[doc = include_str!("../../doc/snippets/raw_as_pin.md")]
     #[must_use]
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     pub unsafe fn as_pin(&self) -> Pin<&T> {
         // SAFETY: Forwarding safety guarantees from the caller.
         let as_ref = unsafe { self.as_ref() };
@@ -61,6 +64,7 @@ impl<T: ?Sized> RawPooledMut<T> {
     #[doc = include_str!("../../doc/snippets/raw_as_pin_mut.md")]
     #[must_use]
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     pub unsafe fn as_pin_mut(&mut self) -> Pin<&mut T> {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself. Pointer validity
@@ -74,6 +78,7 @@ impl<T: ?Sized> RawPooledMut<T> {
     #[doc = include_str!("../../doc/snippets/raw_as_ref.md")]
     #[must_use]
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     pub unsafe fn as_ref(&self) -> &T {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself. Pointer validity
