@@ -159,7 +159,6 @@ impl VacancyMapSlice<'_> {
     /// Returns the index relative to the start of the slice, or `None` if no bits are set.
     #[expect(
         clippy::arithmetic_side_effects,
-        clippy::indexing_slicing,
         reason = "All arithmetic and indexing operations are guaranteed to be in bounds by slice construction."
     )]
     pub(crate) fn first_one(&self) -> Option<usize> {
