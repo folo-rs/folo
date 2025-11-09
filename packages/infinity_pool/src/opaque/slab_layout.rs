@@ -84,6 +84,7 @@ impl SlabLayout {
     }
 
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants does not understand how to deal with NonZero return value, so all the mutations are unviable.
     pub(crate) fn capacity(&self) -> NonZero<usize> {
         self.capacity
     }
@@ -116,6 +117,7 @@ impl SlabLayout {
 /// them, so fill factor is not a problem (after all, if you only have a few objects, why would
 /// you even be using a slab/pool).
 #[must_use]
+#[cfg_attr(test, mutants::skip)] // cargo-mutants does not understand how to deal with NonZero return value, so all the mutations are unviable.
 fn determine_capacity(slot_size: NonZero<usize>) -> NonZero<usize> {
     // No matter what we are storing, we want at this this many objects per slab.
     // If we have overly tiny slabs, the slab management overhead could become significant.

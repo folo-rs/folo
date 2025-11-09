@@ -46,6 +46,7 @@ impl VacancyMap {
     ///
     /// If the new length is greater than the current length, new bits are set to `initial_value`.
     /// If the new length is less than the current length, the map is truncated.
+    #[cfg_attr(test, mutants::skip)] // Some mutations extend logic into impossible branches, which are untestable.
     pub(crate) fn resize(&mut self, new_len: usize, initial_value: bool) {
         if new_len == self.len {
             return;
@@ -161,6 +162,7 @@ impl VacancyMapSlice<'_> {
         clippy::arithmetic_side_effects,
         reason = "All arithmetic and indexing operations are guaranteed to be in bounds by slice construction."
     )]
+    #[cfg_attr(test, mutants::skip)] // Too annoying to test. Some mutations may also cause logic to go out of bounds.
     pub(crate) fn first_one(&self) -> Option<usize> {
         // This cannot wrap unless we just created the slice with start > end,
         // in which case we deserve our fate.
