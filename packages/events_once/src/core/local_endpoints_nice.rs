@@ -89,7 +89,9 @@ impl<T> BoxedLocalReceiver<T> {
     ///     //
     ///     // If no value has been sent yet, into_value() returns Err(IntoValueError::Pending(self)).
     ///     let Err(IntoValueError::Pending(receiver)) = receiver.into_value() else {
-    ///         panic!("Expected receiver to indicate that it is still waiting for a payload to be sent.");
+    ///         panic!(
+    ///             "Expected receiver to indicate that it is still waiting for a payload to be sent."
+    ///         );
     ///     };
     ///
     ///     sender.send("Hello, world!".to_string());
@@ -208,7 +210,9 @@ impl<T> RawLocalReceiver<T> {
     ///     //
     ///     // If no value has been sent yet, into_value() returns Err(IntoValueError::Pending(self)).
     ///     let Err(IntoValueError::Pending(receiver)) = receiver.into_value() else {
-    ///         panic!("Expected receiver to indicate that it is still waiting for a payload to be sent.");
+    ///         panic!(
+    ///             "Expected receiver to indicate that it is still waiting for a payload to be sent."
+    ///         );
     ///     };
     ///
     ///     sender.send("Hello, world!".to_string());

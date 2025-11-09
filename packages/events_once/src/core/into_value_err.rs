@@ -3,7 +3,7 @@
     clippy::exhaustive_enums,
     reason = "intentionally narrow, accepting the risk"
 )]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum IntoValueError<R> {
     /// The value has not yet been sent.
     ///

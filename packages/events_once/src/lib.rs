@@ -264,11 +264,11 @@
 //!
 //! ```rust
 //! use events_once::{Event, IntoValueError};
-//! 
+//!
 //! #[tokio::main]
 //! async fn main() {
 //!     let (sender, receiver) = Event::<String>::boxed();
-//! 
+//!
 //!     // into_value() is designed for synchronous scenarios where you do not want to wait but
 //!     // simply want to either obtain the received value or do nothing. First, we do nothing.
 //!     //
@@ -276,11 +276,11 @@
 //!     let IntoValueError::Pending(receiver) = receiver.into_value().unwrap_err() else {
 //!         panic!("Received unexpected error instead of IntoValueError::Pending");
 //!     };
-//! 
+//!
 //!     sender.send("Hello, world!".to_string());
-//! 
+//!
 //!     let message = receiver.into_value().unwrap();
-//! 
+//!
 //!     println!("Received message: {message}");
 //! }
 //! ```

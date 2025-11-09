@@ -224,7 +224,7 @@ impl VacancyMapSlice<'_> {
             let last_block = unsafe { self.map.blocks.get_unchecked(end_block) };
 
             let mask = (1 << (end_bit + 1)) - 1;
-            
+
             // We zero out bits outside the slice range.
             let masked_last = last_block & mask;
 
