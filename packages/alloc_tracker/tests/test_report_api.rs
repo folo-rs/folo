@@ -1,12 +1,13 @@
 //! Test the new Report API functionality.
 
+#![cfg(not(miri))] // Test uses the real platform which cannot be executed under Miri.
+
 use alloc_tracker::{Allocator, Session};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 #[test]
-#[cfg(not(miri))] // Test uses the real platform which cannot be executed under Miri.
 fn alloc_tracker_report_api() {
     let session = Session::new();
 

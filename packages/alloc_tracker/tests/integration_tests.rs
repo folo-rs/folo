@@ -3,7 +3,7 @@
 //! These tests use a global allocator setup to test the full functionality
 //! of the allocation tracking system, including single-threaded and multithreaded scenarios.
 
-#![cfg(not(miri))] // Miri replaces the global allocator, so cannot be used here.
+#![cfg(not(miri))] // Test uses the real platform which cannot be executed under Miri.
 
 use std::hint::black_box;
 use std::thread;
