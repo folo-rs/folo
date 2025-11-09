@@ -17,8 +17,9 @@ use crate::{EventPool, PooledReceiver, PooledSender};
 /// # Examples
 ///
 /// ```
-/// use events_once::EventLake;
 /// use std::fmt::Debug;
+///
+/// use events_once::EventLake;
 ///
 /// # #[tokio::main]
 /// # async fn main() {

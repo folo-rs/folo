@@ -19,8 +19,9 @@ use crate::{RawLocalEventPool, RawLocalPooledReceiver, RawLocalPooledSender};
 /// # Examples
 ///
 /// ```
-/// use events_once::RawLocalEventLake;
 /// use std::fmt::Debug;
+///
+/// use events_once::RawLocalEventLake;
 ///
 /// # #[tokio::main(flavor = "current_thread")]
 /// # async fn main() {

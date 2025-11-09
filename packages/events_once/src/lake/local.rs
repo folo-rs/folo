@@ -18,8 +18,9 @@ use crate::{LocalEventPool, PooledLocalReceiver, PooledLocalSender};
 /// # Examples
 ///
 /// ```
-/// use events_once::LocalEventLake;
 /// use std::fmt::Debug;
+///
+/// use events_once::LocalEventLake;
 ///
 /// # #[tokio::main(flavor = "current_thread")]
 /// # async fn main() {

@@ -38,7 +38,7 @@ impl<T> fmt::Debug for PooledLocalSender<T> {
 }
 
 /// Receives a single value from the sender connected to the same event.
-/// 
+///
 /// Awaiting the receiver will yield either the payload of type `T` or a [`Disconnected`] error.
 ///
 /// This kind of endpoint is used for events stored in a single-threaded event pool or event lake.
@@ -82,33 +82,29 @@ impl<T> PooledLocalReceiver<T> {
     /// let (sender, receiver) = pool.rent();
     ///
     /// let receiver = match receiver.into_value() {
-    ///     Ok(result) => {
-    ///         match result {
-    ///             Ok(message) => {
-    ///                 println!("Received message: {message}");
-    ///                 return;
-    ///             }
-    ///             Err(Disconnected) => {
-    ///                 panic!("The sender was disconnected before sending a message.");
-    ///             }
+    ///     Ok(result) => match result {
+    ///         Ok(message) => {
+    ///             println!("Received message: {message}");
+    ///             return;
     ///         }
-    ///     }
+    ///         Err(Disconnected) => {
+    ///             panic!("The sender was disconnected before sending a message.");
+    ///         }
+    ///     },
     ///     Err(receiver) => receiver,
     /// };
     ///
     /// sender.send("Hello, world!".to_string());
     ///
     /// match receiver.into_value() {
-    ///     Ok(result) => {
-    ///         match result {
-    ///             Ok(message) => {
-    ///                 println!("Received message: {message}");
-    ///             }
-    ///             Err(Disconnected) => {
-    ///                 panic!("The sender was disconnected before sending a message.");
-    ///             }
+    ///     Ok(result) => match result {
+    ///         Ok(message) => {
+    ///             println!("Received message: {message}");
     ///         }
-    ///     }
+    ///         Err(Disconnected) => {
+    ///             panic!("The sender was disconnected before sending a message.");
+    ///         }
+    ///     },
     ///     Err(_) => {
     ///         panic!("No value was received even after send(). This should never happen.");
     ///     }

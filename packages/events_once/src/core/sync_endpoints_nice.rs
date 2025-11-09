@@ -39,7 +39,7 @@ impl<T: Send> fmt::Debug for BoxedSender<T> {
 }
 
 /// Receives a single value from the sender connected to the same event.
-/// 
+///
 /// Awaiting the receiver will yield either the payload of type `T` or a [`Disconnected`] error.
 ///
 /// This kind of endpoint is used for boxed events, which are heap-allocated and automatically
@@ -83,33 +83,29 @@ impl<T: Send> BoxedReceiver<T> {
     /// let (sender, receiver) = Event::<String>::boxed();
     ///
     /// let receiver = match receiver.into_value() {
-    ///     Ok(result) => {
-    ///         match result {
-    ///             Ok(message) => {
-    ///                 println!("Received message: {message}");
-    ///                 return;
-    ///             }
-    ///             Err(Disconnected) => {
-    ///                 panic!("The sender was disconnected before sending a message.");
-    ///             }
+    ///     Ok(result) => match result {
+    ///         Ok(message) => {
+    ///             println!("Received message: {message}");
+    ///             return;
     ///         }
-    ///     }
+    ///         Err(Disconnected) => {
+    ///             panic!("The sender was disconnected before sending a message.");
+    ///         }
+    ///     },
     ///     Err(receiver) => receiver,
     /// };
     ///
     /// sender.send("Hello, world!".to_string());
     ///
     /// match receiver.into_value() {
-    ///     Ok(result) => {
-    ///         match result {
-    ///             Ok(message) => {
-    ///                 println!("Received message: {message}");
-    ///             }
-    ///             Err(Disconnected) => {
-    ///                 panic!("The sender was disconnected before sending a message.");
-    ///             }
+    ///     Ok(result) => match result {
+    ///         Ok(message) => {
+    ///             println!("Received message: {message}");
     ///         }
-    ///     }
+    ///         Err(Disconnected) => {
+    ///             panic!("The sender was disconnected before sending a message.");
+    ///         }
+    ///     },
     ///     Err(_) => {
     ///         panic!("No value was received even after send(). This should never happen.");
     ///     }
@@ -175,7 +171,7 @@ impl<T: Send> fmt::Debug for RawSender<T> {
 }
 
 /// Receives a single value from the sender connected to the same event.
-/// 
+///
 /// Awaiting the receiver will yield either the payload of type `T` or a [`Disconnected`] error.
 ///
 /// This kind of endpoint is used with events for which the storage is provided by the
@@ -223,33 +219,29 @@ impl<T: Send> RawReceiver<T> {
     /// let (sender, receiver) = unsafe { Event::placed(event.as_mut()) };
     ///
     /// let receiver = match receiver.into_value() {
-    ///     Ok(result) => {
-    ///         match result {
-    ///             Ok(message) => {
-    ///                 println!("Received message: {message}");
-    ///                 return;
-    ///             }
-    ///             Err(Disconnected) => {
-    ///                 panic!("The sender was disconnected before sending a message.");
-    ///             }
+    ///     Ok(result) => match result {
+    ///         Ok(message) => {
+    ///             println!("Received message: {message}");
+    ///             return;
     ///         }
-    ///     }
+    ///         Err(Disconnected) => {
+    ///             panic!("The sender was disconnected before sending a message.");
+    ///         }
+    ///     },
     ///     Err(receiver) => receiver,
     /// };
     ///
     /// sender.send("Hello, world!".to_string());
     ///
     /// match receiver.into_value() {
-    ///     Ok(result) => {
-    ///         match result {
-    ///             Ok(message) => {
-    ///                 println!("Received message: {message}");
-    ///             }
-    ///             Err(Disconnected) => {
-    ///                 panic!("The sender was disconnected before sending a message.");
-    ///             }
+    ///     Ok(result) => match result {
+    ///         Ok(message) => {
+    ///             println!("Received message: {message}");
     ///         }
-    ///     }
+    ///         Err(Disconnected) => {
+    ///             panic!("The sender was disconnected before sending a message.");
+    ///         }
+    ///     },
     ///     Err(_) => {
     ///         panic!("No value was received even after send(). This should never happen.");
     ///     }

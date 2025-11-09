@@ -20,8 +20,9 @@ use crate::{RawEventPool, RawPooledReceiver, RawPooledSender};
 /// # Examples
 ///
 /// ```
-/// use events_once::RawEventLake;
 /// use std::fmt::Debug;
+///
+/// use events_once::RawEventLake;
 ///
 /// # #[tokio::main]
 /// # async fn main() {
