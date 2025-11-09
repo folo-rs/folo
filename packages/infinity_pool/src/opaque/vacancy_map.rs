@@ -182,6 +182,8 @@ impl VacancyMapSlice<'_> {
 
             let mask_start = BitBlock::MAX << start_bit;
             let mask_end = (1 << (end_bit + 1)) - 1;
+
+            // We zero out bits outside the slice range.
             let masked_block = block & mask_start & mask_end;
 
             if masked_block != 0 {
@@ -195,6 +197,8 @@ impl VacancyMapSlice<'_> {
             let first_block = unsafe { self.map.blocks.get_unchecked(start_block) };
 
             let mask = BitBlock::MAX << start_bit;
+
+            // We zero out bits outside the slice range.
             let masked_first = first_block & mask;
 
             if masked_first != 0 {
@@ -220,6 +224,8 @@ impl VacancyMapSlice<'_> {
             let last_block = unsafe { self.map.blocks.get_unchecked(end_block) };
 
             let mask = (1 << (end_bit + 1)) - 1;
+            
+            // We zero out bits outside the slice range.
             let masked_last = last_block & mask;
 
             if masked_last != 0 {
@@ -484,5 +490,124 @@ mod tests {
 
         let slice = map.get(5..15).unwrap();
         assert_eq!(slice.first_one(), Some(5)); // 10 - 5 = 5
+    }
+
+    #[test]
+    fn first_one_ignores_bits_before_slice_in_partial_block() {
+        let mut map = VacancyMap::new();
+        map.resize(100, false);
+
+        // Set bit at position 5 (before slice start).
+        unsafe {
+            map.replace_unchecked(5, true);
+        }
+
+        // Create slice that starts at position 10.
+        let slice = map.get(10..20).unwrap();
+        assert_eq!(slice.first_one(), None);
+    }
+
+    #[test]
+    fn first_one_ignores_bits_after_slice_in_partial_block() {
+        let mut map = VacancyMap::new();
+        map.resize(100, false);
+
+        // Set bit at position 25 (after slice end).
+        unsafe {
+            map.replace_unchecked(25, true);
+        }
+
+        // Create slice that ends at position 20.
+        let slice = map.get(10..20).unwrap();
+        assert_eq!(slice.first_one(), None);
+    }
+
+    #[test]
+    fn first_one_ignores_bits_outside_slice_in_multiblock() {
+        let mut map = VacancyMap::new();
+        map.resize(200, false);
+
+        // Set bits before and after the slice range.
+        unsafe {
+            map.replace_unchecked(5, true); // Before slice start
+            map.replace_unchecked(150, true); // After slice end
+        }
+
+        // Create slice from 10 to 140.
+        let slice = map.get(10..140).unwrap();
+        assert_eq!(slice.first_one(), None);
+    }
+
+    #[test]
+    fn first_one_finds_bit_in_partial_first_block() {
+        let mut map = VacancyMap::new();
+        map.resize(200, false);
+
+        unsafe {
+            map.replace_unchecked(5, true); // Before slice
+            map.replace_unchecked(15, true); // Inside slice
+        }
+
+        let slice = map.get(10..140).unwrap();
+        assert_eq!(slice.first_one(), Some(5)); // 15 - 10 = 5
+    }
+
+    #[test]
+    fn first_one_finds_bit_in_partial_last_block() {
+        let mut map = VacancyMap::new();
+        map.resize(200, false);
+
+        unsafe {
+            map.replace_unchecked(135, true); // Inside slice
+            map.replace_unchecked(145, true); // After slice
+        }
+
+        let slice = map.get(10..140).unwrap();
+        assert_eq!(slice.first_one(), Some(125)); // 135 - 10 = 125
+    }
+
+    #[test]
+    fn first_one_with_bits_in_same_block_before_and_in_slice() {
+        let mut map = VacancyMap::new();
+        map.resize(100, false);
+
+        unsafe {
+            map.replace_unchecked(3, true); // Before slice
+            map.replace_unchecked(7, true); // Inside slice
+        }
+
+        // Slice from 5..15, both bits are in the same block (block 0).
+        let slice = map.get(5..15).unwrap();
+        assert_eq!(slice.first_one(), Some(2)); // 7 - 5 = 2
+    }
+
+    #[test]
+    fn first_one_with_bits_in_same_block_in_and_after_slice() {
+        let mut map = VacancyMap::new();
+        map.resize(100, false);
+
+        unsafe {
+            map.replace_unchecked(12, true); // Inside slice
+            map.replace_unchecked(18, true); // After slice
+        }
+
+        // Slice from 5..15, both bits are in the same block (block 0).
+        let slice = map.get(5..15).unwrap();
+        assert_eq!(slice.first_one(), Some(7)); // 12 - 5 = 7
+    }
+
+    #[test]
+    fn first_one_multiblock_with_bit_right_at_last_block_boundary() {
+        let mut map = VacancyMap::new();
+        map.resize(200, false);
+
+        // Set a bit right at position 139 (last valid position in slice 10..140).
+        unsafe {
+            map.replace_unchecked(139, true);
+            map.replace_unchecked(140, true); // Just outside
+        }
+
+        let slice = map.get(10..140).unwrap();
+        assert_eq!(slice.first_one(), Some(129)); // 139 - 10 = 129
     }
 }
