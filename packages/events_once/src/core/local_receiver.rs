@@ -6,7 +6,10 @@ use std::mem::ManuallyDrop;
 use std::pin::Pin;
 use std::task::{self, Poll};
 
-use crate::{Disconnected, EVENT_AWAITING, EVENT_BOUND, EVENT_DISCONNECTED, EVENT_SET, LocalRef};
+use crate::{
+    Disconnected, EVENT_AWAITING, EVENT_BOUND, EVENT_DISCONNECTED, EVENT_SET, IntoValueError,
+    LocalRef,
+};
 
 /// Receives a single value from the sender connected to the same event.
 pub(crate) struct LocalReceiverCore<E, T>
@@ -56,7 +59,7 @@ where
     ///
     /// Panics if the value has already been received via `Future::poll()`.
     #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
-    pub(crate) fn into_value(self) -> Result<Result<T, Disconnected>, Self> {
+    pub(crate) fn into_value(self) -> Result<T, IntoValueError<Self>> {
         let event_ref = self
             .event_ref
             .as_ref()
@@ -68,7 +71,7 @@ where
         match current_state {
             EVENT_BOUND | EVENT_AWAITING => {
                 // No value available yet - return the receiver
-                Err(self)
+                Err(IntoValueError::Pending(self))
             }
             EVENT_SET | EVENT_DISCONNECTED => {
                 // Value available or disconnected - consume self and let final_poll decide
@@ -78,7 +81,7 @@ where
                 match event_ref.final_poll() {
                     Ok(Some(value)) => {
                         event_ref.release_event();
-                        Ok(Ok(value))
+                        Ok(value)
                     }
                     Ok(None) => {
                         // This shouldn't happen - final_poll should return Some(value) or Err(Disconnected)
@@ -86,7 +89,7 @@ where
                     }
                     Err(Disconnected) => {
                         event_ref.release_event();
-                        Ok(Err(Disconnected))
+                        Err(IntoValueError::Disconnected)
                     }
                 }
             }

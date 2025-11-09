@@ -438,13 +438,13 @@ mod tests {
 
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
 
-        let Err(receiver) = receiver.into_value() else {
+        let Err(crate::IntoValueError::Pending(receiver)) = receiver.into_value() else {
             panic!("Expected receiver to not be ready");
         };
 
         sender.send(42);
 
-        assert!(matches!(receiver.into_value(), Ok(Ok(42))));
+        assert!(matches!(receiver.into_value(), Ok(42)));
     }
 
     #[test]

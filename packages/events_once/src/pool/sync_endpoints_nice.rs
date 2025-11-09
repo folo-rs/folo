@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::task::Poll;
 use std::{fmt, task};
 
-use crate::{Disconnected, PooledRef, ReceiverCore, SenderCore};
+use crate::{Disconnected, IntoValueError, PooledRef, ReceiverCore, SenderCore};
 /// Delivers a single value to the receiver connected to the same event.
 ///
 /// This kind of endpoint is used for events stored in an event pool or event lake.
@@ -73,47 +73,32 @@ impl<T: Send> PooledReceiver<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use events_once::{Disconnected, EventPool};
+    /// use events_once::{Event, IntoValueError};
     ///
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let pool = EventPool::<String>::new();
-    /// let (sender, receiver) = pool.rent();
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let (sender, receiver) = Event::<String>::boxed();
     ///
-    /// let receiver = match receiver.into_value() {
-    ///     Ok(result) => match result {
-    ///         Ok(message) => {
-    ///             println!("Received message: {message}");
-    ///             return;
-    ///         }
-    ///         Err(Disconnected) => {
-    ///             panic!("The sender was disconnected before sending a message.");
-    ///         }
-    ///     },
-    ///     Err(receiver) => receiver,
-    /// };
+    ///     // into_value() is designed for synchronous scenarios where you do not want to wait but
+    ///     // simply want to either obtain the received value or do nothing. First, we do nothing.
+    ///     //
+    ///     // If no value has been sent yet, into_value() returns Err(IntoValueError::Pending(self)).
+    ///     let Err(IntoValueError::Pending(receiver)) = receiver.into_value() else {
+    ///         panic!("Expected receiver to indicate that it is still waiting for a payload to be sent.");
+    ///     };
     ///
-    /// sender.send("Hello, world!".to_string());
+    ///     sender.send("Hello, world!".to_string());
     ///
-    /// match receiver.into_value() {
-    ///     Ok(result) => match result {
-    ///         Ok(message) => {
-    ///             println!("Received message: {message}");
-    ///         }
-    ///         Err(Disconnected) => {
-    ///             panic!("The sender was disconnected before sending a message.");
-    ///         }
-    ///     },
-    ///     Err(_) => {
-    ///         panic!("No value was received even after send(). This should never happen.");
-    ///     }
-    /// };
-    /// # }
+    ///     let message = receiver.into_value().unwrap();
+    ///
+    ///     println!("Received message: {message}");
+    /// }
     /// ```
-    pub fn into_value(self) -> Result<Result<T, Disconnected>, Self> {
+    pub fn into_value(self) -> Result<T, IntoValueError<Self>> {
         match self.inner.into_value() {
             Ok(value) => Ok(value),
-            Err(inner) => Err(Self { inner }),
+            Err(IntoValueError::Pending(inner)) => Err(IntoValueError::Pending(Self { inner })),
+            Err(IntoValueError::Disconnected) => Err(IntoValueError::Disconnected),
         }
     }
 }

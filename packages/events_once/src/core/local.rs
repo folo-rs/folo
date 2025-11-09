@@ -527,6 +527,7 @@ mod tests {
     use static_assertions::assert_not_impl_any;
 
     use super::*;
+    use crate::IntoValueError;
 
     assert_not_impl_any!(LocalEvent<i32>: Send, Sync);
 
@@ -729,13 +730,13 @@ mod tests {
     fn boxed_into_value() {
         let (sender, receiver) = LocalEvent::<i32>::boxed();
 
-        let Err(receiver) = receiver.into_value() else {
+        let Err(IntoValueError::Pending(receiver)) = receiver.into_value() else {
             panic!("expected no value yet");
         };
 
         sender.send(42);
 
-        assert!(matches!(receiver.into_value(), Ok(Ok(42))));
+        assert!(matches!(receiver.into_value(), Ok(42)));
     }
 
     #[test]
@@ -744,7 +745,10 @@ mod tests {
 
         drop(sender);
 
-        assert!(matches!(receiver.into_value(), Ok(Err(Disconnected))));
+        assert!(matches!(
+            receiver.into_value(),
+            Err(IntoValueError::Disconnected)
+        ));
     }
 
     #[test]
@@ -958,13 +962,13 @@ mod tests {
         let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
 
-        let Err(receiver) = receiver.into_value() else {
+        let Err(IntoValueError::Pending(receiver)) = receiver.into_value() else {
             panic!("expected no value yet");
         };
 
         sender.send(42);
 
-        assert!(matches!(receiver.into_value(), Ok(Ok(42))));
+        assert!(matches!(receiver.into_value(), Ok(42)));
     }
 
     #[test]
@@ -974,7 +978,10 @@ mod tests {
 
         drop(sender);
 
-        assert!(matches!(receiver.into_value(), Ok(Err(Disconnected))));
+        assert!(matches!(
+            receiver.into_value(),
+            Err(IntoValueError::Disconnected)
+        ));
     }
 
     #[test]

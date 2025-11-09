@@ -1,3 +1,4 @@
+mod into_value_err;
 mod local;
 mod local_embedded;
 mod local_endpoints_nice;
@@ -12,6 +13,7 @@ mod sync_receiver;
 mod sync_refs;
 mod sync_sender;
 
+pub use into_value_err::*;
 pub use local::*;
 pub use local_embedded::*;
 pub use local_endpoints_nice::*;

@@ -1,6 +1,6 @@
 //! Example used in crate-level documentation. See docs for description.
 
-use events_once::{Disconnected, Event};
+use events_once::{Event, IntoValueError};
 
 #[tokio::main]
 async fn main() {
@@ -8,44 +8,15 @@ async fn main() {
 
     // into_value() is designed for synchronous scenarios where you do not want to wait but
     // simply want to either obtain the received value or do nothing. First, we do nothing.
-    let receiver = match receiver.into_value() {
-        Ok(result) => {
-            // The result is either Ok(payload) or Err(Disconnected).
-            match result {
-                Ok(message) => {
-                    // Just for demonstration. In reality, we know this line of code
-                    // will never be reached because no message is sent yet.
-                    println!("Received message: {message}");
-                    return;
-                }
-                Err(Disconnected) => {
-                    panic!("The sender was disconnected before sending a message.")
-                }
-            }
-        }
-        Err(receiver) => {
-            // If no value is available, the original receiver is returned.
-            receiver
-        }
+    //
+    // If no value has been sent yet, into_value() returns Err(IntoValueError::Pending(self)).
+    let Err(IntoValueError::Pending(receiver)) = receiver.into_value() else {
+        panic!("Expected receiver to indicate that it is still waiting for a payload to be sent.");
     };
 
     sender.send("Hello, world!".to_string());
 
-    match receiver.into_value() {
-        Ok(result) => {
-            // The result is either Ok(payload) or Err(Disconnected).
-            match result {
-                Ok(message) => {
-                    println!("Received message: {message}");
-                    return;
-                }
-                Err(Disconnected) => {
-                    panic!("The sender was disconnected before sending a message.")
-                }
-            }
-        }
-        Err(_) => {
-            panic!("No value was received even after send(). This should never happen.");
-        }
-    };
+    let message = receiver.into_value().unwrap();
+
+    println!("Received message: {message}");
 }
