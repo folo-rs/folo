@@ -238,6 +238,7 @@ impl RawOpaquePool {
     /// assert_eq!(pool.len(), 0);
     /// ```
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert<T>(&mut self, value: T) -> RawPooledMut<T> {
         assert_eq!(
             Layout::new::<T>(),

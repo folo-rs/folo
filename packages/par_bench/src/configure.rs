@@ -89,6 +89,7 @@ impl RunInitial {
     ///
     /// Attempting to execute a run of a thread pool that is not evenly divisible by `n` will
     /// result in a panic.
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn groups(self, n: NonZero<usize>) -> Self {
         Self { groups: n }
     }
@@ -111,6 +112,7 @@ impl RunInitial {
     ///     std::hint::black_box(42);
     /// });
     /// ```
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn prepare_thread<'a, F, ThreadState>(self, f: F) -> RunWithThreadState<'a, ThreadState>
     where
         F: Fn(args::PrepareThread<'_>) -> ThreadState + Send + Sync + 'a,
@@ -146,6 +148,7 @@ impl RunInitial {
     ///
     /// If you wish to specify a thread preparation function to provide state for each
     /// thread or iteration, do both before calling this method.
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn prepare_iter<'a, F, IterState>(self, f: F) -> RunWithIterState<'a, (), IterState>
     where
         F: Fn(args::PrepareIter<'_, ()>) -> IterState + Send + Sync + 'a,
@@ -166,6 +169,7 @@ impl RunInitial {
     ///
     /// If you wish to specify a thread or iteration preparation function to provide state for each
     /// iteration, do it before calling this method.
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn measure_wrapper<'a, FBegin, FEnd, MeasureWrapperState, MeasureOutput>(
         self,
         f_begin: FBegin,
@@ -196,6 +200,7 @@ impl RunInitial {
     /// If you wish to specify a thread or iteration preparation function to provide state for each
     /// thread or iteration, or a specify a measurement wrapper function, do all of these before
     /// calling this method.
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn iter<'a, F, CleanupState>(self, f: F) -> ConfiguredRun<'a, (), (), (), (), CleanupState>
     where
         F: Fn(args::Iter<'_, (), ()>) -> CleanupState + Send + Sync + 'a,
@@ -219,6 +224,7 @@ impl<'a, ThreadState> RunWithThreadState<'a, ThreadState> {
     ///
     /// Attempting to execute a run of a thread pool that is not evenly divisible by `n` will
     /// result in a panic.
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn groups(self, n: NonZero<usize>) -> Self {
         Self { groups: n, ..self }
     }
@@ -246,6 +252,7 @@ impl<'a, ThreadState> RunWithThreadState<'a, ThreadState> {
     ///         std::hint::black_box(iter_vec.len());
     ///     });
     /// ```
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn prepare_iter<F, IterState>(self, f: F) -> RunWithIterState<'a, ThreadState, IterState>
     where
         F: Fn(args::PrepareIter<'_, ThreadState>) -> IterState + Send + Sync + 'a,
@@ -266,6 +273,7 @@ impl<'a, ThreadState> RunWithThreadState<'a, ThreadState> {
     ///
     /// If you wish to specify an iteration preparation function to provide state for each
     /// iteration, do it before calling this method.
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn measure_wrapper<FBegin, FEnd, MeasureWrapperState, MeasureOutput>(
         self,
         f_begin: FBegin,
@@ -317,6 +325,7 @@ impl<'a, ThreadState> RunWithThreadState<'a, ThreadState> {
     ///
     /// If you wish to specify an iteration preparation function to provide state for each
     /// iteration, do it before calling this method.
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn iter<F, CleanupState>(
         self,
         f: F,
@@ -343,6 +352,7 @@ impl<'a, ThreadState, IterState> RunWithIterState<'a, ThreadState, IterState> {
     ///
     /// Attempting to execute a run of a thread pool that is not evenly divisible by `n` will
     /// result in a panic.
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn groups(self, n: NonZero<usize>) -> Self {
         Self { groups: n, ..self }
     }
@@ -353,6 +363,7 @@ impl<'a, ThreadState, IterState> RunWithIterState<'a, ThreadState, IterState> {
     /// The `f_begin` callback is called before the first iteration of each thread, and the
     /// `f_end` callback is called after the last iteration of each thread. Any return value
     /// from the former is passed to the latter.
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn measure_wrapper<FBegin, FEnd, MeasureWrapperState, MeasureOutput>(
         self,
         f_begin: FBegin,
@@ -385,6 +396,7 @@ impl<'a, ThreadState, IterState> RunWithIterState<'a, ThreadState, IterState> {
     /// the only action permitted is to execute the run.
     ///
     /// If you wish to specify a thread wrapper function pair, do it before calling this method.
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn iter<F, CleanupState>(
         self,
         f: F,
@@ -415,6 +427,7 @@ where
     ///
     /// Attempting to execute a run of a thread pool that is not evenly divisible by `n` will
     /// result in a panic.
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn groups(self, n: NonZero<usize>) -> Self {
         Self { groups: n, ..self }
     }
@@ -427,6 +440,7 @@ where
     ///
     /// This must be the last step in preparing a benchmark run. After this,
     /// the only action permitted is to execute the run.
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn iter<F, CleanupState>(
         self,
         f: F,

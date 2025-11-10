@@ -148,6 +148,7 @@ where
     /// ```
     #[inline]
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert(&self, value: T) -> PooledMut<T> {
         let inner = self.inner.lock().insert(value);
 

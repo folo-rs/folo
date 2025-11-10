@@ -155,6 +155,7 @@ impl LocalBlindPool {
     /// ```
     #[inline]
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert<T: 'static>(&self, value: T) -> LocalBlindPooledMut<T> {
         let mut core = self.core.borrow_mut();
 
