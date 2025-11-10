@@ -433,7 +433,7 @@ version = "0.5.1"
 
 [[package]]
 name = "events_once"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "criterion",
  "hash_hasher",
