@@ -21,11 +21,8 @@ const BITS_PER_BLOCK: usize = BitBlock::BITS as usize;
 /// only the minimal API surface required.
 #[derive(Debug)]
 pub(crate) struct VacancyMap {
-    /// Storage blocks.
     blocks: Vec<BitBlock>,
-
-    /// Number of bits in the vector.
-    len: usize,
+    len_bits: usize,
 }
 
 impl VacancyMap {
@@ -33,13 +30,13 @@ impl VacancyMap {
     pub(crate) const fn new() -> Self {
         Self {
             blocks: Vec::new(),
-            len: 0,
+            len_bits: 0,
         }
     }
 
     /// Returns the number of bits in the map.
     pub(crate) const fn len(&self) -> usize {
-        self.len
+        self.len_bits
     }
 
     /// Resizes the vacancy map to the specified length.
@@ -47,45 +44,53 @@ impl VacancyMap {
     /// If the new length is greater than the current length, new bits are set to `initial_value`.
     /// If the new length is less than the current length, the map is truncated.
     #[cfg_attr(test, mutants::skip)] // Some mutations extend logic into impossible branches, which are untestable.
-    pub(crate) fn resize(&mut self, new_len: usize, initial_value: bool) {
-        if new_len == self.len {
+    pub(crate) fn resize(&mut self, len_bits: usize, initial_value: bool) {
+        if len_bits == self.len_bits {
             return;
         }
 
-        let old_len = self.len;
-        self.len = new_len;
+        let old_len_bits = self.len_bits;
+        self.len_bits = len_bits;
 
-        let new_blocks = new_len.div_ceil(BITS_PER_BLOCK);
-        let old_blocks = old_len.div_ceil(BITS_PER_BLOCK);
+        let new_len_blocks = len_bits.div_ceil(BITS_PER_BLOCK);
+        let old_len_blocks = old_len_bits.div_ceil(BITS_PER_BLOCK);
 
-        if new_len > old_len {
+        if len_bits > old_len_bits {
             // Growing: need to set new bits to initial_value.
-            self.blocks
-                .resize(new_blocks, if initial_value { BitBlock::MAX } else { 0 });
+            self.blocks.resize(
+                new_len_blocks,
+                if initial_value { BitBlock::MAX } else { 0 },
+            );
 
             // If there was a partial block at the end, we need to set the new bits in it.
-            if old_len % BITS_PER_BLOCK != 0 && old_blocks == new_blocks {
-                let old_block_bits = old_len % BITS_PER_BLOCK;
-                let new_block_bits = new_len % BITS_PER_BLOCK;
+            // This block may or may not be the final block after resizing but was before.
+            if !old_len_bits.is_multiple_of(BITS_PER_BLOCK) && old_len_blocks == new_len_blocks {
+                let previous_partial_block_len_bits = old_len_bits % BITS_PER_BLOCK;
+                let updated_partial_block_len_bits = len_bits % BITS_PER_BLOCK;
 
                 // SAFETY: This will never wrap because that would imply we entered this "partial
                 // block" branch with zero blocks, which is contradictory. For the same reason we
                 // know that there must be a block at this index.
-                let partial_block =
-                    unsafe { self.blocks.get_unchecked_mut(old_blocks.wrapping_sub(1)) };
+                let partial_block = unsafe {
+                    self.blocks
+                        .get_unchecked_mut(old_len_blocks.wrapping_sub(1))
+                };
 
-                for bit_offset in old_block_bits..new_block_bits {
+                for fresh_bit_index in
+                    previous_partial_block_len_bits..updated_partial_block_len_bits
+                {
                     if initial_value {
-                        *partial_block |= 1 << bit_offset;
+                        set_bit(partial_block, fresh_bit_index);
                     } else {
-                        *partial_block &= !(1 << bit_offset);
+                        clear_bit(partial_block, fresh_bit_index);
                     }
                 }
             }
         } else {
             // Shrinking: truncate blocks. The last block may now be a partial one.
-            // We do not care about the "leftover" bits beyond new_len.
-            self.blocks.truncate(new_blocks);
+            // We do not care about the "leftover" bits beyond new_len as they will
+            // never participate in any logic and will be overwritten if the map is extended.
+            self.blocks.truncate(new_len_blocks);
         }
     }
 
@@ -97,22 +102,22 @@ impl VacancyMap {
     /// will result in a panic in debug builds or undefined behavior in release builds.
     pub(crate) unsafe fn replace_unchecked(&mut self, index: usize, value: bool) -> bool {
         debug_assert!(
-            index < self.len,
+            index < self.len_bits,
             "index {index} out of bounds for VacancyMap of length {}",
-            self.len
+            self.len_bits
         );
 
-        let (block_index, bit_offset) = index.div_rem(&BITS_PER_BLOCK);
+        let (block_index, index_in_block) = index.div_rem(&BITS_PER_BLOCK);
 
         // SAFETY: The caller guarantees that index is in bounds, which means block_index is valid.
         let block = unsafe { self.blocks.get_unchecked_mut(block_index) };
 
-        let old_value = (*block & (1 << bit_offset)) != 0;
+        let old_value = get_bit(*block, index_in_block);
 
         if value {
-            *block |= 1 << bit_offset;
+            set_bit(block, index_in_block);
         } else {
-            *block &= !(1 << bit_offset);
+            clear_bit(block, index_in_block);
         }
 
         old_value
@@ -131,108 +136,131 @@ impl VacancyMap {
         let end = match range.end_bound() {
             std::ops::Bound::Included(&e) => e.checked_add(1)?,
             std::ops::Bound::Excluded(&e) => e,
-            std::ops::Bound::Unbounded => self.len,
+            std::ops::Bound::Unbounded => self.len_bits,
         };
 
-        if start > end || end > self.len {
+        if start > end || end > self.len_bits {
             return None;
         }
 
         Some(VacancyMapSlice {
             map: self,
-            start,
-            end,
+            start_bit_index: start,
+            end_bit_index: end,
         })
     }
+}
+
+fn get_bit(block: BitBlock, bit_index: usize) -> bool {
+    (block & (1 << bit_index)) != 0
+}
+
+fn set_bit(block: &mut BitBlock, bit_index: usize) {
+    *block |= 1 << bit_index;
+}
+
+fn clear_bit(block: &mut BitBlock, bit_index: usize) {
+    *block &= !(1 << bit_index);
+}
+
+/// Preserves only the bits between `start_bit_index` and `end_bit_index` (inclusive)
+/// in `block`, setting all other bits to `0`.
+fn mask_bits(block: BitBlock, start_bit_index: usize, end_bit_index: usize) -> BitBlock {
+    // We start by masking off anything before the start.
+    // For a range of 4..=8, this gives us a mask with the first four bits zeroed:
+    // ..1111_1111_0000
+    let mask_start = BitBlock::MAX << start_bit_index;
+
+    // Then we mask off anything after the end. First we construct a suitable mask for this part.
+    // This will never overflow because it is a usize and we are only indexing bits in a u64.
+    let one_past_end_bit_index = end_bit_index.wrapping_add(1);
+
+    // For a range of 4..=8, this gives us a mask with only bit 9(!) set:
+    // ..0010_0000_0000
+    //
+    // We may be shifting by the entire width of the block (64), so
+    // we do an unbounded shift here (which will just result in zero).
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "we are counting bits, u32 is enough"
+    )]
+    let mask_past_end = (1 as BitBlock).unbounded_shl(one_past_end_bit_index as u32);
+
+    // And now we do the subtraction movement to flip it and shift by one:
+    // ..0000_1111_1111
+    // This will never overflow because we already started with a "plus one" above.
+    let mask_end = mask_past_end.wrapping_sub(1);
+
+    // Done! We apply one mask to zero out bits before the start,
+    // and the other to zero out bits after the end.
+    block & mask_start & mask_end
 }
 
 /// A borrowed view into a `VacancyMap`.
 #[derive(Debug)]
 pub(crate) struct VacancyMapSlice<'a> {
     map: &'a VacancyMap,
-    start: usize,
-    end: usize,
+
+    start_bit_index: usize,
+
+    // Exclusive (index of the first bit past the end)
+    end_bit_index: usize,
 }
 
 impl VacancyMapSlice<'_> {
     /// Finds the index of the first bit set to `1` in this slice.
     ///
     /// Returns the index relative to the start of the slice, or `None` if no bits are set.
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "All arithmetic and indexing operations are guaranteed to be in bounds by slice construction."
-    )]
     #[cfg_attr(test, mutants::skip)] // Too annoying to test. Some mutations may also cause logic to go out of bounds.
     pub(crate) fn first_one(&self) -> Option<usize> {
+        let mut start_bit_index = self.start_bit_index;
+
         // This cannot wrap unless we just created the slice with start > end,
         // in which case we deserve our fate.
-        let len = self.end.wrapping_sub(self.start);
-        if len == 0 {
-            return None;
-        }
+        let mut bits_remaining = self.end_bit_index.wrapping_sub(self.start_bit_index);
 
-        let (start_block, start_bit) = self.start.div_rem(&BITS_PER_BLOCK);
-        let (end_block, end_bit) = (self.end - 1).div_rem(&BITS_PER_BLOCK);
+        while bits_remaining != 0 {
+            let (block_index, start_index_in_block) = start_bit_index.div_rem(&BITS_PER_BLOCK);
 
-        if start_block == end_block {
-            // The slice is entirely within a single block.
+            let end_index_in_block_exclusive = usize::min(
+                BITS_PER_BLOCK,
+                // This will never wrap because it can never go beyond the number of bits in the map, which is usize-bounded.
+                start_index_in_block.wrapping_add(bits_remaining),
+            );
 
             // SAFETY: This can only be out of bounds if the slice was created with invalid indices.
-            let block = unsafe { self.map.blocks.get_unchecked(start_block) };
+            let block = unsafe { self.map.blocks.get_unchecked(block_index) };
 
-            let mask_start = BitBlock::MAX << start_bit;
-            let mask_end = (1 << (end_bit + 1)) - 1;
-
-            // We zero out bits outside the slice range.
-            let masked_block = block & mask_start & mask_end;
+            let masked_block = mask_bits(
+                *block,
+                start_index_in_block,
+                // This will never wrap because that would imply we have an empty range, which is
+                // impossible as it would result in bits_remaining being zero, exiting the loop.
+                end_index_in_block_exclusive.wrapping_sub(1),
+            );
 
             if masked_block != 0 {
-                let bit_pos = masked_block.trailing_zeros() as usize;
-                return Some(bit_pos - self.start);
-            }
-        } else {
-            // First block (partial).
+                // There must be at least one bit set in this masked block.
+                let one_index_in_block = masked_block.trailing_zeros() as usize;
 
-            // SAFETY: This can only be out of bounds if the slice was created with invalid indices.
-            let first_block = unsafe { self.map.blocks.get_unchecked(start_block) };
+                // Calculate absolute position of the found bit in the entire map.
+                // This will never wrap because that would imply the bit was found outside the map.
+                let absolute_pos = block_index
+                    .wrapping_mul(BITS_PER_BLOCK)
+                    .wrapping_add(one_index_in_block);
 
-            let mask = BitBlock::MAX << start_bit;
-
-            // We zero out bits outside the slice range.
-            let masked_first = first_block & mask;
-
-            if masked_first != 0 {
-                let bit_pos = masked_first.trailing_zeros() as usize;
-                return Some(bit_pos - self.start);
+                // And make it relative to the start of the slice.
+                // This will never wrap because it would mean we found
+                // the set bit before the start of the slice.
+                return Some(absolute_pos.wrapping_sub(self.start_bit_index));
             }
 
-            // Middle blocks (full blocks).
-            for block_idx in (start_block + 1)..end_block {
-                // SAFETY: This can only be out of bounds if the slice was created with invalid indices.
-                let block = unsafe { self.map.blocks.get_unchecked(block_idx) };
+            // These will not wrap unless we screwed up our math somewhere.
+            let bits_scanned_in_this_block =
+                end_index_in_block_exclusive.wrapping_sub(start_index_in_block);
 
-                if *block != 0 {
-                    let bit_pos = block.trailing_zeros() as usize;
-                    let absolute_pos = block_idx * BITS_PER_BLOCK + bit_pos;
-                    return Some(absolute_pos - self.start);
-                }
-            }
-
-            // Last block (partial).
-
-            // SAFETY: This can only be out of bounds if the slice was created with invalid indices.
-            let last_block = unsafe { self.map.blocks.get_unchecked(end_block) };
-
-            let mask = (1 << (end_bit + 1)) - 1;
-
-            // We zero out bits outside the slice range.
-            let masked_last = last_block & mask;
-
-            if masked_last != 0 {
-                let bit_pos = masked_last.trailing_zeros() as usize;
-                let absolute_pos = end_block * BITS_PER_BLOCK + bit_pos;
-                return Some(absolute_pos - self.start);
-            }
+            start_bit_index = start_bit_index.wrapping_add(bits_scanned_in_this_block);
+            bits_remaining = bits_remaining.wrapping_sub(bits_scanned_in_this_block);
         }
 
         None
@@ -346,8 +374,8 @@ mod tests {
         map.resize(10, true);
 
         let slice = map.get(0..10).unwrap();
-        assert_eq!(slice.start, 0);
-        assert_eq!(slice.end, 10);
+        assert_eq!(slice.start_bit_index, 0);
+        assert_eq!(slice.end_bit_index, 10);
     }
 
     #[test]
@@ -356,8 +384,8 @@ mod tests {
         map.resize(10, true);
 
         let slice = map.get(3..7).unwrap();
-        assert_eq!(slice.start, 3);
-        assert_eq!(slice.end, 7);
+        assert_eq!(slice.start_bit_index, 3);
+        assert_eq!(slice.end_bit_index, 7);
     }
 
     #[test]
@@ -366,8 +394,8 @@ mod tests {
         map.resize(10, true);
 
         let slice = map.get(5..).unwrap();
-        assert_eq!(slice.start, 5);
-        assert_eq!(slice.end, 10);
+        assert_eq!(slice.start_bit_index, 5);
+        assert_eq!(slice.end_bit_index, 10);
     }
 
     #[test]

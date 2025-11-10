@@ -7,9 +7,7 @@ authors = ["Sander Saares <sander@saares.eu>"]
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/folo-rs/folo"
-# NB! This is not considered breaking change by `just prepare-release`!
-# You may want to manually increment major version because de facto it can be breaking.
-rust-version = "1.86"
+rust-version = "1.88"
 
 [profile.release]
 # This ensures we have high quality data with proper stack traces when profiling.
