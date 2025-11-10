@@ -209,6 +209,7 @@ impl EventBuilder<Pull> {
     /// Panics if an event with this name has already been registered on this thread.
     /// You can only create an event with each name once per thread.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand this signature - every mutation is unviable waste of time.
     pub fn build(self) -> Event<Pull> {
         assert!(!self.name.is_empty());
 

@@ -109,6 +109,7 @@ impl<T> RawLocalPooledReceiver<T> {
 impl<T> Future for RawLocalPooledReceiver<T> {
     type Output = Result<T, Disconnected>;
 
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
         // SAFETY: We never move out of `self`, only access its inner field.
         let inner = unsafe { self.map_unchecked_mut(|x| &mut x.inner) };

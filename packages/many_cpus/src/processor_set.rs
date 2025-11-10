@@ -214,6 +214,7 @@ impl ProcessorSet {
     ///
     /// Each spawned thread will only be scheduled on one of the processors in the set. When that
     /// processor is busy, the thread will simply wait for the processor to become available.
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand this signature - every mutation is unviable waste of time.
     pub fn spawn_threads<E, R>(&self, entrypoint: E) -> Box<[thread::JoinHandle<R>]>
     where
         E: Fn(Processor) -> R + Send + Clone + 'static,

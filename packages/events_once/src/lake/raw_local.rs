@@ -213,6 +213,7 @@ impl<T: 'static> PoolWrapper<T> {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     fn rent(self: Pin<&Self>) -> (RawLocalPooledSender<T>, RawLocalPooledReceiver<T>) {
         // SAFETY: Nothing is being moved here, we are just using the inner pinned value.
         let inner = unsafe { self.map_unchecked(|s| &s.inner) };

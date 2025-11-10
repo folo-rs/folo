@@ -96,6 +96,7 @@ impl<T: ?Sized> Deref for Pooled<T> {
     type Target = T;
 
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand this signature - every mutation is unviable waste of time.
     fn deref(&self) -> &Self::Target {
         // SAFETY: This is a shared handle - the only references
         // that can ever exist are shared references.
@@ -106,6 +107,7 @@ impl<T: ?Sized> Deref for Pooled<T> {
 
 impl<T: ?Sized> Borrow<T> for Pooled<T> {
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand this signature - every mutation is unviable waste of time.
     fn borrow(&self) -> &T {
         self
     }
@@ -113,6 +115,7 @@ impl<T: ?Sized> Borrow<T> for Pooled<T> {
 
 impl<T: ?Sized> AsRef<T> for Pooled<T> {
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand this signature - every mutation is unviable waste of time.
     fn as_ref(&self) -> &T {
         self
     }

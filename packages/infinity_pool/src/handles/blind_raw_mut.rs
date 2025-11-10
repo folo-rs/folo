@@ -129,6 +129,7 @@ impl<T: ?Sized + Unpin> RawBlindPooledMut<T> {
     #[doc = include_str!("../../doc/snippets/raw_as_mut.md")]
     #[must_use]
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand this signature - every mutation is unviable waste of time.
     pub unsafe fn as_mut(&mut self) -> &mut T {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself. Pointer validity

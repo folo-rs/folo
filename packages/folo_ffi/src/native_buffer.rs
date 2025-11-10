@@ -170,6 +170,7 @@ impl<T: Sized> NativeBuffer<T> {
 
     /// Returns a pointer to the start of the buffer.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand NonNull - every mutation is unviable waste of time.
     pub fn as_ptr(&self) -> NonNull<T> {
         self.ptr.cast()
     }
@@ -181,6 +182,7 @@ impl<T: Sized> NativeBuffer<T> {
     /// aligned for `T` if the declared length (`len_bytes()`) is not a multiple of `T`'s size.
     /// Its only purpose is to indicate the end of the declared data in the buffer.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand NonNull - every mutation is unviable waste of time.
     pub fn as_data_ptr_range(&self) -> Range<NonNull<T>> {
         let start = self.ptr.cast();
 
@@ -197,6 +199,7 @@ impl<T: Sized> NativeBuffer<T> {
     /// The `end` pointer is guaranteed to be aligned for `T` but is not valid for reading
     /// or writing because it is at the end of the allocation
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand NonNull - every mutation is unviable waste of time.
     pub fn as_capacity_ptr_range(&self) -> Range<NonNull<T>> {
         let start = self.ptr.cast();
 
@@ -210,6 +213,7 @@ impl<T: Sized> NativeBuffer<T> {
 
 impl<T: Sized> AsMut<MaybeUninit<T>> for NativeBuffer<T> {
     /// Returns an exclusive reference to the first item in the buffer.
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand this signature - every mutation is unviable waste of time.
     fn as_mut(&mut self) -> &mut MaybeUninit<T> {
         // SAFETY: We are returning MaybeUninit, so it is safe to reference the contents.
         // Borrowing rules are enforced via the borrow on `self`, which is extended here.
@@ -219,6 +223,7 @@ impl<T: Sized> AsMut<MaybeUninit<T>> for NativeBuffer<T> {
 
 impl<T: Sized> AsRef<MaybeUninit<T>> for NativeBuffer<T> {
     /// Returns a shared reference to the first item in the buffer.
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand this signature - every mutation is unviable waste of time.
     fn as_ref(&self) -> &MaybeUninit<T> {
         // SAFETY: We are returning MaybeUninit, so it is safe to reference the contents.
         // Borrowing rules are enforced via the borrow on `self`, which is extended here.

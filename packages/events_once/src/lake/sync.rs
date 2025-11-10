@@ -141,6 +141,7 @@ impl<T: Send + 'static> PoolWrapper<T> {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     fn rent(&self) -> (PooledSender<T>, PooledReceiver<T>) {
         self.inner.rent()
     }

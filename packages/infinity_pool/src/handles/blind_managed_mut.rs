@@ -149,6 +149,7 @@ impl<T: ?Sized> Deref for BlindPooledMut<T> {
     type Target = T;
 
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand this signature - every mutation is unviable waste of time.
     fn deref(&self) -> &Self::Target {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself.
@@ -162,6 +163,7 @@ where
     T: ?Sized + Unpin,
 {
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand this signature - every mutation is unviable waste of time.
     fn deref_mut(&mut self) -> &mut Self::Target {
         // SAFETY: This is a unique handle, so we guarantee borrow safety
         // of the target object by borrowing the handle itself.
@@ -172,6 +174,7 @@ where
 
 impl<T: ?Sized> Borrow<T> for BlindPooledMut<T> {
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand this signature - every mutation is unviable waste of time.
     fn borrow(&self) -> &T {
         self
     }
@@ -182,6 +185,7 @@ where
     T: ?Sized + Unpin,
 {
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand this signature - every mutation is unviable waste of time.
     fn borrow_mut(&mut self) -> &mut T {
         self
     }
@@ -189,6 +193,7 @@ where
 
 impl<T: ?Sized> AsRef<T> for BlindPooledMut<T> {
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand this signature - every mutation is unviable waste of time.
     fn as_ref(&self) -> &T {
         self
     }
@@ -199,6 +204,7 @@ where
     T: ?Sized + Unpin,
 {
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand this signature - every mutation is unviable waste of time.
     fn as_mut(&mut self) -> &mut T {
         self
     }
