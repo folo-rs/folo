@@ -638,4 +638,54 @@ mod tests {
         let slice = map.get(10..140).unwrap();
         assert_eq!(slice.first_one(), Some(129)); // 139 - 10 = 129
     }
+
+    #[test]
+    fn get_bit_is_sane() {
+        assert!(!get_bit(0b0000_0000, 3));
+        assert!(get_bit(0b0000_1000, 3));
+
+        assert!(get_bit(BitBlock::MAX, 0));
+        assert!(get_bit(BitBlock::MAX, BitBlock::BITS as usize - 1));
+    }
+
+    #[test]
+    fn set_bit_is_sane() {
+        let mut block = 0b0000_0000;
+
+        set_bit(&mut block, 2);
+        assert_eq!(block, 0b0000_0100);
+
+        set_bit(&mut block, 2);
+        assert_eq!(block, 0b0000_0100);
+
+        set_bit(&mut block, 0);
+        assert_eq!(block, 0b0000_0101);
+
+        set_bit(&mut block, 63);
+        assert_eq!(
+            block,
+            0b1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0101
+        );
+    }
+
+    #[test]
+    fn clear_bit_is_sane() {
+        let mut block = 0b1111_1111;
+
+        clear_bit(&mut block, 2);
+        assert_eq!(block, 0b1111_1011);
+
+        clear_bit(&mut block, 2);
+        assert_eq!(block, 0b1111_1011);
+
+        clear_bit(&mut block, 0);
+        assert_eq!(block, 0b1111_1010);
+
+        block = BitBlock::MAX;
+        clear_bit(&mut block, 63);
+        assert_eq!(
+            block,
+            0b0111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+        );
+    }
 }
