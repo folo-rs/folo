@@ -168,6 +168,24 @@ impl<T: Send> RawEventPool<T> {
         pool.is_empty()
     }
 
+    /// Returns the number of events that have currently been rented from the pool.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        // SAFETY: We are the owner of the core, so we know it remains valid. We only ever
+        // create shared references to it, so no conflicting exclusive references can exist.
+        let core_cell = unsafe { self.core.as_ref() };
+
+        // SAFETY: See above.
+        let core_maybe = unsafe { core_cell.get().as_ref() };
+
+        // SAFETY: UnsafeCell pointer is never null.
+        let core = unsafe { core_maybe.unwrap_unchecked() };
+
+        let pool = core.pool.lock();
+
+        pool.len()
+    }
+
     /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
     /// awaited event in the pool.
     ///
@@ -243,6 +261,27 @@ mod tests {
     use crate::Disconnected;
 
     assert_impl_all!(RawEventPool<u32>: Send, Sync);
+
+    #[test]
+    fn len() {
+        let pool = pin!(RawEventPool::<i32>::new());
+
+        assert_eq!(pool.len(), 0);
+
+        let (sender1, receiver1) = unsafe { pool.as_ref().rent() };
+        assert_eq!(pool.len(), 1);
+
+        let (sender2, receiver2) = unsafe { pool.as_ref().rent() };
+        assert_eq!(pool.len(), 2);
+
+        drop(sender1);
+        drop(receiver1);
+        assert_eq!(pool.len(), 1);
+
+        drop(sender2);
+        drop(receiver2);
+        assert_eq!(pool.len(), 0);
+    }
 
     #[test]
     fn send_receive() {

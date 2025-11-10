@@ -141,6 +141,24 @@ impl RawEventLake {
         pools.values().all(|x| x.is_empty())
     }
 
+    /// Returns the number of events that have currently been rented from the lake.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        // SAFETY: We are the owner of the core, so we know it remains valid. We only ever
+        // create shared references to it, so no conflicting exclusive references can exist.
+        let core_cell = unsafe { self.core.as_ref() };
+
+        // SAFETY: See above.
+        let core_maybe = unsafe { core_cell.get().as_ref() };
+
+        // SAFETY: UnsafeCell pointer is never null.
+        let core = unsafe { core_maybe.unwrap_unchecked() };
+
+        let pools = core.pools.lock();
+
+        pools.values().map(|x| x.len()).sum()
+    }
+
     /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
     /// awaited event in the lake.
     ///
@@ -228,6 +246,8 @@ trait ErasedPool: fmt::Debug + Send {
 
     fn is_empty(&self) -> bool;
 
+    fn len(&self) -> usize;
+
     #[cfg(debug_assertions)]
     fn inspect_awaiters(&self, f: &mut dyn FnMut(&Backtrace));
 }
@@ -239,6 +259,10 @@ impl<T: Send + 'static> ErasedPool for PoolWrapper<T> {
 
     fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.inner.len()
     }
 
     #[cfg(debug_assertions)]
@@ -259,6 +283,34 @@ mod tests {
     use super::*;
 
     assert_impl_all!(RawEventLake: Send, Sync);
+
+    #[test]
+    fn len() {
+        let lake = RawEventLake::new();
+
+        assert_eq!(lake.len(), 0);
+
+        let (sender1, receiver1) = unsafe { lake.rent::<String>() };
+        assert_eq!(lake.len(), 1);
+
+        let (sender2, receiver2) = unsafe { lake.rent::<i32>() };
+        assert_eq!(lake.len(), 2);
+
+        let (sender3, receiver3) = unsafe { lake.rent::<String>() };
+        assert_eq!(lake.len(), 3);
+
+        drop(sender1);
+        drop(receiver1);
+        assert_eq!(lake.len(), 2);
+
+        drop(sender2);
+        drop(receiver2);
+        assert_eq!(lake.len(), 1);
+
+        drop(sender3);
+        drop(receiver3);
+        assert_eq!(lake.len(), 0);
+    }
 
     #[test]
     fn send_receive_multiple_types() {

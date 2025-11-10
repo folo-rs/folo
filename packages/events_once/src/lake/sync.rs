@@ -99,6 +99,13 @@ impl EventLake {
         pools.values().all(|x| x.is_empty())
     }
 
+    /// Returns the number of events that have currently been rented from the lake.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        let pools = self.core.pools.lock();
+        pools.values().map(|x| x.len()).sum()
+    }
+
     /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
     /// awaited event in the lake.
     ///
@@ -155,6 +162,8 @@ trait ErasedPool: fmt::Debug + Send {
 
     fn is_empty(&self) -> bool;
 
+    fn len(&self) -> usize;
+
     #[cfg(debug_assertions)]
     fn inspect_awaiters(&self, f: &mut dyn FnMut(&Backtrace));
 }
@@ -166,6 +175,10 @@ impl<T: Send + 'static> ErasedPool for PoolWrapper<T> {
 
     fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.inner.len()
     }
 
     #[cfg(debug_assertions)]
@@ -185,6 +198,34 @@ mod tests {
     use super::*;
 
     assert_impl_all!(EventLake: Clone, Send, Sync);
+
+    #[test]
+    fn len() {
+        let lake = EventLake::new();
+
+        assert_eq!(lake.len(), 0);
+
+        let (sender1, receiver1) = lake.rent::<String>();
+        assert_eq!(lake.len(), 1);
+
+        let (sender2, receiver2) = lake.rent::<i32>();
+        assert_eq!(lake.len(), 2);
+
+        let (sender3, receiver3) = lake.rent::<String>();
+        assert_eq!(lake.len(), 3);
+
+        drop(sender1);
+        drop(receiver1);
+        assert_eq!(lake.len(), 2);
+
+        drop(sender2);
+        drop(receiver2);
+        assert_eq!(lake.len(), 1);
+
+        drop(sender3);
+        drop(receiver3);
+        assert_eq!(lake.len(), 0);
+    }
 
     #[test]
     fn send_receive_multiple_types() {

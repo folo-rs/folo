@@ -102,6 +102,14 @@ impl<T> LocalEventPool<T> {
         pool.is_empty()
     }
 
+    /// Returns the number of events that have currently been rented from the pool.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        let pool = self.core.pool.borrow();
+
+        pool.len()
+    }
+
     /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
     /// awaited event in the pool.
     ///
@@ -165,6 +173,27 @@ mod tests {
     use crate::Disconnected;
 
     assert_not_impl_any!(LocalEventPool<u32>: Send, Sync);
+
+    #[test]
+    fn len() {
+        let pool = LocalEventPool::<i32>::new();
+
+        assert_eq!(pool.len(), 0);
+
+        let (sender1, receiver1) = pool.rent();
+        assert_eq!(pool.len(), 1);
+
+        let (sender2, receiver2) = pool.rent();
+        assert_eq!(pool.len(), 2);
+
+        drop(sender1);
+        drop(receiver1);
+        assert_eq!(pool.len(), 1);
+
+        drop(sender2);
+        drop(receiver2);
+        assert_eq!(pool.len(), 0);
+    }
 
     #[test]
     fn send_receive() {
