@@ -1,8 +1,8 @@
 [package]
 name = "blind_pool"
-description = "A pinned object pool that can store objects of any type"
+description = "Superseded - use infinity_pool instead"
 publish = true
-version = "0.4.8"
+version = "0.5.0"
 
 authors.workspace = true
 edition.workspace = true
@@ -10,31 +10,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-[features]
-default = []
-
 [dependencies]
-foldhash = { workspace = true }
-opaque_pool = { workspace = true }
-pastey = { workspace = true }
-
-[dev-dependencies]
-alloc_tracker = { path = "../alloc_tracker" }
-criterion = { workspace = true }
-mutants = { workspace = true }
-static_assertions = { workspace = true }
 
 [lints]
 workspace = true
-
-[[bench]]
-name = "blind_basic"
-harness = false
-
-[[bench]]
-name = "blind_many_types"
-harness = false
-
-[[bench]]
-name = "insert_with"
-harness = false

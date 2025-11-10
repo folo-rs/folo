@@ -1,8 +1,8 @@
 [package]
 name = "pinned_pool"
-description = "An object pool that guarantees pinning of its items and enables easy item access via unsafe code by not maintaining any Rust references to its items"
+description = "Superseded - use infinity_pool instead"
 publish = true
-version = "0.1.22"
+version = "0.2.0"
 
 authors.workspace = true
 edition.workspace = true
@@ -10,21 +10,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-[features]
-default = []
-
 [dependencies]
-num-integer = { workspace = true }
-scopeguard = { workspace = true }
-
-[dev-dependencies]
-alloc_tracker = { path = "../alloc_tracker" }
-criterion = { workspace = true }
-mutants = { workspace = true }
 
 [lints]
 workspace = true
-
-[[bench]]
-name = "pp_basic"
-harness = false
