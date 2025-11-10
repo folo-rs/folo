@@ -122,6 +122,24 @@ impl RawLocalEventLake {
         pool.rent()
     }
 
+    /// Returns `true` if no events have currently been rented from the lake.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        // SAFETY: We are the owner of the core, so we know it remains valid. We only ever
+        // create shared references to it, so no conflicting exclusive references can exist.
+        let core_cell = unsafe { self.core.as_ref() };
+
+        // SAFETY: See above.
+        let core_maybe = unsafe { core_cell.get().as_ref() };
+
+        // SAFETY: UnsafeCell pointer is never null.
+        let core = unsafe { core_maybe.unwrap_unchecked() };
+
+        let pools = core.pools.borrow();
+
+        pools.values().all(|x| x.is_empty())
+    }
+
     /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
     /// awaited event in the lake.
     ///
@@ -200,6 +218,8 @@ impl<T: 'static> fmt::Debug for PoolWrapper<T> {
 trait ErasedPool: fmt::Debug {
     fn as_any(&self) -> &dyn Any;
 
+    fn is_empty(&self) -> bool;
+
     #[cfg(debug_assertions)]
     fn inspect_awaiters(&self, f: &mut dyn FnMut(&Backtrace));
 }
@@ -207,6 +227,10 @@ trait ErasedPool: fmt::Debug {
 impl<T: 'static> ErasedPool for PoolWrapper<T> {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inner.is_empty()
     }
 
     #[cfg(debug_assertions)]
@@ -232,22 +256,30 @@ mod tests {
     fn send_receive_multiple_types() {
         let lake = RawLocalEventLake::new();
 
+        assert!(lake.is_empty());
+
         let (sender1, receiver1) = unsafe { lake.rent::<String>() };
         let (sender2, receiver2) = unsafe { lake.rent::<i32>() };
 
-        sender1.send("Hello".to_string());
-        sender2.send(42);
+        assert!(!lake.is_empty());
 
-        let receiver1 = pin!(receiver1);
-        let receiver2 = pin!(receiver2);
+        {
+            sender1.send("Hello".to_string());
+            sender2.send(42);
 
-        let mut cx = task::Context::from_waker(Waker::noop());
+            let receiver1 = pin!(receiver1);
+            let receiver2 = pin!(receiver2);
 
-        assert_eq!(
-            receiver1.poll(&mut cx),
-            task::Poll::Ready(Ok("Hello".to_string()))
-        );
-        assert_eq!(receiver2.poll(&mut cx), task::Poll::Ready(Ok(42)));
+            let mut cx = task::Context::from_waker(Waker::noop());
+
+            assert_eq!(
+                receiver1.poll(&mut cx),
+                task::Poll::Ready(Ok("Hello".to_string()))
+            );
+            assert_eq!(receiver2.poll(&mut cx), task::Poll::Ready(Ok(42)));
+        }
+
+        assert!(lake.is_empty());
     }
 
     #[test]

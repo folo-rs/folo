@@ -106,6 +106,14 @@ impl<T: Send> EventPool<T> {
         )
     }
 
+    /// Returns `true` if no events have currently been rented from the pool.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        let pool = self.core.pool.lock();
+
+        pool.is_empty()
+    }
+
     /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
     /// awaited event in the pool.
     ///
@@ -185,15 +193,24 @@ mod tests {
     fn send_receive() {
         let pool = EventPool::<i32>::new();
 
+        assert!(pool.is_empty());
+
         let (sender, receiver) = pool.rent();
-        let mut receiver = pin!(receiver);
 
-        sender.send(42);
+        assert!(!pool.is_empty());
 
-        let mut cx = task::Context::from_waker(Waker::noop());
+        {
+            let mut receiver = pin!(receiver);
 
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+            sender.send(42);
+
+            let mut cx = task::Context::from_waker(Waker::noop());
+
+            let poll_result = receiver.as_mut().poll(&mut cx);
+            assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+        }
+
+        assert!(pool.is_empty());
     }
 
     #[test]
@@ -201,6 +218,8 @@ mod tests {
         const ITERATIONS: usize = 32;
 
         let pool = EventPool::<i32>::new();
+
+        assert!(pool.is_empty());
 
         for _ in 0..ITERATIONS {
             let (sender, receiver) = pool.rent();
@@ -213,6 +232,8 @@ mod tests {
             let poll_result = receiver.as_mut().poll(&mut cx);
             assert!(matches!(poll_result, Poll::Ready(Ok(42))));
         }
+
+        assert!(pool.is_empty());
     }
 
     #[test]

@@ -92,6 +92,13 @@ impl EventLake {
         pool.rent()
     }
 
+    /// Returns `true` if no events have currently been rented from the lake.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        let pools = self.core.pools.lock();
+        pools.values().all(|x| x.is_empty())
+    }
+
     /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
     /// awaited event in the lake.
     ///
@@ -146,6 +153,8 @@ impl<T: Send + 'static> fmt::Debug for PoolWrapper<T> {
 trait ErasedPool: fmt::Debug + Send {
     fn as_any(&self) -> &dyn Any;
 
+    fn is_empty(&self) -> bool;
+
     #[cfg(debug_assertions)]
     fn inspect_awaiters(&self, f: &mut dyn FnMut(&Backtrace));
 }
@@ -153,6 +162,10 @@ trait ErasedPool: fmt::Debug + Send {
 impl<T: Send + 'static> ErasedPool for PoolWrapper<T> {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inner.is_empty()
     }
 
     #[cfg(debug_assertions)]
@@ -177,22 +190,30 @@ mod tests {
     fn send_receive_multiple_types() {
         let lake = EventLake::new();
 
+        assert!(lake.is_empty());
+
         let (sender1, receiver1) = lake.rent::<String>();
         let (sender2, receiver2) = lake.rent::<i32>();
 
-        sender1.send("Hello".to_string());
-        sender2.send(42);
+        assert!(!lake.is_empty());
 
-        let receiver1 = pin!(receiver1);
-        let receiver2 = pin!(receiver2);
+        {
+            sender1.send("Hello".to_string());
+            sender2.send(42);
 
-        let mut cx = task::Context::from_waker(Waker::noop());
+            let receiver1 = pin!(receiver1);
+            let receiver2 = pin!(receiver2);
 
-        assert_eq!(
-            receiver1.poll(&mut cx),
-            task::Poll::Ready(Ok("Hello".to_string()))
-        );
-        assert_eq!(receiver2.poll(&mut cx), task::Poll::Ready(Ok(42)));
+            let mut cx = task::Context::from_waker(Waker::noop());
+
+            assert_eq!(
+                receiver1.poll(&mut cx),
+                task::Poll::Ready(Ok("Hello".to_string()))
+            );
+            assert_eq!(receiver2.poll(&mut cx), task::Poll::Ready(Ok(42)));
+        }
+
+        assert!(lake.is_empty());
     }
 
     #[test]

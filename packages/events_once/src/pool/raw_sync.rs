@@ -150,6 +150,24 @@ impl<T: Send> RawEventPool<T> {
         )
     }
 
+    /// Returns `true` if no events have currently been rented from the pool.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        // SAFETY: We are the owner of the core, so we know it remains valid. We only ever
+        // create shared references to it, so no conflicting exclusive references can exist.
+        let core_cell = unsafe { self.core.as_ref() };
+
+        // SAFETY: See above.
+        let core_maybe = unsafe { core_cell.get().as_ref() };
+
+        // SAFETY: UnsafeCell pointer is never null.
+        let core = unsafe { core_maybe.unwrap_unchecked() };
+
+        let pool = core.pool.lock();
+
+        pool.is_empty()
+    }
+
     /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
     /// awaited event in the pool.
     ///
@@ -230,15 +248,24 @@ mod tests {
     fn send_receive() {
         let pool = pin!(RawEventPool::<i32>::new());
 
+        assert!(pool.is_empty());
+
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
-        let mut receiver = pin!(receiver);
 
-        sender.send(42);
+        assert!(!pool.is_empty());
 
-        let mut cx = task::Context::from_waker(Waker::noop());
+        {
+            let mut receiver = pin!(receiver);
 
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+            sender.send(42);
+
+            let mut cx = task::Context::from_waker(Waker::noop());
+
+            let poll_result = receiver.as_mut().poll(&mut cx);
+            assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+        }
+
+        assert!(pool.is_empty());
     }
 
     #[test]
@@ -246,6 +273,8 @@ mod tests {
         const ITERATIONS: usize = 32;
 
         let pool = pin!(RawEventPool::<i32>::new());
+
+        assert!(pool.is_empty());
 
         for _ in 0..ITERATIONS {
             let (sender, receiver) = unsafe { pool.as_ref().rent() };
@@ -258,6 +287,8 @@ mod tests {
             let poll_result = receiver.as_mut().poll(&mut cx);
             assert!(matches!(poll_result, Poll::Ready(Ok(42))));
         }
+
+        assert!(pool.is_empty());
     }
 
     #[test]
