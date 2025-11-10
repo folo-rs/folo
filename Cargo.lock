@@ -174,7 +174,7 @@ checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
 name = "cargo-detect-package"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "argh",
  "serial_test",
@@ -704,7 +704,7 @@ dependencies = [
 
 [[package]]
 name = "infinity_pool"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -797,7 +797,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "cpulist",
  "criterion",
@@ -822,7 +822,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_benchmarking"
-version = "0.1.32"
+version = "0.1.33"
 dependencies = [
  "cpulist",
  "criterion",
@@ -913,7 +913,7 @@ version = "1.0.1"
 
 [[package]]
 name = "nm"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "criterion",
  "foldhash 0.2.0",
@@ -973,7 +973,7 @@ version = "0.4.0"
 
 [[package]]
 name = "par_bench"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -1215,7 +1215,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
 name = "region_cached"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1236,7 +1236,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "arc-swap",
  "axum",
