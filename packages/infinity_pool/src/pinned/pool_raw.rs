@@ -141,6 +141,7 @@ impl<T> RawPinnedPool<T> {
     /// assert_eq!(pool.len(), 0);
     /// ```
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert(&mut self, value: T) -> RawPooledMut<T> {
         // SAFETY: match between T and inner pool layout is a type invariant.
         unsafe { self.inner.insert_unchecked(value) }

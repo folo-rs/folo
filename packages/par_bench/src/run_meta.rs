@@ -85,12 +85,14 @@ impl RunMeta {
 
     /// The total number of thread groups in the run.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants does not understand NonZero - unviable.
     pub fn group_count(&self) -> NonZero<usize> {
         self.group_count
     }
 
     /// The total number of threads used to execute the run.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants does not understand NonZero - unviable.
     pub fn thread_count(&self) -> NonZero<usize> {
         self.thread_count
     }

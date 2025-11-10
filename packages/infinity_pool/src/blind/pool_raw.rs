@@ -138,6 +138,7 @@ impl RawBlindPool {
     /// assert_eq!(pool.len(), 0);
     /// ```
     #[inline]
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert<T>(&mut self, value: T) -> RawBlindPooledMut<T> {
         let layout = Layout::new::<T>();
         let key = LayoutKey::new(layout);

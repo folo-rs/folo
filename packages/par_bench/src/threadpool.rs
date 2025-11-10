@@ -101,6 +101,7 @@ impl ThreadPool {
     /// println!("Pool has {} worker threads", pool.thread_count());
     /// ```
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants does not understand NonZero - unviable.
     pub fn thread_count(&self) -> NonZero<usize> {
         self.thread_count
     }

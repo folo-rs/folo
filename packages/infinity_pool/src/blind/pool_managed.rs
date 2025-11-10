@@ -153,6 +153,7 @@ impl BlindPool {
     /// ```
     #[inline]
     #[must_use]
+    #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert<T: Send + 'static>(&self, value: T) -> BlindPooledMut<T> {
         let mut core = self.core.lock();
 
