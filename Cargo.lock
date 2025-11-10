@@ -473,9 +473,9 @@ checksum = "28dd6caf6059519a65843af8fe2a3ae298b14b80179855aeb4adc2c1934ee619"
 
 [[package]]
 name = "frozen-collections"
-version = "0.5.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "005b30254b1476f894fd4b993b0768b6638968c5b197ee246b71bbfe7bd56b7b"
+checksum = "f80d04e59be9d42b94254781a2b7d6788783d1ffc792e5074f5f112768c316ac"
 dependencies = [
  "foldhash 0.1.5",
  "frozen-collections-core",
@@ -485,9 +485,9 @@ dependencies = [
 
 [[package]]
 name = "frozen-collections-core"
-version = "0.5.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "965a37fa0c39baf50ed38a7d55169b1c9b3b4f17b0f511a054ecb26c549e60a4"
+checksum = "5646a7f1d16f60a7c564288fcac261dde8865d3fe5864b1dec56778156109064"
 dependencies = [
  "const-random",
  "equivalent",

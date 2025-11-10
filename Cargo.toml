@@ -55,7 +55,7 @@ deranged = { version = "0.5", default-features = false }
 derive_more = { version = "2.0", default-features = false }
 fake_headers = { version = "0.0", default-features = false }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
-frozen-collections = { version = "0.5", default-features = false }
+frozen-collections = { version = "0.8", default-features = false }
 futures = { version = "0.3", default-features = false, features = [
     "std",
     "executor",
