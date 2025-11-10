@@ -421,11 +421,11 @@ impl ProcessorSetBuilder {
     /// [1]: ProcessorSetBuilder::ignoring_resource_quota
     #[must_use]
     pub fn take(self, count: NonZeroUsize) -> Option<ProcessorSet> {
-        if let Some(max_count) = self.resource_quota_processor_count_limit() {
-            if count.get() > max_count {
-                // We cannot satisfy the request.
-                return None;
-            }
+        if let Some(max_count) = self.resource_quota_processor_count_limit()
+            && count.get() > max_count
+        {
+            // We cannot satisfy the request.
+            return None;
         }
 
         let candidates = self.candidates_by_memory_region();

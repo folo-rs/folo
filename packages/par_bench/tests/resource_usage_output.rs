@@ -366,16 +366,16 @@ fn resource_usage_output_tracks_multiple_operations() {
         assert!(!measure_outputs.is_empty());
 
         for output in measure_outputs {
-            if let Some(alloc_report) = output.allocs() {
-                if !alloc_report.is_empty() {
-                    let ops: Vec<_> = alloc_report.operations().collect();
-                    for (name, stats) in ops {
-                        println!(
-                            "Individual result - Operation '{}': {} bytes",
-                            name,
-                            stats.total_bytes_allocated()
-                        );
-                    }
+            if let Some(alloc_report) = output.allocs()
+                && !alloc_report.is_empty()
+            {
+                let ops: Vec<_> = alloc_report.operations().collect();
+                for (name, stats) in ops {
+                    println!(
+                        "Individual result - Operation '{}': {} bytes",
+                        name,
+                        stats.total_bytes_allocated()
+                    );
                 }
             }
         }

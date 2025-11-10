@@ -240,12 +240,11 @@ fn extract_package_name(
     let contents = std::fs::read_to_string(cargo_toml_path)?;
     let value: Value = toml::from_str(&contents)?;
 
-    if let Some(package_table) = value.get("package") {
-        if let Some(name) = package_table.get("name") {
-            if let Some(name_str) = name.as_str() {
-                return Ok(DetectedPackage::Package(name_str.to_string()));
-            }
-        }
+    if let Some(package_table) = value.get("package")
+        && let Some(name) = package_table.get("name")
+        && let Some(name_str) = name.as_str()
+    {
+        return Ok(DetectedPackage::Package(name_str.to_string()));
     }
 
     Err(format!(
@@ -408,11 +407,12 @@ fn normalize_path(path: &Path) -> PathBuf {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
     // Strip Windows UNC prefix if present after canonicalization
-    if let Some(path_str) = canonical.to_str() {
-        if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
-            return PathBuf::from(stripped);
-        }
+    if let Some(path_str) = canonical.to_str()
+        && let Some(stripped) = path_str.strip_prefix(r"\\?\")
+    {
+        return PathBuf::from(stripped);
     }
+
     canonical
 }
 

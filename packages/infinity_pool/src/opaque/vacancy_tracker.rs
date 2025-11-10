@@ -110,26 +110,26 @@ impl VacancyTracker {
             }
         } else {
             // If we just removed a vacancy, and it was the lowest-index vacancy, find the next one.
-            if let Some(next_vacancy) = self.next_vacancy {
-                if slab_index == next_vacancy {
-                    // There may be a vacancy in a later slab (but never earlier,
-                    // as we fill from the start of the slab list).
-                    //
-                    // Will not wrap because wrapping implies we have more slabs than virtual memory.
-                    let remaining_range_start = slab_index.wrapping_add(1);
-                    let remaining_range = remaining_range_start..;
+            if let Some(next_vacancy) = self.next_vacancy
+                && slab_index == next_vacancy
+            {
+                // There may be a vacancy in a later slab (but never earlier,
+                // as we fill from the start of the slab list).
+                //
+                // Will not wrap because wrapping implies we have more slabs than virtual memory.
+                let remaining_range_start = slab_index.wrapping_add(1);
+                let remaining_range = remaining_range_start..;
 
-                    let Some(remaining_bits) = self.has_vacancy.get(remaining_range) else {
-                        // This was the last slab, so there are no more vacancies.
-                        self.next_vacancy = None;
-                        return;
-                    };
+                let Some(remaining_bits) = self.has_vacancy.get(remaining_range) else {
+                    // This was the last slab, so there are no more vacancies.
+                    self.next_vacancy = None;
+                    return;
+                };
 
-                    // Will not wrap because wrapping implies we have more slabs than virtual memory.
-                    self.next_vacancy = remaining_bits.first_one().map(|index_in_remaining| {
-                        remaining_range_start.wrapping_add(index_in_remaining)
-                    });
-                }
+                // Will not wrap because wrapping implies we have more slabs than virtual memory.
+                self.next_vacancy = remaining_bits.first_one().map(|index_in_remaining| {
+                    remaining_range_start.wrapping_add(index_in_remaining)
+                });
             }
         }
     }

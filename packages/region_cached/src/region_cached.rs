@@ -417,10 +417,10 @@ where
     {
         let reader = self.value.load();
 
-        if let Some(ref value) = *reader {
-            if let RegionalValue::Ready(GenerationValue { value, .. }) = &**value {
-                return Ok(f(value));
-            }
+        if let Some(ref value) = *reader
+            && let RegionalValue::Ready(GenerationValue { value, .. }) = &**value
+        {
+            return Ok(f(value));
         }
 
         Err(f)

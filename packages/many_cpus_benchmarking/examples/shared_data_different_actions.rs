@@ -90,10 +90,10 @@ impl Payload for ProducerConsumerChannels {
                 _ = self.tx.send(i as u64);
 
                 // Occasionally receive a message to keep the flow balanced
-                if i % 10 == 0 {
-                    if let Ok(received) = self.rx.try_recv() {
-                        black_box(received);
-                    }
+                if i % 10 == 0
+                    && let Ok(received) = self.rx.try_recv()
+                {
+                    black_box(received);
                 }
             }
         } else {

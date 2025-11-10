@@ -339,10 +339,10 @@ where
     {
         let reader = self.value.load();
 
-        if let Some(ref value) = *reader {
-            if let RegionalValue::Ready(value) = &**value {
-                return Ok(f(value));
-            }
+        if let Some(ref value) = *reader
+            && let RegionalValue::Ready(value) = &**value
+        {
+            return Ok(f(value));
         }
 
         Err(f)
