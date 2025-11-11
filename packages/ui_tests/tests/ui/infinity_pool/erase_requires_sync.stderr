@@ -1,0 +1,21 @@
+error[E0277]: `Cell<i32>` cannot be shared between threads safely
+  --> tests/ui/infinity_pool/erase_requires_sync.rs:21:33
+   |
+21 |     let _erased = shared_handle.erase();
+   |                                 ^^^^^ `Cell<i32>` cannot be shared between threads safely
+   |
+   = help: within `SendNotSync`, the trait `Sync` is not implemented for `Cell<i32>`
+   = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` or `std::sync::atomic::AtomicI32` instead
+note: required because it appears within the type `SendNotSync`
+  --> tests/ui/infinity_pool/erase_requires_sync.rs:8:8
+   |
+ 8 | struct SendNotSync {
+   |        ^^^^^^^^^^^
+note: required by a bound in `Pooled::<T>::erase`
+  --> $WORKSPACE/packages/infinity_pool/src/handles/managed.rs
+   |
+   |     pub fn erase(self) -> Pooled<()>
+   |            ----- required by a bound in this associated function
+   |     where
+   |         T: Send + Sync,
+   |                   ^^^^ required by this bound in `Pooled::<T>::erase`

@@ -1,6 +1,6 @@
 use std::alloc::Layout;
 use std::iter::{self, FusedIterator};
-use std::mem::MaybeUninit;
+use std::mem::{MaybeUninit, size_of};
 use std::ptr::NonNull;
 
 use crate::opaque::slab::SlabIterator;
@@ -477,6 +477,13 @@ impl RawOpaquePool {
     #[doc = include_str!("../../doc/snippets/raw_pool_remove_unpin.md")]
     #[must_use]
     pub unsafe fn remove_unpin<T: Unpin>(&mut self, handle: RawPooled<T>) -> T {
+        const {
+            assert!(
+                size_of::<T>() > 0,
+                "cannot extract zero-sized types from pool"
+            );
+        };
+
         let slab = self
             .slabs
             .get_mut(handle.slab_index())
@@ -518,6 +525,13 @@ impl RawOpaquePool {
     /// The caller must ensure that the handle belongs to this pool and that the object it
     /// references has not already been removed from the pool.
     pub(crate) unsafe fn remove_unpin_unchecked<T: Unpin>(&mut self, handle: RawPooled<T>) -> T {
+        const {
+            assert!(
+                size_of::<T>() > 0,
+                "cannot extract zero-sized types from pool"
+            );
+        };
+
         // SAFETY: Caller guarantees the handle is valid for this pool.
         let slab = unsafe { self.slabs.get_unchecked_mut(handle.slab_index()) };
 

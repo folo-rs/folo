@@ -113,6 +113,26 @@ impl<T: ?Sized> BlindPooledMut<T> {
             core,
         }
     }
+
+    /// Erase the type information from this handle, converting it to `BlindPooledMut<()>`.
+    ///
+    /// This is useful for extending the lifetime of an object in the pool without retaining
+    /// type information. The type-erased handle prevents access to the object but ensures
+    /// it remains in the pool.
+    #[must_use]
+    #[inline]
+    #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
+    pub fn erase(self) -> BlindPooledMut<()>
+    where
+        T: Send + Sync,
+    {
+        let (inner, key, core) = self.into_parts();
+        BlindPooledMut {
+            inner: inner.erase(),
+            key,
+            core,
+        }
+    }
 }
 
 impl<T> BlindPooledMut<T>

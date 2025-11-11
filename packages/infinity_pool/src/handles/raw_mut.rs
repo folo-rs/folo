@@ -33,6 +33,22 @@ impl<T: ?Sized> RawPooledMut<T> {
         }
     }
 
+    /// Get the index of the slab in the pool.
+    ///
+    /// This is used by the pool itself to identify the slab in which the object resides.
+    #[must_use]
+    pub(crate) fn slab_index(&self) -> usize {
+        self.slab_index
+    }
+
+    /// Get the slab handle for this pool handle.
+    ///
+    /// This is used by the pool itself to perform operations on the object in the slab.
+    #[must_use]
+    pub(crate) fn slab_handle(&self) -> SlabHandle<T> {
+        self.slab_handle
+    }
+
     #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
     #[must_use]
     #[inline]
@@ -86,6 +102,26 @@ impl<T: ?Sized> RawPooledMut<T> {
         unsafe { self.ptr().as_ref() }
     }
 
+    /// Erase the type information from this handle, converting it to `RawPooledMut<()>`.
+    ///
+    /// This is useful for extending the lifetime of an object in the pool without retaining
+    /// type information. The type-erased handle prevents access to the object but ensures
+    /// it remains in the pool.
+    #[must_use]
+    #[inline]
+    #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
+    pub fn erase(self) -> RawPooledMut<()>
+    where
+        T: Send + Sync,
+    {
+        RawPooledMut {
+            slab_index: self.slab_index,
+            slab_handle: self.slab_handle.erase(),
+        }
+    }
+}
+
+impl<T: ?Sized> RawPooledMut<T> {
     /// Casts this handle to reference the target as a trait object.
     ///
     /// This method is only intended for use by the [`define_pooled_dyn_cast!`] macro
@@ -151,6 +187,7 @@ mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
+    use crate::RawPinnedPool;
 
     // u32 is Sync, so RawPooledMut<u32> should be Send (but not Sync).
     assert_impl_all!(RawPooledMut<u32>: Send);
@@ -169,8 +206,6 @@ mod tests {
 
     #[test]
     fn unique_handle_can_cross_threads_with_send_only() {
-        use crate::RawPinnedPool;
-
         // A type that is Send but not Sync.
         struct Counter {
             value: Cell<i32>,
@@ -218,5 +253,35 @@ mod tests {
         // Back in main thread.
         // SAFETY: Handle is valid and pool is still alive.
         assert_eq!(unsafe { handle_in_thread.ptr().as_ref() }.get(), 2);
+    }
+
+    #[cfg(not(miri))] // Too much data for Miri - runs too slow.
+    #[test]
+    fn slab_index_returns_correct_value() {
+        let mut pool = RawPinnedPool::<u64>::new();
+
+        // Insert first item - should be in slab 0.
+        let handle1 = pool.insert(42);
+        assert_eq!(handle1.slab_index(), 0);
+
+        // Insert more items - should all be in slab 0 until it fills up.
+        let handle2 = pool.insert(100);
+        assert_eq!(handle2.slab_index(), 0);
+
+        // Create enough items to force allocation of a new slab.
+        // Default slab capacity varies, so we insert many items.
+        let mut handles = Vec::new();
+        for i in 0..10000 {
+            handles.push(pool.insert(i));
+        }
+
+        // At least some handles should be in slab 1 or higher.
+        let has_slab_1_or_higher = handles.iter().any(|h| h.slab_index() > 0);
+        assert!(has_slab_1_or_higher);
+
+        // All handles should have valid slab indices.
+        for handle in &handles {
+            assert!(handle.slab_index() < pool.capacity());
+        }
     }
 }

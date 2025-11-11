@@ -1,7 +1,7 @@
 use std::fmt;
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
-use std::mem::MaybeUninit;
+use std::mem::{MaybeUninit, size_of};
 use std::ptr::NonNull;
 
 use crate::{
@@ -243,6 +243,13 @@ where
     #[must_use]
     #[inline]
     pub unsafe fn remove_unpin(&mut self, handle: RawPooled<T>) -> T {
+        const {
+            assert!(
+                size_of::<T>() > 0,
+                "cannot extract zero-sized types from pool"
+            );
+        };
+
         // SAFETY: Forwarding safety guarantees from the caller.
         unsafe { self.inner.remove_unpin(handle) }
     }

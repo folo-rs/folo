@@ -110,6 +110,23 @@ impl<T: ?Sized> LocalPooledMut<T> {
             pool,
         }
     }
+
+    /// Erase the type information from this handle, converting it to `LocalPooledMut<()>`.
+    ///
+    /// This is useful for extending the lifetime of an object in the pool without retaining
+    /// type information. The type-erased handle prevents access to the object but ensures
+    /// it remains in the pool.
+    #[must_use]
+    #[inline]
+    #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
+    pub fn erase(self) -> LocalPooledMut<()> {
+        let (inner, pool) = self.into_parts();
+        let inner_erased = RawPooledMut::new(inner.slab_index(), inner.slab_handle().erase());
+        LocalPooledMut {
+            inner: inner_erased,
+            pool,
+        }
+    }
 }
 
 impl<T> LocalPooledMut<T>
@@ -219,7 +236,7 @@ impl<T: ?Sized> Drop for LocalPooledMut<T> {
 
 #[cfg(test)]
 mod tests {
-    use static_assertions::assert_not_impl_any;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
@@ -227,4 +244,26 @@ mod tests {
 
     // We expect no destructor because we treat it as `Copy` in our own Drop::drop().
     assert_not_impl_any!(RawPooledMut<()>: Drop);
+
+    // Type-erased handles preserve auto traits correctly.
+    assert_impl_all!(LocalPooledMut<()>: Unpin);
+    assert_not_impl_any!(LocalPooledMut<()>: Send, Sync);
+
+    #[test]
+    fn erase_extends_lifetime() {
+        use crate::LocalOpaquePool;
+
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
+        let handle = pool.insert(42);
+
+        // Erase the unique handle.
+        let erased = handle.erase();
+
+        // Object still alive in erased handle.
+        assert_eq!(pool.len(), 1);
+
+        // Drop erased handle, object is removed.
+        drop(erased);
+        assert_eq!(pool.len(), 0);
+    }
 }

@@ -26,7 +26,7 @@ impl<T: ?Sized> BlindPooled<T> {
         let inner = inner.into_shared();
 
         let remover = Remover {
-            handle: inner.erase(),
+            handle: inner.erase_raw(),
             key,
             core,
         };
@@ -77,6 +77,24 @@ impl<T: ?Sized> BlindPooled<T> {
 
         BlindPooled {
             inner: new_inner,
+            remover: self.remover,
+        }
+    }
+
+    /// Erase the type information from this handle, converting it to `BlindPooled<()>`.
+    ///
+    /// This is useful for extending the lifetime of an object in the pool without retaining
+    /// type information. The type-erased handle prevents access to the object but ensures
+    /// it remains in the pool.
+    #[must_use]
+    #[inline]
+    #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
+    pub fn erase(self) -> BlindPooled<()>
+    where
+        T: Send + Sync,
+    {
+        BlindPooled {
+            inner: self.inner.erase_raw(),
             remover: self.remover,
         }
     }

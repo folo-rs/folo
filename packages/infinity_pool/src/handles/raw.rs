@@ -58,10 +58,17 @@ impl<T: ?Sized> RawPooled<T> {
     }
 
     /// Erase the type information from this handle for internal use by remover logic.
+    ///
+    /// This method is intended for internal use only and does not enforce trait bounds
+    /// on the type being erased. The caller must guarantee that the type-erased handle
+    /// will not be used in a way that would take advantage of auto traits of `()` that
+    /// the original type `T` did not have (such as `Send`, `Sync`, `Unpin`).
+    ///
+    /// For public use, see [`erase()`](Self::erase), which enforces appropriate trait bounds.
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
-    pub(crate) fn erase(self) -> RawPooled<()> {
+    pub(crate) fn erase_raw(self) -> RawPooled<()> {
         RawPooled {
             slab_index: self.slab_index,
             slab_handle: self.slab_handle.erase(),
@@ -91,6 +98,23 @@ impl<T: ?Sized> RawPooled<T> {
         unsafe { self.ptr().as_ref() }
     }
 
+    /// Erase the type information from this handle, converting it to `RawPooled<()>`.
+    ///
+    /// This is useful for extending the lifetime of an object in the pool without retaining
+    /// type information. The type-erased handle prevents access to the object but ensures
+    /// it remains in the pool.
+    #[must_use]
+    #[inline]
+    #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
+    pub fn erase(self) -> RawPooled<()>
+    where
+        T: Send + Sync,
+    {
+        self.erase_raw()
+    }
+}
+
+impl<T: ?Sized> RawPooled<T> {
     /// Casts this handle to reference the target as a trait object.
     ///
     /// This method is only intended for use by the [`define_pooled_dyn_cast!`] macro
@@ -161,4 +185,31 @@ mod tests {
 
     // Cell is Send but not Sync, so RawPooled<Cell> should be neither Send nor Sync.
     assert_not_impl_any!(RawPooled<Cell<u32>>: Send, Sync);
+
+    // Type-erased handles preserve auto traits correctly.
+    assert_impl_all!(RawPooled<()>: Send, Unpin);
+    assert_not_impl_any!(RawPooled<()>: Sync);
+
+    #[test]
+    fn erase_raw_and_public_erase() {
+        use crate::RawPinnedPool;
+
+        let mut pool = RawPinnedPool::<u32>::new();
+        let handle = pool.insert(42);
+        let shared = handle.into_shared();
+
+        // Both erase_raw() and erase() produce the same result.
+        let erased_raw = shared.erase_raw();
+        let erased_public = shared.erase();
+
+        // Both are RawPooled<()> and behave identically.
+        assert_eq!(erased_raw.slab_index(), erased_public.slab_index());
+
+        // SAFETY: Handles are valid and pool is alive.
+        unsafe {
+            pool.remove(erased_raw);
+        }
+
+        assert_eq!(pool.len(), 0);
+    }
 }

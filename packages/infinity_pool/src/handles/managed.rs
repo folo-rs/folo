@@ -28,7 +28,7 @@ impl<T: ?Sized> Pooled<T> {
         let inner = inner.into_shared();
 
         let remover = Remover {
-            handle: inner.erase(),
+            handle: inner.erase_raw(),
             pool,
         };
 
@@ -78,6 +78,24 @@ impl<T: ?Sized> Pooled<T> {
 
         Pooled {
             inner: new_inner,
+            remover: self.remover,
+        }
+    }
+
+    /// Erase the type information from this handle, converting it to `Pooled<()>`.
+    ///
+    /// This is useful for extending the lifetime of an object in the pool without retaining
+    /// type information. The type-erased handle prevents access to the object but ensures
+    /// it remains in the pool.
+    #[must_use]
+    #[inline]
+    #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
+    pub fn erase(self) -> Pooled<()>
+    where
+        T: Send + Sync,
+    {
+        Pooled {
+            inner: self.inner.erase_raw(),
             remover: self.remover,
         }
     }
@@ -185,4 +203,89 @@ mod tests {
 
     // Cell is Send but not Sync, so Pooled<Cell> should be neither Send nor Sync.
     assert_not_impl_any!(Pooled<Cell<u32>>: Send, Sync);
+
+    // Type-erased handles preserve auto traits correctly.
+    assert_impl_all!(Pooled<()>: Send, Unpin);
+    assert_not_impl_any!(Pooled<()>: Sync);
+
+    #[test]
+    fn erase_extends_lifetime() {
+        use crate::OpaquePool;
+
+        let pool = OpaquePool::with_layout_of::<u32>();
+        let handle = pool.insert(42);
+        let shared = handle.into_shared();
+
+        // Clone one handle and erase it.
+        let erased = shared.clone().erase();
+
+        // Both handles keep the object alive.
+        assert_eq!(pool.len(), 1);
+        assert_eq!(*shared, 42);
+
+        // Drop the typed handle.
+        drop(shared);
+
+        // Object still alive due to erased handle.
+        assert_eq!(pool.len(), 1);
+
+        // Drop erased handle, object is removed.
+        drop(erased);
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn erase_multiple_clones() {
+        use crate::OpaquePool;
+
+        let pool = OpaquePool::with_layout_of::<String>();
+        let handle = pool.insert(String::from("test"));
+        let shared = handle.into_shared();
+
+        let clone1 = shared.clone();
+        let clone2 = shared.clone();
+        let erased1 = clone1.erase();
+        let erased2 = clone2.erase();
+
+        assert_eq!(pool.len(), 1);
+        assert_eq!(*shared, "test");
+
+        drop(shared);
+        assert_eq!(pool.len(), 1);
+
+        drop(erased1);
+        assert_eq!(pool.len(), 1);
+
+        drop(erased2);
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn erase_works_with_not_unpin_types() {
+        use std::marker::PhantomPinned;
+
+        use crate::OpaquePool;
+
+        // Type that is Send + Sync but !Unpin
+        struct NotUnpin {
+            #[allow(dead_code, reason = "Field used to give struct non-zero size")]
+            data: i32,
+            _marker: PhantomPinned,
+        }
+
+        let pool = OpaquePool::with_layout_of::<NotUnpin>();
+        let handle = pool.insert(NotUnpin {
+            data: 42,
+            _marker: PhantomPinned,
+        });
+
+        // Erasing !Unpin types now works because the compile-time assertion in
+        // remove_unpin() prevents calling it with ().
+        let erased = handle.into_shared().erase();
+
+        assert_eq!(pool.len(), 1);
+
+        drop(erased);
+        assert_eq!(pool.len(), 0);
+    }
 }

@@ -94,6 +94,26 @@ impl<T: ?Sized> RawBlindPooledMut<T> {
         unsafe { self.ptr().as_ref() }
     }
 
+    /// Erase the type information from this handle, converting it to `RawBlindPooledMut<()>`.
+    ///
+    /// This is useful for extending the lifetime of an object in the pool without retaining
+    /// type information. The type-erased handle prevents access to the object but ensures
+    /// it remains in the pool.
+    #[must_use]
+    #[inline]
+    #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
+    pub fn erase(self) -> RawBlindPooledMut<()>
+    where
+        T: Send + Sync,
+    {
+        RawBlindPooledMut {
+            key: self.key,
+            inner: self.inner.erase(),
+        }
+    }
+}
+
+impl<T: ?Sized> RawBlindPooledMut<T> {
     /// Casts this handle to reference the target as a trait object.
     ///
     /// This method is only intended for use by the [`define_pooled_dyn_cast!`] macro

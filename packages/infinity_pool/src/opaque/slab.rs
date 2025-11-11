@@ -1,7 +1,7 @@
 use std::alloc::{Layout, alloc, dealloc};
 use std::any::Any;
 use std::iter::FusedIterator;
-use std::mem::{self, MaybeUninit};
+use std::mem::{self, MaybeUninit, size_of};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::ptr::{self, NonNull};
 use std::thread;
@@ -364,6 +364,13 @@ impl Slab {
     /// fat pointers, so ownership and object lifetime must be managed manually by the caller.
     #[must_use]
     pub(crate) unsafe fn remove_unpin<T: Unpin>(&mut self, handle: SlabHandle<T>) -> T {
+        const {
+            assert!(
+                size_of::<T>() > 0,
+                "cannot extract zero-sized types from pool"
+            );
+        };
+
         let next_free_slot_index = self.next_free_slot_index;
 
         // SAFETY: delay-guarded by slot_meta_mut() bounds checking below.
@@ -438,6 +445,13 @@ impl Slab {
     /// fat pointers, so ownership and object lifetime must be managed manually by the caller.
     #[must_use]
     pub(crate) unsafe fn remove_unpin_unchecked<T: Unpin>(&mut self, handle: SlabHandle<T>) -> T {
+        const {
+            assert!(
+                size_of::<T>() > 0,
+                "cannot extract zero-sized types from pool"
+            );
+        };
+
         let next_free_slot_index = self.next_free_slot_index;
 
         // SAFETY: Caller guarantees this object belongs to this slab and is still present.

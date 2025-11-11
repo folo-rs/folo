@@ -1,5 +1,5 @@
 use std::alloc::Layout;
-use std::mem::MaybeUninit;
+use std::mem::{MaybeUninit, size_of};
 
 use crate::{
     DropPolicy, LayoutKey, RawBlindPoolBuilder, RawBlindPoolInnerMap, RawBlindPooled,
@@ -247,6 +247,13 @@ impl RawBlindPool {
     #[must_use]
     #[inline]
     pub unsafe fn remove_unpin<T: Unpin>(&mut self, handle: RawBlindPooled<T>) -> T {
+        const {
+            assert!(
+                size_of::<T>() > 0,
+                "cannot extract zero-sized types from pool"
+            );
+        };
+
         let key = handle.layout_key();
 
         let pool = self

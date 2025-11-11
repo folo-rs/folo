@@ -26,7 +26,7 @@ impl<T: ?Sized> LocalPooled<T> {
         let inner = inner.into_shared();
 
         let remover = Remover {
-            handle: inner.erase(),
+            handle: inner.erase_raw(),
             pool,
         };
 
@@ -76,6 +76,21 @@ impl<T: ?Sized> LocalPooled<T> {
 
         LocalPooled {
             inner: new_inner,
+            remover: self.remover,
+        }
+    }
+
+    /// Erase the type information from this handle, converting it to `LocalPooled<()>`.
+    ///
+    /// This is useful for extending the lifetime of an object in the pool without retaining
+    /// type information. The type-erased handle prevents access to the object but ensures
+    /// it remains in the pool.
+    #[must_use]
+    #[inline]
+    #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
+    pub fn erase(self) -> LocalPooled<()> {
+        LocalPooled {
+            inner: self.inner.erase_raw(),
             remover: self.remover,
         }
     }
@@ -150,16 +165,46 @@ impl Drop for Remover {
         // SAFETY: The remover controls the shared object lifetime and is the only thing
         // that can remove the item from the pool.
         unsafe {
-            pool.remove(self.handle);
+            pool.remove_unchecked(self.handle);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use static_assertions::assert_not_impl_any;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
     assert_not_impl_any!(LocalPooled<u32>: Send, Sync);
+
+    // Type-erased handles preserve auto traits correctly.
+    assert_impl_all!(LocalPooled<()>: Unpin);
+    assert_not_impl_any!(LocalPooled<()>: Send, Sync);
+
+    #[test]
+    fn erase_extends_lifetime() {
+        use crate::LocalOpaquePool;
+
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
+        let handle = pool.insert(42);
+        let shared = handle.into_shared();
+
+        // Clone one handle and erase it.
+        let erased = shared.clone().erase();
+
+        // Both handles keep the object alive.
+        assert_eq!(pool.len(), 1);
+        assert_eq!(*shared, 42);
+
+        // Drop the typed handle.
+        drop(shared);
+
+        // Object still alive due to erased handle.
+        assert_eq!(pool.len(), 1);
+
+        // Drop erased handle, object is removed.
+        drop(erased);
+        assert_eq!(pool.len(), 0);
+    }
 }

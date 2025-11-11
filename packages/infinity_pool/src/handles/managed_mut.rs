@@ -112,6 +112,25 @@ impl<T: ?Sized> PooledMut<T> {
             pool,
         }
     }
+
+    /// Erase the type information from this handle, converting it to `PooledMut<()>`.
+    ///
+    /// This is useful for extending the lifetime of an object in the pool without retaining
+    /// type information. The type-erased handle prevents access to the object but ensures
+    /// it remains in the pool.
+    #[must_use]
+    #[inline]
+    #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
+    pub fn erase(self) -> PooledMut<()>
+    where
+        T: Send + Sync,
+    {
+        let (inner, pool) = self.into_parts();
+        PooledMut {
+            inner: inner.erase(),
+            pool,
+        }
+    }
 }
 
 impl<T> PooledMut<T>
@@ -289,5 +308,48 @@ mod tests {
 
         // Back in main thread.
         assert_eq!(handle_in_thread.get(), 2);
+    }
+
+    // Type-erased handles preserve auto traits correctly.
+    assert_impl_all!(PooledMut<()>: Send, Unpin);
+    assert_not_impl_any!(PooledMut<()>: Sync);
+
+    #[test]
+    fn erase_extends_lifetime() {
+        use crate::OpaquePool;
+
+        let pool = OpaquePool::with_layout_of::<u32>();
+        let handle = pool.insert(42);
+
+        // Erase the unique handle.
+        let erased = handle.erase();
+
+        // Object still alive in erased handle.
+        assert_eq!(pool.len(), 1);
+
+        // Drop erased handle, object is removed.
+        drop(erased);
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn erase_then_convert_to_shared() {
+        use crate::OpaquePool;
+
+        let pool = OpaquePool::with_layout_of::<String>();
+        let handle = pool.insert(String::from("test"));
+
+        // Erase and convert to shared.
+        let erased_mut = handle.erase();
+        let erased_shared = erased_mut.into_shared();
+        let erased_clone = erased_shared.clone();
+
+        assert_eq!(pool.len(), 1);
+
+        drop(erased_shared);
+        assert_eq!(pool.len(), 1);
+
+        drop(erased_clone);
+        assert_eq!(pool.len(), 0);
     }
 }
