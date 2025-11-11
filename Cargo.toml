@@ -30,7 +30,7 @@ events_once = { version = "0.5.3", path = "packages/events_once" }
 fast_time = { version = "0.1.8", path = "packages/fast_time" }
 folo_ffi = { version = "0.1.7", path = "packages/folo_ffi" }
 folo_utils = { version = "0.1.3", path = "packages/folo_utils" }
-infinity_pool = { version = "0.7.5", path = "packages/infinity_pool" }
+infinity_pool = { version = "0.7.6", path = "packages/infinity_pool" }
 linked = { version = "1.0.0", path = "packages/linked" }
 linked_macros = { version = "1.0.0", path = "packages/linked_macros" }
 linked_macros_impl = { version = "1.0.0", path = "packages/linked_macros_impl" }
