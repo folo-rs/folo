@@ -12,15 +12,15 @@ use crate::pal::linux::{Bindings, BuildTargetBindings};
 /// Enum to hide the real/mock choice behind a single wrapper type.
 #[derive(Clone)]
 pub(crate) enum BindingsFacade {
-    Real(&'static BuildTargetBindings),
+    Target(&'static BuildTargetBindings),
 
     #[cfg(test)]
     Mock(Arc<MockBindings>),
 }
 
 impl BindingsFacade {
-    pub(crate) const fn real() -> Self {
-        Self::Real(&BuildTargetBindings)
+    pub(crate) const fn target() -> Self {
+        Self::Target(&BuildTargetBindings)
     }
 
     #[cfg(test)]
@@ -32,7 +32,7 @@ impl BindingsFacade {
 impl Bindings for BindingsFacade {
     fn sched_setaffinity_current(&self, cpuset: &cpu_set_t) -> Result<(), io::Error> {
         match self {
-            Self::Real(bindings) => bindings.sched_setaffinity_current(cpuset),
+            Self::Target(bindings) => bindings.sched_setaffinity_current(cpuset),
             #[cfg(test)]
             Self::Mock(mock) => mock.sched_setaffinity_current(cpuset),
         }
@@ -40,7 +40,7 @@ impl Bindings for BindingsFacade {
 
     fn sched_getcpu(&self) -> i32 {
         match self {
-            Self::Real(bindings) => bindings.sched_getcpu(),
+            Self::Target(bindings) => bindings.sched_getcpu(),
             #[cfg(test)]
             Self::Mock(mock) => mock.sched_getcpu(),
         }
@@ -48,7 +48,7 @@ impl Bindings for BindingsFacade {
 
     fn sched_getaffinity_current(&self) -> Result<cpu_set_t, io::Error> {
         match self {
-            Self::Real(bindings) => bindings.sched_getaffinity_current(),
+            Self::Target(bindings) => bindings.sched_getaffinity_current(),
             #[cfg(test)]
             Self::Mock(mock) => mock.sched_getaffinity_current(),
         }
@@ -58,7 +58,7 @@ impl Bindings for BindingsFacade {
 impl Debug for BindingsFacade {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Real(inner) => inner.fmt(f),
+            Self::Target(inner) => inner.fmt(f),
             #[cfg(test)]
             Self::Mock(inner) => inner.fmt(f),
         }

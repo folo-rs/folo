@@ -58,7 +58,10 @@ impl ProcessorSetBuilder {
     /// documentation for more details on how operating system limits are handled.
     #[must_use]
     pub fn new() -> Self {
-        Self::with_internals(HardwareTrackerClientFacade::real(), PlatformFacade::real())
+        Self::with_internals(
+            HardwareTrackerClientFacade::target(),
+            PlatformFacade::target(),
+        )
     }
 
     #[must_use]
@@ -1969,5 +1972,194 @@ mod tests {
             .return_const(pal_processors);
 
         platform
+    }
+}
+
+/// Fallback PAL integration tests - these test the integration between `ProcessorSetBuilder`
+/// and the fallback platform abstraction layer.
+///
+/// Miri is excluded because `std::thread::available_parallelism()` is not supported under Miri.
+#[cfg(all(any(test, not(any(target_os = "linux", windows))), not(miri)))]
+mod tests_fallback {
+    use std::num::NonZeroUsize;
+
+    use new_zealand::nz;
+
+    use crate::ProcessorSetBuilder;
+    use crate::clients::HardwareTrackerClientFacade;
+    use crate::pal::PlatformFacade;
+    use crate::pal::fallback::BUILD_TARGET_PLATFORM;
+
+    #[test]
+    fn builder_smoke_test() {
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let tracker_client = HardwareTrackerClientFacade::target();
+
+        let builder = ProcessorSetBuilder::with_internals(tracker_client, pal);
+
+        let set = builder.take_all().unwrap();
+
+        assert!(set.len() >= 1);
+    }
+
+    #[test]
+    fn take_respects_limit() {
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let tracker_client = HardwareTrackerClientFacade::target();
+
+        let builder = ProcessorSetBuilder::with_internals(tracker_client, pal);
+
+        let set = builder.take(nz!(1));
+
+        assert!(set.is_some());
+        assert_eq!(set.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn take_all_returns_all() {
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let tracker_client = HardwareTrackerClientFacade::target();
+
+        let builder = ProcessorSetBuilder::with_internals(tracker_client, pal);
+
+        let set = builder.take_all().unwrap();
+
+        let expected_count = std::thread::available_parallelism()
+            .map(NonZeroUsize::get)
+            .unwrap_or(1);
+
+        assert_eq!(set.len(), expected_count);
+    }
+
+    #[test]
+    fn performance_only_filter() {
+        // All processors on the fallback platform are Performance class.
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let tracker_client = HardwareTrackerClientFacade::target();
+
+        let builder = ProcessorSetBuilder::with_internals(tracker_client, pal);
+
+        let set = builder.performance_processors_only().take_all().unwrap();
+
+        let expected_count = std::thread::available_parallelism()
+            .map(NonZeroUsize::get)
+            .unwrap_or(1);
+
+        assert_eq!(set.len(), expected_count);
+    }
+
+    #[test]
+    fn same_memory_region_filter() {
+        // All processors on the fallback platform are in memory region 0.
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let tracker_client = HardwareTrackerClientFacade::target();
+
+        let builder = ProcessorSetBuilder::with_internals(tracker_client, pal);
+
+        let set = builder.same_memory_region().take_all().unwrap();
+
+        let expected_count = std::thread::available_parallelism()
+            .map(NonZeroUsize::get)
+            .unwrap_or(1);
+
+        assert_eq!(set.len(), expected_count);
+
+        for processor in set.processors() {
+            assert_eq!(processor.memory_region_id(), 0);
+        }
+    }
+
+    #[test]
+    fn except_filter() {
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let tracker_client = HardwareTrackerClientFacade::target();
+
+        let builder = ProcessorSetBuilder::with_internals(tracker_client, pal);
+
+        if platform.processor_count() > 1 {
+            let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
+            assert_eq!(except_set.len(), 1);
+
+            let set = builder.except(except_set.processors()).take_all().unwrap();
+
+            for processor in set.processors() {
+                assert_ne!(processor.id(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn ignoring_resource_quota() {
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let tracker_client = HardwareTrackerClientFacade::target();
+
+        let builder = ProcessorSetBuilder::with_internals(tracker_client, pal);
+
+        let set = builder.ignoring_resource_quota().take_all().unwrap();
+
+        assert!(set.len() >= 1);
+    }
+
+    #[test]
+    fn where_available_for_current_thread() {
+        use std::thread;
+
+        thread::spawn(|| {
+            let platform = &BUILD_TARGET_PLATFORM;
+            let pal = PlatformFacade::Fallback(platform);
+
+            let tracker_client = HardwareTrackerClientFacade::target();
+
+            // First pin to one processor.
+            let one = ProcessorSetBuilder::with_internals(tracker_client.clone(), pal.clone())
+                .take(nz!(1))
+                .unwrap();
+
+            one.pin_current_thread_to();
+
+            // Now build a new set inheriting the affinity.
+            let builder = ProcessorSetBuilder::with_internals(tracker_client, pal);
+
+            let set = builder.where_available_for_current_thread().take_all();
+
+            assert!(set.is_some());
+            assert_eq!(set.unwrap().len(), 1);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn obey_resource_quota_by_default() {
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let tracker_client = HardwareTrackerClientFacade::target();
+
+        let builder = ProcessorSetBuilder::with_internals(tracker_client, pal);
+
+        let set = builder.take_all().unwrap();
+
+        // The fallback platform reports max_processor_time == processor_count,
+        // so the default behavior should return all processors.
+        let expected_count = std::thread::available_parallelism()
+            .map(NonZeroUsize::get)
+            .unwrap_or(1);
+
+        assert_eq!(set.len(), expected_count);
     }
 }

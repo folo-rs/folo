@@ -7,15 +7,15 @@ use crate::{HardwareTrackerClient, HardwareTrackerClientImpl, MemoryRegionId, Pr
 
 #[derive(Clone, Debug)]
 pub(crate) enum HardwareTrackerClientFacade {
-    Real(&'static HardwareTrackerClientImpl),
+    Target(&'static HardwareTrackerClientImpl),
 
     #[cfg(test)]
     Mock(Arc<MockHardwareTrackerClient>),
 }
 
 impl HardwareTrackerClientFacade {
-    pub(crate) const fn real() -> Self {
-        Self::Real(&HardwareTrackerClientImpl)
+    pub(crate) const fn target() -> Self {
+        Self::Target(&HardwareTrackerClientImpl)
     }
 
     #[cfg(test)]
@@ -36,7 +36,7 @@ impl HardwareTrackerClient for HardwareTrackerClientFacade {
         memory_region_id: Option<MemoryRegionId>,
     ) {
         match self {
-            Self::Real(real) => {
+            Self::Target(real) => {
                 real.update_pin_status(processor_id, memory_region_id);
             }
             #[cfg(test)]

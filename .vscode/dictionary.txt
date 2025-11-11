@@ -6,6 +6,7 @@ clippy
 cloneable
 cpulist
 cpus
+cpuset
 Dataless
 Deque
 doctest
@@ -31,6 +32,7 @@ pointee
 println
 reentrancy
 repr
+sched
 scopeguard
 Symcrypt
 taskset

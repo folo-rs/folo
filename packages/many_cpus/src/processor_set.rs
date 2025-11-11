@@ -102,8 +102,8 @@ impl ProcessorSet {
         // this should be easy to control.
         Self::new(
             processors,
-            HardwareTrackerClientFacade::real(),
-            PlatformFacade::real(),
+            HardwareTrackerClientFacade::target(),
+            PlatformFacade::target(),
         )
     }
 
@@ -116,8 +116,8 @@ impl ProcessorSet {
         // this should be easy to control.
         Self::new(
             NonEmpty::singleton(processor),
-            HardwareTrackerClientFacade::real(),
-            PlatformFacade::real(),
+            HardwareTrackerClientFacade::target(),
+            PlatformFacade::target(),
         )
     }
 
@@ -614,5 +614,204 @@ mod tests {
         let single_processor_set = ProcessorSet::single();
 
         assert_eq!(single_processor_set.len(), 1);
+    }
+}
+
+/// Fallback PAL integration tests - these test the integration between `ProcessorSet`
+/// and the fallback platform abstraction layer.
+///
+/// Miri is excluded because `std::thread::available_parallelism()` is not supported under Miri.
+#[cfg(all(any(test, not(any(target_os = "linux", windows))), not(miri)))]
+mod tests_fallback {
+    use std::thread;
+
+    use new_zealand::nz;
+
+    use crate::clients::HardwareTrackerClientFacade;
+    use crate::pal::fallback::{BUILD_TARGET_PLATFORM, ProcessorImpl as FallbackProcessor};
+    use crate::pal::{PlatformFacade, ProcessorFacade};
+    use crate::{HardwareTracker, Processor, ProcessorSet};
+
+    #[test]
+    fn smoke_test() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let processors = nonempty::nonempty![
+            Processor::new(ProcessorFacade::Fallback(FallbackProcessor::new(0))),
+            Processor::new(ProcessorFacade::Fallback(FallbackProcessor::new(1)))
+        ];
+
+        let tracker_client = HardwareTrackerClientFacade::target();
+
+        let processor_set = ProcessorSet::new(processors, tracker_client, pal);
+
+        assert_eq!(processor_set.len(), 2);
+
+        let mut processor_iter = processor_set.processors().iter();
+
+        let p1 = processor_iter.next().unwrap();
+        assert_eq!(p1.id(), 0);
+        assert_eq!(p1.memory_region_id(), 0);
+
+        let p2 = processor_iter.next().unwrap();
+        assert_eq!(p2.id(), 1);
+        assert_eq!(p2.memory_region_id(), 0);
+
+        assert!(processor_iter.next().is_none());
+
+        processor_set.pin_current_thread_to();
+
+        let threads_spawned = Arc::new(AtomicUsize::new(0));
+        let threads_spawned_clone = Arc::clone(&threads_spawned);
+
+        processor_set
+            .spawn_thread(move |_| {
+                threads_spawned_clone.fetch_add(1, Ordering::Relaxed);
+            })
+            .join()
+            .unwrap();
+
+        assert_eq!(threads_spawned.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn pin_updates_tracker() {
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let processors = nonempty::nonempty![Processor::new(ProcessorFacade::Fallback(
+            FallbackProcessor::new(0)
+        ))];
+
+        let tracker_client = HardwareTrackerClientFacade::target();
+
+        let processor_set = ProcessorSet::new(processors, tracker_client, pal);
+
+        processor_set.pin_current_thread_to();
+
+        // Verify that the tracker now reports pinning.
+        assert!(HardwareTracker::is_thread_processor_pinned());
+        assert!(HardwareTracker::is_thread_memory_region_pinned());
+    }
+
+    #[test]
+    fn spawn_thread_pins_correctly() {
+        use std::sync::mpsc;
+
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let processors = nonempty::nonempty![Processor::new(ProcessorFacade::Fallback(
+            FallbackProcessor::new(0)
+        ))];
+
+        let tracker_client = HardwareTrackerClientFacade::target();
+
+        let processor_set = ProcessorSet::new(processors, tracker_client, pal);
+
+        let (tx, rx) = mpsc::channel();
+
+        processor_set
+            .spawn_thread(move |_| {
+                let is_pinned = HardwareTracker::is_thread_processor_pinned();
+                tx.send(is_pinned).unwrap();
+            })
+            .join()
+            .unwrap();
+
+        let is_pinned = rx.recv().unwrap();
+        assert!(is_pinned);
+    }
+
+    #[test]
+    fn spawn_threads_pins_all_correctly() {
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let processors = nonempty::nonempty![
+            Processor::new(ProcessorFacade::Fallback(FallbackProcessor::new(0))),
+            Processor::new(ProcessorFacade::Fallback(FallbackProcessor::new(1)))
+        ];
+
+        let tracker_client = HardwareTrackerClientFacade::target();
+
+        let processor_set = ProcessorSet::new(processors, tracker_client, pal);
+
+        let threads =
+            processor_set.spawn_threads(|_| HardwareTracker::is_thread_processor_pinned());
+
+        for thread in threads {
+            let is_pinned = thread.join().unwrap();
+            assert!(is_pinned);
+        }
+    }
+
+    #[test]
+    fn from_processor_preserves_data() {
+        let platform = &BUILD_TARGET_PLATFORM;
+        let _pal = PlatformFacade::Fallback(platform);
+
+        let processor = Processor::new(ProcessorFacade::Fallback(FallbackProcessor::new(0)));
+
+        // We need to ensure the tracker and PAL singletons are using fallback.
+        // For this test, we just verify basic construction works.
+        let processor_id = processor.id();
+
+        let processor_set = ProcessorSet::from_processor(processor);
+
+        assert_eq!(processor_set.len(), 1);
+        assert_eq!(processor_set.processors().first().id(), processor_id);
+    }
+
+    #[test]
+    fn inherit_on_pinned() {
+        use std::thread;
+
+        thread::spawn(|| {
+            let one = ProcessorSet::builder().take(nz!(1)).unwrap();
+
+            one.pin_current_thread_to();
+
+            let current_thread_allowed = ProcessorSet::builder()
+                .where_available_for_current_thread()
+                .take_all()
+                .unwrap();
+
+            // After pinning to one processor, we should see only that processor
+            // when we inherit the affinity.
+            assert_eq!(current_thread_allowed.len(), 1);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn to_builder_preserves_processors() {
+        let set = ProcessorSet::builder().take(nz!(1)).unwrap();
+
+        let builder = set.to_builder();
+
+        let set2 = builder.take_all().unwrap();
+        assert_eq!(set2.len(), 1);
+
+        let processor1 = set.processors().first();
+        let processor2 = set2.processors().first();
+
+        assert_eq!(processor1.id(), processor2.id());
+    }
+
+    #[test]
+    fn default_returns_all_processors() {
+        let default_set = ProcessorSet::default();
+
+        let expected_count = thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1);
+
+        assert_eq!(default_set.len(), expected_count);
     }
 }

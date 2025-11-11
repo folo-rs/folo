@@ -4,20 +4,25 @@ use derive_more::derive::Display;
 
 #[cfg(test)]
 use crate::pal::FakeProcessor;
+#[cfg(test)]
+use crate::pal::fallback::ProcessorImpl as FallbackProcessor;
 use crate::pal::{AbstractProcessor, ProcessorImpl};
 
 #[derive(Clone, Copy, Display, Eq, Hash, PartialEq)]
 pub(crate) enum ProcessorFacade {
-    Real(ProcessorImpl),
+    Target(ProcessorImpl),
+
+    #[cfg(test)]
+    Fallback(FallbackProcessor),
 
     #[cfg(test)]
     Fake(FakeProcessor),
 }
 
 impl ProcessorFacade {
-    pub(crate) fn as_real(&self) -> &ProcessorImpl {
+    pub(crate) fn as_target(&self) -> &ProcessorImpl {
         match self {
-            Self::Real(p) => p,
+            Self::Target(p) => p,
             #[cfg(test)]
             _ => panic!("attempted to dereference facade into wrong type"),
         }
@@ -33,7 +38,9 @@ impl AsRef<Self> for ProcessorFacade {
 impl AbstractProcessor for ProcessorFacade {
     fn id(&self) -> crate::ProcessorId {
         match self {
-            Self::Real(p) => p.id(),
+            Self::Target(p) => p.id(),
+            #[cfg(test)]
+            Self::Fallback(p) => p.id(),
             #[cfg(test)]
             Self::Fake(p) => p.id(),
         }
@@ -41,7 +48,9 @@ impl AbstractProcessor for ProcessorFacade {
 
     fn memory_region_id(&self) -> crate::MemoryRegionId {
         match self {
-            Self::Real(p) => p.memory_region_id(),
+            Self::Target(p) => p.memory_region_id(),
+            #[cfg(test)]
+            Self::Fallback(p) => p.memory_region_id(),
             #[cfg(test)]
             Self::Fake(p) => p.memory_region_id(),
         }
@@ -49,7 +58,9 @@ impl AbstractProcessor for ProcessorFacade {
 
     fn efficiency_class(&self) -> crate::EfficiencyClass {
         match self {
-            Self::Real(p) => p.efficiency_class(),
+            Self::Target(p) => p.efficiency_class(),
+            #[cfg(test)]
+            Self::Fallback(p) => p.efficiency_class(),
             #[cfg(test)]
             Self::Fake(p) => p.efficiency_class(),
         }
@@ -58,7 +69,7 @@ impl AbstractProcessor for ProcessorFacade {
 
 impl From<ProcessorImpl> for ProcessorFacade {
     fn from(p: ProcessorImpl) -> Self {
-        Self::Real(p)
+        Self::Target(p)
     }
 }
 
@@ -72,7 +83,9 @@ impl From<FakeProcessor> for ProcessorFacade {
 impl Debug for ProcessorFacade {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Real(inner) => inner.fmt(f),
+            Self::Target(inner) => inner.fmt(f),
+            #[cfg(test)]
+            Self::Fallback(inner) => inner.fmt(f),
             #[cfg(test)]
             Self::Fake(inner) => inner.fmt(f),
         }

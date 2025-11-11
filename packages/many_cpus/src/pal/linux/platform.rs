@@ -14,7 +14,7 @@ use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
 /// Singleton instance of `BuildTargetPlatform`, used by public API types
 /// to hook up to the correct PAL implementation.
 pub(crate) static BUILD_TARGET_PLATFORM: BuildTargetPlatform =
-    BuildTargetPlatform::new(BindingsFacade::real(), FilesystemFacade::real());
+    BuildTargetPlatform::new(BindingsFacade::target(), FilesystemFacade::target());
 
 /// The platform that matches the crate's build target.
 ///
@@ -51,7 +51,7 @@ impl Platform for BuildTargetPlatform {
             unsafe {
                 // TODO: This can go out of bounds with giant CPU set (1000+), we would need to use
                 // dynamically allocated CPU sets instead of relying on the fixed-size one in libc.
-                libc::CPU_SET(processor.as_ref().as_real().id as usize, &mut cpu_set);
+                libc::CPU_SET(processor.as_ref().as_target().id as usize, &mut cpu_set);
             }
         }
 
@@ -139,7 +139,7 @@ impl BuildTargetPlatform {
                     .iter()
                     .filter(|p| p.is_active)
                     .copied()
-                    .map(ProcessorFacade::Real)
+                    .map(ProcessorFacade::Target)
                     .collect_vec())
                     .expect("found 0 active processors - impossible because this code is running on an active processor")
         })
@@ -541,26 +541,26 @@ mod tests {
             1,
             processors
                 .iter()
-                .map(|p| p.as_real().memory_region_id)
+                .map(|p| p.as_target().memory_region_id)
                 .dedup()
                 .count()
         );
 
         let p0 = &processors[0];
-        assert_eq!(p0.as_real().id, 0);
-        assert_eq!(p0.as_real().memory_region_id, 0);
+        assert_eq!(p0.as_target().id, 0);
+        assert_eq!(p0.as_target().memory_region_id, 0);
 
         let p1 = &processors[1];
-        assert_eq!(p1.as_real().id, 1);
-        assert_eq!(p1.as_real().memory_region_id, 0);
+        assert_eq!(p1.as_target().id, 1);
+        assert_eq!(p1.as_target().memory_region_id, 0);
 
         let p2 = &processors[2];
-        assert_eq!(p2.as_real().id, 2);
-        assert_eq!(p2.as_real().memory_region_id, 0);
+        assert_eq!(p2.as_target().id, 2);
+        assert_eq!(p2.as_target().memory_region_id, 0);
 
         let p3 = &processors[3];
-        assert_eq!(p3.as_real().id, 3);
-        assert_eq!(p3.as_real().memory_region_id, 0);
+        assert_eq!(p3.as_target().id, 3);
+        assert_eq!(p3.as_target().memory_region_id, 0);
     }
 
     #[test]
@@ -591,22 +591,22 @@ mod tests {
             1,
             processors
                 .iter()
-                .map(|p| p.as_real().memory_region_id)
+                .map(|p| p.as_target().memory_region_id)
                 .dedup()
                 .count()
         );
 
         let p0 = &processors[0];
-        assert_eq!(p0.as_real().id, 0);
-        assert_eq!(p0.as_real().memory_region_id, 0);
+        assert_eq!(p0.as_target().id, 0);
+        assert_eq!(p0.as_target().memory_region_id, 0);
 
         let p1 = &processors[1];
-        assert_eq!(p1.as_real().id, 1);
-        assert_eq!(p1.as_real().memory_region_id, 0);
+        assert_eq!(p1.as_target().id, 1);
+        assert_eq!(p1.as_target().memory_region_id, 0);
 
         let p2 = &processors[2];
-        assert_eq!(p2.as_real().id, 3);
-        assert_eq!(p2.as_real().memory_region_id, 0);
+        assert_eq!(p2.as_target().id, 3);
+        assert_eq!(p2.as_target().memory_region_id, 0);
     }
 
     #[test]
@@ -638,18 +638,18 @@ mod tests {
             1,
             processors
                 .iter()
-                .map(|p| p.as_real().memory_region_id)
+                .map(|p| p.as_target().memory_region_id)
                 .dedup()
                 .count()
         );
 
         let p0 = &processors[0];
-        assert_eq!(p0.as_real().id, 0);
-        assert_eq!(p0.as_real().memory_region_id, 0);
+        assert_eq!(p0.as_target().id, 0);
+        assert_eq!(p0.as_target().memory_region_id, 0);
 
         let p1 = &processors[1];
-        assert_eq!(p1.as_real().id, 1);
-        assert_eq!(p1.as_real().memory_region_id, 0);
+        assert_eq!(p1.as_target().id, 1);
+        assert_eq!(p1.as_target().memory_region_id, 0);
     }
 
     #[test]
@@ -675,25 +675,31 @@ mod tests {
 
         // Node 0
         let p0 = &processors[0];
-        assert_eq!(p0.as_real().id, 0);
-        assert_eq!(p0.as_real().memory_region_id, 0);
-        assert_eq!(p0.as_real().efficiency_class, EfficiencyClass::Performance);
+        assert_eq!(p0.as_target().id, 0);
+        assert_eq!(p0.as_target().memory_region_id, 0);
+        assert_eq!(
+            p0.as_target().efficiency_class,
+            EfficiencyClass::Performance
+        );
 
         let p1 = &processors[1];
-        assert_eq!(p1.as_real().id, 1);
-        assert_eq!(p1.as_real().memory_region_id, 0);
-        assert_eq!(p1.as_real().efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(p1.as_target().id, 1);
+        assert_eq!(p1.as_target().memory_region_id, 0);
+        assert_eq!(p1.as_target().efficiency_class, EfficiencyClass::Efficiency);
 
         // Node 1
         let p2 = &processors[2];
-        assert_eq!(p2.as_real().id, 2);
-        assert_eq!(p2.as_real().memory_region_id, 1);
-        assert_eq!(p2.as_real().efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(p2.as_target().id, 2);
+        assert_eq!(p2.as_target().memory_region_id, 1);
+        assert_eq!(p2.as_target().efficiency_class, EfficiencyClass::Efficiency);
 
         let p3 = &processors[3];
-        assert_eq!(p3.as_real().id, 3);
-        assert_eq!(p3.as_real().memory_region_id, 1);
-        assert_eq!(p3.as_real().efficiency_class, EfficiencyClass::Performance);
+        assert_eq!(p3.as_target().id, 3);
+        assert_eq!(p3.as_target().memory_region_id, 1);
+        assert_eq!(
+            p3.as_target().efficiency_class,
+            EfficiencyClass::Performance
+        );
     }
 
     #[test]
@@ -721,23 +727,23 @@ mod tests {
         // First 4 in node 0 => Performance
         for i in 0..4 {
             let p = &processors[i];
-            assert_eq!(p.as_real().id, i as ProcessorId);
-            assert_eq!(p.as_real().memory_region_id, 0);
-            assert_eq!(p.as_real().efficiency_class, EfficiencyClass::Performance);
+            assert_eq!(p.as_target().id, i as ProcessorId);
+            assert_eq!(p.as_target().memory_region_id, 0);
+            assert_eq!(p.as_target().efficiency_class, EfficiencyClass::Performance);
         }
         // Next 2 in node 1 => Efficiency
         for i in 4..6 {
             let p = &processors[i];
-            assert_eq!(p.as_real().id, i as ProcessorId);
-            assert_eq!(p.as_real().memory_region_id, 1);
-            assert_eq!(p.as_real().efficiency_class, EfficiencyClass::Efficiency);
+            assert_eq!(p.as_target().id, i as ProcessorId);
+            assert_eq!(p.as_target().memory_region_id, 1);
+            assert_eq!(p.as_target().efficiency_class, EfficiencyClass::Efficiency);
         }
         // Last 2 in node 2 => Efficiency
         for i in 6..8 {
             let p = &processors[i];
-            assert_eq!(p.as_real().id, i as ProcessorId);
-            assert_eq!(p.as_real().memory_region_id, 2);
-            assert_eq!(p.as_real().efficiency_class, EfficiencyClass::Efficiency);
+            assert_eq!(p.as_target().id, i as ProcessorId);
+            assert_eq!(p.as_target().memory_region_id, 2);
+            assert_eq!(p.as_target().efficiency_class, EfficiencyClass::Efficiency);
         }
     }
 
@@ -763,19 +769,25 @@ mod tests {
 
         // Node 1 => [Perf, Eff, Perf]
         let p0 = &processors[0];
-        assert_eq!(p0.as_real().id, 3);
-        assert_eq!(p0.as_real().memory_region_id, 1);
-        assert_eq!(p0.as_real().efficiency_class, EfficiencyClass::Performance);
+        assert_eq!(p0.as_target().id, 3);
+        assert_eq!(p0.as_target().memory_region_id, 1);
+        assert_eq!(
+            p0.as_target().efficiency_class,
+            EfficiencyClass::Performance
+        );
 
         let p1 = &processors[1];
-        assert_eq!(p1.as_real().id, 4);
-        assert_eq!(p1.as_real().memory_region_id, 1);
-        assert_eq!(p1.as_real().efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(p1.as_target().id, 4);
+        assert_eq!(p1.as_target().memory_region_id, 1);
+        assert_eq!(p1.as_target().efficiency_class, EfficiencyClass::Efficiency);
 
         let p2 = &processors[2];
-        assert_eq!(p2.as_real().id, 5);
-        assert_eq!(p2.as_real().memory_region_id, 1);
-        assert_eq!(p2.as_real().efficiency_class, EfficiencyClass::Performance);
+        assert_eq!(p2.as_target().id, 5);
+        assert_eq!(p2.as_target().memory_region_id, 1);
+        assert_eq!(
+            p2.as_target().efficiency_class,
+            EfficiencyClass::Performance
+        );
     }
 
     #[test]
@@ -802,25 +814,31 @@ mod tests {
 
         // Node 0 => [Eff, Eff]
         let p0 = &processors[0];
-        assert_eq!(p0.as_real().id, 0);
-        assert_eq!(p0.as_real().memory_region_id, 0);
-        assert_eq!(p0.as_real().efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(p0.as_target().id, 0);
+        assert_eq!(p0.as_target().memory_region_id, 0);
+        assert_eq!(p0.as_target().efficiency_class, EfficiencyClass::Efficiency);
 
         let p1 = &processors[1];
-        assert_eq!(p1.as_real().id, 2);
-        assert_eq!(p1.as_real().memory_region_id, 0);
-        assert_eq!(p1.as_real().efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(p1.as_target().id, 2);
+        assert_eq!(p1.as_target().memory_region_id, 0);
+        assert_eq!(p1.as_target().efficiency_class, EfficiencyClass::Efficiency);
 
         // Node 1 => [Perf, Perf]
         let p2 = &processors[2];
-        assert_eq!(p2.as_real().id, 4);
-        assert_eq!(p2.as_real().memory_region_id, 1);
-        assert_eq!(p2.as_real().efficiency_class, EfficiencyClass::Performance);
+        assert_eq!(p2.as_target().id, 4);
+        assert_eq!(p2.as_target().memory_region_id, 1);
+        assert_eq!(
+            p2.as_target().efficiency_class,
+            EfficiencyClass::Performance
+        );
 
         let p3 = &processors[3];
-        assert_eq!(p3.as_real().id, 6);
-        assert_eq!(p3.as_real().memory_region_id, 1);
-        assert_eq!(p3.as_real().efficiency_class, EfficiencyClass::Performance);
+        assert_eq!(p3.as_target().id, 6);
+        assert_eq!(p3.as_target().memory_region_id, 1);
+        assert_eq!(
+            p3.as_target().efficiency_class,
+            EfficiencyClass::Performance
+        );
     }
 
     /// Configures mock bindings and filesystem to simulate a particular type of processor layout.
@@ -1103,7 +1121,7 @@ mod tests {
         let efficiency_processors = NonEmpty::from_vec(
             processors
                 .iter()
-                .filter(|p| p.as_real().efficiency_class == EfficiencyClass::Efficiency)
+                .filter(|p| p.as_target().efficiency_class == EfficiencyClass::Efficiency)
                 .collect_vec(),
         )
         .unwrap();
@@ -1597,13 +1615,19 @@ CPU revision    : 1
         assert_eq!(processors.len(), 2);
 
         let p0 = &processors[0];
-        assert_eq!(p0.as_real().id, 0);
-        assert_eq!(p0.as_real().memory_region_id, 0);
-        assert_eq!(p0.as_real().efficiency_class, EfficiencyClass::Performance);
+        assert_eq!(p0.as_target().id, 0);
+        assert_eq!(p0.as_target().memory_region_id, 0);
+        assert_eq!(
+            p0.as_target().efficiency_class,
+            EfficiencyClass::Performance
+        );
 
         let p1 = &processors[1];
-        assert_eq!(p1.as_real().id, 1);
-        assert_eq!(p1.as_real().memory_region_id, 0);
-        assert_eq!(p1.as_real().efficiency_class, EfficiencyClass::Performance);
+        assert_eq!(p1.as_target().id, 1);
+        assert_eq!(p1.as_target().memory_region_id, 0);
+        assert_eq!(
+            p1.as_target().efficiency_class,
+            EfficiencyClass::Performance
+        );
     }
 }

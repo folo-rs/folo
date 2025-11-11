@@ -58,6 +58,22 @@
 //! The functionality may also work on other operating systems if they offer compatible platform
 //! APIs but this is not actively tested.
 //!
+//! ## Unsupported platforms
+//!
+//! On operating systems without native support (such as macOS, BSD variants, etc.), this package
+//! provides a fallback implementation that allows code to compile and run with graceful degradation:
+//!
+//! * Processor count is determined via `std::thread::available_parallelism()`
+//! * All processors are simulated as being in a single memory region (region 0)
+//! * All processors are marked as Performance class
+//! * Thread pinning operations succeed but do not actually pin threads to processors
+//! * Current processor tracking uses stable thread-local IDs derived from thread IDs
+//!
+//! While this fallback behavior maintains API compatibility and allows applications to function,
+//! it does not provide the performance benefits of actual processor pinning and topology awareness.
+//! Applications running on unsupported platforms will not see performance improvements from using
+//! this package but will still function correctly.
+//!
 //! # Quick start
 //!
 //! The simplest scenario is when you want to start a thread on every processor in the default
