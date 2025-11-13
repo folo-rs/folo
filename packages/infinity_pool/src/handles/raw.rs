@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::fmt;
 use std::pin::Pin;
 use std::ptr::NonNull;
@@ -21,6 +22,8 @@ where
 
     /// Handle to the object in the slab. This grants us access to the object's pointer
     /// and allows us to operate on the object (e.g. to remove it or create a reference).
+    ///
+    /// We inherit the thread-safety properties of the slab handle (Send from T, Sync always).
     slab_handle: SlabHandle<T>,
 }
 
@@ -59,19 +62,23 @@ impl<T: ?Sized> RawPooled<T> {
 
     /// Erase the type information from this handle for internal use by remover logic.
     ///
+    /// # Safety
+    ///
     /// This method is intended for internal use only and does not enforce trait bounds
     /// on the type being erased. The caller must guarantee that the type-erased handle
     /// will not be used in a way that would take advantage of auto traits of `()` that
-    /// the original type `T` did not have (such as `Send`, `Sync`, `Unpin`).
+    /// the original type `T` did not have (such as `Send`).
     ///
-    /// For public use, see [`erase()`](Self::erase), which enforces appropriate trait bounds.
+    /// For public use, see [`erase()`](Self::erase), which has simplified safety rules
+    /// because it can rely on public API constraints being enforced on all accesses.
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
-    pub(crate) fn erase_raw(self) -> RawPooled<()> {
+    pub(crate) unsafe fn erase_raw(self) -> RawPooled<()> {
         RawPooled {
             slab_index: self.slab_index,
-            slab_handle: self.slab_handle.erase(),
+            // SAFETY: Forwarding safety guarantees from the caller.
+            slab_handle: unsafe { self.slab_handle.erase() },
         }
     }
 
@@ -98,23 +105,6 @@ impl<T: ?Sized> RawPooled<T> {
         unsafe { self.ptr().as_ref() }
     }
 
-    /// Erase the type information from this handle, converting it to `RawPooled<()>`.
-    ///
-    /// This is useful for extending the lifetime of an object in the pool without retaining
-    /// type information. The type-erased handle prevents access to the object but ensures
-    /// it remains in the pool.
-    #[must_use]
-    #[inline]
-    #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
-    pub fn erase(self) -> RawPooled<()>
-    where
-        T: Send + Sync,
-    {
-        self.erase_raw()
-    }
-}
-
-impl<T: ?Sized> RawPooled<T> {
     /// Casts this handle to reference the target as a trait object.
     ///
     /// This method is only intended for use by the [`define_pooled_dyn_cast!`] macro
@@ -144,6 +134,24 @@ impl<T: ?Sized> RawPooled<T> {
             slab_handle: new_handle,
         }
     }
+
+    /// Erase the type information from this handle, converting it to `RawPooled<()>`.
+    ///
+    /// This is useful for extending the lifetime of an object in the pool without retaining
+    /// type information. The type-erased handle prevents access to the object but provides
+    /// the capability to type-agnostically remove the object at a later point in time.
+    #[must_use]
+    #[inline]
+    #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
+    pub fn erase(self) -> RawPooled<()> {
+        // SAFETY: The risk is that if `T: !Send` then `Self<()>` would be `Send`. Calling
+        // `pool.remove()` with this handle would move the object across threads to drop it.
+        // However, this cannot actually happen because for this call to be possible, `pool`
+        // would need to at minimum be `Send` (either to move it to a new thread or to wrap in
+        // a mutex and gain `Sync` with an exclusive reference), which is only possible if
+        // `T: Send` to begin with because that is a condition set by the pool itself.
+        unsafe { self.erase_raw() }
+    }
 }
 
 impl<T: ?Sized> Clone for RawPooled<T> {
@@ -157,7 +165,7 @@ impl<T: ?Sized> Copy for RawPooled<T> {}
 
 impl<T: ?Sized> fmt::Debug for RawPooled<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawPooled")
+        f.debug_struct(type_name::<Self>())
             .field("slab_index", &self.slab_index)
             .field("slab_handle", &self.slab_handle)
             .finish()
@@ -172,23 +180,24 @@ impl<T: ?Sized> From<RawPooledMut<T>> for RawPooled<T> {
 }
 
 #[cfg(test)]
+#[allow(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
 mod tests {
-    use std::cell::Cell;
-
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
+    use crate::{NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};
 
-    // u32 is Sync, so RawPooled<u32> should be Send (but not Sync).
-    assert_impl_all!(RawPooled<u32>: Send);
-    assert_not_impl_any!(RawPooled<u32>: Sync);
+    assert_impl_all!(RawPooled<SendAndSync>: Send, Sync);
+    assert_impl_all!(RawPooled<SendNotSync>: Send, Sync);
+    assert_impl_all!(RawPooled<NotSendNotSync>: Sync);
+    assert_impl_all!(RawPooled<NotSendSync>:  Sync);
 
-    // Cell is Send but not Sync, so RawPooled<Cell> should be neither Send nor Sync.
-    assert_not_impl_any!(RawPooled<Cell<u32>>: Send, Sync);
+    assert_not_impl_any!(RawPooled<NotSendNotSync>: Send);
+    assert_not_impl_any!(RawPooled<NotSendSync>: Send);
 
-    // Type-erased handles preserve auto traits correctly.
-    assert_impl_all!(RawPooled<()>: Send, Unpin);
-    assert_not_impl_any!(RawPooled<()>: Sync);
+    // Shared raw handles are just fancy pointers, value objects.
+    assert_impl_all!(RawPooled<SendAndSync>: Copy);
+    assert_not_impl_any!(RawPooled<SendAndSync>: Drop);
 
     #[test]
     fn erase_raw_and_public_erase() {
@@ -199,7 +208,7 @@ mod tests {
         let shared = handle.into_shared();
 
         // Both erase_raw() and erase() produce the same result.
-        let erased_raw = shared.erase_raw();
+        let erased_raw = unsafe { shared.erase_raw() };
         let erased_public = shared.erase();
 
         // Both are RawPooled<()> and behave identically.

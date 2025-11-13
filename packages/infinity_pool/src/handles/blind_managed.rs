@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::borrow::Borrow;
 use std::fmt;
 use std::ops::Deref;
@@ -16,17 +17,27 @@ use crate::{BlindPoolCore, BlindPooledMut, LayoutKey, RawPooled, RawPooledMut};
 #[doc = include_str!("../../doc/snippets/shared_handle_implications.md")]
 #[doc = include_str!("../../doc/snippets/nonlocal_handle_thread_safety.md")]
 pub struct BlindPooled<T: ?Sized> {
+    // We inherit our thread-safety traits from this one (Send from T, Sync always).
     inner: RawPooled<T>,
+
     remover: Arc<Remover>,
 }
 
 impl<T: ?Sized> BlindPooled<T> {
+    /// # Safety
+    ///
+    /// Even though the signature does not require `T: Send`, the underlying object must be `Send`.
+    /// The signature does not require it to be compatible with casting to trait objects that do
+    /// not have `Send` as a supertrait.
     #[must_use]
-    pub(crate) fn new(inner: RawPooledMut<T>, key: LayoutKey, core: BlindPoolCore) -> Self {
+    pub(crate) unsafe fn new(inner: RawPooledMut<T>, key: LayoutKey, core: BlindPoolCore) -> Self {
         let inner = inner.into_shared();
 
         let remover = Remover {
-            handle: inner.erase_raw(),
+            // SAFETY: This is a thread-safe handle, which means it can only work on Send types,
+            // so we can have no risk of `T: !Send` which is the main thing we worry about when
+            // erasing the object type. No issue with `Send` types at all.
+            handle: unsafe { inner.erase_raw() },
             key,
             core,
         };
@@ -89,12 +100,12 @@ impl<T: ?Sized> BlindPooled<T> {
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
-    pub fn erase(self) -> BlindPooled<()>
-    where
-        T: Send + Sync,
-    {
+    pub fn erase(self) -> BlindPooled<()> {
         BlindPooled {
-            inner: self.inner.erase_raw(),
+            // SAFETY: This is a thread-safe handle, which means it can only work on Send types,
+            // so we can have no risk of `T: !Send` which is the main thing we worry about when
+            // erasing the object type. No issue with `Send` types at all.
+            inner: unsafe { self.inner.erase_raw() },
             remover: self.remover,
         }
     }
@@ -102,7 +113,7 @@ impl<T: ?Sized> BlindPooled<T> {
 
 impl<T: ?Sized> fmt::Debug for BlindPooled<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BlindPooled")
+        f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)
             .field("remover", &self.remover)
             .finish()
@@ -179,24 +190,26 @@ impl Drop for Remover {
     }
 }
 
-// SAFETY: By default we do not have `Sync` because the handle is not `Sync`. However, the reason
-// for that is because the handle can be used to access the object. As we have a type-erased handle
-// that cannot access anything meaningful, and as the remover is not accessing the object anyway,
-// just removing it from the pool, we can safety glue back the `Sync` label onto the type.
-unsafe impl Sync for Remover {}
-
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
+    use crate::{NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};
 
-    // u32 is Sync, so BlindPooled<u32> should be Send (but not Sync).
-    assert_impl_all!(BlindPooled<u32>: Send);
-    assert_not_impl_any!(BlindPooled<u32>: Sync);
+    assert_impl_all!(BlindPooled<SendAndSync>: Send, Sync);
+    assert_impl_all!(BlindPooled<SendNotSync>: Send, Sync);
+    assert_impl_all!(BlindPooled<NotSendNotSync>: Sync);
+    assert_impl_all!(BlindPooled<NotSendSync>: Sync);
 
-    // Cell is Send but not Sync, so BlindPooled<Cell> should be neither Send nor Sync.
-    assert_not_impl_any!(BlindPooled<Cell<u32>>: Send, Sync);
+    assert_not_impl_any!(BlindPooled<NotSendNotSync>: Send);
+    assert_not_impl_any!(BlindPooled<NotSendSync>: Send);
+
+    // This is a shared handle, must be cloneable.
+    assert_impl_all!(BlindPooled<SendAndSync>: Clone);
+
+    assert_impl_all!(Remover: Send, Sync);
+
+    // Must have a destructor because we need to remove the object on destroy.
+    assert_impl_all!(Remover: Drop);
 }

@@ -137,6 +137,8 @@ mod drop_policy;
 mod handles;
 mod opaque;
 mod pinned;
+#[cfg(test)]
+mod thread_safety_types;
 
 pub use blind::*;
 pub use builders::*;
@@ -147,3 +149,5 @@ pub use opaque::*;
 #[doc(hidden)]
 pub use pastey::paste as __private_paste;
 pub use pinned::*;
+#[cfg(test)]
+pub(crate) use thread_safety_types::*;

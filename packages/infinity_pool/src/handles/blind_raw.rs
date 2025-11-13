@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::fmt;
 use std::pin::Pin;
 use std::ptr::NonNull;
@@ -15,6 +16,8 @@ where
     T: ?Sized,
 {
     key: LayoutKey,
+
+    // We inherit our thread-safety traits from this one (Send from T, Sync always).
     inner: RawPooled<T>,
 }
 
@@ -68,26 +71,6 @@ impl<T: ?Sized> RawBlindPooled<T> {
         unsafe { self.ptr().as_ref() }
     }
 
-    /// Erase the type information from this handle, converting it to `RawBlindPooled<()>`.
-    ///
-    /// This is useful for extending the lifetime of an object in the pool without retaining
-    /// type information. The type-erased handle prevents access to the object but ensures
-    /// it remains in the pool.
-    #[must_use]
-    #[inline]
-    #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
-    pub fn erase(self) -> RawBlindPooled<()>
-    where
-        T: Send + Sync,
-    {
-        RawBlindPooled {
-            key: self.key,
-            inner: self.inner.erase_raw(),
-        }
-    }
-}
-
-impl<T: ?Sized> RawBlindPooled<T> {
     /// Casts this handle to reference the target as a trait object.
     ///
     /// This method is only intended for use by the [`define_pooled_dyn_cast!`] macro
@@ -114,6 +97,30 @@ impl<T: ?Sized> RawBlindPooled<T> {
             inner: new_inner,
         }
     }
+
+    /// Erase the type information from this handle, converting it to `RawBlindPooled<()>`.
+    ///
+    /// This is useful for extending the lifetime of an object in the pool without retaining
+    /// type information. The type-erased handle prevents access to the object but ensures
+    /// it remains in the pool.
+    #[must_use]
+    #[inline]
+    #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
+    pub fn erase(self) -> RawBlindPooled<()>
+    where
+        T: Send,
+    {
+        RawBlindPooled {
+            key: self.key,
+            // SAFETY: The risk is that if `T: !Send` then `Self<()>` would be `Send`. Calling
+            // `pool.remove()` with this handle would move the object across threads to drop it.
+            // Therefore, we cannot allow type-erased blind handles for `!Send` types.
+            // This only affects blind pools because typed pools enforce this on a pool level,
+            // forbidding the pool itself to be accessed across threads if `T: !Send`.
+            // We are safe because this method has the additional bound `T: Send`.
+            inner: unsafe { self.inner.erase_raw() },
+        }
+    }
 }
 
 impl<T: ?Sized> Clone for RawBlindPooled<T> {
@@ -127,7 +134,7 @@ impl<T: ?Sized> Copy for RawBlindPooled<T> {}
 
 impl<T: ?Sized> fmt::Debug for RawBlindPooled<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawBlindPooled")
+        f.debug_struct(type_name::<Self>())
             .field("key", &self.key)
             .field("inner", &self.inner)
             .finish()
@@ -143,16 +150,20 @@ impl<T: ?Sized> From<RawBlindPooledMut<T>> for RawBlindPooled<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
+    use crate::{NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};
 
-    // u32 is Sync, so RawBlindPooled<u32> should be Send (but not Sync).
-    assert_impl_all!(RawBlindPooled<u32>: Send);
-    assert_not_impl_any!(RawBlindPooled<u32>: Sync);
+    assert_impl_all!(RawBlindPooled<SendAndSync>: Send, Sync);
+    assert_impl_all!(RawBlindPooled<SendNotSync>: Send, Sync);
+    assert_impl_all!(RawBlindPooled<NotSendNotSync>: Sync);
+    assert_impl_all!(RawBlindPooled<NotSendSync>:  Sync);
 
-    // Cell is Send but not Sync, so RawBlindPooled<Cell> should be neither Send nor Sync.
-    assert_not_impl_any!(RawBlindPooled<Cell<u32>>: Send, Sync);
+    assert_not_impl_any!(RawBlindPooled<NotSendNotSync>: Send);
+    assert_not_impl_any!(RawBlindPooled<NotSendSync>: Send);
+
+    // Shared raw handles are just fancy pointers, value objects.
+    assert_impl_all!(RawBlindPooled<SendAndSync>: Copy);
+    assert_not_impl_any!(RawBlindPooled<SendAndSync>: Drop);
 }

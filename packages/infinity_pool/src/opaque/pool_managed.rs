@@ -176,7 +176,8 @@ impl OpaquePool {
     pub fn insert<T: Send + 'static>(&self, value: T) -> PooledMut<T> {
         let inner = self.inner.lock().insert(value);
 
-        PooledMut::new(inner, Arc::clone(&self.inner))
+        // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
+        unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert.md")]
@@ -188,7 +189,8 @@ impl OpaquePool {
         // SAFETY: Forwarding safety guarantees from caller.
         let inner = unsafe { self.inner.lock().insert_unchecked(value) };
 
-        PooledMut::new(inner, Arc::clone(&self.inner))
+        // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
+        unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
@@ -239,7 +241,8 @@ impl OpaquePool {
         // SAFETY: Forwarding safety guarantees from caller.
         let inner = unsafe { self.inner.lock().insert_with(f) };
 
-        PooledMut::new(inner, Arc::clone(&self.inner))
+        // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
+        unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
@@ -288,7 +291,8 @@ impl OpaquePool {
         // SAFETY: Forwarding safety guarantees from caller.
         let inner = unsafe { self.inner.lock().insert_with_unchecked(f) };
 
-        PooledMut::new(inner, Arc::clone(&self.inner))
+        // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
+        unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
     }
 
     /// Calls a closure with an iterator over all objects in the pool.

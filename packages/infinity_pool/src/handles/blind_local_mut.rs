@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::borrow::{Borrow, BorrowMut};
 use std::cell::RefCell;
 use std::ops::{Deref, DerefMut};
@@ -17,6 +18,11 @@ use crate::{LayoutKey, LocalBlindPoolCore, LocalBlindPooled, RawPooledMut};
 pub struct LocalBlindPooledMut<T: ?Sized> {
     inner: RawPooledMut<T>,
     key: LayoutKey,
+
+    // This gives us our thread-safety characteristics (single-threaded),
+    // overriding those of `RawPooledMut<T>`. This is expected because we align
+    // with the stricter constraints of the pool itself, even if the underlying
+    // slab storage allows for more flexibility.
     core: LocalBlindPoolCore,
 }
 
@@ -127,7 +133,12 @@ impl<T: ?Sized> LocalBlindPooledMut<T> {
     #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
     pub fn erase(self) -> LocalBlindPooledMut<()> {
         let (inner, key, core) = self.into_parts();
-        let inner_erased = RawPooledMut::new(inner.slab_index(), inner.slab_handle().erase());
+
+        // SAFETY: This handle is single-threaded, no cross-thread access even if `T: Send`.
+        let slab_handle_erased = unsafe { inner.slab_handle().erase() };
+
+        let inner_erased = RawPooledMut::new(inner.slab_index(), slab_handle_erased);
+
         LocalBlindPooledMut {
             inner: inner_erased,
             key,
@@ -159,7 +170,7 @@ where
 
 impl<T: ?Sized> fmt::Debug for LocalBlindPooledMut<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LocalBlindPooledMut")
+        f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)
             .field("key", &self.key)
             .field("core", &self.core)
@@ -258,8 +269,15 @@ mod tests {
     use static_assertions::assert_not_impl_any;
 
     use super::*;
+    use crate::{NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};
 
-    assert_not_impl_any!(LocalBlindPooledMut<u32>: Send, Sync);
+    assert_not_impl_any!(LocalBlindPooledMut<SendAndSync>: Send, Sync);
+    assert_not_impl_any!(LocalBlindPooledMut<SendNotSync>: Send, Sync);
+    assert_not_impl_any!(LocalBlindPooledMut<NotSendNotSync>: Send, Sync);
+    assert_not_impl_any!(LocalBlindPooledMut<NotSendSync>: Send, Sync);
+
+    // This is a unique handle, must not be cloneable/copyable.
+    assert_not_impl_any!(LocalBlindPooledMut<SendAndSync>: Clone, Copy);
 
     // We expect no destructor because we treat it as `Copy` in our own Drop::drop().
     assert_not_impl_any!(RawPooledMut<()>: Drop);

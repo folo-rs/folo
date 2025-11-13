@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::cell::RefCell;
 use std::fmt;
 use std::iter::FusedIterator;
@@ -261,7 +262,7 @@ impl<T> Default for LocalPinnedPool<T> {
 
 impl<T> fmt::Debug for LocalPinnedPool<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LocalPinnedPool")
+        f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)
             .finish()
     }

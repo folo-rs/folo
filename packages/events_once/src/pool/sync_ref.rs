@@ -70,16 +70,11 @@ impl<T: Send> fmt::Debug for PooledRef<T> {
     }
 }
 
-// SAFETY: The events are synchronization primitives and can be referenced from any thread.
-// The reference itself is not synchronized, so is not Sync, but it can move between threads.
-unsafe impl<T: Send> Send for PooledRef<T> {}
-
 #[cfg(test)]
 mod tests {
-    use static_assertions::{assert_impl_all, assert_not_impl_any};
+    use static_assertions::assert_impl_all;
 
     use super::*;
 
-    assert_impl_all!(PooledRef<u32>: Send);
-    assert_not_impl_any!(PooledRef<u32>: Sync);
+    assert_impl_all!(PooledRef<u32>: Send, Sync);
 }

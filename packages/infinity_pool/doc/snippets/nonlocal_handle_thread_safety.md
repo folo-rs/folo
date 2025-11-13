@@ -1,7 +1,7 @@
 # Thread safety
 
-The handle provides access to the underlying object, so its thread-safety characteristics
-are determined by the type of the object it points to.
+The handle provides access to an object of type `T`, so its thread-safety characteristics
+are determined by the type of the object it references.
 
-If the underlying object is `Sync`, the handle is thread-mobile (`Send`). Otherwise, the
-handle is single-threaded (neither `Send` nor `Sync`).
+If the underlying object `T` is `Send` then the handle is `Send`.
+If the underlying object `T` is `Sync` then the handle is `Sync`.

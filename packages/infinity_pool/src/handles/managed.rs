@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::borrow::Borrow;
 use std::fmt;
 use std::ops::Deref;
@@ -18,17 +19,27 @@ use crate::{PooledMut, RawOpaquePoolSend, RawPooled, RawPooledMut};
 #[doc = include_str!("../../doc/snippets/shared_handle_implications.md")]
 #[doc = include_str!("../../doc/snippets/nonlocal_handle_thread_safety.md")]
 pub struct Pooled<T: ?Sized> {
+    // We inherit our thread-safety traits from this one (Send from T, Sync always).
     inner: RawPooled<T>,
+
     remover: Arc<Remover>,
 }
 
 impl<T: ?Sized> Pooled<T> {
+    /// # Safety
+    ///
+    /// Even though the signature does not require `T: Send`, the underlying object must be `Send`.
+    /// The signature does not require it to be compatible with casting to trait objects that do
+    /// not have `Send` as a supertrait.
     #[must_use]
-    pub(crate) fn new(inner: RawPooledMut<T>, pool: Arc<Mutex<RawOpaquePoolSend>>) -> Self {
+    pub(crate) unsafe fn new(inner: RawPooledMut<T>, pool: Arc<Mutex<RawOpaquePoolSend>>) -> Self {
         let inner = inner.into_shared();
 
         let remover = Remover {
-            handle: inner.erase_raw(),
+            // SAFETY: This is a thread-safe handle, which means it can only work on Send types,
+            // so we can have no risk of `T: !Send` which is the main thing we worry about when
+            // erasing the object type. No issue with `Send` types at all.
+            handle: unsafe { inner.erase_raw() },
             pool,
         };
 
@@ -90,12 +101,12 @@ impl<T: ?Sized> Pooled<T> {
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
-    pub fn erase(self) -> Pooled<()>
-    where
-        T: Send + Sync,
-    {
+    pub fn erase(self) -> Pooled<()> {
         Pooled {
-            inner: self.inner.erase_raw(),
+            // SAFETY: This is a thread-safe handle, which means it can only work on Send types,
+            // so we can have no risk of `T: !Send` which is the main thing we worry about when
+            // erasing the object type. No issue with `Send` types at all.
+            inner: unsafe { self.inner.erase_raw() },
             remover: self.remover,
         }
     }
@@ -103,7 +114,7 @@ impl<T: ?Sized> Pooled<T> {
 
 impl<T: ?Sized> fmt::Debug for Pooled<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Pooled")
+        f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)
             .field("remover", &self.remover)
             .finish()
@@ -164,7 +175,7 @@ struct Remover {
 
 impl fmt::Debug for Remover {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Remover")
+        f.debug_struct(type_name::<Self>())
             .field("handle", &self.handle)
             .field("pool", &"<pool>")
             .finish()
@@ -191,22 +202,26 @@ unsafe impl Sync for Remover {}
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
+    use crate::{NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};
 
-    // u32 is Sync, so Pooled<u32> should be Send (but not Sync).
-    assert_impl_all!(Pooled<u32>: Send);
-    assert_not_impl_any!(Pooled<u32>: Sync);
+    assert_impl_all!(Pooled<SendAndSync>: Send, Sync);
+    assert_impl_all!(Pooled<SendNotSync>: Send, Sync);
+    assert_impl_all!(Pooled<NotSendNotSync>: Sync);
+    assert_impl_all!(Pooled<NotSendSync>: Sync);
 
-    // Cell is Send but not Sync, so Pooled<Cell> should be neither Send nor Sync.
-    assert_not_impl_any!(Pooled<Cell<u32>>: Send, Sync);
+    assert_not_impl_any!(Pooled<NotSendNotSync>: Send);
+    assert_not_impl_any!(Pooled<NotSendSync>: Send);
 
-    // Type-erased handles preserve auto traits correctly.
-    assert_impl_all!(Pooled<()>: Send, Unpin);
-    assert_not_impl_any!(Pooled<()>: Sync);
+    // This is a shared handle, must be cloneable.
+    assert_impl_all!(Pooled<SendAndSync>: Clone);
+
+    assert_impl_all!(Remover: Send, Sync);
+
+    // Must have a destructor because we need to remove the object on destroy.
+    assert_impl_all!(Remover: Drop);
 
     #[test]
     fn erase_extends_lifetime() {

@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{any::type_name, fmt};
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
@@ -152,7 +152,8 @@ where
     pub fn insert(&self, value: T) -> PooledMut<T> {
         let inner = self.inner.lock().insert(value);
 
-        PooledMut::new(inner, Arc::clone(&self.inner))
+        // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
+        unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
@@ -199,7 +200,8 @@ where
         // SAFETY: Forwarding safety guarantees from caller.
         let inner = unsafe { self.inner.lock().insert_with(f) };
 
-        PooledMut::new(inner, Arc::clone(&self.inner))
+        // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
+        unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
     }
 
     /// Calls a closure with an iterator over all objects in the pool.
@@ -276,7 +278,7 @@ where
     T: Send,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PinnedPool")
+        f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)
             .finish()
     }

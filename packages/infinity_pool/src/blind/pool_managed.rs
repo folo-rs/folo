@@ -162,11 +162,14 @@ impl BlindPool {
         // SAFETY: inner pool selector guarantees matching layout.
         let inner_handle = unsafe { pool.insert_unchecked(value) };
 
-        BlindPooledMut::new(
-            inner_handle,
-            LayoutKey::with_layout_of::<T>(),
-            Arc::clone(&self.core),
-        )
+        // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
+        unsafe {
+            BlindPooledMut::new(
+                inner_handle,
+                LayoutKey::with_layout_of::<T>(),
+                Arc::clone(&self.core),
+            )
+        }
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
@@ -218,11 +221,14 @@ impl BlindPool {
         // Initialization guarantee is forwarded from the caller.
         let inner_handle = unsafe { pool.insert_with_unchecked(f) };
 
-        BlindPooledMut::new(
-            inner_handle,
-            LayoutKey::with_layout_of::<T>(),
-            Arc::clone(&self.core),
-        )
+        // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
+        unsafe {
+            BlindPooledMut::new(
+                inner_handle,
+                LayoutKey::with_layout_of::<T>(),
+                Arc::clone(&self.core),
+            )
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 affinitization
 affinitized
 affinitizing
+agnostically
 argh
 clippy
 cloneable
@@ -32,6 +33,7 @@ println
 reentrancy
 repr
 scopeguard
+supertrait
 Symcrypt
 taskset
 threadpool

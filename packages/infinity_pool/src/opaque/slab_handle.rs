@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::fmt;
 use std::ptr::{self, NonNull};
 
@@ -15,8 +16,16 @@ use std::ptr::{self, NonNull};
 /// The handle provides access to the underlying object, so its thread-safety characteristics
 /// are determined by the type of the object it points to.
 ///
-/// If the underlying object is `Sync`, the handle is thread-mobile (`Send`). Otherwise, the
-/// handle is single-threaded (neither `Send` nor `Sync`).
+/// If `T` is `Send` then the handle is also `Send`. This enables the handle to be used on the
+/// other thread to remove the object from the slab (assuming the entire slab is thread-mobile,
+/// which it may not be - depends on the type of collection it is part of and what it contains).
+/// This is because the slab requires an owned slab handle to remove an object, so a !Send slab
+/// handle prevents the object from being removed on a thread it was not inserted on.
+///
+/// This handle itself is safe to access from multiple threads, as it is immutable. Of course, it
+/// provides no direct access to the object (only a pointer) and the object of type `T` might not
+/// be safe to access across threads. However, any access of the object `T` is outside the
+/// jurisdiction of this handle type.
 pub(crate) struct SlabHandle<T: ?Sized> {
     /// Index in the slab at which this item is stored.
     ///
@@ -47,16 +56,6 @@ impl<T: ?Sized> SlabHandle<T> {
     #[must_use]
     pub(crate) fn index(&self) -> usize {
         self.index
-    }
-
-    /// Get a raw pointer to the object in the slab.
-    ///
-    /// It is the responsibility of the caller to ensure that the pointer is not used
-    /// after the object has been removed from the slab.
-    #[must_use]
-    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
-    pub(crate) fn ptr(&self) -> NonNull<T> {
-        self.ptr
     }
 
     /// Casts this handle to reference the target as a trait object.
@@ -130,13 +129,33 @@ impl<T: ?Sized> SlabHandle<T> {
     /// This is used internally by the pool cleanup system to allow uniform handling
     /// of handles with different types, particularly for shared handle cleanup where
     /// different trait object casts would otherwise create incompatible remover types.
+    ///
+    /// # Safety
+    ///
+    /// This operation may upgrade the handle from `!Send` to `Send`. The caller is
+    /// responsible for ensuring that the resulting handle does not allow the object `T`
+    /// to be accessed in a way that would violate its original thread-safety guarantees.
+    ///
+    /// Most importantly, this means if the handle is itself a reference-counting handle,
+    /// it must only be possible to erase it if `T: Send` because otherwise a type-erased
+    /// handle may end up trying to destroy a `T: !Send` on a different thread (which is invalid).
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
-    pub(crate) fn erase(self) -> SlabHandle<()> {
+    pub(crate) unsafe fn erase(self) -> SlabHandle<()> {
         SlabHandle {
             index: self.index,
             ptr: self.ptr.cast::<()>(),
         }
+    }
+
+    /// Get a raw pointer to the object in the slab.
+    ///
+    /// It is the responsibility of the caller to ensure that the pointer is not used
+    /// after the object has been removed from the slab.
+    #[must_use]
+    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
+    pub(crate) fn ptr(&self) -> NonNull<T> {
+        self.ptr
     }
 }
 
@@ -157,11 +176,14 @@ impl<T: ?Sized> PartialEq for SlabHandle<T> {
 impl<T: ?Sized> Eq for SlabHandle<T> {}
 
 // SAFETY: See type-level documentation.
-unsafe impl<T> Send for SlabHandle<T> where T: ?Sized + Sync {}
+unsafe impl<T> Send for SlabHandle<T> where T: ?Sized + Send {}
+
+// SAFETY: See type-level documentation.
+unsafe impl<T> Sync for SlabHandle<T> where T: ?Sized {}
 
 impl<T: ?Sized> fmt::Debug for SlabHandle<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SlabHandle")
+        f.debug_struct(type_name::<Self>())
             .field("index", &self.index)
             .field("ptr", &self.ptr)
             .finish()
@@ -170,19 +192,24 @@ impl<T: ?Sized> fmt::Debug for SlabHandle<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
     use std::fmt::Display;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
+    use crate::{NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};
 
-    // u32 is Sync, so SlabHandle<u32> should be Send (but not Sync).
-    assert_impl_all!(SlabHandle<u32>: Send);
-    assert_not_impl_any!(SlabHandle<u32>: Sync);
+    assert_impl_all!(SlabHandle<SendAndSync>: Send, Sync);
+    assert_impl_all!(SlabHandle<SendNotSync>: Send, Sync);
+    assert_impl_all!(SlabHandle<NotSendNotSync>: Sync);
+    assert_impl_all!(SlabHandle<NotSendSync>: Sync);
 
-    // Cell is Send but not Sync, so SlabHandle<Cell> should be neither Send nor Sync.
-    assert_not_impl_any!(SlabHandle<Cell<u32>>: Send, Sync);
+    assert_not_impl_any!(SlabHandle<NotSendNotSync>: Send);
+    assert_not_impl_any!(SlabHandle<NotSendSync>: Send);
+
+    // We expect it to work as a value type.
+    assert_impl_all!(SlabHandle<SendAndSync>: Copy);
+    assert_not_impl_any!(SlabHandle<SendAndSync>: Drop);
 
     #[test]
     fn same_index_different_ptr_is_not_equal() {

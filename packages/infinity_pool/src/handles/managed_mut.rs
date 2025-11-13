@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::borrow::{Borrow, BorrowMut};
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
@@ -18,13 +19,20 @@ use crate::{Pooled, RawOpaquePoolSend, RawPooledMut};
 #[doc = include_str!("../../doc/snippets/unique_handle_implications.md")]
 #[doc = include_str!("../../doc/snippets/nonlocal_handle_thread_safety.md")]
 pub struct PooledMut<T: ?Sized> {
+    // We inherit our thread-safety traits from this one (Send from T, Sync always).
     inner: RawPooledMut<T>,
+
     pool: Arc<Mutex<RawOpaquePoolSend>>,
 }
 
 impl<T: ?Sized> PooledMut<T> {
+    /// # Safety
+    ///
+    /// Even though the signature does not require `T: Send`, the underlying object must be `Send`.
+    /// The signature does not require it to be compatible with casting to trait objects that do
+    /// not have `Send` as a supertrait.
     #[must_use]
-    pub(crate) fn new(inner: RawPooledMut<T>, pool: Arc<Mutex<RawOpaquePoolSend>>) -> Self {
+    pub(crate) unsafe fn new(inner: RawPooledMut<T>, pool: Arc<Mutex<RawOpaquePoolSend>>) -> Self {
         Self { inner, pool }
     }
 
@@ -43,7 +51,9 @@ impl<T: ?Sized> PooledMut<T> {
     pub fn into_shared(self) -> Pooled<T> {
         let (inner, pool) = self.into_parts();
 
-        Pooled::new(inner, pool)
+        // SAFETY: Guaranteed by ::new() - we only ever create these handles for `T: Send` but
+        // we may just lose the `Send` trait from the signature if we cast or erase the type.
+        unsafe { Pooled::new(inner, pool) }
     }
 
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
@@ -121,11 +131,9 @@ impl<T: ?Sized> PooledMut<T> {
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
-    pub fn erase(self) -> PooledMut<()>
-    where
-        T: Send + Sync,
-    {
+    pub fn erase(self) -> PooledMut<()> {
         let (inner, pool) = self.into_parts();
+
         PooledMut {
             inner: inner.erase(),
             pool,
@@ -150,7 +158,7 @@ where
 
 impl<T: ?Sized> fmt::Debug for PooledMut<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PooledMut")
+        f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)
             .field("pool", &self.pool)
             .finish()
@@ -246,18 +254,21 @@ mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
+    use crate::{NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};
 
-    // u32 is Sync, so PooledMut<u32> should be Send (but not Sync).
-    assert_impl_all!(PooledMut<u32>: Send);
-    assert_not_impl_any!(PooledMut<u32>: Sync);
+    assert_impl_all!(PooledMut<SendAndSync>: Send, Sync);
+    assert_impl_all!(PooledMut<SendNotSync>: Send, Sync);
+    assert_impl_all!(PooledMut<NotSendNotSync>: Sync);
+    assert_impl_all!(PooledMut<NotSendSync>: Sync);
 
-    // Cell is Send but not Sync, so PooledMut<Cell> should now be Send (but not Sync)
-    // because unique handles only need T: Send.
-    assert_impl_all!(PooledMut<Cell<u32>>: Send);
-    assert_not_impl_any!(PooledMut<Cell<u32>>: Sync);
+    assert_not_impl_any!(PooledMut<NotSendNotSync>: Send);
+    assert_not_impl_any!(PooledMut<NotSendSync>: Send);
 
-    // Non-Send types should make the handle non-Send.
-    assert_not_impl_any!(PooledMut<std::rc::Rc<i32>>: Send);
+    // This is a unique handle, it cannot be cloneable/copyable.
+    assert_not_impl_any!(PooledMut<SendAndSync>: Clone, Copy);
+
+    // We must have a destructor because we need to remove the object on destroy.
+    assert_impl_all!(PooledMut<SendAndSync>: Drop);
 
     // We expect no destructor because we treat it as `Copy` in our own Drop::drop().
     assert_not_impl_any!(RawPooledMut<()>: Drop);
@@ -309,10 +320,6 @@ mod tests {
         // Back in main thread.
         assert_eq!(handle_in_thread.get(), 2);
     }
-
-    // Type-erased handles preserve auto traits correctly.
-    assert_impl_all!(PooledMut<()>: Send, Unpin);
-    assert_not_impl_any!(PooledMut<()>: Sync);
 
     #[test]
     fn erase_extends_lifetime() {

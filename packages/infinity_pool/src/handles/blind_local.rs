@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::fmt;
@@ -17,6 +18,11 @@ use crate::{LayoutKey, LocalBlindPoolCore, LocalBlindPooledMut, RawPooled, RawPo
 /// This type is single-threaded.
 pub struct LocalBlindPooled<T: ?Sized> {
     inner: RawPooled<T>,
+
+    // This gives us our thread-safety characteristics (single-threaded),
+    // overriding those of `RawPooled<T>`. This is expected because we align
+    // with the stricter constraints of the pool itself, even if the underlying
+    // slab storage allows for more flexibility.
     remover: Rc<Remover>,
 }
 
@@ -26,7 +32,8 @@ impl<T: ?Sized> LocalBlindPooled<T> {
         let inner = inner.into_shared();
 
         let remover = Remover {
-            handle: inner.erase_raw(),
+            // SAFETY: This handle is single-threaded, no cross-thread access even if `T: Send`.
+            handle: unsafe { inner.erase_raw() },
             key,
             core,
         };
@@ -91,7 +98,8 @@ impl<T: ?Sized> LocalBlindPooled<T> {
     #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
     pub fn erase(self) -> LocalBlindPooled<()> {
         LocalBlindPooled {
-            inner: self.inner.erase_raw(),
+            // SAFETY: This handle is single-threaded, no cross-thread access even if `T: Send`.
+            inner: unsafe { self.inner.erase_raw() },
             remover: self.remover,
         }
     }
@@ -99,7 +107,7 @@ impl<T: ?Sized> LocalBlindPooled<T> {
 
 impl<T: ?Sized> fmt::Debug for LocalBlindPooled<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LocalBlindPooled")
+        f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)
             .field("remover", &self.remover)
             .finish()
@@ -176,17 +184,23 @@ impl Drop for Remover {
     }
 }
 
-// SAFETY: By default we do not have `Sync` because the handle is not `Sync`. However, the reason
-// for that is because the handle can be used to access the object. As we have a type-erased handle
-// that cannot access anything meaningful, and as the remover is not accessing the object anyway,
-// just removing it from the pool, we can safety glue back the `Sync` label onto the type.
-unsafe impl Sync for Remover {}
-
 #[cfg(test)]
 mod tests {
-    use static_assertions::assert_not_impl_any;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
+    use crate::{NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};
 
-    assert_not_impl_any!(LocalBlindPooled<u32>: Send, Sync);
+    assert_not_impl_any!(LocalBlindPooled<SendAndSync>: Send, Sync);
+    assert_not_impl_any!(LocalBlindPooled<SendNotSync>: Send, Sync);
+    assert_not_impl_any!(LocalBlindPooled<NotSendNotSync>: Send, Sync);
+    assert_not_impl_any!(LocalBlindPooled<NotSendSync>: Send, Sync);
+
+    // This is a shared handle, must be cloneable.
+    assert_impl_all!(LocalBlindPooled<SendAndSync>: Clone);
+
+    assert_not_impl_any!(Remover: Send, Sync);
+
+    // Must have a destructor because we need to remove the object on destroy.
+    assert_impl_all!(Remover: Drop);
 }

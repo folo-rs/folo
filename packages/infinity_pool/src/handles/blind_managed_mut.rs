@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::borrow::{Borrow, BorrowMut};
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
@@ -21,8 +22,13 @@ pub struct BlindPooledMut<T: ?Sized> {
 }
 
 impl<T: ?Sized> BlindPooledMut<T> {
+    /// # Safety
+    ///
+    /// Even though the signature does not require `T: Send`, the underlying object must be `Send`.
+    /// The signature does not require it to be compatible with casting to trait objects that do
+    /// not have `Send` as a supertrait.
     #[must_use]
-    pub(crate) fn new(inner: RawPooledMut<T>, key: LayoutKey, core: BlindPoolCore) -> Self {
+    pub(crate) unsafe fn new(inner: RawPooledMut<T>, key: LayoutKey, core: BlindPoolCore) -> Self {
         Self { inner, key, core }
     }
 
@@ -41,7 +47,9 @@ impl<T: ?Sized> BlindPooledMut<T> {
     pub fn into_shared(self) -> BlindPooled<T> {
         let (inner, key, core) = self.into_parts();
 
-        BlindPooled::new(inner, key, core)
+        // SAFETY: Guaranteed by ::new() - we only ever create these handles for `T: Send` but
+        // we may just lose the `Send` trait from the signature if we cast or erase the type.
+        unsafe { BlindPooled::new(inner, key, core) }
     }
 
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
@@ -122,10 +130,7 @@ impl<T: ?Sized> BlindPooledMut<T> {
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
-    pub fn erase(self) -> BlindPooledMut<()>
-    where
-        T: Send + Sync,
-    {
+    pub fn erase(self) -> BlindPooledMut<()> {
         let (inner, key, core) = self.into_parts();
         BlindPooledMut {
             inner: inner.erase(),
@@ -157,7 +162,7 @@ where
 
 impl<T: ?Sized> fmt::Debug for BlindPooledMut<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BlindPooledMut")
+        f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)
             .field("key", &self.key)
             .field("core", &self.core)
@@ -259,18 +264,21 @@ mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
+    use crate::{NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};
 
-    // u32 is Sync, so BlindPooledMut<u32> should be Send (but not Sync).
-    assert_impl_all!(BlindPooledMut<u32>: Send);
-    assert_not_impl_any!(BlindPooledMut<u32>: Sync);
+    assert_impl_all!(BlindPooledMut<SendAndSync>: Send, Sync);
+    assert_impl_all!(BlindPooledMut<SendNotSync>: Send, Sync);
+    assert_impl_all!(BlindPooledMut<NotSendNotSync>: Sync);
+    assert_impl_all!(BlindPooledMut<NotSendSync>: Sync);
 
-    // Cell is Send but not Sync, so BlindPooledMut<Cell> should now be Send (but not Sync)
-    // because unique handles only need T: Send.
-    assert_impl_all!(BlindPooledMut<Cell<u32>>: Send);
-    assert_not_impl_any!(BlindPooledMut<Cell<u32>>: Sync);
+    assert_not_impl_any!(BlindPooledMut<NotSendNotSync>: Send);
+    assert_not_impl_any!(BlindPooledMut<NotSendSync>: Send);
 
-    // Non-Send types should make the handle non-Send.
-    assert_not_impl_any!(BlindPooledMut<std::rc::Rc<i32>>: Send);
+    // This is a unique handle, it cannot be cloneable/copyable.
+    assert_not_impl_any!(BlindPooledMut<SendAndSync>: Clone, Copy);
+
+    // We must have a destructor because we need to remove the object on destroy.
+    assert_impl_all!(BlindPooledMut<SendAndSync>: Drop);
 
     // We expect no destructor because we treat it as `Copy` in our own Drop::drop().
     assert_not_impl_any!(RawPooledMut<()>: Drop);

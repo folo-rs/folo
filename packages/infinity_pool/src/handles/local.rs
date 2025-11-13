@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::fmt;
@@ -17,6 +18,11 @@ use crate::{LocalPooledMut, RawOpaquePool, RawPooled, RawPooledMut};
 /// This type is single-threaded.
 pub struct LocalPooled<T: ?Sized> {
     inner: RawPooled<T>,
+
+    // This gives us our thread-safety characteristics (single-threaded),
+    // overriding those of `RawPooled<T>`. This is expected because we align
+    // with the stricter constraints of the pool itself, even if the underlying
+    // slab storage allows for more flexibility.
     remover: Rc<Remover>,
 }
 
@@ -26,7 +32,8 @@ impl<T: ?Sized> LocalPooled<T> {
         let inner = inner.into_shared();
 
         let remover = Remover {
-            handle: inner.erase_raw(),
+            // SAFETY: This handle is single-threaded, no cross-thread access even if `T: Send`.
+            handle: unsafe { inner.erase_raw() },
             pool,
         };
 
@@ -90,7 +97,8 @@ impl<T: ?Sized> LocalPooled<T> {
     #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
     pub fn erase(self) -> LocalPooled<()> {
         LocalPooled {
-            inner: self.inner.erase_raw(),
+            // SAFETY: This handle is single-threaded, no cross-thread access even if `T: Send`.
+            inner: unsafe { self.inner.erase_raw() },
             remover: self.remover,
         }
     }
@@ -98,7 +106,7 @@ impl<T: ?Sized> LocalPooled<T> {
 
 impl<T: ?Sized> fmt::Debug for LocalPooled<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LocalPooled")
+        f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)
             .field("remover", &self.remover)
             .finish()
@@ -175,12 +183,20 @@ mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
+    use crate::{NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};
 
-    assert_not_impl_any!(LocalPooled<u32>: Send, Sync);
+    assert_not_impl_any!(LocalPooled<SendAndSync>: Send, Sync);
+    assert_not_impl_any!(LocalPooled<SendNotSync>: Send, Sync);
+    assert_not_impl_any!(LocalPooled<NotSendNotSync>: Send, Sync);
+    assert_not_impl_any!(LocalPooled<NotSendSync>: Send, Sync);
 
-    // Type-erased handles preserve auto traits correctly.
-    assert_impl_all!(LocalPooled<()>: Unpin);
-    assert_not_impl_any!(LocalPooled<()>: Send, Sync);
+    // This is a shared handle, must be cloneable.
+    assert_impl_all!(LocalPooled<SendAndSync>: Clone);
+
+    assert_not_impl_any!(Remover: Send, Sync);
+
+    // Must have a destructor because we need to remove the object on destroy.
+    assert_impl_all!(Remover: Drop);
 
     #[test]
     fn erase_extends_lifetime() {

@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::fmt;
 use std::pin::Pin;
 use std::ptr::NonNull;
@@ -21,6 +22,8 @@ where
 
     /// Handle to the object in the slab. This grants us access to the object's pointer
     /// and allows us to operate on the object (e.g. to remove it or create a reference).
+    ///
+    /// We inherit the thread-safety properties of the slab handle (Send from T, Sync always).
     slab_handle: SlabHandle<T>,
 }
 
@@ -110,18 +113,19 @@ impl<T: ?Sized> RawPooledMut<T> {
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // All mutations unviable - save some time.
-    pub fn erase(self) -> RawPooledMut<()>
-    where
-        T: Send + Sync,
-    {
+    pub fn erase(self) -> RawPooledMut<()> {
         RawPooledMut {
             slab_index: self.slab_index,
-            slab_handle: self.slab_handle.erase(),
+            // SAFETY: The risk is that if `T: !Send` then `Self<()>` would be `Send`. Calling
+            // `pool.remove()` with this handle would move the object across threads to drop it.
+            // However, this cannot actually happen because for this call to be possible, `pool`
+            // would need to at minimum be `Send` (either to move it to a new thread or to wrap in
+            // a mutex and gain `Sync` with an exclusive reference), which is only possible if
+            // `T: Send` to begin with because that is a condition set by the pool itself.
+            slab_handle: unsafe { self.slab_handle.erase() },
         }
     }
-}
 
-impl<T: ?Sized> RawPooledMut<T> {
     /// Casts this handle to reference the target as a trait object.
     ///
     /// This method is only intended for use by the [`define_pooled_dyn_cast!`] macro
@@ -167,17 +171,12 @@ impl<T: ?Sized + Unpin> RawPooledMut<T> {
 
 impl<T: ?Sized> fmt::Debug for RawPooledMut<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawPooledMut")
+        f.debug_struct(type_name::<Self>())
             .field("slab_index", &self.slab_index)
             .field("slab_handle", &self.slab_handle)
             .finish()
     }
 }
-
-// SAFETY: RawPooledMut provides unique access to T. When the handle moves between
-// threads, T moves with it atomically. No concurrent access is possible through
-// a unique handle, so we only require T: Send, not T: Sync.
-unsafe impl<T: ?Sized + Send> Send for RawPooledMut<T> {}
 
 #[cfg(test)]
 mod tests {
@@ -187,22 +186,21 @@ mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
-    use crate::RawPinnedPool;
+    use crate::{NotSendNotSync, NotSendSync, RawPinnedPool, SendAndSync, SendNotSync};
 
-    // u32 is Sync, so RawPooledMut<u32> should be Send (but not Sync).
-    assert_impl_all!(RawPooledMut<u32>: Send);
-    assert_not_impl_any!(RawPooledMut<u32>: Sync);
+    assert_impl_all!(RawPooledMut<SendAndSync>: Send, Sync);
+    assert_impl_all!(RawPooledMut<SendNotSync>: Send, Sync);
+    assert_impl_all!(RawPooledMut<NotSendNotSync>: Sync);
+    assert_impl_all!(RawPooledMut<NotSendSync>: Sync);
 
-    // Cell is Send but not Sync, so RawPooledMut<Cell> should now be Send (but not Sync)
-    // because unique handles only need T: Send.
-    assert_impl_all!(RawPooledMut<Cell<u32>>: Send);
-    assert_not_impl_any!(RawPooledMut<Cell<u32>>: Sync);
+    assert_not_impl_any!(RawPooledMut<NotSendNotSync>: Send);
+    assert_not_impl_any!(RawPooledMut<NotSendSync>: Send);
 
-    // Non-Send types should make the handle non-Send.
-    assert_not_impl_any!(RawPooledMut<std::rc::Rc<i32>>: Send);
+    // This is a unique handle, it cannot be cloneable/copyable.
+    assert_not_impl_any!(RawPooledMut<SendAndSync>: Clone, Copy);
 
-    // This is a unique handle, it cannot be copyable.
-    assert_not_impl_any!(RawPooledMut<u32>: Copy);
+    // This is not strictly a requirement but a destructor is not something we expect here.
+    assert_not_impl_any!(RawPooledMut<SendAndSync>: Drop);
 
     #[test]
     fn unique_handle_can_cross_threads_with_send_only() {

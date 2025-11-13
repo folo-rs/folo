@@ -26,9 +26,11 @@ use crate::{DropPolicy, Dropper, SlabHandle, SlabLayout, SlotMeta};
 ///
 /// # Thread safety
 ///
-/// The slab is single-threaded, though if all the objects inserted are `Send` then the owner of
-/// the slab is allowed to treat the slab itself as `Send` (but must do so via a wrapper type that
-/// implements `Send` using unsafe code).
+/// The slab is single-threaded by default, though if all the objects inserted are `Send` then
+/// the owner of the slab is allowed to treat the slab itself as `Send` (but must do so via a
+/// wrapper type that implements `Send` using unsafe code).
+/// 
+/// The slab is never `Sync`, as it provides no internal synchronization.
 #[derive(Debug)]
 pub(crate) struct Slab {
     /// Precomputed layout factors for the slab, based on the object layout and capacity.
