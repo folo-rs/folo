@@ -2,7 +2,7 @@
 name = "pinned_pool"
 description = "Superseded - use infinity_pool instead"
 publish = true
-version = "0.2.0"
+version = "0.2.1"
 
 authors.workspace = true
 edition.workspace = true

@@ -23,7 +23,7 @@ incremental = false
 # The packages we publish.
 all_the_time = { version = "0.4.4", path = "packages/all_the_time" }
 alloc_tracker = { version = "0.5.9", path = "packages/alloc_tracker" }
-blind_pool = { version = "0.5.0", path = "packages/blind_pool" }
+blind_pool = { version = "0.5.1", path = "packages/blind_pool" }
 cpulist = { version = "1.0.1", path = "packages/cpulist" }
 events = { version = "0.5.1", path = "packages/events" }
 events_once = { version = "0.5.4", path = "packages/events_once" }
@@ -38,9 +38,9 @@ many_cpus = { version = "1.0.4", path = "packages/many_cpus" }
 many_cpus_benchmarking = { version = "0.1.33", path = "packages/many_cpus_benchmarking" }
 new_zealand = { version = "1.0.1", path = "packages/new_zealand" }
 nm = { version = "0.1.21", path = "packages/nm" }
-opaque_pool = { version = "0.4.0", path = "packages/opaque_pool" }
+opaque_pool = { version = "0.4.1", path = "packages/opaque_pool" }
 par_bench = { version = "0.2.21", path = "packages/par_bench" }
-pinned_pool = { version = "0.2.0", path = "packages/pinned_pool" }
+pinned_pool = { version = "0.2.1", path = "packages/pinned_pool" }
 region_cached = { version = "1.0.3", path = "packages/region_cached" }
 region_local = { version = "1.0.3", path = "packages/region_local" }
 

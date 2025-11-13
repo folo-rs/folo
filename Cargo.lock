@@ -158,7 +158,7 @@ checksum = "812e12b5285cc515a9c72a5c1d3b6d46a19dac5acfef5265968c166106e31dd3"
 
 [[package]]
 name = "blind_pool"
-version = "0.5.0"
+version = "0.5.1"
 
 [[package]]
 name = "byteorder"
@@ -969,7 +969,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "opaque_pool"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "par_bench"
@@ -1055,7 +1055,7 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
 name = "pinned_pool"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "ppv-lite86"

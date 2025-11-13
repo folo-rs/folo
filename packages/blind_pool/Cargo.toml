@@ -2,7 +2,7 @@
 name = "blind_pool"
 description = "Superseded - use infinity_pool instead"
 publish = true
-version = "0.5.0"
+version = "0.5.1"
 
 authors.workspace = true
 edition.workspace = true
