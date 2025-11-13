@@ -1674,7 +1674,6 @@ dependencies = [
 name = "ui_tests"
 version = "0.0.0-never"
 dependencies = [
- "infinity_pool",
  "new_zealand",
  "trybuild",
 ]
