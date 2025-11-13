@@ -17,6 +17,17 @@ mod windows;
 #[cfg(windows)]
 pub use windows::*;
 
+// The fallback module is compiled in test mode on all platforms, and as the primary
+// implementation on unsupported platforms. However, we only glob-import it when it is
+// the primary implementation (i.e. on unsupported platforms). On supported platforms
+// in test mode, it must be accessed via the explicit path `fallback::` to avoid ambiguity
+// with the platform-specific implementation.
+#[cfg(any(test, not(any(target_os = "linux", windows))))]
+pub(crate) mod fallback;
+
+#[cfg(not(any(target_os = "linux", windows)))]
+pub(crate) use fallback::*;
+
 #[cfg(test)]
 mod mocks;
 #[cfg(test)]

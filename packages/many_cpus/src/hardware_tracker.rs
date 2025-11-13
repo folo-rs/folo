@@ -12,7 +12,7 @@ thread_local! {
     /// Each thread has its own hardware tracker, as some of the information will be thread-
     /// specific. This also helps avoid the need for synchronization when accessing the tracker.
     pub(crate) static CURRENT_TRACKER: RefCell<HardwareTrackerCore>
-        = RefCell::new(HardwareTrackerCore::new(PlatformFacade::real()));
+        = RefCell::new(HardwareTrackerCore::new(PlatformFacade::target()));
 }
 
 /// Tracks and provides access to changing hardware information over time.
@@ -433,7 +433,7 @@ mod tests {
     #[cfg(not(miri))] // Miri does not support talking to the real platform.
     #[test]
     fn real_does_not_panic() {
-        let tracker = HardwareTrackerCore::new(PlatformFacade::real());
+        let tracker = HardwareTrackerCore::new(PlatformFacade::target());
 
         // We do not care what it returns (because we are operating in arbitrary thread which can
         // float among all processors); all we care about is that it does not panic.
@@ -868,5 +868,169 @@ mod tests {
         let max_processor_time_usize = max_processor_time.floor() as usize;
 
         assert!(max_processor_time_usize <= all_processors.len());
+    }
+}
+
+/// Fallback PAL integration tests - these test the integration between logic types
+/// and the fallback platform abstraction layer.
+///
+/// Miri is excluded because `std::thread::available_parallelism()` is not supported under Miri.
+#[cfg(all(any(test, not(any(target_os = "linux", windows))), not(miri)))]
+mod tests_fallback {
+    use crate::HardwareTrackerCore;
+    use crate::pal::fallback::BUILD_TARGET_PLATFORM;
+    use crate::pal::{Platform, PlatformFacade};
+
+    #[test]
+    fn processor_id_is_stable_per_thread() {
+        // When not pinned, the tracker returns a stable processor ID for the current thread,
+        // derived from the thread ID.
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let tracker = HardwareTrackerCore::new(pal);
+
+        let id1 = tracker.current_processor_id();
+        let id2 = tracker.current_processor_id();
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn processor_id_reflects_pinning() {
+        // When pinned to a single processor, current_processor_id() returns the pinned ID,
+        // overriding the thread's natural processor ID.
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let mut tracker = HardwareTrackerCore::new(pal);
+
+        // Get the natural processor ID for this thread.
+        let natural_id = tracker.current_processor_id();
+
+        // Pin to a different processor (we know processor 0 exists).
+        let different_processor = if natural_id == 0 { 1 } else { 0 };
+        tracker.update_pin_status(Some(different_processor), Some(0));
+
+        // The current processor ID should now reflect the pinned processor.
+        assert_eq!(different_processor, tracker.current_processor_id());
+
+        // After unpinning, we should return to the natural processor ID.
+        tracker.update_pin_status(None, None);
+        assert_eq!(natural_id, tracker.current_processor_id());
+    }
+
+    #[test]
+    fn ghost_processor_does_not_panic() {
+        // Even if we pin to a processor ID that does not exist, we should not panic.
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let mut tracker = HardwareTrackerCore::new(pal);
+
+        let real_processor_id = tracker.current_processor_id();
+
+        // Pin to a ghost processor beyond the max.
+        let ghost_id = 9999;
+        tracker.update_pin_status(Some(ghost_id), Some(0));
+
+        assert_eq!(ghost_id, tracker.current_processor_id());
+        // It must return something, even for ghosts.
+        _ = tracker.current_processor();
+
+        // Unpin and verify we go back to a real processor.
+        tracker.update_pin_status(None, None);
+        assert_eq!(real_processor_id, tracker.current_processor_id());
+    }
+
+    #[test]
+    fn pinning_updates_are_respected() {
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let mut tracker = HardwareTrackerCore::new(pal);
+
+        assert!(!tracker.is_thread_processor_pinned());
+        assert!(!tracker.is_thread_memory_region_pinned());
+
+        tracker.update_pin_status(Some(0), Some(0));
+
+        assert!(tracker.is_thread_processor_pinned());
+        assert!(tracker.is_thread_memory_region_pinned());
+
+        assert_eq!(0, tracker.current_processor_id());
+        assert_eq!(0, tracker.current_memory_region_id());
+
+        tracker.update_pin_status(None, Some(0));
+
+        assert!(!tracker.is_thread_processor_pinned());
+        assert!(tracker.is_thread_memory_region_pinned());
+
+        tracker.update_pin_status(None, None);
+
+        assert!(!tracker.is_thread_processor_pinned());
+        assert!(!tracker.is_thread_memory_region_pinned());
+    }
+
+    #[test]
+    fn resource_quota_is_accurately_represented() {
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let tracker = HardwareTrackerCore::new(pal);
+
+        let quota = tracker.resource_quota().max_processor_time();
+        let processor_count = tracker.active_processor_count();
+
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "acceptable precision loss for test"
+        )]
+        let expected_quota = processor_count as f64;
+
+        #[expect(clippy::float_cmp, reason = "exact comparison is appropriate")]
+        {
+            assert_eq!(quota, expected_quota);
+        }
+    }
+
+    #[test]
+    fn current_processor_returns_valid_id() {
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let tracker = HardwareTrackerCore::new(pal);
+
+        let processor_id = tracker.current_processor_id();
+        let max_id = platform.max_processor_id();
+
+        assert!(processor_id <= max_id);
+    }
+
+    #[test]
+    fn current_memory_region_returns_zero() {
+        // All processors are in memory region 0 on the fallback platform.
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let tracker = HardwareTrackerCore::new(pal);
+
+        assert_eq!(0, tracker.current_memory_region_id());
+    }
+
+    #[test]
+    fn active_processor_count_matches_available_parallelism() {
+        let platform = &BUILD_TARGET_PLATFORM;
+        let pal = PlatformFacade::Fallback(platform);
+
+        let tracker = HardwareTrackerCore::new(pal);
+
+        let active_count = tracker.active_processor_count();
+        assert!(active_count >= 1);
+
+        let expected_count = std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1);
+
+        assert_eq!(active_count, expected_count);
     }
 }

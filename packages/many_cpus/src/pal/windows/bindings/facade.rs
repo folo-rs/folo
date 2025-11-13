@@ -16,15 +16,15 @@ use crate::pal::windows::{Bindings, BuildTargetBindings};
 /// Hide the real/mock bindings choice behind a single type.
 #[derive(Clone)]
 pub(crate) enum BindingsFacade {
-    Real(&'static BuildTargetBindings),
+    Target(&'static BuildTargetBindings),
 
     #[cfg(test)]
     Mock(Arc<MockBindings>),
 }
 
 impl BindingsFacade {
-    pub(crate) const fn real() -> Self {
-        Self::Real(&BuildTargetBindings)
+    pub(crate) const fn target() -> Self {
+        Self::Target(&BuildTargetBindings)
     }
 
     #[cfg(test)]
@@ -36,7 +36,7 @@ impl BindingsFacade {
 impl Bindings for BindingsFacade {
     fn get_active_processor_count(&self, group_number: u16) -> u32 {
         match self {
-            Self::Real(bindings) => bindings.get_active_processor_count(group_number),
+            Self::Target(bindings) => bindings.get_active_processor_count(group_number),
             #[cfg(test)]
             Self::Mock(bindings) => bindings.get_active_processor_count(group_number),
         }
@@ -44,7 +44,7 @@ impl Bindings for BindingsFacade {
 
     fn get_maximum_processor_count(&self, group_number: u16) -> u32 {
         match self {
-            Self::Real(bindings) => bindings.get_maximum_processor_count(group_number),
+            Self::Target(bindings) => bindings.get_maximum_processor_count(group_number),
             #[cfg(test)]
             Self::Mock(bindings) => bindings.get_maximum_processor_count(group_number),
         }
@@ -52,7 +52,7 @@ impl Bindings for BindingsFacade {
 
     fn get_maximum_processor_group_count(&self) -> u16 {
         match self {
-            Self::Real(bindings) => bindings.get_maximum_processor_group_count(),
+            Self::Target(bindings) => bindings.get_maximum_processor_group_count(),
             #[cfg(test)]
             Self::Mock(bindings) => bindings.get_maximum_processor_group_count(),
         }
@@ -60,7 +60,7 @@ impl Bindings for BindingsFacade {
 
     fn get_current_processor_number_ex(&self) -> PROCESSOR_NUMBER {
         match self {
-            Self::Real(bindings) => bindings.get_current_processor_number_ex(),
+            Self::Target(bindings) => bindings.get_current_processor_number_ex(),
             #[cfg(test)]
             Self::Mock(bindings) => bindings.get_current_processor_number_ex(),
         }
@@ -74,7 +74,7 @@ impl Bindings for BindingsFacade {
     ) -> Result<()> {
         match self {
             // SAFETY: Forwarding safety requirements to caller.
-            Self::Real(bindings) => unsafe {
+            Self::Target(bindings) => unsafe {
                 bindings.get_logical_processor_information_ex(
                     relationship_type,
                     buffer,
@@ -95,7 +95,7 @@ impl Bindings for BindingsFacade {
 
     fn get_numa_highest_node_number(&self) -> u32 {
         match self {
-            Self::Real(bindings) => bindings.get_numa_highest_node_number(),
+            Self::Target(bindings) => bindings.get_numa_highest_node_number(),
             #[cfg(test)]
             Self::Mock(bindings) => bindings.get_numa_highest_node_number(),
         }
@@ -103,7 +103,7 @@ impl Bindings for BindingsFacade {
 
     fn get_current_process_default_cpu_set_masks(&self) -> Vec<GROUP_AFFINITY> {
         match self {
-            Self::Real(bindings) => bindings.get_current_process_default_cpu_set_masks(),
+            Self::Target(bindings) => bindings.get_current_process_default_cpu_set_masks(),
             #[cfg(test)]
             Self::Mock(bindings) => bindings.get_current_process_default_cpu_set_masks(),
         }
@@ -111,7 +111,7 @@ impl Bindings for BindingsFacade {
 
     fn get_current_thread_cpu_set_masks(&self) -> Vec<GROUP_AFFINITY> {
         match self {
-            Self::Real(bindings) => bindings.get_current_thread_cpu_set_masks(),
+            Self::Target(bindings) => bindings.get_current_thread_cpu_set_masks(),
             #[cfg(test)]
             Self::Mock(bindings) => bindings.get_current_thread_cpu_set_masks(),
         }
@@ -119,7 +119,7 @@ impl Bindings for BindingsFacade {
 
     fn set_current_thread_cpu_set_masks(&self, masks: &[GROUP_AFFINITY]) {
         match self {
-            Self::Real(bindings) => bindings.set_current_thread_cpu_set_masks(masks),
+            Self::Target(bindings) => bindings.set_current_thread_cpu_set_masks(masks),
             #[cfg(test)]
             Self::Mock(bindings) => bindings.set_current_thread_cpu_set_masks(masks),
         }
@@ -127,7 +127,7 @@ impl Bindings for BindingsFacade {
 
     fn get_current_job_cpu_set_masks(&self) -> Vec<GROUP_AFFINITY> {
         match self {
-            Self::Real(bindings) => bindings.get_current_job_cpu_set_masks(),
+            Self::Target(bindings) => bindings.get_current_job_cpu_set_masks(),
             #[cfg(test)]
             Self::Mock(bindings) => bindings.get_current_job_cpu_set_masks(),
         }
@@ -135,7 +135,7 @@ impl Bindings for BindingsFacade {
 
     fn get_current_thread_legacy_group_affinity(&self) -> GROUP_AFFINITY {
         match self {
-            Self::Real(bindings) => bindings.get_current_thread_legacy_group_affinity(),
+            Self::Target(bindings) => bindings.get_current_thread_legacy_group_affinity(),
             #[cfg(test)]
             Self::Mock(bindings) => bindings.get_current_thread_legacy_group_affinity(),
         }
@@ -143,7 +143,7 @@ impl Bindings for BindingsFacade {
 
     fn get_current_job_cpu_rate_control(&self) -> Option<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION> {
         match self {
-            Self::Real(bindings) => bindings.get_current_job_cpu_rate_control(),
+            Self::Target(bindings) => bindings.get_current_job_cpu_rate_control(),
             #[cfg(test)]
             Self::Mock(bindings) => bindings.get_current_job_cpu_rate_control(),
         }
@@ -153,7 +153,7 @@ impl Bindings for BindingsFacade {
 impl Debug for BindingsFacade {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Real(inner) => inner.fmt(f),
+            Self::Target(inner) => inner.fmt(f),
             #[cfg(test)]
             Self::Mock(inner) => inner.fmt(f),
         }
