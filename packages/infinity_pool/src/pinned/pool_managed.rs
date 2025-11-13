@@ -1,4 +1,5 @@
-use std::{any::type_name, fmt};
+use std::any::type_name;
+use std::fmt;
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
