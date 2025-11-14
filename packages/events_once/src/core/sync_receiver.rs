@@ -23,9 +23,10 @@ where
     // against that because the event will be cleaned up after the first poll that signals "ready".
     event_ref: Option<E>,
 
-    _t: PhantomData<T>,
+    _t: PhantomData<fn() -> T>,
 
     // We are not compatible with concurrent receiver use from multiple threads.
+    // This is just to leave us design flexibility until we have a concrete use case for it.
     _not_sync: PhantomData<Cell<()>>,
 }
 
@@ -201,14 +202,21 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::marker::PhantomPinned;
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
-    use crate::{BoxedRef, PtrRef};
+    use crate::{BoxedRef, PooledRef, PtrRef};
 
     assert_impl_all!(ReceiverCore<BoxedRef<u32>, u32>: Send);
     assert_not_impl_any!(ReceiverCore<BoxedRef<u32>, u32>: Sync);
 
     assert_impl_all!(ReceiverCore<PtrRef<u32>, u32>: Send);
     assert_not_impl_any!(ReceiverCore<PtrRef<u32>, u32>: Sync);
+
+    // The event payload being `!Unpin` should not cause the endpoints to become `!Unpin`.
+    assert_impl_all!(ReceiverCore<BoxedRef<PhantomPinned>, PhantomPinned>: Unpin);
+    assert_impl_all!(ReceiverCore<PtrRef<PhantomPinned>, PhantomPinned>: Unpin);
+    assert_impl_all!(ReceiverCore<PooledRef<PhantomPinned>, PhantomPinned>: Unpin);
 }

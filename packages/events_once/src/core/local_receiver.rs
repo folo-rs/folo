@@ -20,7 +20,7 @@ where
     // against that because the event will be cleaned up after the first poll that signals "ready".
     event_ref: Option<E>,
 
-    _t: PhantomData<T>,
+    _t: PhantomData<fn() -> T>,
 }
 
 impl<E, T> LocalReceiverCore<E, T>
@@ -167,11 +167,18 @@ where
 
 #[cfg(test)]
 mod tests {
-    use static_assertions::assert_not_impl_any;
+    use std::marker::PhantomPinned;
+
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
-    use crate::{BoxedLocalRef, PtrLocalRef};
+    use crate::{BoxedLocalRef, PooledLocalRef, PtrLocalRef};
 
     assert_not_impl_any!(LocalReceiverCore<BoxedLocalRef<i32>, i32>: Send, Sync);
     assert_not_impl_any!(LocalReceiverCore<PtrLocalRef<i32>, i32>: Send, Sync);
+
+    // The event payload being `!Unpin` should not cause the endpoints to become `!Unpin`.
+    assert_impl_all!(LocalReceiverCore<BoxedLocalRef<PhantomPinned>, PhantomPinned>: Unpin);
+    assert_impl_all!(LocalReceiverCore<PtrLocalRef<PhantomPinned>, PhantomPinned>: Unpin);
+    assert_impl_all!(LocalReceiverCore<PooledLocalRef<PhantomPinned>, PhantomPinned>: Unpin);
 }

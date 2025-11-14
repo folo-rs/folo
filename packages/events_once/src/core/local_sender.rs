@@ -11,7 +11,7 @@ where
 {
     event_ref: E,
 
-    _t: PhantomData<T>,
+    _t: PhantomData<fn(T)>,
 }
 
 impl<E, T> LocalSenderCore<E, T>
@@ -74,11 +74,18 @@ where
 
 #[cfg(test)]
 mod tests {
-    use static_assertions::assert_not_impl_any;
+    use std::marker::PhantomPinned;
+
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
-    use crate::{BoxedLocalRef, PtrLocalRef};
+    use crate::{BoxedLocalRef, PooledLocalRef, PtrLocalRef};
 
     assert_not_impl_any!(LocalSenderCore<BoxedLocalRef<i32>, i32>: Send, Sync);
     assert_not_impl_any!(LocalSenderCore<PtrLocalRef<i32>, i32>: Send, Sync);
+
+    // The event payload being `!Unpin` should not cause the endpoints to become `!Unpin`.
+    assert_impl_all!(LocalSenderCore<BoxedLocalRef<PhantomPinned>, PhantomPinned>: Unpin);
+    assert_impl_all!(LocalSenderCore<PtrLocalRef<PhantomPinned>, PhantomPinned>: Unpin);
+    assert_impl_all!(LocalSenderCore<PooledLocalRef<PhantomPinned>, PhantomPinned>: Unpin);
 }

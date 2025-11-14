@@ -14,9 +14,11 @@ where
 {
     event_ref: E,
 
-    _t: PhantomData<T>,
+    _t: PhantomData<fn(T)>,
 
     // We are not compatible with concurrent sender use from multiple threads.
+    // This is just to leave us design flexibility - the API consumes the sender
+    // so there is not really anything you can do with it concurrently anyway.
     _not_sync: PhantomData<Cell<()>>,
 }
 
@@ -84,14 +86,21 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::marker::PhantomPinned;
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
-    use crate::{BoxedRef, PtrRef};
+    use crate::{BoxedRef, PooledRef, PtrRef};
 
     assert_impl_all!(SenderCore<BoxedRef<u32>, u32>: Send);
     assert_not_impl_any!(SenderCore<BoxedRef<u32>, u32>: Sync);
 
     assert_impl_all!(SenderCore<PtrRef<u32>, u32>: Send);
     assert_not_impl_any!(SenderCore<PtrRef<u32>, u32>: Sync);
+
+    // The event payload being `!Unpin` should not cause the endpoints to become `!Unpin`.
+    assert_impl_all!(SenderCore<BoxedRef<PhantomPinned>, PhantomPinned>: Unpin);
+    assert_impl_all!(SenderCore<PtrRef<PhantomPinned>, PhantomPinned>: Unpin);
+    assert_impl_all!(SenderCore<PooledRef<PhantomPinned>, PhantomPinned>: Unpin);
 }
