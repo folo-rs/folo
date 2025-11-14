@@ -38,7 +38,7 @@ many_cpus = { version = "1.0.4", path = "packages/many_cpus" }
 many_cpus_benchmarking = { version = "0.1.33", path = "packages/many_cpus_benchmarking" }
 new_zealand = { version = "1.0.1", path = "packages/new_zealand" }
 nm = { version = "0.1.21", path = "packages/nm" }
-opaque_pool = { version = "0.4.1", path = "packages/opaque_pool" }
+opaque_pool = { version = "0.4.2", path = "packages/opaque_pool" }
 par_bench = { version = "0.2.21", path = "packages/par_bench" }
 pinned_pool = { version = "0.2.1", path = "packages/pinned_pool" }
 region_cached = { version = "1.0.3", path = "packages/region_cached" }

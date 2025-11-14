@@ -1,8 +1,8 @@
 [package]
 name = "opaque_pool"
-description = "A pinned object pool that contains any type of object as long as it has a compatible memory layout"
+description = "Superseded - use infinity_pool instead"
 publish = true
-version = "0.4.1"
+version = "0.4.2"
 
 authors.workspace = true
 edition.workspace = true
