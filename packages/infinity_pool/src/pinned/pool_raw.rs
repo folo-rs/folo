@@ -17,9 +17,9 @@ use crate::{
 ///
 /// # Thread safety
 ///
-/// If `T: Send` then the pool is thread-mobile (`Send` but not `Sync`).
+/// If `T: Send` then the pool is thread-safe (`Send` and `Sync`).
 ///
-/// If `T: !Send`, the pool is single-threaded.
+/// If `T: !Send`, the pool is only `Sync`.
 ///
 /// # Example
 ///
@@ -270,10 +270,16 @@ impl<T> fmt::Debug for RawPinnedPool<T> {
     }
 }
 
-// SAFETY: RawPinnedPool<T> is Send when T is Send. This is possible because the underlying
-// RawOpaquePool allows us to consider it `Send` when all objects inserted into it are `Send`,
+// SAFETY: RawPinnedPool<T> is thread-safe when T is Send. This is possible because the underlying
+// RawOpaquePool allows us to consider it thread-safe when all objects inserted into it are `Send`,
 // which we guarantee via the type parameter T.
 unsafe impl<T> Send for RawPinnedPool<T> where T: Send {}
+
+// SAFETY: There is no reason we cannot be `Sync` even if `T` is single-threaded, because the
+// pool does not grant access to its contents, only enabling inspection of pool metadata and
+// iterations over pointers (which would require their own safety guarantees to dereference)
+// when accessed via shared reference across threads.
+unsafe impl<T> Sync for RawPinnedPool<T> {}
 
 /// Iterator over all objects in a [`RawPinnedPool`].
 ///
@@ -347,22 +353,26 @@ impl<'p, T> IntoIterator for &'p RawPinnedPool<T> {
 )]
 mod tests {
     use std::mem::MaybeUninit;
-    use std::rc::Rc;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
+    use crate::{NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};
 
-    // When T: Send, the pool should be Send but not Sync
-    assert_impl_all!(RawPinnedPool<i32>: Send);
-    assert_not_impl_any!(RawPinnedPool<i32>: Sync);
+    // When T: Send, the pool should be thread-safe.
+    assert_impl_all!(RawPinnedPool<SendAndSync>: Send, Sync);
+    assert_impl_all!(RawPinnedPool<SendNotSync>: Send, Sync);
 
-    // When T: !Send, the pool should be neither Send nor Sync
-    assert_not_impl_any!(RawPinnedPool<Rc<i32>>: Send, Sync);
+    // When T: !Send, the pool should be only Sync.
+    assert_impl_all!(RawPinnedPool<NotSendSync>: Sync);
+    assert_impl_all!(RawPinnedPool<NotSendNotSync>: Sync);
+    assert_not_impl_any!(RawPinnedPool<NotSendSync>: Send);
+    assert_not_impl_any!(RawPinnedPool<NotSendNotSync>: Send);
 
     // Iterator trait assertions
     assert_impl_all!(RawPinnedPoolIterator<'_, i32>: Iterator, DoubleEndedIterator, ExactSizeIterator, FusedIterator);
-    assert_not_impl_any!(RawPinnedPoolIterator<'_, i32>: Send, Sync);
+    assert_not_impl_any!(RawPinnedPoolIterator<'_, SendAndSync>: Send, Sync);
+
     assert_impl_all!(&RawPinnedPool<i32>: IntoIterator);
 
     #[test]

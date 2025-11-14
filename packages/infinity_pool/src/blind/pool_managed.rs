@@ -5,7 +5,8 @@ use std::sync::Arc;
 use parking_lot::MutexGuard;
 
 use crate::{
-    BlindPoolCore, BlindPoolInnerMap, BlindPooledMut, LayoutKey, RawOpaquePool, RawOpaquePoolSend,
+    BlindPoolCore, BlindPoolInnerMap, BlindPooledMut, LayoutKey, RawOpaquePool,
+    RawOpaquePoolThreadSafe,
 };
 
 /// A thread-safe reference-counting object pool that accepts any type of object.
@@ -234,13 +235,13 @@ impl BlindPool {
 
 fn ensure_inner_pool<'a, T: Send + 'static>(
     core: &'a mut MutexGuard<'_, BlindPoolInnerMap>,
-) -> &'a mut RawOpaquePoolSend {
+) -> &'a mut RawOpaquePoolThreadSafe {
     let layout = Layout::new::<T>();
     let key = LayoutKey::new(layout);
 
     core.entry(key).or_insert_with(|| {
         // SAFETY: We always require `T: Send`.
-        unsafe { RawOpaquePoolSend::new(RawOpaquePool::with_layout(layout)) }
+        unsafe { RawOpaquePoolThreadSafe::new(RawOpaquePool::with_layout(layout)) }
     })
 }
 
@@ -251,7 +252,11 @@ mod tests {
     use std::sync::atomic::{AtomicI32, Ordering};
     use std::thread;
 
+    use static_assertions::assert_impl_all;
+
     use super::*;
+
+    assert_impl_all!(BlindPool: Send, Sync);
 
     struct DropTracker {
         counter: Arc<AtomicI32>,

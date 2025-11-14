@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::{PooledMut, RawOpaquePool, RawOpaquePoolIterator, RawOpaquePoolSend};
+use crate::{PooledMut, RawOpaquePool, RawOpaquePoolIterator, RawOpaquePoolThreadSafe};
 
 /// A thread-safe pool of reference-counted objects of type `T`.
 ///
@@ -64,7 +64,7 @@ pub struct PinnedPool<T: Send + 'static> {
     // pool configuration, as the pool can never be dropped if it has
     // contents (as dropping the handles of pooled objects will remove
     // them from the pool, while keeping the pool alive until then).
-    inner: Arc<Mutex<RawOpaquePoolSend>>,
+    inner: Arc<Mutex<RawOpaquePoolThreadSafe>>,
 
     _phantom: PhantomData<T>,
 }
@@ -79,7 +79,7 @@ where
         let inner = RawOpaquePool::with_layout_of::<T>();
 
         // SAFETY: All insertion methods require `T: Send`.
-        let inner = unsafe { RawOpaquePoolSend::new(inner) };
+        let inner = unsafe { RawOpaquePoolThreadSafe::new(inner) };
 
         Self {
             inner: Arc::new(Mutex::new(inner)),
@@ -285,6 +285,10 @@ where
     }
 }
 
+// SAFETY: PinnedPool<T> is Sync because it is internally mutex-synchronized.
+// This overrides the PhantomData that would remove Sync if T is not Sync.
+unsafe impl<T> Sync for PinnedPool<T> where T: Send {}
+
 /// Iterator over all objects in a pinned pool.
 ///
 /// The iterator only yields pointers to the objects, not references, because the pool
@@ -301,7 +305,7 @@ pub struct PinnedPoolIterator<'p, T: 'static> {
 }
 
 impl<'p, T> PinnedPoolIterator<'p, T> {
-    fn new(pool: &'p RawOpaquePoolSend) -> Self {
+    fn new(pool: &'p RawOpaquePoolThreadSafe) -> Self {
         Self {
             raw_iter: pool.iter(),
             _phantom: PhantomData,
@@ -339,7 +343,16 @@ impl<T> FusedIterator for PinnedPoolIterator<'_, T> {}
 mod tests {
     use std::mem::MaybeUninit;
 
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
     use super::*;
+    use crate::{SendAndSync, SendNotSync};
+
+    assert_impl_all!(PinnedPool<SendAndSync>: Send, Sync);
+    assert_impl_all!(PinnedPool<SendNotSync>: Send, Sync);
+
+    assert_impl_all!(PinnedPoolIterator<'_, SendAndSync>: Iterator, DoubleEndedIterator, ExactSizeIterator, FusedIterator);
+    assert_not_impl_any!(PinnedPoolIterator<'_, SendAndSync>: Send, Sync);
 
     #[test]
     fn new_pool_is_empty() {

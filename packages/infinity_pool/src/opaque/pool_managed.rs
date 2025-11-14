@@ -7,7 +7,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::opaque::pool_raw::RawOpaquePoolIterator;
-use crate::{PooledMut, RawOpaquePool, RawOpaquePoolSend};
+use crate::{PooledMut, RawOpaquePool, RawOpaquePoolThreadSafe};
 
 /// A thread-safe pool of reference-counted objects with uniform memory layout.
 ///
@@ -65,7 +65,7 @@ pub struct OpaquePool {
     // pool configuration, as the pool can never be dropped if it has
     // contents (as dropping the handles of pooled objects will remove
     // them from the pool, while keeping the pool alive until then).
-    inner: Arc<Mutex<RawOpaquePoolSend>>,
+    inner: Arc<Mutex<RawOpaquePoolThreadSafe>>,
 }
 
 impl OpaquePool {
@@ -81,7 +81,7 @@ impl OpaquePool {
         let inner = RawOpaquePool::with_layout(object_layout);
 
         // SAFETY: All insertion methods require `T: Send`.
-        let inner = unsafe { RawOpaquePoolSend::new(inner) };
+        let inner = unsafe { RawOpaquePoolThreadSafe::new(inner) };
 
         Self {
             inner: Arc::new(Mutex::new(inner)),
@@ -366,7 +366,7 @@ pub struct OpaquePoolIterator<'p> {
 }
 
 impl<'p> OpaquePoolIterator<'p> {
-    fn new(pool: &'p RawOpaquePoolSend) -> Self {
+    fn new(pool: &'p RawOpaquePoolThreadSafe) -> Self {
         Self {
             raw_iter: pool.iter(),
         }
@@ -401,7 +401,14 @@ impl FusedIterator for OpaquePoolIterator<'_> {}
 
 #[cfg(test)]
 mod tests {
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
     use super::*;
+
+    assert_impl_all!(OpaquePool: Send, Sync);
+
+    assert_impl_all!(OpaquePoolIterator<'_>: Iterator, DoubleEndedIterator, ExactSizeIterator, FusedIterator);
+    assert_not_impl_any!(OpaquePoolIterator<'_>: Send, Sync);
 
     #[test]
     fn new_pool_with_layout_of_is_empty() {

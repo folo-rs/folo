@@ -246,7 +246,11 @@ mod tests {
     use std::mem::MaybeUninit;
     use std::rc::Rc;
 
+    use static_assertions::assert_not_impl_any;
+
     use super::*;
+
+    assert_not_impl_any!(LocalBlindPool: Send, Sync);
 
     struct LocalDropTracker {
         counter: Rc<RefCell<i32>>,

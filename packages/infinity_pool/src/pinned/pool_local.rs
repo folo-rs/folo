@@ -322,7 +322,15 @@ impl<T> FusedIterator for LocalPinnedPoolIterator<'_, T> {}
 mod tests {
     use std::mem::MaybeUninit;
 
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
     use super::*;
+    use crate::SendAndSync;
+
+    assert_not_impl_any!(LocalPinnedPool<SendAndSync>: Send, Sync);
+
+    assert_impl_all!(LocalPinnedPoolIterator<'_, i32>: Iterator, DoubleEndedIterator, ExactSizeIterator, FusedIterator);
+    assert_not_impl_any!(LocalPinnedPoolIterator<'_, SendAndSync>: Send, Sync);
 
     #[test]
     fn new_pool_is_empty() {

@@ -2,11 +2,12 @@ use std::ops::{Deref, DerefMut};
 
 use crate::RawOpaquePool;
 
-/// A wrapper around `RawOpaquePool` that asserts it is `Send`.
+/// A wrapper around `RawOpaquePool` that asserts it is `Send` and `Sync`,
+/// using the permissions given by the API documentation of `RawOpaquePool`.
 #[derive(Debug)]
-pub(crate) struct RawOpaquePoolSend(RawOpaquePool);
+pub(crate) struct RawOpaquePoolThreadSafe(RawOpaquePool);
 
-impl RawOpaquePoolSend {
+impl RawOpaquePoolThreadSafe {
     /// # Safety
     ///
     /// The caller must guarantee that only `Send` objects are inserted into the pool.
@@ -17,9 +18,13 @@ impl RawOpaquePoolSend {
 
 // SAFETY: RawOpaquePool documentation allows us to treat it as `Send` if every object
 // inserted into it is `Send`. We guarantee that via ctor requirements, therefore it is `Send`.
-unsafe impl Send for RawOpaquePoolSend {}
+unsafe impl Send for RawOpaquePoolThreadSafe {}
 
-impl Deref for RawOpaquePoolSend {
+// SAFETY: RawOpaquePool documentation allows us to treat it as `Sync` if every object
+// inserted into it is `Send`. We guarantee that via ctor requirements, therefore it is `Send`.
+unsafe impl Sync for RawOpaquePoolThreadSafe {}
+
+impl Deref for RawOpaquePoolThreadSafe {
     type Target = RawOpaquePool;
 
     fn deref(&self) -> &Self::Target {
@@ -27,7 +32,7 @@ impl Deref for RawOpaquePoolSend {
     }
 }
 
-impl DerefMut for RawOpaquePoolSend {
+impl DerefMut for RawOpaquePoolThreadSafe {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }

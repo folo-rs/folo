@@ -14,7 +14,7 @@ use crate::{
 /// time. All values in the pool remain pinned for their entire lifetime.
 ///
 /// The pool automatically expands its capacity when needed.
-#[doc = include_str!("../../doc/snippets/raw_pool_is_potentially_send.md")]
+#[doc = include_str!("../../doc/snippets/raw_pool_is_potentially_thread_safe.md")]
 ///
 /// # Example
 ///
@@ -732,6 +732,9 @@ mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
+
+    // We are nominally single-threaded.
+    assert_not_impl_any!(RawOpaquePool: Send, Sync);
 
     assert_impl_all!(RawOpaquePoolIterator<'_>: Iterator, DoubleEndedIterator, ExactSizeIterator, FusedIterator);
     assert_not_impl_any!(RawOpaquePoolIterator<'_>: Send, Sync);

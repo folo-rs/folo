@@ -8,7 +8,7 @@ use std::{fmt, mem, ptr};
 
 use parking_lot::Mutex;
 
-use crate::{Pooled, RawOpaquePoolSend, RawPooledMut};
+use crate::{Pooled, RawOpaquePoolThreadSafe, RawPooledMut};
 
 // Note that while this is a thread-safe handle, we do not require `T: Send` because
 // we do not want to require every trait we cast into via trait object to be `Send`.
@@ -22,7 +22,7 @@ pub struct PooledMut<T: ?Sized> {
     // We inherit our thread-safety traits from this one (Send from T, Sync always).
     inner: RawPooledMut<T>,
 
-    pool: Arc<Mutex<RawOpaquePoolSend>>,
+    pool: Arc<Mutex<RawOpaquePoolThreadSafe>>,
 }
 
 impl<T: ?Sized> PooledMut<T> {
@@ -32,7 +32,10 @@ impl<T: ?Sized> PooledMut<T> {
     /// The signature does not require it to be compatible with casting to trait objects that do
     /// not have `Send` as a supertrait.
     #[must_use]
-    pub(crate) unsafe fn new(inner: RawPooledMut<T>, pool: Arc<Mutex<RawOpaquePoolSend>>) -> Self {
+    pub(crate) unsafe fn new(
+        inner: RawPooledMut<T>,
+        pool: Arc<Mutex<RawOpaquePoolThreadSafe>>,
+    ) -> Self {
         Self { inner, pool }
     }
 
@@ -57,7 +60,7 @@ impl<T: ?Sized> PooledMut<T> {
     }
 
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
-    fn into_parts(self) -> (RawPooledMut<T>, Arc<Mutex<RawOpaquePoolSend>>) {
+    fn into_parts(self) -> (RawPooledMut<T>, Arc<Mutex<RawOpaquePoolThreadSafe>>) {
         // We transfer these fields to the caller, so we do not want the current handle
         // to be dropped. Hence we perform raw reads to extract the fields directly.
 

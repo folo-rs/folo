@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::{PooledMut, RawOpaquePoolSend, RawPooled, RawPooledMut};
+use crate::{PooledMut, RawOpaquePoolThreadSafe, RawPooled, RawPooledMut};
 
 // Note that while this is a thread-safe handle, we do not require `T: Send` because
 // we do not want to require every trait we cast into via trait object to be `Send`.
@@ -32,7 +32,10 @@ impl<T: ?Sized> Pooled<T> {
     /// The signature does not require it to be compatible with casting to trait objects that do
     /// not have `Send` as a supertrait.
     #[must_use]
-    pub(crate) unsafe fn new(inner: RawPooledMut<T>, pool: Arc<Mutex<RawOpaquePoolSend>>) -> Self {
+    pub(crate) unsafe fn new(
+        inner: RawPooledMut<T>,
+        pool: Arc<Mutex<RawOpaquePoolThreadSafe>>,
+    ) -> Self {
         let inner = inner.into_shared();
 
         let remover = Remover {
@@ -170,7 +173,7 @@ impl<T: ?Sized> From<PooledMut<T>> for Pooled<T> {
 /// When dropped, removes an object from a pool.
 struct Remover {
     handle: RawPooled<()>,
-    pool: Arc<Mutex<RawOpaquePoolSend>>,
+    pool: Arc<Mutex<RawOpaquePoolThreadSafe>>,
 }
 
 impl fmt::Debug for Remover {

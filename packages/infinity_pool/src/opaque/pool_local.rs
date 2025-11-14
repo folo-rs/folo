@@ -395,7 +395,14 @@ impl FusedIterator for LocalOpaquePoolIterator<'_> {}
 
 #[cfg(test)]
 mod tests {
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
     use super::*;
+
+    assert_not_impl_any!(LocalOpaquePool: Send, Sync);
+    assert_not_impl_any!(LocalOpaquePoolIterator<'_>: Send, Sync);
+
+    assert_impl_all!(LocalOpaquePoolIterator<'_>: Iterator, DoubleEndedIterator, ExactSizeIterator, FusedIterator);
 
     #[test]
     fn new_pool_with_layout_of_is_empty() {

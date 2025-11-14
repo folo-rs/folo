@@ -11,7 +11,7 @@ use crate::{
 /// All values in the pool remain pinned for their entire lifetime.
 ///
 /// The pool automatically expands its capacity when needed.
-#[doc = include_str!("../../doc/snippets/raw_pool_is_potentially_send.md")]
+#[doc = include_str!("../../doc/snippets/raw_pool_is_potentially_thread_safe.md")]
 ///
 /// # Example
 ///
@@ -307,7 +307,12 @@ impl Default for RawBlindPool {
 mod tests {
     use std::mem::MaybeUninit;
 
+    use static_assertions::assert_not_impl_any;
+
     use super::*;
+
+    // We are nominally single-threaded.
+    assert_not_impl_any!(RawBlindPool: Send, Sync);
 
     #[test]
     fn new_pool_is_empty() {
