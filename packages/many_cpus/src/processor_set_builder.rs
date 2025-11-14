@@ -1979,7 +1979,7 @@ mod tests {
 /// and the fallback platform abstraction layer.
 ///
 /// Miri is excluded because `std::thread::available_parallelism()` is not supported under Miri.
-#[cfg(all(any(test, not(any(target_os = "linux", windows))), not(miri)))]
+#[cfg(all(test, not(miri)))]
 mod tests_fallback {
     use std::num::NonZeroUsize;
 

@@ -69,7 +69,14 @@ impl BuildTargetPlatform {
                     reason = "unrealistic to have more than u32::MAX processors"
                 )]
                 let id = id as ProcessorId;
-                ProcessorFacade::Fallback(ProcessorImpl::new(id))
+                #[cfg(test)]
+                {
+                    ProcessorFacade::Fallback(ProcessorImpl::new(id))
+                }
+                #[cfg(not(test))]
+                {
+                    ProcessorFacade::Target(ProcessorImpl::new(id))
+                }
             })
             .collect::<Vec<_>>();
 
