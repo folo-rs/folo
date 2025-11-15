@@ -2,7 +2,7 @@
 [script]
 mutants:
     function Escape-Wildcards ($s) {
-        if (!$IsWindows) {
+        if ($IsWindows) {
             return $s
         }
 
