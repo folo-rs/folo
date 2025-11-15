@@ -874,12 +874,12 @@ mod tests {
         // 5. Slab drops automatically with MayDropContents policy
     }
 
+    #[expect(
+        dead_code,
+        reason = "Test structs to verify slab operations with complex types"
+    )]
     #[test]
     fn smoke_test() {
-        #[allow(
-            dead_code,
-            reason = "Test struct to verify slab operations with complex types"
-        )]
         struct FunkyStuff {
             a: u32,
             b: MaybeUninit<u64>,
@@ -898,10 +898,22 @@ mod tests {
             }
         }
 
+        struct VeryLarge {
+            data: [u8; 64_000],
+        }
+
+        impl Default for VeryLarge {
+            fn default() -> Self {
+                #[expect(clippy::large_stack_arrays, reason = "good enough for test code")]
+                Self { data: [1; 64_000] }
+            }
+        }
+
         smoke_test_impl::<u8>();
         smoke_test_impl::<u32>();
         smoke_test_impl::<(u32, u64)>();
         smoke_test_impl::<FunkyStuff>();
+        smoke_test_impl::<VeryLarge>();
     }
 
     #[test]
@@ -920,7 +932,7 @@ mod tests {
     }
 
     #[test]
-    fn handles_very_large_objects() {
+    fn handles_medium_sized_objects() {
         // Test with objects larger than typical page size
         struct LargeObject {
             data: [u8; 8192], // 8KB object
