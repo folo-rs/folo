@@ -1088,6 +1088,63 @@ mod tests {
 
     #[test]
     #[should_panic]
+    fn double_remove_unchecked_panics() {
+        let layout = SlabLayout::new(Layout::new::<u32>());
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
+
+        // SAFETY: u32 layout matches slab layout
+        let handle = unsafe { insert(&mut slab, 42_u32) };
+
+        // SAFETY: handle is valid and from this slab
+        unsafe {
+            slab.remove_unchecked(handle);
+        }
+        // SAFETY: This should panic - handle is no longer valid
+        unsafe {
+            slab.remove_unchecked(handle);
+        } // Should panic
+    }
+
+    #[test]
+    #[should_panic]
+    fn double_remove_unpin_panics() {
+        let layout = SlabLayout::new(Layout::new::<u32>());
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
+
+        // SAFETY: u32 layout matches slab layout
+        let handle = unsafe { insert(&mut slab, 42_u32) };
+
+        // SAFETY: handle is valid and from this slab
+        unsafe {
+            _ = slab.remove_unpin(handle);
+        }
+        // SAFETY: This should panic - handle is no longer valid
+        unsafe {
+            _ = slab.remove_unpin(handle);
+        } // Should panic
+    }
+
+    #[test]
+    #[should_panic]
+    fn double_remove_unpin_unchecked_panics() {
+        let layout = SlabLayout::new(Layout::new::<u32>());
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
+
+        // SAFETY: u32 layout matches slab layout
+        let handle = unsafe { insert(&mut slab, 42_u32) };
+
+        // SAFETY: handle is valid and from this slab
+        unsafe {
+            _ = slab.remove_unpin_unchecked(handle);
+        }
+        // SAFETY: This should panic - handle is no longer valid
+        unsafe {
+            _ = slab.remove_unpin_unchecked(handle);
+        } // Should panic
+    }
+
+    #[test]
+    #[should_panic]
     fn remove_with_handle_from_wrong_slab_panics() {
         let layout = SlabLayout::new(Layout::new::<u32>());
         let mut slab1 = Slab::new(layout, DropPolicy::MayDropContents);
@@ -1097,6 +1154,61 @@ mod tests {
         let _handle_from_slab1 = unsafe { insert(&mut slab1, 42_u32) };
         // SAFETY: u32 layout matches slab layout
         let handle_from_slab2 = unsafe { insert(&mut slab2, 42_u32) };
+
+        // Try to remove handle from slab2 using slab1 - should panic
+        // SAFETY: This should panic - handle is from wrong slab
+        unsafe {
+            slab1.remove(handle_from_slab2);
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn remove_unpin_with_handle_from_wrong_slab_panics() {
+        let layout = SlabLayout::new(Layout::new::<u32>());
+        let mut slab1 = Slab::new(layout, DropPolicy::MayDropContents);
+        let mut slab2 = Slab::new(layout, DropPolicy::MayDropContents);
+
+        // SAFETY: u32 layout matches slab layout
+        let _handle_from_slab1 = unsafe { insert(&mut slab1, 42_u32) };
+        // SAFETY: u32 layout matches slab layout
+        let handle_from_slab2 = unsafe { insert(&mut slab2, 42_u32) };
+
+        // Try to remove handle from slab2 using slab1 - should panic
+        // SAFETY: This should panic - handle is from wrong slab
+        unsafe {
+            _ = slab1.remove_unpin(handle_from_slab2);
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn remove_with_out_of_bounds_handle_from_wrong_slab_panics() {
+        // We create slabs with different capacities - a slab with large items, meaning it
+        // has a small capacity, and a slab with small items, meaning it has a large capacity.
+        // Trying to remove from the large object slab using the handle from the small object
+        // slab will indicate an index out of bounds of the large object slab.
+
+        let layout1 = SlabLayout::new(Layout::new::<[u8; 64_000]>());
+        let layout2 = SlabLayout::new(Layout::new::<u32>());
+        let mut slab1 = Slab::new(layout1, DropPolicy::MayDropContents);
+        let mut slab2 = Slab::new(layout2, DropPolicy::MayDropContents);
+
+        // SAFETY: layout matches slab layout
+        #[expect(clippy::large_stack_arrays, reason = "good enough for test code")]
+        let _handle_from_slab1 = unsafe { insert(&mut slab1, [0_u8; 64_000]) };
+
+        let handle_from_slab2 = {
+            let mut last_handle = None;
+
+            for _ in 0..layout2.capacity().get() {
+                // SAFETY: u32 layout matches slab layout
+                let handle = unsafe { insert(&mut slab2, 42_u32) };
+                last_handle = Some(handle);
+            }
+
+            last_handle.unwrap()
+        };
 
         // Try to remove handle from slab2 using slab1 - should panic
         // SAFETY: This should panic - handle is from wrong slab
@@ -1215,7 +1327,7 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn insert_panics_when_slab_is_full() {
+    fn debug_build_insert_panics_when_slab_is_full() {
         // Create a slab with minimal capacity to make it easy to fill
         let layout = SlabLayout::new(Layout::new::<u32>());
         let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
@@ -1235,7 +1347,9 @@ mod tests {
         assert!(slab.is_full());
         assert_eq!(slab.len(), capacity);
 
-        // This should panic - slab is full
+        // This should panic - slab is full.
+        // NB! This only panics if debug_assertions is enabled. This is not part of the API
+        // contract, rather it is a debug build sanity check.
         // SAFETY: u32 layout matches slab layout, but slab is full so should panic
         unsafe {
             insert(&mut slab, 999_u32);
@@ -1243,9 +1357,24 @@ mod tests {
     }
 
     #[test]
+    #[should_panic]
+    fn debug_build_wrong_layout_panics() {
+        let layout = SlabLayout::new(Layout::new::<u32>());
+        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
+
+        // This should panic - layout of u64 does not match slab layout of u32.
+        // NB! This only panics if debug_assertions is enabled. This is not part of the API
+        // contract, rather it is a debug build sanity check.
+        // SAFETY: intentionally violating safety requirements here.
+        unsafe {
+            insert(&mut slab, 123_u64);
+        }
+    }
+
+    #[test]
     fn is_full_comprehensive_behavior() {
         // Create a slab with minimal capacity to test full behavior
-        let layout = SlabLayout::new(Layout::new::<u32>());
+        let layout = SlabLayout::new(Layout::new::<usize>());
         let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
         let capacity = layout.capacity().get();
@@ -1262,12 +1391,8 @@ mod tests {
             // Should not be full before inserting (except when about to reach capacity)
             assert!(!slab.is_full());
 
-            // SAFETY: u32 layout matches slab layout
-            #[allow(
-                clippy::cast_possible_truncation,
-                reason = "test uses small capacity values"
-            )]
-            let handle = unsafe { insert(&mut slab, i as u32) };
+            // SAFETY: usize layout matches slab layout
+            let handle = unsafe { insert(&mut slab, i) };
             handles.push(handle);
 
             assert_eq!(slab.len(), i + 1);
@@ -1319,6 +1444,11 @@ mod tests {
 
     #[test]
     fn insertion_follows_lowest_index_first_order() {
+        // This is not a promise in the API contract - we are allowed to insert in any order
+        // we want, as the indexes are an internal implementation detail of the slabs. However,
+        // our current implementation fills from the lowest index first, so we have a test here
+        // to verify this behavior remains stable until we choose to change it.
+
         let layout = SlabLayout::new(Layout::new::<u32>());
         let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
