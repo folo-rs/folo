@@ -21,16 +21,16 @@ incremental = false
 
 [workspace.dependencies]
 # The packages we publish.
-all_the_time = { version = "0.4.4", path = "packages/all_the_time" }
+all_the_time = { version = "0.4.5", path = "packages/all_the_time" }
 alloc_tracker = { version = "0.5.9", path = "packages/alloc_tracker" }
 blind_pool = { version = "0.5.1", path = "packages/blind_pool" }
 cpulist = { version = "1.0.1", path = "packages/cpulist" }
 events = { version = "0.5.1", path = "packages/events" }
-events_once = { version = "0.5.5", path = "packages/events_once" }
+events_once = { version = "0.5.6", path = "packages/events_once" }
 fast_time = { version = "0.1.8", path = "packages/fast_time" }
 folo_ffi = { version = "0.1.7", path = "packages/folo_ffi" }
 folo_utils = { version = "0.1.3", path = "packages/folo_utils" }
-infinity_pool = { version = "0.7.8", path = "packages/infinity_pool" }
+infinity_pool = { version = "0.7.9", path = "packages/infinity_pool" }
 linked = { version = "1.0.0", path = "packages/linked" }
 linked_macros = { version = "1.0.0", path = "packages/linked_macros" }
 linked_macros_impl = { version = "1.0.0", path = "packages/linked_macros_impl" }
@@ -39,7 +39,7 @@ many_cpus_benchmarking = { version = "0.1.33", path = "packages/many_cpus_benchm
 new_zealand = { version = "1.0.1", path = "packages/new_zealand" }
 nm = { version = "0.1.21", path = "packages/nm" }
 opaque_pool = { version = "0.4.2", path = "packages/opaque_pool" }
-par_bench = { version = "0.2.21", path = "packages/par_bench" }
+par_bench = { version = "0.2.22", path = "packages/par_bench" }
 pinned_pool = { version = "0.2.1", path = "packages/pinned_pool" }
 region_cached = { version = "1.0.3", path = "packages/region_cached" }
 region_local = { version = "1.0.3", path = "packages/region_local" }
