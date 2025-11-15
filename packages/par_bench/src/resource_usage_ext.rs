@@ -606,7 +606,7 @@ mod tests {
         };
 
         let mut pool = ThreadPool::new(processors.clone());
-        
+
         let allocs = alloc_tracker::Session::new();
 
         // Test original pattern: Run::new().groups().prepare_iter().measure_resource_usage()
