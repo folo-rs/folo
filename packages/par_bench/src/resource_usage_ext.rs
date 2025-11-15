@@ -406,6 +406,9 @@ mod tests {
     use super::ResourceUsageExt;
     use crate::{Run, ThreadPool};
 
+    static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> =
+        LazyLock::new(|| ProcessorSet::builder().take(nz!(2)));
+
     static FOUR_PROCESSORS: LazyLock<Option<ProcessorSet>> =
         LazyLock::new(|| ProcessorSet::builder().take(nz!(4)));
 
@@ -520,9 +523,15 @@ mod tests {
     #[test]
     #[cfg(all(not(miri), feature = "alloc_tracker", feature = "all_the_time"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
     fn api_supports_groups_in_any_order() {
+        let Some(processors) = TWO_PROCESSORS.as_ref() else {
+            println!("Skipping test: not enough processors");
+            return;
+        };
+
+        let mut pool = ThreadPool::new(processors.clone());
+
         let allocs = alloc_tracker::Session::new();
         let processor_time = all_the_time::Session::new();
-        let mut pool = ThreadPool::new(ProcessorSet::default());
 
         // Test 1: .measure_resource_usage() before .groups()
         let results1 = Run::new()
@@ -567,8 +576,14 @@ mod tests {
     #[test]
     #[cfg(all(not(miri), feature = "alloc_tracker"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
     fn api_supports_measure_resource_usage_after_groups_only() {
+        let Some(processors) = TWO_PROCESSORS.as_ref() else {
+            println!("Skipping test: not enough processors");
+            return;
+        };
+
+        let mut pool = ThreadPool::new(processors.clone());
+
         let allocs = alloc_tracker::Session::new();
-        let mut pool = ThreadPool::new(ProcessorSet::default());
 
         // Test pattern: Run::new().groups().measure_resource_usage()
         let results = Run::new()
@@ -585,8 +600,14 @@ mod tests {
     #[test]
     #[cfg(all(not(miri), feature = "alloc_tracker"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
     fn api_supports_original_pattern_groups_prepare_iter_measure() {
+        let Some(processors) = TWO_PROCESSORS.as_ref() else {
+            println!("Skipping test: not enough processors");
+            return;
+        };
+
+        let mut pool = ThreadPool::new(processors.clone());
+        
         let allocs = alloc_tracker::Session::new();
-        let mut pool = ThreadPool::new(ProcessorSet::default());
 
         // Test original pattern: Run::new().groups().prepare_iter().measure_resource_usage()
         let results = Run::new()
