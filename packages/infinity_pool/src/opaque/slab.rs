@@ -1,5 +1,5 @@
 use std::alloc::{Layout, alloc, dealloc};
-use std::any::Any;
+use std::any::{Any, type_name};
 use std::iter::FusedIterator;
 use std::mem::{self, MaybeUninit, size_of};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -8,39 +8,37 @@ use std::thread;
 
 use crate::{DropPolicy, Dropper, SlabHandle, SlabLayout, SlotMeta};
 
-/// A slab is one piece of a pool's capacity, providing the memory used to store pooled objects.
+/// A slab is one piece of an object pool's capacity.
 ///
-/// All slabs in a pool have the same capacity but the pool may add/remove slabs as needed.
-///
-/// Objects placed into a slab are later referenced (e.g. for removal) by index.
+/// Inserting an object into the slab returns a handle that can be used to access or remove the
+/// object.
 ///
 /// # Out of band access
 ///
 /// The slab does not create or keep references to the objects within, so it is valid to access
-/// memory via pointers and to create exclusive references to memory from unsafe code even when not
-/// holding an exclusive reference to the slab.
+/// memory via pointers and to create exclusive references to objects in the slab from unsafe code
+/// even when not holding an exclusive reference to the slab.
 ///
-/// The caller is responsible for ensuring that no reference survives beyond the lifetime of the
-/// object in the slab. Higher-level abstractions may provide safe wrappers around these unsafe
-/// lifetime management principles.
+/// The caller is responsible for ensuring that no reference survives after the object is removed
+/// from the slab or the slab is dropped. Higher-level abstractions in this package provide safe
+/// wrappers around these unsafe lifetime management principles.
 ///
 /// # Thread safety
 ///
 /// The slab is single-threaded by default, though if all the objects inserted are `Send` then
 /// the owner of the slab is allowed to treat the slab itself as `Send` (but must do so via a
 /// wrapper type that implements `Send` using unsafe code).
-///
-/// The slab is never `Sync`, as it provides no internal synchronization.
 #[derive(Debug)]
 pub(crate) struct Slab {
     /// Precomputed layout factors for the slab, based on the object layout and capacity.
     layout: SlabLayout,
 
-    /// Drop policy that determines whether the slab panics if any objects are present during drop.
+    /// Drop policy that determines whether the slab panics if any objects
+    /// are present in the slab when the slab is dropped.
     drop_policy: DropPolicy,
 
     /// Base pointer for the array containing all slots in the slab, where each slot combines
-    /// metadata and object storage. Each slot is a pseudo-object with a structure
+    /// metadata and object storage. Each slot is an untyped pseudo-object with a structure
     /// equivalent to this Rust type:
     ///
     /// ```ignore
@@ -55,7 +53,7 @@ pub(crate) struct Slab {
     first_slot_ptr: NonNull<SlotMeta>,
 
     /// Head of the intrusive freelist implementing a stack of available slots, where each
-    /// vacant slot stores the index of the next free slot. Points beyond capacity when full.
+    /// vacant slot stores the index of the next vacant slot. Points beyond capacity when full.
     next_free_slot_index: usize,
 
     /// Current number of occupied slots.
@@ -75,16 +73,17 @@ impl Slab {
 
         // We initialize all the slots to "vacant" to start with.
         for index in 0_usize..layout.capacity().get() {
-            // Cannot overflow because that would imply slab extends beyond virtual memory.
-            let slot_offset = index.wrapping_mul(layout.slot_layout().size());
+            // Cannot overflow because that would imply slab extends beyond virtual memory,
+            // which would have failed at the layout generation stage above.
+            let slot_offset_bytes = index.wrapping_mul(layout.slot_layout().size());
 
             // SAFETY: Index is bounded by loop conditions and the condition itself is supplied
             // by the slab layout, so we are guaranteed to be in-bounds.
-            let slot_ptr = unsafe { first_slot_ptr.as_ptr().cast::<u8>().add(slot_offset) };
+            let slot_ptr = unsafe { first_slot_ptr.as_ptr().cast::<u8>().add(slot_offset_bytes) };
 
             #[expect(
                 clippy::cast_ptr_alignment,
-                reason = "SlabLayout guarantees proper alignment of array elements via padding"
+                reason = "SlabLayout guarantees proper alignment"
             )]
             let slot_meta_ptr = slot_ptr.cast::<SlotMeta>();
 
@@ -94,8 +93,8 @@ impl Slab {
                 ptr::write(
                     slot_meta_ptr,
                     SlotMeta::Vacant {
-                        // Cannot overflow, as that would imply the slab
-                        // is larger than virtual memory.
+                        // Cannot overflow, as that would imply the slab is larger than virtual
+                        // memory, which would have failed to generate a layout.
                         next_free_slot_index: index.wrapping_add(1),
                     },
                 );
@@ -148,39 +147,41 @@ impl Slab {
     /// The caller must ensure that the closure correctly initializes the object. All fields that
     /// are not `MaybeUninit` must be initialized when the closure returns.
     ///
-    /// The caller must ensure that the slab is not full.
-    pub(crate) unsafe fn insert_with<T, F>(&mut self, f: F) -> SlabHandle<T>
+    /// The caller must ensure that the slab is not full. There is no bounds checking performed.
+    pub(crate) unsafe fn insert_with_unchecked<T, F>(&mut self, f: F) -> SlabHandle<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {
         debug_assert_eq!(
             Layout::new::<T>(),
             self.layout.object_layout(),
-            "type layout mismatch: expected layout {:?}, got layout {:?}",
+            "type {} layout mismatch: expected layout {:?}, got layout {:?}",
+            type_name::<T>(),
             self.layout.object_layout(),
             Layout::new::<T>()
         );
 
         debug_assert!(
             !self.is_full(),
-            "cannot insert value into a full slab of capacity {}",
+            "cannot insert value into a full Slab<{}> of capacity {}",
+            type_name::<T>(),
             self.layout.capacity().get()
         );
 
         // Pop the next free index from the stack of free entries.
         let index = self.next_free_slot_index;
 
-        // SAFETY: Guaranteed in-bounds since we verified the slab is not full
-        // and we picked the next free slot index from the freelist.
+        // SAFETY: Guaranteed in-bounds since we have a safety requirement that the slab is not
+        // full and we picked the next free slot index from the freelist.
         let mut slot_ptr = unsafe { self.slot_ptr_unchecked(index) };
 
         // SAFETY: We hold an exclusive reference to the slab (&mut self), and slot_ptr
-        // points to a valid, initialized SlotMeta. The slab design ensures no other references
-        // to individual entries exist while we hold the exclusive slab reference.
+        // points to a valid, initialized SlotMeta. Access to SlotMeta objects requires
+        // exclusive access to the slab, so this is safe.
         let slot_meta = unsafe { slot_ptr.as_mut() };
 
-        // SAFETY: Guaranteed in-bounds since we verified the slab is not full
-        // and we picked the next free slot index from the freelist.
+        // SAFETY: Guaranteed in-bounds since we have a safety requirement that the slab is not
+        // full and we picked the next free slot index from the freelist.
         let object_ptr = unsafe { self.object_ptr_unchecked::<T>(index) };
 
         // We create a MaybeUninit wrapper around the memory location where the object is to be
@@ -214,7 +215,8 @@ impl Slab {
             } => next_free_slot_index,
             SlotMeta::Occupied { .. } => {
                 unreachable!(
-                    "slot {index} was already occupied in slab of capacity {}",
+                    "slot {index} was already occupied in Slab<{}> of capacity {}",
+                    type_name::<T>(),
                     self.layout.capacity().get()
                 );
             }
@@ -250,16 +252,19 @@ impl Slab {
         let slot_meta = self.slot_meta_mut(handle.index());
 
         let old_meta = {
-            // For extra security, we also verify that the pointer matches, because otherwise
-            // one might mix up slot 5 in slab A with slot 5 in slab B.
-            assert!(ptr::addr_eq(
-                object_ptr_erased.as_ptr(),
-                handle.ptr().as_ptr()
-            ));
+            // slot_meta_mut() above performed a bounds check already but for extra safety,
+            // we also verify that the pointer matches, because otherwise one might mix up
+            // slot 5 in slab A with slot 5 in slab B.
+            assert!(
+                ptr::addr_eq(object_ptr_erased.as_ptr(), handle.ptr().as_ptr(),),
+                "handle pointer does not match object {} pointer in slab",
+                type_name::<T>(),
+            );
 
             // The Drop implementation of the existing SlotMeta will automatically call the dropper.
             // We return it to the outer scope so we can defer the drop until after the slab has
-            // been updated back into its post-remove state.
+            // been updated back into its post-remove state (so if drop panics, the slab remains
+            // in an internally consistent state).
             mem::replace(
                 slot_meta,
                 SlotMeta::Vacant {
@@ -278,7 +283,8 @@ impl Slab {
             *slot_meta = old_meta;
 
             panic!(
-                "remove() slot {} was vacant in slab of capacity {}",
+                "remove::<{}>() slot {} was vacant in slab of capacity {}",
+                type_name::<T>(),
                 handle.index(),
                 self.layout.capacity().get()
             );
@@ -309,12 +315,7 @@ impl Slab {
     pub(crate) unsafe fn remove_unchecked<T: ?Sized>(&mut self, handle: SlabHandle<T>) {
         let next_free_slot_index = self.next_free_slot_index;
 
-        // SAFETY: Caller guarantees this object belongs to this slab and is still present.
-        let mut slot_ptr = unsafe { self.slot_ptr_unchecked(handle.index()) };
-
-        // SAFETY: Caller guarantees that we are in the right state to do this, as the safety
-        // requirements state that ownership and object lifetime are managed manually by the caller.
-        let slot_meta = unsafe { slot_ptr.as_mut() };
+        let slot_meta = self.slot_meta_mut(handle.index());
 
         // The Drop implementation of the existing SlotMeta will automatically call the dropper.
         // We return it to the outer scope so we can defer the drop until after the slab has
@@ -336,7 +337,8 @@ impl Slab {
             *slot_meta = old_meta;
 
             panic!(
-                "remove() slot {} was vacant in slab of capacity {}",
+                "remove::<{}>() slot {} was vacant in slab of capacity {}",
+                type_name::<T>(),
                 handle.index(),
                 self.layout.capacity().get()
             );
@@ -345,7 +347,7 @@ impl Slab {
         // Push the released slot into the freelist.
         self.next_free_slot_index = handle.index();
 
-        // Cannot overflow because we asserted above the removed entry was occupied.
+        // Cannot overflow because we verified above that the removed entry was occupied.
         self.count = self.count.wrapping_sub(1);
 
         // It is now safe to do the drop. If drop() panics, the slab is still in a valid state.
@@ -369,7 +371,7 @@ impl Slab {
         const {
             assert!(
                 size_of::<T>() > 0,
-                "cannot extract zero-sized types from pool"
+                "cannot extract zero-sized type from pool"
             );
         };
 
@@ -383,12 +385,14 @@ impl Slab {
         let slot_meta = self.slot_meta_mut(handle.index());
 
         let old_meta = {
-            // For extra security, we also verify that the pointer matches, because otherwise
-            // one might mix up slot 5 in slab A with slot 5 in slab B.
-            assert!(ptr::addr_eq(
-                object_ptr_erased.as_ptr(),
-                handle.ptr().as_ptr()
-            ));
+            // slot_meta_mut() above performed a bounds check already but for extra safety,
+            // we also verify that the pointer matches, because otherwise one might mix up
+            // slot 5 in slab A with slot 5 in slab B.
+            assert!(
+                ptr::addr_eq(object_ptr_erased.as_ptr(), handle.ptr().as_ptr(),),
+                "handle pointer does not match object {} pointer in slab",
+                type_name::<T>(),
+            );
 
             mem::replace(
                 slot_meta,
@@ -408,7 +412,8 @@ impl Slab {
             *slot_meta = old_meta;
 
             panic!(
-                "remove() slot {} was vacant in slab of capacity {}",
+                "remove::<{}>() slot {} was vacant in slab of capacity {}",
+                type_name::<T>(),
                 handle.index(),
                 self.layout.capacity().get()
             );
@@ -456,12 +461,7 @@ impl Slab {
 
         let next_free_slot_index = self.next_free_slot_index;
 
-        // SAFETY: Caller guarantees this object belongs to this slab and is still present.
-        let mut slot_ptr = unsafe { self.slot_ptr_unchecked(handle.index()) };
-
-        // SAFETY: Caller guarantees that we are in the right state to do this, as the safety
-        // requirements state that ownership and object lifetime are managed manually by the caller.
-        let slot_meta = unsafe { slot_ptr.as_mut() };
+        let slot_meta = self.slot_meta_mut(handle.index());
 
         let old_meta = mem::replace(
             slot_meta,
@@ -480,7 +480,8 @@ impl Slab {
             *slot_meta = old_meta;
 
             panic!(
-                "remove() slot {} was vacant in slab of capacity {}",
+                "remove::<{}>() slot {} was vacant in slab of capacity {}",
+                type_name::<T>(),
                 handle.index(),
                 self.layout.capacity().get()
             );
@@ -509,16 +510,20 @@ impl Slab {
     ///
     /// The caller must ensure that `index` is not out of bounds.
     unsafe fn slot_ptr_unchecked(&self, index: usize) -> NonNull<SlotMeta> {
-        // Guarded by bounds check above, so we are guaranteed that the pointer is valid.
-        // This cannot overflow because that would imply the slab extends beyond virtual memory.
+        // Safety requirement implies we are in bounds, so it overflow because that
+        // would imply the slab extends beyond virtual memory, which is not a valid slab layout.
         let offset = index.wrapping_mul(self.layout.slot_layout().size());
 
         // SAFETY: first_slot_ptr is valid from our allocation in new(), offset is within
-        // bounds due to the index bounds check above, and byte_add preserves pointer validity.
+        // bounds due to the safety requirements and the wrap logic above, and byte_add
+        // preserves pointer validity.
         unsafe { self.first_slot_ptr.byte_add(offset) }
     }
 
     fn slot_meta_mut(&mut self, index: usize) -> &mut SlotMeta {
+        // This assertion is important in release builds, to avoid a handle from one pool
+        // from being used to remove an object from another pool. It is only one of several
+        // checks - even if we are in bounds, we still have further validation to do.
         assert!(
             index < self.layout.capacity().get(),
             "slot {index} is out of bounds in slab of capacity {}",
@@ -608,7 +613,7 @@ impl Drop for Slab {
         if !thread::panicking() && matches!(self.drop_policy, DropPolicy::MustNotDropContents) {
             assert!(
                 was_empty,
-                "dropped a non-empty slab with {original_count} items - this is forbidden by DropPolicy::MustNotDropItems"
+                "dropped a non-empty slab with {original_count} items - this is forbidden by DropPolicy::MustNotDropContents"
             );
         }
     }
@@ -619,6 +624,9 @@ impl Drop for Slab {
 /// This iterator yields untyped pointers to objects stored in the slab. Since the slab
 /// can contain objects of different types (as long as they have the same layout), the
 /// iterator returns `NonNull<()>` and leaves type casting to the caller.
+///
+/// The iterator makes no promises about the pointers being safe to access - the objects pointed
+/// to are owned by whoever inserted them and they may hold exclusive references to the objects.
 ///
 /// Supports bidirectional iteration via `DoubleEndedIterator` and exact size tracking
 /// via `ExactSizeIterator`.
@@ -738,7 +746,8 @@ impl FusedIterator for SlabIterator<'_> {}
 /// ahead of time if it is known to eventually be used.
 ///
 /// We are operating in context of object pooling, so we can assume all its memory will eventually
-/// be used, so we do this eagerly whenever we create a new slab.
+/// be used, so we do this eagerly whenever we create a new slab, trading off slower initialization
+/// for faster object insertion.
 ///
 /// We implement this by writing to each page of memory in the pointer's range, so the memory
 /// is assumed to be uninitialized. Calling this on initialized memory would conceptually be
@@ -771,7 +780,14 @@ mod tests {
 
     use super::*;
 
+    // Intentionally not Send to avoid accidents. The type API documentation does allow it to be
+    // treated as Send if the owner guarantees all contents are Send, but via unsafe code only.
     assert_not_impl_any!(Slab: Send);
+
+    // We do not have any reason to avoid Sync - in principle, the type is only !Sync because the
+    // pointers inside disable the auto trait. If we wanted to, we could be Sync. However, we do
+    // not want to - simply to preserve design freedom for future implementation changes that may
+    // be in conflict with Sync.
     assert_not_impl_any!(Slab: Sync);
 
     assert_impl_all!(SlabIterator<'_>: Iterator, DoubleEndedIterator, ExactSizeIterator, FusedIterator);
@@ -783,7 +799,7 @@ mod tests {
     unsafe fn insert<T>(slab: &mut Slab, value: T) -> SlabHandle<T> {
         // SAFETY: Caller guarantees T layout matches slab layout, then we initialize.
         unsafe {
-            slab.insert_with(|slot| {
+            slab.insert_with_unchecked(|slot| {
                 slot.write(value);
             })
         }
@@ -795,7 +811,7 @@ mod tests {
         // 2. We remove the second item.
         // 3. We insert 2 more items.
         // 4. We remove the first item.
-        // 5. We drop the slab and let it clean up itself (as drop policy == MayDropItems).
+        // 5. We drop the slab and let it clean up itself (as drop policy == MayDropContents).
         //
         // At relevant points, we check the slab length and emptiness/fullness.
         let layout = SlabLayout::new(Layout::new::<T>());
@@ -855,7 +871,7 @@ mod tests {
         }
         assert!(slab.is_empty());
 
-        // 5. Slab drops automatically with MayDropItems policy
+        // 5. Slab drops automatically with MayDropContents policy
     }
 
     #[test]
@@ -1024,7 +1040,7 @@ mod tests {
         // SAFETY: PartiallyInitializable layout matches slab layout,
         // and new_in_place properly initializes required fields
         let handle = unsafe {
-            slab.insert_with(|uninit| {
+            slab.insert_with_unchecked(|uninit| {
                 PartiallyInitializable::new_in_place(uninit);
             })
         };

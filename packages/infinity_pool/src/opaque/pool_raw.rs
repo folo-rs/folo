@@ -367,7 +367,7 @@ impl RawOpaquePool {
         //
         // We ensure that the slab is not full via the logic that gets us `slab_index`,
         // with the logic always guaranteeing that there is a vacancy in that slab.
-        let slab_handle = unsafe { slab.insert_with(f) };
+        let slab_handle = unsafe { slab.insert_with_unchecked(f) };
 
         // Update our tracked length since we just inserted an object.
         // This can never overflow since that would mean the pool is greater than virtual memory.
