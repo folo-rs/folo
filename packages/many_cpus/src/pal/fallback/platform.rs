@@ -46,10 +46,6 @@ static PROCESSOR_COUNT: OnceLock<usize> = OnceLock::new();
 pub(crate) static BUILD_TARGET_PLATFORM: BuildTargetPlatform = BuildTargetPlatform;
 
 impl BuildTargetPlatform {
-    pub(crate) const fn new() -> Self {
-        Self
-    }
-
     #[expect(clippy::unused_self, reason = "matches Platform trait signature")]
     pub(crate) fn processor_count(&self) -> usize {
         *PROCESSOR_COUNT.get_or_init(|| {
@@ -207,14 +203,14 @@ mod tests {
 
     #[test]
     fn has_at_least_one_processor() {
-        let platform = BuildTargetPlatform::new();
+        let platform = BuildTargetPlatform;
         assert!(platform.processor_count() >= 1);
         assert!(!platform.get_processors().is_empty());
     }
 
     #[test]
     fn all_processors_in_region_zero() {
-        let platform = BuildTargetPlatform::new();
+        let platform = BuildTargetPlatform;
         for processor in platform.get_processors().iter() {
             assert_eq!(processor.memory_region_id(), 0);
         }
@@ -222,7 +218,7 @@ mod tests {
 
     #[test]
     fn all_processors_are_performance() {
-        let platform = BuildTargetPlatform::new();
+        let platform = BuildTargetPlatform;
         for processor in platform.get_processors().iter() {
             assert_eq!(processor.efficiency_class(), EfficiencyClass::Performance);
         }
@@ -230,7 +226,7 @@ mod tests {
 
     #[test]
     fn processor_ids_are_sequential() {
-        let platform = BuildTargetPlatform::new();
+        let platform = BuildTargetPlatform;
         for (index, processor) in platform.get_processors().iter().enumerate() {
             #[expect(
                 clippy::cast_possible_truncation,
@@ -243,7 +239,7 @@ mod tests {
 
     #[test]
     fn max_processor_id_is_count_minus_one() {
-        let platform = BuildTargetPlatform::new();
+        let platform = BuildTargetPlatform;
         let max_id = platform.max_processor_id();
         #[expect(
             clippy::cast_possible_truncation,
@@ -255,7 +251,7 @@ mod tests {
 
     #[test]
     fn current_processor_id_is_stable_within_thread() {
-        let platform = BuildTargetPlatform::new();
+        let platform = BuildTargetPlatform;
         let id1 = platform.current_processor_id();
         let id2 = platform.current_processor_id();
         assert_eq!(id1, id2);
@@ -263,7 +259,7 @@ mod tests {
 
     #[test]
     fn pinning_updates_current_thread_processors() {
-        let platform = BuildTargetPlatform::new();
+        let platform = BuildTargetPlatform;
 
         let processors = platform.get_processors();
         let first_processor = processors.first();
@@ -282,7 +278,7 @@ mod tests {
         reason = "exact comparison is appropriate for this test"
     )]
     fn max_processor_time_equals_processor_count() {
-        let platform = BuildTargetPlatform::new();
+        let platform = BuildTargetPlatform;
         #[expect(
             clippy::cast_precision_loss,
             reason = "test comparison with acceptable precision"
