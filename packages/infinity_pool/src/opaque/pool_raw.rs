@@ -444,7 +444,7 @@ impl RawOpaquePool {
 
         // SAFETY: Caller guarantees the handle is valid for this pool.
         unsafe {
-            slab.remove_unchecked(handle.slab_handle());
+            slab.remove(handle.slab_handle());
         }
 
         // Update our tracked length since we just removed an object.
@@ -536,7 +536,7 @@ impl RawOpaquePool {
         let slab = unsafe { self.slabs.get_unchecked_mut(handle.slab_index()) };
 
         // SAFETY: Caller guarantees the handle is valid for this pool.
-        let value = unsafe { slab.remove_unpin_unchecked::<T>(handle.slab_handle()) };
+        let value = unsafe { slab.remove_unpin::<T>(handle.slab_handle()) };
 
         // Update our tracked length since we just removed an object.
         // This cannot wrap around because we just removed an object,

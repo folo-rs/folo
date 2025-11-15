@@ -231,10 +231,6 @@ impl Slab {
 
     /// Removes an object from the slab, dropping it.
     ///
-    /// # Panics
-    ///
-    /// Panics if the handle does not reference an existing object in this slab.
-    ///
     /// # Safety
     ///
     /// The caller must ensure that the handle belongs to this slab.
@@ -242,37 +238,40 @@ impl Slab {
     /// The caller must ensure that the object is still present in the slab. Slab handles are just
     /// fat pointers, so ownership and object lifetime must be managed manually by the caller.
     pub(crate) unsafe fn remove<T: ?Sized>(&mut self, handle: SlabHandle<T>) {
-        let next_free_slot_index = self.next_free_slot_index;
+        // we also verify that the pointer matches, because otherwise one might mix up
+        // slot 5 in slab A with slot 5 in slab B.
+        #[cfg(debug_assertions)]
+        {
+            // SAFETY: Forwarding safety requirements from the caller (object must be present in slab).
+            let object_ptr_erased = unsafe { self.object_ptr_unchecked::<()>(handle.index()) };
 
-        // SAFETY: delay-guarded by slot_meta_mut() bounds checking below.
-        // We will not use this pointer if bounds check fails but we just need
-        // to get the pointer already here due to self-borrowing rules.
-        let object_ptr_erased = unsafe { self.object_ptr_unchecked::<()>(handle.index()) };
-
-        let slot_meta = self.slot_meta_mut(handle.index());
-
-        let old_meta = {
-            // slot_meta_mut() above performed a bounds check already but for extra safety,
-            // we also verify that the pointer matches, because otherwise one might mix up
-            // slot 5 in slab A with slot 5 in slab B.
-            assert!(
+            debug_assert!(
                 ptr::addr_eq(object_ptr_erased.as_ptr(), handle.ptr().as_ptr(),),
                 "handle pointer does not match object {} pointer in slab",
                 type_name::<T>(),
             );
+        }
 
-            // The Drop implementation of the existing SlotMeta will automatically call the dropper.
-            // We return it to the outer scope so we can defer the drop until after the slab has
-            // been updated back into its post-remove state (so if drop panics, the slab remains
-            // in an internally consistent state).
-            mem::replace(
-                slot_meta,
-                SlotMeta::Vacant {
-                    next_free_slot_index,
-                },
-            )
-        };
+        let next_free_slot_index = self.next_free_slot_index;
 
+        // SAFETY: Forwarding safety requirements from the caller (object must be present in slab).
+        let slot_meta = unsafe { self.slot_meta_mut(handle.index()) };
+
+        // The Drop implementation of the existing SlotMeta will automatically call the dropper.
+        // We return it to the outer scope so we can defer the drop until after the slab has
+        // been updated back into its post-remove state (so if drop panics, the slab remains
+        // in an internally consistent state).
+        let old_meta = mem::replace(
+            slot_meta,
+            SlotMeta::Vacant {
+                next_free_slot_index,
+            },
+        );
+
+        // We have a safety requirement that the object must exist in the slab, so this is only
+        // an extra check to go above and beyond the call of duty in debug builds, to help detect
+        // violations of this safety requirement.
+        #[cfg(debug_assertions)]
         if !matches!(old_meta, SlotMeta::Occupied { .. }) {
             // Uh-oh, we were told to remove an object that did not actually exist.
             // While this is a no-no and we will panic, we still need to preserve
@@ -300,65 +299,7 @@ impl Slab {
         drop(old_meta);
     }
 
-    /// Removes an object from the slab, dropping it.
-    ///
-    /// Performs minimal validation. The idea is to only use this from contexts where the
-    /// caller can make solid guarantees (e.g. because the caller is the exclusive owner
-    /// of the target object and the slab handle).
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that the handle belongs to this slab.
-    ///
-    /// The caller must ensure that the object is still present in the slab. Slab handles are just
-    /// fat pointers, so ownership and object lifetime must be managed manually by the caller.
-    pub(crate) unsafe fn remove_unchecked<T: ?Sized>(&mut self, handle: SlabHandle<T>) {
-        let next_free_slot_index = self.next_free_slot_index;
-
-        let slot_meta = self.slot_meta_mut(handle.index());
-
-        // The Drop implementation of the existing SlotMeta will automatically call the dropper.
-        // We return it to the outer scope so we can defer the drop until after the slab has
-        // been updated back into its post-remove state.
-        let old_meta = mem::replace(
-            slot_meta,
-            SlotMeta::Vacant {
-                next_free_slot_index,
-            },
-        );
-
-        if !matches!(old_meta, SlotMeta::Occupied { .. }) {
-            // Uh-oh, we were told to remove an object that did not actually exist.
-            // While this is a no-no and we will panic, we still need to preserve
-            // the pool in a valid state after this (if only for a proper drop to happen).
-
-            // All we did was overwrite the slot with a "vacant" sign,
-            // so to restore the previous state we just put back the old meta.
-            *slot_meta = old_meta;
-
-            panic!(
-                "remove::<{}>() slot {} was vacant in slab of capacity {}",
-                type_name::<T>(),
-                handle.index(),
-                self.layout.capacity().get()
-            );
-        }
-
-        // Push the released slot into the freelist.
-        self.next_free_slot_index = handle.index();
-
-        // Cannot overflow because we verified above that the removed entry was occupied.
-        self.count = self.count.wrapping_sub(1);
-
-        // It is now safe to do the drop. If drop() panics, the slab is still in a valid state.
-        drop(old_meta);
-    }
-
     /// Removes an object from the slab, returning it.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the handle does not reference an existing object in this slab.
     ///
     /// # Safety
     ///
@@ -375,93 +316,24 @@ impl Slab {
             );
         };
 
-        let next_free_slot_index = self.next_free_slot_index;
+        // we also verify that the pointer matches, because otherwise one might mix up
+        // slot 5 in slab A with slot 5 in slab B.
+        #[cfg(debug_assertions)]
+        {
+            // SAFETY: Forwarding safety requirements from the caller (object must be present in slab).
+            let object_ptr_erased = unsafe { self.object_ptr_unchecked::<()>(handle.index()) };
 
-        // SAFETY: delay-guarded by slot_meta_mut() bounds checking below.
-        // We will not use this pointer if bounds check fails but we just need
-        // to get the pointer already here due to self-borrowing rules.
-        let object_ptr_erased = unsafe { self.object_ptr_unchecked::<()>(handle.index()) };
-
-        let slot_meta = self.slot_meta_mut(handle.index());
-
-        let old_meta = {
-            // slot_meta_mut() above performed a bounds check already but for extra safety,
-            // we also verify that the pointer matches, because otherwise one might mix up
-            // slot 5 in slab A with slot 5 in slab B.
-            assert!(
+            debug_assert!(
                 ptr::addr_eq(object_ptr_erased.as_ptr(), handle.ptr().as_ptr(),),
                 "handle pointer does not match object {} pointer in slab",
                 type_name::<T>(),
             );
-
-            mem::replace(
-                slot_meta,
-                SlotMeta::Vacant {
-                    next_free_slot_index,
-                },
-            )
-        };
-
-        if !matches!(old_meta, SlotMeta::Occupied { .. }) {
-            // Uh-oh, we were told to remove an object that did not actually exist.
-            // While this is a no-no and we will panic, we still need to preserve
-            // the pool in a valid state after this (if only for a proper drop to happen).
-
-            // All we did was overwrite the slot with a "vacant" sign,
-            // so to restore the previous state we just put back the old meta.
-            *slot_meta = old_meta;
-
-            panic!(
-                "remove::<{}>() slot {} was vacant in slab of capacity {}",
-                type_name::<T>(),
-                handle.index(),
-                self.layout.capacity().get()
-            );
         }
-
-        // We deliberately do NOT drop the existing slot meta here, instead forgetting it.
-        // This prevents the dropper from running, which would drop the object we want to
-        // return to the caller.
-        mem::forget(old_meta);
-
-        // Read the value from the slot so we can return it to the caller.
-        // SAFETY: The caller guarantees the handle points to a valid object of type T in the slab.
-        // We have exclusive access through &mut self, and we've verified the slot was occupied.
-        let value = unsafe { handle.ptr().read() };
-
-        // Push the released slot into the freelist.
-        self.next_free_slot_index = handle.index();
-
-        // Cannot overflow because we asserted above the removed entry was occupied.
-        self.count = self.count.wrapping_sub(1);
-
-        value
-    }
-
-    /// Removes an object from the slab, returning it.
-    ///
-    /// Performs minimal validation. The idea is to only use this from contexts where the
-    /// caller can make solid guarantees (e.g. because the caller is the exclusive owner
-    /// of the target object and the slab handle).
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that the handle belongs to this slab.
-    ///
-    /// The caller must ensure that the object is still present in the slab. Slab handles are just
-    /// fat pointers, so ownership and object lifetime must be managed manually by the caller.
-    #[must_use]
-    pub(crate) unsafe fn remove_unpin_unchecked<T: Unpin>(&mut self, handle: SlabHandle<T>) -> T {
-        const {
-            assert!(
-                size_of::<T>() > 0,
-                "cannot extract zero-sized types from pool"
-            );
-        };
 
         let next_free_slot_index = self.next_free_slot_index;
 
-        let slot_meta = self.slot_meta_mut(handle.index());
+        // SAFETY: Forwarding safety requirements from the caller (object must be present in slab).
+        let slot_meta = unsafe { self.slot_meta_mut(handle.index()) };
 
         let old_meta = mem::replace(
             slot_meta,
@@ -470,6 +342,10 @@ impl Slab {
             },
         );
 
+        // We have a safety requirement that the object must exist in the slab, so this is only
+        // an extra check to go above and beyond the call of duty in debug builds, to help detect
+        // violations of this safety requirement.
+        #[cfg(debug_assertions)]
         if !matches!(old_meta, SlotMeta::Occupied { .. }) {
             // Uh-oh, we were told to remove an object that did not actually exist.
             // While this is a no-no and we will panic, we still need to preserve
@@ -520,11 +396,15 @@ impl Slab {
         unsafe { self.first_slot_ptr.byte_add(offset) }
     }
 
-    fn slot_meta_mut(&mut self, index: usize) -> &mut SlotMeta {
-        // This assertion is important in release builds, to avoid a handle from one pool
-        // from being used to remove an object from another pool. It is only one of several
-        // checks - even if we are in bounds, we still have further validation to do.
-        assert!(
+    /// # Safety
+    ///
+    /// The caller must ensure that `index` is not out of bounds.
+    unsafe fn slot_meta_mut(&mut self, index: usize) -> &mut SlotMeta {
+        // We define a safety requirement that a handle must actually point to an item
+        // in the pool. This assertion is merely an extra safeguard in debug builds, to help
+        // detect issues without having to rely on Miri catching the UB. We also do additional
+        // validation later on.
+        debug_assert!(
             index < self.layout.capacity().get(),
             "slot {index} is out of bounds in slab of capacity {}",
             self.layout.capacity().get()
@@ -1069,7 +949,8 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn double_remove_panics() {
+    #[cfg(debug_assertions)]
+    fn debug_build_double_remove_panics() {
         let layout = SlabLayout::new(Layout::new::<u32>());
         let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
@@ -1088,26 +969,8 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn double_remove_unchecked_panics() {
-        let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
-
-        // SAFETY: u32 layout matches slab layout
-        let handle = unsafe { insert(&mut slab, 42_u32) };
-
-        // SAFETY: handle is valid and from this slab
-        unsafe {
-            slab.remove_unchecked(handle);
-        }
-        // SAFETY: This should panic - handle is no longer valid
-        unsafe {
-            slab.remove_unchecked(handle);
-        } // Should panic
-    }
-
-    #[test]
-    #[should_panic]
-    fn double_remove_unpin_panics() {
+    #[cfg(debug_assertions)]
+    fn debug_build_double_remove_unpin_panics() {
         let layout = SlabLayout::new(Layout::new::<u32>());
         let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
@@ -1126,26 +989,8 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn double_remove_unpin_unchecked_panics() {
-        let layout = SlabLayout::new(Layout::new::<u32>());
-        let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
-
-        // SAFETY: u32 layout matches slab layout
-        let handle = unsafe { insert(&mut slab, 42_u32) };
-
-        // SAFETY: handle is valid and from this slab
-        unsafe {
-            _ = slab.remove_unpin_unchecked(handle);
-        }
-        // SAFETY: This should panic - handle is no longer valid
-        unsafe {
-            _ = slab.remove_unpin_unchecked(handle);
-        } // Should panic
-    }
-
-    #[test]
-    #[should_panic]
-    fn remove_with_handle_from_wrong_slab_panics() {
+    #[cfg(debug_assertions)]
+    fn debug_build_remove_with_handle_from_wrong_slab_panics() {
         let layout = SlabLayout::new(Layout::new::<u32>());
         let mut slab1 = Slab::new(layout, DropPolicy::MayDropContents);
         let mut slab2 = Slab::new(layout, DropPolicy::MayDropContents);
@@ -1164,7 +1009,8 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn remove_unpin_with_handle_from_wrong_slab_panics() {
+    #[cfg(debug_assertions)]
+    fn debug_build_remove_unpin_with_handle_from_wrong_slab_panics() {
         let layout = SlabLayout::new(Layout::new::<u32>());
         let mut slab1 = Slab::new(layout, DropPolicy::MayDropContents);
         let mut slab2 = Slab::new(layout, DropPolicy::MayDropContents);
@@ -1183,7 +1029,11 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn remove_with_out_of_bounds_handle_from_wrong_slab_panics() {
+    // Miri correctly detects the OOB pointer arithmetic, so "fails" the test.
+    // This behavior is acceptable because being in-bounds is anyway a safety requirement.
+    // We are just being extra thorough here by explicitly checking, which is potentially overkill.
+    #[cfg(not(miri))]
+    fn debug_build_remove_with_out_of_bounds_handle_from_wrong_slab_panics() {
         // We create slabs with different capacities - a slab with large items, meaning it
         // has a small capacity, and a slab with small items, meaning it has a large capacity.
         // Trying to remove from the large object slab using the handle from the small object
@@ -1211,7 +1061,7 @@ mod tests {
         };
 
         // Try to remove handle from slab2 using slab1 - should panic
-        // SAFETY: This should panic - handle is from wrong slab
+        // SAFETY: We are intentionally violating the safety requirements.
         unsafe {
             slab1.remove(handle_from_slab2);
         }
