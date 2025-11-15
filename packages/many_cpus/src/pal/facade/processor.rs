@@ -20,7 +20,9 @@ pub(crate) enum ProcessorFacade {
 }
 
 impl ProcessorFacade {
-    #[cfg(any(windows, target_os = "linux", test))]
+    // Only available on platforms with native support. The fallback platform does not need
+    // direct access to the underlying ProcessorImpl type.
+    #[cfg(any(windows, target_os = "linux"))]
     pub(crate) fn as_target(&self) -> &ProcessorImpl {
         match self {
             Self::Target(p) => p,
