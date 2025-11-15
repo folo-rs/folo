@@ -2,7 +2,7 @@
 [script]
 mutants:
     function Escape-Wildcards ($s) {
-        if (!$IsLinux) {
+        if (!$IsWindows) {
             return $s
         }
 
@@ -55,24 +55,20 @@ mutants:
         (Escape-Wildcards "packages/benchmarks/**")
     )
 
-    if ($IsLinux) {
+    if (!$IsWindows) {
         $args += "-e"
         $args += (Escape-Wildcards "**/*windows.rs")
 
         $args += "-e"
         $args += "windows"
-    } else {
+    }
+    
+    if (!$IsLinux) {
         $args += "-e"
         $args += (Escape-Wildcards "**/*linux.rs")
 
         $args += "-e"
         $args += "linux"
-
-        $args += "-e"
-        $args += (Escape-Wildcards "**/*unix.rs")
-
-        $args += "-e"
-        $args += "unix"
     }
 
     # Heuristically, 4 processors per job seems to work out well to achieve high efficiency.
