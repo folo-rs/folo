@@ -53,6 +53,12 @@ mutants:
         (Escape-Wildcards "packages/testing/**")
         "-e"
         (Escape-Wildcards "packages/benchmarks/**")
+
+        # Some of our systems are single-processor, yet the code may only be meaningfully testable
+        # on multi-processor systems. As a "good enough" approximation, we skip mutation testing
+        # of code that is only testable in a multi-processor system.
+        "-e",
+        (Escape-Wildcards "packages/par_bench/src/resource_usage_ext.rs")
     )
 
     if (!$IsWindows) {
