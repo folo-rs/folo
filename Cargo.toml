@@ -34,7 +34,7 @@ infinity_pool = { version = "0.7.8", path = "packages/infinity_pool" }
 linked = { version = "1.0.0", path = "packages/linked" }
 linked_macros = { version = "1.0.0", path = "packages/linked_macros" }
 linked_macros_impl = { version = "1.0.0", path = "packages/linked_macros_impl" }
-many_cpus = { version = "1.0.4", path = "packages/many_cpus" }
+many_cpus = { version = "1.1.0", path = "packages/many_cpus" }
 many_cpus_benchmarking = { version = "0.1.33", path = "packages/many_cpus_benchmarking" }
 new_zealand = { version = "1.0.1", path = "packages/new_zealand" }
 nm = { version = "0.1.21", path = "packages/nm" }
