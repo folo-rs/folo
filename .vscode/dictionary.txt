@@ -43,5 +43,6 @@ timespec
 trybuild
 Uninit
 unviable
+wildcarded
 withf
 Zmiri

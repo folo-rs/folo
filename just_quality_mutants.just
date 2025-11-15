@@ -113,6 +113,6 @@ mutants:
     #     This needs to be long enough to run a full package test suite (for all jobs in parallel)
     #     but short enough to call a timeout and timeout and avoid things going on forever.
     #     This should only be reached if a mutation causes a serious issue (and may need to be
-    #     skipped).
+    #     skipped or the test improved).
     Invoke-Expression "cargo mutants {{ target_package }} --baseline=skip --timeout=60 --no-shuffle --caught --unviable $expanded_args"
     exit $LASTEXITCODE
