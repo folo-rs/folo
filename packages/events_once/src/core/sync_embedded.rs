@@ -42,11 +42,11 @@ use crate::Event;
 /// ```
 ///
 /// [1]: crate::Event::placed
-pub struct EmbeddedEvent<T: Send> {
+pub struct EmbeddedEvent<T: Send + 'static> {
     pub(crate) inner: UnsafeCell<MaybeUninit<Event<T>>>,
 }
 
-impl<T: Send> EmbeddedEvent<T> {
+impl<T: Send + 'static> EmbeddedEvent<T> {
     /// Creates a new event container that an event can be placed into.
     #[must_use]
     pub fn new() -> Self {
@@ -56,13 +56,13 @@ impl<T: Send> EmbeddedEvent<T> {
     }
 }
 
-impl<T: Send> Default for EmbeddedEvent<T> {
+impl<T: Send + 'static> Default for EmbeddedEvent<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: Send> fmt::Debug for EmbeddedEvent<T> {
+impl<T: Send + 'static> fmt::Debug for EmbeddedEvent<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)

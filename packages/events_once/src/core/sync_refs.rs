@@ -11,7 +11,7 @@ use crate::Event;
 /// Enables a sender or receiver to reference the event that connects them.
 pub(crate) trait EventRef<T>: Deref<Target = UnsafeCell<Event<T>>> + fmt::Debug
 where
-    T: Send,
+    T: Send + 'static,
 {
     /// Releases the event, asserting that the last endpoint has been dropped
     /// and nothing will access the event after this call.
@@ -21,12 +21,12 @@ where
 /// References an event stored anywhere, via raw pointer.
 pub(crate) struct PtrRef<T>
 where
-    T: Send,
+    T: Send + 'static,
 {
     event: NonNull<UnsafeCell<Event<T>>>,
 }
 
-impl<T: Send> PtrRef<T> {
+impl<T: Send + 'static> PtrRef<T> {
     #[must_use]
     pub(crate) fn new(event: NonNull<UnsafeCell<Event<T>>>) -> Self {
         Self { event }
@@ -35,7 +35,7 @@ impl<T: Send> PtrRef<T> {
 
 impl<T> EventRef<T> for PtrRef<T>
 where
-    T: Send,
+    T: Send + 'static,
 {
     #[cfg_attr(test, mutants::skip)] // Does nothing, so nothing to test.
     fn release_event(&self) {}
@@ -43,7 +43,7 @@ where
 
 impl<T> Deref for PtrRef<T>
 where
-    T: Send,
+    T: Send + 'static,
 {
     type Target = UnsafeCell<Event<T>>;
 
@@ -54,9 +54,9 @@ where
 }
 
 // SAFETY: This is only used with the thread-safe event (the event is Sync).
-unsafe impl<T> Send for PtrRef<T> where T: Send {}
+unsafe impl<T> Send for PtrRef<T> where T: Send + 'static {}
 
-impl<T: Send> fmt::Debug for PtrRef<T> {
+impl<T: Send + 'static> fmt::Debug for PtrRef<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("event", &self.event)
@@ -67,14 +67,14 @@ impl<T: Send> fmt::Debug for PtrRef<T> {
 /// References an event stored on the heap.
 pub(crate) struct BoxedRef<T>
 where
-    T: Send,
+    T: Send + 'static,
 {
     event: NonNull<UnsafeCell<Event<T>>>,
 }
 
 impl<T> BoxedRef<T>
 where
-    T: Send,
+    T: Send + 'static,
 {
     #[must_use]
     pub(crate) fn new_pair() -> (Self, Self) {
@@ -100,7 +100,7 @@ where
 
 impl<T> EventRef<T> for BoxedRef<T>
 where
-    T: Send,
+    T: Send + 'static,
 {
     #[cfg_attr(test, mutants::skip)] // Impractical to test deallocation - Miri will complain if we leak.
     fn release_event(&self) {
@@ -117,7 +117,7 @@ where
 
 impl<T> Deref for BoxedRef<T>
 where
-    T: Send,
+    T: Send + 'static,
 {
     type Target = UnsafeCell<Event<T>>;
 
@@ -129,9 +129,9 @@ where
 }
 
 // SAFETY: This is only used with the thread-safe event (the event is Sync).
-unsafe impl<T> Send for BoxedRef<T> where T: Send {}
+unsafe impl<T> Send for BoxedRef<T> where T: Send + 'static {}
 
-impl<T: Send> fmt::Debug for BoxedRef<T> {
+impl<T: Send + 'static> fmt::Debug for BoxedRef<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("event", &self.event)

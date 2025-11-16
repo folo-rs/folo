@@ -11,11 +11,11 @@ use crate::{Disconnected, IntoValueError, LocalReceiverCore, LocalSenderCore, Ra
 /// Delivers a single value to the receiver connected to the same event.
 ///
 /// This kind of endpoint is used for events stored in a raw single-threaded event pool or event lake.
-pub struct RawLocalPooledSender<T> {
+pub struct RawLocalPooledSender<T: 'static> {
     inner: LocalSenderCore<RawLocalPooledRef<T>, T>,
 }
 
-impl<T> RawLocalPooledSender<T> {
+impl<T: 'static> RawLocalPooledSender<T> {
     pub(crate) fn new(inner: LocalSenderCore<RawLocalPooledRef<T>, T>) -> Self {
         Self { inner }
     }
@@ -29,7 +29,7 @@ impl<T> RawLocalPooledSender<T> {
     }
 }
 
-impl<T> fmt::Debug for RawLocalPooledSender<T> {
+impl<T: 'static> fmt::Debug for RawLocalPooledSender<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)
@@ -42,11 +42,11 @@ impl<T> fmt::Debug for RawLocalPooledSender<T> {
 /// Awaiting the receiver will yield either the payload of type `T` or a [`Disconnected`] error.
 ///
 /// This kind of endpoint is used for events stored in a raw single-threaded event pool or event lake.
-pub struct RawLocalPooledReceiver<T> {
+pub struct RawLocalPooledReceiver<T: 'static> {
     inner: LocalReceiverCore<RawLocalPooledRef<T>, T>,
 }
 
-impl<T> RawLocalPooledReceiver<T> {
+impl<T: 'static> RawLocalPooledReceiver<T> {
     pub(crate) fn new(inner: LocalReceiverCore<RawLocalPooledRef<T>, T>) -> Self {
         Self { inner }
     }
@@ -106,7 +106,7 @@ impl<T> RawLocalPooledReceiver<T> {
     }
 }
 
-impl<T> Future for RawLocalPooledReceiver<T> {
+impl<T: 'static> Future for RawLocalPooledReceiver<T> {
     type Output = Result<T, Disconnected>;
 
     #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
@@ -118,7 +118,7 @@ impl<T> Future for RawLocalPooledReceiver<T> {
     }
 }
 
-impl<T> fmt::Debug for RawLocalPooledReceiver<T> {
+impl<T: 'static> fmt::Debug for RawLocalPooledReceiver<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)

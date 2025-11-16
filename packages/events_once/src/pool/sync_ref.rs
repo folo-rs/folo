@@ -9,12 +9,12 @@ use infinity_pool::RawPooled;
 
 use crate::{Event, EventPoolCore, EventRef};
 
-pub(crate) struct PooledRef<T: Send> {
+pub(crate) struct PooledRef<T: Send + 'static> {
     core: Arc<EventPoolCore<T>>,
     event: RawPooled<UnsafeCell<MaybeUninit<Event<T>>>>,
 }
 
-impl<T: Send> PooledRef<T> {
+impl<T: Send + 'static> PooledRef<T> {
     #[must_use]
     pub(crate) fn new(
         core: Arc<EventPoolCore<T>>,
@@ -24,7 +24,7 @@ impl<T: Send> PooledRef<T> {
     }
 }
 
-impl<T: Send> Clone for PooledRef<T> {
+impl<T: Send + 'static> Clone for PooledRef<T> {
     fn clone(&self) -> Self {
         Self {
             core: Arc::clone(&self.core),
@@ -33,7 +33,7 @@ impl<T: Send> Clone for PooledRef<T> {
     }
 }
 
-impl<T: Send> EventRef<T> for PooledRef<T> {
+impl<T: Send + 'static> EventRef<T> for PooledRef<T> {
     fn release_event(&self) {
         let mut pool = self.core.pool.lock();
 
@@ -45,7 +45,7 @@ impl<T: Send> EventRef<T> for PooledRef<T> {
     }
 }
 
-impl<T: Send> Deref for PooledRef<T> {
+impl<T: Send + 'static> Deref for PooledRef<T> {
     type Target = UnsafeCell<Event<T>>;
 
     fn deref(&self) -> &Self::Target {
@@ -61,7 +61,7 @@ impl<T: Send> Deref for PooledRef<T> {
     }
 }
 
-impl<T: Send> fmt::Debug for PooledRef<T> {
+impl<T: Send + 'static> fmt::Debug for PooledRef<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("core", &self.core)

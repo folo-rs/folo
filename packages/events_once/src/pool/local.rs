@@ -34,13 +34,13 @@ use crate::{
 /// }
 /// # }
 /// ```
-pub struct LocalEventPool<T> {
+pub struct LocalEventPool<T: 'static> {
     core: Rc<LocalPoolCore<T>>,
 
     _owns_some: PhantomData<T>,
 }
 
-impl<T> fmt::Debug for LocalEventPool<T> {
+impl<T: 'static> fmt::Debug for LocalEventPool<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("core", &self.core)
@@ -48,11 +48,11 @@ impl<T> fmt::Debug for LocalEventPool<T> {
     }
 }
 
-pub(crate) struct LocalPoolCore<T> {
+pub(crate) struct LocalPoolCore<T: 'static> {
     pub(crate) pool: RefCell<RawPinnedPool<LocalEvent<T>>>,
 }
 
-impl<T> LocalEventPool<T> {
+impl<T: 'static> LocalEventPool<T> {
     /// Creates a new empty event pool.
     #[must_use]
     pub fn new() -> Self {
@@ -138,13 +138,13 @@ impl<T> LocalEventPool<T> {
     }
 }
 
-impl<T> Default for LocalEventPool<T> {
+impl<T: 'static> Default for LocalEventPool<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T> Clone for LocalEventPool<T> {
+impl<T: 'static> Clone for LocalEventPool<T> {
     fn clone(&self) -> Self {
         Self {
             core: Rc::clone(&self.core),
@@ -153,7 +153,7 @@ impl<T> Clone for LocalEventPool<T> {
     }
 }
 
-impl<T> fmt::Debug for LocalPoolCore<T> {
+impl<T: 'static> fmt::Debug for LocalPoolCore<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("pool", &self.pool)

@@ -8,30 +8,30 @@ use std::ptr::NonNull;
 use crate::LocalEvent;
 
 /// Enables a sender or receiver to reference the event that connects them.
-pub(crate) trait LocalRef<T>: Deref<Target = LocalEvent<T>> + fmt::Debug {
+pub(crate) trait LocalRef<T: 'static>: Deref<Target = LocalEvent<T>> + fmt::Debug {
     /// Releases the event, asserting that the last endpoint has been dropped
     /// and nothing will access the event after this call.
     fn release_event(&self);
 }
 
 /// References an event stored anywhere, via raw pointer.
-pub(crate) struct PtrLocalRef<T> {
+pub(crate) struct PtrLocalRef<T: 'static> {
     event: NonNull<LocalEvent<T>>,
 }
 
-impl<T> PtrLocalRef<T> {
+impl<T: 'static> PtrLocalRef<T> {
     #[must_use]
     pub(crate) fn new(event: NonNull<LocalEvent<T>>) -> Self {
         Self { event }
     }
 }
 
-impl<T> LocalRef<T> for PtrLocalRef<T> {
+impl<T: 'static> LocalRef<T> for PtrLocalRef<T> {
     #[cfg_attr(test, mutants::skip)] // Does nothing, so nothing to test.
     fn release_event(&self) {}
 }
 
-impl<T> Deref for PtrLocalRef<T> {
+impl<T: 'static> Deref for PtrLocalRef<T> {
     type Target = LocalEvent<T>;
 
     fn deref(&self) -> &Self::Target {
@@ -40,7 +40,7 @@ impl<T> Deref for PtrLocalRef<T> {
     }
 }
 
-impl<T> fmt::Debug for PtrLocalRef<T> {
+impl<T: 'static> fmt::Debug for PtrLocalRef<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("event", &self.event)
@@ -49,11 +49,11 @@ impl<T> fmt::Debug for PtrLocalRef<T> {
 }
 
 /// References an event stored on the heap.
-pub(crate) struct BoxedLocalRef<T> {
+pub(crate) struct BoxedLocalRef<T: 'static> {
     event: NonNull<LocalEvent<T>>,
 }
 
-impl<T> BoxedLocalRef<T> {
+impl<T: 'static> BoxedLocalRef<T> {
     #[must_use]
     pub(crate) fn new_pair() -> (Self, Self) {
         // SAFETY: The layout is correct for the type we are using - all is well.
@@ -75,7 +75,7 @@ impl<T> BoxedLocalRef<T> {
     }
 }
 
-impl<T> LocalRef<T> for BoxedLocalRef<T> {
+impl<T: 'static> LocalRef<T> for BoxedLocalRef<T> {
     #[cfg_attr(test, mutants::skip)] // Impractical to test that memory is released. Miri will tell us about leaks.
     fn release_event(&self) {
         // The caller tells us that they are the last endpoint, so nothing else can possibly
@@ -89,7 +89,7 @@ impl<T> LocalRef<T> for BoxedLocalRef<T> {
     }
 }
 
-impl<T> Deref for BoxedLocalRef<T> {
+impl<T: 'static> Deref for BoxedLocalRef<T> {
     type Target = LocalEvent<T>;
 
     fn deref(&self) -> &Self::Target {
@@ -99,7 +99,7 @@ impl<T> Deref for BoxedLocalRef<T> {
     }
 }
 
-impl<T> fmt::Debug for BoxedLocalRef<T> {
+impl<T: 'static> fmt::Debug for BoxedLocalRef<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("event", &self.event)

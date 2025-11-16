@@ -8,12 +8,12 @@ use infinity_pool::RawPooled;
 
 use crate::{LocalEvent, LocalRef, RawLocalEventPoolCore};
 
-pub(crate) struct RawLocalPooledRef<T> {
+pub(crate) struct RawLocalPooledRef<T: 'static> {
     core: NonNull<UnsafeCell<RawLocalEventPoolCore<T>>>,
     event: RawPooled<LocalEvent<T>>,
 }
 
-impl<T> RawLocalPooledRef<T> {
+impl<T: 'static> RawLocalPooledRef<T> {
     #[must_use]
     pub(crate) fn new(
         core: NonNull<UnsafeCell<RawLocalEventPoolCore<T>>>,
@@ -23,7 +23,7 @@ impl<T> RawLocalPooledRef<T> {
     }
 }
 
-impl<T> Clone for RawLocalPooledRef<T> {
+impl<T: 'static> Clone for RawLocalPooledRef<T> {
     fn clone(&self) -> Self {
         Self {
             core: self.core,
@@ -32,7 +32,7 @@ impl<T> Clone for RawLocalPooledRef<T> {
     }
 }
 
-impl<T> LocalRef<T> for RawLocalPooledRef<T> {
+impl<T: 'static> LocalRef<T> for RawLocalPooledRef<T> {
     fn release_event(&self) {
         // SAFETY: Our owner promised the pool that the pool (the owner of the core) stays alive
         // longer than the event endpoints, so we know it remains valid. We only ever
@@ -55,7 +55,7 @@ impl<T> LocalRef<T> for RawLocalPooledRef<T> {
     }
 }
 
-impl<T> Deref for RawLocalPooledRef<T> {
+impl<T: 'static> Deref for RawLocalPooledRef<T> {
     type Target = LocalEvent<T>;
 
     fn deref(&self) -> &Self::Target {
@@ -64,7 +64,7 @@ impl<T> Deref for RawLocalPooledRef<T> {
     }
 }
 
-impl<T> fmt::Debug for RawLocalPooledRef<T> {
+impl<T: 'static> fmt::Debug for RawLocalPooledRef<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("core", &self.core)

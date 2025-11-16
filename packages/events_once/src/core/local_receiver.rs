@@ -15,6 +15,7 @@ use crate::{
 pub(crate) struct LocalReceiverCore<E, T>
 where
     E: LocalRef<T>,
+    T: 'static,
 {
     // This is `None` if the receiver has already been polled to completion. We need to guard
     // against that because the event will be cleaned up after the first poll that signals "ready".
@@ -26,6 +27,7 @@ where
 impl<E, T> LocalReceiverCore<E, T>
 where
     E: LocalRef<T>,
+    T: 'static,
 {
     #[must_use]
     pub(crate) fn new(event_ref: E) -> Self {
@@ -103,6 +105,7 @@ where
 impl<E, T> Future for LocalReceiverCore<E, T>
 where
     E: LocalRef<T>,
+    T: 'static,
 {
     type Output = Result<T, Disconnected>;
 
@@ -136,6 +139,7 @@ where
 impl<E, T> Drop for LocalReceiverCore<E, T>
 where
     E: LocalRef<T>,
+    T: 'static,
 {
     #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn drop(&mut self) {
@@ -157,6 +161,7 @@ where
 impl<E, T> fmt::Debug for LocalReceiverCore<E, T>
 where
     E: LocalRef<T>,
+    T: 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())

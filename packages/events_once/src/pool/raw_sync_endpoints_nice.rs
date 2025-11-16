@@ -10,11 +10,11 @@ use crate::{Disconnected, IntoValueError, RawPooledRef, ReceiverCore, SenderCore
 /// Delivers a single value to the receiver connected to the same event.
 ///
 /// This kind of endpoint is used for events stored in a raw event pool or event lake.
-pub struct RawPooledSender<T: Send> {
+pub struct RawPooledSender<T: Send + 'static> {
     inner: SenderCore<RawPooledRef<T>, T>,
 }
 
-impl<T: Send> RawPooledSender<T> {
+impl<T: Send + 'static> RawPooledSender<T> {
     pub(crate) fn new(inner: SenderCore<RawPooledRef<T>, T>) -> Self {
         Self { inner }
     }
@@ -28,7 +28,7 @@ impl<T: Send> RawPooledSender<T> {
     }
 }
 
-impl<T: Send> fmt::Debug for RawPooledSender<T> {
+impl<T: Send + 'static> fmt::Debug for RawPooledSender<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)
@@ -41,11 +41,11 @@ impl<T: Send> fmt::Debug for RawPooledSender<T> {
 /// Awaiting the receiver will yield either the payload of type `T` or a [`Disconnected`] error.
 ///
 /// This kind of endpoint is used for events stored in a raw event pool or event lake.
-pub struct RawPooledReceiver<T: Send> {
+pub struct RawPooledReceiver<T: Send + 'static> {
     inner: ReceiverCore<RawPooledRef<T>, T>,
 }
 
-impl<T: Send> RawPooledReceiver<T> {
+impl<T: Send + 'static> RawPooledReceiver<T> {
     pub(crate) fn new(inner: ReceiverCore<RawPooledRef<T>, T>) -> Self {
         Self { inner }
     }
@@ -105,7 +105,7 @@ impl<T: Send> RawPooledReceiver<T> {
     }
 }
 
-impl<T: Send> Future for RawPooledReceiver<T> {
+impl<T: Send + 'static> Future for RawPooledReceiver<T> {
     type Output = Result<T, Disconnected>;
 
     #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
@@ -117,7 +117,7 @@ impl<T: Send> Future for RawPooledReceiver<T> {
     }
 }
 
-impl<T: Send> fmt::Debug for RawPooledReceiver<T> {
+impl<T: Send + 'static> fmt::Debug for RawPooledReceiver<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)

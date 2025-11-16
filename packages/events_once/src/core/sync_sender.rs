@@ -10,7 +10,7 @@ use crate::{Disconnected, Event, EventRef};
 pub(crate) struct SenderCore<E, T>
 where
     E: EventRef<T>,
-    T: Send,
+    T: Send + 'static,
 {
     event_ref: E,
 
@@ -25,7 +25,7 @@ where
 impl<E, T> SenderCore<E, T>
 where
     E: EventRef<T>,
-    T: Send,
+    T: Send + 'static,
 {
     #[must_use]
     pub(crate) fn new(event_ref: E) -> Self {
@@ -61,7 +61,7 @@ where
 impl<E, T> Drop for SenderCore<E, T>
 where
     E: EventRef<T>,
-    T: Send,
+    T: Send + 'static,
 {
     #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn drop(&mut self) {
@@ -75,7 +75,7 @@ where
 impl<E, T> fmt::Debug for SenderCore<E, T>
 where
     E: EventRef<T>,
-    T: Send,
+    T: Send + 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())

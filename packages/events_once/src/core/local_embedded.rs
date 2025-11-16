@@ -41,11 +41,11 @@ use crate::LocalEvent;
 /// ```
 ///
 /// [1]: crate::LocalEvent::placed
-pub struct EmbeddedLocalEvent<T> {
+pub struct EmbeddedLocalEvent<T: 'static> {
     pub(crate) inner: MaybeUninit<LocalEvent<T>>,
 }
 
-impl<T> EmbeddedLocalEvent<T> {
+impl<T: 'static> EmbeddedLocalEvent<T> {
     /// Creates a new event container that an event can be placed into.
     #[must_use]
     pub fn new() -> Self {
@@ -55,13 +55,13 @@ impl<T> EmbeddedLocalEvent<T> {
     }
 }
 
-impl<T> Default for EmbeddedLocalEvent<T> {
+impl<T: 'static> Default for EmbeddedLocalEvent<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T> fmt::Debug for EmbeddedLocalEvent<T> {
+impl<T: 'static> fmt::Debug for EmbeddedLocalEvent<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)

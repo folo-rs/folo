@@ -8,6 +8,7 @@ use crate::{Disconnected, LocalRef};
 pub(crate) struct LocalSenderCore<E, T>
 where
     E: LocalRef<T>,
+    T: 'static,
 {
     event_ref: E,
 
@@ -17,6 +18,7 @@ where
 impl<E, T> LocalSenderCore<E, T>
 where
     E: LocalRef<T>,
+    T: 'static,
 {
     #[must_use]
     pub(crate) fn new(event_ref: E) -> Self {
@@ -51,6 +53,7 @@ where
 impl<E, T> Drop for LocalSenderCore<E, T>
 where
     E: LocalRef<T>,
+    T: 'static,
 {
     #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn drop(&mut self) {
@@ -64,6 +67,7 @@ where
 impl<E, T> fmt::Debug for LocalSenderCore<E, T>
 where
     E: LocalRef<T>,
+    T: 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalSender")

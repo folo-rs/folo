@@ -35,7 +35,7 @@ use crate::{Event, RawPooledReceiver, RawPooledRef, RawPooledSender, ReceiverCor
 /// }
 /// # }
 /// ```
-pub struct RawEventPool<T: Send> {
+pub struct RawEventPool<T: Send + 'static> {
     // This is in an UnsafeCell to logically "detach" it from the parent object.
     // We will create direct (shared) references to the contents of the cell not only from
     // the pool but also from the event references themselves. This is safe as long as
@@ -46,7 +46,7 @@ pub struct RawEventPool<T: Send> {
     _owns_some: PhantomData<T>,
 }
 
-impl<T: Send> fmt::Debug for RawEventPool<T> {
+impl<T: Send + 'static> fmt::Debug for RawEventPool<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("core", &self.core)
@@ -54,7 +54,7 @@ impl<T: Send> fmt::Debug for RawEventPool<T> {
     }
 }
 
-impl<T: Send> Drop for RawEventPool<T> {
+impl<T: Send + 'static> Drop for RawEventPool<T> {
     #[cfg_attr(test, mutants::skip)] // Impractical to test deallocation - Miri will complain if we leak.
     fn drop(&mut self) {
         // SAFETY: We are the owner of the core, so we know it remains valid.
@@ -64,11 +64,11 @@ impl<T: Send> Drop for RawEventPool<T> {
     }
 }
 
-pub(crate) struct RawEventPoolCore<T: Send> {
+pub(crate) struct RawEventPoolCore<T: Send + 'static> {
     pub(crate) pool: Mutex<RawPinnedPool<UnsafeCell<MaybeUninit<Event<T>>>>>,
 }
 
-impl<T: Send> fmt::Debug for RawEventPoolCore<T> {
+impl<T: Send + 'static> fmt::Debug for RawEventPoolCore<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("pool", &self.pool)
@@ -76,7 +76,7 @@ impl<T: Send> fmt::Debug for RawEventPoolCore<T> {
     }
 }
 
-impl<T: Send> RawEventPool<T> {
+impl<T: Send + 'static> RawEventPool<T> {
     /// Creates a new empty event pool.
     #[must_use]
     pub fn new() -> Self {
@@ -233,7 +233,7 @@ impl<T: Send> RawEventPool<T> {
     }
 }
 
-impl<T: Send> Default for RawEventPool<T> {
+impl<T: Send + 'static> Default for RawEventPool<T> {
     fn default() -> Self {
         Self::new()
     }
@@ -242,9 +242,9 @@ impl<T: Send> Default for RawEventPool<T> {
 // SAFETY: The pool is thread-safe - the only reason it does not have it via auto traits is that
 // we have the NonNull pointer that disables thread safety auto traits. However, all the logic is
 // actually protected via the core Mutex, so all is well.
-unsafe impl<T: Send> Send for RawEventPool<T> {}
+unsafe impl<T: Send + 'static> Send for RawEventPool<T> {}
 // SAFETY: See above.
-unsafe impl<T: Send> Sync for RawEventPool<T> {}
+unsafe impl<T: Send + 'static> Sync for RawEventPool<T> {}
 
 #[cfg(test)]
 #[allow(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]

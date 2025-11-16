@@ -138,7 +138,7 @@ impl RawBlindPool {
     #[doc = include_str!("../../doc/snippets/pool_insert.md")]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
-    pub fn insert<T>(&mut self, value: T) -> RawBlindPooledMut<T> {
+    pub fn insert<T: 'static>(&mut self, value: T) -> RawBlindPooledMut<T> {
         let layout = Layout::new::<T>();
         let key = LayoutKey::new(layout);
 
@@ -189,6 +189,7 @@ impl RawBlindPool {
     #[inline]
     pub unsafe fn insert_with<T, F>(&mut self, f: F) -> RawBlindPooledMut<T>
     where
+        T: 'static,
         F: FnOnce(&mut MaybeUninit<T>),
     {
         let layout = Layout::new::<T>();

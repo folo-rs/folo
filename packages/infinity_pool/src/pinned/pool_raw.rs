@@ -75,7 +75,7 @@ use crate::{
 ///     pool.remove(shared_handle);
 /// }
 /// ```
-pub struct RawPinnedPool<T> {
+pub struct RawPinnedPool<T: 'static> {
     /// The underlying pool that manages memory and storage.
     inner: RawOpaquePool,
 
@@ -83,7 +83,7 @@ pub struct RawPinnedPool<T> {
     _marker: PhantomData<T>,
 }
 
-impl<T> RawPinnedPool<T> {
+impl<T: 'static> RawPinnedPool<T> {
     #[doc = include_str!("../../doc/snippets/pool_builder.md")]
     #[cfg_attr(test, mutants::skip)] // Gets mutated to alternate version of itself.
     pub fn builder() -> RawPinnedPoolBuilder<T> {
@@ -215,7 +215,7 @@ impl<T> RawPinnedPool<T> {
 
 impl<T> RawPinnedPool<T>
 where
-    T: Unpin,
+    T: Unpin + 'static,
 {
     /// Removes an object from the pool and returns it.
     ///

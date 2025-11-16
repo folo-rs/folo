@@ -33,13 +33,13 @@ use crate::{Event, PooledReceiver, PooledRef, PooledSender, ReceiverCore, Sender
 /// }
 /// # }
 /// ```
-pub struct EventPool<T: Send> {
+pub struct EventPool<T: Send + 'static> {
     core: Arc<EventPoolCore<T>>,
 
     _owns_some: PhantomData<T>,
 }
 
-impl<T: Send> fmt::Debug for EventPool<T> {
+impl<T: Send + 'static> fmt::Debug for EventPool<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("core", &self.core)
@@ -47,11 +47,11 @@ impl<T: Send> fmt::Debug for EventPool<T> {
     }
 }
 
-pub(crate) struct EventPoolCore<T: Send> {
+pub(crate) struct EventPoolCore<T: Send + 'static> {
     pub(crate) pool: Mutex<RawPinnedPool<UnsafeCell<MaybeUninit<Event<T>>>>>,
 }
 
-impl<T: Send> EventPool<T> {
+impl<T: Send + 'static> EventPool<T> {
     /// Creates a new empty event pool.
     #[must_use]
     pub fn new() -> Self {
@@ -159,13 +159,13 @@ impl<T: Send> EventPool<T> {
     }
 }
 
-impl<T: Send> Default for EventPool<T> {
+impl<T: Send + 'static> Default for EventPool<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: Send> Clone for EventPool<T> {
+impl<T: Send + 'static> Clone for EventPool<T> {
     fn clone(&self) -> Self {
         Self {
             core: Arc::clone(&self.core),
@@ -174,7 +174,7 @@ impl<T: Send> Clone for EventPool<T> {
     }
 }
 
-impl<T: Send> fmt::Debug for EventPoolCore<T> {
+impl<T: Send + 'static> fmt::Debug for EventPoolCore<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("pool", &self.pool)

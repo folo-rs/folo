@@ -239,7 +239,7 @@ impl RawOpaquePool {
     #[doc = include_str!("../../doc/snippets/panic_on_pool_t_layout_mismatch.md")]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
-    pub fn insert<T>(&mut self, value: T) -> RawPooledMut<T> {
+    pub fn insert<T: 'static>(&mut self, value: T) -> RawPooledMut<T> {
         assert_eq!(
             Layout::new::<T>(),
             self.object_layout(),
@@ -254,7 +254,7 @@ impl RawOpaquePool {
     /// # Safety
     #[doc = include_str!("../../doc/snippets/safety_pool_t_layout_must_match.md")]
     #[inline]
-    pub unsafe fn insert_unchecked<T>(&mut self, value: T) -> RawPooledMut<T> {
+    pub unsafe fn insert_unchecked<T: 'static>(&mut self, value: T) -> RawPooledMut<T> {
         // Implement insert() in terms of insert_with() to reduce logic duplication.
         // SAFETY: Forwarding safety requirements to the caller.
         unsafe {
@@ -307,6 +307,7 @@ impl RawOpaquePool {
     pub unsafe fn insert_with<T, F>(&mut self, f: F) -> RawPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
+        T: 'static,
     {
         assert_eq!(
             Layout::new::<T>(),
@@ -329,6 +330,7 @@ impl RawOpaquePool {
     pub unsafe fn insert_with_unchecked<T, F>(&mut self, f: F) -> RawPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
+        T: 'static,
     {
         let slab_index = self.index_of_slab_to_insert_into();
 

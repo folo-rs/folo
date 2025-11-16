@@ -14,11 +14,11 @@ use crate::{
 ///
 /// This kind of endpoint is used for boxed events, which are heap-allocated and automatically
 /// destroyed when both the sender and receiver are dropped.
-pub struct BoxedLocalSender<T> {
+pub struct BoxedLocalSender<T: 'static> {
     inner: LocalSenderCore<BoxedLocalRef<T>, T>,
 }
 
-impl<T> BoxedLocalSender<T> {
+impl<T: 'static> BoxedLocalSender<T> {
     pub(crate) fn new(inner: LocalSenderCore<BoxedLocalRef<T>, T>) -> Self {
         Self { inner }
     }
@@ -32,7 +32,7 @@ impl<T> BoxedLocalSender<T> {
     }
 }
 
-impl<T> fmt::Debug for BoxedLocalSender<T> {
+impl<T: 'static> fmt::Debug for BoxedLocalSender<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)
@@ -46,11 +46,11 @@ impl<T> fmt::Debug for BoxedLocalSender<T> {
 ///
 /// This kind of endpoint is used for boxed events, which are heap-allocated and automatically
 /// destroyed when both the sender and receiver are dropped.
-pub struct BoxedLocalReceiver<T> {
+pub struct BoxedLocalReceiver<T: 'static> {
     inner: LocalReceiverCore<BoxedLocalRef<T>, T>,
 }
 
-impl<T> BoxedLocalReceiver<T> {
+impl<T: 'static> BoxedLocalReceiver<T> {
     pub(crate) fn new(inner: LocalReceiverCore<BoxedLocalRef<T>, T>) -> Self {
         Self { inner }
     }
@@ -110,7 +110,7 @@ impl<T> BoxedLocalReceiver<T> {
     }
 }
 
-impl<T> Future for BoxedLocalReceiver<T> {
+impl<T: 'static> Future for BoxedLocalReceiver<T> {
     type Output = Result<T, Disconnected>;
 
     #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
@@ -122,7 +122,7 @@ impl<T> Future for BoxedLocalReceiver<T> {
     }
 }
 
-impl<T> fmt::Debug for BoxedLocalReceiver<T> {
+impl<T: 'static> fmt::Debug for BoxedLocalReceiver<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)
@@ -135,11 +135,11 @@ impl<T> fmt::Debug for BoxedLocalReceiver<T> {
 /// This kind of endpoint is used with events for which the storage is provided by the
 /// owner of the endpoint. They are also responsible for ensuring that the event that
 /// connects the sender-receiver pair outlives both endpoints.
-pub struct RawLocalSender<T> {
+pub struct RawLocalSender<T: 'static> {
     inner: LocalSenderCore<PtrLocalRef<T>, T>,
 }
 
-impl<T> RawLocalSender<T> {
+impl<T: 'static> RawLocalSender<T> {
     pub(crate) fn new(inner: LocalSenderCore<PtrLocalRef<T>, T>) -> Self {
         Self { inner }
     }
@@ -153,7 +153,7 @@ impl<T> RawLocalSender<T> {
     }
 }
 
-impl<T> fmt::Debug for RawLocalSender<T> {
+impl<T: 'static> fmt::Debug for RawLocalSender<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)
@@ -168,11 +168,11 @@ impl<T> fmt::Debug for RawLocalSender<T> {
 /// This kind of endpoint is used with events for which the storage is provided by the
 /// owner of the endpoint. They are also responsible for ensuring that the event that
 /// connects the sender-receiver pair outlives both endpoints.
-pub struct RawLocalReceiver<T> {
+pub struct RawLocalReceiver<T: 'static> {
     inner: LocalReceiverCore<PtrLocalRef<T>, T>,
 }
 
-impl<T> RawLocalReceiver<T> {
+impl<T: 'static> RawLocalReceiver<T> {
     pub(crate) fn new(inner: LocalReceiverCore<PtrLocalRef<T>, T>) -> Self {
         Self { inner }
     }
@@ -232,7 +232,7 @@ impl<T> RawLocalReceiver<T> {
     }
 }
 
-impl<T> Future for RawLocalReceiver<T> {
+impl<T: 'static> Future for RawLocalReceiver<T> {
     type Output = Result<T, Disconnected>;
 
     #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
@@ -244,7 +244,7 @@ impl<T> Future for RawLocalReceiver<T> {
     }
 }
 
-impl<T> fmt::Debug for RawLocalReceiver<T> {
+impl<T: 'static> fmt::Debug for RawLocalReceiver<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)

@@ -10,11 +10,11 @@ use crate::{Disconnected, IntoValueError, PooledRef, ReceiverCore, SenderCore};
 /// Delivers a single value to the receiver connected to the same event.
 ///
 /// This kind of endpoint is used for events stored in an event pool or event lake.
-pub struct PooledSender<T: Send> {
+pub struct PooledSender<T: Send + 'static> {
     inner: SenderCore<PooledRef<T>, T>,
 }
 
-impl<T: Send> PooledSender<T> {
+impl<T: Send + 'static> PooledSender<T> {
     pub(crate) fn new(inner: SenderCore<PooledRef<T>, T>) -> Self {
         Self { inner }
     }
@@ -28,7 +28,7 @@ impl<T: Send> PooledSender<T> {
     }
 }
 
-impl<T: Send> fmt::Debug for PooledSender<T> {
+impl<T: Send + 'static> fmt::Debug for PooledSender<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)
@@ -41,11 +41,11 @@ impl<T: Send> fmt::Debug for PooledSender<T> {
 /// Awaiting the receiver will yield either the payload of type `T` or a [`Disconnected`] error.
 ///
 /// This kind of endpoint is used for events stored in an event pool or event lake.
-pub struct PooledReceiver<T: Send> {
+pub struct PooledReceiver<T: Send + 'static> {
     inner: ReceiverCore<PooledRef<T>, T>,
 }
 
-impl<T: Send> PooledReceiver<T> {
+impl<T: Send + 'static> PooledReceiver<T> {
     pub(crate) fn new(inner: ReceiverCore<PooledRef<T>, T>) -> Self {
         Self { inner }
     }
@@ -105,7 +105,7 @@ impl<T: Send> PooledReceiver<T> {
     }
 }
 
-impl<T: Send> Future for PooledReceiver<T> {
+impl<T: Send + 'static> Future for PooledReceiver<T> {
     type Output = Result<T, Disconnected>;
 
     #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
@@ -117,7 +117,7 @@ impl<T: Send> Future for PooledReceiver<T> {
     }
 }
 
-impl<T: Send> fmt::Debug for PooledReceiver<T> {
+impl<T: Send + 'static> fmt::Debug for PooledReceiver<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("inner", &self.inner)

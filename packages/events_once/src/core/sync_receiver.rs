@@ -17,7 +17,7 @@ use crate::{
 pub(crate) struct ReceiverCore<E, T>
 where
     E: EventRef<T>,
-    T: Send,
+    T: Send + 'static,
 {
     // This is `None` if the receiver has already been polled to completion. We need to guard
     // against that because the event will be cleaned up after the first poll that signals "ready".
@@ -33,7 +33,7 @@ where
 impl<E, T> ReceiverCore<E, T>
 where
     E: EventRef<T>,
-    T: Send,
+    T: Send + 'static,
 {
     #[must_use]
     pub(crate) fn new(event_ref: E) -> Self {
@@ -129,7 +129,7 @@ where
 impl<E, T> Future for ReceiverCore<E, T>
 where
     E: EventRef<T>,
-    T: Send,
+    T: Send + 'static,
 {
     type Output = Result<T, Disconnected>;
 
@@ -169,7 +169,7 @@ where
 impl<E, T> Drop for ReceiverCore<E, T>
 where
     E: EventRef<T>,
-    T: Send,
+    T: Send + 'static,
 {
     #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn drop(&mut self) {
@@ -191,7 +191,7 @@ where
 impl<E, T> fmt::Debug for ReceiverCore<E, T>
 where
     E: EventRef<T>,
-    T: Send,
+    T: Send + 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())

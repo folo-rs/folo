@@ -9,12 +9,12 @@ use infinity_pool::RawPooled;
 
 use crate::{Event, EventRef, RawEventPoolCore};
 
-pub(crate) struct RawPooledRef<T: Send> {
+pub(crate) struct RawPooledRef<T: Send + 'static> {
     core: NonNull<UnsafeCell<RawEventPoolCore<T>>>,
     event: RawPooled<UnsafeCell<MaybeUninit<Event<T>>>>,
 }
 
-impl<T: Send> RawPooledRef<T> {
+impl<T: Send + 'static> RawPooledRef<T> {
     #[must_use]
     pub(crate) fn new(
         core: NonNull<UnsafeCell<RawEventPoolCore<T>>>,
@@ -24,7 +24,7 @@ impl<T: Send> RawPooledRef<T> {
     }
 }
 
-impl<T: Send> Clone for RawPooledRef<T> {
+impl<T: Send + 'static> Clone for RawPooledRef<T> {
     fn clone(&self) -> Self {
         Self {
             core: self.core,
@@ -33,7 +33,7 @@ impl<T: Send> Clone for RawPooledRef<T> {
     }
 }
 
-impl<T: Send> EventRef<T> for RawPooledRef<T> {
+impl<T: Send + 'static> EventRef<T> for RawPooledRef<T> {
     fn release_event(&self) {
         // SAFETY: Our owner promised the pool that the pool (the owner of the core) stays alive
         // longer than the event endpoints, so we know it remains valid. We only ever
@@ -56,7 +56,7 @@ impl<T: Send> EventRef<T> for RawPooledRef<T> {
     }
 }
 
-impl<T: Send> Deref for RawPooledRef<T> {
+impl<T: Send + 'static> Deref for RawPooledRef<T> {
     type Target = UnsafeCell<Event<T>>;
 
     fn deref(&self) -> &Self::Target {
@@ -72,7 +72,7 @@ impl<T: Send> Deref for RawPooledRef<T> {
     }
 }
 
-impl<T: Send> fmt::Debug for RawPooledRef<T> {
+impl<T: Send + 'static> fmt::Debug for RawPooledRef<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("core", &self.core)
@@ -83,7 +83,7 @@ impl<T: Send> fmt::Debug for RawPooledRef<T> {
 
 // SAFETY: The events are synchronization primitives and can be referenced from any thread.
 // The reference itself is not synchronized, so is not Sync, but it can move between threads.
-unsafe impl<T: Send> Send for RawPooledRef<T> {}
+unsafe impl<T: Send + 'static> Send for RawPooledRef<T> {}
 
 #[cfg(test)]
 mod tests {

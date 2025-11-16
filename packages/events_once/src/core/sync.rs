@@ -24,7 +24,7 @@ use crate::{
 /// Coordinates delivery of a `T` at most once from a sender to a receiver on any thread.
 pub struct Event<T>
 where
-    T: Send,
+    T: Send + 'static,
 {
     /// The logical state of the event; see constants in `state.rs`.
     pub(crate) state: AtomicU8,
@@ -63,7 +63,7 @@ where
 
 impl<T> Event<T>
 where
-    T: Send,
+    T: Send + 'static,
 {
     /// In-place initializes a new instance in the `BOUND` state.
     ///
@@ -831,10 +831,10 @@ where
 }
 
 // SAFETY: We are a synchronization primitive, so we do our own synchronization.
-unsafe impl<T: Send> Sync for Event<T> {}
+unsafe impl<T: Send + 'static> Sync for Event<T> {}
 
 #[expect(clippy::missing_fields_in_debug, reason = "phantoms are boring")]
-impl<T: Send> fmt::Debug for Event<T> {
+impl<T: Send + 'static> fmt::Debug for Event<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut debug = f.debug_struct("Event");
 

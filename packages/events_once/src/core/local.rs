@@ -19,7 +19,7 @@ use crate::{
 };
 
 /// Coordinates delivery of a `T` at most once from a sender to a receiver on the same thread.
-pub struct LocalEvent<T> {
+pub struct LocalEvent<T: 'static> {
     /// The logical state of the event; see constants in `state.rs`.
     pub(crate) state: Cell<u8>,
 
@@ -59,7 +59,7 @@ pub struct LocalEvent<T> {
     _requires_pinning: PhantomPinned,
 }
 
-impl<T> LocalEvent<T> {
+impl<T: 'static> LocalEvent<T> {
     /// In-place initializes a new instance in the `BOUND` state.
     ///
     /// This is for internal use only and is wrapped by public methods that also
@@ -501,7 +501,7 @@ impl<T> LocalEvent<T> {
 }
 
 #[expect(clippy::missing_fields_in_debug, reason = "phantoms are boring")]
-impl<T> fmt::Debug for LocalEvent<T> {
+impl<T: 'static> fmt::Debug for LocalEvent<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut debug = f.debug_struct("LocalEvent");
 
