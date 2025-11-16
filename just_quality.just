@@ -60,9 +60,8 @@ validate-local:
     just package={{ package }} format-check
     just package={{ package }} check dev
     just package={{ package }} clippy dev
-    just package={{ package }} test
+    just package={{ package }} test-more
     just package={{ package }} test-docs
-    just package={{ package }} test-benches
     just package={{ package }} docs
     just package={{ package }} miri
     just package={{ package }} machete
