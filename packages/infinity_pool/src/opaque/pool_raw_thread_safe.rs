@@ -37,3 +37,46 @@ impl DerefMut for RawOpaquePoolThreadSafe {
         &mut self.0
     }
 }
+
+#[cfg(test)]
+#[allow(
+    clippy::undocumented_unsafe_blocks,
+    reason = "keep tests concise and easy to read"
+)]
+mod tests {
+    use std::thread;
+
+    use super::*;
+
+    #[test]
+    fn raw_opaque_pool_thread_travel() {
+        let mut pool =
+            unsafe { RawOpaquePoolThreadSafe::new(RawOpaquePool::with_layout_of::<u64>()) };
+
+        let handle1 = pool.insert(123_u64);
+
+        let (mut pool, handle2) = thread::spawn(move || {
+            assert_eq!(*unsafe { handle1.as_ref() }, 123_u64);
+
+            unsafe {
+                pool.remove(handle1);
+            }
+            let handle2 = pool.insert(456_u64);
+            (pool, handle2)
+        })
+        .join()
+        .unwrap();
+
+        assert_eq!(*unsafe { handle2.as_ref() }, 456_u64);
+
+        pool.insert(789_u64);
+
+        thread::spawn(move || {
+            pool.insert(111_u64);
+
+            drop(pool);
+        })
+        .join()
+        .unwrap();
+    }
+}
