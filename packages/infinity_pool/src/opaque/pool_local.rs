@@ -307,18 +307,16 @@ impl Clone for LocalOpaquePool {
 
 /// Iterator over all objects in an opaque pool.
 ///
-/// This iterator yields untyped pointers to objects stored in the pool.
-/// Since the pool can contain objects of different types (as long as they have the same layout),
-/// the iterator returns `NonNull<()>` and leaves type casting to the caller.
+/// The iterator only yields pointers to the objects, not references, because the pool
+/// does not have the authority to create references to its contents as user code may
+/// concurrently be holding a conflicting exclusive reference via `LocalPooledMut<T>`.
+///
+/// Therefore, obtaining actual references to pool contents via iteration is only possible
+/// by using the pointer to create such references in unsafe code and relies on the caller
+/// guaranteeing that no conflicting exclusive references exist.
 ///
 /// The iterator holds a reference to the locked pool, ensuring that objects cannot be
 /// removed while iteration is in progress and that all yielded pointers remain valid.
-///
-/// # Safety
-///
-/// While the iterator ensures objects cannot be removed from the pool during iteration,
-/// it is still the caller's responsibility to cast the `NonNull<()>` pointers to the
-/// correct type that matches the pool's layout.
 #[derive(Debug)]
 pub struct LocalOpaquePoolIterator<'p> {
     raw_iter: RawOpaquePoolIterator<'p>,

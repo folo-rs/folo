@@ -17,28 +17,50 @@ use crate::{
 #[doc = include_str!("../../doc/snippets/managed_pool_lifetimes.md")]
 #[doc = include_str!("../../doc/snippets/managed_pool_is_thread_safe.md")]
 ///
-/// # Example
+/// # Example: unique object ownership
 ///
 /// ```rust
+/// use std::fmt::Display;
+///
 /// use infinity_pool::BlindPool;
 ///
-/// fn work_with_data(data: impl std::fmt::Display + Send + 'static) {
-///     let mut pool = BlindPool::new();
+/// let mut pool = BlindPool::new();
 ///
-///     // Insert an object into the pool (type determined at runtime)
-///     let handle = pool.insert(data.to_string());
+/// // Insert an object into the pool, returning a unique handle to it.
+/// let mut handle = pool.insert("Hello, world!".to_string());
 ///
-///     // Access the object through the handle
-///     assert_eq!(*handle, data.to_string());
+/// // A unique handle grants the same access as a `&mut` reference to the object.
+/// handle.push_str(" Welcome to Infinity Pool!");
 ///
-///     // The object is automatically removed when the handle is dropped
-/// }
+/// println!("Updated value: {}", &*handle);
 ///
-/// work_with_data("Hello, Blind!");
-/// work_with_data(42);
+/// // The object is removed when the handle is dropped.
 /// ```
 ///
-/// # Pool clones are functionally equivalent
+/// # Example: shared object ownership
+///
+/// ```rust
+/// use std::fmt::Display;
+///
+/// use infinity_pool::BlindPool;
+///
+/// let mut pool = BlindPool::new();
+///
+/// // Insert an object into the pool, returning a unique handle to it.
+/// let handle = pool.insert("Hello, world!".to_string());
+///
+/// // The unique handle can be converted into a shared handle,
+/// // allowing multiple clones of the handle to be created.
+/// let shared_handle = handle.into_shared();
+/// let shared_handle_clone = shared_handle.clone();
+///
+/// // Shared handles grant the same access as `&` shared references to the object.
+/// println!("Shared access to value: {}", &*shared_handle);
+///
+/// // The object is removed when the last shared handle is dropped.
+/// ```
+///
+/// # Clones of the pool are functionally equivalent
 ///
 /// ```rust
 /// use infinity_pool::BlindPool;
@@ -47,7 +69,9 @@ use crate::{
 /// let pool2 = pool1.clone();
 ///
 /// assert_eq!(pool1.len(), pool2.len());
-/// let _handle = pool1.insert(42_i32);
+///
+/// _ = pool1.insert(42_i32);
+///
 /// assert_eq!(pool1.len(), pool2.len());
 /// ```
 #[derive(Clone, Debug, Default)]
@@ -126,32 +150,6 @@ impl BlindPool {
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert.md")]
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use infinity_pool::BlindPool;
-    ///
-    /// let mut pool = BlindPool::new();
-    ///
-    /// // Insert an object into the pool
-    /// let mut handle = pool.insert("Hello".to_string());
-    ///
-    /// // Mutate the object via the unique handle
-    /// handle.push_str(", Blind World!");
-    /// assert_eq!(&*handle, "Hello, Blind World!");
-    ///
-    /// // Transform the unique handle into a shared handle
-    /// let shared_handle = handle.into_shared();
-    ///
-    /// // After transformation, you can only immutably dereference the object
-    /// assert_eq!(&*shared_handle, "Hello, Blind World!");
-    /// // shared_handle.push_str("!"); // This would not compile
-    ///
-    /// // The object is removed when the handle is dropped
-    /// drop(shared_handle); // Explicitly drop to remove from pool
-    /// assert_eq!(pool.len(), 0);
-    /// ```
     #[inline]
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
@@ -179,31 +177,30 @@ impl BlindPool {
     ///
     /// ```rust
     /// use std::mem::MaybeUninit;
+    /// use std::ptr;
     ///
     /// use infinity_pool::BlindPool;
     ///
     /// struct DataBuffer {
     ///     id: u32,
-    ///     data: MaybeUninit<[u8; 1024]>, // Large buffer to skip initializing
+    ///     data: MaybeUninit<[u8; 1024]>,
     /// }
     ///
     /// let mut pool = BlindPool::new();
     ///
-    /// // Initialize only the id, leaving data uninitialized for performance
+    /// // Initialize only the id, leaving data uninitialized for performance.
     /// let handle = unsafe {
     ///     pool.insert_with(|uninit: &mut MaybeUninit<DataBuffer>| {
     ///         let ptr = uninit.as_mut_ptr();
-    ///         // SAFETY: Writing to the id field within allocated space
+    ///
+    ///         // SAFETY: We are writing to a correctly located field within the object.
     ///         unsafe {
-    ///             std::ptr::addr_of_mut!((*ptr).id).write(42);
-    ///             // data field is intentionally left uninitialized
+    ///             ptr::addr_of_mut!((*ptr).id).write(42);
     ///         }
     ///     })
     /// };
     ///
-    /// // ID is accessible, data remains uninitialized
-    /// let id = unsafe { std::ptr::addr_of!((*handle).id).read() };
-    /// assert_eq!(id, 42);
+    /// assert_eq!(handle.id, 42);
     /// ```
     ///
     /// # Safety

@@ -13,27 +13,61 @@ use crate::{
 /// The pool automatically expands its capacity when needed.
 #[doc = include_str!("../../doc/snippets/raw_pool_is_potentially_thread_safe.md")]
 ///
-/// # Example
+/// # Example: unique object ownership
 ///
 /// ```rust
+/// use std::fmt::Display;
+///
 /// use infinity_pool::RawBlindPool;
 ///
-/// fn work_with_displayable<T: std::fmt::Display + Unpin>(value: T) {
-///     let mut pool = RawBlindPool::new();
+/// let mut pool = RawBlindPool::new();
 ///
-///     // Insert an object into the pool (type determined at runtime)
-///     let handle = pool.insert(value);
+/// // Insert an object into the pool, returning a unique handle to it.
+/// let mut handle = pool.insert("Hello, world!".to_string());
 ///
-///     // Access the object through the handle
-///     let stored_value = unsafe { handle.ptr().as_ref() };
-///     println!("Stored: {}", stored_value);
+/// // A unique handle allows us to create exclusive references to the target object.
+/// // SAFETY: We promise to keep the pool alive for the duration of this reference.
+/// let value_mut = unsafe { handle.as_mut() };
+/// value_mut.push_str(" Welcome to Infinity Pool!");
 ///
-///     // Explicitly remove the object from the pool
+/// println!("Updated value: {value_mut}");
+///
+/// // This is optional - we could also just drop the pool.
+/// // SAFETY: We promise that this handle really is for an object present in this pool.
+/// unsafe {
 ///     pool.remove(handle);
 /// }
+/// ```
 ///
-/// work_with_displayable("Hello, Raw Blind!");
-/// work_with_displayable(42);
+/// # Example: shared object ownership
+///
+/// ```rust
+/// use std::fmt::Display;
+///
+/// use infinity_pool::RawBlindPool;
+///
+/// let mut pool = RawBlindPool::new();
+///
+/// // Insert an object into the pool, returning a unique handle to it.
+/// let handle = pool.insert("Hello, world!".to_string());
+///
+/// // The unique handle can be converted into a shared handle,
+/// // allowing multiple copies of the handle to be created.
+/// let shared_handle = handle.into_shared();
+/// let shared_handle_copy = shared_handle;
+///
+/// // Shared handles allow only shared references to be created.
+/// // SAFETY: We promise to keep the pool alive for the duration of this reference.
+/// let value_ref = unsafe { shared_handle.as_ref() };
+///
+/// println!("Shared access to value: {value_ref}");
+///
+/// // This is optional - we could also just drop the pool.
+/// // SAFETY: We promise that the object has not already been removed
+/// // via a different shared handle - look up to verify that.
+/// unsafe {
+///     pool.remove(shared_handle);
+/// }
 /// ```
 #[derive(Debug)]
 pub struct RawBlindPool {
@@ -102,41 +136,6 @@ impl RawBlindPool {
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert.md")]
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use infinity_pool::RawBlindPool;
-    ///
-    /// let mut pool = RawBlindPool::new();
-    ///
-    /// // Insert an object into the pool
-    /// let mut handle = pool.insert("Hello".to_string());
-    ///
-    /// // Mutate the object via the unique handle
-    /// // SAFETY: The handle is valid and points to a properly initialized String
-    /// unsafe {
-    ///     handle.as_mut().push_str(", Raw Blind World!");
-    ///     assert_eq!(handle.as_ref(), "Hello, Raw Blind World!");
-    /// }
-    ///
-    /// // Transform the unique handle into a shared handle
-    /// let shared_handle = handle.into_shared();
-    ///
-    /// // After transformation, you can only immutably dereference the object
-    /// // SAFETY: The shared handle is valid and points to a properly initialized String
-    /// unsafe {
-    ///     assert_eq!(shared_handle.as_ref(), "Hello, Raw Blind World!");
-    ///     // shared_handle.as_mut(); // This would not compile
-    /// }
-    ///
-    /// // Explicitly remove the object from the pool
-    /// // SAFETY: The handle belongs to this pool and references a valid object
-    /// unsafe {
-    ///     pool.remove(shared_handle);
-    /// }
-    /// assert_eq!(pool.len(), 0);
-    /// ```
     #[inline]
     #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert<T>(&mut self, value: T) -> RawBlindPooledMut<T> {
@@ -157,31 +156,32 @@ impl RawBlindPool {
     ///
     /// ```rust
     /// use std::mem::MaybeUninit;
+    /// use std::ptr;
     ///
     /// use infinity_pool::RawBlindPool;
     ///
     /// struct DataBuffer {
     ///     id: u32,
-    ///     data: MaybeUninit<[u8; 1024]>, // Large buffer to skip initializing
+    ///     data: MaybeUninit<[u8; 1024]>,
     /// }
     ///
     /// let mut pool = RawBlindPool::new();
     ///
-    /// // Initialize only the id, leaving data uninitialized for performance
+    /// // Initialize only the id, leaving data uninitialized for performance.
     /// let handle = unsafe {
     ///     pool.insert_with(|uninit: &mut MaybeUninit<DataBuffer>| {
     ///         let ptr = uninit.as_mut_ptr();
-    ///         // SAFETY: Writing to the id field within allocated space
+    ///
+    ///         // SAFETY: We are writing to a correctly located field within the object.
     ///         unsafe {
-    ///             std::ptr::addr_of_mut!((*ptr).id).write(42);
-    ///             // data field is intentionally left uninitialized
+    ///             ptr::addr_of_mut!((*ptr).id).write(42);
     ///         }
     ///     })
     /// };
     ///
-    /// // ID is accessible, data remains uninitialized
-    /// let id = unsafe { std::ptr::addr_of!(handle.ptr().as_ref().id).read() };
-    /// assert_eq!(id, 42);
+    /// // SAFETY: We promise that the pool is not dropped while we hold this reference.
+    /// let item = unsafe { handle.as_ref() };
+    /// assert_eq!(item.id, 42);
     /// ```
     ///
     /// # Safety
