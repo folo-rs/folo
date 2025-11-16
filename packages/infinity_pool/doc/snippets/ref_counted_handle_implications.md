@@ -1,3 +1,4 @@
+# Implications of reference counted handles
 
 The handle can be used to access the pooled object.
 

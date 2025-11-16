@@ -1,3 +1,4 @@
+# Implications of raw handles
 
 The handle can be used to access the pooled object, as well as to remove
 it from the pool when no longer needed.
