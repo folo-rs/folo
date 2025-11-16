@@ -156,7 +156,10 @@ where
             .get_mut(&key)
             .expect("if the handle still exists, the inner pool must still exist");
 
-        pool.remove_mut_unpin(inner)
+        // SAFETY: We are a managed unique handle, so we are the only one who is allowed to remove
+        // the object from the pool - as long as we exist, the object exists in the pool. We keep
+        // the pool alive for as long as any handle to it exists, so the pool must still exist.
+        unsafe { pool.remove_unpin(inner) }
     }
 }
 
@@ -252,7 +255,12 @@ impl<T: ?Sized> Drop for BlindPooledMut<T> {
             .get_mut(&self.key)
             .expect("if the handle still exists, the inner pool must still exist");
 
-        pool.remove_mut(inner);
+        // SAFETY: We are a managed unique handle, so we are the only one who is allowed to remove
+        // the object from the pool - as long as we exist, the object exists in the pool. We keep
+        // the pool alive for as long as any handle to it exists, so the pool must still exist.
+        unsafe {
+            pool.remove(inner);
+        }
     }
 }
 

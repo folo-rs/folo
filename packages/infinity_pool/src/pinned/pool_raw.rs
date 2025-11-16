@@ -36,7 +36,7 @@ use crate::{
 /// assert_eq!(stored_value, "Hello, Raw Pinned!");
 ///
 /// // Explicitly remove the object from the pool
-/// pool.remove_mut(handle);
+/// pool.remove(handle);
 /// ```
 pub struct RawPinnedPool<T> {
     /// The underlying pool that manages memory and storage.
@@ -193,15 +193,9 @@ impl<T> RawPinnedPool<T> {
         unsafe { self.inner.insert_with_unchecked(f) }
     }
 
-    #[doc = include_str!("../../doc/snippets/raw_pool_remove_mut.md")]
-    #[inline]
-    pub fn remove_mut<P: ?Sized>(&mut self, handle: RawPooledMut<P>) {
-        self.inner.remove_mut(handle);
-    }
-
     #[doc = include_str!("../../doc/snippets/raw_pool_remove.md")]
     #[inline]
-    pub unsafe fn remove<P: ?Sized>(&mut self, handle: RawPooled<P>) {
+    pub unsafe fn remove<P: ?Sized>(&mut self, handle: impl Into<RawPooled<P>>) {
         // SAFETY: Forwarding safety guarantees from the caller.
         unsafe {
             self.inner.remove(handle);
@@ -224,17 +218,6 @@ where
     ///
     /// # Panics
     ///
-    /// Panics if the handle does not reference an object in this pool.
-    #[must_use]
-    #[inline]
-    pub fn remove_mut_unpin(&mut self, handle: RawPooledMut<T>) -> T {
-        self.inner.remove_mut_unpin(handle)
-    }
-
-    /// Removes an object from the pool and returns it.
-    ///
-    /// # Panics
-    ///
     /// Panics if the handle does not reference an existing object in this pool.
     ///
     /// # Safety
@@ -243,7 +226,7 @@ where
     /// references has not already been removed from the pool.
     #[must_use]
     #[inline]
-    pub unsafe fn remove_unpin(&mut self, handle: RawPooled<T>) -> T {
+    pub unsafe fn remove_unpin(&mut self, handle: impl Into<RawPooled<T>>) -> T {
         const {
             assert!(
                 size_of::<T>() > 0,
@@ -481,10 +464,14 @@ mod tests {
 
         assert_eq!(pool.len(), 2);
 
-        pool.remove_mut(handle1);
+        unsafe {
+            pool.remove(handle1);
+        }
         assert_eq!(pool.len(), 1);
 
-        pool.remove_mut(handle2);
+        unsafe {
+            pool.remove(handle2);
+        }
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
     }
@@ -517,7 +504,9 @@ mod tests {
 
         // Remove all items
         for handle in handles {
-            pool.remove_mut(handle);
+            unsafe {
+                pool.remove(handle);
+            }
         }
 
         assert!(pool.is_empty());
@@ -550,14 +539,18 @@ mod tests {
 
         // Test slot reuse
         let handle1 = pool.insert(1_usize);
-        pool.remove_mut(handle1);
+        unsafe {
+            pool.remove(handle1);
+        }
 
         let handle2 = pool.insert(2_usize);
 
         assert_eq!(pool.len(), 1);
         assert_eq!(unsafe { *handle2.as_ref() }, 2);
 
-        pool.remove_mut(handle2);
+        unsafe {
+            pool.remove(handle2);
+        }
         assert!(pool.is_empty());
     }
 
@@ -567,7 +560,7 @@ mod tests {
 
         let handle = pool.insert(-456_i32);
 
-        let value = pool.remove_mut_unpin(handle);
+        let value = unsafe { pool.remove_unpin(handle) };
         assert_eq!(value, -456);
         assert_eq!(pool.len(), 0);
     }

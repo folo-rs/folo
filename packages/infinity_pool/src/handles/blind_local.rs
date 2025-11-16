@@ -177,7 +177,8 @@ impl Drop for Remover {
             .expect("if the handle still exists, the inner pool must still exist");
 
         // SAFETY: The remover controls the shared object lifetime and is the only thing
-        // that can remove the item from the pool.
+        // that can remove the item from the pool. We keep the pool alive for as long as any
+        // handle or remover referencing it exists, so the pool must still exist.
         unsafe {
             pool.remove(self.handle);
         }

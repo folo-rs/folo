@@ -192,7 +192,7 @@ impl Drop for Remover {
         // SAFETY: The remover controls the shared object lifetime and is the only thing
         // that can remove the item from the pool.
         unsafe {
-            pool.remove_unchecked(self.handle);
+            pool.remove(self.handle);
         }
     }
 }

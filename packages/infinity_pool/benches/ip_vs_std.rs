@@ -8,6 +8,7 @@
     clippy::arithmetic_side_effects,
     clippy::cast_possible_truncation,
     clippy::explicit_counter_loop,
+    clippy::undocumented_unsafe_blocks,
     clippy::integer_division,
     clippy::indexing_slicing,
     missing_docs,
@@ -309,7 +310,9 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                     for _ in 0..BATCH_SIZE {
                         let target_index = rng.random_range(0..handles.len());
                         let handle = handles.swap_remove(target_index);
-                        pool.remove_mut(handle);
+                        unsafe {
+                            pool.remove(handle);
+                        }
                     }
                 }
             }
@@ -445,7 +448,9 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                     for _ in 0..BATCH_SIZE {
                         let target_index = rng.random_range(0..handles.len());
                         let handle = handles.swap_remove(target_index);
-                        pool.remove_mut(handle);
+                        unsafe {
+                            pool.remove(handle);
+                        }
                     }
                 }
             }
@@ -581,7 +586,9 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
                     for _ in 0..BATCH_SIZE {
                         let target_index = rng.random_range(0..handles.len());
                         let handle = handles.swap_remove(target_index);
-                        pool.remove_mut(handle);
+                        unsafe {
+                            pool.remove(handle);
+                        }
                     }
                 }
             }

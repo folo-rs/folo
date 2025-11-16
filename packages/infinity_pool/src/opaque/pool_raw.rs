@@ -16,27 +16,61 @@ use crate::{
 /// The pool automatically expands its capacity when needed.
 #[doc = include_str!("../../doc/snippets/raw_pool_is_potentially_thread_safe.md")]
 ///
-/// # Example
+/// # Example: unique object ownership
 ///
 /// ```rust
+/// use std::fmt::Display;
+///
 /// use infinity_pool::RawOpaquePool;
 ///
-/// fn work_with_displayable<T: std::fmt::Display + 'static + Unpin>(value: T) {
-///     let mut pool = RawOpaquePool::with_layout_of::<T>();
+/// let mut pool = RawOpaquePool::with_layout_of::<String>();
 ///
-///     // Insert an object into the pool
-///     let handle = pool.insert(value);
+/// // Insert an object into the pool, returning a unique handle to it.
+/// let mut handle = pool.insert("Hello, world!".to_string());
 ///
-///     // Access the object through the handle
-///     let stored_value = unsafe { handle.ptr().as_ref() };
-///     println!("Stored: {}", stored_value);
+/// // A unique handle allows us to create exclusive references to the target object.
+/// // SAFETY: We promise to keep the pool alive for the duration of this reference.
+/// let value_mut = unsafe { handle.as_mut() };
+/// value_mut.push_str(" Welcome to Infinity Pool!");
 ///
-///     // Explicitly remove the object from the pool
-///     pool.remove_mut(handle);
+/// println!("Updated value: {value_mut}");
+///
+/// // This is optional - we could also just drop the pool.
+/// // SAFETY: We promise that this handle really is for an object present in this pool.
+/// unsafe {
+///     pool.remove(handle);
 /// }
+/// ```
 ///
-/// work_with_displayable("Hello, world!");
-/// work_with_displayable(42);
+/// # Example: shared object ownership
+///
+/// ```rust
+/// use std::fmt::Display;
+///
+/// use infinity_pool::RawOpaquePool;
+///
+/// let mut pool = RawOpaquePool::with_layout_of::<String>();
+///
+/// // Insert an object into the pool, returning a unique handle to it.
+/// let handle = pool.insert("Hello, world!".to_string());
+///
+/// // The unique handle can be converted into a shared handle,
+/// // allowing multiple copies of the handle to be created.
+/// let shared_handle = handle.into_shared();
+/// let shared_handle_copy = shared_handle;
+///
+/// // Shared handles allow only shared references to be created.
+/// // SAFETY: We promise to keep the pool alive for the duration of this reference.
+/// let value_ref = unsafe { shared_handle.as_ref() };
+///
+/// println!("Shared access to value: {value_ref}");
+///
+/// // This is optional - we could also just drop the pool.
+/// // SAFETY: We promise that the object has not already been removed
+/// // via a different shared handle - look up to verify that.
+/// unsafe {
+///     pool.remove(shared_handle);
+/// }
 /// ```
 #[derive(Debug)]
 pub struct RawOpaquePool {
@@ -82,12 +116,15 @@ impl RawOpaquePool {
     /// Creates a new instance of the pool with the layout of `T`.
     ///
     /// Shorthand for a builder that keeps all other options at their default values.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `T` is a zero-sized type.
     #[must_use]
     pub fn with_layout_of<T: Sized>() -> Self {
+        const {
+            assert!(
+                size_of::<T>() > 0,
+                "cannot create a pool of zero-sized objects"
+            );
+        };
+
         Self::builder().layout_of::<T>().build()
     }
 
@@ -200,43 +237,6 @@ impl RawOpaquePool {
     ///
     /// # Panics
     #[doc = include_str!("../../doc/snippets/panic_on_pool_t_layout_mismatch.md")]
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use std::alloc::Layout;
-    ///
-    /// use infinity_pool::RawOpaquePool;
-    ///
-    /// let mut pool = RawOpaquePool::with_layout(Layout::new::<String>());
-    ///
-    /// // Insert an object into the pool
-    /// let mut handle = pool.insert("Hello".to_string());
-    ///
-    /// // Mutate the object via the unique handle
-    /// // SAFETY: The handle is valid and points to a properly initialized String
-    /// unsafe {
-    ///     handle.as_mut().push_str(", Raw Opaque World!");
-    ///     assert_eq!(handle.as_ref(), "Hello, Raw Opaque World!");
-    /// }
-    ///
-    /// // Transform the unique handle into a shared handle
-    /// let shared_handle = handle.into_shared();
-    ///
-    /// // After transformation, you can only immutably dereference the object
-    /// // SAFETY: The shared handle is valid and points to a properly initialized String
-    /// unsafe {
-    ///     assert_eq!(shared_handle.as_ref(), "Hello, Raw Opaque World!");
-    ///     // shared_handle.as_mut(); // This would not compile
-    /// }
-    ///
-    /// // Explicitly remove the object from the pool
-    /// // SAFETY: The handle belongs to this pool and references a valid object
-    /// unsafe {
-    ///     pool.remove(shared_handle);
-    /// }
-    /// assert_eq!(pool.len(), 0);
-    /// ```
     #[inline]
     #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert<T>(&mut self, value: T) -> RawPooledMut<T> {
@@ -270,31 +270,32 @@ impl RawOpaquePool {
     ///
     /// ```rust
     /// use std::mem::MaybeUninit;
+    /// use std::ptr;
     ///
     /// use infinity_pool::RawOpaquePool;
     ///
     /// struct DataBuffer {
     ///     id: u32,
-    ///     data: MaybeUninit<[u8; 1024]>, // Large buffer to skip initializing
+    ///     data: MaybeUninit<[u8; 1024]>,
     /// }
     ///
     /// let mut pool = RawOpaquePool::with_layout_of::<DataBuffer>();
     ///
-    /// // Initialize only the id, leaving data uninitialized for performance
+    /// // Initialize only the id, leaving data uninitialized for performance.
     /// let handle = unsafe {
     ///     pool.insert_with(|uninit: &mut MaybeUninit<DataBuffer>| {
     ///         let ptr = uninit.as_mut_ptr();
-    ///         // SAFETY: Writing to the id field within allocated space
+    ///
+    ///         // SAFETY: We are writing to a correctly located field within the object.
     ///         unsafe {
-    ///             std::ptr::addr_of_mut!((*ptr).id).write(42);
-    ///             // data field is intentionally left uninitialized
+    ///             ptr::addr_of_mut!((*ptr).id).write(42);
     ///         }
     ///     })
     /// };
     ///
-    /// // ID is accessible, data remains uninitialized
-    /// let id = unsafe { std::ptr::addr_of!(handle.ptr().as_ref().id).read() };
-    /// assert_eq!(id, 42);
+    /// // SAFETY: We promise that the pool is not dropped while we hold this reference.
+    /// let item = unsafe { handle.as_ref() };
+    /// assert_eq!(item.id, 42);
     /// ```
     ///
     /// # Panics
@@ -319,36 +320,8 @@ impl RawOpaquePool {
 
     #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
     ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use std::mem::MaybeUninit;
-    ///
-    /// use infinity_pool::RawOpaquePool;
-    ///
-    /// struct DataBuffer {
-    ///     id: u32,
-    ///     data: MaybeUninit<[u8; 1024]>, // Large buffer to skip initializing
-    /// }
-    ///
-    /// let mut pool = RawOpaquePool::with_layout_of::<DataBuffer>();
-    ///
-    /// // Initialize only the id, leaving data uninitialized for performance
-    /// let handle = unsafe {
-    ///     pool.insert_with_unchecked(|uninit: &mut MaybeUninit<DataBuffer>| {
-    ///         let ptr = uninit.as_mut_ptr();
-    ///         // SAFETY: Writing to the id field within allocated space
-    ///         unsafe {
-    ///             std::ptr::addr_of_mut!((*ptr).id).write(42);
-    ///             // data field is intentionally left uninitialized
-    ///         }
-    ///     })
-    /// };
-    ///
-    /// // ID is accessible, data remains uninitialized
-    /// let id = unsafe { std::ptr::addr_of!(handle.ptr().as_ref().id).read() };
-    /// assert_eq!(id, 42);
-    /// ```
+    /// This unchecked variant of the method skips the layout verification step, requiring
+    /// the caller to ensure that the object has a matching layout with the pool.
     ///
     /// # Safety
     #[doc = include_str!("../../doc/snippets/safety_pool_t_layout_must_match.md")]
@@ -387,58 +360,10 @@ impl RawOpaquePool {
         RawPooledMut::new(slab_index, slab_handle)
     }
 
-    #[doc = include_str!("../../doc/snippets/raw_pool_remove_mut.md")]
-    #[inline]
-    pub fn remove_mut<T: ?Sized>(&mut self, handle: RawPooledMut<T>) {
-        // SAFETY: The provided handle is a unique handle, which guarantees that the object
-        // has not been removed yet (because doing so consumes the unique handle).
-        unsafe {
-            self.remove_unchecked(handle.into_shared());
-        }
-    }
-
     #[doc = include_str!("../../doc/snippets/raw_pool_remove.md")]
-    pub unsafe fn remove<T: ?Sized>(&mut self, handle: RawPooled<T>) {
-        let slab = self
-            .slabs
-            .get_mut(handle.slab_index())
-            .expect("the RawPooled did not point to an object in this pool");
+    pub unsafe fn remove<T: ?Sized>(&mut self, handle: impl Into<RawPooled<T>>) {
+        let handle = handle.into();
 
-        // SAFETY: Forwarding guarantees from caller.
-        unsafe {
-            slab.remove(handle.slab_handle());
-        }
-
-        // Update our tracked length since we just removed an object.
-        // This cannot wrap around because we just removed an object,
-        // so the value must be at least 1 before subtraction.
-        self.length = self.length.wrapping_sub(1);
-
-        if slab.len() == self.slab_layout.capacity().get().wrapping_sub(1) {
-            // We removed from a full slab.
-            // This means we have a vacant slot where there was not one before.
-
-            // SAFETY: We are currently operating on the slab, so it must be an existing slab.
-            // The mechanism that adds slabs is responsible for updating vacancy tracker bounds.
-            unsafe {
-                self.vacancy_tracker
-                    .update_slab_status(handle.slab_index(), true);
-            }
-        }
-    }
-
-    /// An unchecked version of `remove()`, intended for callers who can make strong guarantees.
-    ///
-    /// While it imposes substantially the same requirements as regular `remove()`, it skips
-    /// many of the internal validity checks that `remove()` still performs (as the safety
-    /// requirements of `remove()` are more of a technical limitation and not desired, whereas
-    /// here they are desired).
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that the handle belongs to this pool and that the object it
-    /// references has not already been removed from the pool.
-    pub(crate) unsafe fn remove_unchecked<T: ?Sized>(&mut self, handle: RawPooled<T>) {
         // SAFETY: Caller guarantees the handle is valid for this pool.
         let slab = unsafe { self.slabs.get_unchecked_mut(handle.slab_index()) };
 
@@ -465,66 +390,11 @@ impl RawOpaquePool {
         }
     }
 
-    #[doc = include_str!("../../doc/snippets/raw_pool_remove_mut_unpin.md")]
-    #[must_use]
-    #[inline]
-    pub fn remove_mut_unpin<T: Unpin>(&mut self, handle: RawPooledMut<T>) -> T {
-        // SAFETY: The provided handle is a unique handle, which guarantees that the object
-        // has not been removed yet (because doing so consumes the unique handle).
-        unsafe { self.remove_unpin_unchecked(handle.into_shared()) }
-    }
-
     #[doc = include_str!("../../doc/snippets/raw_pool_remove_unpin.md")]
     #[must_use]
-    pub unsafe fn remove_unpin<T: Unpin>(&mut self, handle: RawPooled<T>) -> T {
-        const {
-            assert!(
-                size_of::<T>() > 0,
-                "cannot extract zero-sized types from pool"
-            );
-        };
+    pub unsafe fn remove_unpin<T: Unpin>(&mut self, handle: impl Into<RawPooled<T>>) -> T {
+        let handle = handle.into();
 
-        let slab = self
-            .slabs
-            .get_mut(handle.slab_index())
-            .expect("the RawPooled did not point to an existing object in the pool");
-
-        // SAFETY: The RawPooled<T> guarantees the type T is correct for this pool slot.
-        let value = unsafe { slab.remove_unpin::<T>(handle.slab_handle()) };
-
-        // Update our tracked length since we just removed an object.
-        // This cannot wrap around because we just removed an object,
-        // so the value must be at least 1 before subtraction.
-        self.length = self.length.wrapping_sub(1);
-
-        if slab.len() == self.slab_layout.capacity().get().wrapping_sub(1) {
-            // We removed from a full slab.
-            // This means we have a vacant slot where there was not one before.
-
-            // SAFETY: We are currently operating on the slab, so it must be an existing slab.
-            // The mechanism that adds slabs is responsible for updating vacancy tracker bounds.
-            unsafe {
-                self.vacancy_tracker
-                    .update_slab_status(handle.slab_index(), true);
-            }
-        }
-
-        value
-    }
-
-    /// An unchecked version of `remove_unpin()`, intended for
-    /// callers who can make strong guarantees.
-    ///
-    /// While it imposes substantially the same requirements as regular `remove_unpin()`,
-    /// it skips many of the internal validity checks that `remove_unpin()` still performs
-    /// (as the safety requirements of `remove_unpin()` are more of a technical limitation
-    /// and not desired, whereas here they are desired).
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that the handle belongs to this pool and that the object it
-    /// references has not already been removed from the pool.
-    pub(crate) unsafe fn remove_unpin_unchecked<T: Unpin>(&mut self, handle: RawPooled<T>) -> T {
         const {
             assert!(
                 size_of::<T>() > 0,
@@ -837,7 +707,7 @@ mod tests {
 
         assert_eq!(pool.len(), 1);
 
-        let value = pool.remove_mut_unpin(handle);
+        let value = unsafe { pool.remove_unpin(handle) };
         assert_eq!(value, 42);
     }
 
@@ -850,10 +720,14 @@ mod tests {
 
         assert_eq!(pool.len(), 2);
 
-        pool.remove_mut(handle1);
+        unsafe {
+            pool.remove(handle1);
+        }
         assert_eq!(pool.len(), 1);
 
-        pool.remove_mut(handle2);
+        unsafe {
+            pool.remove(handle2);
+        }
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
     }
@@ -864,7 +738,7 @@ mod tests {
 
         let handle = pool.insert(-456_i32);
 
-        let value = pool.remove_mut_unpin(handle);
+        let value = unsafe { pool.remove_unpin(handle) };
         assert_eq!(value, -456);
         assert_eq!(pool.len(), 0);
     }
@@ -881,7 +755,9 @@ mod tests {
 
         // Remove all items.
         for handle in handles {
-            pool.remove_mut(handle);
+            unsafe {
+                pool.remove(handle);
+            }
         }
 
         assert!(pool.is_empty());
@@ -932,13 +808,15 @@ mod tests {
 
         // Insert, remove, insert again to test slot reuse
         let handle1 = pool.insert(1_usize);
-        pool.remove_mut(handle1);
+        unsafe {
+            pool.remove(handle1);
+        }
 
         let handle2 = pool.insert(2_usize);
 
         assert_eq!(pool.len(), 1);
 
-        let value = pool.remove_mut_unpin(handle2);
+        let value = unsafe { pool.remove_unpin(handle2) };
         assert_eq!(value, 2);
     }
 
@@ -1069,11 +947,6 @@ mod tests {
         for (i, &value) in values.iter().enumerate() {
             assert_eq!(value, u8::try_from(i).unwrap());
         }
-
-        // Clean up
-        for handle in handles {
-            pool.remove_mut(handle);
-        }
     }
 
     #[test]
@@ -1086,7 +959,9 @@ mod tests {
         let _handle3 = pool.insert(300_u32);
 
         // Remove the middle item to create a gap
-        pool.remove_mut(handle2);
+        unsafe {
+            pool.remove(handle2);
+        }
 
         let values: Vec<u32> = pool
             .iter()
@@ -1109,7 +984,9 @@ mod tests {
 
         // Remove all items from some slabs to create empty slabs
         for handle in handles.drain(5..15) {
-            pool.remove_mut(handle);
+            unsafe {
+                pool.remove(handle);
+            }
         }
 
         let values: Vec<u64> = pool
@@ -1298,7 +1175,9 @@ mod tests {
 
         // Remove in reverse order to maintain indices
         for &index in to_remove.iter().rev() {
-            pool.remove_mut(handles.swap_remove(index));
+            unsafe {
+                pool.remove(handles.swap_remove(index));
+            }
         }
 
         let values: Vec<usize> = pool

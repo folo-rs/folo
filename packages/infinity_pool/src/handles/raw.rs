@@ -99,9 +99,11 @@ impl<T: ?Sized> RawPooled<T> {
     #[inline]
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
     pub unsafe fn as_ref(&self) -> &T {
-        // SAFETY: This is a unique handle, so we guarantee borrow safety
-        // of the target object by borrowing the handle itself. Pointer validity
-        // requires pool to be alive, which is a safety requirement of this function.
+        // SAFETY: This is a shared handle, so we cannot guarantee borrow safety. What we
+        // do instead is that we only allow shared references to be created from shared handles,
+        // so the user must explicitly invoke (some other) unsafe code to create an exclusive
+        // reference, at which point they become responsible for deconflicting the references.
+        // Pointer validity requires pool to be alive for the duration of the reference.
         unsafe { self.ptr().as_ref() }
     }
 

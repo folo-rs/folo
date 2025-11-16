@@ -29,7 +29,7 @@ use crate::{
 ///     println!("Stored: {}", stored_value);
 ///
 ///     // Explicitly remove the object from the pool
-///     pool.remove_mut(handle);
+///     pool.remove(handle);
 /// }
 ///
 /// work_with_displayable("Hello, Raw Blind!");
@@ -203,21 +203,11 @@ impl RawBlindPool {
         RawBlindPooledMut::new(key, inner_handle)
     }
 
-    #[doc = include_str!("../../doc/snippets/raw_pool_remove_mut.md")]
-    #[inline]
-    pub fn remove_mut<T: ?Sized>(&mut self, handle: RawBlindPooledMut<T>) {
-        let key = handle.layout_key();
-
-        let pool = self
-            .try_inner_pool_mut(key)
-            .expect("attempted to remove an item that is not present in the pool");
-
-        pool.remove_mut(handle.into_inner());
-    }
-
     #[doc = include_str!("../../doc/snippets/raw_pool_remove.md")]
     #[inline]
-    pub unsafe fn remove<T: ?Sized>(&mut self, handle: RawBlindPooled<T>) {
+    pub unsafe fn remove<T: ?Sized>(&mut self, handle: impl Into<RawBlindPooled<T>>) {
+        let handle = handle.into();
+
         let key = handle.layout_key();
 
         let pool = self
@@ -230,29 +220,18 @@ impl RawBlindPool {
         }
     }
 
-    #[doc = include_str!("../../doc/snippets/raw_pool_remove_mut_unpin.md")]
-    #[must_use]
-    #[inline]
-    pub fn remove_mut_unpin<T: Unpin>(&mut self, handle: RawBlindPooledMut<T>) -> T {
-        let key = handle.layout_key();
-
-        let pool = self
-            .try_inner_pool_mut(key)
-            .expect("attempted to remove an item that is not present in the pool");
-
-        pool.remove_mut_unpin(handle.into_inner())
-    }
-
     #[doc = include_str!("../../doc/snippets/raw_pool_remove_unpin.md")]
     #[must_use]
     #[inline]
-    pub unsafe fn remove_unpin<T: Unpin>(&mut self, handle: RawBlindPooled<T>) -> T {
+    pub unsafe fn remove_unpin<T: Unpin>(&mut self, handle: impl Into<RawBlindPooled<T>>) -> T {
         const {
             assert!(
                 size_of::<T>() > 0,
                 "cannot extract zero-sized types from pool"
             );
         };
+
+        let handle = handle.into();
 
         let key = handle.layout_key();
 
@@ -398,7 +377,9 @@ mod tests {
         let handle = pool.insert(42_u32);
         assert_eq!(pool.len(), 1);
 
-        pool.remove_mut(handle);
+        unsafe {
+            pool.remove(handle);
+        }
         assert_eq!(pool.len(), 0);
     }
 
@@ -450,9 +431,11 @@ mod tests {
         assert!(pool.capacity_for::<u32>() > 0);
 
         // Remove all items
-        pool.remove_mut(handle1);
-        pool.remove_mut(handle2);
-        pool.remove_mut(handle3);
+        unsafe {
+            pool.remove(handle1);
+            pool.remove(handle2);
+            pool.remove(handle3);
+        }
 
         assert!(pool.is_empty());
 
@@ -500,13 +483,19 @@ mod tests {
         assert_eq!(pool.len(), 3);
 
         // Remove them
-        pool.remove_mut(handle2);
+        unsafe {
+            pool.remove(handle2);
+        }
         assert_eq!(pool.len(), 2);
 
-        pool.remove_mut(handle1);
+        unsafe {
+            pool.remove(handle1);
+        }
         assert_eq!(pool.len(), 1);
 
-        pool.remove_mut(handle3);
+        unsafe {
+            pool.remove(handle3);
+        }
         assert_eq!(pool.len(), 0);
     }
 
@@ -515,7 +504,7 @@ mod tests {
         let mut pool = RawBlindPool::new();
 
         let handle = pool.insert(42_u32);
-        let value = pool.remove_mut_unpin(handle);
+        let value = unsafe { pool.remove_unpin(handle) };
 
         assert_eq!(value, 42);
         assert_eq!(pool.len(), 0);

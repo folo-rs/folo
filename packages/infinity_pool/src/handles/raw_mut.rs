@@ -94,7 +94,7 @@ impl<T: ?Sized> RawPooledMut<T> {
         unsafe { Pin::new_unchecked(as_mut) }
     }
 
-    #[doc = include_str!("../../doc/snippets/raw_as_ref.md")]
+    #[doc = include_str!("../../doc/snippets/raw_mut_as_ref.md")]
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.

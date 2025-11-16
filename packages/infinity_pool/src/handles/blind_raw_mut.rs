@@ -27,19 +27,6 @@ impl<T: ?Sized> RawBlindPooledMut<T> {
         Self { key, inner }
     }
 
-    /// The layout key used to identify the inner pool the blind pool used to store it.
-    #[must_use]
-    pub(crate) fn layout_key(&self) -> LayoutKey {
-        self.key
-    }
-
-    /// Becomes the inner handle for the `RawOpaquePool` that holds the object.
-    #[must_use]
-    #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
-    pub(crate) fn into_inner(self) -> RawPooledMut<T> {
-        self.inner
-    }
-
     #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
     #[must_use]
     #[inline]
@@ -86,7 +73,7 @@ impl<T: ?Sized> RawBlindPooledMut<T> {
         unsafe { Pin::new_unchecked(as_mut) }
     }
 
-    #[doc = include_str!("../../doc/snippets/raw_as_ref.md")]
+    #[doc = include_str!("../../doc/snippets/raw_mut_as_ref.md")]
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.

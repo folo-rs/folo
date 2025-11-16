@@ -240,7 +240,10 @@ fn cast_raw_blind_pooled_removal_unique() {
     assert_eq!(display_ref.to_string(), "Test string");
 
     // Remove via trait object
-    pool.remove_mut(display_pooled);
+    // SAFETY: We know the handle is valid
+    unsafe {
+        pool.remove(display_pooled);
+    }
     assert_eq!(pool.len(), 0);
 }
 
@@ -293,7 +296,10 @@ fn cast_raw_opaque_pooled_removal_unique() {
     assert_eq!(display_ref.to_string(), "Test string");
 
     // Remove via trait object
-    pool.remove_mut(display_pooled);
+    // SAFETY: We know the handle is valid
+    unsafe {
+        pool.remove(display_pooled);
+    }
     assert_eq!(pool.len(), 0);
 }
 
@@ -346,6 +352,9 @@ fn cast_raw_pinned_pooled_removal_unique() {
     assert_eq!(display_ref.to_string(), "Test string");
 
     // Remove via trait object
-    pool.remove_mut(display_pooled);
+    // SAFETY: We know the handle is valid
+    unsafe {
+        pool.remove(display_pooled);
+    }
     assert_eq!(pool.len(), 0);
 }

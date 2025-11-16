@@ -9,6 +9,7 @@ cpulist
 cpus
 cpuset
 Dataless
+deconflicting
 Deque
 doctest
 foldhash
