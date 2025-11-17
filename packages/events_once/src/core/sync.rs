@@ -593,24 +593,13 @@ where
             }
             Err(EVENT_SET) => {
                 // The sender has transitioned the event into EVENT_SET while we were
-                // doing our thing. This is fine - we can destroy the old awaiter and
-                // simply continue as if we were never in EVENT_AWAITING, going through
-                // the EVENT_SET path instead.
+                // doing our thing. As part of this transition, the sender took ownership
+                // of the awaiter and destroyed it. We can treat this as just EVENT_SET now.
 
-                // We are about to touch the `awaiter`, so we need to acquire its synchronization
-                // block - the load above was relaxed, so we may not yet have access to the awaiter.
+                // We entered this state unsynchronized, so we need to acquire the synchronization
+                // block for the `value` now.
                 atomic::fence(atomic::Ordering::Acquire);
 
-                // SAFETY: We have entered the `EVENT_SET` state which makes it invalid
-                // for the sender to touch `awaiter`. The receiver is !Sync, so we have
-                // the only reference here.
-                // We also just came from `EVENT_AWAITING` which guarantees there is an
-                // awaiter in the cell as we are the only one allowed to touch the field.
-                unsafe {
-                    self.destroy_awaiter();
-                }
-
-                // Now we go back into the normal `EVENT_SET` path.
                 Some(Ok(self.poll_set()))
             }
             Err(EVENT_SIGNALING) => {
