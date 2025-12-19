@@ -8,7 +8,10 @@ use crate::pal::RustTimeSource;
 use crate::pal::TimeSource;
 #[cfg(all(any(target_os = "linux", windows), not(miri)))]
 use crate::pal::TimeSourceImpl;
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
 
+#[derive(Clone)]
 pub(crate) enum TimeSourceFacade {
     #[cfg(all(any(target_os = "linux", windows), not(miri)))]
     Optimized(TimeSourceImpl),
@@ -17,7 +20,7 @@ pub(crate) enum TimeSourceFacade {
     Passthrough(RustTimeSource),
 
     #[cfg(test)]
-    Mock(MockTimeSource),
+    Mock(Arc<Mutex<MockTimeSource>>),
 }
 
 #[cfg(all(any(target_os = "linux", windows), not(miri)))]
@@ -37,7 +40,7 @@ impl From<RustTimeSource> for TimeSourceFacade {
 #[cfg(test)]
 impl From<MockTimeSource> for TimeSourceFacade {
     fn from(ts: MockTimeSource) -> Self {
-        Self::Mock(ts)
+        Self::Mock(Arc::new(Mutex::new(ts)))
     }
 }
 
@@ -49,7 +52,10 @@ impl TimeSource for TimeSourceFacade {
             #[cfg(any(miri, not(any(target_os = "linux", windows))))]
             Self::Passthrough(ts) => ts.now(),
             #[cfg(test)]
-            Self::Mock(ts) => ts.now(),
+            Self::Mock(ts) => ts
+                .lock()
+                .expect("mock time source lock should not be poisoned")
+                .now(),
         }
     }
 }

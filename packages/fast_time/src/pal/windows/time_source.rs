@@ -31,6 +31,13 @@ impl TimeSourceImpl {
     }
 }
 
+impl Clone for TimeSourceImpl {
+    fn clone(&self) -> Self {
+        // Create a fresh instance with the same bindings but reset cache.
+        Self::new(self.bindings.clone())
+    }
+}
+
 impl TimeSource for TimeSourceImpl {
     fn now(&mut self) -> Instant {
         let platform_time = self.bindings.get_tick_count_64();

@@ -64,7 +64,7 @@ use crate::pal::{Platform, PlatformFacade, TimeSource, TimeSourceFacade};
 ///     assert!(window[1] >= window[0]);
 /// }
 /// ```
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Clock {
     inner: TimeSourceFacade,
 }
@@ -146,6 +146,8 @@ impl Default for Clock {
 mod tests {
     use super::*;
 
+    static_assertions::assert_impl_all!(Clock: Clone, Send);
+
     #[test]
     fn now_is_approximately_now() {
         let mut clock = Clock::new();
@@ -187,5 +189,26 @@ mod tests {
         let rust_elapsed = rust_instant2.duration_since(rust_instant1);
 
         assert!(rust_elapsed.as_millis() < 100);
+    }
+
+    #[test]
+    fn clock_can_be_cloned() {
+        let mut clock1 = Clock::new();
+        let instant1 = clock1.now();
+
+        let mut clock2 = clock1.clone();
+        let instant2 = clock2.now();
+
+        // Both clocks should produce valid timestamps
+        assert!(instant1.elapsed(&mut clock1).as_millis() < 100);
+        assert!(instant2.elapsed(&mut clock2).as_millis() < 100);
+
+        // The timestamps should be close to each other
+        let diff = if instant2 > instant1 {
+            instant2.saturating_duration_since(instant1)
+        } else {
+            instant1.saturating_duration_since(instant2)
+        };
+        assert!(diff.as_millis() < 100);
     }
 }
