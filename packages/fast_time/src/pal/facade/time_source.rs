@@ -54,7 +54,7 @@ impl TimeSource for TimeSourceFacade {
             #[cfg(test)]
             Self::Mock(ts) => ts
                 .lock()
-                .expect("mock time source lock should not be poisoned")
+                .expect("no panic occurred while lock was held, so it cannot be poisoned")
                 .now(),
         }
     }

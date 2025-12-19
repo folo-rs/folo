@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use crate::pal::TimeSource;
 use crate::pal::windows::{Bindings, BindingsFacade};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct TimeSourceImpl {
     rust_epoch: Instant,
     platform_epoch: u64,
@@ -28,13 +28,6 @@ impl TimeSourceImpl {
 
             bindings,
         }
-    }
-}
-
-impl Clone for TimeSourceImpl {
-    fn clone(&self) -> Self {
-        // Create a fresh instance with the same bindings but reset cache.
-        Self::new(self.bindings.clone())
     }
 }
 
