@@ -64,6 +64,23 @@ use crate::pal::{Platform, PlatformFacade, TimeSource, TimeSourceFacade};
 ///     assert!(window[1] >= window[0]);
 /// }
 /// ```
+///
+/// Cloning a clock:
+///
+/// ```rust
+/// use fast_time::Clock;
+///
+/// let mut clock1 = Clock::new();
+/// let instant1 = clock1.now();
+///
+/// // Clone the clock to create an independent instance
+/// let mut clock2 = clock1.clone();
+/// let instant2 = clock2.now();
+///
+/// // Both clocks work independently
+/// assert!(instant1.elapsed(&mut clock1).as_millis() < 100);
+/// assert!(instant2.elapsed(&mut clock2).as_millis() < 100);
+/// ```
 #[derive(Clone, Debug)]
 pub struct Clock {
     inner: TimeSourceFacade,
