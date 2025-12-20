@@ -15,7 +15,7 @@ impl Platform for RustPlatform {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct RustTimeSource;
 
 impl TimeSource for RustTimeSource {
