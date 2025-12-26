@@ -1,0 +1,43 @@
+[package]
+name = "vicinal"
+description = "Processor-local worker pool that schedules tasks in the vicinity of the caller"
+publish = true
+version = "0.1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+crossbeam = { workspace = true }
+event-listener = { workspace = true }
+events_once = { workspace = true }
+fast_time = { workspace = true }
+infinity_pool = { workspace = true }
+many_cpus = { workspace = true }
+new_zealand = { workspace = true }
+nm = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+all_the_time = { workspace = true }
+alloc_tracker = { workspace = true }
+criterion = { workspace = true }
+futures = { workspace = true }
+mutants = { workspace = true }
+static_assertions = { workspace = true }
+testing = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "spawn"
+harness = false

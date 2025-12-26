@@ -3,8 +3,10 @@ affinitized
 affinitizing
 agnostically
 argh
+bytecount
 clippy
 cloneable
+constness
 cpulist
 cpus
 cpuset
@@ -30,10 +32,13 @@ nextest
 nonoverlapping
 nsec
 oneshot
+pathbuf
+peekable
 pointee
 println
 reentrancy
 repr
+Saares
 sched
 scopeguard
 supertrait
@@ -42,7 +47,10 @@ taskset
 threadpool
 timespec
 trybuild
+udeps
 Uninit
+uninlined
+unseparated
 unviable
 wildcarded
 withf
