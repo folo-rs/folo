@@ -1,4 +1,6 @@
 use std::fmt::Debug;
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 #[cfg(test)]
@@ -8,8 +10,6 @@ use crate::pal::RustTimeSource;
 use crate::pal::TimeSource;
 #[cfg(all(any(target_os = "linux", windows), not(miri)))]
 use crate::pal::TimeSourceImpl;
-#[cfg(test)]
-use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
 pub(crate) enum TimeSourceFacade {

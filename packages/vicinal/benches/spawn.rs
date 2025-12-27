@@ -107,8 +107,12 @@ fn entrypoint(c: &mut Criterion) {
             let mut handles = Vec::with_capacity(100);
 
             let start = Instant::now();
-            let _alloc_span = spawn_urgent_100_alloc.measure_process().iterations(iterations);
-            let _time_span = spawn_urgent_100_time.measure_thread().iterations(iterations);
+            let _alloc_span = spawn_urgent_100_alloc
+                .measure_process()
+                .iterations(iterations);
+            let _time_span = spawn_urgent_100_time
+                .measure_thread()
+                .iterations(iterations);
 
             for _ in 0..iterations {
                 for i in 0..100 {

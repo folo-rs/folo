@@ -1,13 +1,11 @@
 //! Pool management and lifecycle.
 
 use std::any::type_name;
-use std::fmt;
-use std::mem;
 use std::num::NonZero;
-use std::panic;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle as ThreadJoinHandle};
+use std::{fmt, mem, panic};
 
 use event_listener::Listener;
 use many_cpus::{ProcessorId, ProcessorSet};

@@ -55,11 +55,10 @@ mod task;
 mod worker;
 
 pub use join_handle::*;
-pub use pool::*;
-pub use scheduler::*;
-
 pub(crate) use pool::PoolInner;
+pub use pool::*;
 pub(crate) use processor_registry::ProcessorRegistry;
 pub(crate) use processor_state::ProcessorState;
+pub use scheduler::*;
 pub(crate) use task::*;
 pub(crate) use worker::*;
