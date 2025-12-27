@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle as ThreadJoinHandle};
 use std::{fmt, mem, panic};
 
-use event_listener::Listener;
+use event_listener::{Listener, listener};
 use many_cpus::{ProcessorId, ProcessorSet};
 use new_zealand::nz;
 use parking_lot::Mutex;
@@ -171,7 +171,7 @@ fn worker_loop(inner: &PoolInner, processor_id: ProcessorId, worker_index: u32) 
                 break;
             }
             IterationResult::WaitingForWork => {
-                let listener = state.wake_event.listen();
+                listener!(state.wake_event => listener);
 
                 // Re-check after registering listener to avoid lost wakeups.
                 // Acquire ordering synchronizes with Release in signal_shutdown and task push.

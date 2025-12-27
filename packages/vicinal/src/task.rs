@@ -47,17 +47,18 @@ where
 {
     fn call(self: Pin<&mut Self>) {
         let this = self.project();
-        if let Some(task) = this.task.take() {
-            // Record scheduling delay: time from spawn to execution start.
-            let scheduling_delay = CLOCK.with_borrow_mut(|clock| this.spawn_time.elapsed(clock));
-            SCHEDULING_DELAY_MS.with(|e| e.observe_millis(scheduling_delay));
 
-            // Execute the task and record execution time.
-            let start = CLOCK.with_borrow_mut(fast_time::Clock::now);
-            task();
-            let elapsed = CLOCK.with_borrow_mut(|clock| start.elapsed(clock));
-            EXECUTION_TIME_MS.with(|e| e.observe_millis(elapsed));
-        }
+        let Some(task) = this.task.take() else { return };
+        
+        // Record scheduling delay: time from spawn to execution start.
+        let scheduling_delay = CLOCK.with_borrow_mut(|clock| this.spawn_time.elapsed(clock));
+        SCHEDULING_DELAY_MS.with(|e| e.observe_millis(scheduling_delay));
+
+        // Execute the task and record execution time.
+        let start = CLOCK.with_borrow_mut(fast_time::Clock::now);
+        task();
+        let elapsed = CLOCK.with_borrow_mut(|clock| start.elapsed(clock));
+        EXECUTION_TIME_MS.with(|e| e.observe_millis(elapsed));
     }
 }
 

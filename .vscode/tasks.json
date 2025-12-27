@@ -107,7 +107,8 @@
                 "pinned_pool",
                 "region_cached",
                 "region_local",
-                "testing"
+                "testing",
+                "vicinal"
             ]
         }
     ]

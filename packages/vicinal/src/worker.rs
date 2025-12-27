@@ -1,6 +1,6 @@
 //! Worker thread logic for executing tasks from queues.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{self, AtomicBool, Ordering};
 
 use crossbeam::queue::SegQueue;
 use infinity_pool::BlindPooledMut;
@@ -35,15 +35,18 @@ impl<'a> WorkerCore<'a> {
     }
 
     pub(crate) fn run_one_iteration(&self) -> IterationResult {
+        // We first check with Relaxed to minimize overhead, as this will be called often.
+        if self.shutdown_flag.load(Ordering::Relaxed) {
+            // Acquire ordering synchronizes with Release in signal_shutdown, ensuring we see
+            // the latest value of the shutdown flag after all prior writes from the signaler.
+            atomic::fence(Ordering::Acquire);
+
+            return IterationResult::Shutdown;
+        }
+
         if let Some(mut task) = self.urgent_queue.pop() {
             task.as_pin_mut().call();
             return IterationResult::ExecutedUrgent;
-        }
-
-        // Acquire ordering synchronizes with Release in signal_shutdown, ensuring we see
-        // the latest value of the shutdown flag after all prior writes from the signaler.
-        if self.shutdown_flag.load(Ordering::Acquire) {
-            return IterationResult::Shutdown;
         }
 
         if let Some(mut task) = self.regular_queue.pop() {
