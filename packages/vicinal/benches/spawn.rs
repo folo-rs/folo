@@ -96,6 +96,38 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
+    let spawn_urgent_100_alloc = allocs.operation("spawn_urgent_100");
+    let spawn_urgent_100_time = times.operation("spawn_urgent_100");
+
+    g.bench_function("spawn_urgent_100", |b| {
+        let pool = Pool::new();
+        let scheduler = pool.scheduler();
+
+        b.iter_custom(|iterations| {
+            let mut handles = Vec::with_capacity(100);
+
+            let start = Instant::now();
+            let _alloc_span = spawn_urgent_100_alloc.measure_process().iterations(iterations);
+            let _time_span = spawn_urgent_100_time.measure_thread().iterations(iterations);
+
+            for _ in 0..iterations {
+                for i in 0..100 {
+                    handles.push(scheduler.spawn_urgent(move || black_box(i)));
+                }
+
+                #[allow(
+                    clippy::iter_with_drain,
+                    reason = "we reuse the vector in the next iteration"
+                )]
+                for handle in handles.drain(..) {
+                    black_box(block_on(handle));
+                }
+            }
+
+            start.elapsed()
+        });
+    });
+
     let spawn_only_alloc = allocs.operation("spawn_only");
     let spawn_only_time = times.operation("spawn_only");
 
@@ -123,6 +155,53 @@ fn entrypoint(c: &mut Criterion) {
             }
 
             elapsed
+        });
+    });
+
+    let thread_single_alloc = allocs.operation("thread_single");
+    let thread_single_time = times.operation("thread_single");
+
+    g.bench_function("thread_single", |b| {
+        b.iter_custom(|iterations| {
+            let start = Instant::now();
+            let _alloc_span = thread_single_alloc.measure_process().iterations(iterations);
+            let _time_span = thread_single_time.measure_thread().iterations(iterations);
+
+            for _ in 0..iterations {
+                let handle = std::thread::spawn(|| black_box(42));
+                black_box(handle.join().unwrap());
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let thread_100_alloc = allocs.operation("thread_100");
+    let thread_100_time = times.operation("thread_100");
+
+    g.bench_function("thread_100", |b| {
+        b.iter_custom(|iterations| {
+            let mut handles = Vec::with_capacity(100);
+
+            let start = Instant::now();
+            let _alloc_span = thread_100_alloc.measure_process().iterations(iterations);
+            let _time_span = thread_100_time.measure_thread().iterations(iterations);
+
+            for _ in 0..iterations {
+                for i in 0..100 {
+                    handles.push(std::thread::spawn(move || black_box(i)));
+                }
+
+                #[allow(
+                    clippy::iter_with_drain,
+                    reason = "we reuse the vector in the next iteration"
+                )]
+                for handle in handles.drain(..) {
+                    black_box(handle.join().unwrap());
+                }
+            }
+
+            start.elapsed()
         });
     });
 

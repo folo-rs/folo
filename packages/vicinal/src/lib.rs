@@ -29,7 +29,7 @@
 //!
 //! - **Processor locality**: Tasks execute on the same processor that called `spawn()`.
 //! - **Urgent tasks**: Use `spawn_urgent()` for high-priority tasks that execute before regular
-//!   tasks.
+//!   tasks (e.g. to prefer releasing resources over allocating new resources).
 //!
 //! # Shutdown behavior
 //!

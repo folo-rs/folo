@@ -34,9 +34,7 @@ use crate::{JoinHandle, PoolInner, PooledCastVicinalTask, wrap_task};
 ///
 /// // Clone and use in another context.
 /// let scheduler2 = scheduler.clone();
-/// let handle2 = scheduler.spawn(move || {
-///     scheduler2.spawn(|| "nested")
-/// });
+/// let handle2 = scheduler.spawn(move || scheduler2.spawn(|| "nested"));
 ///
 /// assert_eq!(handle1.await, "hello");
 /// assert_eq!(handle2.await.await, "nested");
@@ -58,6 +56,10 @@ impl Scheduler {
     /// The task will be added to the regular (normal-priority) queue and executed
     /// by a worker thread associated with the processor that called this method.
     ///
+    /// Spawned tasks may be executed in any order. Urgent tasks are scheduled
+    /// preferentially but there is no hard guarantee that they will preempt all
+    /// regular tasks.
+    ///
     /// # Returns
     ///
     /// A [`JoinHandle`] that can be awaited to get the task's return value.
@@ -78,6 +80,10 @@ impl Scheduler {
     ///
     /// Urgent tasks are executed before regular tasks. Use this for time-sensitive
     /// operations that should not wait behind a queue of regular work.
+    ///
+    /// Spawned tasks may be executed in any order. Urgent tasks are scheduled
+    /// preferentially but there is no hard guarantee that they will preempt all
+    /// regular tasks.
     ///
     /// # Returns
     ///
@@ -139,7 +145,7 @@ impl Scheduler {
         // Record the spawn for metrics.
         state.record_task_spawned();
 
-        // Notify workers that work is available.
+        // Notify one worker that work is available.
         state.wake_event.notify(1);
 
         JoinHandle::new(receiver)
