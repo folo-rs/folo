@@ -1,15 +1,16 @@
 #![expect(missing_docs, reason = "benchmarks")]
 
 use std::hint::black_box;
+use std::thread;
 use std::time::Instant;
 
 use all_the_time::Session as TimeSession;
 use alloc_tracker::{Allocator, Session as AllocSession};
 use criterion::{Criterion, criterion_group, criterion_main};
+use events_once::EventPool;
 use futures::executor::block_on;
 use many_cpus::ProcessorSet;
 use new_zealand::nz;
-use std::sync::mpsc;
 use threadpool::ThreadPool;
 use vicinal::Pool;
 
@@ -25,7 +26,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs = AllocSession::new();
     let times = TimeSession::new();
 
-    let mut g = c.benchmark_group("spawn");
+    let mut g = c.benchmark_group("vicinal");
 
     let spawn_single_alloc = allocs.operation("spawn_single");
     let spawn_single_time = times.operation("spawn_single");
@@ -37,10 +38,13 @@ fn entrypoint(c: &mut Criterion) {
         b.iter_custom(|iterations| {
             let start = Instant::now();
             let _alloc_span = spawn_single_alloc.measure_process().iterations(iterations);
-            let _time_span = spawn_single_time.measure_thread().iterations(iterations);
+            let _time_span = spawn_single_time.measure_process().iterations(iterations);
 
             for _ in 0..iterations {
-                let handle = scheduler.spawn(|| black_box(42));
+                let handle = scheduler.spawn(|| {
+                    thread::yield_now();
+                    black_box(42)
+                });
                 black_box(block_on(handle));
             }
 
@@ -60,11 +64,14 @@ fn entrypoint(c: &mut Criterion) {
 
             let start = Instant::now();
             let _alloc_span = spawn_100_alloc.measure_process().iterations(iterations);
-            let _time_span = spawn_100_time.measure_thread().iterations(iterations);
+            let _time_span = spawn_100_time.measure_process().iterations(iterations);
 
             for _ in 0..iterations {
                 for i in 0..100 {
-                    handles.push(scheduler.spawn(move || black_box(i)));
+                    handles.push(scheduler.spawn(move || {
+                        thread::yield_now();
+                        black_box(i)
+                    }));
                 }
 
                 #[allow(
@@ -93,11 +100,14 @@ fn entrypoint(c: &mut Criterion) {
                 .measure_process()
                 .iterations(iterations);
             let _time_span = spawn_urgent_single_time
-                .measure_thread()
+                .measure_process()
                 .iterations(iterations);
 
             for _ in 0..iterations {
-                let handle = scheduler.spawn_urgent(|| black_box(42));
+                let handle = scheduler.spawn_urgent(|| {
+                    thread::yield_now();
+                    black_box(42)
+                });
                 black_box(block_on(handle));
             }
 
@@ -120,12 +130,15 @@ fn entrypoint(c: &mut Criterion) {
                 .measure_process()
                 .iterations(iterations);
             let _time_span = spawn_urgent_100_time
-                .measure_thread()
+                .measure_process()
                 .iterations(iterations);
 
             for _ in 0..iterations {
                 for i in 0..100 {
-                    handles.push(scheduler.spawn_urgent(move || black_box(i)));
+                    handles.push(scheduler.spawn_urgent(move || {
+                        thread::yield_now();
+                        black_box(i)
+                    }));
                 }
 
                 #[allow(
@@ -141,36 +154,6 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let spawn_only_alloc = allocs.operation("spawn_only");
-    let spawn_only_time = times.operation("spawn_only");
-
-    g.bench_function("spawn_only", |b| {
-        let pool = Pool::new();
-        let scheduler = pool.scheduler();
-
-        b.iter_custom(|iterations| {
-            let capacity = usize::try_from(iterations).expect("iterations fits in usize");
-            let mut handles = Vec::with_capacity(capacity);
-
-            let start = Instant::now();
-            let _alloc_span = spawn_only_alloc.measure_process().iterations(iterations);
-            let _time_span = spawn_only_time.measure_thread().iterations(iterations);
-
-            for _ in 0..iterations {
-                handles.push(scheduler.spawn(|| black_box(42)));
-            }
-
-            let elapsed = start.elapsed();
-
-            // Await outside measured section to avoid measuring await overhead.
-            for handle in handles {
-                black_box(block_on(handle));
-            }
-
-            elapsed
-        });
-    });
-
     let thread_single_alloc = allocs.operation("thread_single");
     let thread_single_time = times.operation("thread_single");
 
@@ -178,10 +161,13 @@ fn entrypoint(c: &mut Criterion) {
         b.iter_custom(|iterations| {
             let start = Instant::now();
             let _alloc_span = thread_single_alloc.measure_process().iterations(iterations);
-            let _time_span = thread_single_time.measure_thread().iterations(iterations);
+            let _time_span = thread_single_time.measure_process().iterations(iterations);
 
             for _ in 0..iterations {
-                let handle = std::thread::spawn(|| black_box(42));
+                let handle = thread::spawn(|| {
+                    thread::yield_now();
+                    black_box(42)
+                });
                 black_box(handle.join().unwrap());
             }
 
@@ -198,11 +184,14 @@ fn entrypoint(c: &mut Criterion) {
 
             let start = Instant::now();
             let _alloc_span = thread_100_alloc.measure_process().iterations(iterations);
-            let _time_span = thread_100_time.measure_thread().iterations(iterations);
+            let _time_span = thread_100_time.measure_process().iterations(iterations);
 
             for _ in 0..iterations {
                 for i in 0..100 {
-                    handles.push(std::thread::spawn(move || black_box(i)));
+                    handles.push(thread::spawn(move || {
+                        thread::yield_now();
+                        black_box(i)
+                    }));
                 }
 
                 #[allow(
@@ -223,6 +212,7 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("threadpool_single", |b| {
         let pool = ThreadPool::new(2);
+        let event_pool = EventPool::<i32>::new();
 
         b.iter_custom(|iterations| {
             let start = Instant::now();
@@ -230,17 +220,16 @@ fn entrypoint(c: &mut Criterion) {
                 .measure_process()
                 .iterations(iterations);
             let _time_span = threadpool_single_time
-                .measure_thread()
+                .measure_process()
                 .iterations(iterations);
 
             for _ in 0..iterations {
-                let (tx, rx) = mpsc::channel();
+                let (tx, rx) = event_pool.rent();
                 pool.execute(move || {
-                    black_box(42);
-                    tx.send(()).unwrap();
+                    thread::yield_now();
+                    tx.send(black_box(42));
                 });
-                let _: () = rx.recv().unwrap();
-                black_box(());
+                black_box(block_on(rx).unwrap());
             }
 
             start.elapsed()
@@ -252,21 +241,24 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("threadpool_100", |b| {
         let pool = ThreadPool::new(2);
+        let event_pool = EventPool::<i32>::new();
 
         b.iter_custom(|iterations| {
             let mut rxs = Vec::with_capacity(100);
 
             let start = Instant::now();
-            let _alloc_span = threadpool_100_alloc.measure_process().iterations(iterations);
-            let _time_span = threadpool_100_time.measure_thread().iterations(iterations);
+            let _alloc_span = threadpool_100_alloc
+                .measure_process()
+                .iterations(iterations);
+            let _time_span = threadpool_100_time.measure_process().iterations(iterations);
 
             for _ in 0..iterations {
                 for i in 0..100 {
-                    let (tx, rx) = mpsc::channel();
+                    let (tx, rx) = event_pool.rent();
                     rxs.push(rx);
                     pool.execute(move || {
-                        black_box(i);
-                        tx.send(()).unwrap();
+                        thread::yield_now();
+                        tx.send(black_box(i));
                     });
                 }
 
@@ -275,8 +267,7 @@ fn entrypoint(c: &mut Criterion) {
                     reason = "we reuse the vector in the next iteration"
                 )]
                 for rx in rxs.drain(..) {
-                    let _: () = rx.recv().unwrap();
-                    black_box(());
+                    black_box(block_on(rx).unwrap());
                 }
             }
 

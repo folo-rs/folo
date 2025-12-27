@@ -53,7 +53,10 @@ where
             SCHEDULING_DELAY_MS.with(|e| e.observe_millis(scheduling_delay));
 
             // Execute the task and record execution time.
-            EXECUTION_TIME_MS.with(|e| e.observe_duration_millis(task));
+            let start = CLOCK.with_borrow_mut(fast_time::Clock::now);
+            task();
+            let elapsed = CLOCK.with_borrow_mut(|clock| start.elapsed(clock));
+            EXECUTION_TIME_MS.with(|e| e.observe_millis(elapsed));
         }
     }
 }
