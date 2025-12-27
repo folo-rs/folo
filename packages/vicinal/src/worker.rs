@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{self, AtomicBool, Ordering};
 
-use crossbeam::queue::SegQueue;
+use crossbeam::channel::{Receiver, select_biased};
 use infinity_pool::BlindPooledMut;
 
 use crate::VicinalTask;
@@ -12,24 +12,23 @@ pub(crate) enum IterationResult {
     ExecutedUrgent,
     ExecutedRegular,
     Shutdown,
-    WaitingForWork,
 }
 
 pub(crate) struct WorkerCore<'a> {
-    urgent_queue: &'a SegQueue<BlindPooledMut<dyn VicinalTask>>,
-    regular_queue: &'a SegQueue<BlindPooledMut<dyn VicinalTask>>,
+    urgent_receiver: Receiver<BlindPooledMut<dyn VicinalTask>>,
+    regular_receiver: Receiver<BlindPooledMut<dyn VicinalTask>>,
     shutdown_flag: &'a AtomicBool,
 }
 
 impl<'a> WorkerCore<'a> {
     pub(crate) fn new(
-        urgent_queue: &'a SegQueue<BlindPooledMut<dyn VicinalTask>>,
-        regular_queue: &'a SegQueue<BlindPooledMut<dyn VicinalTask>>,
+        urgent_receiver: Receiver<BlindPooledMut<dyn VicinalTask>>,
+        regular_receiver: Receiver<BlindPooledMut<dyn VicinalTask>>,
         shutdown_flag: &'a AtomicBool,
     ) -> Self {
         Self {
-            urgent_queue,
-            regular_queue,
+            urgent_receiver,
+            regular_receiver,
             shutdown_flag,
         }
     }
@@ -44,17 +43,26 @@ impl<'a> WorkerCore<'a> {
             return IterationResult::Shutdown;
         }
 
-        if let Some(mut task) = self.urgent_queue.pop() {
-            task.as_pin_mut().call();
-            return IterationResult::ExecutedUrgent;
+        select_biased! {
+            recv(self.urgent_receiver) -> msg => {
+                match msg {
+                    Ok(mut task) => {
+                        task.as_pin_mut().call();
+                        IterationResult::ExecutedUrgent
+                    }
+                    Err(_) => IterationResult::Shutdown,
+                }
+            }
+            recv(self.regular_receiver) -> msg => {
+                match msg {
+                    Ok(mut task) => {
+                        task.as_pin_mut().call();
+                        IterationResult::ExecutedRegular
+                    }
+                    Err(_) => IterationResult::Shutdown,
+                }
+            }
         }
-
-        if let Some(mut task) = self.regular_queue.pop() {
-            task.as_pin_mut().call();
-            return IterationResult::ExecutedRegular;
-        }
-
-        IterationResult::WaitingForWork
     }
 }
 
@@ -63,6 +71,7 @@ mod tests {
     use std::pin::Pin;
     use std::sync::atomic::AtomicU32;
 
+    use crossbeam::channel;
     use infinity_pool::BlindPool;
 
     use super::*;
@@ -94,23 +103,12 @@ mod tests {
     }
 
     #[test]
-    fn empty_queues_no_shutdown_returns_waiting() {
-        let urgent = SegQueue::new();
-        let regular = SegQueue::new();
-        let shutdown = AtomicBool::new(false);
-
-        let core = WorkerCore::new(&urgent, &regular, &shutdown);
-
-        assert_eq!(core.run_one_iteration(), IterationResult::WaitingForWork);
-    }
-
-    #[test]
     fn empty_queues_with_shutdown_returns_shutdown() {
-        let urgent = SegQueue::new();
-        let regular = SegQueue::new();
+        let (_urgent_tx, urgent_rx) = channel::unbounded();
+        let (_regular_tx, regular_rx) = channel::unbounded();
         let shutdown = AtomicBool::new(true);
 
-        let core = WorkerCore::new(&urgent, &regular, &shutdown);
+        let core = WorkerCore::new(urgent_rx, regular_rx, &shutdown);
 
         assert_eq!(core.run_one_iteration(), IterationResult::Shutdown);
     }
@@ -121,14 +119,14 @@ mod tests {
         COUNTER.store(0, Ordering::Relaxed);
 
         let pool = BlindPool::new();
-        let urgent = SegQueue::new();
-        let regular = SegQueue::new();
+        let (urgent_tx, urgent_rx) = channel::unbounded();
+        let (_regular_tx, regular_rx) = channel::unbounded();
         let shutdown = AtomicBool::new(false);
 
         let task = pool.insert(CountingTask::new(&COUNTER));
-        urgent.push(task.cast_vicinal_task());
+        urgent_tx.send(task.cast_vicinal_task()).unwrap();
 
-        let core = WorkerCore::new(&urgent, &regular, &shutdown);
+        let core = WorkerCore::new(urgent_rx, regular_rx, &shutdown);
 
         assert_eq!(core.run_one_iteration(), IterationResult::ExecutedUrgent);
         assert_eq!(COUNTER.load(Ordering::Relaxed), 1);
@@ -142,16 +140,16 @@ mod tests {
         REGULAR_COUNTER.store(0, Ordering::Relaxed);
 
         let pool = BlindPool::new();
-        let urgent = SegQueue::new();
-        let regular = SegQueue::new();
+        let (urgent_tx, urgent_rx) = channel::unbounded();
+        let (regular_tx, regular_rx) = channel::unbounded();
         let shutdown = AtomicBool::new(false);
 
         let urgent_task = pool.insert(CountingTask::new(&URGENT_COUNTER));
         let regular_task = pool.insert(CountingTask::new(&REGULAR_COUNTER));
-        urgent.push(urgent_task.cast_vicinal_task());
-        regular.push(regular_task.cast_vicinal_task());
+        urgent_tx.send(urgent_task.cast_vicinal_task()).unwrap();
+        regular_tx.send(regular_task.cast_vicinal_task()).unwrap();
 
-        let core = WorkerCore::new(&urgent, &regular, &shutdown);
+        let core = WorkerCore::new(urgent_rx, regular_rx, &shutdown);
 
         // First iteration should execute urgent task only.
         assert_eq!(core.run_one_iteration(), IterationResult::ExecutedUrgent);
@@ -165,14 +163,14 @@ mod tests {
         COUNTER.store(0, Ordering::Relaxed);
 
         let pool = BlindPool::new();
-        let urgent = SegQueue::new();
-        let regular = SegQueue::new();
+        let (_urgent_tx, urgent_rx) = channel::unbounded();
+        let (regular_tx, regular_rx) = channel::unbounded();
         let shutdown = AtomicBool::new(false);
 
         let task = pool.insert(CountingTask::new(&COUNTER));
-        regular.push(task.cast_vicinal_task());
+        regular_tx.send(task.cast_vicinal_task()).unwrap();
 
-        let core = WorkerCore::new(&urgent, &regular, &shutdown);
+        let core = WorkerCore::new(urgent_rx, regular_rx, &shutdown);
 
         assert_eq!(core.run_one_iteration(), IterationResult::ExecutedRegular);
         assert_eq!(COUNTER.load(Ordering::Relaxed), 1);
@@ -184,14 +182,14 @@ mod tests {
         COUNTER.store(0, Ordering::Relaxed);
 
         let pool = BlindPool::new();
-        let urgent = SegQueue::new();
-        let regular = SegQueue::new();
+        let (_urgent_tx, urgent_rx) = channel::unbounded();
+        let (regular_tx, regular_rx) = channel::unbounded();
         let shutdown = AtomicBool::new(true);
 
         let task = pool.insert(CountingTask::new(&COUNTER));
-        regular.push(task.cast_vicinal_task());
+        regular_tx.send(task.cast_vicinal_task()).unwrap();
 
-        let core = WorkerCore::new(&urgent, &regular, &shutdown);
+        let core = WorkerCore::new(urgent_rx, regular_rx, &shutdown);
 
         // Shutdown takes priority over regular tasks.
         assert_eq!(core.run_one_iteration(), IterationResult::Shutdown);

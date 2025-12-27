@@ -2,22 +2,22 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use crossbeam::queue::SegQueue;
-use event_listener::Event;
+use crossbeam::channel::{self, Receiver, Sender};
 use events_once::EventLake;
 use infinity_pool::{BlindPool, BlindPooledMut};
+use parking_lot::RwLock;
 
 use crate::VicinalTask;
 
 pub(crate) struct ProcessorState {
-    /// Queue for high-priority tasks. These are executed before regular tasks.
-    pub(crate) urgent_queue: SegQueue<BlindPooledMut<dyn VicinalTask>>,
+    /// Channel for high-priority tasks. These are executed before regular tasks.
+    /// Wrapped in `RwLock<Option>` to allow dropping the sender to signal shutdown.
+    pub(crate) urgent_sender: RwLock<Option<Sender<BlindPooledMut<dyn VicinalTask>>>>,
+    pub(crate) urgent_receiver: Receiver<BlindPooledMut<dyn VicinalTask>>,
 
-    /// Queue for normal-priority tasks.
-    pub(crate) regular_queue: SegQueue<BlindPooledMut<dyn VicinalTask>>,
-
-    /// Event used to wake up sleeping workers when new tasks are added.
-    pub(crate) wake_event: Event,
+    /// Channel for normal-priority tasks.
+    pub(crate) regular_sender: RwLock<Option<Sender<BlindPooledMut<dyn VicinalTask>>>>,
+    pub(crate) regular_receiver: Receiver<BlindPooledMut<dyn VicinalTask>>,
 
     /// Flag indicating that the processor (and its workers) should shut down.
     pub(crate) shutdown_flag: AtomicBool,
@@ -38,10 +38,14 @@ pub(crate) struct ProcessorState {
 
 impl ProcessorState {
     pub(crate) fn new() -> Self {
+        let (urgent_sender, urgent_receiver) = channel::unbounded();
+        let (regular_sender, regular_receiver) = channel::unbounded();
+
         Self {
-            urgent_queue: SegQueue::new(),
-            regular_queue: SegQueue::new(),
-            wake_event: Event::new(),
+            urgent_sender: RwLock::new(Some(urgent_sender)),
+            urgent_receiver,
+            regular_sender: RwLock::new(Some(regular_sender)),
+            regular_receiver,
             shutdown_flag: AtomicBool::new(false),
             workers_spawned: AtomicBool::new(false),
             task_pool: BlindPool::new(),
@@ -55,7 +59,10 @@ impl ProcessorState {
         // Release ordering ensures all prior task queue operations are visible to workers
         // before they observe the shutdown flag.
         self.shutdown_flag.store(true, Ordering::Release);
-        self.wake_event.notify(usize::MAX);
+
+        // Drop senders to signal shutdown to workers.
+        *self.urgent_sender.write() = None;
+        *self.regular_sender.write() = None;
     }
 
     pub(crate) fn record_task_spawned(&self) {
@@ -78,8 +85,8 @@ mod tests {
     fn new_creates_empty_queues() {
         let state = ProcessorState::new();
 
-        assert!(state.urgent_queue.pop().is_none());
-        assert!(state.regular_queue.pop().is_none());
+        assert!(state.urgent_receiver.is_empty());
+        assert!(state.regular_receiver.is_empty());
     }
 
     #[test]

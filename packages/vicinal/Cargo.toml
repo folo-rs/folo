@@ -15,7 +15,6 @@ default = []
 
 [dependencies]
 crossbeam = { workspace = true }
-event-listener = { workspace = true }
 events_once = { workspace = true }
 fast_time = { workspace = true }
 infinity_pool = { workspace = true }

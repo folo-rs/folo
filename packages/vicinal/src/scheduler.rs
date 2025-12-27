@@ -128,25 +128,34 @@ impl Scheduler {
         let dyn_task = pooled_task.cast_vicinal_task();
 
         // Push to the appropriate queue.
-        if urgent {
-            state.urgent_queue.push(dyn_task);
-            trace!(
-                pool_id = self.inner.pool_id,
-                processor_id, "spawned urgent task"
-            );
+        let sender_lock = if urgent {
+            state.urgent_sender.read()
         } else {
-            state.regular_queue.push(dyn_task);
+            state.regular_sender.read()
+        };
+
+        if let Some(sender) = &*sender_lock {
+            // If sending fails, it means all workers have disconnected (e.g. panicked or shutdown).
+            // In that case we just drop the task.
+            if sender.send(dyn_task).is_ok() {
+                trace!(
+                    pool_id = self.inner.pool_id,
+                    processor_id,
+                    "spawned {} task",
+                    if urgent { "urgent" } else { "regular" }
+                );
+            }
+        } else {
             trace!(
                 pool_id = self.inner.pool_id,
-                processor_id, "spawned regular task"
+                processor_id,
+                "dropped {} task due to shutdown",
+                if urgent { "urgent" } else { "regular" }
             );
         }
 
         // Record the spawn for metrics.
         state.record_task_spawned();
-
-        // Notify one worker that work is available.
-        state.wake_event.notify(1);
 
         JoinHandle::new(receiver)
     }

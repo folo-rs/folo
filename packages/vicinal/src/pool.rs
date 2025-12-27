@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle as ThreadJoinHandle};
 use std::{fmt, mem, panic};
 
-use event_listener::{Listener, listener};
 use many_cpus::{ProcessorId, ProcessorSet};
 use new_zealand::nz;
 use parking_lot::Mutex;
@@ -148,8 +147,8 @@ impl PoolInner {
 fn worker_loop(inner: &PoolInner, processor_id: ProcessorId, worker_index: u32) {
     let state = inner.registry.get_or_init(processor_id);
     let core = WorkerCore::new(
-        &state.urgent_queue,
-        &state.regular_queue,
+        state.urgent_receiver.clone(),
+        state.regular_receiver.clone(),
         &state.shutdown_flag,
     );
 
@@ -169,20 +168,6 @@ fn worker_loop(inner: &PoolInner, processor_id: ProcessorId, worker_index: u32) 
             }
             IterationResult::Shutdown => {
                 break;
-            }
-            IterationResult::WaitingForWork => {
-                listener!(state.wake_event => listener);
-
-                // Re-check after registering listener to avoid lost wakeups.
-                // Acquire ordering synchronizes with Release in signal_shutdown and task push.
-                if !state.urgent_queue.is_empty()
-                    || !state.regular_queue.is_empty()
-                    || state.shutdown_flag.load(Ordering::Acquire)
-                {
-                    continue;
-                }
-
-                listener.wait();
             }
         }
     }
