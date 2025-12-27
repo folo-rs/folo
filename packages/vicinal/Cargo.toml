@@ -31,9 +31,11 @@ all_the_time = { path = "../all_the_time" }
 alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
 futures = { workspace = true }
+many_cpus.workspace = true
 mutants = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
+threadpool = "1.8.1"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]

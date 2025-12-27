@@ -7,12 +7,21 @@ use all_the_time::Session as TimeSession;
 use alloc_tracker::{Allocator, Session as AllocSession};
 use criterion::{Criterion, criterion_group, criterion_main};
 use futures::executor::block_on;
+use many_cpus::ProcessorSet;
+use new_zealand::nz;
+use std::sync::mpsc;
+use threadpool::ThreadPool;
 use vicinal::Pool;
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 fn entrypoint(c: &mut Criterion) {
+    // Pin the main thread to a single processor to eliminate OS migration noise.
+    if let Some(processors) = ProcessorSet::builder().take(nz!(1)) {
+        processors.pin_current_thread_to();
+    }
+
     let allocs = AllocSession::new();
     let times = TimeSession::new();
 
@@ -209,7 +218,76 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
+    let threadpool_single_alloc = allocs.operation("threadpool_single");
+    let threadpool_single_time = times.operation("threadpool_single");
+
+    g.bench_function("threadpool_single", |b| {
+        let pool = ThreadPool::new(2);
+
+        b.iter_custom(|iterations| {
+            let start = Instant::now();
+            let _alloc_span = threadpool_single_alloc
+                .measure_process()
+                .iterations(iterations);
+            let _time_span = threadpool_single_time
+                .measure_thread()
+                .iterations(iterations);
+
+            for _ in 0..iterations {
+                let (tx, rx) = mpsc::channel();
+                pool.execute(move || {
+                    black_box(42);
+                    tx.send(()).unwrap();
+                });
+                let _: () = rx.recv().unwrap();
+                black_box(());
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let threadpool_100_alloc = allocs.operation("threadpool_100");
+    let threadpool_100_time = times.operation("threadpool_100");
+
+    g.bench_function("threadpool_100", |b| {
+        let pool = ThreadPool::new(2);
+
+        b.iter_custom(|iterations| {
+            let mut rxs = Vec::with_capacity(100);
+
+            let start = Instant::now();
+            let _alloc_span = threadpool_100_alloc.measure_process().iterations(iterations);
+            let _time_span = threadpool_100_time.measure_thread().iterations(iterations);
+
+            for _ in 0..iterations {
+                for i in 0..100 {
+                    let (tx, rx) = mpsc::channel();
+                    rxs.push(rx);
+                    pool.execute(move || {
+                        black_box(i);
+                        tx.send(()).unwrap();
+                    });
+                }
+
+                #[allow(
+                    clippy::iter_with_drain,
+                    reason = "we reuse the vector in the next iteration"
+                )]
+                for rx in rxs.drain(..) {
+                    let _: () = rx.recv().unwrap();
+                    black_box(());
+                }
+            }
+
+            start.elapsed()
+        });
+    });
+
     g.finish();
+
+    allocs.print_to_stdout();
+    times.print_to_stdout();
 }
 
 criterion_group!(benches, entrypoint);
