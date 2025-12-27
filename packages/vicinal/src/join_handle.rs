@@ -53,7 +53,7 @@ where
         let receiver = self
             .receiver
             .as_mut()
-            .expect("JoinHandle polled after completion");
+            .expect("JoinHandle polled after completion: Future trait contract violated");
 
         // SAFETY: We do not move the receiver, only poll it.
         let pinned_receiver = unsafe { Pin::new_unchecked(receiver) };

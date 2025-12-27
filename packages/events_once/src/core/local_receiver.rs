@@ -65,7 +65,7 @@ where
         let event_ref = self
             .event_ref
             .as_ref()
-            .expect("receiver polled after completion");
+            .expect("receiver polled after completion: Future trait contract violated");
 
         // Check the current state directly to decide what to do
         let current_state = event_ref.state.get();
@@ -114,7 +114,7 @@ where
         let event_ref = self
             .event_ref
             .as_ref()
-            .expect("receiver polled after completion");
+            .expect("receiver polled after completion: Future trait contract violated");
 
         let inner_poll_result = event_ref.poll(cx.waker());
 

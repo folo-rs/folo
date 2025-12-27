@@ -73,7 +73,7 @@ impl PoolInner {
                     worker_loop(&inner_clone, processor_id, worker_index);
                     debug!(processor_id, worker_index, "worker thread exiting");
                 })
-                .expect("failed to spawn worker thread");
+                .expect("failed to spawn worker thread: thread spawning failure is not supported");
 
             new_handles.push(handle);
         }

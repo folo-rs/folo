@@ -5,8 +5,6 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
-use std::time::Duration;
 
 use many_cpus::{HardwareTracker, ProcessorSet};
 use vicinal::Pool;
@@ -67,9 +65,6 @@ fn tasks_execute_on_spawning_processor() {
     for handle in handles {
         handle.join().unwrap();
     }
-
-    // Give workers a moment to finish any remaining work.
-    thread::sleep(Duration::from_millis(100));
 
     let correct = correct_processor_count.load(Ordering::Relaxed);
     let total = total_tasks.load(Ordering::Relaxed);

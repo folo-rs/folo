@@ -82,7 +82,7 @@ where
         let event_ref = self
             .event_ref
             .as_ref()
-            .expect("Receiver polled after completion");
+            .expect("Receiver polled after completion: Future trait contract violated");
 
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
@@ -138,7 +138,7 @@ where
         let event_ref = self
             .event_ref
             .as_ref()
-            .expect("Receiver polled after completion");
+            .expect("Receiver polled after completion: Future trait contract violated");
 
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
