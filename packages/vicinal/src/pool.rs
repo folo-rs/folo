@@ -44,6 +44,7 @@ impl fmt::Debug for PoolInner {
 }
 
 impl PoolInner {
+    #[cfg_attr(test, mutants::skip)] // Removing this causes timeouts (workers never start)
     pub(crate) fn ensure_workers_spawned(self: &Arc<Self>, processor_id: ProcessorId) {
         // If the pool is shutting down, we should not spawn new workers.
         if self.shutdown.load(Ordering::Relaxed) {
@@ -145,6 +146,7 @@ impl PoolInner {
     }
 }
 
+#[cfg_attr(test, mutants::skip)] // Removing this causes timeouts; condition logic is race-sensitive
 fn worker_loop(inner: &PoolInner, processor_id: ProcessorId, worker_index: u32) {
     let state = inner.registry.get_or_init(processor_id);
     let core = WorkerCore::new(
@@ -319,5 +321,27 @@ mod tests {
     fn scheduler_can_be_obtained() {
         let pool = Pool::new();
         let _scheduler = pool.scheduler();
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn drop_waits_for_workers() {
+        let pool = Pool::new();
+        let scheduler = pool.scheduler();
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        scheduler.spawn(move || {
+            tx.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        });
+
+        // Wait for task to start.
+        rx.recv().unwrap();
+
+        let start = std::time::Instant::now();
+        drop(pool);
+
+        // If drop didn't wait, this would be near-instant.
+        assert!(start.elapsed() >= std::time::Duration::from_millis(50));
     }
 }

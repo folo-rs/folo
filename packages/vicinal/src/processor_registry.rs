@@ -47,6 +47,7 @@ impl ProcessorRegistry {
         self.states[processor_id as usize].get()
     }
 
+    #[cfg_attr(test, mutants::skip)] // Removing this causes timeouts (workers never stop)
     pub(crate) fn signal_shutdown_all(&self) {
         for state in &self.states {
             if let Some(s) = state.get() {

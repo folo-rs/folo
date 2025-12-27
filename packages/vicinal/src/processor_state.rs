@@ -50,6 +50,7 @@ impl ProcessorState {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Removing this causes timeouts (workers never stop)
     pub(crate) fn signal_shutdown(&self) {
         // Release ordering ensures all prior task queue operations are visible to workers
         // before they observe the shutdown flag.

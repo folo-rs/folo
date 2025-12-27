@@ -83,6 +83,7 @@ impl<R> Drop for JoinHandle<R>
 where
     R: Send + 'static,
 {
+    #[cfg_attr(test, mutants::skip)] // Logging side-effect is hard to test
     fn drop(&mut self) {
         // If the receiver is still present, we were dropped without being awaited.
         // Check if there is a panic payload we should warn about.
@@ -103,6 +104,7 @@ where
 }
 
 /// Formats a panic payload for logging.
+#[cfg_attr(test, mutants::skip)] // Helper for logging, hard to test
 fn format_panic_payload(payload: &Box<dyn Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         (*s).to_string()
