@@ -7,6 +7,14 @@ use many_cpus::{HardwareInfo, ProcessorId};
 
 use crate::ProcessorState;
 
+/// Registry for managing per-processor state.
+///
+/// This registry maintains the state for each processor in the system. It allows
+/// lazy initialization of processor states, ensuring that resources are only
+/// allocated for processors that actually schedule tasks.
+///
+/// The registry is indexed by `ProcessorId`, which corresponds to the logical
+/// processor ID assigned by the OS.
 pub(crate) struct ProcessorRegistry {
     states: Box<[OnceLock<ProcessorState>]>,
 }
@@ -30,7 +38,7 @@ impl ProcessorRegistry {
         self.states[processor_id as usize].get_or_init(ProcessorState::new)
     }
 
-    #[allow(dead_code, reason = "reserved for metrics collection")]
+    #[cfg(test)]
     #[allow(
         clippy::indexing_slicing,
         reason = "processor_id is guaranteed to be in bounds by HardwareInfo"
@@ -47,12 +55,12 @@ impl ProcessorRegistry {
         }
     }
 
-    #[allow(dead_code, reason = "reserved for metrics collection")]
+    #[cfg(test)]
     pub(crate) fn initialized_count(&self) -> usize {
         self.states.iter().filter(|s| s.get().is_some()).count()
     }
 
-    #[allow(dead_code, reason = "reserved for metrics collection")]
+    #[cfg(test)]
     #[allow(
         clippy::cast_possible_truncation,
         reason = "index is guaranteed to fit in ProcessorId because the registry is sized exactly to max_processor_count"

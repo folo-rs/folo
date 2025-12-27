@@ -6,7 +6,7 @@ use std::mem;
 use std::num::NonZero;
 use std::panic;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle as ThreadJoinHandle};
 
 use event_listener::Listener;
@@ -17,12 +17,18 @@ use tracing::{debug, trace};
 
 use crate::{IterationResult, ProcessorRegistry, Scheduler, WorkerCore};
 
+/// Experimentally determined as providing good throughput under
+/// heavy I/O primitive create/destroy workload.
 const DEFAULT_WORKERS_PER_PROCESSOR: NonZero<u32> = nz!(2_u32);
 
+static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
+
 pub(crate) struct PoolInner {
+    pub(crate) pool_id: u64,
     pub(crate) registry: ProcessorRegistry,
     pub(crate) workers_per_processor: NonZero<u32>,
     pub(crate) worker_handles: Mutex<Vec<ThreadJoinHandle<()>>>,
+    pub(crate) shutdown: AtomicBool,
 }
 
 impl fmt::Debug for PoolInner {
@@ -30,6 +36,7 @@ impl fmt::Debug for PoolInner {
         let handle_count = self.worker_handles.lock().len();
 
         f.debug_struct(type_name::<Self>())
+            .field("pool_id", &self.pool_id)
             .field("workers_per_processor", &self.workers_per_processor)
             .field("worker_count", &handle_count)
             .finish_non_exhaustive()
@@ -38,6 +45,11 @@ impl fmt::Debug for PoolInner {
 
 impl PoolInner {
     pub(crate) fn ensure_workers_spawned(self: &Arc<Self>, processor_id: ProcessorId) {
+        // If the pool is shutting down, we should not spawn new workers.
+        if self.shutdown.load(Ordering::Relaxed) {
+            return;
+        }
+
         let state = self.registry.get_or_init(processor_id);
 
         // Acquire on failure to synchronize with the Release on successful exchange.
@@ -69,21 +81,57 @@ impl PoolInner {
                         processor_set.pin_current_thread_to();
                     }
 
-                    debug!(processor_id, worker_index, "worker thread started");
+                    debug!(
+                        pool_id = inner_clone.pool_id,
+                        processor_id, worker_index, "worker thread started"
+                    );
                     worker_loop(&inner_clone, processor_id, worker_index);
-                    debug!(processor_id, worker_index, "worker thread exiting");
+                    debug!(
+                        pool_id = inner_clone.pool_id,
+                        processor_id, worker_index, "worker thread exiting"
+                    );
                 })
                 .expect("failed to spawn worker thread: thread spawning failure is not supported");
 
             new_handles.push(handle);
         }
 
-        self.worker_handles.lock().extend(new_handles);
+        let mut worker_handles = self.worker_handles.lock();
+
+        // Re-check shutdown flag under the lock to avoid race condition where
+        // join_all_workers() runs concurrently and we add new handles after it
+        // has already taken the existing ones.
+        //
+        // If shutdown is true here, it means join_all_workers() has already
+        // set the flag (and possibly taken the handles). We must not add our
+        // new handles to the list, as they would be leaked. Instead, we join
+        // them immediately.
+        if self.shutdown.load(Ordering::Acquire) {
+            for handle in new_handles {
+                if let Err(payload) = handle.join() {
+                    panic::resume_unwind(payload);
+                }
+            }
+            return;
+        }
+
+        worker_handles.extend(new_handles);
     }
 
     pub(crate) fn join_all_workers(&self) {
+        // Signal shutdown to prevent new workers from being spawned.
+        // We use Release to ensure this store is visible to ensure_workers_spawned
+        // when it acquires the lock.
+        self.shutdown.store(true, Ordering::Release);
+
+        // Signal all existing workers to exit.
         self.registry.signal_shutdown_all();
 
+        // We take the handles out of the mutex, ensuring that no other thread can
+        // access them. Because we set the shutdown flag above, we know that
+        // ensure_workers_spawned() will not add any new handles to the list after
+        // we release the lock (or if it does, it will see the shutdown flag and
+        // return early).
         let handles = mem::take(&mut *self.worker_handles.lock());
 
         for handle in handles {
@@ -108,10 +156,16 @@ fn worker_loop(inner: &PoolInner, processor_id: ProcessorId, worker_index: u32) 
     loop {
         match core.run_one_iteration() {
             IterationResult::ExecutedUrgent => {
-                trace!(processor_id, worker_index, "executed urgent task");
+                trace!(
+                    pool_id = inner.pool_id,
+                    processor_id, worker_index, "executed urgent task"
+                );
             }
             IterationResult::ExecutedRegular => {
-                trace!(processor_id, worker_index, "executed regular task");
+                trace!(
+                    pool_id = inner.pool_id,
+                    processor_id, worker_index, "executed regular task"
+                );
             }
             IterationResult::Shutdown => {
                 break;
@@ -217,8 +271,6 @@ impl PoolBuilder {
     }
 
     /// Sets the number of worker threads per processor.
-    ///
-    /// Default is 2.
     #[must_use]
     pub fn workers_per_processor(mut self, count: NonZero<u32>) -> Self {
         self.workers_per_processor = count;
@@ -229,9 +281,11 @@ impl PoolBuilder {
     #[must_use]
     pub fn build(self) -> Pool {
         let inner = Arc::new(PoolInner {
+            pool_id: NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed),
             registry: ProcessorRegistry::new(),
             workers_per_processor: self.workers_per_processor,
             worker_handles: Mutex::new(Vec::new()),
+            shutdown: AtomicBool::new(false),
         });
 
         Pool { inner }

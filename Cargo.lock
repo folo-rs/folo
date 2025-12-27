@@ -1884,6 +1884,7 @@ dependencies = [
  "new_zealand",
  "nm",
  "parking_lot",
+ "pin-project",
  "static_assertions",
  "testing",
  "tokio",

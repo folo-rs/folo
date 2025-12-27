@@ -36,7 +36,7 @@ impl<'a> WorkerCore<'a> {
 
     pub(crate) fn run_one_iteration(&self) -> IterationResult {
         if let Some(mut task) = self.urgent_queue.pop() {
-            task.call();
+            task.as_pin_mut().call();
             return IterationResult::ExecutedUrgent;
         }
 
@@ -47,7 +47,7 @@ impl<'a> WorkerCore<'a> {
         }
 
         if let Some(mut task) = self.regular_queue.pop() {
-            task.call();
+            task.as_pin_mut().call();
             return IterationResult::ExecutedRegular;
         }
 
@@ -57,6 +57,7 @@ impl<'a> WorkerCore<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::pin::Pin;
     use std::sync::atomic::AtomicU32;
 
     use infinity_pool::BlindPool;
@@ -80,10 +81,11 @@ mod tests {
     }
 
     impl VicinalTask for CountingTask {
-        fn call(&mut self) {
-            if !self.called {
-                self.called = true;
-                self.counter.fetch_add(1, Ordering::Relaxed);
+        fn call(self: Pin<&mut Self>) {
+            let this = self.get_mut();
+            if !this.called {
+                this.called = true;
+                this.counter.fetch_add(1, Ordering::Relaxed);
             }
         }
     }

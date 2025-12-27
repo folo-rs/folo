@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use fast_time::Clock;
 use many_cpus::HardwareTracker;
 use tracing::trace;
 
+use crate::metrics::CLOCK;
 use crate::{JoinHandle, PoolInner, PooledCastVicinalTask, wrap_task};
 
 /// A handle for spawning tasks on a [`Pool`][crate::Pool].
@@ -69,7 +69,7 @@ impl Scheduler {
     pub fn spawn<R, F>(&self, task: F) -> JoinHandle<R>
     where
         R: Send + 'static,
-        F: FnOnce() -> R + Send + Unpin + 'static,
+        F: FnOnce() -> R + Send + 'static,
     {
         self.spawn_internal(task, false)
     }
@@ -90,7 +90,7 @@ impl Scheduler {
     pub fn spawn_urgent<R, F>(&self, task: F) -> JoinHandle<R>
     where
         R: Send + 'static,
-        F: FnOnce() -> R + Send + Unpin + 'static,
+        F: FnOnce() -> R + Send + 'static,
     {
         self.spawn_internal(task, true)
     }
@@ -99,11 +99,10 @@ impl Scheduler {
     fn spawn_internal<R, F>(&self, task: F, urgent: bool) -> JoinHandle<R>
     where
         R: Send + 'static,
-        F: FnOnce() -> R + Send + Unpin + 'static,
+        F: FnOnce() -> R + Send + 'static,
     {
         // Capture spawn time for metrics.
-        let mut clock = Clock::new();
-        let spawn_time = clock.now();
+        let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
 
         let processor_id = HardwareTracker::current_processor_id();
 
@@ -113,7 +112,7 @@ impl Scheduler {
         let state = self.inner.registry.get_or_init(processor_id);
 
         // Rent a oneshot channel for the result.
-        let (sender, receiver) = state.event_lake.rent();
+        let (sender, receiver) = state.result_channel_pool.rent();
 
         // Wrap the task to capture panics and send the result.
         let wrapped = wrap_task(task, sender, spawn_time);
@@ -125,10 +124,16 @@ impl Scheduler {
         // Push to the appropriate queue.
         if urgent {
             state.urgent_queue.push(dyn_task);
-            trace!(processor_id, "spawned urgent task");
+            trace!(
+                pool_id = self.inner.pool_id,
+                processor_id, "spawned urgent task"
+            );
         } else {
             state.regular_queue.push(dyn_task);
-            trace!(processor_id, "spawned regular task");
+            trace!(
+                pool_id = self.inner.pool_id,
+                processor_id, "spawned regular task"
+            );
         }
 
         // Record the spawn for metrics.
@@ -199,5 +204,22 @@ mod tests {
 
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| block_on(handle)));
         assert!(result.is_err());
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn spawn_accepts_not_unpin_task() {
+        let pool = Pool::new();
+        let scheduler = pool.scheduler();
+
+        // Create a !Unpin task by capturing a !Unpin future.
+        let not_unpin_future = async {};
+        let handle = scheduler.spawn(move || {
+            let _unused = not_unpin_future;
+            42
+        });
+
+        let result = block_on(handle);
+        assert_eq!(result, 42);
     }
 }
