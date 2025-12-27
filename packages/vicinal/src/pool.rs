@@ -297,6 +297,7 @@ impl PoolBuilder {
 #[cfg(test)]
 mod tests {
     use std::num::NonZero;
+    use std::sync::mpsc;
 
     use crate::Pool;
 
@@ -328,7 +329,7 @@ mod tests {
     fn drop_waits_for_workers() {
         let pool = Pool::new();
         let scheduler = pool.scheduler();
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = mpsc::channel();
 
         scheduler.spawn(move || {
             tx.send(()).unwrap();
