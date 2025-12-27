@@ -17,11 +17,15 @@ use vicinal::Pool;
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
+fn simulate_work() -> u32 {
+    thread::yield_now();
+    42
+}
+
 fn entrypoint(c: &mut Criterion) {
-    // Pin the main thread to a single processor to eliminate OS migration noise.
-    if let Some(processors) = ProcessorSet::builder().take(nz!(1)) {
-        processors.pin_current_thread_to();
-    }
+    // Pin the main thread to a single processor to eliminate OS migration impact.
+    let one_processor = ProcessorSet::builder().take(nz!(1)).unwrap();
+    one_processor.pin_current_thread_to();
 
     let allocs = AllocSession::new();
     let times = TimeSession::new();
@@ -41,10 +45,7 @@ fn entrypoint(c: &mut Criterion) {
             let _time_span = spawn_single_time.measure_process().iterations(iterations);
 
             for _ in 0..iterations {
-                let handle = scheduler.spawn(|| {
-                    thread::yield_now();
-                    black_box(42)
-                });
+                let handle = scheduler.spawn(|| black_box(simulate_work()));
                 black_box(block_on(handle));
             }
 
@@ -67,11 +68,8 @@ fn entrypoint(c: &mut Criterion) {
             let _time_span = spawn_100_time.measure_process().iterations(iterations);
 
             for _ in 0..iterations {
-                for i in 0..100 {
-                    handles.push(scheduler.spawn(move || {
-                        thread::yield_now();
-                        black_box(i)
-                    }));
+                for _ in 0..100 {
+                    handles.push(scheduler.spawn(move || black_box(simulate_work())));
                 }
 
                 #[allow(
@@ -104,10 +102,7 @@ fn entrypoint(c: &mut Criterion) {
                 .iterations(iterations);
 
             for _ in 0..iterations {
-                let handle = scheduler.spawn_urgent(|| {
-                    thread::yield_now();
-                    black_box(42)
-                });
+                let handle = scheduler.spawn_urgent(|| black_box(simulate_work()));
                 black_box(block_on(handle));
             }
 
@@ -134,11 +129,8 @@ fn entrypoint(c: &mut Criterion) {
                 .iterations(iterations);
 
             for _ in 0..iterations {
-                for i in 0..100 {
-                    handles.push(scheduler.spawn_urgent(move || {
-                        thread::yield_now();
-                        black_box(i)
-                    }));
+                for _ in 0..100 {
+                    handles.push(scheduler.spawn_urgent(move || black_box(simulate_work())));
                 }
 
                 #[allow(
@@ -164,10 +156,7 @@ fn entrypoint(c: &mut Criterion) {
             let _time_span = thread_single_time.measure_process().iterations(iterations);
 
             for _ in 0..iterations {
-                let handle = thread::spawn(|| {
-                    thread::yield_now();
-                    black_box(42)
-                });
+                let handle = thread::spawn(|| black_box(simulate_work()));
                 black_box(handle.join().unwrap());
             }
 
@@ -187,11 +176,8 @@ fn entrypoint(c: &mut Criterion) {
             let _time_span = thread_100_time.measure_process().iterations(iterations);
 
             for _ in 0..iterations {
-                for i in 0..100 {
-                    handles.push(thread::spawn(move || {
-                        thread::yield_now();
-                        black_box(i)
-                    }));
+                for _ in 0..100 {
+                    handles.push(thread::spawn(move || black_box(simulate_work())));
                 }
 
                 #[allow(
@@ -211,8 +197,23 @@ fn entrypoint(c: &mut Criterion) {
     let threadpool_single_time = times.operation("threadpool_single");
 
     g.bench_function("threadpool_single", |b| {
+        // Vicinal pool defaults to 2 threads per processor, so we match.
         let pool = ThreadPool::new(2);
-        let event_pool = EventPool::<i32>::new();
+        let event_pool = EventPool::<u32>::new();
+
+        // Ensure the thread pool threads are pinned to the same processor as main().
+        // There is no guarantee on what thread each task gets scheduled on, so we
+        // spam a whole bunch of these to make it more likely we hit both threads.
+        for _ in 0..30 {
+            pool.execute({
+                let one_processor = one_processor.clone();
+                move || {
+                    one_processor.pin_current_thread_to();
+                }
+            });
+        }
+
+        pool.join();
 
         b.iter_custom(|iterations| {
             let start = Instant::now();
@@ -226,8 +227,7 @@ fn entrypoint(c: &mut Criterion) {
             for _ in 0..iterations {
                 let (tx, rx) = event_pool.rent();
                 pool.execute(move || {
-                    thread::yield_now();
-                    tx.send(black_box(42));
+                    tx.send(black_box(simulate_work()));
                 });
                 black_box(block_on(rx).unwrap());
             }
@@ -240,8 +240,23 @@ fn entrypoint(c: &mut Criterion) {
     let threadpool_100_time = times.operation("threadpool_100");
 
     g.bench_function("threadpool_100", |b| {
+        // Vicinal pool defaults to 2 threads per processor, so we match.
         let pool = ThreadPool::new(2);
-        let event_pool = EventPool::<i32>::new();
+        let event_pool = EventPool::<u32>::new();
+
+        // Ensure the thread pool threads are pinned to the same processor as main().
+        // There is no guarantee on what thread each task gets scheduled on, so we
+        // spam a whole bunch of these to make it more likely we hit both threads.
+        for _ in 0..30 {
+            pool.execute({
+                let one_processor = one_processor.clone();
+                move || {
+                    one_processor.pin_current_thread_to();
+                }
+            });
+        }
+
+        pool.join();
 
         b.iter_custom(|iterations| {
             let mut rxs = Vec::with_capacity(100);
@@ -253,12 +268,11 @@ fn entrypoint(c: &mut Criterion) {
             let _time_span = threadpool_100_time.measure_process().iterations(iterations);
 
             for _ in 0..iterations {
-                for i in 0..100 {
+                for _ in 0..100 {
                     let (tx, rx) = event_pool.rent();
                     rxs.push(rx);
                     pool.execute(move || {
-                        thread::yield_now();
-                        tx.send(black_box(i));
+                        tx.send(black_box(simulate_work()));
                     });
                 }
 
