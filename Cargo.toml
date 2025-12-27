@@ -26,8 +26,8 @@ alloc_tracker = { version = "0.5.9", path = "packages/alloc_tracker" }
 blind_pool = { version = "0.5.1", path = "packages/blind_pool" }
 cpulist = { version = "1.0.1", path = "packages/cpulist" }
 events = { version = "0.5.1", path = "packages/events" }
-events_once = { version = "0.5.8", path = "packages/events_once" }
-fast_time = { version = "0.1.9", path = "packages/fast_time" }
+events_once = { version = "0.5.9", path = "packages/events_once" }
+fast_time = { version = "0.1.10", path = "packages/fast_time" }
 folo_ffi = { version = "0.1.7", path = "packages/folo_ffi" }
 folo_utils = { version = "0.1.3", path = "packages/folo_utils" }
 infinity_pool = { version = "0.8.1", path = "packages/infinity_pool" }

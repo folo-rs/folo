@@ -177,7 +177,7 @@ checksum = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3"
 
 [[package]]
 name = "cargo-detect-package"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "argh",
  "serial_test",
@@ -482,7 +482,7 @@ version = "0.5.1"
 
 [[package]]
 name = "events_once"
-version = "0.5.8"
+version = "0.5.9"
 dependencies = [
  "criterion",
  "hash_hasher",
@@ -507,7 +507,7 @@ dependencies = [
 
 [[package]]
 name = "fast_time"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "criterion",
  "libc",
