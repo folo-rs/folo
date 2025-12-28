@@ -581,4 +581,4 @@ panic or error messages - these messages are not an API contract and may change 
 
 # Type names
 
-Do not hardcode type names in string literals. Instead use `type_name::<Self>()` or similar.
+Do not hardcode type names in string literals (e.g. in `Debug` trait implementations). Instead use `type_name::<Self>()` or similar.

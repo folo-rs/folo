@@ -54,6 +54,7 @@ unpark
 unparking
 unseparated
 unviable
+VTABLE
 wakeups
 wildcarded
 withf

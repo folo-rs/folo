@@ -17,6 +17,7 @@ doc = false
 default = []
 
 [dependencies]
+parking_lot = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 deranged = { workspace = true, features = ["macros"] }

@@ -10,6 +10,9 @@ mod windows;
 #[cfg(windows)]
 pub use windows::*;
 
+mod multi_await;
+pub use multi_await::*;
+
 /// Runs a test with a 10-second timeout to prevent infinite hangs.
 ///
 /// This function wraps a test closure with a timeout mechanism. If the test
