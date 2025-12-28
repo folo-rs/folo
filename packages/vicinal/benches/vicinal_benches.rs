@@ -1,5 +1,6 @@
 #![expect(missing_docs, reason = "benchmarks")]
 
+use std::fs::File;
 use std::hint::black_box;
 use std::thread;
 use std::time::Instant;
@@ -18,7 +19,7 @@ use vicinal::Pool;
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 fn simulate_work() -> u32 {
-    thread::yield_now();
+    drop(File::open("Q:\\non_existent_file.txt"));
     42
 }
 
