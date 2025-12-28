@@ -1,5 +1,5 @@
 ---
-mode: agent
+agent: agent
 ---
 Ensure that the `README.md` in each published package succinctly summarizes
 the contents of the package.
@@ -18,7 +18,8 @@ The contents of a `README.md` file for library packages (containing a `lib.rs`) 
 
 1. A summary of no more than 2 pages.
 2. A very succinct example.
-3. The standard footer.
+3. Any notes about platform support or limitations (if documented in `lib.rs`).
+4. The standard footer.
 
 The example in the readme should have a corresponding `src/examples/package_name_readme.rs` file to
 verify that it builds and succeeds when executed. If the two are out of sync, adjust the readme file
@@ -27,6 +28,8 @@ to match the example in `src/examples/package_name_readme.rs`.
 The standard footer for library packages is:
 
 ```
+## See also
+
 More details in the [package documentation](https://docs.rs/package_name_here/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for

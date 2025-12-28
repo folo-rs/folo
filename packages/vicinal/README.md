@@ -2,10 +2,10 @@
 
 Processor-local worker pool that schedules tasks in the vicinity of the caller.
 
-This crate provides a worker pool where each task is executed on the same processor that spawned
-it, ensuring optimal cache locality and minimizing cross-processor data movement.
+This crate provides a worker pool where each task is executed on the same processor that
+spawned it, ensuring optimal cache locality and minimizing cross-processor data movement.
 
-## Quick start
+## Example
 
 ```rust
 use vicinal::Pool;
@@ -27,22 +27,23 @@ async fn main() {
 }
 ```
 
-## Key features
+## Tradeoffs
 
-- **Processor locality**: Tasks execute on the same processor that called `spawn()`.
-- **Urgent tasks**: Use `spawn_urgent()` for high-priority tasks that execute before regular tasks.
-- **Resource reuse**: Internal pooling minimizes memory allocation overhead.
-- **Lazy initialization**: Per-processor resources are only allocated when first used.
+- **Single task latency on an idle pool** is prioritized. The expectation is that tasks are
+  short-lived so that the pool is often idle.
 
-## Shutdown behavior
+## Platform support
 
-When the `Pool` is dropped, it signals all worker threads to shut down and waits for any
-currently-executing tasks to complete. Queued tasks that have not started execution are abandoned.
+The package is tested on the following operating systems:
 
-If you need to ensure all spawned tasks complete before shutdown, await their `JoinHandle`s
-before dropping the pool.
+* Windows 11 x64
+* Windows Server 2022 x64
+* Ubuntu 24.04 x64
 
-## Panics
+On non-Windows non-Linux platforms (e.g. mac OS), the package will not uphold the processor
+locality guarantees, but will otherwise function correctly as a worker pool.
 
-If a task panics, the panic is captured and re-thrown when the `JoinHandle` is awaited.
-If the `JoinHandle` is dropped without being awaited, the panic is logged and discarded.
+More details in the [package documentation](https://docs.rs/vicinal/).
+
+This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
+high-performance hardware-aware programming in Rust.

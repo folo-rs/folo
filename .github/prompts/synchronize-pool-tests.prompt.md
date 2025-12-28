@@ -1,5 +1,5 @@
 ---
-mode: agent
+agent: agent
 ---
 
 The 9 pool types provided by the infinity_pool package are:

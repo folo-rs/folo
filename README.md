@@ -16,6 +16,10 @@ blindly - now we spawn specific threads for specific processors or groups of pro
 how work and data are spread between processors, when applied to different algorithms. This
 allows you to judge when it matters and by how much.
 
+[`vicinal`][vicinal] allows you to schedule synchronous tasks on the same processor, providing
+an easy way to preserve data locality for work that must be detached from the primary application
+threads (e.g. because it is blocking code not suitable for an async application thread).
+
 ![](doc/region_cached.png)
 
 [The ability to target our workloads to specific processors and specific memory regions unlocks new optimization opportunities.][structural_changes]
@@ -173,6 +177,7 @@ Deprecated packages:
 [region_cached]: packages/region_cached/README.md
 [region_local]: packages/region_local/README.md
 [structural_changes]: https://sander.saares.eu/2025/03/31/structural-changes-for-48-throughput-in-a-rust-web-service/
+[vicinal]: packages/vicinal/README.md
 
 # Development environment setup
 
