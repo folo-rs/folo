@@ -6,7 +6,6 @@ use std::iter;
 use std::mem::{self, ManuallyDrop};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 /// A future that waits for multiple futures to complete.
@@ -33,9 +32,12 @@ pub struct MultiAwait<F: Future> {
 /// Each child future is given a `Waker` that also holds a reference to this state (via a raw pointer
 /// derived from the `Arc`). When a child future wakes its waker, it updates the counters in this state.
 struct SharedState {
-    parent_waker: Mutex<Option<Waker>>,
-    wakes_needed: AtomicUsize,
-    wakes_received: AtomicUsize,
+    inner: Mutex<InnerState>,
+}
+
+struct InnerState {
+    parent_waker: Option<Waker>,
+    wakes_needed: usize,
 }
 
 impl<F: Future> Debug for MultiAwait<F> {
@@ -65,9 +67,10 @@ impl<F: Future> MultiAwait<F> {
             futures,
             results: iter::repeat_with(|| None).take(len).collect(),
             shared: Arc::new(SharedState {
-                parent_waker: Mutex::new(None),
-                wakes_needed: AtomicUsize::new(0),
-                wakes_received: AtomicUsize::new(0),
+                inner: Mutex::new(InnerState {
+                    parent_waker: None,
+                    wakes_needed: 0,
+                }),
             }),
         }
     }
@@ -98,18 +101,18 @@ impl<F: Future> Future for MultiAwait<F> {
 
         // Reset state for this poll cycle.
         // We expect 'pending_count' signals.
-        this.shared.wakes_received.store(0, Ordering::SeqCst);
-        this.shared
-            .wakes_needed
-            .store(pending_count, Ordering::SeqCst);
-
-        // Update parent waker.
-        *this.shared.parent_waker.lock() = Some(cx.waker().clone());
+        {
+            let mut state = this.shared.inner.lock();
+            state.wakes_needed = pending_count;
+            state.parent_waker = Some(cx.waker().clone());
+        }
 
         // SAFETY: We are creating a Waker from a RawWaker that we constructed correctly
         // using the VTABLE and a pointer to our SharedState.
         let waker = unsafe { Waker::from_raw(raw_waker(&this.shared)) };
         let mut child_cx = Context::from_waker(&waker);
+
+        let mut completed_count = 0;
 
         for (i, future_slot) in this.futures.iter_mut().enumerate() {
             if let Some(future) = future_slot
@@ -126,18 +129,36 @@ impl<F: Future> Future for MultiAwait<F> {
                     this.results[i] = Some(output);
                 }
                 *future_slot = None;
-
-                // If a future completes, we reduce the number of needed signals.
-                // We don't need a signal from a completed future.
-                //
-                // We are just subtracting 1.
                 #[allow(
                     clippy::arithmetic_side_effects,
-                    reason = "We initialized wakes_needed to pending_count. Each future completes \
-                              exactly once. Thus we subtract 1 at most pending_count times, so \
-                              wakes_needed cannot go below 0."
+                    reason = "completed_count cannot exceed futures.len()"
                 )]
-                this.shared.wakes_needed.fetch_sub(1, Ordering::SeqCst);
+                {
+                    completed_count += 1;
+                }
+            }
+        }
+
+        if completed_count > 0 {
+            let mut state = this.shared.inner.lock();
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "We initialized wakes_needed to pending_count. Each future completes \
+                          exactly once. Thus we subtract 1 at most pending_count times, so \
+                          wakes_needed cannot go below 0."
+            )]
+            {
+                if state.wakes_needed >= completed_count {
+                    state.wakes_needed -= completed_count;
+                } else {
+                    state.wakes_needed = 0;
+                }
+            }
+
+            if state.wakes_needed == 0
+                && let Some(waker) = state.parent_waker.take()
+            {
+                waker.wake();
             }
         }
 
@@ -156,16 +177,6 @@ impl<F: Future> Future for MultiAwait<F> {
                     })
                     .collect(),
             );
-        }
-
-        // If we have enough signals already (e.g. from concurrent completions or immediate wakes),
-        // we should ensure we are woken up.
-        let needed = this.shared.wakes_needed.load(Ordering::SeqCst);
-        let received = this.shared.wakes_received.load(Ordering::SeqCst);
-
-        if received >= needed {
-            // We met the condition. Wake the parent to poll again immediately.
-            cx.waker().wake_by_ref();
         }
 
         Poll::Pending
@@ -210,16 +221,17 @@ unsafe fn drop_waker(ptr: *const ()) {
 }
 
 fn wake_impl(shared: &SharedState) {
+    let mut state = shared.inner.lock();
     // We are just adding 1. Overflow is extremely unlikely in this context.
-    #[allow(
-        clippy::arithmetic_side_effects,
-        reason = "Overflow is extremely unlikely in this context"
-    )]
-    let received = shared.wakes_received.fetch_add(1, Ordering::SeqCst) + 1;
-    let needed = shared.wakes_needed.load(Ordering::SeqCst);
+    #[allow(clippy::arithmetic_side_effects, reason = "We guard against underflow")]
+    {
+        if state.wakes_needed > 0 {
+            state.wakes_needed -= 1;
+        }
+    }
 
-    if received >= needed
-        && let Some(waker) = shared.parent_waker.lock().as_ref()
+    if state.wakes_needed == 0
+        && let Some(waker) = state.parent_waker.as_ref()
     {
         waker.wake_by_ref();
     }
@@ -228,7 +240,7 @@ fn wake_impl(shared: &SharedState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     struct ManualFuture {
         id: usize,

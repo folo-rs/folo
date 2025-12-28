@@ -12,6 +12,7 @@ use events_once::EventPool;
 use futures::executor::block_on;
 use many_cpus::ProcessorSet;
 use new_zealand::nz;
+use testing::MultiAwait;
 use threadpool::ThreadPool;
 use vicinal::Pool;
 
@@ -77,9 +78,7 @@ fn entrypoint(c: &mut Criterion) {
                     clippy::iter_with_drain,
                     reason = "we reuse the vector in the next iteration"
                 )]
-                for handle in handles.drain(..) {
-                    black_box(block_on(handle));
-                }
+                black_box(block_on(MultiAwait::new(handles.drain(..))));
             }
 
             start.elapsed()
@@ -138,9 +137,7 @@ fn entrypoint(c: &mut Criterion) {
                     clippy::iter_with_drain,
                     reason = "we reuse the vector in the next iteration"
                 )]
-                for handle in handles.drain(..) {
-                    black_box(block_on(handle));
-                }
+                black_box(block_on(MultiAwait::new(handles.drain(..))));
             }
 
             start.elapsed()
@@ -281,9 +278,7 @@ fn entrypoint(c: &mut Criterion) {
                     clippy::iter_with_drain,
                     reason = "we reuse the vector in the next iteration"
                 )]
-                for rx in rxs.drain(..) {
-                    black_box(block_on(rx).unwrap());
-                }
+                black_box(block_on(MultiAwait::new(rxs.drain(..))));
             }
 
             start.elapsed()
