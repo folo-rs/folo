@@ -43,7 +43,6 @@
 //! # Panics
 //!
 //! If a task panics, the panic is captured and re-thrown when the [`JoinHandle`] is awaited.
-//! If the [`JoinHandle`] is dropped without being awaited, the panic is logged and discarded.
 
 mod join_handle;
 mod metrics;

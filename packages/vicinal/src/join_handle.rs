@@ -1,6 +1,5 @@
 //! Join handle for awaiting task completion.
 
-use std::any::Any;
 use std::future::Future;
 use std::panic;
 use std::pin::Pin;
@@ -15,9 +14,6 @@ use crate::TaskResult;
 /// Awaiting the join handle returns the task's return value. If the task panicked,
 /// awaiting the join handle will re-throw the panic.
 ///
-/// If the join handle is dropped without being awaited and the task panicked,
-/// a warning is logged and the panic is discarded.
-///
 /// # Panics
 ///
 /// Awaiting the join handle panics if:
@@ -28,7 +24,7 @@ pub struct JoinHandle<R>
 where
     R: Send + 'static,
 {
-    receiver: Option<PooledReceiver<TaskResult<R>>>,
+    receiver: PooledReceiver<TaskResult<R>>,
 }
 
 impl<R> JoinHandle<R>
@@ -37,9 +33,7 @@ where
 {
     /// Creates a new join handle from a receiver.
     pub(crate) fn new(receiver: PooledReceiver<TaskResult<R>>) -> Self {
-        Self {
-            receiver: Some(receiver),
-        }
+        Self { receiver }
     }
 }
 
@@ -50,68 +44,23 @@ where
     type Output = R;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let receiver = self
-            .receiver
-            .as_mut()
-            .expect("JoinHandle polled after completion: Future trait contract violated");
-
-        // SAFETY: We do not move the receiver, only poll it.
-        let pinned_receiver = unsafe { Pin::new_unchecked(receiver) };
+        // SAFETY: JoinHandle is Unpin because PooledReceiver is Unpin.
+        let receiver = &mut self.receiver;
+        let pinned_receiver = Pin::new(receiver);
 
         match pinned_receiver.poll(cx) {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(result) => {
-                // Take ownership to prevent Drop from logging a warning.
-                self.receiver = None;
-
-                match result {
-                    Ok(Ok(value)) => Poll::Ready(value),
-                    Ok(Err(panic_payload)) => {
-                        panic::resume_unwind(panic_payload);
-                    }
-                    Err(_disconnected) => {
-                        // Channel disconnected - pool was shut down.
-                        panic!("task was abandoned because the pool was shut down");
-                    }
+            Poll::Ready(result) => match result {
+                Ok(Ok(value)) => Poll::Ready(value),
+                Ok(Err(panic_payload)) => {
+                    panic::resume_unwind(panic_payload);
                 }
-            }
+                Err(_disconnected) => {
+                    // Channel disconnected - pool was shut down.
+                    panic!("task was abandoned because the pool was shut down");
+                }
+            },
         }
-    }
-}
-
-impl<R> Drop for JoinHandle<R>
-where
-    R: Send + 'static,
-{
-    #[cfg_attr(test, mutants::skip)] // Logging side-effect is hard to test
-    fn drop(&mut self) {
-        // If the receiver is still present, we were dropped without being awaited.
-        // Check if there is a panic payload we should warn about.
-        if let Some(receiver) = self.receiver.take() {
-            // Try to get the value synchronously to check for panics.
-            if let Ok(Err(panic_payload)) = receiver.into_value() {
-                // Task panicked but the join handle was never awaited.
-                let message = format_panic_payload(&panic_payload);
-                tracing::warn!(
-                    panic_message = %message,
-                    "task panicked but JoinHandle was dropped without being awaited"
-                );
-            }
-            // Ok(Ok(_)) means task completed successfully - no warning needed.
-            // Err(_) means still pending or disconnected - no panic to report.
-        }
-    }
-}
-
-/// Formats a panic payload for logging.
-#[cfg_attr(test, mutants::skip)] // Helper for logging, hard to test
-fn format_panic_payload(payload: &Box<dyn Any + Send>) -> String {
-    if let Some(s) = payload.downcast_ref::<&str>() {
-        (*s).to_string()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "unknown panic payload".to_string()
     }
 }
 
