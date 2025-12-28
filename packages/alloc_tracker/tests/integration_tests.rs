@@ -3,8 +3,6 @@
 //! These tests use a global allocator setup to test the full functionality
 //! of the allocation tracking system, including single-threaded and multithreaded scenarios.
 
-#![cfg(not(miri))] // Test uses the real platform which cannot be executed under Miri.
-
 use std::hint::black_box;
 use std::thread;
 
@@ -16,6 +14,7 @@ use alloc_tracker::{Allocator, Session};
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 #[test]
+#[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 fn no_span_is_empty_session() {
     let session = Session::new();
 
@@ -25,6 +24,7 @@ fn no_span_is_empty_session() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 fn span_with_no_allocation_is_not_empty_session() {
     let session = Session::new();
 
@@ -40,6 +40,7 @@ fn span_with_no_allocation_is_not_empty_session() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 fn single_thread_allocations() {
     const BYTES_PER_ITERATION: usize = 100;
     const TEST_ITERATIONS: usize = 5;
@@ -76,6 +77,7 @@ fn single_thread_allocations() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 fn multithreaded_allocations_show_span_differences() {
     const NUM_WORKER_THREADS: u32 = 4;
     const ALLOCATIONS_PER_THREAD: u32 = 50;
@@ -146,6 +148,7 @@ fn multithreaded_allocations_show_span_differences() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 fn mixed_span_types_in_multithreaded_context() {
     const ITERATIONS: usize = 3;
 
@@ -184,6 +187,7 @@ fn mixed_span_types_in_multithreaded_context() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 fn report_is_empty_matches_session_is_empty() {
     let session = Session::new();
 
@@ -214,6 +218,7 @@ fn report_is_empty_matches_session_is_empty() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 fn report_mean_with_known_allocations() {
     const NUM_ITERATIONS: u64 = 5;
 
@@ -261,6 +266,7 @@ fn report_mean_with_known_allocations() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 #[cfg(feature = "panic_on_next_alloc")]
 fn panic_on_next_alloc_can_be_controlled() {
     // This test verifies the API works but doesn't test the panic behavior
@@ -288,6 +294,7 @@ fn panic_on_next_alloc_can_be_controlled() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 #[cfg(feature = "panic_on_next_alloc")]
 fn panic_on_next_alloc_resets_automatically() {
     use std::panic;
@@ -314,6 +321,7 @@ fn panic_on_next_alloc_resets_automatically() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 fn process_report_includes_allocations_from_multiple_threads() {
     const THREAD_A_ALLOCS: usize = 40;
     const THREAD_B_ALLOCS: usize = 25;

@@ -3,13 +3,12 @@
 //! These tests verify that the public API types can be safely moved
 //! between threads and that thread-safety changes work correctly.
 
-#![cfg(not(miri))] // The real platform functionality cannot be accessed under Miri.
-
 use std::thread;
 
 use all_the_time::{Report, Session};
 
 #[test]
+#[cfg_attr(miri, ignore)] // The real platform functionality cannot be accessed under Miri.
 fn session_can_be_moved_between_threads() {
     let session = Session::new();
 
@@ -35,6 +34,7 @@ fn session_can_be_moved_between_threads() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // The real platform functionality cannot be accessed under Miri.
 fn operation_can_be_moved_between_threads() {
     let session = Session::new();
     let operation = session.operation("test_op");
@@ -58,6 +58,7 @@ fn operation_can_be_moved_between_threads() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // The real platform functionality cannot be accessed under Miri.
 fn report_can_be_shared_across_threads() {
     let session = Session::new();
     {
@@ -85,6 +86,7 @@ fn report_can_be_shared_across_threads() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // The real platform functionality cannot be accessed under Miri.
 fn reports_can_be_merged_across_threads() {
     let session1 = Session::new();
     let session2 = Session::new();

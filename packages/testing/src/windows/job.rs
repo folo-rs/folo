@@ -232,13 +232,13 @@ impl JobBuilder {
 }
 
 #[cfg(test)]
-#[cfg(not(miri))] // Miri cannot use the real operating system APIs.
 mod tests {
     use new_zealand::nz;
 
     use super::*;
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Miri cannot use the real operating system APIs.
     fn one_job() {
         let job = Job::builder()
             .with_processor_count(nz!(1))
@@ -249,6 +249,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Miri cannot use the real operating system APIs.
     fn two_jobs() {
         let job = Job::builder()
             .with_processor_count(nz!(1))

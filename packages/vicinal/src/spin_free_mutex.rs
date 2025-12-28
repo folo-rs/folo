@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     // Miri on Windows does not support GetModuleHandleA used by parking_lot_core in the contention path.
-    #[cfg(not(miri))]
+    #[cfg_attr(miri, ignore)]
     fn mutex_contention() {
         let m = Arc::new(SpinFreeMutex::new(0));
         let mut handles = vec![];

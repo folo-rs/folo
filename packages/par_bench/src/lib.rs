@@ -186,8 +186,6 @@
 //!     .execute_on(&mut pool, 1000);
 //! ```
 
-#![cfg_attr(miri, allow(dead_code, unused_imports))]
-
 mod run;
 mod run_configured;
 mod run_configured_criterion;

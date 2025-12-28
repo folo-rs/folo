@@ -335,7 +335,6 @@ impl<MeasureOutput> RunSummary<MeasureOutput> {
 }
 
 #[cfg(test)]
-#[cfg(not(miri))]
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "test code with known array bounds")]
 
@@ -358,6 +357,7 @@ mod tests {
     use crate::Run;
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn single_iteration_minimal() {
         let processors = ProcessorSet::builder().take(nz!(1)).unwrap();
         let mut pool = ThreadPool::new(&processors);
@@ -377,6 +377,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn multiple_iterations_minimal() {
         let processors = ProcessorSet::builder().take(nz!(1)).unwrap();
         let mut pool = ThreadPool::new(&processors);
@@ -408,6 +409,7 @@ mod tests {
         assert_eq!(meta.group_count().get(), 1);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn two_processors_two_groups_one_thread_per_group() {
         let Some(processors) = TWO_PROCESSORS.as_ref() else {
@@ -442,7 +444,7 @@ mod tests {
         assert_eq!(seen[1].group_count().get(), 2);
         assert_eq!(seen[1].iterations(), 1);
     }
-
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn four_processors_two_groups_two_threads_per_group() {
         let Some(processors) = FOUR_PROCESSORS.as_ref() else {
@@ -485,7 +487,7 @@ mod tests {
         assert_eq!(seen[3].group_count().get(), 2);
         assert_eq!(seen[3].iterations(), 1);
     }
-
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn three_processors_three_groups_one_thread_per_group() {
         let Some(processors) = THREE_PROCESSORS.as_ref() else {
@@ -523,9 +525,9 @@ mod tests {
         assert_eq!(seen[2].group_count().get(), 3);
         assert_eq!(seen[2].iterations(), 1);
     }
-
     #[test]
     #[should_panic]
+    #[cfg_attr(miri, ignore)]
     fn four_processors_three_groups_panics() {
         let Some(processors) = FOUR_PROCESSORS.as_ref() else {
             println!("Skipping test four_processors_three_groups_panics: not enough processors");
@@ -541,6 +543,7 @@ mod tests {
 
     #[test]
     #[should_panic]
+    #[cfg_attr(miri, ignore)]
     fn one_processor_two_groups_panics() {
         let mut pool = ThreadPool::new(ProcessorSet::single());
 
@@ -551,6 +554,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn state_flow_from_thread_to_iteration_to_cleanup() {
         let mut pool = ThreadPool::new(ProcessorSet::single());
         let cleanup_states = Arc::new(Mutex::new(Vec::new()));
@@ -576,6 +580,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn measurement_wrapper_called_before_and_after_timed_execution() {
         let mut pool = ThreadPool::new(ProcessorSet::single());
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -618,6 +623,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn measure_output_threaded_through_logic() {
         let Some(processors) = TWO_PROCESSORS.as_ref() else {
             println!("Skipping test measure_output_threaded_through_logic: not enough processors");
@@ -643,6 +649,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn cleanup_executed_after_measurement_wrapper_end() {
         let mut pool = ThreadPool::new(ProcessorSet::single());
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -750,6 +757,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn call_counts_one_processor() {
         let mut pool = ThreadPool::new(ProcessorSet::single());
@@ -757,6 +765,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn call_counts_four_processors_one_group() {
         let Some(processors) = FOUR_PROCESSORS.as_ref() else {
             println!("Skipping test call_counts_four_processors_one_group: not enough processors");
@@ -767,6 +776,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn call_counts_two_processors_two_groups() {
         let Some(processors) = TWO_PROCESSORS.as_ref() else {
             println!("Skipping test call_counts_two_processors_two_groups: not enough processors");
@@ -777,6 +787,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn call_counts_four_processors_two_groups() {
         let Some(processors) = FOUR_PROCESSORS.as_ref() else {
             println!("Skipping test call_counts_four_processors_two_groups: not enough processors");

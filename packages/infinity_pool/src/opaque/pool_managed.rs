@@ -835,7 +835,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(miri))] // Blocking on a parking_lot Mutex in Miri is not supported.
+    #[cfg_attr(miri, ignore)] // Blocking on a parking_lot Mutex in Miri is not supported.
     fn concurrent_access_basic() {
         use std::sync::{Arc, Barrier};
         use std::thread;

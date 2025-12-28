@@ -208,7 +208,6 @@ fn worker_entrypoint(rx: &mpsc::Receiver<Command>) {
     }
 }
 
-#[cfg(not(miri))] // ProcessorSet is not supported under Miri.
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{self, AtomicUsize};
@@ -218,6 +217,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg_attr(miri, ignore)] // ProcessorSet is not supported under Miri.
     fn smoke_test_all() {
         let expected_default = ProcessorSet::default();
         let expected_thread_count = expected_default.len();
@@ -242,6 +242,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // ProcessorSet is not supported under Miri.
     fn smoke_test_one() {
         let processor_set = ProcessorSet::builder().take(nz!(1)).unwrap();
         let expected_thread_count = processor_set.len();

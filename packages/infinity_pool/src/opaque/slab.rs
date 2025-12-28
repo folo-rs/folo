@@ -1032,7 +1032,7 @@ mod tests {
     // Miri correctly detects the OOB pointer arithmetic, so "fails" the test.
     // This behavior is acceptable because being in-bounds is anyway a safety requirement.
     // We are just being extra thorough here by explicitly checking, which is potentially overkill.
-    #[cfg(not(miri))]
+    #[cfg_attr(miri, ignore)]
     fn debug_build_remove_with_out_of_bounds_handle_from_wrong_slab_panics() {
         // We create slabs with different capacities - a slab with large items, meaning it
         // has a small capacity, and a slab with small items, meaning it has a large capacity.

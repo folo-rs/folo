@@ -441,7 +441,7 @@ mod tests {
     use super::*;
     use crate::{MockHardwareInfoClient, MockHardwareTrackerClient, RegionLocalExt, region_local};
 
-    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn real_smoke_test() {
         region_local! {
@@ -459,7 +459,7 @@ mod tests {
         });
     }
 
-    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn with_non_const_initial_value() {
         region_local!(static FAVORITE_COLOR: Arc<String> = Arc::new("blue".to_string()));
@@ -469,7 +469,7 @@ mod tests {
         });
     }
 
-    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn non_static() {
         let favorite_color_linked =
@@ -501,7 +501,7 @@ mod tests {
         // so we cannot assume that the value is the same in the main thread now.
     }
 
-    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn non_static_sync() {
         let favorite_color_linked =
@@ -839,7 +839,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(miri))] // Test uses thread::sleep which is not supported by Miri
+    #[cfg_attr(miri, ignore)] // Test uses thread::sleep which is not supported by Miri
     fn initializer_panic_does_not_block_other_threads() {
         use std::sync::{Arc, Barrier};
         use std::thread;

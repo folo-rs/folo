@@ -3,8 +3,6 @@
 //! These tests generate temporary workspace structures on the fly
 //! to verify the tool's behavior in realistic scenarios.
 
-#![cfg(not(miri))]
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -235,6 +233,7 @@ edition = "2021"
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
 fn package_detection_in_simple_workspace() {
     let workspace = create_simple_workspace();
     let workspace_root = workspace.path();
@@ -267,6 +266,7 @@ fn package_detection_in_simple_workspace() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
 fn package_detection_package_a_utils() {
     let workspace = create_simple_workspace();
     let workspace_root = workspace.path();
@@ -286,6 +286,7 @@ fn package_detection_package_a_utils() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
 fn package_detection_package_b() {
     let workspace = create_simple_workspace();
     let workspace_root = workspace.path();
@@ -305,6 +306,7 @@ fn package_detection_package_b() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
 fn workspace_root_file_fallback() {
     let workspace = create_simple_workspace();
     let workspace_root = workspace.path();
@@ -324,6 +326,7 @@ fn workspace_root_file_fallback() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
 fn readme_fallback() {
     let workspace = create_simple_workspace();
     let workspace_root = workspace.path();
@@ -343,6 +346,7 @@ fn readme_fallback() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
 fn nonexistent_file_fallback() {
     let workspace = create_simple_workspace();
     let workspace_root = workspace.path();
@@ -374,6 +378,7 @@ fn nonexistent_file_fallback() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
 fn cross_workspace_rejection() {
     let workspace1 = create_simple_workspace();
     let workspace1_root = workspace1.path();
@@ -401,6 +406,7 @@ fn cross_workspace_rejection() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
 fn outside_workspace_rejection() {
     let workspace = create_simple_workspace();
     let workspace_root = workspace.path();
@@ -431,6 +437,7 @@ fn outside_workspace_rejection() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
 fn relative_path_escape_rejection() {
     let workspace = create_simple_workspace();
     let workspace_root = workspace.path();
@@ -455,6 +462,7 @@ fn relative_path_escape_rejection() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
 fn malformed_package_handling() {
     let workspace = create_edge_cases_workspace();
     let workspace_root = workspace.path();
@@ -474,6 +482,7 @@ fn malformed_package_handling() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
 fn cargo_integration_mode() {
     let workspace = create_simple_workspace();
     let workspace_root = workspace.path();
@@ -504,6 +513,7 @@ fn cargo_integration_mode() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
 fn workspace_scope_cargo_integration() {
     let workspace = create_simple_workspace();
     let workspace_root = workspace.path();

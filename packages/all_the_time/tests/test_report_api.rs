@@ -5,7 +5,7 @@ use std::time::Duration;
 use all_the_time::Session as TimeSession;
 
 #[test]
-#[cfg(not(miri))] // Test uses the real platform which cannot be executed under Miri.
+#[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 fn all_the_time_report_api() {
     let session = TimeSession::new();
 

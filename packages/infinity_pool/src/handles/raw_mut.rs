@@ -253,7 +253,7 @@ mod tests {
         assert_eq!(unsafe { handle_in_thread.ptr().as_ref() }.get(), 2);
     }
 
-    #[cfg(not(miri))] // Too much data for Miri - runs too slow.
+    #[cfg_attr(miri, ignore)] // Too much data for Miri - runs too slow.
     #[test]
     fn slab_index_returns_correct_value() {
         let mut pool = RawPinnedPool::<u64>::new();

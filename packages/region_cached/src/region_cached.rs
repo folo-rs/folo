@@ -534,7 +534,7 @@ mod tests {
         region_cached,
     };
 
-    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn real_smoke_test() {
         region_cached! {
@@ -555,7 +555,7 @@ mod tests {
         assert_eq!(FAVORITE_NUMBER.get_cached(), 42);
     }
 
-    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn with_non_const_initial_value() {
         region_cached!(static FAVORITE_COLOR: Arc<String> = Arc::new("blue".to_string()));
@@ -565,7 +565,7 @@ mod tests {
         });
     }
 
-    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn non_static() {
         let favorite_color_linked =
@@ -598,7 +598,7 @@ mod tests {
         });
     }
 
-    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn non_static_sync() {
         let favorite_color_linked =
@@ -930,7 +930,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(miri))] // Test uses thread::sleep which is not supported by Miri
+    #[cfg_attr(miri, ignore)] // Test uses thread::sleep which is not supported by Miri
     fn clone_panic_does_not_block_other_threads() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::{Arc, Barrier};

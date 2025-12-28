@@ -508,7 +508,7 @@ mod tests {
         assert_eq!(cloned_processor_set.len(), 2);
     }
 
-    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn from_processor_preserves_processor() {
         let one = ProcessorSet::builder().take(nz!(1)).unwrap();
@@ -524,7 +524,7 @@ mod tests {
         assert_eq!(one_again.processors().first(), one.processors().first());
     }
 
-    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn from_processors_preserves_processors() {
         if ProcessorSet::builder().take_all().unwrap().len() < 2 {
@@ -557,7 +557,7 @@ mod tests {
         }
     }
 
-    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn from_processors_with_one_preserves_processors() {
         let one = ProcessorSet::builder().take(nz!(1)).unwrap();
@@ -568,7 +568,7 @@ mod tests {
         assert_eq!(one_again.processors().first(), one.processors().first());
     }
 
-    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn to_builder_preserves_processors() {
         let set = ProcessorSet::builder().take(nz!(1)).unwrap();
@@ -584,7 +584,7 @@ mod tests {
         assert_eq!(processor1, processor2);
     }
 
-    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn inherit_on_pinned() {
         thread::spawn(|| {
@@ -608,7 +608,7 @@ mod tests {
         .unwrap();
     }
 
-    #[cfg(not(miri))] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn single_contains_exactly_one_processor() {
         let single_processor_set = ProcessorSet::single();
@@ -619,9 +619,7 @@ mod tests {
 
 /// Fallback PAL integration tests - these test the integration between `ProcessorSet`
 /// and the fallback platform abstraction layer.
-///
-/// Miri is excluded because `std::thread::available_parallelism()` is not supported under Miri.
-#[cfg(all(test, not(miri)))]
+#[cfg(test)]
 mod tests_fallback {
     use std::thread;
 
@@ -633,6 +631,7 @@ mod tests_fallback {
     use crate::{HardwareTracker, Processor, ProcessorSet};
 
     #[test]
+    #[cfg_attr(miri, ignore)] // `std::thread::available_parallelism()` is not supported under Miri.
     fn smoke_test() {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -679,6 +678,7 @@ mod tests_fallback {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // `std::thread::available_parallelism()` is not supported under Miri.
     fn pin_updates_tracker() {
         let platform = &BUILD_TARGET_PLATFORM;
         let pal = PlatformFacade::Fallback(platform);
@@ -699,6 +699,7 @@ mod tests_fallback {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // `std::thread::available_parallelism()` is not supported under Miri.
     fn spawn_thread_pins_correctly() {
         use std::sync::mpsc;
 
@@ -727,6 +728,7 @@ mod tests_fallback {
         assert!(is_pinned);
     }
 
+    #[cfg_attr(miri, ignore)] // `std::thread::available_parallelism()` is not supported under Miri.
     #[test]
     fn spawn_threads_pins_all_correctly() {
         let platform = &BUILD_TARGET_PLATFORM;
@@ -749,7 +751,7 @@ mod tests_fallback {
             assert!(is_pinned);
         }
     }
-
+    #[cfg_attr(miri, ignore)] // `std::thread::available_parallelism()` is not supported under Miri.
     #[test]
     fn from_processor_preserves_data() {
         let platform = &BUILD_TARGET_PLATFORM;
@@ -768,6 +770,7 @@ mod tests_fallback {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // `std::thread::available_parallelism()` is not supported under Miri.
     fn inherit_on_pinned() {
         use std::thread;
 
@@ -790,6 +793,7 @@ mod tests_fallback {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // `std::thread::available_parallelism()` is not supported under Miri.
     fn to_builder_preserves_processors() {
         let set = ProcessorSet::builder().take(nz!(1)).unwrap();
 
@@ -803,7 +807,7 @@ mod tests_fallback {
 
         assert_eq!(processor1.id(), processor2.id());
     }
-
+    #[cfg_attr(miri, ignore)] // `std::thread::available_parallelism()` is not supported under Miri.
     #[test]
     fn default_returns_all_processors() {
         let default_set = ProcessorSet::default();

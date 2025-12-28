@@ -499,16 +499,11 @@ Avoid algorithms that allocate memory at runtime when an allocation-free alterna
 
 Tests that talk to the real operating system generally fail to execute under Miri. This is fine and
 expected. However, a Miri test run must still succeed with a clean result! If there are tests that
-cannot be executed under Miri, they should be excluded via `#[cfg(not(miri))]` (plus a comment
+cannot be executed under Miri, they should be excluded via `#[cfg_attr(miri, ignore))]` (plus a comment
 justifying why it is correct to exclude them).
 
 Naturally, if it is possible to redesign a test so it does not rely on the operating system, that
 is even better. However, this is not always possible.
-
-If excluding tests due to  `#[cfg(not(miri))]` causes warnings about unused imports and dead code,
-simply suppress these warnings at the `lib.rs` level via
-`#![cfg_attr(miri, allow(dead_code, unused_imports))]` because we do not want to restructure our
-code/imports simply because some of it is disabled under Miri.
 
 Miri is too slow when running tests with large data sets (anything with 100s or 1000s of items).
 Exclude such tests from running under Miri.
