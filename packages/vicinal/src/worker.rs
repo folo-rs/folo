@@ -1,11 +1,11 @@
 //! Worker thread logic for executing tasks from queues.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{self, AtomicBool, Ordering};
 
-use crossbeam::queue::SegQueue;
 use infinity_pool::BlindPooledMut;
 
-use crate::VicinalTask;
+use crate::{SpinFreeMutex, VicinalTask};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum IterationResult {
@@ -16,15 +16,15 @@ pub(crate) enum IterationResult {
 }
 
 pub(crate) struct WorkerCore<'a> {
-    urgent_queue: &'a SegQueue<BlindPooledMut<dyn VicinalTask>>,
-    regular_queue: &'a SegQueue<BlindPooledMut<dyn VicinalTask>>,
+    urgent_queue: &'a SpinFreeMutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
+    regular_queue: &'a SpinFreeMutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
     shutdown_flag: &'a AtomicBool,
 }
 
 impl<'a> WorkerCore<'a> {
     pub(crate) fn new(
-        urgent_queue: &'a SegQueue<BlindPooledMut<dyn VicinalTask>>,
-        regular_queue: &'a SegQueue<BlindPooledMut<dyn VicinalTask>>,
+        urgent_queue: &'a SpinFreeMutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
+        regular_queue: &'a SpinFreeMutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
         shutdown_flag: &'a AtomicBool,
     ) -> Self {
         Self {
@@ -44,12 +44,14 @@ impl<'a> WorkerCore<'a> {
             return IterationResult::Shutdown;
         }
 
-        if let Some(mut task) = self.urgent_queue.pop() {
+        let task = self.urgent_queue.lock().pop_front();
+        if let Some(mut task) = task {
             task.as_pin_mut().call();
             return IterationResult::ExecutedUrgent;
         }
 
-        if let Some(mut task) = self.regular_queue.pop() {
+        let task = self.regular_queue.lock().pop_front();
+        if let Some(mut task) = task {
             task.as_pin_mut().call();
             return IterationResult::ExecutedRegular;
         }
@@ -95,8 +97,8 @@ mod tests {
 
     #[test]
     fn empty_queues_no_shutdown_returns_waiting() {
-        let urgent = SegQueue::new();
-        let regular = SegQueue::new();
+        let urgent = SpinFreeMutex::new(VecDeque::new());
+        let regular = SpinFreeMutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
@@ -106,8 +108,8 @@ mod tests {
 
     #[test]
     fn empty_queues_with_shutdown_returns_shutdown() {
-        let urgent = SegQueue::new();
-        let regular = SegQueue::new();
+        let urgent = SpinFreeMutex::new(VecDeque::new());
+        let regular = SpinFreeMutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(true);
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
@@ -121,12 +123,12 @@ mod tests {
         COUNTER.store(0, Ordering::Relaxed);
 
         let pool = BlindPool::new();
-        let urgent = SegQueue::new();
-        let regular = SegQueue::new();
+        let urgent = SpinFreeMutex::new(VecDeque::new());
+        let regular = SpinFreeMutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
 
         let task = pool.insert(CountingTask::new(&COUNTER));
-        urgent.push(task.cast_vicinal_task());
+        urgent.lock().push_back(task.cast_vicinal_task());
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
 
@@ -142,14 +144,14 @@ mod tests {
         REGULAR_COUNTER.store(0, Ordering::Relaxed);
 
         let pool = BlindPool::new();
-        let urgent = SegQueue::new();
-        let regular = SegQueue::new();
+        let urgent = SpinFreeMutex::new(VecDeque::new());
+        let regular = SpinFreeMutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
 
         let urgent_task = pool.insert(CountingTask::new(&URGENT_COUNTER));
         let regular_task = pool.insert(CountingTask::new(&REGULAR_COUNTER));
-        urgent.push(urgent_task.cast_vicinal_task());
-        regular.push(regular_task.cast_vicinal_task());
+        urgent.lock().push_back(urgent_task.cast_vicinal_task());
+        regular.lock().push_back(regular_task.cast_vicinal_task());
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
 
@@ -165,12 +167,12 @@ mod tests {
         COUNTER.store(0, Ordering::Relaxed);
 
         let pool = BlindPool::new();
-        let urgent = SegQueue::new();
-        let regular = SegQueue::new();
+        let urgent = SpinFreeMutex::new(VecDeque::new());
+        let regular = SpinFreeMutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
 
         let task = pool.insert(CountingTask::new(&COUNTER));
-        regular.push(task.cast_vicinal_task());
+        regular.lock().push_back(task.cast_vicinal_task());
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
 
@@ -184,12 +186,12 @@ mod tests {
         COUNTER.store(0, Ordering::Relaxed);
 
         let pool = BlindPool::new();
-        let urgent = SegQueue::new();
-        let regular = SegQueue::new();
+        let urgent = SpinFreeMutex::new(VecDeque::new());
+        let regular = SpinFreeMutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(true);
 
         let task = pool.insert(CountingTask::new(&COUNTER));
-        regular.push(task.cast_vicinal_task());
+        regular.lock().push_back(task.cast_vicinal_task());
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
 

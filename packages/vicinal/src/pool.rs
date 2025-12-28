@@ -175,8 +175,8 @@ fn worker_loop(inner: &PoolInner, processor_id: ProcessorId, worker_index: u32) 
 
                 // Re-check after registering listener to avoid lost wakeups.
                 // Acquire ordering synchronizes with Release in signal_shutdown and task push.
-                if !state.urgent_queue.is_empty()
-                    || !state.regular_queue.is_empty()
+                if !state.urgent_queue.lock().is_empty()
+                    || !state.regular_queue.lock().is_empty()
                     || state.shutdown_flag.load(Ordering::Acquire)
                 {
                     continue;

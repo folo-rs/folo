@@ -44,7 +44,6 @@ where
     type Output = R;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // SAFETY: JoinHandle is Unpin because PooledReceiver is Unpin.
         let receiver = &mut self.receiver;
         let pinned_receiver = Pin::new(receiver);
 

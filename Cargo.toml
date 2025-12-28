@@ -23,41 +23,23 @@ incremental = false
 # The packages we publish.
 all_the_time = { version = "0.4.5", path = "packages/all_the_time" }
 alloc_tracker = { version = "0.5.9", path = "packages/alloc_tracker" }
-blind_pool = { version = "0.5.1", path = "packages/blind_pool" }
 cpulist = { version = "1.0.1", path = "packages/cpulist" }
-events = { version = "0.5.1", path = "packages/events" }
 events_once = { version = "0.5.9", path = "packages/events_once" }
 fast_time = { version = "0.1.10", path = "packages/fast_time" }
 folo_ffi = { version = "0.1.7", path = "packages/folo_ffi" }
-folo_utils = { version = "0.1.3", path = "packages/folo_utils" }
 infinity_pool = { version = "0.8.1", path = "packages/infinity_pool" }
 linked = { version = "1.0.0", path = "packages/linked" }
 linked_macros = { version = "1.0.0", path = "packages/linked_macros" }
 linked_macros_impl = { version = "1.0.0", path = "packages/linked_macros_impl" }
 many_cpus = { version = "1.1.0", path = "packages/many_cpus" }
-many_cpus_benchmarking = { version = "0.1.33", path = "packages/many_cpus_benchmarking" }
 new_zealand = { version = "1.0.1", path = "packages/new_zealand" }
 nm = { version = "0.1.21", path = "packages/nm" }
-opaque_pool = { version = "0.4.2", path = "packages/opaque_pool" }
-par_bench = { version = "0.2.22", path = "packages/par_bench" }
-pinned_pool = { version = "0.2.1", path = "packages/pinned_pool" }
-region_cached = { version = "1.0.3", path = "packages/region_cached" }
-region_local = { version = "1.0.3", path = "packages/region_local" }
-vicinal = { version = "0.1.0", path = "packages/vicinal" }
-
-# Internal packages we do not publish.
-benchmarks = { path = "packages/benchmarks" }
-testing = { path = "packages/testing" }
-ui_tests = { path = "packages/ui_tests" }
 
 # The packages we consume. We mostly only enable "std" features here, the rest in individual packages.
 arc-swap = { version = "1.7", default-features = false }
 argh = { version = "0.1.13", default-features = false, features = ["help"] }
 axum = { version = "0.8", default-features = false }
-cargo = { version = "0.89.0", default-features = false }
 criterion = { version = "0.7", default-features = false }
-crossbeam = { version = "0.8", default-features = false, features = ["std"] }
-darling = { version = "0.20", default-features = false }
 deranged = { version = "0.5", default-features = false }
 derive_more = { version = "2.0", default-features = false }
 event-listener = { version = "5.4", default-features = false, features = ["std"] }
@@ -68,7 +50,6 @@ futures = { version = "0.3", default-features = false, features = [
     "std",
     "executor",
 ] }
-futures-executor = { version = "0.3", default-features = false }
 hash_hasher = { version = "2.0", default-features = false }
 heapless = { version = "0.9", default-features = false }
 http = { version = "1.2", default-features = false, features = ["std"] }

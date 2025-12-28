@@ -129,13 +129,13 @@ impl Scheduler {
 
         // Push to the appropriate queue.
         if urgent {
-            state.urgent_queue.push(dyn_task);
+            state.urgent_queue.lock().push_back(dyn_task);
             trace!(
                 pool_id = self.inner.pool_id,
                 processor_id, "spawned urgent task"
             );
         } else {
-            state.regular_queue.push(dyn_task);
+            state.regular_queue.lock().push_back(dyn_task);
             trace!(
                 pool_id = self.inner.pool_id,
                 processor_id, "spawned regular task"

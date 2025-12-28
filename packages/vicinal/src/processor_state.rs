@@ -1,20 +1,20 @@
 //! Per-processor state for worker threads.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use crossbeam::queue::SegQueue;
 use event_listener::Event;
 use events_once::EventLake;
 use infinity_pool::{BlindPool, BlindPooledMut};
 
-use crate::VicinalTask;
+use crate::{SpinFreeMutex, VicinalTask};
 
 pub(crate) struct ProcessorState {
     /// Queue for high-priority tasks. These are executed before regular tasks.
-    pub(crate) urgent_queue: SegQueue<BlindPooledMut<dyn VicinalTask>>,
+    pub(crate) urgent_queue: SpinFreeMutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
 
     /// Queue for normal-priority tasks.
-    pub(crate) regular_queue: SegQueue<BlindPooledMut<dyn VicinalTask>>,
+    pub(crate) regular_queue: SpinFreeMutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
 
     /// Event used to wake up sleeping workers when new tasks are added.
     pub(crate) wake_event: Event,
@@ -39,8 +39,8 @@ pub(crate) struct ProcessorState {
 impl ProcessorState {
     pub(crate) fn new() -> Self {
         Self {
-            urgent_queue: SegQueue::new(),
-            regular_queue: SegQueue::new(),
+            urgent_queue: SpinFreeMutex::new(VecDeque::new()),
+            regular_queue: SpinFreeMutex::new(VecDeque::new()),
             wake_event: Event::new(),
             shutdown_flag: AtomicBool::new(false),
             workers_spawned: AtomicBool::new(false),
@@ -78,8 +78,8 @@ mod tests {
     fn new_creates_empty_queues() {
         let state = ProcessorState::new();
 
-        assert!(state.urgent_queue.pop().is_none());
-        assert!(state.regular_queue.pop().is_none());
+        assert!(state.urgent_queue.lock().pop_front().is_none());
+        assert!(state.regular_queue.lock().pop_front().is_none());
     }
 
     #[test]

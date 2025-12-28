@@ -14,7 +14,6 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
-crossbeam = { workspace = true }
 event-listener = { workspace = true }
 events_once = { workspace = true }
 fast_time = { workspace = true }
@@ -23,6 +22,7 @@ many_cpus = { workspace = true }
 new_zealand = { workspace = true }
 nm = { workspace = true }
 parking_lot = { workspace = true }
+parking_lot_core = "0.9"
 pin-project = { workspace = true }
 tracing = { workspace = true }
 
