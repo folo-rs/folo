@@ -15,6 +15,8 @@ println!("Selected processors: {selected_processors:?}");
 println!("As cpulist: {}", cpulist::emit(selected_processors));
 ```
 
+## See also
+
 More details in the [package documentation](https://docs.rs/cpulist/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for

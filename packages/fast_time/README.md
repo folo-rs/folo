@@ -30,6 +30,8 @@ let fast_instant = clock.now();
 let std_instant: std::time::Instant = fast_instant.into();
 ```
 
+## See also
+
 More details in the [package documentation](https://docs.rs/fast_time/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for

@@ -43,6 +43,8 @@ The package is tested on the following operating systems:
 On non-Windows non-Linux platforms (e.g. mac OS), the package will not uphold the processor
 locality guarantees, but will otherwise function correctly as a worker pool.
 
+## See also
+
 More details in the [package documentation](https://docs.rs/vicinal/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for

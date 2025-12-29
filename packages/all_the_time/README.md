@@ -31,6 +31,8 @@ fn main() {
 }
 ```
 
+## See also
+
 More details in the [package documentation](https://docs.rs/all_the_time/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for

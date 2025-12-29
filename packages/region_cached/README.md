@@ -23,6 +23,8 @@ FAVORITE_COLOR.with_cached(|color| {
 FAVORITE_COLOR.set_global("red".to_string());
 ```
 
+## See also
+
 More details in the [package documentation](https://docs.rs/region_cached/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for

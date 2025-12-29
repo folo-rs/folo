@@ -12,6 +12,8 @@ fn foo(x: NonZero<u32>) { println!("NonZero value: {x}"); }
 foo(nz!(42));
 ```
 
+## See also
+
 More details in the [package documentation](https://docs.rs/new_zealand/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for

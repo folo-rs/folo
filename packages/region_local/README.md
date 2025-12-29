@@ -27,6 +27,8 @@ FAVORITE_COLOR.with_local(|color| {
 FAVORITE_COLOR.set_local("red".to_string());
 ```
 
+## See also
+
 More details in the [package documentation](https://docs.rs/region_local/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for

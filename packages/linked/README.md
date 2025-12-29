@@ -78,6 +78,8 @@ assert_eq!(counter.local_events(), 2);  // Still 2 on main thread
 assert_eq!(counter.total_events(), 3);   // Global total visible everywhere
 ```
 
+## See also
+
 More details in the [package documentation](https://docs.rs/linked/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for

@@ -37,6 +37,8 @@ fn benchmark(c: &mut criterion::Criterion) {
 }
 ```
 
+## See also
+
 More details in the [package documentation](https://docs.rs/many_cpus_benchmarking/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for

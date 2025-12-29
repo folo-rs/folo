@@ -36,6 +36,8 @@ For each defined event, the following metrics are collected:
 * Mean magnitude of observations (`i64`).
 * (Optional) Histogram of magnitudes, with configurable bucket boundaries (`i64`).
 
+## See also
+
 More details in the [package documentation](https://docs.rs/nm/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for

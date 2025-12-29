@@ -14,6 +14,8 @@ let threads = ProcessorSet::default().spawn_threads(|processor| {
 });
 ```
 
+## See also
+
 More details in the [package documentation](https://docs.rs/many_cpus/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
