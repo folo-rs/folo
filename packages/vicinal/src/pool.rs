@@ -244,6 +244,25 @@ impl Pool {
     pub fn scheduler(&self) -> Scheduler {
         Scheduler::new(Arc::clone(&self.inner))
     }
+
+    /// Checks if the pool appears idle (all queues empty).
+    ///
+    /// This is a non-exact heuristic for benchmarking purposes only.
+    /// It checks if all initialized processors have empty queues.
+    ///
+    /// This is not an exact guarantee and is not part of the public API contract.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn __private_is_idle(&self) -> bool {
+        for (_processor_id, state) in self.inner.registry.iter_initialized() {
+            // Check if queues are empty.
+            if !state.urgent_queue.lock().is_empty() || !state.regular_queue.lock().is_empty() {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 impl Default for Pool {

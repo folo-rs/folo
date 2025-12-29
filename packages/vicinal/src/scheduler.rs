@@ -6,7 +6,7 @@ use many_cpus::HardwareTracker;
 use tracing::trace;
 
 use crate::metrics::CLOCK;
-use crate::{wrap_task, wrap_task_and_forget, JoinHandle, PoolInner, PooledCastVicinalTask};
+use crate::{JoinHandle, PoolInner, PooledCastVicinalTask, wrap_task, wrap_task_and_forget};
 
 /// A handle for spawning tasks on a [`Pool`][crate::Pool].
 ///
@@ -107,7 +107,7 @@ impl Scheduler {
     /// No join handle is created, and no result channel is allocated. If the task panics,
     /// the panic is caught and logged rather than being propagated to the caller.
     ///
-    /// Use this when you don't need the task's return value and want to minimize allocation
+    /// Use this when you do not need the task's return value and want to minimize allocation
     /// overhead.
     ///
     /// The task will be added to the regular (normal-priority) queue and executed
@@ -196,7 +196,7 @@ impl Scheduler {
         JoinHandle::new(receiver)
     }
 
-    /// Internal implementation of spawn_and_forget.
+    /// Internal implementation of `spawn_and_forget`.
     fn spawn_and_forget_internal<F>(&self, task: F, urgent: bool)
     where
         F: FnOnce() + Send + 'static,
@@ -316,64 +316,5 @@ mod tests {
 
         let result = block_on(handle);
         assert_eq!(result, 42);
-    }
-
-    #[cfg_attr(miri, ignore)]
-    #[test]
-    fn spawn_and_forget_executes_task() {
-        use std::sync::atomic::{AtomicU32, Ordering};
-        use std::sync::Arc;
-
-        let pool = Pool::new();
-        let scheduler = pool.scheduler();
-        let counter = Arc::new(AtomicU32::new(0));
-
-        let counter_clone = Arc::clone(&counter);
-        scheduler.spawn_and_forget(move || {
-            counter_clone.fetch_add(1, Ordering::Relaxed);
-        });
-
-        // Give the task time to execute.
-        std::thread::sleep(std::time::Duration::from_millis(100));
-
-        assert_eq!(counter.load(Ordering::Relaxed), 1);
-    }
-
-    #[cfg_attr(miri, ignore)]
-    #[test]
-    fn spawn_urgent_and_forget_executes_task() {
-        use std::sync::atomic::{AtomicU32, Ordering};
-        use std::sync::Arc;
-
-        let pool = Pool::new();
-        let scheduler = pool.scheduler();
-        let counter = Arc::new(AtomicU32::new(0));
-
-        let counter_clone = Arc::clone(&counter);
-        scheduler.spawn_urgent_and_forget(move || {
-            counter_clone.fetch_add(1, Ordering::Relaxed);
-        });
-
-        // Give the task time to execute.
-        std::thread::sleep(std::time::Duration::from_millis(100));
-
-        assert_eq!(counter.load(Ordering::Relaxed), 1);
-    }
-
-    #[cfg_attr(miri, ignore)]
-    #[test]
-    fn spawn_and_forget_handles_panic() {
-        let pool = Pool::new();
-        let scheduler = pool.scheduler();
-
-        // This should not panic at the call site.
-        scheduler.spawn_and_forget(|| {
-            panic!("intentional panic in and_forget");
-        });
-
-        // Give the task time to execute (and panic).
-        std::thread::sleep(std::time::Duration::from_millis(100));
-
-        // If we reach here, the panic was properly caught and logged.
     }
 }

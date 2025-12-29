@@ -80,6 +80,17 @@ where
     )
 }
 
+/// Extracts a human-readable message from a panic payload.
+fn extract_panic_message(panic_payload: &Box<dyn Any + Send>) -> String {
+    if let Some(&s) = panic_payload.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
 pub(crate) fn wrap_task_and_forget<F>(task: F, spawn_time: Instant) -> impl VicinalTask
 where
     F: FnOnce() + Send + 'static,
@@ -88,14 +99,7 @@ where
         move || {
             let result = panic::catch_unwind(AssertUnwindSafe(task));
             if let Err(panic_payload) = result {
-                // Log the panic instead of forwarding it.
-                let message = if let Some(&s) = panic_payload.downcast_ref::<&str>() {
-                    s.to_string()
-                } else if let Some(s) = panic_payload.downcast_ref::<String>() {
-                    s.clone()
-                } else {
-                    "unknown panic payload".to_string()
-                };
+                let message = extract_panic_message(&panic_payload);
                 tracing::error!("Task panicked: {}", message);
             }
         },

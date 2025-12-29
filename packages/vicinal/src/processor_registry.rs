@@ -61,7 +61,6 @@ impl ProcessorRegistry {
         self.states.iter().filter(|s| s.get().is_some()).count()
     }
 
-    #[cfg(test)]
     #[allow(
         clippy::cast_possible_truncation,
         reason = "index is guaranteed to fit in ProcessorId because the registry is sized exactly to max_processor_count"

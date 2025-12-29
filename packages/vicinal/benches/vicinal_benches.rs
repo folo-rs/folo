@@ -155,7 +155,6 @@ fn entrypoint(c: &mut Criterion) {
         let scheduler = pool.scheduler();
 
         b.iter_custom(|iterations| {
-            let start = Instant::now();
             let _alloc_span = spawn_and_forget_single_alloc
                 .measure_process()
                 .iterations(iterations);
@@ -163,15 +162,18 @@ fn entrypoint(c: &mut Criterion) {
                 .measure_process()
                 .iterations(iterations);
 
+            let start = Instant::now();
+
             for _ in 0..iterations {
                 scheduler.spawn_and_forget(|| {
                     black_box(simulate_work());
                 });
             }
 
-            // Give tasks time to complete before measuring elapsed time.
-            // We use a small sleep to ensure tasks have started executing.
-            thread::sleep(std::time::Duration::from_micros(100));
+            // Wait for tasks to complete.
+            while !pool.__private_is_idle() {
+                thread::yield_now();
+            }
 
             start.elapsed()
         });
@@ -185,13 +187,14 @@ fn entrypoint(c: &mut Criterion) {
         let scheduler = pool.scheduler();
 
         b.iter_custom(|iterations| {
-            let start = Instant::now();
             let _alloc_span = spawn_and_forget_100_alloc
                 .measure_process()
                 .iterations(iterations);
             let _time_span = spawn_and_forget_100_time
                 .measure_process()
                 .iterations(iterations);
+
+            let start = Instant::now();
 
             for _ in 0..iterations {
                 for _ in 0..100 {
@@ -200,9 +203,10 @@ fn entrypoint(c: &mut Criterion) {
                     });
                 }
 
-                // Give tasks time to complete before measuring elapsed time.
-                // We use a small sleep to ensure tasks have started executing.
-                thread::sleep(std::time::Duration::from_micros(100));
+                // Wait for tasks to complete.
+                while !pool.__private_is_idle() {
+                    thread::yield_now();
+                }
             }
 
             start.elapsed()
