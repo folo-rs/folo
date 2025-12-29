@@ -60,7 +60,6 @@ mod pool;
 mod processor_registry;
 mod processor_state;
 mod scheduler;
-mod spin_free_mutex;
 mod task;
 mod worker;
 
@@ -70,6 +69,5 @@ pub use pool::*;
 pub(crate) use processor_registry::ProcessorRegistry;
 pub(crate) use processor_state::ProcessorState;
 pub use scheduler::*;
-pub(crate) use spin_free_mutex::SpinFreeMutex;
 pub(crate) use task::*;
 pub(crate) use worker::*;

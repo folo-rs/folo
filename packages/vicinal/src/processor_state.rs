@@ -6,15 +6,16 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use event_listener::Event;
 use events_once::EventLake;
 use infinity_pool::{BlindPool, BlindPooledMut};
+use parking_lot::Mutex;
 
-use crate::{SpinFreeMutex, VicinalTask};
+use crate::VicinalTask;
 
 pub(crate) struct ProcessorState {
     /// Queue for high-priority tasks. These are executed before regular tasks.
-    pub(crate) urgent_queue: SpinFreeMutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
+    pub(crate) urgent_queue: Mutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
 
     /// Queue for normal-priority tasks.
-    pub(crate) regular_queue: SpinFreeMutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
+    pub(crate) regular_queue: Mutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
 
     /// Event used to wake up sleeping workers when new tasks are added.
     pub(crate) wake_event: Event,
@@ -39,8 +40,8 @@ pub(crate) struct ProcessorState {
 impl ProcessorState {
     pub(crate) fn new() -> Self {
         Self {
-            urgent_queue: SpinFreeMutex::new(VecDeque::new()),
-            regular_queue: SpinFreeMutex::new(VecDeque::new()),
+            urgent_queue: Mutex::new(VecDeque::new()),
+            regular_queue: Mutex::new(VecDeque::new()),
             wake_event: Event::new(),
             shutdown_flag: AtomicBool::new(false),
             workers_spawned: AtomicBool::new(false),

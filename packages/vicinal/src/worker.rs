@@ -4,8 +4,9 @@ use std::collections::VecDeque;
 use std::sync::atomic::{self, AtomicBool, Ordering};
 
 use infinity_pool::BlindPooledMut;
+use parking_lot::Mutex;
 
-use crate::{SpinFreeMutex, VicinalTask};
+use crate::VicinalTask;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum IterationResult {
@@ -16,15 +17,15 @@ pub(crate) enum IterationResult {
 }
 
 pub(crate) struct WorkerCore<'a> {
-    urgent_queue: &'a SpinFreeMutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
-    regular_queue: &'a SpinFreeMutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
+    urgent_queue: &'a Mutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
+    regular_queue: &'a Mutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
     shutdown_flag: &'a AtomicBool,
 }
 
 impl<'a> WorkerCore<'a> {
     pub(crate) fn new(
-        urgent_queue: &'a SpinFreeMutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
-        regular_queue: &'a SpinFreeMutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
+        urgent_queue: &'a Mutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
+        regular_queue: &'a Mutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
         shutdown_flag: &'a AtomicBool,
     ) -> Self {
         Self {
@@ -97,8 +98,8 @@ mod tests {
 
     #[test]
     fn empty_queues_no_shutdown_returns_waiting() {
-        let urgent = SpinFreeMutex::new(VecDeque::new());
-        let regular = SpinFreeMutex::new(VecDeque::new());
+        let urgent = Mutex::new(VecDeque::new());
+        let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
@@ -108,8 +109,8 @@ mod tests {
 
     #[test]
     fn empty_queues_with_shutdown_returns_shutdown() {
-        let urgent = SpinFreeMutex::new(VecDeque::new());
-        let regular = SpinFreeMutex::new(VecDeque::new());
+        let urgent = Mutex::new(VecDeque::new());
+        let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(true);
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
@@ -123,8 +124,8 @@ mod tests {
         COUNTER.store(0, Ordering::Relaxed);
 
         let pool = BlindPool::new();
-        let urgent = SpinFreeMutex::new(VecDeque::new());
-        let regular = SpinFreeMutex::new(VecDeque::new());
+        let urgent = Mutex::new(VecDeque::new());
+        let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
 
         let task = pool.insert(CountingTask::new(&COUNTER));
@@ -144,8 +145,8 @@ mod tests {
         REGULAR_COUNTER.store(0, Ordering::Relaxed);
 
         let pool = BlindPool::new();
-        let urgent = SpinFreeMutex::new(VecDeque::new());
-        let regular = SpinFreeMutex::new(VecDeque::new());
+        let urgent = Mutex::new(VecDeque::new());
+        let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
 
         let urgent_task = pool.insert(CountingTask::new(&URGENT_COUNTER));
@@ -167,8 +168,8 @@ mod tests {
         COUNTER.store(0, Ordering::Relaxed);
 
         let pool = BlindPool::new();
-        let urgent = SpinFreeMutex::new(VecDeque::new());
-        let regular = SpinFreeMutex::new(VecDeque::new());
+        let urgent = Mutex::new(VecDeque::new());
+        let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
 
         let task = pool.insert(CountingTask::new(&COUNTER));
@@ -186,8 +187,8 @@ mod tests {
         COUNTER.store(0, Ordering::Relaxed);
 
         let pool = BlindPool::new();
-        let urgent = SpinFreeMutex::new(VecDeque::new());
-        let regular = SpinFreeMutex::new(VecDeque::new());
+        let urgent = Mutex::new(VecDeque::new());
+        let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(true);
 
         let task = pool.insert(CountingTask::new(&COUNTER));

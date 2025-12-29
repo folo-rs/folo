@@ -2,7 +2,7 @@
 name = "vicinal"
 description = "Processor-local worker pool that schedules tasks in the vicinity of the caller"
 publish = true
-version = "0.1.3"
+version = "0.1.4"
 
 authors.workspace = true
 edition.workspace = true
@@ -22,7 +22,6 @@ many_cpus = { workspace = true }
 new_zealand = { workspace = true }
 nm = { workspace = true }
 parking_lot = { workspace = true }
-parking_lot_core = "0.9"
 pin-project = { workspace = true }
 tracing = { workspace = true }
 
@@ -35,7 +34,7 @@ many_cpus.workspace = true
 mutants = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
-threadpool = "1.8.1"
+threadpool = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
