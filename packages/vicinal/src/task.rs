@@ -100,7 +100,7 @@ where
             let result = panic::catch_unwind(AssertUnwindSafe(task));
             if let Err(panic_payload) = result {
                 let message = extract_panic_message(&panic_payload);
-                tracing::error!("Task panicked: {}", message);
+                tracing::error!(message, "task panicked");
             }
         },
         spawn_time,
@@ -218,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn wrap_task_and_forget_logs_panic() {
+    fn wrap_task_and_forget_catches_panic() {
         let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
 
         let wrapped = wrap_task_and_forget(
