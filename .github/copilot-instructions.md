@@ -365,7 +365,11 @@ embedding `\n` in another printed line.
 There should never be any delay/sleep on the successful path in tests - every test must be
 near-instantaneous and time-based synchronization is forbidden.
 
-You may use events/signals for synchronization (e.g. `Barrier` or `oneshot` or channels),
+To be clear, any form of "sleep" or "delay" that uses a real-time clock is forbidden in test code.
+If the type can be made to use a `tick::Clock` then a clock using a simulated time source may be
+used in test code (via `tick::ClockControl`).
+
+You may use events/signals for synchronization (e.g. `Barrier` or `events_once` events or message channels),
 as long as there are no delays or wait-loops in the test code itself.
 
 # Tests must not hang
