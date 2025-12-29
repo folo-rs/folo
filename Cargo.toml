@@ -21,19 +21,19 @@ incremental = false
 
 [workspace.dependencies]
 # The packages we publish.
-all_the_time = { version = "0.4.6", path = "packages/all_the_time" }
-alloc_tracker = { version = "0.5.10", path = "packages/alloc_tracker" }
-cpulist = { version = "1.0.1", path = "packages/cpulist" }
-events_once = { version = "0.5.10", path = "packages/events_once" }
-fast_time = { version = "0.1.10", path = "packages/fast_time" }
-folo_ffi = { version = "0.1.7", path = "packages/folo_ffi" }
-infinity_pool = { version = "0.8.2", path = "packages/infinity_pool" }
-linked = { version = "1.0.0", path = "packages/linked" }
-linked_macros = { version = "1.0.0", path = "packages/linked_macros" }
-linked_macros_impl = { version = "1.0.0", path = "packages/linked_macros_impl" }
-many_cpus = { version = "1.1.1", path = "packages/many_cpus" }
-new_zealand = { version = "1.0.1", path = "packages/new_zealand" }
-nm = { version = "0.1.21", path = "packages/nm" }
+all_the_time = { version = "0.4.7", path = "packages/all_the_time" }
+alloc_tracker = { version = "0.5.11", path = "packages/alloc_tracker" }
+cpulist = { version = "1.0.2", path = "packages/cpulist" }
+events_once = { version = "0.5.11", path = "packages/events_once" }
+fast_time = { version = "0.1.11", path = "packages/fast_time" }
+folo_ffi = { version = "0.1.8", path = "packages/folo_ffi" }
+infinity_pool = { version = "0.8.3", path = "packages/infinity_pool" }
+linked = { version = "1.0.1", path = "packages/linked" }
+linked_macros = { version = "1.0.1", path = "packages/linked_macros" }
+linked_macros_impl = { version = "1.0.1", path = "packages/linked_macros_impl" }
+many_cpus = { version = "1.1.2", path = "packages/many_cpus" }
+new_zealand = { version = "1.0.2", path = "packages/new_zealand" }
+nm = { version = "0.1.22", path = "packages/nm" }
 
 # The packages we consume. We mostly only enable "std" features here, the rest in individual packages.
 arc-swap = { version = "1.7", default-features = false }
