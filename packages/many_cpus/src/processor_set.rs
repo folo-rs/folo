@@ -813,7 +813,7 @@ mod tests_fallback {
         let default_set = ProcessorSet::default();
 
         let expected_count = thread::available_parallelism()
-            .map(std::num::NonZeroUsize::get)
+            .map(std::num::NonZero::get)
             .unwrap_or(1);
 
         assert_eq!(default_set.len(), expected_count);

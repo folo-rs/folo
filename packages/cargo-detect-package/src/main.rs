@@ -336,7 +336,7 @@ fn execute_with_env_var(
             cmd.env(env_var, package_name);
         }
         DetectedPackage::Workspace => {
-            // For workspace, we don't set the environment variable
+            // For workspace, we do not set the environment variable
             // This allows the target command to handle the "no package specified" case
         }
     }
@@ -363,7 +363,7 @@ fn validate_workspace_context(target_path: &Path) -> Result<(), Box<dyn std::err
         if relative_to_current.exists() {
             relative_to_current
         } else {
-            // If that doesn't exist, try relative to workspace root
+            // If that does not exist, try relative to workspace root
             // This handles cases where the tool is run from a different directory
             current_workspace_root.join(target_path)
         }
@@ -559,7 +559,7 @@ version = "0.1.0"
         // Change to the temp directory
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
-        // Validation should fail when targeting a file that doesn't exist
+        // Validation should fail when targeting a file that does not exist
         let target_path = Path::new("nonexistent.rs");
         let result = validate_workspace_context(target_path);
         assert!(result.is_err());

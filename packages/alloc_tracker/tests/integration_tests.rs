@@ -170,7 +170,7 @@ fn mixed_span_types_in_multithreaded_context() {
             handle.join().expect("thread should complete successfully");
         } else {
             let _span = mixed_op.measure_thread();
-            // Spawn a thread that allocates memory (won't be captured by thread span)
+            // Spawn a thread that allocates memory (will not be captured by thread span)
             let handle = thread::spawn(|| {
                 let data = vec![0_u8; 500];
                 black_box(data);
@@ -269,7 +269,7 @@ fn report_mean_with_known_allocations() {
 #[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 #[cfg(feature = "panic_on_next_alloc")]
 fn panic_on_next_alloc_can_be_controlled() {
-    // This test verifies the API works but doesn't test the panic behavior
+    // This test verifies the API works but does not test the panic behavior
     // as that would terminate the test process
 
     // Default state should allow allocations
@@ -281,7 +281,7 @@ fn panic_on_next_alloc_can_be_controlled() {
     let _allowed_allocation = vec![1, 2, 3];
 
     // Enable and then immediately disable panic on next allocation
-    // We don't test the actual panic as it would kill the test
+    // We do not test the actual panic as it would kill the test
     panic_on_next_alloc(true);
     panic_on_next_alloc(false);
 

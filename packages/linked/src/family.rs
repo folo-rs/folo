@@ -91,7 +91,7 @@ impl<T> Debug for Family<T> {
 
 impl<T> Family<T> {
     #[must_use]
-    pub(super) fn new(link: Link<T>) -> Self {
+    pub(crate) fn new(link: Link<T>) -> Self {
         Self {
             instance_factory: link.instance_factory,
         }

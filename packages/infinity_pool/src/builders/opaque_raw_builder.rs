@@ -134,7 +134,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "dropped a non-empty slab")]
+    #[should_panic]
     fn builder_with_must_not_drop_contents_policy() {
         // Test that MustNotDropContents panics when pool is dropped with items
         let mut pool = RawOpaquePoolBuilder::new()

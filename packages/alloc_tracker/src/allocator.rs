@@ -191,7 +191,7 @@ fn track_allocation(size: usize) {
     });
 }
 
-// Test helper for unit tests where we don't hook the global allocator.
+// Test helper for unit tests where we do not hook the global allocator.
 #[cfg(test)]
 pub(crate) fn register_fake_allocation(bytes: u64, count: u64) {
     let counters = get_or_init_thread_counters();

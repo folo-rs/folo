@@ -518,7 +518,7 @@ mod tests {
         let handle_mut = pool.insert(42_u32);
         let handle_shared = handle_mut.into_shared();
 
-        // SAFETY: Handle belongs to this pool and hasn't been removed
+        // SAFETY: Handle belongs to this pool and has not been removed
         let value = unsafe { pool.remove_unpin(handle_shared) };
 
         assert_eq!(value, 42);

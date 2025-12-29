@@ -602,7 +602,7 @@ mod tests {
         // Insert the tracker into the pool
         let mut_handle = pool.insert(tracker);
 
-        // Verify the object hasn't been dropped yet
+        // Verify the object has not been dropped yet
         assert_eq!(*drop_count.borrow(), 0);
 
         // Convert to shared handle
@@ -612,7 +612,7 @@ mod tests {
         let shared_handle2 = shared_handle1.clone();
         let shared_handle3 = shared_handle2.clone();
 
-        // Verify the object still hasn't been dropped
+        // Verify the object still has not been dropped
         assert_eq!(*drop_count.borrow(), 0);
 
         // Drop all but the last handle

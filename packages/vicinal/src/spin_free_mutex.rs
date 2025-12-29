@@ -90,7 +90,7 @@ impl<T> SpinFreeMutex<T> {
                 // No, if we set it to CONTENDED, it stays CONTENDED until unlock.
                 // So if it is not CONTENDED, it must be UNLOCKED (because we just set it to CONTENDED).
                 // Wait, if we set it to CONTENDED, and then someone unlocks, it becomes UNLOCKED.
-                // So if it is UNLOCKED, we don't park.
+                // So if it is UNLOCKED, we do not park.
                 // SAFETY: The address is derived from a reference to the atomic state, so it is valid.
                 let state = unsafe { &*(addr as *const AtomicU8) };
                 state.load(Ordering::Relaxed) != UNLOCKED

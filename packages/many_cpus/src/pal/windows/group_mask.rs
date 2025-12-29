@@ -6,7 +6,7 @@ use crate::pal::windows::{ProcessorGroupIndex, ProcessorIndexInGroup};
 pub(crate) struct GroupMask {
     // Yes, the mask is a usize, not a u64, even though processor groups are always 64-sized.
     // This is because in the 32-bit Windows API, processor group masking was never really properly
-    // implemented so don't use 32-bit Windows if you want things to work right.
+    // implemented so do not use 32-bit Windows if you want things to work right.
     mask: usize,
 
     // If set, must match - adding processors from different groups to the same mask is nonsense.

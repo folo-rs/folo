@@ -74,7 +74,7 @@ where
     ///
     /// linked::thread_local_rc!(static EVENTS: EventCounter = EventCounter::new());
     ///
-    /// // Use .with() for efficient access when you don't need to store the Rc
+    /// // Use .with() for efficient access when you do not need to store the Rc
     /// EVENTS.with(|counter| {
     ///     counter.record_event();
     ///     assert_eq!(counter.local_count(), 1);

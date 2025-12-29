@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::fmt::Debug;
-use std::num::NonZeroUsize;
+use std::num::NonZero;
 
 use foldhash::{HashMap, HashMapExt, HashSet, HashSetExt};
 use itertools::Itertools;
@@ -423,7 +423,7 @@ impl ProcessorSetBuilder {
     ///
     /// [1]: ProcessorSetBuilder::ignoring_resource_quota
     #[must_use]
-    pub fn take(self, count: NonZeroUsize) -> Option<ProcessorSet> {
+    pub fn take(self, count: NonZero<usize>) -> Option<ProcessorSet> {
         if let Some(max_count) = self.resource_quota_processor_count_limit()
             && count.get() > max_count
         {
@@ -1981,7 +1981,7 @@ mod tests {
 /// Miri is excluded because `std::thread::available_parallelism()` is not supported under Miri.
 #[cfg(all(test, not(miri)))]
 mod tests_fallback {
-    use std::num::NonZeroUsize;
+    use std::num::NonZero;
 
     use new_zealand::nz;
 
@@ -2031,7 +2031,7 @@ mod tests_fallback {
         let set = builder.take_all().unwrap();
 
         let expected_count = std::thread::available_parallelism()
-            .map(NonZeroUsize::get)
+            .map(NonZero::get)
             .unwrap_or(1);
 
         assert_eq!(set.len(), expected_count);
@@ -2050,7 +2050,7 @@ mod tests_fallback {
         let set = builder.performance_processors_only().take_all().unwrap();
 
         let expected_count = std::thread::available_parallelism()
-            .map(NonZeroUsize::get)
+            .map(NonZero::get)
             .unwrap_or(1);
 
         assert_eq!(set.len(), expected_count);
@@ -2069,7 +2069,7 @@ mod tests_fallback {
         let set = builder.same_memory_region().take_all().unwrap();
 
         let expected_count = std::thread::available_parallelism()
-            .map(NonZeroUsize::get)
+            .map(NonZero::get)
             .unwrap_or(1);
 
         assert_eq!(set.len(), expected_count);
@@ -2157,7 +2157,7 @@ mod tests_fallback {
         // The fallback platform reports max_processor_time == processor_count,
         // so the default behavior should return all processors.
         let expected_count = std::thread::available_parallelism()
-            .map(NonZeroUsize::get)
+            .map(NonZero::get)
             .unwrap_or(1);
 
         assert_eq!(set.len(), expected_count);

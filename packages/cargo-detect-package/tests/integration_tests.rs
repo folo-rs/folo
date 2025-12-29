@@ -70,7 +70,7 @@ fn get_test_command() -> Vec<&'static str> {
 
 /// Creates a simple test workspace with two packages.
 fn create_simple_workspace() -> tempfile::TempDir {
-    let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
+    let temp_dir = tempfile::tempdir().unwrap();
     let workspace_root = temp_dir.path();
 
     // Create workspace Cargo.toml
@@ -85,11 +85,11 @@ version = "0.1.0"
 edition = "2021"
 "#,
     )
-    .expect("Failed to write workspace Cargo.toml");
+    .unwrap();
 
     // Create package_a
     let package_a = workspace_root.join("package_a");
-    fs::create_dir_all(package_a.join("src")).expect("Failed to create package_a/src");
+    fs::create_dir_all(package_a.join("src")).unwrap();
     fs::write(
         package_a.join("Cargo.toml"),
         r#"[package]
@@ -100,18 +100,15 @@ edition.workspace = true
 [dependencies]
 "#,
     )
-    .expect("Failed to write package_a Cargo.toml");
+    .unwrap();
 
-    fs::write(package_a.join("src/lib.rs"), "// package_a lib\n")
-        .expect("Failed to write package_a lib.rs");
-    fs::write(package_a.join("src/main.rs"), "// package_a main\n")
-        .expect("Failed to write package_a main.rs");
-    fs::write(package_a.join("src/utils.rs"), "// package_a utils\n")
-        .expect("Failed to write package_a utils.rs");
+    fs::write(package_a.join("src/lib.rs"), "// package_a lib\n").unwrap();
+    fs::write(package_a.join("src/main.rs"), "// package_a main\n").unwrap();
+    fs::write(package_a.join("src/utils.rs"), "// package_a utils\n").unwrap();
 
     // Create package_b
     let package_b = workspace_root.join("package_b");
-    fs::create_dir_all(package_b.join("src")).expect("Failed to create package_b/src");
+    fs::create_dir_all(package_b.join("src")).unwrap();
     fs::write(
         package_b.join("Cargo.toml"),
         r#"[package]
@@ -123,23 +120,20 @@ edition.workspace = true
 package_a = { path = "../package_a" }
 "#,
     )
-    .expect("Failed to write package_b Cargo.toml");
+    .unwrap();
 
-    fs::write(package_b.join("src/lib.rs"), "// package_b lib\n")
-        .expect("Failed to write package_b lib.rs");
+    fs::write(package_b.join("src/lib.rs"), "// package_b lib\n").unwrap();
 
     // Create root files
-    fs::write(workspace_root.join("README.md"), "# Test Workspace\n")
-        .expect("Failed to write README.md");
-    fs::write(workspace_root.join("root_file.rs"), "// root file\n")
-        .expect("Failed to write root_file.rs");
+    fs::write(workspace_root.join("README.md"), "# Test Workspace\n").unwrap();
+    fs::write(workspace_root.join("root_file.rs"), "// root file\n").unwrap();
 
     temp_dir
 }
 
 /// Creates a separate workspace for cross-workspace testing.
 fn create_separate_workspace() -> tempfile::TempDir {
-    let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
+    let temp_dir = tempfile::tempdir().unwrap();
     let workspace_root = temp_dir.path();
 
     // Create workspace Cargo.toml
@@ -154,12 +148,11 @@ version = "0.1.0"
 edition = "2021"
 "#,
     )
-    .expect("Failed to write workspace Cargo.toml");
+    .unwrap();
 
     // Create isolated_package
     let isolated_package = workspace_root.join("isolated_package");
-    fs::create_dir_all(isolated_package.join("src"))
-        .expect("Failed to create isolated_package/src");
+    fs::create_dir_all(isolated_package.join("src")).unwrap();
     fs::write(
         isolated_package.join("Cargo.toml"),
         r#"[package]
@@ -170,17 +163,16 @@ edition.workspace = true
 [dependencies]
 "#,
     )
-    .expect("Failed to write isolated_package Cargo.toml");
+    .unwrap();
 
-    fs::write(isolated_package.join("src/lib.rs"), "// isolated package\n")
-        .expect("Failed to write isolated_package lib.rs");
+    fs::write(isolated_package.join("src/lib.rs"), "// isolated package\n").unwrap();
 
     temp_dir
 }
 
 /// Creates a workspace with edge cases (malformed packages).
 fn create_edge_cases_workspace() -> tempfile::TempDir {
-    let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
+    let temp_dir = tempfile::tempdir().unwrap();
     let workspace_root = temp_dir.path();
 
     // Create workspace Cargo.toml
@@ -195,11 +187,11 @@ version = "0.1.0"
 edition = "2021"
 "#,
     )
-    .expect("Failed to write workspace Cargo.toml");
+    .unwrap();
 
     // Create valid_package
     let valid_package = workspace_root.join("valid_package");
-    fs::create_dir_all(valid_package.join("src")).expect("Failed to create valid_package/src");
+    fs::create_dir_all(valid_package.join("src")).unwrap();
     fs::write(
         valid_package.join("Cargo.toml"),
         r#"[package]
@@ -210,14 +202,13 @@ edition.workspace = true
 [dependencies]
 "#,
     )
-    .expect("Failed to write valid_package Cargo.toml");
+    .unwrap();
 
-    fs::write(valid_package.join("src/lib.rs"), "// valid package\n")
-        .expect("Failed to write valid_package lib.rs");
+    fs::write(valid_package.join("src/lib.rs"), "// valid package\n").unwrap();
 
     // Create malformed_package (intentionally malformed TOML)
     let malformed_package = workspace_root.join("malformed_package");
-    fs::create_dir_all(&malformed_package).expect("Failed to create malformed_package");
+    fs::create_dir_all(&malformed_package).unwrap();
     fs::write(
         malformed_package.join("Cargo.toml"),
         r#"# This is intentionally malformed TOML for testing
@@ -227,7 +218,7 @@ version = 0.1.0  # Missing quotes
 edition = "2021"
 "#,
     )
-    .expect("Failed to write malformed_package Cargo.toml");
+    .unwrap();
 
     temp_dir
 }
@@ -248,7 +239,7 @@ fn package_detection_in_simple_workspace() {
     ];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(workspace_root, &args).expect("Failed to run tool");
+    let output = run_tool(workspace_root, &args).unwrap();
 
     assert!(
         output.status.success(),
@@ -257,7 +248,7 @@ fn package_detection_in_simple_workspace() {
     );
 
     // The tool should detect package_a
-    // We can't directly check environment variables, but we can verify it doesn't error
+    // We cannot directly check environment variables, but we can verify it does not error
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !stderr.contains("Error"),
@@ -276,7 +267,7 @@ fn package_detection_package_a_utils() {
     let mut args = vec!["--path", "package_a/src/utils.rs", "--via-env", "PKG"];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(workspace_root, &args).expect("Failed to run tool");
+    let output = run_tool(workspace_root, &args).unwrap();
 
     assert!(
         output.status.success(),
@@ -296,7 +287,7 @@ fn package_detection_package_b() {
     let mut args = vec!["--path", "package_b/src/lib.rs", "--via-env", "PKG"];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(workspace_root, &args).expect("Failed to run tool");
+    let output = run_tool(workspace_root, &args).unwrap();
 
     assert!(
         output.status.success(),
@@ -316,7 +307,7 @@ fn workspace_root_file_fallback() {
     let mut args = vec!["--path", "root_file.rs", "--via-env", "PKG"];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(workspace_root, &args).expect("Failed to run tool");
+    let output = run_tool(workspace_root, &args).unwrap();
 
     assert!(
         output.status.success(),
@@ -336,7 +327,7 @@ fn readme_fallback() {
     let mut args = vec!["--path", "README.md", "--via-env", "PKG"];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(workspace_root, &args).expect("Failed to run tool");
+    let output = run_tool(workspace_root, &args).unwrap();
 
     assert!(
         output.status.success(),
@@ -362,7 +353,7 @@ fn nonexistent_file_fallback() {
     ];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(workspace_root, &args).expect("Failed to run tool");
+    let output = run_tool(workspace_root, &args).unwrap();
 
     assert!(
         !output.status.success(),
@@ -391,7 +382,7 @@ fn cross_workspace_rejection() {
     let mut args = vec!["--path", target_file.to_str().unwrap(), "--via-env", "PKG"];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(workspace1_root, &args).expect("Failed to run tool");
+    let output = run_tool(workspace1_root, &args).unwrap();
 
     assert!(
         !output.status.success(),
@@ -422,7 +413,7 @@ fn outside_workspace_rejection() {
     let mut args = vec!["--path", outside_file, "--via-env", "PKG"];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(workspace_root, &args).expect("Failed to run tool");
+    let output = run_tool(workspace_root, &args).unwrap();
 
     assert!(
         !output.status.success(),
@@ -447,7 +438,7 @@ fn relative_path_escape_rejection() {
     let mut args = vec!["--path", "../../../outside_file.rs", "--via-env", "PKG"];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(workspace_root, &args).expect("Failed to run tool");
+    let output = run_tool(workspace_root, &args).unwrap();
 
     assert!(
         !output.status.success(),
@@ -472,7 +463,7 @@ fn malformed_package_handling() {
     let mut args = vec!["--path", "valid_package/src/lib.rs", "--via-env", "PKG"];
     args.extend_from_slice(&test_cmd);
 
-    let output = run_tool(workspace_root, &args).expect("Failed to run tool");
+    let output = run_tool(workspace_root, &args).unwrap();
 
     assert!(
         output.status.success(),
@@ -499,7 +490,7 @@ fn cargo_integration_mode() {
             "--quiet",
         ],
     )
-    .expect("Failed to run tool");
+    .unwrap();
 
     // The tool should succeed and cargo should run
     if !output.status.success() {
@@ -529,7 +520,7 @@ fn workspace_scope_cargo_integration() {
             "--quiet",
         ],
     )
-    .expect("Failed to run tool");
+    .unwrap();
 
     // Should use --workspace flag for workspace-scope files
     if !output.status.success() {

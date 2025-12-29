@@ -1,11 +1,11 @@
 use std::cell::RefCell;
-use std::num::NonZeroUsize;
+use std::num::NonZero;
 use std::sync::OnceLock;
 use std::thread::ThreadId;
 
 use nonempty::NonEmpty;
 
-use super::ProcessorImpl;
+use crate::pal::fallback::ProcessorImpl;
 use crate::pal::{AbstractProcessor, Platform, ProcessorFacade};
 use crate::{MemoryRegionId, ProcessorId};
 
@@ -50,7 +50,7 @@ impl BuildTargetPlatform {
     pub(crate) fn processor_count(&self) -> usize {
         *PROCESSOR_COUNT.get_or_init(|| {
             std::thread::available_parallelism()
-                .map(NonZeroUsize::get)
+                .map(NonZero::get)
                 .unwrap_or(1)
         })
     }

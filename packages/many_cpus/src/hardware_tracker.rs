@@ -1028,7 +1028,7 @@ mod tests_fallback {
         assert!(active_count >= 1);
 
         let expected_count = std::thread::available_parallelism()
-            .map(std::num::NonZeroUsize::get)
+            .map(std::num::NonZero::get)
             .unwrap_or(1);
 
         assert_eq!(active_count, expected_count);

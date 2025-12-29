@@ -6,19 +6,19 @@ use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ProcessorImpl {
-    pub(super) group_index: ProcessorGroupIndex,
-    pub(super) index_in_group: ProcessorIndexInGroup,
+    pub(crate) group_index: ProcessorGroupIndex,
+    pub(crate) index_in_group: ProcessorIndexInGroup,
 
     // Cumulative index when counting across all groups.
-    pub(super) id: ProcessorId,
+    pub(crate) id: ProcessorId,
 
-    pub(super) memory_region_id: MemoryRegionId,
+    pub(crate) memory_region_id: MemoryRegionId,
 
-    pub(super) efficiency_class: EfficiencyClass,
+    pub(crate) efficiency_class: EfficiencyClass,
 }
 
 impl ProcessorImpl {
-    pub(super) fn new(
+    pub(crate) fn new(
         group_index: ProcessorGroupIndex,
         index_in_group: ProcessorIndexInGroup,
         id: ProcessorId,

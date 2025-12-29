@@ -1444,7 +1444,7 @@ mod tests {
             slab.remove(handle2);
         }
 
-        // Silence unused variable warnings for handles we don't use after removal
+        // Silence unused variable warnings for handles we do not use after removal
         let _ = (handle1, handle3);
 
         let values: Vec<u32> = slab
@@ -1657,7 +1657,7 @@ mod tests {
             slab.remove(handle4); // Remove 400 (index 3)
         }
 
-        // Silence unused variable warnings for handles we don't use after removal
+        // Silence unused variable warnings for handles we do not use after removal
         let _ = (handle1, handle3, handle5);
 
         // Now we have items at indices 0, 2, 4 with values 100, 300, 500

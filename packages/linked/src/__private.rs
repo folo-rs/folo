@@ -44,7 +44,7 @@ pub(crate) type InstanceFactory<T> = Arc<dyn Fn(Link<T>) -> T + Send + Sync + 's
 /// This type serves the linked object infrastructure and is not meant to be used by user code.
 /// It is a private public type because it is used in macro-generated code.
 pub struct Link<T> {
-    pub(super) instance_factory: InstanceFactory<T>,
+    pub(crate) instance_factory: InstanceFactory<T>,
 }
 
 impl<T> Debug for Link<T> {
@@ -63,12 +63,12 @@ impl<T> Debug for Link<T> {
 
 impl<T> Link<T> {
     #[must_use]
-    pub(super) fn new(instance_factory: InstanceFactory<T>) -> Self {
+    pub(crate) fn new(instance_factory: InstanceFactory<T>) -> Self {
         Self { instance_factory }
     }
 
     #[must_use]
-    pub(super) fn into_instance(self) -> T {
+    pub(crate) fn into_instance(self) -> T {
         let instance_factory = Arc::clone(&self.instance_factory);
         (instance_factory)(self)
     }

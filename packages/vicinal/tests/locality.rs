@@ -16,9 +16,7 @@ fn tasks_execute_on_spawning_processor() {
     let scheduler = pool.scheduler();
 
     // We will spawn tasks from different processors and verify they execute on the same processor.
-    let processors = ProcessorSet::builder()
-        .take_all()
-        .expect("no processors available");
+    let processors = ProcessorSet::builder().take_all().unwrap();
 
     // Counter for tasks that executed on their expected processor.
     let correct_processor_count = Arc::new(AtomicUsize::new(0));

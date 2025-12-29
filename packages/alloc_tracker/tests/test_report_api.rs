@@ -28,7 +28,7 @@ fn alloc_tracker_report_api() {
     let (name, op) = operations.first().unwrap();
     assert_eq!(*name, "test_alloc");
     assert_eq!(op.total_iterations(), 3);
-    // Note: We can't predict exact allocation amounts due to Vec overhead,
+    // Note: We cannot predict exact allocation amounts due to Vec overhead,
     // but we can verify the API structure
     assert!(op.total_bytes_allocated() > 0);
     assert!(op.mean() > 0);

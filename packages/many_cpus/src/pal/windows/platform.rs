@@ -1,6 +1,6 @@
 use std::hint::black_box;
 use std::mem::offset_of;
-use std::num::{NonZero, NonZeroUsize};
+use std::num::NonZero;
 use std::ptr::NonNull;
 use std::sync::OnceLock;
 
@@ -346,7 +346,7 @@ impl Platform for BuildTargetPlatform {
 }
 
 impl BuildTargetPlatform {
-    pub(super) const fn new(bindings: BindingsFacade) -> Self {
+    pub(crate) const fn new(bindings: BindingsFacade) -> Self {
         Self {
             bindings,
             group_max_count: OnceLock::new(),
@@ -505,7 +505,7 @@ impl BuildTargetPlatform {
                 "GetLogicalProcessorInformationEx size probe failed with unexpected error code {e}",
             );
 
-            let required_length_usize = NonZeroUsize::new(required_length as usize).expect(
+            let required_length_usize = NonZero::<usize>::new(required_length as usize).expect(
                 "GetLogicalProcessorInformationEx size probe said 0 bytes are needed - impossible",
             );
             let mut buffer =

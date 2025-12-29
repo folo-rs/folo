@@ -186,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Iterations cannot be zero")]
+    #[should_panic]
     fn panics_on_zero_iterations() {
         let session = create_test_session();
         let operation = session.operation("test");

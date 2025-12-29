@@ -676,7 +676,7 @@ mod tests {
         let results = Run::new()
             .measure_resource_usage("iteration_division_test", |measure| measure.allocs(&allocs))
             .iter(|_| {
-                // For this test, we don't need to actually allocate since we're just
+                // For this test, we do not need to actually allocate since we're just
                 // testing the iteration division logic, not the allocation tracking itself
                 std::hint::black_box(42);
             })
@@ -699,7 +699,7 @@ mod tests {
         let (_operation_name, operation_stats) = operations
             .iter()
             .find(|(name, _)| *name == "iteration_division_test")
-            .expect("Should find our test operation");
+            .unwrap();
 
         // Each thread should report the divided iteration count, not the full count
         // With 4 threads, total tracked iterations should be 4 * (1000/4) = 1000, not 4000

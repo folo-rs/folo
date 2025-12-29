@@ -6,11 +6,11 @@ use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
 /// A processor present on the system and available to the current process.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ProcessorImpl {
-    pub(super) id: ProcessorId,
-    pub(super) memory_region_id: MemoryRegionId,
-    pub(super) efficiency_class: EfficiencyClass,
+    pub(crate) id: ProcessorId,
+    pub(crate) memory_region_id: MemoryRegionId,
+    pub(crate) efficiency_class: EfficiencyClass,
 
-    pub(super) is_active: bool,
+    pub(crate) is_active: bool,
 }
 
 impl Display for ProcessorImpl {

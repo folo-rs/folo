@@ -74,7 +74,7 @@ where
     ///
     /// linked::thread_local_arc!(static METRICS: MetricsCollector = MetricsCollector::new());
     ///
-    /// // Use .with() for efficient access when you don't need to store the Arc
+    /// // Use .with() for efficient access when you do not need to store the Arc
     /// METRICS.with(|metrics| {
     ///     metrics.record_request();
     ///     assert_eq!(metrics.local_count(), 1);

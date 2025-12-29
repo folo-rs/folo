@@ -116,7 +116,7 @@ impl Platform for BuildTargetPlatform {
 }
 
 impl BuildTargetPlatform {
-    pub(super) const fn new(bindings: BindingsFacade, fs: FilesystemFacade) -> Self {
+    pub(crate) const fn new(bindings: BindingsFacade, fs: FilesystemFacade) -> Self {
         Self {
             bindings,
             fs,

@@ -35,9 +35,7 @@ fn resource_usage_output_provides_meaningful_allocation_data() {
 
     // Check that allocation data is present and meaningful
     for output in &measure_outputs {
-        let alloc_report = output
-            .allocs()
-            .expect("allocation tracking should be configured");
+        let alloc_report = output.allocs().unwrap();
 
         // The report should not be empty
         assert!(!alloc_report.is_empty());
@@ -46,9 +44,7 @@ fn resource_usage_output_provides_meaningful_allocation_data() {
         let operations: Vec<_> = alloc_report.operations().collect();
         assert_eq!(operations.len(), 1);
 
-        let (operation_name, operation_stats) = operations
-            .first()
-            .expect("should have exactly one operation");
+        let (operation_name, operation_stats) = operations.first().unwrap();
         assert_eq!(*operation_name, "test_allocations");
 
         // Verify meaningful allocation statistics
@@ -109,9 +105,7 @@ fn resource_usage_output_provides_meaningful_processor_time_data() {
 
     // Check that processor time data is present and meaningful
     for output in &measure_outputs {
-        let time_report = output
-            .processor_time()
-            .expect("processor time tracking should be configured");
+        let time_report = output.processor_time().unwrap();
 
         // The report should not be empty
         assert!(!time_report.is_empty());
@@ -120,9 +114,7 @@ fn resource_usage_output_provides_meaningful_processor_time_data() {
         let operations: Vec<_> = time_report.operations().collect();
         assert_eq!(operations.len(), 1);
 
-        let (operation_name, operation_stats) = operations
-            .first()
-            .expect("should have exactly one operation");
+        let (operation_name, operation_stats) = operations.first().unwrap();
         assert_eq!(*operation_name, "test_cpu_work");
 
         // Verify meaningful processor time statistics
@@ -198,17 +190,13 @@ fn resource_usage_output_provides_meaningful_combined_data() {
     // Check that both allocation and processor time data are present and meaningful
     for output in &measure_outputs {
         // Check allocation data
-        let alloc_report = output
-            .allocs()
-            .expect("allocation tracking should be configured");
+        let alloc_report = output.allocs().unwrap();
         assert!(!alloc_report.is_empty());
 
         let alloc_operations: Vec<_> = alloc_report.operations().collect();
         assert_eq!(alloc_operations.len(), 1);
 
-        let (alloc_name, alloc_stats) = alloc_operations
-            .first()
-            .expect("should have exactly one operation");
+        let (alloc_name, alloc_stats) = alloc_operations.first().unwrap();
         assert_eq!(*alloc_name, "combined_work");
         assert!(alloc_stats.total_iterations() > 0);
         assert!(alloc_stats.total_bytes_allocated() > 0);
@@ -221,17 +209,13 @@ fn resource_usage_output_provides_meaningful_combined_data() {
         );
 
         // Check processor time data
-        let time_report = output
-            .processor_time()
-            .expect("processor time tracking should be configured");
+        let time_report = output.processor_time().unwrap();
         assert!(!time_report.is_empty());
 
         let time_operations: Vec<_> = time_report.operations().collect();
         assert_eq!(time_operations.len(), 1);
 
-        let (time_name, time_stats) = time_operations
-            .first()
-            .expect("should have exactly one operation");
+        let (time_name, time_stats) = time_operations.first().unwrap();
         assert_eq!(*time_name, "combined_work");
         assert!(time_stats.total_iterations() > 0);
 
@@ -288,9 +272,7 @@ fn resource_usage_output_handles_no_allocations_gracefully() {
     assert!(!measure_outputs.is_empty());
 
     for output in &measure_outputs {
-        let alloc_report = output
-            .allocs()
-            .expect("allocation tracking should be configured");
+        let alloc_report = output.allocs().unwrap();
 
         // The report might be empty if no allocations occurred
         // This is valid behavior - we should handle it gracefully

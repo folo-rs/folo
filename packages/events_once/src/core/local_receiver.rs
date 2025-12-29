@@ -86,7 +86,7 @@ where
                         Ok(value)
                     }
                     Ok(None) => {
-                        // This shouldn't happen - final_poll should return Some(value) or Err(Disconnected)
+                        // This should not happen - final_poll should return Some(value) or Err(Disconnected)
                         unreachable!("final_poll returned None")
                     }
                     Err(Disconnected) => {

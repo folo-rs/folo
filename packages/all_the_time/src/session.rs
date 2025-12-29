@@ -66,7 +66,7 @@ impl Session {
     /// Creates a new processor time tracking session with a specific platform.
     ///
     /// This method is primarily used for testing purposes to inject a fake platform
-    /// that doesn't rely on actual system calls.
+    /// that does not rely on actual system calls.
     #[cfg(test)]
     pub(crate) fn with_platform(platform: PlatformFacade) -> Self {
         Self {
@@ -202,7 +202,7 @@ mod tests {
     fn is_empty_returns_true_for_operations_with_no_spans() {
         let session = create_test_session();
 
-        // Create operations but don't record any spans
+        // Create operations but do not record any spans
         let _operation1 = session.operation("test1");
         let _operation2 = session.operation("test2");
 
@@ -249,7 +249,7 @@ mod tests {
     fn is_empty_multiple_operations_all_empty() {
         let session = create_test_session();
 
-        // Create multiple operations but don't record spans
+        // Create multiple operations but do not record spans
         for i in 0..5 {
             let _operation = session.operation(format!("test_{i}"));
         }
