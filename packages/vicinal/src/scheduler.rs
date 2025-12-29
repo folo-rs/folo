@@ -6,7 +6,7 @@ use many_cpus::HardwareTracker;
 use tracing::trace;
 
 use crate::metrics::CLOCK;
-use crate::{JoinHandle, PoolInner, PooledCastVicinalTask, wrap_task, wrap_task_and_forget};
+use crate::{wrap_task, wrap_task_and_forget, JoinHandle, PoolInner, PooledCastVicinalTask};
 
 /// A handle for spawning tasks on a [`Pool`][crate::Pool].
 ///
