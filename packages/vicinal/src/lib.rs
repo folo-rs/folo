@@ -42,15 +42,15 @@
 //! # Panics
 //!
 //! If a task panics, the panic is captured and re-thrown when the [`JoinHandle`] is awaited.
-//! 
+//!
 //! # Platform support
-//! 
+//!
 //! The package is tested on the following operating systems:
-//! 
+//!
 //! * Windows 11 x64
 //! * Windows Server 2022 x64
 //! * Ubuntu 24.04 x64
-//! 
+//!
 //! On non-Windows non-Linux platforms (e.g. mac OS), the package will not uphold the processor
 //! locality guarantees, but will otherwise function correctly as a worker pool.
 

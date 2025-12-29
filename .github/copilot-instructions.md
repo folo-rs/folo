@@ -437,7 +437,8 @@ Unless there is a specific reason to use saturating/wrapping arithmetic, use che
 
 It is fine to `.expect()` success if there is some reason to believe overflow can never happen,
 e.g. because it is guarded by an assertion or because it would require some data structure to
-exceed the size of virtual memory.
+exceed the size of virtual memory. If very confident that an overflow can never occur, it is
+fine to use wrapping arithmetic via explicit `.wrapping_add()` methods.
 
 This only applies to non-test code - in tests and benchmarks, it is fine to use whatever arithmetic
 is most convenient.
@@ -510,15 +511,28 @@ Exclude such tests from running under Miri.
 
 # Mutation testing coverage and skipping mutations
 
+We expect all mutations to either be unviable or to be caught. Uncaught mutations and mutants that
+time out are anomalies that must be corrected.
+
 It is acceptable to skip mutations if they are impractical to test. Some justifiable reasons are:
 
 * Detecting the mutation requires real timing logic to be used. We intentionally do not permit any
-  timing-dependent code in our test cases.
-* Detecting the mutation requires detecting that a thing is not happening. This can sometimes be
-  impossible relying on timeouts (which would violate the above expectation).
+  timing-dependent code in our test cases. However, if circumstances allow, we can use the `tick`
+  crate with its simulated clock to create timing-dependent logic that can be tested without real
+  time passing.
+* Detecting the mutation requires detecting that a thing is not happening (e.g. detecting that an object
+  is never dropped or that some code never executes). This can sometimes be impossible without relying
+  on real-time timeouts (which would violate the above expectation).
+* The mutation is in a defensive branch for defense in depth and can never be reached due to higher layers
+  of the API preventing the situation from arising.
 
 To skip a mutation, use the `#[cfg_attr(test, mutants::skip)]` style and leave a comment to justify
 why we are skipping it.
+
+Before skipping a mutation, consider how to catch it. Beyond simply improving test coverage, the
+following techniques may help:
+
+* Adding `debug_assert!()` statements to strategic places, verifying that logical invariants still hold.
 
 # Adjust patterns, fix entire classes of problems
 

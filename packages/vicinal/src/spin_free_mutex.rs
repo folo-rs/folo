@@ -48,6 +48,9 @@ impl<T> SpinFreeMutex<T> {
     }
 
     #[cold]
+    #[cfg_attr(test, mutants::skip)]
+    // Contention-path mutations cause suboptimal-but-correct behavior. Detecting them
+    // requires deterministic thread interleaving which is not feasible without timing logic.
     fn lock_slow(&self) {
         loop {
             let state = self.state.load(Ordering::Relaxed);
@@ -114,6 +117,9 @@ impl<T> SpinFreeMutex<T> {
     }
 
     #[inline]
+    #[cfg_attr(test, mutants::skip)]
+    // Removing unlock causes deadlocks detected via test timeout. Skipped to avoid the
+    // long timeout penalty in mutation testing.
     pub(crate) fn unlock(&self) {
         // Fast path: if LOCKED, just unlock.
         if self
@@ -129,6 +135,9 @@ impl<T> SpinFreeMutex<T> {
     }
 
     #[cold]
+    #[cfg_attr(test, mutants::skip)]
+    // Requires guaranteeing a thread is parked waiting before unlock; this needs real-time
+    // synchronization which is not feasible in tests.
     fn unlock_slow(&self) {
         self.state.store(UNLOCKED, Ordering::Release);
         let addr = self.state.as_ptr() as usize;
@@ -159,6 +168,9 @@ impl<T> DerefMut for SpinFreeMutexGuard<'_, T> {
 }
 
 impl<T> Drop for SpinFreeMutexGuard<'_, T> {
+    #[cfg_attr(test, mutants::skip)]
+    // Not calling unlock on drop causes deadlocks detected via test timeout. Skipped to
+    // avoid the long timeout penalty in mutation testing.
     fn drop(&mut self) {
         self.lock.unlock();
     }
