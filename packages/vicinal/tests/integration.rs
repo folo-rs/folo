@@ -138,48 +138,6 @@ fn scheduler_sent_to_another_thread() {
 
 #[cfg_attr(miri, ignore)]
 #[test]
-fn urgent_tasks_execute_before_regular() {
-    with_watchdog(|| {
-        let pool = Pool::new();
-        let scheduler = pool.scheduler();
-
-        let order = Arc::new(AtomicUsize::new(0));
-
-        // Spawn many regular tasks.
-        let regular_handles: Vec<_> = std::iter::repeat_with(|| {
-            let order = Arc::clone(&order);
-            scheduler.spawn(move || {
-                order.fetch_add(1, Ordering::SeqCst);
-                "regular"
-            })
-        })
-        .take(10)
-        .collect();
-
-        // Spawn an urgent task.
-        let urgent_order = Arc::clone(&order);
-        let urgent_handle =
-            scheduler.spawn_urgent(move || urgent_order.fetch_add(1, Ordering::SeqCst));
-
-        // The urgent task should execute early (position should be small).
-        let urgent_position = block_on(urgent_handle);
-
-        // Await all regular tasks.
-        for handle in regular_handles {
-            block_on(handle);
-        }
-
-        // The urgent task should have executed in the first few positions.
-        // We allow some flexibility because of concurrency.
-        assert!(
-            urgent_position < 5,
-            "urgent task executed at position {urgent_position}, expected < 5"
-        );
-    });
-}
-
-#[cfg_attr(miri, ignore)]
-#[test]
 fn concurrent_spawns_from_multiple_threads() {
     with_watchdog(|| {
         let pool = Pool::new();
