@@ -80,6 +80,29 @@ where
     )
 }
 
+pub(crate) fn wrap_task_and_forget<F>(task: F, spawn_time: Instant) -> impl VicinalTask
+where
+    F: FnOnce() + Send + 'static,
+{
+    TaskWrapper::new(
+        move || {
+            let result = panic::catch_unwind(AssertUnwindSafe(task));
+            if let Err(panic_payload) = result {
+                // Log the panic instead of forwarding it.
+                let message = if let Some(&s) = panic_payload.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic payload".to_string()
+                };
+                tracing::error!("Task panicked: {}", message);
+            }
+        },
+        spawn_time,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use events_once::EventLake;
@@ -168,5 +191,41 @@ mod tests {
         pinned.as_mut().call(); // Second call should be a no-op.
 
         assert_eq!(COUNTER.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn wrap_task_and_forget_executes_task() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+        let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
+
+        let wrapped = wrap_task_and_forget(
+            || {
+                COUNTER.fetch_add(1, Ordering::Relaxed);
+            },
+            spawn_time,
+        );
+
+        Box::pin(wrapped).as_mut().call();
+
+        assert_eq!(COUNTER.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn wrap_task_and_forget_logs_panic() {
+        let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
+
+        let wrapped = wrap_task_and_forget(
+            || {
+                panic!("test panic in and_forget");
+            },
+            spawn_time,
+        );
+
+        // The panic should be caught and logged, not propagated.
+        Box::pin(wrapped).as_mut().call();
+        // If we reach here, the panic was successfully caught.
     }
 }

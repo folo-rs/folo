@@ -147,6 +147,68 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
+    let spawn_and_forget_single_alloc = allocs.operation("spawn_and_forget_single");
+    let spawn_and_forget_single_time = times.operation("spawn_and_forget_single");
+
+    g.bench_function("spawn_and_forget_single", |b| {
+        let pool = Pool::new();
+        let scheduler = pool.scheduler();
+
+        b.iter_custom(|iterations| {
+            let start = Instant::now();
+            let _alloc_span = spawn_and_forget_single_alloc
+                .measure_process()
+                .iterations(iterations);
+            let _time_span = spawn_and_forget_single_time
+                .measure_process()
+                .iterations(iterations);
+
+            for _ in 0..iterations {
+                scheduler.spawn_and_forget(|| {
+                    black_box(simulate_work());
+                });
+            }
+
+            // Give tasks time to complete before measuring elapsed time.
+            // We use a small sleep to ensure tasks have started executing.
+            thread::sleep(std::time::Duration::from_micros(100));
+
+            start.elapsed()
+        });
+    });
+
+    let spawn_and_forget_100_alloc = allocs.operation("spawn_and_forget_100");
+    let spawn_and_forget_100_time = times.operation("spawn_and_forget_100");
+
+    g.bench_function("spawn_and_forget_100", |b| {
+        let pool = Pool::new();
+        let scheduler = pool.scheduler();
+
+        b.iter_custom(|iterations| {
+            let start = Instant::now();
+            let _alloc_span = spawn_and_forget_100_alloc
+                .measure_process()
+                .iterations(iterations);
+            let _time_span = spawn_and_forget_100_time
+                .measure_process()
+                .iterations(iterations);
+
+            for _ in 0..iterations {
+                for _ in 0..100 {
+                    scheduler.spawn_and_forget(move || {
+                        black_box(simulate_work());
+                    });
+                }
+
+                // Give tasks time to complete before measuring elapsed time.
+                // We use a small sleep to ensure tasks have started executing.
+                thread::sleep(std::time::Duration::from_micros(100));
+            }
+
+            start.elapsed()
+        });
+    });
+
     let thread_single_alloc = allocs.operation("thread_single");
     let thread_single_time = times.operation("thread_single");
 

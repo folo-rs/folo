@@ -174,3 +174,68 @@ fn concurrent_spawns_from_multiple_threads() {
         assert_eq!(completed.load(Ordering::Relaxed), 100);
     });
 }
+
+#[cfg_attr(miri, ignore)]
+#[test]
+fn spawn_and_forget_no_return_value() {
+    with_watchdog(|| {
+        let pool = Pool::new();
+        let scheduler = pool.scheduler();
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        for _ in 0..10 {
+            let counter = Arc::clone(&counter);
+            scheduler.spawn_and_forget(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+            });
+        }
+
+        // Give tasks time to execute.
+        thread::sleep(std::time::Duration::from_millis(200));
+
+        assert_eq!(counter.load(Ordering::Relaxed), 10);
+    });
+}
+
+#[cfg_attr(miri, ignore)]
+#[test]
+fn spawn_urgent_and_forget_no_return_value() {
+    with_watchdog(|| {
+        let pool = Pool::new();
+        let scheduler = pool.scheduler();
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        for _ in 0..10 {
+            let counter = Arc::clone(&counter);
+            scheduler.spawn_urgent_and_forget(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+            });
+        }
+
+        // Give tasks time to execute.
+        thread::sleep(std::time::Duration::from_millis(200));
+
+        assert_eq!(counter.load(Ordering::Relaxed), 10);
+    });
+}
+
+#[cfg_attr(miri, ignore)]
+#[test]
+fn spawn_and_forget_panic_does_not_propagate() {
+    with_watchdog(|| {
+        let pool = Pool::new();
+        let scheduler = pool.scheduler();
+
+        // Spawn a task that panics.
+        scheduler.spawn_and_forget(|| {
+            panic!("intentional panic in integration test");
+        });
+
+        // Give the task time to execute and panic.
+        thread::sleep(std::time::Duration::from_millis(200));
+
+        // Verify that the pool is still functional after the panic.
+        let handle = scheduler.spawn(|| 42);
+        assert_eq!(block_on(handle), 42);
+    });
+}
