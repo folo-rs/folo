@@ -27,6 +27,7 @@ version = "0.5.12"
 dependencies = [
  "criterion",
  "mutants",
+ "serial_test",
  "static_assertions",
 ]
 

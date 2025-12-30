@@ -19,6 +19,7 @@ panic_on_next_alloc = []
 [dev-dependencies]
 criterion = { workspace = true }
 mutants = { workspace = true }
+serial_test = { workspace = true }
 static_assertions = { workspace = true }
 
 [[bench]]

@@ -39,6 +39,10 @@ machete:
     cargo +nightly udeps
     cargo +nightly udeps --all-targets
 
+[group('quality')]
+careful FILTER="":
+    cargo +nightly careful test {{ target_package }} --all-features {{ FILTER }} --locked
+
 # Separate file because it is a giant script.
 import 'just_quality_mutants.just'
 
@@ -85,3 +89,4 @@ validate-extra-local:
     just package={{ package }} mutants
     just package={{ package }} run-examples
     just package={{ package }} hack
+    just package={{ package }} careful

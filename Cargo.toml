@@ -118,6 +118,8 @@ unused_macros = "warn"
 unused_qualifications = "warn"
 variant_size_differences = "warn"
 
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(careful)'] }
+
 [workspace.lints.rustdoc]
 private_doc_tests = "warn"
 unescaped_backticks = "warn"

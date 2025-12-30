@@ -18,6 +18,7 @@
 
 #[test]
 #[cfg_attr(miri, ignore)] // Miri and trybuild do not go together.
+#[cfg_attr(careful, ignore)] // Careful is nightly build, may have different expected output.
 fn ui() {
     let t = trybuild::TestCases::new();
 

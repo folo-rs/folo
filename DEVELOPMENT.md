@@ -18,9 +18,7 @@ Prerequisites:
     * vscode-just
     * WSL
 * PowerShell 7
-* Rust development tools for version listed in `rust-toolchain.toml`
-* `rustup toolchain install nightly --component miri`
-* `rustup toolchain install nightly --component rustfmt`
+* `rustup toolchain install` to install Rust development tools based on `rust-toolchain.toml`
 * `cargo install just`
 * (Only if publishing releases) GitHub CLI + `gh auth login`
 
@@ -54,9 +52,7 @@ Prerequisites:
   sudo apt update
   sudo apt install -y powershell
   ```
-* Rust development tools for version listed in `rust-toolchain.toml`
-* `rustup toolchain install nightly --component miri`
-* `rustup toolchain install nightly --component rustfmt`
+* `rustup toolchain install` to install Rust development tools based on `rust-toolchain.toml`
 * `cargo install just`
 * If first time Git setup, execute `git config --global credential.helper "/mnt/c/Program\ Files/Git/mingw64/bin/git-credential-manager.exe"` to setup authentication flow
 
