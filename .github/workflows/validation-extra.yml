@@ -7,7 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  validation-extra:
+  mutants:
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -22,5 +23,43 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
-      - name: Run extra validation on ${{ matrix.platform }}
-        run: just validate-extra-local
+      - name: Run mutants on ${{ matrix.platform }}
+        run: just mutants
+
+  run-examples:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run examples on ${{ matrix.platform }}
+        run: just run-examples
+
+  hack:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run hack on ${{ matrix.platform }}
+        run: just hack
