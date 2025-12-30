@@ -101,6 +101,46 @@ impl Scheduler {
         self.spawn_internal(task, true)
     }
 
+    /// Spawns a fire-and-forget task on the current processor.
+    ///
+    /// Unlike [`spawn`](Self::spawn), this method does not return a [`JoinHandle`].
+    /// The task's result is discarded, and panics are logged rather than propagated.
+    /// This reduces overhead by avoiding result channel allocation.
+    ///
+    /// Use this when:
+    /// - The task's return value is not needed
+    /// - Panic propagation is not required
+    /// - Working with trait objects that cannot support generic return types
+    ///
+    /// # Panics
+    ///
+    /// If the task panics, the panic will be caught and logged via `tracing::error!`
+    /// but will not be propagated to the caller.
+    pub fn spawn_and_forget<F>(&self, task: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        self.spawn_internal_and_forget(task, false);
+    }
+
+    /// Spawns an urgent fire-and-forget task on the current processor.
+    ///
+    /// This is the fire-and-forget equivalent of [`spawn_urgent`](Self::spawn_urgent).
+    /// The task is added to the high-priority queue but does not return a [`JoinHandle`].
+    ///
+    /// Use this for time-sensitive operations where the result is not needed.
+    ///
+    /// # Panics
+    ///
+    /// If the task panics, the panic will be caught and logged via `tracing::error!`
+    /// but will not be propagated to the caller.
+    pub fn spawn_urgent_and_forget<F>(&self, task: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        self.spawn_internal_and_forget(task, true);
+    }
+
     /// Internal implementation of spawn.
     fn spawn_internal<R, F>(&self, task: F, urgent: bool) -> JoinHandle<R>
     where
@@ -150,10 +190,57 @@ impl Scheduler {
 
         JoinHandle::new(receiver)
     }
+
+    /// Internal implementation of fire-and-forget spawn.
+    fn spawn_internal_and_forget<F>(&self, task: F, urgent: bool)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        use crate::wrap_task_and_forget;
+
+        // Capture spawn time for metrics.
+        let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
+
+        let processor_id = HardwareTracker::current_processor_id();
+
+        // Ensure workers are spawned for this processor (lazy initialization).
+        self.inner.ensure_workers_spawned(processor_id);
+
+        let state = self.inner.registry.get_or_init(processor_id);
+
+        // Wrap the task to capture panics and log them.
+        let wrapped = wrap_task_and_forget(task, spawn_time);
+
+        // Insert the wrapped task into the pool and cast to trait object.
+        let pooled_task = state.task_pool.insert(wrapped);
+        let dyn_task = pooled_task.cast_vicinal_task();
+
+        // Push to the appropriate queue.
+        if urgent {
+            state.urgent_queue.lock().push_back(dyn_task);
+            trace!(
+                pool_id = self.inner.pool_id,
+                processor_id, "spawned urgent fire-and-forget task"
+            );
+        } else {
+            state.regular_queue.lock().push_back(dyn_task);
+            trace!(
+                pool_id = self.inner.pool_id,
+                processor_id, "spawned fire-and-forget task"
+            );
+        }
+
+        // Record the spawn for metrics.
+        state.record_task_spawned();
+
+        // Notify one worker that work is available.
+        state.wake_event.notify(1);
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use events_once::EventPool;
     use futures::executor::block_on;
 
     use crate::Pool;
@@ -227,5 +314,35 @@ mod tests {
 
         let result = block_on(handle);
         assert_eq!(result, 42);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn spawn_and_forget_completes() {
+        let pool = Pool::new();
+        let scheduler = pool.scheduler();
+        let event_pool = EventPool::<()>::new();
+
+        let (tx, rx) = event_pool.rent();
+        scheduler.spawn_and_forget(move || {
+            tx.send(());
+        });
+
+        block_on(rx).unwrap();
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn spawn_urgent_and_forget_completes() {
+        let pool = Pool::new();
+        let scheduler = pool.scheduler();
+        let event_pool = EventPool::<()>::new();
+
+        let (tx, rx) = event_pool.rent();
+        scheduler.spawn_urgent_and_forget(move || {
+            tx.send(());
+        });
+
+        block_on(rx).unwrap();
     }
 }

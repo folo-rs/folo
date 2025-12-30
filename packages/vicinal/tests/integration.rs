@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
+use events_once::EventPool;
 use futures::executor::block_on;
 use testing::with_watchdog;
 use vicinal::Pool;
@@ -172,5 +173,74 @@ fn concurrent_spawns_from_multiple_threads() {
         }
 
         assert_eq!(completed.load(Ordering::Relaxed), 100);
+    });
+}
+
+#[cfg_attr(miri, ignore)]
+#[test]
+fn spawn_and_forget_completes() {
+    with_watchdog(|| {
+        let pool = Pool::new();
+        let scheduler = pool.scheduler();
+        let event_pool = EventPool::<()>::new();
+
+        let (tx, rx) = event_pool.rent();
+        scheduler.spawn_and_forget(move || {
+            // Signal completion via the event.
+            tx.send(());
+        });
+
+        // Wait for the task to complete.
+        block_on(rx).unwrap();
+    });
+}
+
+#[cfg_attr(miri, ignore)]
+#[test]
+fn spawn_urgent_and_forget_completes() {
+    with_watchdog(|| {
+        let pool = Pool::new();
+        let scheduler = pool.scheduler();
+        let event_pool = EventPool::<()>::new();
+
+        let (tx, rx) = event_pool.rent();
+        scheduler.spawn_urgent_and_forget(move || {
+            // Signal completion via the event.
+            tx.send(());
+        });
+
+        // Wait for the task to complete.
+        block_on(rx).unwrap();
+    });
+}
+
+#[cfg_attr(miri, ignore)]
+#[test]
+fn spawn_and_forget_multiple_tasks() {
+    with_watchdog(|| {
+        let pool = Pool::new();
+        let scheduler = pool.scheduler();
+        let event_pool = EventPool::<()>::new();
+        let completed = Arc::new(AtomicUsize::new(0));
+
+        let mut receivers = Vec::new();
+
+        for _ in 0..50 {
+            let (tx, rx) = event_pool.rent();
+            let completed = Arc::clone(&completed);
+            receivers.push(rx);
+
+            scheduler.spawn_and_forget(move || {
+                completed.fetch_add(1, Ordering::Relaxed);
+                tx.send(());
+            });
+        }
+
+        // Wait for all tasks to complete.
+        for rx in receivers {
+            block_on(rx).unwrap();
+        }
+
+        assert_eq!(completed.load(Ordering::Relaxed), 50);
     });
 }

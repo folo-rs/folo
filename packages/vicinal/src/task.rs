@@ -20,6 +20,20 @@ define_pooled_dyn_cast!(VicinalTask);
 
 pub(crate) type TaskResult<R> = Result<R, Box<dyn Any + Send>>;
 
+/// Extracts a human-readable message from a panic payload.
+///
+/// Handles both `&str` and `String` panic payloads, which are the most common
+/// panic types produced by the `panic!` macro.
+fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
 #[pin_project]
 struct TaskWrapper<F>
 where
@@ -75,6 +89,26 @@ where
         move || {
             let result = panic::catch_unwind(AssertUnwindSafe(task));
             sender.send(result);
+        },
+        spawn_time,
+    )
+}
+
+/// Wraps a task for "fire-and-forget" execution without a result channel.
+///
+/// Panics are caught and logged instead of being forwarded through a channel.
+/// Metrics for scheduling delay and execution time are still recorded.
+pub(crate) fn wrap_task_and_forget<F>(task: F, spawn_time: Instant) -> impl VicinalTask
+where
+    F: FnOnce() + Send + 'static,
+{
+    TaskWrapper::new(
+        move || {
+            let result = panic::catch_unwind(AssertUnwindSafe(task));
+            if let Err(payload) = result {
+                let message = extract_panic_message(&payload);
+                tracing::error!(message, "fire-and-forget task panicked");
+            }
         },
         spawn_time,
     )
@@ -168,5 +202,78 @@ mod tests {
         pinned.as_mut().call(); // Second call should be a no-op.
 
         assert_eq!(COUNTER.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn wrap_task_and_forget_executes() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+        let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
+
+        let wrapped = wrap_task_and_forget(
+            || {
+                COUNTER.fetch_add(1, Ordering::Relaxed);
+            },
+            spawn_time,
+        );
+
+        Box::pin(wrapped).as_mut().call();
+
+        assert_eq!(COUNTER.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn wrap_task_and_forget_catches_panic_str() {
+        let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
+
+        let wrapped = wrap_task_and_forget(
+            || {
+                panic!("test panic str");
+            },
+            spawn_time,
+        );
+
+        // The panic should be caught and logged, not propagated.
+        Box::pin(wrapped).as_mut().call();
+        // If we reach here, the panic was caught successfully.
+    }
+
+    #[test]
+    fn wrap_task_and_forget_catches_panic_string() {
+        let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
+
+        let wrapped = wrap_task_and_forget(
+            || {
+                panic!("{}", "test panic String".to_string());
+            },
+            spawn_time,
+        );
+
+        // The panic should be caught and logged, not propagated.
+        Box::pin(wrapped).as_mut().call();
+        // If we reach here, the panic was caught successfully.
+    }
+
+    #[test]
+    fn extract_panic_message_handles_str_ref() {
+        let payload: Box<dyn Any + Send> = Box::new("panic message");
+        let message = extract_panic_message(&payload);
+        assert_eq!(message, "panic message");
+    }
+
+    #[test]
+    fn extract_panic_message_handles_string() {
+        let payload: Box<dyn Any + Send> = Box::new("owned panic".to_string());
+        let message = extract_panic_message(&payload);
+        assert_eq!(message, "owned panic");
+    }
+
+    #[test]
+    fn extract_panic_message_handles_unknown_type() {
+        let payload: Box<dyn Any + Send> = Box::new(42_i32);
+        let message = extract_panic_message(&payload);
+        assert_eq!(message, "unknown panic payload");
     }
 }

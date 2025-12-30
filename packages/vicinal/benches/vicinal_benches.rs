@@ -41,9 +41,9 @@ fn entrypoint(c: &mut Criterion) {
         let scheduler = pool.scheduler();
 
         b.iter_custom(|iterations| {
-            let start = Instant::now();
             let _alloc_span = spawn_single_alloc.measure_process().iterations(iterations);
             let _time_span = spawn_single_time.measure_process().iterations(iterations);
+            let start = Instant::now();
 
             for _ in 0..iterations {
                 let handle = scheduler.spawn(|| black_box(simulate_work()));
@@ -64,9 +64,9 @@ fn entrypoint(c: &mut Criterion) {
         b.iter_custom(|iterations| {
             let mut handles = Vec::with_capacity(100);
 
-            let start = Instant::now();
             let _alloc_span = spawn_100_alloc.measure_process().iterations(iterations);
             let _time_span = spawn_100_time.measure_process().iterations(iterations);
+            let start = Instant::now();
 
             for _ in 0..iterations {
                 for _ in 0..100 {
@@ -94,13 +94,13 @@ fn entrypoint(c: &mut Criterion) {
         let scheduler = pool.scheduler();
 
         b.iter_custom(|iterations| {
-            let start = Instant::now();
             let _alloc_span = spawn_urgent_single_alloc
                 .measure_process()
                 .iterations(iterations);
             let _time_span = spawn_urgent_single_time
                 .measure_process()
                 .iterations(iterations);
+            let start = Instant::now();
 
             for _ in 0..iterations {
                 let handle = scheduler.spawn_urgent(|| black_box(simulate_work()));
@@ -121,13 +121,13 @@ fn entrypoint(c: &mut Criterion) {
         b.iter_custom(|iterations| {
             let mut handles = Vec::with_capacity(100);
 
-            let start = Instant::now();
             let _alloc_span = spawn_urgent_100_alloc
                 .measure_process()
                 .iterations(iterations);
             let _time_span = spawn_urgent_100_time
                 .measure_process()
                 .iterations(iterations);
+            let start = Instant::now();
 
             for _ in 0..iterations {
                 for _ in 0..100 {
@@ -152,9 +152,9 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("thread_single", |b| {
         b.iter_custom(|iterations| {
-            let start = Instant::now();
             let _alloc_span = thread_single_alloc.measure_process().iterations(iterations);
             let _time_span = thread_single_time.measure_process().iterations(iterations);
+            let start = Instant::now();
 
             for _ in 0..iterations {
                 let handle = thread::spawn(|| black_box(simulate_work()));
@@ -172,9 +172,9 @@ fn entrypoint(c: &mut Criterion) {
         b.iter_custom(|iterations| {
             let mut handles = Vec::with_capacity(100);
 
-            let start = Instant::now();
             let _alloc_span = thread_100_alloc.measure_process().iterations(iterations);
             let _time_span = thread_100_time.measure_process().iterations(iterations);
+            let start = Instant::now();
 
             for _ in 0..iterations {
                 for _ in 0..100 {
@@ -217,13 +217,13 @@ fn entrypoint(c: &mut Criterion) {
         pool.join();
 
         b.iter_custom(|iterations| {
-            let start = Instant::now();
             let _alloc_span = threadpool_single_alloc
                 .measure_process()
                 .iterations(iterations);
             let _time_span = threadpool_single_time
                 .measure_process()
                 .iterations(iterations);
+            let start = Instant::now();
 
             for _ in 0..iterations {
                 let (tx, rx) = event_pool.rent();
@@ -262,11 +262,11 @@ fn entrypoint(c: &mut Criterion) {
         b.iter_custom(|iterations| {
             let mut rxs = Vec::with_capacity(100);
 
-            let start = Instant::now();
             let _alloc_span = threadpool_100_alloc
                 .measure_process()
                 .iterations(iterations);
             let _time_span = threadpool_100_time.measure_process().iterations(iterations);
+            let start = Instant::now();
 
             for _ in 0..iterations {
                 for _ in 0..100 {
@@ -282,7 +282,159 @@ fn entrypoint(c: &mut Criterion) {
                     reason = "we reuse the vector in the next iteration"
                 )]
                 for rx in rxs.drain(..) {
-                    black_box(block_on(rx).unwrap());
+                    block_on(rx).unwrap();
+                }
+            }
+
+            start.elapsed()
+        });
+    });
+
+    g.finish();
+
+    // Benchmark group for fire-and-forget variants with EventPool<()> completion signaling.
+    // This group includes both regular spawn (with event) and spawn_and_forget for fair comparison.
+    let mut g = c.benchmark_group("vicinal_fire_and_forget");
+
+    let spawn_with_event_single_alloc = allocs.operation("spawn_with_event_single");
+    let spawn_with_event_single_time = times.operation("spawn_with_event_single");
+
+    g.bench_function("spawn_with_event_single", |b| {
+        let pool = Pool::new();
+        let scheduler = pool.scheduler();
+        let event_pool = EventPool::<()>::new();
+
+        b.iter_custom(|iterations| {
+            let _alloc_span = spawn_with_event_single_alloc
+                .measure_process()
+                .iterations(iterations);
+            let _time_span = spawn_with_event_single_time
+                .measure_process()
+                .iterations(iterations);
+            let start = Instant::now();
+
+            for _ in 0..iterations {
+                let (tx, rx) = event_pool.rent();
+                let _handle = scheduler.spawn(move || {
+                    let result = black_box(simulate_work());
+                    tx.send(());
+                    result
+                });
+                block_on(rx).unwrap();
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let spawn_with_event_100_alloc = allocs.operation("spawn_with_event_100");
+    let spawn_with_event_100_time = times.operation("spawn_with_event_100");
+
+    g.bench_function("spawn_with_event_100", |b| {
+        let pool = Pool::new();
+        let scheduler = pool.scheduler();
+        let event_pool = EventPool::<()>::new();
+
+        b.iter_custom(|iterations| {
+            let mut rxs = Vec::with_capacity(100);
+
+            let _alloc_span = spawn_with_event_100_alloc
+                .measure_process()
+                .iterations(iterations);
+            let _time_span = spawn_with_event_100_time
+                .measure_process()
+                .iterations(iterations);
+            let start = Instant::now();
+
+            for _ in 0..iterations {
+                for _ in 0..100 {
+                    let (tx, rx) = event_pool.rent();
+                    rxs.push(rx);
+                    let _handle = scheduler.spawn(move || {
+                        let result = black_box(simulate_work());
+                        tx.send(());
+                        result
+                    });
+                }
+
+                #[allow(
+                    clippy::iter_with_drain,
+                    reason = "we reuse the vector in the next iteration"
+                )]
+                for rx in rxs.drain(..) {
+                    block_on(rx).unwrap();
+                }
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let spawn_and_forget_single_alloc = allocs.operation("spawn_and_forget_single");
+    let spawn_and_forget_single_time = times.operation("spawn_and_forget_single");
+
+    g.bench_function("spawn_and_forget_single", |b| {
+        let pool = Pool::new();
+        let scheduler = pool.scheduler();
+        let event_pool = EventPool::<()>::new();
+
+        b.iter_custom(|iterations| {
+            let _alloc_span = spawn_and_forget_single_alloc
+                .measure_process()
+                .iterations(iterations);
+            let _time_span = spawn_and_forget_single_time
+                .measure_process()
+                .iterations(iterations);
+            let start = Instant::now();
+
+            for _ in 0..iterations {
+                let (tx, rx) = event_pool.rent();
+                scheduler.spawn_and_forget(move || {
+                    black_box(simulate_work());
+                    tx.send(());
+                });
+                block_on(rx).unwrap();
+            }
+
+            start.elapsed()
+        });
+    });
+
+    let spawn_and_forget_100_alloc = allocs.operation("spawn_and_forget_100");
+    let spawn_and_forget_100_time = times.operation("spawn_and_forget_100");
+
+    g.bench_function("spawn_and_forget_100", |b| {
+        let pool = Pool::new();
+        let scheduler = pool.scheduler();
+        let event_pool = EventPool::<()>::new();
+
+        b.iter_custom(|iterations| {
+            let mut rxs = Vec::with_capacity(100);
+
+            let _alloc_span = spawn_and_forget_100_alloc
+                .measure_process()
+                .iterations(iterations);
+            let _time_span = spawn_and_forget_100_time
+                .measure_process()
+                .iterations(iterations);
+            let start = Instant::now();
+
+            for _ in 0..iterations {
+                for _ in 0..100 {
+                    let (tx, rx) = event_pool.rent();
+                    rxs.push(rx);
+                    scheduler.spawn_and_forget(move || {
+                        black_box(simulate_work());
+                        tx.send(());
+                    });
+                }
+
+                #[allow(
+                    clippy::iter_with_drain,
+                    reason = "we reuse the vector in the next iteration"
+                )]
+                for rx in rxs.drain(..) {
+                    block_on(rx).unwrap();
                 }
             }
 
