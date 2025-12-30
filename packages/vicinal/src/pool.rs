@@ -70,7 +70,7 @@ impl PoolInner {
         for worker_index in 0..workers_count {
             let inner_clone = Arc::clone(self);
             let handle = thread::Builder::new()
-                .name(format!("vicinal-p{processor_id}-w{worker_index}"))
+                .name(format!("vicinal-{}-{}-{}", inner_clone.pool_id, processor_id, worker_index))
                 .spawn(move || {
                     // Pin worker thread to the target processor for cache locality.
                     if let Some(processor_set) = ProcessorSet::builder()
