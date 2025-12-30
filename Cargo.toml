@@ -34,7 +34,7 @@ linked_macros_impl = { version = "1.0.2", path = "packages/linked_macros_impl" }
 many_cpus = { version = "1.1.3", path = "packages/many_cpus" }
 new_zealand = { version = "1.0.2", path = "packages/new_zealand" }
 nm = { version = "0.1.22", path = "packages/nm" }
-vicinal = { version = "0.1.4", path = "packages/vicinal" }
+vicinal = { version = "0.1.5", path = "packages/vicinal" }
 
 # The packages we consume. We mostly only enable "std" features here, the rest in individual packages.
 arc-swap = { version = "1.7", default-features = false }
