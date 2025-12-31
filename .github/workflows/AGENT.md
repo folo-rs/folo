@@ -6,7 +6,7 @@ The CI workflows in this repository run individual `just` commands as separate p
 
 ## Workflow Structure
 
-### validation.yml (11 parallel jobs)
+### validation.yml
 
 Split from the monolithic `just validate-local` into individual jobs:
 
@@ -25,8 +25,7 @@ Split from the monolithic `just validate-local` into individual jobs:
   - check-release
   - clippy-release
   - build-release
-
-### validation-extra.yml (3 parallel jobs)
+  - careful
 
 Split from the monolithic `just validate-extra-local` into individual jobs, all multi-platform:
 
