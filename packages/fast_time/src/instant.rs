@@ -262,6 +262,7 @@ impl From<Instant> for std::time::Instant {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use mockall::Sequence;
 

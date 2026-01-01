@@ -35,6 +35,7 @@ pub(crate) fn contains_compile_error(tokens: &TokenStream) -> bool {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use proc_macro2::Span;
 

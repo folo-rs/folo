@@ -413,6 +413,7 @@ impl !Send for HardwareTracker {}
 impl !Sync for HardwareTracker {}
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use itertools::Itertools;
     use mockall::Sequence;

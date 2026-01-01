@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 //! Provides efficient mechanisms to capture the current timestamp and measure elapsed time.
 //!
 //! This crate offers a [`Clock`] that can provide timestamps with low overhead, making it

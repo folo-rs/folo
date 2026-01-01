@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 //! # nm - nanometer
 //!
 //! Collect metrics about observed events with low overhead even in

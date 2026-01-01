@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 //! Worker pool that schedules tasks on the same processor that spawned them.
 //!
 //! This crate provides a worker pool where each task is executed on the same processor that

@@ -238,6 +238,7 @@ fn ensure_inner_pool<'a, T: 'static>(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::cell::RefCell;
     use std::mem::MaybeUninit;

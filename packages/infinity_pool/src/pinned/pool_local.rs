@@ -316,6 +316,7 @@ impl<T> ExactSizeIterator for LocalPinnedPoolIterator<'_, T> {
 impl<T> FusedIterator for LocalPinnedPoolIterator<'_, T> {}
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::mem::MaybeUninit;
 

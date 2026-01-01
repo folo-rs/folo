@@ -115,6 +115,7 @@ where
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use events_once::EventLake;
     use futures::executor::block_on;

@@ -324,6 +324,7 @@ pub fn __private_clear_linked_variables_local() {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::any::TypeId;
     use std::rc::Rc;

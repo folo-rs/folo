@@ -49,6 +49,7 @@ fn drop_fn<T>(ptr: NonNull<T>) {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::cell::Cell;
     use std::mem;

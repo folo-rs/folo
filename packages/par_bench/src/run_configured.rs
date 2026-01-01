@@ -335,6 +335,7 @@ impl<MeasureOutput> RunSummary<MeasureOutput> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "test code with known array bounds")]
 

@@ -149,6 +149,7 @@ impl<T: ?Sized> From<RawBlindPooledMut<T>> for RawBlindPooled<T> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 

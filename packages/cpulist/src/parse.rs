@@ -96,6 +96,7 @@ fn parse_single(single_item_part: &str) -> crate::Result<Item> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

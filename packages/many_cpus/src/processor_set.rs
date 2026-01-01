@@ -350,6 +350,7 @@ impl Display for ProcessorSet {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -620,6 +621,7 @@ mod tests {
 /// Fallback PAL integration tests - these test the integration between `ProcessorSet`
 /// and the fallback platform abstraction layer.
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests_fallback {
     use std::thread;
 

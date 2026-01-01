@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 //! Utilities for parsing and emitting strings in the the `cpulist` format often used by Linux
 //! utilities that work with processor IDs, memory region IDs and similar numeric hardware
 //! identifiers.

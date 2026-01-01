@@ -209,6 +209,7 @@ fn worker_entrypoint(rx: &mpsc::Receiver<Command>) {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::sync::atomic::{self, AtomicUsize};
 

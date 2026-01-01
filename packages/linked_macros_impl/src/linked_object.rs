@@ -68,6 +68,7 @@ fn core(mut item: ItemStruct) -> Result<TokenStream, syn::Error> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use quote::quote;
 

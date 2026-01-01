@@ -320,6 +320,7 @@ where
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::rc::Rc;
     use std::sync::Arc;

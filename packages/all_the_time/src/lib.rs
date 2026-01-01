@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 //! Processor time tracking utilities for benchmarks and performance analysis.
 //!
 //! This package provides utilities to track processor time during code execution,

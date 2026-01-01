@@ -307,6 +307,7 @@ macro_rules! thread_local_arc {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::sync::atomic::{self, AtomicUsize};
     use std::thread;

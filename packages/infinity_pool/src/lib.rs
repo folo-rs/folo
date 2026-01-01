@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 //! Infinity pool: object pools with trait object support and multiple access models.
 //!
 //! This package provides several types of object pools designed for different use cases,

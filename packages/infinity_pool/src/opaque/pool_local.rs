@@ -357,6 +357,7 @@ impl ExactSizeIterator for LocalOpaquePoolIterator<'_> {
 impl FusedIterator for LocalOpaquePoolIterator<'_> {}
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 

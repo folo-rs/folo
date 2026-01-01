@@ -159,6 +159,7 @@ fn determine_capacity(slot_size: NonZero<usize>) -> NonZero<usize> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::mem::size_of;
 

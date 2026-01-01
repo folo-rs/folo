@@ -201,6 +201,7 @@ impl fmt::Display for Operation {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::hint::black_box;
 

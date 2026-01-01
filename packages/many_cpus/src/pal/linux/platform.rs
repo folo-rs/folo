@@ -501,6 +501,7 @@ fn parse_v1_cgroup_cpu_quota_and_period_us(
     reason = "we need not worry in tests"
 )]
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::fmt::Write;
 

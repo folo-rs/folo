@@ -196,6 +196,7 @@ pub(crate) static GLOBAL_REGISTRY: LazyLock<GlobalEventRegistry> =
     LazyLock::new(GlobalEventRegistry::new);
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

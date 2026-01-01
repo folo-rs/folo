@@ -162,6 +162,7 @@ impl<T: 'static> fmt::Debug for LocalPoolCore<T> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::iter;
     use std::pin::pin;

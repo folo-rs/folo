@@ -190,6 +190,7 @@ impl<T: 'static> ErasedPool for PoolWrapper<T> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use core::task;
     use std::pin::pin;

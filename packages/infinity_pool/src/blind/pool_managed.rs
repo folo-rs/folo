@@ -243,6 +243,7 @@ fn ensure_inner_pool<'a, T: Send + 'static>(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::mem::MaybeUninit;
     use std::sync::Arc;

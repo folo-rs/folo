@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 //! Private helpers for testing and examples in Folo packages.
 
 use std::sync::mpsc;
@@ -87,6 +89,7 @@ pub fn f64_diff_abs(a: f64, b: f64, close_enough: f64) -> f64 {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

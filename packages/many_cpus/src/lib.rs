@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 //! Working on many-processor systems with 100+ logical processors can require you to pay extra
 //! attention to the specifics of the hardware to make optimal use of available compute capacity
 //! and extract the most performance out of the system.

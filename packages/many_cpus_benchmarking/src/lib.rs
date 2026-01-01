@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 //! [Criterion][1] benchmark harness designed to compare different modes of distributing work in a
 //! many-processor system with multiple memory regions. This helps highlight the performance impact of
 //! cross-memory-region data transfers, cross-processor data transfers and multi-threaded logic.

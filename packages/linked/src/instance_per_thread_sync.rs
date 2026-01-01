@@ -399,6 +399,7 @@ where
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::sync::atomic::{self, AtomicUsize};
     use std::sync::{Arc, Mutex};

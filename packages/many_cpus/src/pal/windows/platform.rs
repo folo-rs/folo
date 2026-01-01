@@ -820,6 +820,7 @@ fn is_soft_capped(rate_control: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION) -> bool 
     reason = "we need not worry in tests"
 )]
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::mem::offset_of;
     use std::sync::Arc;

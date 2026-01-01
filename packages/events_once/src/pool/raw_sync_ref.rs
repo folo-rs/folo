@@ -86,6 +86,7 @@ impl<T: Send + 'static> fmt::Debug for RawPooledRef<T> {
 unsafe impl<T: Send + 'static> Send for RawPooledRef<T> {}
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 

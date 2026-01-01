@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 //! Efficient oneshot events (channels) with support for single-threaded events,
 //! object embedding, event pools and event lakes
 //!

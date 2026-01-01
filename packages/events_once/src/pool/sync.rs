@@ -183,6 +183,7 @@ impl<T: Send + 'static> fmt::Debug for EventPoolCore<T> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::pin::pin;
     use std::sync::Barrier;

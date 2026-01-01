@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 //! Multi-threaded benchmark execution framework for performance testing.
 //!
 //! This package provides utilities to execute multi-threaded benchmarks with precise control

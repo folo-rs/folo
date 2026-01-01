@@ -651,6 +651,7 @@ fn ensure_virtual_pages_mapped_to_physical_pages(ptr: NonNull<SlotMeta>, layout:
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::mem::offset_of;
     use std::sync::Mutex;

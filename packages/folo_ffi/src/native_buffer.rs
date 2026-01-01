@@ -243,6 +243,7 @@ impl<T: Sized> Drop for NativeBuffer<T> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

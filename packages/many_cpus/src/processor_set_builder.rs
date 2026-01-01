@@ -841,6 +841,7 @@ enum ProcessorTypeSelector {
 
 #[cfg(not(miri))] // Talking to the operating system is not possible under Miri.
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests_real {
     use new_zealand::nz;
 
@@ -960,6 +961,7 @@ mod tests_real {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use new_zealand::nz;
     use nonempty::nonempty;

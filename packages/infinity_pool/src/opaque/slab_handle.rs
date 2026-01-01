@@ -191,6 +191,7 @@ impl<T: ?Sized> fmt::Debug for SlabHandle<T> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::fmt::Display;
 

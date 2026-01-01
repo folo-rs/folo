@@ -239,6 +239,7 @@ impl Scheduler {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use events_once::EventPool;
     use futures::executor::block_on;

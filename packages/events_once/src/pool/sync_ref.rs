@@ -71,6 +71,7 @@ impl<T: Send + 'static> fmt::Debug for PooledRef<T> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use static_assertions::assert_impl_all;
 

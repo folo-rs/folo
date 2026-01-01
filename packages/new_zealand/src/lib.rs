@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 //! Utilizing for working with non-zero integers.
 //!
 //! Currently this implements a shorthand macro for creating non-zero integers
@@ -25,6 +27,7 @@ macro_rules! nz {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::num::NonZero;
 

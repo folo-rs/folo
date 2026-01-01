@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 //! Memory allocation tracking utilities for benchmarks and performance analysis.
 //!
 //! This package provides utilities to track memory allocations during code execution,

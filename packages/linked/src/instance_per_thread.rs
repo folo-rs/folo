@@ -472,6 +472,7 @@ unsafe impl<T> Sync for ThreadSpecificState<T> where T: linked::Object {}
 unsafe impl<T> Send for ThreadSpecificState<T> where T: linked::Object {}
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::cell::Cell;
     use std::sync::{Arc, Mutex};
