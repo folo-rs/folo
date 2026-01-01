@@ -16,8 +16,11 @@ fn get_binary_path() -> PathBuf {
         "cargo-detect-package"
     };
 
-    // Honor explicit target override via CARGO_TARGET_DIR.
-    if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
+    // Honor explicit target override via CARGO_TARGET_DIR or CARGO_LLVM_COV_TARGET_DIR
+    // (the latter is set by cargo-llvm-cov for coverage runs).
+    if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR")
+        .or_else(|_| std::env::var("CARGO_LLVM_COV_TARGET_DIR"))
+    {
         return PathBuf::from(target_dir).join("debug").join(binary_name);
     }
 
