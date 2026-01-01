@@ -21,6 +21,20 @@ jobs:
       - name: Run format-check
         run: just format-check
 
+  # Default features check is platform-agnostic, so run only on Ubuntu for efficiency
+  default-features-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run default-features-check
+        run: just default-features-check
+
   check-dev:
     strategy:
       fail-fast: false

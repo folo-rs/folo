@@ -42,6 +42,10 @@ machete:
     cargo +nightly udeps --all-targets
 
 [group('quality')]
+default-features-check:
+    cargo ensure-no-default-features
+
+[group('quality')]
 careful FILTER="":
     cargo +nightly careful test {{ target_package }} --all-features {{ FILTER }} --locked
 
@@ -71,6 +75,7 @@ validate-local:
     just package={{ package }} docs
     just package={{ package }} miri
     just package={{ package }} machete
+    just package={{ package }} default-features-check
     just package={{ package }} check release
     just package={{ package }} clippy release
     just package={{ package }} build release
