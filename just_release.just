@@ -9,6 +9,9 @@ prepare-release:
 [group('release')]
 [script]
 release:
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
     $env:GIT_TOKEN = gh auth token
     try {
         release-plz release

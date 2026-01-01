@@ -600,3 +600,14 @@ panic or error messages - these messages are not an API contract and may change 
 # Type names
 
 Do not hardcode type names in string literals. Instead use `type_name::<Self>()` or similar.
+
+# PowerShell scripts in justfiles must consider exit codes
+
+Every PowerShell script in a .just file (i.e. every `[script]` block) must start with the following:
+
+```powershell
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
+```
+
+This ensures that commands that produce nonzero exit codes are correctly considered errors and fail the script.

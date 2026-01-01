@@ -1,6 +1,9 @@
 [group('quality')]
 [script]
 mutants:
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
     function Escape-Wildcards ($s) {
         if ($IsWindows) {
             return $s

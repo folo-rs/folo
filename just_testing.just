@@ -1,6 +1,9 @@
 [group('testing')]
 [script]
 bench TARGET="":
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
     $target_selector = @()
 
     if ("{{ TARGET }}" -ne "") {
@@ -17,6 +20,9 @@ miri FILTER="":
 [group('testing')]
 [script]
 miri-example EXAMPLE:
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
     if ("{{ package }}" -eq "") {
         cargo +nightly miri run --all-features --example {{ EXAMPLE }} --locked
     } else {
@@ -37,6 +43,9 @@ test-more FILTER="":
 [group('testing')]
 [script]
 test-docs FILTER="":
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
     # Extract package name from target_package variable
     $target_package_var = "{{ target_package }}"
     
@@ -65,6 +74,9 @@ test-docs FILTER="":
 [group('testing')]
 [script]
 run-examples:
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
     # Discover and run all stand-alone example binaries
     $failures = @()
     $total_count = 0
