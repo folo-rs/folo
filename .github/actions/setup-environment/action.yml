@@ -29,8 +29,14 @@ runs:
         # Verify PowerShell installation
         pwsh -c "Write-Host 'PowerShell installed successfully'"
     
-    - name: Install Rust toolchain
+    - name: Install Rust toolchain (stable)
       uses: dtolnay/rust-toolchain@stable
+    
+    # Keep nightly components in sync with just_setup.just install-tools recipe
+    - name: Install Rust toolchain (nightly)
+      uses: dtolnay/rust-toolchain@nightly
+      with:
+        components: miri, rustfmt, rust-src, llvm-tools-preview
     
     - name: Setup Rust cache
       uses: Swatinem/rust-cache@v2
@@ -41,16 +47,18 @@ runs:
         shared-key: prerequisites
     
     - name: Install just
-      shell: bash
-      run: cargo install just --locked
+      uses: taiki-e/install-action@just
     
     - name: Configure Git
       shell: bash
       run: git config --local include.path ./.gitconfig
     
+    # Keep tool list in sync with just_setup.just install-tools recipe
+    # Using taiki-e/install-action downloads pre-built binaries instead of compiling
     - name: Install development tools
-      shell: bash
-      run: just install-tools
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-machete, cargo-nextest, release-plz, cargo-semver-checks, cargo-audit, cargo-hack, cargo-mutants, cargo-llvm-cov, cargo-sort, cargo-sort-derives, cargo-udeps, cargo-careful, cargo-ensure-no-default-features
     
     - name: Verify environment setup
       shell: bash
