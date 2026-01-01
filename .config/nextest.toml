@@ -3,3 +3,6 @@
 # coincidences to do its job. It is not an accurate nor valuable feature and we would rather
 # disable it but there is no off button so let's just set a high timeout that avoids it complaining.
 leak-timeout = "10s"
+
+[profile.default.junit]
+path = "junit.xml"

@@ -89,6 +89,14 @@ jobs:
       - name: Run test-more on ${{ matrix.platform }}
         run: just test-more
 
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: target/nextest/default/junit.xml
+          flags: ${{ matrix.platform }}
+
   test-docs:
     strategy:
       fail-fast: false
