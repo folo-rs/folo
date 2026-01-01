@@ -32,11 +32,6 @@ runs:
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
     
-    - name: Install nightly Rust toolchain
-      uses: dtolnay/rust-toolchain@nightly
-      with:
-        components: miri, rustfmt, rust-src
-    
     - name: Setup Rust cache
       uses: Swatinem/rust-cache@v2
       with:

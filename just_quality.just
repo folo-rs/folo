@@ -6,17 +6,21 @@ clippy PROFILE='dev':
 coverage-measure:
     # Before running the tests, we need to clear old test coverage data because the coverage report
     # simply sums up all the data in the target folder, even if it is from old builds.
-    cargo llvm-cov clean --workspace
+    cargo +nightly llvm-cov clean --workspace
 
     # This will run tests and generate test coverage data files, to be analyzed separately.
-    cargo llvm-cov nextest {{ target_package }} --all-targets --no-report --all-features --locked
+    cargo +nightly llvm-cov nextest {{ target_package }} --all-targets --no-report --all-features --locked
 
 # This tool needs a different way to specify the package.
 coverage-package := if package == "" { "" } else { "-p " + package }
 
 [group('quality')]
 coverage-report:
-    cargo llvm-cov report {{ coverage-package }} --open
+    cargo +nightly llvm-cov report {{ coverage-package }} --open
+
+[group('quality')]
+coverage-report-ci:
+    cargo +nightly llvm-cov report --lcov --output-path lcov.info
 
 [group('quality')]
 [no-cd]
