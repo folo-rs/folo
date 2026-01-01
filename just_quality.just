@@ -9,7 +9,7 @@ coverage-measure:
     cargo +nightly llvm-cov clean --workspace
 
     # This will run tests and generate test coverage data files, to be analyzed separately.
-    cargo +nightly llvm-cov nextest {{ target_package }} --all-targets --no-report --all-features --locked
+    cargo +nightly llvm-cov nextest {{ target_package }} --no-fail-fast --all-targets --no-report --all-features --locked
 
 # This tool needs a different way to specify the package.
 coverage-package := if package == "" { "" } else { "-p " + package }
@@ -51,7 +51,7 @@ default-features-check:
 
 [group('quality')]
 careful FILTER="":
-    cargo +nightly careful test {{ target_package }} --all-features {{ FILTER }} --locked
+    cargo +nightly careful test {{ target_package }} --no-fail-fast --all-features {{ FILTER }} --locked
 
 # Separate file because it is a giant script.
 import 'just_quality_mutants.just'
