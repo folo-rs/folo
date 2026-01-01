@@ -292,6 +292,12 @@ development = ["mutants", "static_assertions"]
 # This ensures we have high quality data with proper stack traces when profiling.
 debug = "line-tables-only"
 
+[profile.test]
+# This is supposed to be the default (inherited from "dev") but in practice,
+# fails to be so when running llvm-cov to measure test coverage. Explicitly
+# specifying this here to ensure we always have proper errors and stack traces.
+debug = "full"
+
 [profile.mutants]
 inherits = "test"
 # Speed up the build.
