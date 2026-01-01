@@ -14,13 +14,13 @@ rust-version.workspace = true
 doc = false
 
 [dev-dependencies]
-many_cpus = { path = "../many_cpus" }
-many_cpus_benchmarking = { path = "../many_cpus_benchmarking" }
 
 criterion = { workspace = true }
 fake_headers = { workspace = true }
 frozen-collections = { workspace = true }
 http = { workspace = true }
+many_cpus = { path = "../many_cpus" }
+many_cpus_benchmarking = { path = "../many_cpus_benchmarking" }
 scc = { workspace = true }
 
 [target.'cfg(windows)'.dev-dependencies]

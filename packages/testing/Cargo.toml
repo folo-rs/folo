@@ -26,11 +26,11 @@ windows = { workspace = true, features = [
     "Win32_Security",
 ] }
 
-[target.'cfg(windows)'.dev-dependencies]
-new_zealand = { workspace = true }
-
 [dev-dependencies]
 mutants = { workspace = true }
+
+[target.'cfg(windows)'.dev-dependencies]
+new_zealand = { workspace = true }
 
 [lints]
 workspace = true

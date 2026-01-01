@@ -10,12 +10,12 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[package.metadata.cargo-machete]
+ignored = ["proc-macro2"]
+
 [lib]
 proc-macro = true
 doc = false
-
-[package.metadata.cargo-machete]
-ignored = ["proc-macro2"]
 
 [dependencies]
 linked_macros_impl = { workspace = true }

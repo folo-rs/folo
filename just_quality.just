@@ -22,11 +22,13 @@ coverage-report:
 [no-cd]
 format:
     cargo +nightly fmt --verbose --all -- --config-path ./unstable-rustfmt.toml
+    cargo sort --workspace
     cargo sort-derives
 
 [group('quality')]
 format-check:
     cargo +nightly fmt --verbose --all --check
+    cargo sort --workspace --check
     cargo sort-derives --check
 
 [group('quality')]

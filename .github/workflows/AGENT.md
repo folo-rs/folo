@@ -1,5 +1,7 @@
 # GitHub Workflows Design Rationale
 
+Update this ".github/workflows/AGENT.md" file if you change the GitHub workflows.
+
 ## Overview
 
 The CI workflows in this repository run individual `just` commands as separate parallel jobs instead of combined `validate-local` and `validate-extra-local` commands. This design provides faster feedback by parallelizing checks and clearer failure identification.

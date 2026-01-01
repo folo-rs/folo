@@ -27,8 +27,8 @@ num-integer = { workspace = true }
 oneshot = { workspace = true }
 
 [dev-dependencies]
-alloc_tracker = { path = "../alloc_tracker" }
 all_the_time = { path = "../all_the_time" }
+alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
 mutants = { workspace = true }
 
@@ -39,7 +39,6 @@ harness = false
 [[bench]]
 name = "par_bench_basic"
 harness = false
-
 
 [[bench]]
 name = "par_bench_manual"
