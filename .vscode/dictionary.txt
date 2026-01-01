@@ -15,7 +15,6 @@ Dataless
 deconflicting
 Deque
 doctest
-dtolnay
 foldhash
 Folo
 freelist
@@ -45,9 +44,7 @@ Saares
 sched
 scopeguard
 supertrait
-Swatinem
 Symcrypt
-taiki
 taskset
 threadpool
 timespec
