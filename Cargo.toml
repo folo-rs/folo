@@ -105,7 +105,10 @@ unused_macros = "warn"
 unused_qualifications = "warn"
 variant_size_differences = "warn"
 
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(careful)'] }
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(careful)',
+    'cfg(coverage_nightly)',
+] }
 
 [workspace.lints.rustdoc]
 private_doc_tests = "warn"

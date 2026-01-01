@@ -4,6 +4,7 @@ affinitizing
 agnostically
 argh
 bytecount
+cfgs
 clippy
 cloneable
 constness
@@ -38,6 +39,7 @@ pointee
 println
 reentrancy
 repr
+rustdoc
 Saares
 sched
 scopeguard

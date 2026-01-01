@@ -28,8 +28,6 @@ macro_rules! nz {
 mod tests {
     use std::num::NonZero;
 
-    use crate::nz;
-
     #[test]
     fn basic_functionality() {
         // Test basic usage with different data types

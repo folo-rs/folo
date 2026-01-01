@@ -21,15 +21,39 @@ fn get_binary_path() -> PathBuf {
         return PathBuf::from(target_dir).join("debug").join(binary_name);
     }
 
-    // Try to find the binary in the standard Cargo target directory
-    std::env::var("CARGO_MANIFEST_DIR").map_or_else(
-        |_| PathBuf::from("../../target/debug").join(binary_name),
-        |manifest_dir| {
-            PathBuf::from(manifest_dir)
-                .join("../../target/debug")
-                .join(binary_name)
-        },
-    )
+    // Try to find the binary relative to CARGO_MANIFEST_DIR
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        let manifest_path = PathBuf::from(&manifest_dir);
+
+        // Look for workspace root by going up from CARGO_MANIFEST_DIR
+        // This handles both running from the workspace root and from the package directory.
+        // We need to find the target directory relative to the workspace root.
+        let workspace_root = manifest_path
+            .parent()
+            .and_then(|p| p.parent())
+            .unwrap_or(&manifest_path);
+
+        // When running under cargo-llvm-cov, binaries are placed in target/llvm-cov-target/debug
+        // instead of target/debug. Try the llvm-cov path first since it's more specific.
+        let llvm_cov_path = workspace_root
+            .join("target/llvm-cov-target/debug")
+            .join(binary_name);
+        if llvm_cov_path.exists() {
+            return llvm_cov_path;
+        }
+
+        // Fall back to the standard target directory
+        let standard_path = workspace_root.join("target/debug").join(binary_name);
+        if standard_path.exists() {
+            return standard_path;
+        }
+
+        // If neither exists, return the standard path (will fail later with a clear error)
+        return standard_path;
+    }
+
+    // Fallback when CARGO_MANIFEST_DIR is not set
+    PathBuf::from("../../target/debug").join(binary_name)
 }
 
 /// Helper to run cargo-detect-package with given arguments and working directory.
