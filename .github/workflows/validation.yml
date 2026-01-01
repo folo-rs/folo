@@ -275,3 +275,21 @@ jobs:
 
       - name: Run careful on ${{ matrix.platform }}
         run: just careful
+
+  check-external-types:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run check-external-types on ${{ matrix.platform }}
+        run: just check-external-types

@@ -10,6 +10,7 @@ target_package := if package == "" { " --workspace" } else { " -p " + package }
 _default:
     @just --list
 
+import 'just_constants.just'
 import 'just_basics.just'
 import 'just_quality.just'
 import 'just_release.just'

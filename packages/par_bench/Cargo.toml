@@ -10,6 +10,13 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[package.metadata.cargo_check_external_types]
+allowed_external_types = [
+    "criterion::benchmark_group::BenchmarkGroup",
+    "criterion::measurement::WallTime",
+    "many_cpus::processor_set::ProcessorSet",
+]
+
 [features]
 default = []
 all_the_time = ["dep:all_the_time"]
