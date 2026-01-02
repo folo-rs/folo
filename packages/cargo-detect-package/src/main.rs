@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 //! A Cargo tool to detect the package that a file belongs to, passing the package name to a subcommand.
 //!
 //! This tool automatically detects which Cargo package a given file belongs to within a workspace,
@@ -416,6 +418,7 @@ fn normalize_path(path: &Path) -> PathBuf {
 }
 
 #[cfg(all(test, not(miri)))]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::fs;
 
@@ -724,5 +727,34 @@ version = "0.1.0"
         let subcommand_edge_case = ["clippy".to_string(), "--".to_string(), "--help".to_string()];
         let separator_pos = subcommand_edge_case.iter().position(|arg| arg == "--");
         assert_eq!(separator_pos, Some(1));
+    }
+
+    #[test]
+    #[serial] // This test runs cargo which requires a workspace context.
+    fn execute_with_cargo_args_workspace_branch() {
+        // Test that the Workspace branch correctly adds --workspace flag.
+        // We use "tree" with --depth 0 as it is fast and accepts --workspace.
+        let result = execute_with_cargo_args(
+            &DetectedPackage::Workspace,
+            &["tree".to_string(), "--depth".to_string(), "0".to_string()],
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().success());
+    }
+
+    #[test]
+    fn execute_with_cargo_args_no_subcommand_returns_error() {
+        let result = execute_with_cargo_args(&DetectedPackage::Workspace, &[]);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn execute_with_env_var_no_subcommand_returns_error() {
+        let result = execute_with_env_var("TEST_ENV", &DetectedPackage::Workspace, &[]);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     }
 }

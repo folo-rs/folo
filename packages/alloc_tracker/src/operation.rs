@@ -406,4 +406,20 @@ mod tests {
     }
 
     static_assertions::assert_impl_all!(Operation: Send, Sync);
+
+    #[test]
+    fn operation_display_shows_mean_bytes() {
+        let operation = create_test_operation();
+
+        // Add some data to have a non-zero mean.
+        // add_iterations(bytes_delta, count_delta, iterations) means bytes_delta * iterations total bytes.
+        {
+            let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
+            metrics.add_iterations(250, 5, 2); // 250 * 2 = 500 total bytes / 2 = 250 mean
+        }
+
+        let display_output = operation.to_string();
+        assert!(display_output.contains("bytes (mean)"));
+        assert!(display_output.contains("250")); // 500 / 2 = 250 mean bytes
+    }
 }

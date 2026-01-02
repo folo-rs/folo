@@ -302,4 +302,17 @@ mod tests {
 
     // The type is thread-safe.
     static_assertions::assert_impl_all!(Session: Send, Sync);
+
+    #[test]
+    fn session_display_includes_operation_name() {
+        let session = create_test_session();
+
+        {
+            let operation = session.operation("display_test_operation");
+            let _span = operation.measure_thread();
+        }
+
+        let display_output = session.to_string();
+        assert!(display_output.contains("display_test_operation"));
+    }
 }

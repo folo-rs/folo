@@ -311,6 +311,8 @@ impl fmt::Display for ReportOperation {
     }
 }
 
+// No API contract to test - output format is not guaranteed.
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.operations.is_empty() || self.operations.values().all(|op| op.total_iterations == 0)
@@ -571,4 +573,24 @@ mod tests {
     // Static assertions for thread safety
     static_assertions::assert_impl_all!(Report: Send, Sync);
     static_assertions::assert_impl_all!(ReportOperation: Send, Sync);
+
+    #[test]
+    fn report_operation_display_shows_mean_bytes() {
+        let operation = ReportOperation {
+            total_bytes_allocated: 1000,
+            total_allocations_count: 10,
+            total_iterations: 4,
+        };
+
+        let display_output = operation.to_string();
+        assert!(display_output.contains("bytes (mean)"));
+        assert!(display_output.contains("250")); // 1000 / 4 = 250 mean bytes
+    }
+
+    #[test]
+    fn empty_report_display_shows_no_statistics_message() {
+        let report = Report::new();
+        let display_output = report.to_string();
+        assert!(display_output.contains("No allocation statistics captured."));
+    }
 }
