@@ -4,30 +4,24 @@ description: Setup development environment for Folo project
 runs:
   using: composite
   steps:
-    - name: Install system dependencies (Linux)
+    - name: Install dependencies (Linux)
       if: runner.os == 'Linux'
       shell: bash
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        sudo apt update
-        sudo apt install -y git git-lfs build-essential cmake gcc make curl libssl-dev pkg-config
-        # Set up Git LFS
-        git lfs install
-    
-    - name: Install PowerShell 7 (Linux)
-      if: runner.os == 'Linux'
-      shell: bash
-      env:
-        DEBIAN_FRONTEND: noninteractive
-      run: |
-        # Download and install PowerShell 7
+        # This supposedly speeds up installation by avoiding mandb updates.
+        sudo mv /usr/bin/mandb /usr/bin/mandb.deactivated && sudo cp -p /bin/true /usr/bin/mandb
+
+        # Add Microsoft package repository (for PowerShell and any other Microsoft packages).
         wget -q "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"
         sudo dpkg -i --force-confnew packages-microsoft-prod.deb
+
         sudo apt update
-        sudo apt install -y powershell
-        # Verify PowerShell installation
-        pwsh -c "Write-Host 'PowerShell installed successfully'"
+        sudo apt install -y git git-lfs build-essential cmake gcc make curl libssl-dev pkg-config powershell
+
+        # Set up Git LFS
+        git lfs install
     
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
@@ -59,4 +53,5 @@ runs:
         just --version
         cargo --version
         rustc --version
+        pwsh --version
         echo "Environment setup complete"

@@ -15,6 +15,7 @@ Dataless
 deconflicting
 Deque
 doctest
+dpkg
 foldhash
 Folo
 freelist
@@ -24,12 +25,14 @@ Initializable
 JOBOBJECT
 libc
 lifecycles
+mandb
 metas
 miri
 MIRIFLAGS
 mockall
 nanos
 nextest
+noninteractive
 nonoverlapping
 nsec
 oneshot
@@ -39,6 +42,7 @@ pointee
 println
 reentrancy
 repr
+rustc
 rustdoc
 Saares
 sched
