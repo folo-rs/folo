@@ -216,8 +216,8 @@ mod tests {
         let mut clock_new = Clock::new();
         let mut clock_default = Clock::default();
 
-        let _ = clock_new.now();
-        let _ = clock_default.now();
+        _ = clock_new.now();
+        _ = clock_default.now();
     }
 
     #[test]

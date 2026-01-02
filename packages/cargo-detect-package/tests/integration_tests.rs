@@ -807,12 +807,7 @@ fn invalid_toml_package_detection_error() {
     )
     .unwrap();
 
-    let mut args = vec![
-        "--path",
-        "malformed_package/src/lib.rs",
-        "--via-env",
-        "PKG",
-    ];
+    let mut args = vec!["--path", "malformed_package/src/lib.rs", "--via-env", "PKG"];
     args.extend_from_slice(&test_cmd);
 
     let output = run_tool(workspace_root, &args).unwrap();
