@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::sync::atomic::{self, AtomicU64};
 use std::sync::{Arc, OnceLock};
 
@@ -282,9 +283,9 @@ struct GenerationValue<T> {
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T> std::fmt::Debug for GenerationValue<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GenerationValue")
+        f.debug_struct(type_name::<Self>())
             .field("generation", &self.generation)
-            .field("value", &format_args!("<{}>", std::any::type_name::<T>()))
+            .field("value", &format_args!("<{}>", type_name::<T>()))
             .finish()
     }
 }
@@ -316,10 +317,10 @@ where
     T: Clone + Send + Sync + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GlobalState")
+        f.debug_struct(type_name::<Self>())
             .field(
                 "latest_value",
-                &format_args!("<GenerationValue<{}>>", std::any::type_name::<T>()),
+                &format_args!("<GenerationValue<{}>>", type_name::<T>()),
             )
             .field("next_generation", &self.next_generation)
             .field(

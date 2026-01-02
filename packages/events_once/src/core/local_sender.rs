@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::{fmt, ptr};
@@ -71,7 +72,7 @@ where
     T: 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LocalSender")
+        f.debug_struct(type_name::<Self>())
             .field("event_ref", &self.event_ref)
             .finish()
     }

@@ -1,3 +1,4 @@
+use std::any::type_name;
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
 use std::cell::UnsafeCell;
@@ -826,7 +827,7 @@ unsafe impl<T: Send + 'static> Sync for Event<T> {}
 #[expect(clippy::missing_fields_in_debug, reason = "phantoms are boring")]
 impl<T: Send + 'static> fmt::Debug for Event<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut debug = f.debug_struct("Event");
+        let mut debug = f.debug_struct(type_name::<Self>());
 
         debug.field("state", &self.state);
         debug.field("awaiter", &self.awaiter);

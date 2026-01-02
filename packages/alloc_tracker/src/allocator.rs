@@ -1,6 +1,7 @@
 //! Allocation wrapper for tracking memory allocations.
 
 use std::alloc::{GlobalAlloc, Layout};
+use std::any::type_name;
 use std::cell::{Cell, OnceCell};
 use std::fmt;
 #[cfg(feature = "panic_on_next_alloc")]
@@ -224,7 +225,7 @@ pub struct Allocator<A: GlobalAlloc> {
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<A: GlobalAlloc> fmt::Debug for Allocator<A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Allocator")
+        f.debug_struct(type_name::<Self>())
             .field("inner", &"<allocator>")
             .finish()
     }

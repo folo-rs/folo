@@ -4,6 +4,7 @@
 //! This module contains logically private things that must be technically public
 //! because they are accessed from macro-generated code.
 
+use std::any::type_name;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
@@ -49,13 +50,10 @@ pub struct Link<T> {
 
 impl<T> Debug for Link<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Link")
+        f.debug_struct(type_name::<Self>())
             .field(
                 "instance_factory",
-                &format_args!(
-                    "Arc<dyn Fn(Link<{t}>) -> {t}>",
-                    t = std::any::type_name::<T>()
-                ),
+                &format_args!("Arc<dyn Fn(Link<{t}>) -> {t}>", t = type_name::<T>()),
             )
             .finish()
     }

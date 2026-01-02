@@ -1,3 +1,4 @@
+use std::any::type_name;
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
 #[cfg(debug_assertions)]
@@ -504,7 +505,7 @@ impl<T: 'static> LocalEvent<T> {
 #[expect(clippy::missing_fields_in_debug, reason = "phantoms are boring")]
 impl<T: 'static> fmt::Debug for LocalEvent<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut debug = f.debug_struct("LocalEvent");
+        let mut debug = f.debug_struct(type_name::<Self>());
 
         debug.field("state", &self.state);
         debug.field("awaiter", &self.awaiter);
