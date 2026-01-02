@@ -32,6 +32,7 @@ impl<T: 'static> BoxedLocalSender<T> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: 'static> fmt::Debug for BoxedLocalSender<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
@@ -122,6 +123,7 @@ impl<T: 'static> Future for BoxedLocalReceiver<T> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: 'static> fmt::Debug for BoxedLocalReceiver<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
@@ -153,6 +155,7 @@ impl<T: 'static> RawLocalSender<T> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: 'static> fmt::Debug for RawLocalSender<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
@@ -244,6 +247,7 @@ impl<T: 'static> Future for RawLocalReceiver<T> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: 'static> fmt::Debug for RawLocalReceiver<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())

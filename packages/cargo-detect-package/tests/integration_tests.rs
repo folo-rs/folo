@@ -555,3 +555,308 @@ fn workspace_scope_cargo_integration() {
         );
     }
 }
+
+#[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
+fn cargo_invocation_style_with_detect_package_arg() {
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
+    let test_cmd = get_test_command();
+
+    // Simulate how cargo invokes subcommands: `cargo-detect-package detect-package --path ...`
+    // The first argument after the program name is "detect-package" which should be skipped
+    let mut args = vec![
+        "detect-package", // This is what cargo passes as first arg
+        "--path",
+        "package_a/src/lib.rs",
+        "--via-env",
+        "DETECTED_PKG",
+    ];
+    args.extend_from_slice(&test_cmd);
+
+    let output = run_tool(workspace_root, &args).unwrap();
+
+    assert!(
+        output.status.success(),
+        "Tool should succeed when invoked cargo-style: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
+fn help_flag_early_exit() {
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
+
+    let output = run_tool(workspace_root, &["--help"]).unwrap();
+
+    assert!(
+        output.status.success(),
+        "Tool should succeed with --help: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Usage") || stdout.contains("path"),
+        "Help output should contain usage information: {stdout}"
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
+fn missing_required_args_early_exit() {
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
+
+    // Run without required --path argument
+    let output = run_tool(workspace_root, &[]).unwrap();
+
+    assert!(
+        !output.status.success(),
+        "Tool should fail when required args are missing"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Required") || stdout.contains("path"),
+        "Error output should mention required arguments: {stdout}"
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
+fn missing_subcommand_error() {
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
+
+    // Provide path but no subcommand to execute
+    let output = run_tool(workspace_root, &["--path", "package_a/src/lib.rs"]).unwrap();
+
+    assert!(
+        !output.status.success(),
+        "Tool should fail when no subcommand is provided"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("No subcommand") || stderr.contains("subcommand"),
+        "Error should mention missing subcommand: {stderr}"
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
+fn outside_package_action_ignore() {
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
+    let test_cmd = get_test_command();
+
+    // Test --outside-package ignore with a root-level file
+    let mut args = vec![
+        "--path",
+        "README.md",
+        "--outside-package",
+        "ignore",
+        "--via-env",
+        "PKG",
+    ];
+    args.extend_from_slice(&test_cmd);
+
+    let output = run_tool(workspace_root, &args).unwrap();
+
+    assert!(
+        output.status.success(),
+        "Tool should succeed with --outside-package ignore: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ignoring"),
+        "Output should indicate ignoring: {stdout}"
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
+fn outside_package_action_error() {
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
+    let test_cmd = get_test_command();
+
+    // Test --outside-package error with a root-level file
+    let mut args = vec![
+        "--path",
+        "README.md",
+        "--outside-package",
+        "error",
+        "--via-env",
+        "PKG",
+    ];
+    args.extend_from_slice(&test_cmd);
+
+    let output = run_tool(workspace_root, &args).unwrap();
+
+    assert!(
+        !output.status.success(),
+        "Tool should fail with --outside-package error for root-level file"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not in any package"),
+        "Error should indicate file is not in a package: {stderr}"
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
+fn directory_path_instead_of_file() {
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
+    let test_cmd = get_test_command();
+
+    // Pass a directory instead of a file
+    let mut args = vec!["--path", "package_a/src", "--via-env", "PKG"];
+    args.extend_from_slice(&test_cmd);
+
+    let output = run_tool(workspace_root, &args).unwrap();
+
+    // Tool should handle directories - it should detect the package
+    assert!(
+        output.status.success(),
+        "Tool should handle directory paths: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
+fn execution_outside_any_cargo_workspace() {
+    // Create a temp directory that is NOT a Cargo workspace
+    let temp_dir = tempfile::tempdir().unwrap();
+    let non_workspace_root = temp_dir.path();
+
+    // Create a simple file in the non-workspace
+    fs::write(non_workspace_root.join("some_file.rs"), "// test\n").unwrap();
+
+    let test_cmd = get_test_command();
+    let mut args = vec!["--path", "some_file.rs", "--via-env", "PKG"];
+    args.extend_from_slice(&test_cmd);
+
+    let output = run_tool(non_workspace_root, &args).unwrap();
+
+    assert!(
+        !output.status.success(),
+        "Tool should fail when run outside a Cargo workspace"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not within a Cargo workspace"),
+        "Error should indicate not in a workspace: {stderr}"
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
+fn subcommand_with_double_dash_separator() {
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
+
+    // Test clippy-style command with "--" separator
+    // The package flags should be inserted before "--"
+    let output = run_tool(
+        workspace_root,
+        &[
+            "--path",
+            "package_a/src/lib.rs",
+            "clippy",
+            "--all-features",
+            "--",
+            "-D",
+            "warnings",
+        ],
+    )
+    .unwrap();
+
+    // This may fail due to missing dependencies, but it should not fail with our tool's error
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("Error detecting package")
+            && !stderr.contains("No subcommand")
+            && !stderr.contains("not within a Cargo workspace"),
+        "Tool should properly handle -- separator: {stderr}"
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
+fn invalid_toml_package_detection_error() {
+    let workspace = create_edge_cases_workspace();
+    let workspace_root = workspace.path();
+    let test_cmd = get_test_command();
+
+    // Create a file inside the malformed_package to trigger parsing that Cargo.toml
+    fs::create_dir_all(workspace_root.join("malformed_package/src")).unwrap();
+    fs::write(
+        workspace_root.join("malformed_package/src/lib.rs"),
+        "// test\n",
+    )
+    .unwrap();
+
+    let mut args = vec![
+        "--path",
+        "malformed_package/src/lib.rs",
+        "--via-env",
+        "PKG",
+    ];
+    args.extend_from_slice(&test_cmd);
+
+    let output = run_tool(workspace_root, &args).unwrap();
+
+    assert!(
+        !output.status.success(),
+        "Tool should fail when package has invalid TOML"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // The TOML parse error may surface during workspace validation or package detection
+    assert!(
+        stderr.contains("TOML parse error") || stderr.contains("Error detecting package"),
+        "Error should indicate TOML parsing failure: {stderr}"
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
+fn nonexistent_executable_error() {
+    let workspace = create_simple_workspace();
+    let workspace_root = workspace.path();
+
+    // Use a non-existent executable as the subcommand
+    let output = run_tool(
+        workspace_root,
+        &[
+            "--path",
+            "package_a/src/lib.rs",
+            "--via-env",
+            "PKG",
+            "nonexistent-binary-xyz-123456",
+        ],
+    )
+    .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "Tool should fail when executable does not exist"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Error executing command"),
+        "Error should indicate command execution failure: {stderr}"
+    );
+}

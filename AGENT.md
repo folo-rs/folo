@@ -611,3 +611,20 @@ $PSNativeCommandUseErrorActionPreference = $true
 ```
 
 This ensures that commands that produce nonzero exit codes are correctly considered errors and fail the script.
+
+# Test coverage
+
+In some circumstances, we may need to mark parts of code as intentionally not covered by tests. For example:
+
+* Tests themselves - the tooling measures test code as well as real code. We only care about real code, so all
+  unit test modules and mock/fake test utilities (anything `#[cfg(test)]`) need to be excluded. Integration tests
+  in `tests/` are automatically excluded, though - no need to worry about those.
+* Defensive branches that can never be reached due to defense in depth layering.
+* Code that is only ever executed on a const context, as const context is not covered in coverage measurements.
+* When code has no API contract to test (e.g. `fmt::Debug` implementations which may contractually write anything).
+* Facade types whose only purpose is to redirect calls to either a real or mock implementation - not worth testing.
+
+To exclude code from coverage measurement, mark it with `#[cfg_attr(coverage_nightly, coverage(off))]`. This
+also requires `#![cfg_attr(coverage_nightly, feature(coverage_attribute))]` on the crate level.
+
+When excluding code for any other reason than "it is test code", leave a comment to explain why.

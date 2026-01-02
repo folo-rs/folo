@@ -29,6 +29,7 @@ impl<T: 'static> RawLocalPooledSender<T> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: 'static> fmt::Debug for RawLocalPooledSender<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
@@ -118,6 +119,7 @@ impl<T: 'static> Future for RawLocalPooledReceiver<T> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: 'static> fmt::Debug for RawLocalPooledReceiver<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())

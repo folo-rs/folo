@@ -169,6 +169,7 @@ impl<T: ?Sized + Unpin> RawPooledMut<T> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: ?Sized> fmt::Debug for RawPooledMut<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())

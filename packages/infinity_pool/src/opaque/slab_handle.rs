@@ -181,6 +181,7 @@ unsafe impl<T> Send for SlabHandle<T> where T: ?Sized + Send {}
 // SAFETY: See type-level documentation.
 unsafe impl<T> Sync for SlabHandle<T> where T: ?Sized {}
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: ?Sized> fmt::Debug for SlabHandle<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())

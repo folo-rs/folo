@@ -47,6 +47,7 @@ pub struct RawLocalEventPool<T: 'static> {
     _owns_some: PhantomData<T>,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: 'static> fmt::Debug for RawLocalEventPool<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
@@ -69,6 +70,7 @@ pub(crate) struct RawLocalEventPoolCore<T: 'static> {
     pub(crate) pool: RefCell<RawPinnedPool<LocalEvent<T>>>,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: 'static> fmt::Debug for RawLocalEventPoolCore<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())

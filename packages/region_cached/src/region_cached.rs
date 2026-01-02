@@ -279,6 +279,7 @@ struct GenerationValue<T> {
     value: T,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T> std::fmt::Debug for GenerationValue<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GenerationValue")
@@ -309,6 +310,7 @@ where
     regional_states: Box<[OnceLock<Arc<RegionalState<T>>>]>,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T> std::fmt::Debug for GlobalState<T>
 where
     T: Clone + Send + Sync + 'static,

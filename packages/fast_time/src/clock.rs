@@ -210,6 +210,17 @@ mod tests {
     }
 
     #[test]
+    fn default_behaves_like_new() {
+        // Verify both constructors work without panicking.
+        // Other tests validate the actual time measurement behavior.
+        let mut clock_new = Clock::new();
+        let mut clock_default = Clock::default();
+
+        let _ = clock_new.now();
+        let _ = clock_default.now();
+    }
+
+    #[test]
     fn clock_can_be_cloned() {
         let mut clock1 = Clock::new();
         let instant1 = clock1.now();

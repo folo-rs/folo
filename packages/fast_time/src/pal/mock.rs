@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, coverage(off))]
+
 use mockall::mock;
 
 use crate::pal::{MockTimeSource, Platform};

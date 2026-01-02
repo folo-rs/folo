@@ -123,6 +123,7 @@ impl Display for Processor {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl Debug for Processor {
     #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     #[inline]

@@ -70,10 +70,9 @@ fn main() -> ExitCode {
     // Convert to &str for argh
     let str_args: Vec<&str> = env_args.iter().map(String::as_str).collect();
 
-    let Some(program_name) = str_args.first() else {
-        eprintln!("Failed to get program name");
-        return ExitCode::FAILURE;
-    };
+    let program_name = str_args
+        .first()
+        .expect("std::env::args() always provides at least the program name");
 
     let args: Args = match Args::from_args(&[program_name], str_args.get(1..).unwrap_or(&[])) {
         Ok(args) => args,

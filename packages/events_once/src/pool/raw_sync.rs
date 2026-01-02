@@ -46,6 +46,7 @@ pub struct RawEventPool<T: Send + 'static> {
     _owns_some: PhantomData<T>,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: Send + 'static> fmt::Debug for RawEventPool<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
@@ -68,6 +69,7 @@ pub(crate) struct RawEventPoolCore<T: Send + 'static> {
     pub(crate) pool: Mutex<RawPinnedPool<UnsafeCell<MaybeUninit<Event<T>>>>>,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: Send + 'static> fmt::Debug for RawEventPoolCore<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())

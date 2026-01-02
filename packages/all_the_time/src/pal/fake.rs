@@ -1,5 +1,7 @@
 //! Fake platform implementation for testing.
 
+#![cfg_attr(coverage_nightly, coverage(off))]
+
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 

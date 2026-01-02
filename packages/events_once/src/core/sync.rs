@@ -822,6 +822,7 @@ where
 // SAFETY: We are a synchronization primitive, so we do our own synchronization.
 unsafe impl<T: Send + 'static> Sync for Event<T> {}
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 #[expect(clippy::missing_fields_in_debug, reason = "phantoms are boring")]
 impl<T: Send + 'static> fmt::Debug for Event<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

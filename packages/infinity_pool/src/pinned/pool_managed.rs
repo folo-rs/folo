@@ -267,6 +267,7 @@ where
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T> fmt::Debug for PinnedPool<T>
 where
     T: Send,

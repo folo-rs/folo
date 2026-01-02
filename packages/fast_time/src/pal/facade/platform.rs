@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, coverage(off))]
+
 use std::fmt::Debug;
 #[cfg(test)]
 use std::sync::Arc;
@@ -70,6 +72,7 @@ impl From<MockPlatform> for PlatformFacade {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl Debug for PlatformFacade {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

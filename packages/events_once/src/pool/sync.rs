@@ -39,6 +39,7 @@ pub struct EventPool<T: Send + 'static> {
     _owns_some: PhantomData<T>,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: Send + 'static> fmt::Debug for EventPool<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
@@ -174,6 +175,7 @@ impl<T: Send + 'static> Clone for EventPool<T> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: Send + 'static> fmt::Debug for EventPoolCore<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())

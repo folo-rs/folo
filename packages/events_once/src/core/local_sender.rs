@@ -64,6 +64,7 @@ where
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<E, T> fmt::Debug for LocalSenderCore<E, T>
 where
     E: LocalRef<T>,

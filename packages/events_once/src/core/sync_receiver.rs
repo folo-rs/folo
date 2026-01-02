@@ -188,6 +188,7 @@ where
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<E, T> fmt::Debug for ReceiverCore<E, T>
 where
     E: EventRef<T>,

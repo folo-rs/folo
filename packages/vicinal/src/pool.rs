@@ -29,6 +29,7 @@ pub(crate) struct PoolInner {
     pub(crate) shutdown: AtomicBool,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl fmt::Debug for PoolInner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let handle_count = self.worker_handles.lock().len();

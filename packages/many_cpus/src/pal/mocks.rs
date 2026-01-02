@@ -1,4 +1,5 @@
 #![expect(clippy::same_name_method, reason = "mock magic")]
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 use derive_more::derive::Display;
 use mockall::mock;

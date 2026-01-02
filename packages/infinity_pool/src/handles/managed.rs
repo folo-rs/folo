@@ -115,6 +115,7 @@ impl<T: ?Sized> Pooled<T> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: ?Sized> fmt::Debug for Pooled<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
@@ -176,6 +177,7 @@ struct Remover {
     pool: Arc<Mutex<RawOpaquePoolThreadSafe>>,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl fmt::Debug for Remover {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())

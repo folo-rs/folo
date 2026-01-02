@@ -315,4 +315,24 @@ mod tests {
     }
 
     static_assertions::assert_impl_all!(Operation: Send, Sync);
+
+    #[test]
+    fn display_shows_mean() {
+        let session = create_test_session();
+        let operation = session.operation("test");
+
+        // Add some data: 100ms per iteration * 2 iterations = 200ms total, mean = 100ms
+        {
+            let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
+            metrics.add_iterations(Duration::from_millis(100), 2);
+        }
+
+        let display = operation.to_string();
+        assert!(display.contains("mean"), "Display should mention 'mean'");
+        // Duration debug format varies, but should contain '100' for 100ms mean
+        assert!(
+            display.contains("100"),
+            "Display should show the mean duration containing '100' (for 100ms): got {display}"
+        );
+    }
 }

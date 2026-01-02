@@ -256,6 +256,7 @@ impl fmt::Display for ReportOperation {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // Too annoying to test every question mark operator.
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.operations.is_empty() || self.operations.values().all(|op| op.total_iterations == 0)
@@ -499,4 +500,32 @@ mod tests {
     // Static assertions for thread safety
     static_assertions::assert_impl_all!(Report: Send, Sync);
     static_assertions::assert_impl_all!(ReportOperation: Send, Sync);
+
+    #[test]
+    fn report_operation_display_shows_mean() {
+        use crate::pal::{FakePlatform, PlatformFacade};
+
+        let fake_platform = FakePlatform::new();
+        let platform_facade = PlatformFacade::fake(fake_platform.clone());
+        let session = Session::with_platform(platform_facade);
+
+        // Set up timing: 100ms total for 2 iterations = 50ms mean
+        fake_platform.set_thread_time(Duration::from_millis(0));
+        {
+            let operation = session.operation("test_op");
+            let _span = operation.measure_thread().iterations(2);
+            fake_platform.set_thread_time(Duration::from_millis(100));
+        }
+
+        let report = session.to_report();
+        let (_name, op) = report.operations().next().unwrap();
+
+        let display = op.to_string();
+        assert!(display.contains("mean"), "Display should mention 'mean'");
+        // Duration debug format varies, but should contain '50' for 50ms
+        assert!(
+            display.contains("50"),
+            "Display should show the mean duration containing '50' (for 50ms): got {display}"
+        );
+    }
 }

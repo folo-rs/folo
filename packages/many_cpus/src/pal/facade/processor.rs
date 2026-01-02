@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, coverage(off))]
+
 use std::fmt::Debug;
 
 use derive_more::derive::Display;
@@ -83,6 +85,7 @@ impl From<FakeProcessor> for ProcessorFacade {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl Debug for ProcessorFacade {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

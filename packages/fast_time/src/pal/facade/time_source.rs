@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, coverage(off))]
+
 use std::fmt::Debug;
 #[cfg(test)]
 use std::sync::{Arc, Mutex};
@@ -60,6 +62,7 @@ impl TimeSource for TimeSourceFacade {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl Debug for TimeSourceFacade {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

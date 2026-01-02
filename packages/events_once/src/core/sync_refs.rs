@@ -56,6 +56,7 @@ where
 // SAFETY: This is only used with the thread-safe event (the event is Sync).
 unsafe impl<T> Send for PtrRef<T> where T: Send + 'static {}
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: Send + 'static> fmt::Debug for PtrRef<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
@@ -131,6 +132,7 @@ where
 // SAFETY: This is only used with the thread-safe event (the event is Sync).
 unsafe impl<T> Send for BoxedRef<T> where T: Send + 'static {}
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: Send + 'static> fmt::Debug for BoxedRef<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
