@@ -1,3 +1,6 @@
+// Facade types are trivial pass-through layers - not worth testing.
+#![cfg_attr(coverage_nightly, coverage(off))]
+
 #[cfg(test)]
 use std::sync::Arc;
 

@@ -1,5 +1,8 @@
 //! Platform facade for switching between real and fake implementations.
 
+// Facade types are trivial pass-through layers - not worth testing.
+#![cfg_attr(coverage_nightly, coverage(off))]
+
 use std::time::Duration;
 
 use crate::pal::abstractions::Platform;
