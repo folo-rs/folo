@@ -12,6 +12,8 @@ pub(crate) struct BuildTargetPlatform {
 }
 
 impl BuildTargetPlatform {
+    // Only executed in const context.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) const fn new(bindings: BindingsFacade) -> Self {
         Self { bindings }
     }
