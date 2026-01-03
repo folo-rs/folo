@@ -12,6 +12,10 @@ use std::process::Command;
 
 use toml::Value;
 
+mod pal;
+
+use pal::{Filesystem, FilesystemFacade};
+
 /// Action to take when a path is not within any package.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -24,6 +28,8 @@ pub enum OutsidePackageAction {
     Error,
 }
 
+// Mutations to match arms cause integration test timeouts due to cargo subprocess hangs.
+#[cfg_attr(test, mutants::skip)]
 impl std::str::FromStr for OutsidePackageAction {
     type Err = String;
 
@@ -120,12 +126,19 @@ impl std::error::Error for RunError {}
 /// like `std::env::args()`, making it suitable for direct testing.
 #[doc(hidden)]
 pub fn run(input: &RunInput) -> Result<RunOutcome, RunError> {
+    run_with_filesystem(input, &FilesystemFacade::target())
+}
+
+/// Internal implementation of `run` that accepts a filesystem abstraction.
+///
+/// This allows mocking filesystem operations in tests.
+fn run_with_filesystem(input: &RunInput, fs: &impl Filesystem) -> Result<RunOutcome, RunError> {
     // Validate that we are running from within the same workspace as the target path.
     // This also canonicalizes paths and finds the workspace root, which we reuse later.
-    let workspace_context = validate_workspace_context(&input.path)
+    let workspace_context = validate_workspace_context(&input.path, fs)
         .map_err(|e| RunError::WorkspaceValidation(e.to_string()))?;
 
-    let detected_package = detect_package(&workspace_context)
+    let detected_package = detect_package(&workspace_context, fs)
         .map_err(|e| RunError::PackageDetection(e.to_string()))?;
 
     // Handle outside package actions.
@@ -191,24 +204,26 @@ struct WorkspaceContext {
 ///
 /// Takes a `WorkspaceContext` which contains the already-validated and canonicalized paths,
 /// avoiding redundant filesystem lookups.
+// Mutations to loop conditions can cause infinite loops, timing out tests.
+#[cfg_attr(test, mutants::skip)]
 fn detect_package(
     context: &WorkspaceContext,
+    fs: &impl Filesystem,
 ) -> Result<DetectedPackage, Box<dyn std::error::Error>> {
     let absolute_path = &context.absolute_target_path;
     let workspace_root = &context.workspace_root;
 
     // Start from the file's directory and walk up to find the nearest Cargo.toml.
-    let mut current_dir = if absolute_path.is_file() {
+    let mut current_dir = if fs.is_file(absolute_path) {
         absolute_path.parent().unwrap()
     } else {
         absolute_path
     };
 
     while current_dir.starts_with(workspace_root) {
-        let cargo_toml = current_dir.join("Cargo.toml");
-        if cargo_toml.exists() && current_dir != workspace_root {
+        if fs.cargo_toml_exists(current_dir) && current_dir != workspace_root {
             // Found a package-level Cargo.toml, extract the package name.
-            return extract_package_name(&cargo_toml);
+            return extract_package_name(current_dir, fs);
         }
 
         current_dir = match try_get_parent(current_dir) {
@@ -222,19 +237,23 @@ fn detect_package(
 }
 
 /// Finds the workspace root by looking for the workspace-level Cargo.toml.
-fn find_workspace_root(start_path: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+// Mutations to this function cause infinite loops or hangs in integration tests.
+#[cfg_attr(test, mutants::skip)]
+fn find_workspace_root(
+    start_path: &Path,
+    fs: &impl Filesystem,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let mut current_dir = start_path;
 
     loop {
-        let cargo_toml = current_dir.join("Cargo.toml");
-        if cargo_toml.exists() {
+        if fs.cargo_toml_exists(current_dir) {
             // Check if this is a workspace root.
-            let contents = std::fs::read_to_string(&cargo_toml)?;
+            let contents = fs.read_cargo_toml(current_dir)?;
             let value: Value = toml::from_str(&contents)?;
             if value.get("workspace").is_some() {
                 // Return canonicalized path for consistent comparison.
-                return Ok(current_dir
-                    .canonicalize()
+                return Ok(fs
+                    .canonicalize(current_dir)
                     .unwrap_or_else(|_| current_dir.to_path_buf()));
             }
         }
@@ -248,11 +267,12 @@ fn find_workspace_root(start_path: &Path) -> Result<PathBuf, Box<dyn std::error:
     Err("Could not find workspace root".into())
 }
 
-/// Extracts the package name from a Cargo.toml file.
+/// Extracts the package name from a Cargo.toml file in the given directory.
 fn extract_package_name(
-    cargo_toml_path: &Path,
+    dir: &Path,
+    fs: &impl Filesystem,
 ) -> Result<DetectedPackage, Box<dyn std::error::Error>> {
-    let contents = std::fs::read_to_string(cargo_toml_path)?;
+    let contents = fs.read_cargo_toml(dir)?;
     let value: Value = toml::from_str(&contents)?;
 
     if let Some(package_table) = value.get("package")
@@ -263,8 +283,8 @@ fn extract_package_name(
     }
 
     Err(format!(
-        "Could not find package name in {}",
-        cargo_toml_path.display()
+        "Could not find package name in {}/Cargo.toml",
+        dir.display()
     )
     .into())
 }
@@ -328,6 +348,8 @@ fn execute_with_cargo_args(
 }
 
 /// Executes the subcommand with an environment variable set to the package name.
+// Mutations to process execution cause subprocess hangs in integration tests.
+#[cfg_attr(test, mutants::skip)]
 fn execute_with_env_var(
     env_var: &str,
     detected_package: &DetectedPackage,
@@ -367,13 +389,15 @@ fn execute_with_env_var(
 /// which can be reused by subsequent operations to avoid redundant filesystem lookups.
 fn validate_workspace_context(
     target_path: &Path,
+    fs: &impl Filesystem,
 ) -> Result<WorkspaceContext, Box<dyn std::error::Error>> {
-    let current_dir = std::env::current_dir()?;
+    let current_dir = fs.current_dir()?;
 
     // Find workspace root from the current directory.
-    let current_workspace_root = find_workspace_root(&current_dir).map_err(|original_error| {
-        format!("Current directory is not within a Cargo workspace: {original_error}")
-    })?;
+    let current_workspace_root =
+        find_workspace_root(&current_dir, fs).map_err(|original_error| {
+            format!("Current directory is not within a Cargo workspace: {original_error}")
+        })?;
 
     // Resolve the target path - try to make it absolute.
     let resolved_target_path = if target_path.is_absolute() {
@@ -381,7 +405,7 @@ fn validate_workspace_context(
     } else {
         // For relative paths, try relative to current directory first.
         let relative_to_current = current_dir.join(target_path);
-        if relative_to_current.exists() {
+        if fs.exists(&relative_to_current) {
             relative_to_current
         } else {
             // If that does not exist, try relative to workspace root.
@@ -391,7 +415,7 @@ fn validate_workspace_context(
     };
 
     // Canonicalize the resolved target path - it must exist.
-    let absolute_target_path = resolved_target_path.canonicalize().map_err(|error| {
+    let absolute_target_path = fs.canonicalize(&resolved_target_path).map_err(|error| {
         format!(
             "Target path '{}' does not exist or cannot be accessed: {error}",
             target_path.display()
@@ -400,14 +424,14 @@ fn validate_workspace_context(
 
     // Find workspace root for the target path.
     let target_workspace_root =
-        find_workspace_root(&absolute_target_path).map_err(|original_error| {
+        find_workspace_root(&absolute_target_path, fs).map_err(|original_error| {
             format!("Target path is not within a Cargo workspace: {original_error}")
         })?;
 
     // Verify both paths are in the same workspace.
     // Normalize paths to handle Windows path representation differences.
-    let current_workspace_normalized = normalize_path(&current_workspace_root);
-    let target_workspace_normalized = normalize_path(&target_workspace_root);
+    let current_workspace_normalized = normalize_path(&current_workspace_root, fs);
+    let target_workspace_normalized = normalize_path(&target_workspace_root, fs);
 
     if current_workspace_normalized != target_workspace_normalized {
         return Err(format!(
@@ -421,7 +445,7 @@ fn validate_workspace_context(
     // Normalize the absolute target path as well to ensure consistent path format with
     // workspace_root. This is important on Windows where canonicalize() adds UNC prefixes
     // that would break starts_with() comparisons in detect_package().
-    let absolute_target_path_normalized = normalize_path(&absolute_target_path);
+    let absolute_target_path_normalized = normalize_path(&absolute_target_path, fs);
 
     Ok(WorkspaceContext {
         absolute_target_path: absolute_target_path_normalized,
@@ -431,9 +455,9 @@ fn validate_workspace_context(
 
 /// Normalizes a path by using OS canonicalization and stripping Windows UNC prefixes.
 /// This helps with path comparisons on Windows where paths may have different representations.
-fn normalize_path(path: &Path) -> PathBuf {
+fn normalize_path(path: &Path, fs: &impl Filesystem) -> PathBuf {
     // Canonicalize the path (paths are expected to exist).
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let canonical = fs.canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
     // Strip Windows UNC prefix if present after canonicalization.
     if let Some(path_str) = canonical.to_str()
@@ -451,6 +475,8 @@ fn normalize_path(path: &Path) -> PathBuf {
 ///
 /// This assertion can never fail with the current code structure because the match block returns
 /// early for both (Workspace, Ignore) and (Workspace, Error) cases.
+// Defense-in-depth check that can never be reached due to earlier match block logic.
+#[cfg_attr(test, mutants::skip)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn assert_early_exit_cases_handled(
     detected_package: &DetectedPackage,
@@ -487,14 +513,14 @@ mod tests {
     use serial_test::serial;
 
     use super::*;
+    use crate::pal::FilesystemFacade;
 
     #[test]
     fn extract_package_name_double_quotes() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let cargo_toml = temp_dir.path().join("Cargo.toml");
 
         fs::write(
-            &cargo_toml,
+            temp_dir.path().join("Cargo.toml"),
             r#"
 [package]
 name = "test-package"
@@ -503,17 +529,17 @@ version = "0.1.0"
         )
         .unwrap();
 
-        let result = extract_package_name(&cargo_toml).unwrap();
+        let fs = FilesystemFacade::target();
+        let result = extract_package_name(temp_dir.path(), &fs).unwrap();
         assert_eq!(result, DetectedPackage::Package("test-package".to_string()));
     }
 
     #[test]
     fn extract_package_name_single_quotes() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let cargo_toml = temp_dir.path().join("Cargo.toml");
 
         fs::write(
-            &cargo_toml,
+            temp_dir.path().join("Cargo.toml"),
             r#"
 [package]
 name = 'test-package-single'
@@ -522,7 +548,8 @@ version = "0.1.0"
         )
         .unwrap();
 
-        let result = extract_package_name(&cargo_toml).unwrap();
+        let fs = FilesystemFacade::target();
+        let result = extract_package_name(temp_dir.path(), &fs).unwrap();
         assert_eq!(
             result,
             DetectedPackage::Package("test-package-single".to_string())
@@ -532,10 +559,9 @@ version = "0.1.0"
     #[test]
     fn extract_package_name_with_comments_and_complex_toml() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let cargo_toml = temp_dir.path().join("Cargo.toml");
 
         fs::write(
-            &cargo_toml,
+            temp_dir.path().join("Cargo.toml"),
             r#"
 # This is a comment
 [package]
@@ -551,7 +577,8 @@ serde = { version = "1.0", features = ["derive"] }
         )
         .unwrap();
 
-        let result = extract_package_name(&cargo_toml).unwrap();
+        let fs = FilesystemFacade::target();
+        let result = extract_package_name(temp_dir.path(), &fs).unwrap();
         assert_eq!(
             result,
             DetectedPackage::Package("complex-package".to_string())
@@ -561,10 +588,9 @@ serde = { version = "1.0", features = ["derive"] }
     #[test]
     fn extract_package_name_missing() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let cargo_toml = temp_dir.path().join("Cargo.toml");
 
         fs::write(
-            &cargo_toml,
+            temp_dir.path().join("Cargo.toml"),
             r#"
 [package]
 version = "0.1.0"
@@ -572,7 +598,8 @@ version = "0.1.0"
         )
         .unwrap();
 
-        extract_package_name(&cargo_toml)
+        let fs = FilesystemFacade::target();
+        extract_package_name(temp_dir.path(), &fs)
             .expect_err("Expected an error when package name is missing");
     }
 
@@ -592,7 +619,8 @@ version = "0.1.0"
     #[test]
     fn validate_workspace_context_nonexistent_file() {
         // Nonexistent files are now rejected by validate_workspace_context, not detect_package.
-        let result = validate_workspace_context(Path::new("nonexistent/file.rs"));
+        let fs = FilesystemFacade::target();
+        let result = validate_workspace_context(Path::new("nonexistent/file.rs"), &fs);
         assert!(
             result.is_err(),
             "Should return error for non-existent files"
@@ -608,7 +636,8 @@ version = "0.1.0"
         let current_file = file!(); // This gives us the path to this source file.
         let current_file_path = Path::new(current_file);
 
-        validate_workspace_context(current_file_path)
+        let fs = FilesystemFacade::target();
+        validate_workspace_context(current_file_path, &fs)
             .expect("Should validate successfully when both paths are in the same workspace");
     }
 
@@ -626,7 +655,8 @@ version = "0.1.0"
 
         // Validation should fail when targeting a file that does not exist.
         let target_path = Path::new("nonexistent.rs");
-        let result = validate_workspace_context(target_path);
+        let fs = FilesystemFacade::target();
+        let result = validate_workspace_context(target_path, &fs);
         assert!(result.is_err());
         assert!(
             result
@@ -703,7 +733,8 @@ version = "0.1.0"
 
         // This should fail because we are in different workspaces.
         let other_workspace_file = other_package.join("src").join("lib.rs");
-        let result = validate_workspace_context(&other_workspace_file);
+        let fs = FilesystemFacade::target();
+        let result = validate_workspace_context(&other_workspace_file, &fs);
         result.unwrap_err();
 
         // Restore original directory.
@@ -713,7 +744,9 @@ version = "0.1.0"
     #[test]
     #[serial] // This test uses a relative path that depends on the current working directory for resolution.
     fn validate_workspace_context_relative_path_outside() {
-        let result = validate_workspace_context(Path::new("../../../outside_workspace/file.rs"));
+        let fs = FilesystemFacade::target();
+        let result =
+            validate_workspace_context(Path::new("../../../outside_workspace/file.rs"), &fs);
         assert!(result.is_err(), "Expected error but validation succeeded!");
         // The error could be about the file not existing or being outside workspace.
         let error_msg = result.unwrap_err().to_string();
@@ -861,8 +894,9 @@ version = "0.1.0"
             workspace_root: workspace_root.canonicalize().unwrap(),
         };
 
+        let fs = FilesystemFacade::target();
         // detect_package should fail because the Cargo.toml is malformed.
-        let result = detect_package(&context);
+        let result = detect_package(&context, &fs);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
         assert!(
@@ -885,5 +919,418 @@ version = "0.1.0"
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+}
+
+// Mock-based tests that do not require real filesystem access.
+// These tests duplicate key scenarios from the integration tests but use a mock filesystem,
+// enabling fine-grained control over filesystem behavior (e.g., files disappearing mid-operation).
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod mock_tests {
+    use std::io;
+    use std::path::{Path, PathBuf};
+
+    use super::*;
+    use crate::pal::{FilesystemFacade, MockFilesystem};
+
+    /// Helper to create a mock filesystem for a simple workspace with one package.
+    ///
+    /// Structure:
+    /// ```text
+    /// /workspace/
+    ///   Cargo.toml (workspace)
+    ///   package_a/
+    ///     Cargo.toml (package: "package_a")
+    ///     src/
+    ///       lib.rs
+    ///   README.md
+    /// ```
+    fn create_simple_workspace_mock() -> MockFilesystem {
+        let mut mock = MockFilesystem::new();
+
+        // current_dir returns the workspace root.
+        mock.expect_current_dir()
+            .returning(|| Ok(PathBuf::from("/workspace")));
+
+        // Set up cargo_toml_exists expectations.
+        mock.expect_cargo_toml_exists().returning(|dir| {
+            let path_str = dir.to_string_lossy();
+            path_str == "/workspace" || path_str == "/workspace/package_a"
+        });
+
+        // Set up read_cargo_toml expectations.
+        mock.expect_read_cargo_toml().returning(|dir| {
+            let path_str = dir.to_string_lossy();
+            if path_str == "/workspace" {
+                Ok(r#"[workspace]
+members = ["package_a"]
+"#
+                .to_string())
+            } else if path_str == "/workspace/package_a" {
+                Ok(r#"[package]
+name = "package_a"
+version = "0.1.0"
+"#
+                .to_string())
+            } else {
+                Err(io::Error::new(io::ErrorKind::NotFound, "not found"))
+            }
+        });
+
+        // Set up is_file expectations.
+        mock.expect_is_file().returning(|path| {
+            let path_str = path.to_string_lossy();
+            path_str.ends_with(".rs") || path_str.ends_with(".md")
+        });
+
+        // Set up exists expectations.
+        mock.expect_exists().returning(|path| {
+            let path_str = path.to_string_lossy();
+            path_str == "/workspace"
+                || path_str == "/workspace/Cargo.toml"
+                || path_str == "/workspace/package_a"
+                || path_str == "/workspace/package_a/Cargo.toml"
+                || path_str == "/workspace/package_a/src"
+                || path_str == "/workspace/package_a/src/lib.rs"
+                || path_str == "/workspace/README.md"
+        });
+
+        // Set up canonicalize expectations - returns path as-is for virtual filesystem.
+        mock.expect_canonicalize()
+            .returning(|path| Ok(path.to_path_buf()));
+
+        mock
+    }
+
+    #[test]
+    fn mock_package_detection_in_simple_workspace() {
+        let mock = create_simple_workspace_mock();
+        let fs = FilesystemFacade::from_mock(mock);
+
+        let context = validate_workspace_context(Path::new("/workspace/package_a/src/lib.rs"), &fs)
+            .expect("workspace validation should succeed");
+
+        let result = detect_package(&context, &fs).expect("package detection should succeed");
+
+        assert_eq!(result, DetectedPackage::Package("package_a".to_string()));
+    }
+
+    #[test]
+    fn mock_workspace_root_file_fallback() {
+        let mock = create_simple_workspace_mock();
+        let fs = FilesystemFacade::from_mock(mock);
+
+        let context = validate_workspace_context(Path::new("/workspace/README.md"), &fs)
+            .expect("workspace validation should succeed");
+
+        let result = detect_package(&context, &fs).expect("package detection should succeed");
+
+        assert_eq!(result, DetectedPackage::Workspace);
+    }
+
+    #[test]
+    fn mock_nonexistent_file_error() {
+        let mut mock = MockFilesystem::new();
+
+        mock.expect_current_dir()
+            .returning(|| Ok(PathBuf::from("/workspace")));
+
+        mock.expect_cargo_toml_exists()
+            .returning(|dir| dir.to_string_lossy() == "/workspace");
+
+        mock.expect_read_cargo_toml().returning(|dir| {
+            if dir.to_string_lossy() == "/workspace" {
+                Ok("[workspace]\nmembers = []\n".to_string())
+            } else {
+                Err(io::Error::new(io::ErrorKind::NotFound, "not found"))
+            }
+        });
+
+        mock.expect_exists().returning(|path| {
+            let path_str = path.to_string_lossy();
+            path_str == "/workspace" || path_str == "/workspace/Cargo.toml"
+        });
+
+        mock.expect_canonicalize().returning(|path| {
+            let path_str = path.to_string_lossy();
+            if path_str.contains("nonexistent") {
+                Err(io::Error::new(io::ErrorKind::NotFound, "not found"))
+            } else {
+                Ok(path.to_path_buf())
+            }
+        });
+
+        let fs = FilesystemFacade::from_mock(mock);
+
+        let result =
+            validate_workspace_context(Path::new("/workspace/package_a/src/nonexistent.rs"), &fs);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn mock_file_disappears_during_package_detection() {
+        // This test demonstrates the power of mocking - we can simulate a file disappearing
+        // between the exists check and the read operation.
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let file_exists = Arc::new(AtomicBool::new(true));
+        let file_exists_clone = Arc::clone(&file_exists);
+
+        let mut mock = MockFilesystem::new();
+
+        mock.expect_current_dir()
+            .returning(|| Ok(PathBuf::from("/workspace")));
+
+        mock.expect_cargo_toml_exists().returning(move |dir| {
+            let path_str = dir.to_string_lossy();
+            if path_str == "/workspace/package_a" {
+                // First call returns true, then we "delete" the file.
+                let exists = file_exists_clone.load(Ordering::SeqCst);
+                file_exists_clone.store(false, Ordering::SeqCst);
+                exists
+            } else {
+                path_str == "/workspace"
+            }
+        });
+
+        mock.expect_read_cargo_toml().returning(|dir| {
+            let path_str = dir.to_string_lossy();
+            if path_str == "/workspace" {
+                Ok("[workspace]\nmembers = [\"package_a\"]\n".to_string())
+            } else {
+                // File was "deleted" - return error.
+                Err(io::Error::new(io::ErrorKind::NotFound, "file was deleted"))
+            }
+        });
+
+        mock.expect_is_file()
+            .returning(|path| path.to_string_lossy().ends_with(".rs"));
+
+        mock.expect_exists().returning(|_| true);
+
+        mock.expect_canonicalize()
+            .returning(|path| Ok(path.to_path_buf()));
+
+        let fs = FilesystemFacade::from_mock(mock);
+
+        // Create context directly to skip validation (which would also call the mock).
+        let context = WorkspaceContext {
+            absolute_target_path: PathBuf::from("/workspace/package_a/src/lib.rs"),
+            workspace_root: PathBuf::from("/workspace"),
+        };
+
+        // The file exists when cargo_toml_exists is called, but disappears when we try to read it.
+        let result = detect_package(&context, &fs);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("deleted"));
+    }
+
+    #[test]
+    fn mock_invalid_toml_in_package() {
+        let mut mock = MockFilesystem::new();
+
+        mock.expect_current_dir()
+            .returning(|| Ok(PathBuf::from("/workspace")));
+
+        mock.expect_cargo_toml_exists().returning(|dir| {
+            let path_str = dir.to_string_lossy();
+            path_str == "/workspace" || path_str == "/workspace/bad_package"
+        });
+
+        mock.expect_read_cargo_toml().returning(|dir| {
+            let path_str = dir.to_string_lossy();
+            if path_str == "/workspace" {
+                Ok("[workspace]\nmembers = [\"bad_package\"]\n".to_string())
+            } else if path_str == "/workspace/bad_package" {
+                // Return malformed TOML.
+                Ok("[package\nname = \"bad\"\n".to_string())
+            } else {
+                Err(io::Error::new(io::ErrorKind::NotFound, "not found"))
+            }
+        });
+
+        mock.expect_is_file()
+            .returning(|path| path.to_string_lossy().ends_with(".rs"));
+
+        mock.expect_exists().returning(|_| true);
+
+        mock.expect_canonicalize()
+            .returning(|path| Ok(path.to_path_buf()));
+
+        let fs = FilesystemFacade::from_mock(mock);
+
+        let context = WorkspaceContext {
+            absolute_target_path: PathBuf::from("/workspace/bad_package/src/lib.rs"),
+            workspace_root: PathBuf::from("/workspace"),
+        };
+
+        let result = detect_package(&context, &fs);
+
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("TOML") || error_msg.contains("parse"),
+            "Expected TOML parse error, got: {error_msg}"
+        );
+    }
+
+    #[test]
+    fn mock_package_without_name_field() {
+        let mut mock = MockFilesystem::new();
+
+        mock.expect_current_dir()
+            .returning(|| Ok(PathBuf::from("/workspace")));
+
+        mock.expect_cargo_toml_exists().returning(|dir| {
+            let path_str = dir.to_string_lossy();
+            path_str == "/workspace" || path_str == "/workspace/nameless"
+        });
+
+        mock.expect_read_cargo_toml().returning(|dir| {
+            let path_str = dir.to_string_lossy();
+            if path_str == "/workspace" {
+                Ok("[workspace]\nmembers = [\"nameless\"]\n".to_string())
+            } else if path_str == "/workspace/nameless" {
+                // Valid TOML but missing package name.
+                Ok("[package]\nversion = \"0.1.0\"\n".to_string())
+            } else {
+                Err(io::Error::new(io::ErrorKind::NotFound, "not found"))
+            }
+        });
+
+        mock.expect_is_file()
+            .returning(|path| path.to_string_lossy().ends_with(".rs"));
+
+        mock.expect_exists().returning(|_| true);
+
+        mock.expect_canonicalize()
+            .returning(|path| Ok(path.to_path_buf()));
+
+        let fs = FilesystemFacade::from_mock(mock);
+
+        let context = WorkspaceContext {
+            absolute_target_path: PathBuf::from("/workspace/nameless/src/lib.rs"),
+            workspace_root: PathBuf::from("/workspace"),
+        };
+
+        let result = detect_package(&context, &fs);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Could not find package name")
+        );
+    }
+
+    #[test]
+    fn mock_nested_package_detection() {
+        // Test that we find the nearest package, not the workspace root.
+        let mut mock = MockFilesystem::new();
+
+        mock.expect_current_dir()
+            .returning(|| Ok(PathBuf::from("/workspace")));
+
+        mock.expect_cargo_toml_exists().returning(|dir| {
+            let path_str = dir.to_string_lossy();
+            path_str == "/workspace"
+                || path_str == "/workspace/crates/inner"
+                || path_str == "/workspace/crates"
+        });
+
+        mock.expect_read_cargo_toml().returning(|dir| {
+            let path_str = dir.to_string_lossy();
+            if path_str == "/workspace" {
+                Ok("[workspace]\nmembers = [\"crates/*\"]\n".to_string())
+            } else if path_str == "/workspace/crates/inner" {
+                Ok("[package]\nname = \"inner-package\"\nversion = \"0.1.0\"\n".to_string())
+            } else {
+                Err(io::Error::new(io::ErrorKind::NotFound, "not found"))
+            }
+        });
+
+        mock.expect_is_file()
+            .returning(|path| path.to_string_lossy().ends_with(".rs"));
+
+        mock.expect_exists().returning(|_| true);
+
+        mock.expect_canonicalize()
+            .returning(|path| Ok(path.to_path_buf()));
+
+        let fs = FilesystemFacade::from_mock(mock);
+
+        let context = WorkspaceContext {
+            absolute_target_path: PathBuf::from("/workspace/crates/inner/src/lib.rs"),
+            workspace_root: PathBuf::from("/workspace"),
+        };
+
+        let result = detect_package(&context, &fs).expect("package detection should succeed");
+
+        assert_eq!(
+            result,
+            DetectedPackage::Package("inner-package".to_string())
+        );
+    }
+
+    #[test]
+    fn mock_directory_target_instead_of_file() {
+        let mock = create_simple_workspace_mock();
+        let fs = FilesystemFacade::from_mock(mock);
+
+        // Target is a directory, not a file.
+        let context = WorkspaceContext {
+            absolute_target_path: PathBuf::from("/workspace/package_a/src"),
+            workspace_root: PathBuf::from("/workspace"),
+        };
+
+        let result = detect_package(&context, &fs).expect("package detection should succeed");
+
+        assert_eq!(result, DetectedPackage::Package("package_a".to_string()));
+    }
+
+    #[test]
+    fn mock_current_dir_outside_workspace() {
+        let mut mock = MockFilesystem::new();
+
+        mock.expect_current_dir()
+            .returning(|| Ok(PathBuf::from("/some/random/path")));
+
+        mock.expect_cargo_toml_exists().returning(|_| false);
+
+        let fs = FilesystemFacade::from_mock(mock);
+
+        let result = validate_workspace_context(Path::new("file.rs"), &fs);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not within a Cargo workspace")
+        );
+    }
+
+    #[test]
+    fn mock_current_dir_fails() {
+        let mut mock = MockFilesystem::new();
+
+        mock.expect_current_dir().returning(|| {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "access denied",
+            ))
+        });
+
+        let fs = FilesystemFacade::from_mock(mock);
+
+        let result = validate_workspace_context(Path::new("file.rs"), &fs);
+
+        result.unwrap_err();
     }
 }

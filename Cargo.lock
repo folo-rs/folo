@@ -181,6 +181,8 @@ name = "cargo-detect-package"
 version = "1.0.7"
 dependencies = [
  "argh",
+ "mockall",
+ "mutants",
  "serial_test",
  "tempfile",
  "toml",

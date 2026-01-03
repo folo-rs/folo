@@ -529,6 +529,7 @@ It is acceptable to skip mutations if they are impractical to test. Some justifi
   on real-time timeouts (which would violate the above expectation).
 * The mutation is in a defensive branch for defense in depth and can never be reached due to higher layers
   of the API preventing the situation from arising.
+* The mutation is in trivial forwarder code (e.g. a facade that chooses between a real and mock implementation).
 
 To skip a mutation, use the `#[cfg_attr(test, mutants::skip)]` style and leave a comment to justify
 why we are skipping it.

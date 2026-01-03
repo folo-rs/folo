@@ -2,6 +2,9 @@
 #![cfg_attr(coverage_nightly, coverage(off))]
 
 //! Binary entry point for the cargo-detect-package tool.
+//!
+//! This module is excluded from mutation testing because testing process entry/exit behavior
+//! is impractical - it requires spawning subprocesses and checking exit codes.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -30,6 +33,8 @@ struct Args {
     subcommand: Vec<String>,
 }
 
+// Binary entry point - mutations would require subprocess testing which is impractical.
+#[cfg_attr(test, mutants::skip)]
 fn main() -> ExitCode {
     // When called via `cargo detect-package`, the first argument will be "detect-package"
     // which we need to skip. We handle this by manually parsing the args.
