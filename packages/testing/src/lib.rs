@@ -1,4 +1,5 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(coverage_nightly, coverage(off))] // This is all test code, no need to test it.
 
 //! Private helpers for testing and examples in Folo packages.
 
