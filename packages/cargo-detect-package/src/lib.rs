@@ -525,4 +525,43 @@ version = "0.1.0"
 
         result.unwrap_err();
     }
+
+    #[test]
+    fn mock_detect_package_reaches_filesystem_root() {
+        // This tests the case where try_get_parent() returns None because we have walked
+        // up to the filesystem root. We simulate this by having a workspace at the root
+        // and a target file directly in the root - when we try to get parent of root, we get None.
+        let mut mock = MockFilesystem::new();
+
+        mock.expect_is_file()
+            .returning(|path| path.to_string_lossy() == "/file.rs");
+
+        // No Cargo.toml exists anywhere except at root (which is the workspace root).
+        mock.expect_cargo_toml_exists()
+            .returning(|dir| dir.to_string_lossy() == "/");
+
+        mock.expect_read_cargo_toml().returning(|dir| {
+            if dir.to_string_lossy() == "/" {
+                Ok("[workspace]\nmembers = []\n".to_string())
+            } else {
+                Err(io::Error::new(io::ErrorKind::NotFound, "not found"))
+            }
+        });
+
+        let fs = FilesystemFacade::from_mock(mock);
+
+        // Create a context where the file is at root level and workspace is root.
+        // The parent of "/" is None, so try_get_parent will return None.
+        let context = WorkspaceContext {
+            absolute_target_path: PathBuf::from("/file.rs"),
+            workspace_root: PathBuf::from("/"),
+        };
+
+        // Since the file is at root and there is no package-level Cargo.toml (only workspace),
+        // and we will hit None from try_get_parent when trying to go above root,
+        // detect_package should return Workspace.
+        let result = detect_package(&context, &fs).expect("detection should succeed");
+
+        assert_eq!(result, DetectedPackage::Workspace);
+    }
 }

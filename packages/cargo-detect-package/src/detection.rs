@@ -55,7 +55,7 @@ pub(crate) fn detect_package(
             return extract_package_name(current_dir, fs);
         }
 
-        current_dir = match try_get_parent(current_dir) {
+        current_dir = match current_dir.parent() {
             Some(parent) => parent,
             None => break,
         };
@@ -85,16 +85,6 @@ pub(crate) fn extract_package_name(
         dir.display()
     )
     .into())
-}
-
-/// Returns the parent directory of the given path, if one exists.
-///
-/// This function exists to allow the coverage attribute to be applied. The None case can only be
-/// reached if the filesystem changes during operation - we found a workspace Cargo.toml earlier
-/// but now we have walked up to the drive root without finding any Cargo.toml.
-#[cfg_attr(coverage_nightly, coverage(off))]
-fn try_get_parent(path: &Path) -> Option<&Path> {
-    path.parent()
 }
 
 #[cfg(all(test, not(miri)))]
