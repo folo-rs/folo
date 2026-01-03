@@ -15,7 +15,7 @@ bench TARGET="":
 
 [group('testing')]
 miri FILTER="":
-    cargo +nightly miri nextest run {{ target_package }} --no-fail-fast --all-features {{ FILTER }} --locked
+    cargo +nightly miri nextest run {{ target_package }} --no-fail-fast --all-features {{ FILTER }} --locked --no-tests=pass
 
 [group('testing')]
 [script]
