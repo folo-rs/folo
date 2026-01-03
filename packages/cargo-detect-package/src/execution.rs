@@ -2,12 +2,14 @@
 //
 // This module contains logic for executing subcommands with package information.
 
+use std::path::Path;
 use std::process::Command;
 
 use crate::detection::DetectedPackage;
 
 /// Executes the subcommand with cargo arguments (-p or --workspace).
 pub(crate) fn execute_with_cargo_args(
+    working_dir: &Path,
     detected_package: &DetectedPackage,
     subcommand: &[String],
 ) -> Result<std::process::ExitStatus, std::io::Error> {
@@ -19,6 +21,7 @@ pub(crate) fn execute_with_cargo_args(
     }
 
     let mut cmd = Command::new("cargo");
+    cmd.current_dir(working_dir);
 
     // Find the position of "--" separator if it exists.
     let separator_pos = subcommand.iter().position(|arg| arg == "--");
@@ -68,6 +71,7 @@ pub(crate) fn execute_with_cargo_args(
 // Mutations to process execution cause subprocess hangs in integration tests.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn execute_with_env_var(
+    working_dir: &Path,
     env_var: &str,
     detected_package: &DetectedPackage,
     subcommand: &[String],
@@ -80,6 +84,7 @@ pub(crate) fn execute_with_env_var(
     };
 
     let mut cmd = Command::new(first_arg);
+    cmd.current_dir(working_dir);
 
     if let Some(remaining_args) = subcommand.get(1..) {
         cmd.args(remaining_args);
@@ -101,9 +106,40 @@ pub(crate) fn execute_with_env_var(
 #[cfg(all(test, not(miri)))]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use serial_test::serial;
+    use std::fs;
+    use std::path::Path;
 
     use super::*;
+
+    /// Creates a minimal temporary Cargo workspace for tests that need to run cargo commands.
+    fn create_minimal_workspace() -> tempfile::TempDir {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let workspace_root = temp_dir.path();
+
+        fs::write(
+            workspace_root.join("Cargo.toml"),
+            r#"[workspace]
+members = ["test_pkg"]
+resolver = "2"
+"#,
+        )
+        .unwrap();
+
+        let test_pkg = workspace_root.join("test_pkg");
+        fs::create_dir_all(test_pkg.join("src")).unwrap();
+        fs::write(
+            test_pkg.join("Cargo.toml"),
+            r#"[package]
+name = "test_pkg"
+version = "0.1.0"
+edition = "2021"
+"#,
+        )
+        .unwrap();
+        fs::write(test_pkg.join("src/lib.rs"), "// minimal lib\n").unwrap();
+
+        temp_dir
+    }
 
     #[test]
     fn execute_with_cargo_args_handles_separator() {
@@ -132,25 +168,30 @@ mod tests {
     }
 
     #[test]
-    #[serial] // This test runs cargo which requires a workspace context.
     fn execute_with_cargo_args_workspace_branch() {
         // Test that the Workspace branch correctly adds --workspace flag.
         // We use "tree" with --depth 0 as it is fast and accepts --workspace.
+        let workspace = create_minimal_workspace();
+
         let result = execute_with_cargo_args(
+            workspace.path(),
             &DetectedPackage::Workspace,
             &["tree".to_string(), "--depth".to_string(), "0".to_string()],
         );
+
         assert!(result.is_ok());
         assert!(result.unwrap().success());
     }
 
     #[test]
-    #[serial] // This test runs cargo which requires a workspace context.
     fn execute_with_cargo_args_workspace_with_separator() {
         // Test that the Workspace branch correctly adds --workspace flag when there is a "--"
         // separator. This tests the `Some(pos)` branch with `DetectedPackage::Workspace`.
         // We use "clippy" with "--" separator as it is a common use case.
+        let workspace = create_minimal_workspace();
+
         let result = execute_with_cargo_args(
+            workspace.path(),
             &DetectedPackage::Workspace,
             &[
                 "clippy".to_string(),
@@ -159,6 +200,7 @@ mod tests {
                 "warnings".to_string(),
             ],
         );
+
         result.unwrap();
         // The command should have run (exit status depends on clippy findings, but it should not
         // error out from our argument handling).
@@ -166,7 +208,7 @@ mod tests {
 
     #[test]
     fn execute_with_cargo_args_no_subcommand_returns_error() {
-        let result = execute_with_cargo_args(&DetectedPackage::Workspace, &[]);
+        let result = execute_with_cargo_args(Path::new("."), &DetectedPackage::Workspace, &[]);
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
@@ -174,7 +216,8 @@ mod tests {
 
     #[test]
     fn execute_with_env_var_no_subcommand_returns_error() {
-        let result = execute_with_env_var("TEST_ENV", &DetectedPackage::Workspace, &[]);
+        let result =
+            execute_with_env_var(Path::new("."), "TEST_ENV", &DetectedPackage::Workspace, &[]);
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);

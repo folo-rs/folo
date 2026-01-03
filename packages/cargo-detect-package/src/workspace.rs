@@ -152,17 +152,53 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("does not exist"));
     }
 
+    /// Creates a minimal temporary Cargo workspace for tests.
+    fn create_minimal_workspace_for_validation() -> tempfile::TempDir {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let workspace_root = temp_dir.path();
+
+        fs::write(
+            workspace_root.join("Cargo.toml"),
+            r#"[workspace]
+members = ["test_pkg"]
+resolver = "2"
+"#,
+        )
+        .unwrap();
+
+        let test_pkg = workspace_root.join("test_pkg");
+        fs::create_dir_all(test_pkg.join("src")).unwrap();
+        fs::write(
+            test_pkg.join("Cargo.toml"),
+            r#"[package]
+name = "test_pkg"
+version = "0.1.0"
+edition = "2021"
+"#,
+        )
+        .unwrap();
+        fs::write(test_pkg.join("src/lib.rs"), "// minimal lib\n").unwrap();
+
+        temp_dir
+    }
+
     #[test]
-    #[serial] // This test uses file!() which gives a relative path that depends on the current working directory.
+    #[serial] // This test changes the global working directory, so must run serially.
     fn validate_workspace_context_from_workspace() {
         // This test ensures validation works when both current dir and target are in the same
-        // workspace. Use the current source file which should exist and be in the workspace.
-        let current_file = file!(); // This gives us the path to this source file.
-        let current_file_path = Path::new(current_file);
+        // workspace. We use a temporary workspace to avoid running against the actual repo.
+        let workspace = create_minimal_workspace_for_validation();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(workspace.path()).unwrap();
+
+        let target_file = Path::new("test_pkg/src/lib.rs");
 
         let fs = FilesystemFacade::target();
-        validate_workspace_context(current_file_path, &fs)
-            .expect("Should validate successfully when both paths are in the same workspace");
+        let result = validate_workspace_context(target_file, &fs);
+
+        std::env::set_current_dir(original_dir).unwrap();
+
+        result.expect("Should validate successfully when both paths are in the same workspace");
     }
 
     #[test]

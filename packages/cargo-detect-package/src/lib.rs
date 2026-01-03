@@ -60,8 +60,17 @@ fn run_with_filesystem(input: &RunInput, fs: &impl Filesystem) -> Result<RunOutc
     assert_early_exit_cases_handled(&detected_package, &input.outside_package);
 
     let exit_status = match &input.via_env {
-        Some(env_var) => execute_with_env_var(env_var, &detected_package, &input.subcommand),
-        None => execute_with_cargo_args(&detected_package, &input.subcommand),
+        Some(env_var) => execute_with_env_var(
+            &workspace_context.workspace_root,
+            env_var,
+            &detected_package,
+            &input.subcommand,
+        ),
+        None => execute_with_cargo_args(
+            &workspace_context.workspace_root,
+            &detected_package,
+            &input.subcommand,
+        ),
     }
     .map_err(RunError::CommandExecution)?;
 
