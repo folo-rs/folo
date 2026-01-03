@@ -155,4 +155,34 @@ mod tests {
                 .contains("Invalid outside-package action")
         );
     }
+
+    #[test]
+    fn run_error_display_workspace_validation() {
+        let error = RunError::WorkspaceValidation("some validation error".to_string());
+        let display = format!("{error}");
+        assert_eq!(display, "some validation error");
+    }
+
+    #[test]
+    fn run_error_display_package_detection() {
+        let error = RunError::PackageDetection("could not find package".to_string());
+        let display = format!("{error}");
+        assert_eq!(display, "Error detecting package: could not find package");
+    }
+
+    #[test]
+    fn run_error_display_outside_package() {
+        let error = RunError::OutsidePackage;
+        let display = format!("{error}");
+        assert_eq!(display, "Path is not in any package");
+    }
+
+    #[test]
+    fn run_error_display_command_execution() {
+        let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "command not found");
+        let error = RunError::CommandExecution(io_error);
+        let display = format!("{error}");
+        assert!(display.starts_with("Error executing command:"));
+        assert!(display.contains("command not found"));
+    }
 }
