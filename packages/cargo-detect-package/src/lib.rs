@@ -145,27 +145,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, RunError> {
         }
     }
 
-    // Defense-in-depth check: verify that the match block above has handled all early-exit cases.
-    // As of the current logic, is_early_exit_case is always false because the match block above
-    // returns early for both Ignore and Error cases. If is_early_exit_case is true here, it
-    // indicates a logic bug in the match block.
-    //
-    // Coverage: This assertion can never fail with the current code structure because the match
-    // block above returns early for both (Workspace, Ignore) and (Workspace, Error) cases.
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    {
-        let is_early_exit_case = matches!(
-            (&detected_package, &input.outside_package),
-            (
-                DetectedPackage::Workspace,
-                OutsidePackageAction::Ignore | OutsidePackageAction::Error
-            )
-        );
-        assert!(
-            !is_early_exit_case,
-            "Logic error: the match block above must return early for Ignore/Error cases"
-        );
-    }
+    assert_early_exit_cases_handled(&detected_package, &input.outside_package);
 
     let exit_status = match &input.via_env {
         Some(env_var) => execute_with_env_var(env_var, &detected_package, &input.subcommand),
@@ -231,14 +211,10 @@ fn detect_package(
             return extract_package_name(&cargo_toml);
         }
 
-        match current_dir.parent() {
-            Some(parent) => current_dir = parent,
-            // Coverage: This branch can only be reached if the filesystem changes during the
-            // operation - we found a workspace Cargo.toml earlier but now we have walked up
-            // to the drive root without finding any Cargo.toml. Not worth mocking for tests.
-            #[cfg_attr(coverage_nightly, coverage(off))]
+        current_dir = match try_get_parent(current_dir) {
+            Some(parent) => parent,
             None => break,
-        }
+        };
     }
 
     // No package found, use workspace.
@@ -467,6 +443,40 @@ fn normalize_path(path: &Path) -> PathBuf {
     }
 
     canonical
+}
+
+/// Defense-in-depth check: verifies that the match block in `run()` has handled all early-exit
+/// cases. If this assertion fails, it indicates a logic bug in the match block that should have
+/// returned early for the Ignore and Error cases.
+///
+/// This assertion can never fail with the current code structure because the match block returns
+/// early for both (Workspace, Ignore) and (Workspace, Error) cases.
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn assert_early_exit_cases_handled(
+    detected_package: &DetectedPackage,
+    outside_package: &OutsidePackageAction,
+) {
+    let is_early_exit_case = matches!(
+        (detected_package, outside_package),
+        (
+            DetectedPackage::Workspace,
+            OutsidePackageAction::Ignore | OutsidePackageAction::Error
+        )
+    );
+    assert!(
+        !is_early_exit_case,
+        "Logic error: the match block above must return early for Ignore/Error cases"
+    );
+}
+
+/// Returns the parent directory of the given path, if one exists.
+///
+/// This function exists to allow the coverage attribute to be applied. The None case can only be
+/// reached if the filesystem changes during operation - we found a workspace Cargo.toml earlier
+/// but now we have walked up to the drive root without finding any Cargo.toml.
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn try_get_parent(path: &Path) -> Option<&Path> {
+    path.parent()
 }
 
 #[cfg(all(test, not(miri)))]
