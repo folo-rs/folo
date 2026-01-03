@@ -1,3 +1,6 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(coverage_nightly, coverage(off))]
+
 //! Binary entry point for the cargo-detect-package tool.
 
 use std::path::PathBuf;
