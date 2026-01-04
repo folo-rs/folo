@@ -268,6 +268,7 @@ impl<T: 'static> ErasedPool for PoolWrapper<T> {
 
 #[cfg(test)]
 #[allow(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use core::task;
     use std::pin::pin;

@@ -229,6 +229,7 @@ unsafe impl<T: 'static> Sync for RawLocalEventPool<T> {}
 
 #[cfg(test)]
 #[allow(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::iter;
     use std::pin::pin;

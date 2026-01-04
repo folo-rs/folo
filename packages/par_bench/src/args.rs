@@ -187,7 +187,7 @@ mod tests {
                         *observed.lock().unwrap() = Some(args.thread_state().clone());
                     }
                 },
-                |_| (),
+                |()| (),
             )
             .iter(|_| ())
             .execute_on(&mut pool, 1);

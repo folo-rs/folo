@@ -273,6 +273,7 @@ impl VacancyMapSlice<'_> {
     clippy::undocumented_unsafe_blocks,
     reason = "test code, we assume safety is considered"
 )]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

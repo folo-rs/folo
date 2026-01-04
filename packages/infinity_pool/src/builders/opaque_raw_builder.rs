@@ -59,6 +59,7 @@ impl RawOpaquePoolBuilder {
     clippy::undocumented_unsafe_blocks,
     reason = "tests focus on succinct code and do not need to tick all the boxes"
 )]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use static_assertions::assert_not_impl_any;
 

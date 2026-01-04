@@ -184,6 +184,7 @@ impl<T: ?Sized> From<RawPooledMut<T>> for RawPooled<T> {
 
 #[cfg(test)]
 #[allow(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 

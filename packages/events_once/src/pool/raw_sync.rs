@@ -250,6 +250,7 @@ unsafe impl<T: Send + 'static> Sync for RawEventPool<T> {}
 
 #[cfg(test)]
 #[allow(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::pin::pin;
     use std::sync::{Arc, Barrier};

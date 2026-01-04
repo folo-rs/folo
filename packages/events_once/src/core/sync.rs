@@ -848,6 +848,7 @@ impl<T: Send + 'static> fmt::Debug for Event<T> {
     clippy::multiple_unsafe_ops_per_block,
     reason = "test code, be concise"
 )]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::pin::pin;
     use std::sync::{Arc, Barrier};

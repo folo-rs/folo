@@ -43,6 +43,7 @@ impl DerefMut for RawOpaquePoolThreadSafe {
     clippy::undocumented_unsafe_blocks,
     reason = "keep tests concise and easy to read"
 )]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::thread;
 

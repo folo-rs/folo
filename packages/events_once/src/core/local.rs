@@ -522,6 +522,7 @@ impl<T: 'static> fmt::Debug for LocalEvent<T> {
 
 #[cfg(test)]
 #[expect(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::pin::pin;
     use std::task::{self, Poll};
