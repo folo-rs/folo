@@ -259,8 +259,7 @@ impl fmt::Display for ReportOperation {
 #[cfg_attr(coverage_nightly, coverage(off))] // Too annoying to test every question mark operator.
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.operations.is_empty() || self.operations.values().all(|op| op.total_iterations == 0)
-        {
+        if self.operations.values().all(|op| op.total_iterations == 0) {
             writeln!(f, "No processor time statistics captured.")?;
         } else {
             writeln!(f, "Processor time statistics:")?;

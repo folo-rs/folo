@@ -13,3 +13,18 @@ impl Display for Disconnected {
         write!(f, "sender-receiver pair has disconnected")
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disconnected_display_writes_message() {
+        let disconnected = Disconnected;
+        let display_output = disconnected.to_string();
+
+        // Verify that the display output is not empty.
+        assert!(!display_output.is_empty());
+    }
+}

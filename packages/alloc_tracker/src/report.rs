@@ -315,8 +315,7 @@ impl fmt::Display for ReportOperation {
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.operations.is_empty() || self.operations.values().all(|op| op.total_iterations == 0)
-        {
+        if self.operations.values().all(|op| op.total_iterations == 0) {
             writeln!(f, "No allocation statistics captured.")?;
         } else {
             writeln!(f, "Allocation statistics:")?;

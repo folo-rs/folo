@@ -2076,6 +2076,7 @@ mod tests {
 ///
 /// Miri is excluded because `std::thread::available_parallelism()` is not supported under Miri.
 #[cfg(all(test, not(miri)))]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests_fallback {
     use std::num::NonZero;
 

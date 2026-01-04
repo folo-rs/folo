@@ -134,6 +134,9 @@ impl Bindings for BuildTargetBindings {
             .expect("platform refused to accept a new current thread processor affinity");
     }
 
+    // Excluded from coverage because the "not in job" branches cannot be tested in automation,
+    // as automated test runs are always executed within a job.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn get_current_job_cpu_set_masks(&self) -> Vec<GROUP_AFFINITY> {
         // SAFETY: No safety requirements. Does not require closing the handle.
         let current_process = unsafe { GetCurrentProcess() };
