@@ -287,4 +287,31 @@ mod tests {
         let expected_time = platform.processor_count() as f64;
         assert_eq!(platform.max_processor_time(), expected_time);
     }
+
+    #[test]
+    fn current_thread_processors_returns_all_when_unpinned() {
+        // When a thread is not pinned, current_thread_processors() should return all
+        // processor IDs available on the platform.
+        std::thread::spawn(|| {
+            let platform = BuildTargetPlatform;
+
+            // Do not pin this thread - we want to test the unpinned case.
+            let current_processors = platform.current_thread_processors();
+
+            // Should return all processors.
+            assert_eq!(current_processors.len(), platform.processor_count());
+
+            // All processor IDs should be in the range [0, processor_count).
+            for (i, processor_id) in current_processors.iter().enumerate() {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "test data is small enough to fit"
+                )]
+                let expected_id = i as ProcessorId;
+                assert_eq!(*processor_id, expected_id);
+            }
+        })
+        .join()
+        .unwrap();
+    }
 }

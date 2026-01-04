@@ -206,6 +206,9 @@ impl Bindings for BuildTargetBindings {
         aff
     }
 
+    // Excluded from coverage because the "not in job" branches cannot be tested in automation,
+    // as automated test runs are always executed within a job.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn get_current_job_cpu_rate_control(&self) -> Option<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION> {
         // SAFETY: No safety requirements. Does not require closing the handle.
         let current_process = unsafe { GetCurrentProcess() };

@@ -12,6 +12,10 @@ use crate::pal::linux::Bindings;
 #[derive(Debug, Default)]
 pub(crate) struct BuildTargetBindings;
 
+// Real OS bindings are excluded from coverage measurement because:
+// 1. They are tested via integration tests running on actual Linux.
+// 2. Error paths require OS-level failures that are impractical to trigger in tests.
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl Bindings for BuildTargetBindings {
     fn sched_setaffinity_current(&self, cpuset: &cpu_set_t) -> Result<(), io::Error> {
         // 0 means current thread.

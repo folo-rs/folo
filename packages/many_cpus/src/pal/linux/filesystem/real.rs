@@ -10,6 +10,10 @@ use crate::pal::linux::Filesystem;
 #[derive(Debug, Default)]
 pub(crate) struct BuildTargetFilesystem;
 
+// Real filesystem bindings are excluded from coverage measurement because:
+// 1. They are tested via integration tests running on actual Linux.
+// 2. Some paths (like cgroups v1) are not available on all test systems.
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl Filesystem for BuildTargetFilesystem {
     fn get_cpuinfo_contents(&self) -> String {
         fs::read_to_string("/proc/cpuinfo")

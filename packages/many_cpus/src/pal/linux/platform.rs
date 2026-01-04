@@ -1631,4 +1631,75 @@ CPU revision    : 1
             EfficiencyClass::Performance
         );
     }
+
+    #[test]
+    fn proc_self_status_with_empty_lines_interspersed() {
+        // This test specifically verifies that empty lines in /proc/self/status
+        // are correctly filtered out and do not cause parsing errors.
+        let mut fs = MockFilesystem::new();
+
+        let cpuinfo = "processor       : 0
+bogomips        : 99.9
+whatever        : 123
+other           : ignored
+
+processor       : 1
+bogomips        : 99.9
+whatever        : 123
+other           : ignored
+
+";
+
+        fs.expect_get_cpuinfo_contents()
+            .times(1)
+            .return_const(cpuinfo.to_string());
+
+        fs.expect_get_numa_node_possible_contents()
+            .times(1)
+            .return_const(Some("0\n".to_string()));
+
+        fs.expect_get_numa_node_cpulist_contents()
+            .withf(move |n| *n == 0)
+            .times(1)
+            .return_const("0,1\n".to_string());
+
+        fs.expect_get_cpu_online_contents()
+            .withf(move |p| *p == 0)
+            .times(1)
+            .return_const(Some("1\n".to_string()));
+
+        fs.expect_get_cpu_online_contents()
+            .withf(move |p| *p == 1)
+            .times(1)
+            .return_const(Some("1\n".to_string()));
+
+        // Include empty lines interspersed in the status content.
+        let status_with_empty_lines = "Name:   test_process
+
+Umask:  0022
+
+State:  R (running)
+
+Cpus_allowed:   ffffffff
+
+Cpus_allowed_list:      0-1
+
+Mems_allowed:   1
+";
+
+        fs.expect_get_proc_self_status_contents()
+            .times(1)
+            .return_const(status_with_empty_lines.to_string());
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        // The key assertion: parsing should succeed despite empty lines.
+        let processors = platform.get_all_processors();
+        assert_eq!(processors.len(), 2);
+        assert_eq!(processors[0].as_target().id, 0);
+        assert_eq!(processors[1].as_target().id, 1);
+    }
 }

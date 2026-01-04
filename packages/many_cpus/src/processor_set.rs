@@ -616,6 +616,83 @@ mod tests {
 
         assert_eq!(single_processor_set.len(), 1);
     }
+
+    #[test]
+    fn display_shows_cpulist_and_count() {
+        let mut platform = MockPlatform::new();
+
+        platform
+            .expect_get_all_processors_core()
+            .return_const(nonempty![
+                FakeProcessor {
+                    index: 0,
+                    memory_region: 0,
+                    efficiency_class: EfficiencyClass::Efficiency,
+                }
+                .into(),
+                FakeProcessor {
+                    index: 1,
+                    memory_region: 0,
+                    efficiency_class: EfficiencyClass::Efficiency,
+                }
+                .into(),
+                FakeProcessor {
+                    index: 2,
+                    memory_region: 0,
+                    efficiency_class: EfficiencyClass::Efficiency,
+                }
+                .into(),
+                FakeProcessor {
+                    index: 3,
+                    memory_region: 0,
+                    efficiency_class: EfficiencyClass::Efficiency,
+                }
+                .into()
+            ]);
+
+        let platform = PlatformFacade::from_mock(platform);
+
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 2,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 3,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            }
+        ];
+
+        let processors = pal_processors.map(move |p| Processor::new(p.into()));
+
+        let tracker_client = HardwareTrackerClientFacade::default_mock();
+
+        let processor_set = ProcessorSet::new(processors, tracker_client, platform);
+
+        let display_output = processor_set.to_string();
+
+        // The display format is " <cpulist> (<count> processors)".
+        assert!(
+            display_output.contains("0-3"),
+            "display output should contain cpulist format: {display_output}"
+        );
+        assert!(
+            display_output.contains("4 processors"),
+            "display output should contain processor count: {display_output}"
+        );
+    }
 }
 
 /// Fallback PAL integration tests - these test the integration between `ProcessorSet`

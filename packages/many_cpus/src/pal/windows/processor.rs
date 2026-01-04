@@ -98,4 +98,32 @@ mod tests {
         assert!(processor < processor3);
         assert!(processor3 > processor);
     }
+
+    #[test]
+    fn display_shows_processor_id_and_group_info() {
+        // group_index=1, index_in_group=3, id=7
+        let processor = ProcessorImpl::new(1, 3, 7, 0, EfficiencyClass::Performance);
+
+        let display_output = processor.to_string();
+
+        assert!(
+            display_output.contains("processor 7"),
+            "display should contain processor ID: {display_output}"
+        );
+        assert!(
+            display_output.contains("[1.3]"),
+            "display should contain group.index format: {display_output}"
+        );
+    }
+
+    #[test]
+    fn as_ref_returns_self() {
+        let processor = ProcessorImpl::new(0, 2, 5, 1, EfficiencyClass::Efficiency);
+
+        let processor_ref: &ProcessorImpl = processor.as_ref();
+
+        assert_eq!(processor_ref.id, processor.id);
+        assert_eq!(processor_ref.group_index, processor.group_index);
+        assert_eq!(processor_ref.index_in_group, processor.index_in_group);
+    }
 }

@@ -89,4 +89,40 @@ mod tests {
         assert!(processor < processor3);
         assert!(processor3 > processor);
     }
+
+    #[test]
+    fn display_shows_processor_id_and_node() {
+        let processor = ProcessorImpl {
+            id: 5,
+            memory_region_id: 2,
+            efficiency_class: EfficiencyClass::Efficiency,
+            is_active: true,
+        };
+
+        let display_output = processor.to_string();
+
+        assert!(
+            display_output.contains("processor 5"),
+            "display should contain processor ID: {display_output}"
+        );
+        assert!(
+            display_output.contains("node 2"),
+            "display should contain memory region (node): {display_output}"
+        );
+    }
+
+    #[test]
+    fn as_ref_returns_self() {
+        let processor = ProcessorImpl {
+            id: 7,
+            memory_region_id: 1,
+            efficiency_class: EfficiencyClass::Performance,
+            is_active: true,
+        };
+
+        let processor_ref: &ProcessorImpl = processor.as_ref();
+
+        assert_eq!(processor_ref.id, processor.id);
+        assert_eq!(processor_ref.memory_region_id, processor.memory_region_id);
+    }
 }

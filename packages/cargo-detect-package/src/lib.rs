@@ -12,11 +12,10 @@ mod pal;
 mod types;
 mod workspace;
 
-pub use types::*;
-
 use detection::{DetectedPackage, detect_package};
 use execution::{execute_with_cargo_args, execute_with_env_var};
 use pal::{Filesystem, FilesystemFacade};
+pub use types::*;
 use workspace::validate_workspace_context;
 
 /// Core logic of the tool, extracted for testability.

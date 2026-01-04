@@ -1947,6 +1947,100 @@ mod tests {
         );
     }
 
+    #[test]
+    fn take_any_returns_none_when_not_enough_processors() {
+        // This tests the MemoryRegionSelector::Any branch returning None when there
+        // are not enough processors in the candidate set to satisfy the request.
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let mut platform = MockPlatform::new();
+        let pal_processors_facade = pal_processors.map(ProcessorFacade::Fake);
+
+        // Set quota high enough that the request passes the quota check.
+        // The actual selection logic in the Any branch will fail due to insufficient candidates.
+        platform
+            .expect_max_processor_time()
+            .times(1)
+            .return_const(10.0);
+
+        platform
+            .expect_get_all_processors_core()
+            .times(1)
+            .return_const(pal_processors_facade);
+
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
+
+        // Request more processors than exist (3 > 2). Quota is high so the quota check passes,
+        // but there are not enough candidates in the Any branch.
+        let set = builder.take(nz!(3));
+        assert!(
+            set.is_none(),
+            "should return None when not enough processors available"
+        );
+    }
+
+    #[test]
+    fn take_prefer_different_returns_none_when_candidates_exhausted() {
+        // This tests the MemoryRegionSelector::PreferDifferent branch returning None
+        // when the round-robin through memory regions exhausts all candidates.
+        // Configuration: 2 memory regions with 1 processor each. Request 3 processors.
+        // The round-robin will pick 1 from each region (total 2), then have no more
+        // candidates to pick from, so it returns None.
+        let pal_processors = nonempty![
+            FakeProcessor {
+                index: 0,
+                memory_region: 0,
+                efficiency_class: EfficiencyClass::Efficiency,
+            },
+            FakeProcessor {
+                index: 1,
+                memory_region: 1,
+                efficiency_class: EfficiencyClass::Performance,
+            }
+        ];
+
+        let mut platform = MockPlatform::new();
+        let pal_processors_facade = pal_processors.map(ProcessorFacade::Fake);
+
+        // Set quota high enough that the request passes the quota check.
+        platform
+            .expect_max_processor_time()
+            .times(1)
+            .return_const(10.0);
+
+        platform
+            .expect_get_all_processors_core()
+            .times(1)
+            .return_const(pal_processors_facade);
+
+        let builder = ProcessorSetBuilder::with_internals(
+            HardwareTrackerClientFacade::default_mock(),
+            platform.into(),
+        );
+
+        // Request 3 processors with prefer_different_memory_regions.
+        // We only have 2 total, so after 2 rounds the candidates will be exhausted.
+        let set = builder.prefer_different_memory_regions().take(nz!(3));
+        assert!(
+            set.is_none(),
+            "should return None when candidates exhausted in PreferDifferent mode"
+        );
+    }
+
     fn new_mock_platform(processors: NonEmpty<FakeProcessor>) -> MockPlatform {
         new_mock_platform_with_get_count(processors, 1, 1)
     }

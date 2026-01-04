@@ -523,13 +523,9 @@ impl BuildTargetPlatform {
 
             // In theory, it could still have failed with "insufficient buffer" because the set of
             // processors available to us can change at any time. Super unlikely but let's be safe.
-            if let Err(e) = real_result {
-                if e.code() == HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) {
-                    // Well, we just have to try again then.
-                    continue;
-                }
-
-                panic!("GetLogicalProcessorInformationEx failed with unexpected error code: {e}",);
+            match check_logical_processor_info_result(&real_result) {
+                LogicalProcessorInfoResult::Retry => continue,
+                LogicalProcessorInfoResult::Proceed => {}
             }
 
             // Signal the buffer that we wrote into it.
@@ -810,6 +806,37 @@ fn is_soft_capped(rate_control: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION) -> bool 
         JOB_OBJECT_CPU_RATE_CONTROL_ENABLE.0 | JOB_OBJECT_CPU_RATE_CONTROL_MIN_MAX_RATE.0;
 
     rate_control.ControlFlags.0 & SOFT_CAP_FLAGS == SOFT_CAP_FLAGS
+}
+
+/// Result of checking the outcome of `GetLogicalProcessorInformationEx`.
+enum LogicalProcessorInfoResult {
+    /// The caller should retry the call because the buffer size changed.
+    Retry,
+    /// The call succeeded and the caller should proceed with processing the data.
+    Proceed,
+}
+
+/// Checks the result of `GetLogicalProcessorInformationEx` and returns the action to take.
+///
+/// Panics if the call failed with an unexpected error.
+// Excluded from coverage because:
+// 1. The retry path requires the processor set to change between size probe and actual call,
+//    which is extremely rare and impractical to test.
+// 2. The panic path requires an OS-level failure that is unrealistic to trigger.
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn check_logical_processor_info_result(
+    result: &windows::core::Result<()>,
+) -> LogicalProcessorInfoResult {
+    if let Err(e) = result {
+        if e.code() == HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) {
+            // Buffer size changed between probe and actual call. Retry.
+            return LogicalProcessorInfoResult::Retry;
+        }
+
+        panic!("GetLogicalProcessorInformationEx failed with unexpected error code: {e}");
+    }
+
+    LogicalProcessorInfoResult::Proceed
 }
 
 #[allow(

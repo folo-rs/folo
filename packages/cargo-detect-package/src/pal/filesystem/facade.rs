@@ -5,14 +5,12 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-
 #[cfg(test)]
 use std::sync::Arc;
 
-use crate::pal::{BuildTargetFilesystem, Filesystem};
-
 #[cfg(test)]
 use crate::pal::MockFilesystem;
+use crate::pal::{BuildTargetFilesystem, Filesystem};
 
 /// Facade over filesystem operations, dispatching to real or mock implementation.
 ///
