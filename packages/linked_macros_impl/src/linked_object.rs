@@ -187,4 +187,15 @@ mod tests {
         let result = entrypoint(&TokenStream::new(), &input);
         assert!(contains_compile_error(&result));
     }
+
+    #[test]
+    fn with_invalid_syntax_fails() {
+        // This input cannot be parsed by syn because it is not valid Rust syntax.
+        let input = quote! {
+            struct { missing name }
+        };
+
+        let result = entrypoint(&TokenStream::new(), &input);
+        assert!(contains_compile_error(&result));
+    }
 }

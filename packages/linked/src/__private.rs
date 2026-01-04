@@ -48,6 +48,7 @@ pub struct Link<T> {
     pub(crate) instance_factory: InstanceFactory<T>,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T> Debug for Link<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
