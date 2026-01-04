@@ -135,6 +135,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn default_creates_valid_pusher() {
+        let pusher = MetricsPusher::default();
+
+        // Verify the pusher is functional by pre-registering and checking event count.
+        assert_eq!(pusher.event_count(), 0);
+
+        let pre_registration = pusher.pre_register();
+        let source = Rc::new(ObservationBag::new(&[]));
+        pre_registration.register("default_test_event".into(), source);
+
+        assert_eq!(pusher.event_count(), 1);
+    }
+
+    #[test]
     fn data_updated_only_on_push() {
         let local = Rc::new(ObservationBag::new(&[]));
 

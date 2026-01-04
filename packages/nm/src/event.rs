@@ -255,6 +255,7 @@ where
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarders.
 impl<P> Observe for Event<P>
 where
     P: PublishModel,
@@ -287,6 +288,7 @@ where
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarders.
 impl<P> Observe for ObservationBatch<'_, P>
 where
     P: PublishModel,

@@ -614,4 +614,48 @@ mod tests {
         // This should panic because the bucket magnitudes do not match.
         observations1.merge_from(&observations2);
     }
+
+    #[test]
+    fn copy_from_transfers_non_empty_bucket_counts() {
+        let source = ObservationBag::new(&[-100, -10, 0, 10, 100]);
+
+        // Insert observations into various buckets.
+        source.insert(-1000, 1); // Goes into bucket 0 (le -100)
+        source.insert(-50, 2); // Goes into bucket 1 (le -10)
+        source.insert(0, 3); // Goes into bucket 2 (le 0)
+        source.insert(5, 4); // Goes into bucket 3 (le 10)
+        source.insert(50, 5); // Goes into bucket 4 (le 100)
+        source.insert(1000, 6); // Goes outside any bucket (>100)
+
+        let target = ObservationBagSync::new(&[-100, -10, 0, 10, 100]);
+
+        // Verify target starts empty.
+        let snapshot_before = target.snapshot();
+        assert_eq!(snapshot_before.count, 0);
+        assert_eq!(snapshot_before.sum, 0);
+        for &count in &snapshot_before.bucket_counts {
+            assert_eq!(count, 0);
+        }
+
+        // Copy data from source to target.
+        target.copy_from(&source);
+
+        // Verify all data was transferred correctly.
+        let snapshot_after = target.snapshot();
+
+        // Total count: 1+2+3+4+5+6 = 21
+        assert_eq!(snapshot_after.count, 21);
+
+        // Total sum: -1000*1 + -50*2 + 0*3 + 5*4 + 50*5 + 1000*6 = 5170
+        assert_eq!(snapshot_after.sum, 5170);
+
+        // Verify bucket counts.
+        assert_eq!(snapshot_after.bucket_counts.len(), 5);
+        assert_eq!(snapshot_after.bucket_counts[0], 1); // le -100
+        assert_eq!(snapshot_after.bucket_counts[1], 2); // le -10
+        assert_eq!(snapshot_after.bucket_counts[2], 3); // le 0
+        assert_eq!(snapshot_after.bucket_counts[3], 4); // le 10
+        assert_eq!(snapshot_after.bucket_counts[4], 5); // le 100
+        // Note: observations with magnitude 1000 do not go into any bucket.
+    }
 }

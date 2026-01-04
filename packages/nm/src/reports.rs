@@ -1028,4 +1028,103 @@ mod tests {
         let expected_bytes = expected_chars * BYTES_PER_HISTOGRAM_BAR_CHAR.get();
         assert_eq!(HISTOGRAM_BAR_CHARS.len(), expected_bytes);
     }
+
+    #[test]
+    fn event_metrics_display_zero_count_reports_flat_zero() {
+        // This tests the "If there is no recorded data, we just report a flat zero
+        // no questions asked." branch in the Display impl.
+        let snapshot = ObservationBagSnapshot {
+            count: 0,
+            sum: 0,
+            bucket_magnitudes: &[],
+            bucket_counts: Box::new([]),
+        };
+
+        let metrics = EventMetrics::new("zero_event".into(), snapshot);
+
+        let output = format!("{metrics}");
+
+        // The output should contain the event name followed by ": 0".
+        assert!(output.contains("zero_event: 0"));
+
+        // It should be a short output (just the name and zero, plus newline).
+        assert_eq!(output.trim(), "zero_event: 0");
+    }
+
+    #[test]
+    fn event_metrics_new_zero_count_empty_buckets() {
+        let snapshot = ObservationBagSnapshot {
+            count: 0,
+            sum: 0,
+            bucket_magnitudes: &[],
+            bucket_counts: Box::new([]),
+        };
+
+        let metrics = EventMetrics::new("empty_event".into(), snapshot);
+
+        assert_eq!(metrics.name(), "empty_event");
+        assert_eq!(metrics.count(), 0);
+        assert_eq!(metrics.sum(), 0);
+        assert_eq!(metrics.mean(), 0);
+        assert!(metrics.histogram().is_none());
+    }
+
+    #[test]
+    fn event_metrics_new_non_zero_count_empty_buckets() {
+        let snapshot = ObservationBagSnapshot {
+            count: 10,
+            sum: 100,
+            bucket_magnitudes: &[],
+            bucket_counts: Box::new([]),
+        };
+
+        let metrics = EventMetrics::new("sum_event".into(), snapshot);
+
+        assert_eq!(metrics.name(), "sum_event");
+        assert_eq!(metrics.count(), 10);
+        assert_eq!(metrics.sum(), 100);
+        assert_eq!(metrics.mean(), 10); // 100 / 10 = 10
+        assert!(metrics.histogram().is_none());
+    }
+
+    #[test]
+    fn event_metrics_new_non_zero_count_with_buckets() {
+        // Create a snapshot with bucket data.
+        // Buckets: [-10, 0, 10, 100]
+        // Counts in buckets: [2, 3, 4, 5] = 14 total in buckets
+        // Total count: 20 (so 6 are in +inf bucket)
+        let snapshot = ObservationBagSnapshot {
+            count: 20,
+            sum: 500,
+            bucket_magnitudes: &[-10, 0, 10, 100],
+            bucket_counts: vec![2, 3, 4, 5].into_boxed_slice(),
+        };
+
+        let metrics = EventMetrics::new("histogram_event".into(), snapshot);
+
+        assert_eq!(metrics.name(), "histogram_event");
+        assert_eq!(metrics.count(), 20);
+        assert_eq!(metrics.sum(), 500);
+        assert_eq!(metrics.mean(), 25); // 500 / 20 = 25
+
+        let histogram = metrics.histogram().expect("histogram should be present");
+
+        // Verify bucket magnitudes include the synthetic +inf bucket.
+        let magnitudes: Vec<_> = histogram.magnitudes().collect();
+        assert_eq!(magnitudes, vec![-10, 0, 10, 100, Magnitude::MAX]);
+
+        // Verify bucket counts include the plus_infinity_bucket_count.
+        // plus_infinity = 20 - (2+3+4+5) = 20 - 14 = 6
+        let counts: Vec<_> = histogram.counts().collect();
+        assert_eq!(counts, vec![2, 3, 4, 5, 6]);
+
+        // Verify buckets() returns correct pairs.
+        let buckets: Vec<_> = histogram.buckets().collect();
+        assert_eq!(buckets.len(), 5);
+        assert_eq!(buckets[0], (-10, 2));
+        assert_eq!(buckets[1], (0, 3));
+        assert_eq!(buckets[2], (10, 4));
+        assert_eq!(buckets[3], (100, 5));
+        assert_eq!(buckets[4], (Magnitude::MAX, 6));
+    }
 }

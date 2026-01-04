@@ -203,6 +203,22 @@ mod tests {
     const TEST_EVENT_NAME: &str = "test_event";
 
     #[test]
+    fn unregister_unregistered_thread_is_no_op() {
+        let global_registry = GlobalEventRegistry::new();
+
+        // Get a thread ID that was never registered.
+        let unregistered_thread_id = thread::current().id();
+
+        // This should complete without panic - the if let Some(...) branch is skipped.
+        global_registry.unregister_thread(unregistered_thread_id);
+
+        // Verify that no archived data was created (since there was nothing to archive).
+        let state = global_registry.state.read().expect(ERR_POISONED_LOCK);
+        assert!(state.archived_observation_bags.is_empty());
+        assert!(state.thread_observation_bags.is_empty());
+    }
+
+    #[test]
     fn register_unregister_smoke_test() {
         let observations = Arc::new(ObservationBagSync::new(&[]));
 
