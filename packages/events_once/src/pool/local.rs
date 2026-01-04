@@ -40,6 +40,7 @@ pub struct LocalEventPool<T: 'static> {
     _owns_some: PhantomData<T>,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: 'static> fmt::Debug for LocalEventPool<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
@@ -153,6 +154,7 @@ impl<T: 'static> Clone for LocalEventPool<T> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: 'static> fmt::Debug for LocalPoolCore<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
@@ -557,5 +559,22 @@ mod tests {
         });
 
         assert_eq!(inspected_count, 2);
+    }
+
+    #[test]
+    fn default_creates_functional_pool() {
+        let pool = LocalEventPool::<i32>::default();
+
+        assert!(pool.is_empty());
+
+        let (sender, receiver) = pool.rent();
+        let mut receiver = pin!(receiver);
+
+        sender.send(42);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
     }
 }

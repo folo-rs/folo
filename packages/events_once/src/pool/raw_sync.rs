@@ -712,4 +712,21 @@ mod tests {
 
         assert_eq!(inspected_count, 1);
     }
+
+    #[test]
+    fn default_creates_functional_pool() {
+        let pool = pin!(RawEventPool::<i32>::default());
+
+        assert!(pool.is_empty());
+
+        let (sender, receiver) = unsafe { pool.as_ref().rent() };
+        let mut receiver = pin!(receiver);
+
+        sender.send(42);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+    }
 }

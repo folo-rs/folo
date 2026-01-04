@@ -458,3 +458,49 @@ where
         }
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use many_cpus::ProcessorSet;
+    use new_zealand::nz;
+
+    use crate::{Run, ThreadPool};
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn run_with_thread_state_groups_sets_group_count() {
+        let Some(processors) = ProcessorSet::builder().take(nz!(2)) else {
+            println!(
+                "Skipping test run_with_thread_state_groups_sets_group_count: not enough processors"
+            );
+            return;
+        };
+        let mut pool = ThreadPool::new(&processors);
+        let observed_group_counts = Arc::new(Mutex::new(Vec::new()));
+
+        // This specifically tests the groups() method on RunWithThreadState,
+        // which is the builder stage after prepare_thread() has been called.
+        // We explicitly set groups to 1 (the documented default) to verify the method works.
+        let _result = Run::new()
+            .prepare_thread(|_| ())
+            .groups(nz!(1))
+            .prepare_iter({
+                let observed = Arc::clone(&observed_group_counts);
+                move |args| {
+                    observed
+                        .lock()
+                        .unwrap()
+                        .push(args.meta().group_count().get());
+                }
+            })
+            .iter(|_| ())
+            .execute_on(&mut pool, 1);
+
+        let counts = observed_group_counts.lock().unwrap();
+        assert!(counts.iter().all(|&c| c == 1));
+        assert_eq!(counts.len(), 2);
+    }
+}

@@ -133,10 +133,25 @@ mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
+    use crate::{EventPool, IntoValueError};
 
     assert_impl_all!(PooledSender<u32>: Send);
     assert_not_impl_any!(PooledSender<u32>: Sync);
 
     assert_impl_all!(PooledReceiver<u32>: Send);
     assert_not_impl_any!(PooledReceiver<u32>: Sync);
+
+    #[test]
+    fn into_value_disconnected() {
+        let pool = EventPool::<i32>::new();
+
+        let (sender, receiver) = pool.rent();
+
+        drop(sender);
+
+        assert!(matches!(
+            receiver.into_value(),
+            Err(IntoValueError::Disconnected)
+        ));
+    }
 }

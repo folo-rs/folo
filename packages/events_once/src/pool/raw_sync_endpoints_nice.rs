@@ -130,13 +130,31 @@ impl<T: Send + 'static> fmt::Debug for RawPooledReceiver<T> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::pin::pin;
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
+    use crate::{IntoValueError, RawEventPool};
 
     assert_impl_all!(RawPooledSender<u32>: Send);
     assert_not_impl_any!(RawPooledSender<u32>: Sync);
 
     assert_impl_all!(RawPooledReceiver<u32>: Send);
     assert_not_impl_any!(RawPooledReceiver<u32>: Sync);
+
+    #[test]
+    fn into_value_disconnected() {
+        let pool = pin!(RawEventPool::<i32>::new());
+
+        // SAFETY: We guarantee the pool outlives the endpoints.
+        let (sender, receiver) = unsafe { pool.as_ref().rent() };
+
+        drop(sender);
+
+        assert!(matches!(
+            receiver.into_value(),
+            Err(IntoValueError::Disconnected)
+        ));
+    }
 }
