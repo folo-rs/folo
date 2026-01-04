@@ -21,7 +21,7 @@ fn perform_measurable_cpu_work() -> u64 {
 
     // Perform intensive work for at least 50ms of real time
     // This should be easily measurable as processor time
-    while start.elapsed() < Duration::from_millis(50) {
+    loop {
         // Intensive arithmetic that cannot be optimized away
         for i in 0..50_000_u32 {
             accumulator = accumulator
@@ -39,6 +39,10 @@ fn perform_measurable_cpu_work() -> u64 {
         }
         iterations = iterations.wrapping_add(50000);
         black_box(accumulator);
+
+        if start.elapsed() >= Duration::from_millis(50) {
+            break;
+        }
     }
 
     iterations
