@@ -74,39 +74,24 @@ async fn main() {
 }
 
 fn perform_fake_work() {
-    // Use a simple counter instead of random for simplicity.
-    static mut COUNTER: u8 = 0;
+    // Use an atomic counter to avoid unsafe static access.
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static COUNTER: AtomicU8 = AtomicU8::new(0);
 
     // Simulate processing 3 work items.
     for _ in 0..3 {
         WORK_ITEMS_PROCESSED.with(Event::observe_once);
 
         // Simulate work taking some time (10-100ms).
-        // SAFETY: Single read of mutable static, single-threaded example.
-        let counter = unsafe { COUNTER };
-        let new_counter = counter.wrapping_add(1);
-
-        // SAFETY: Single write to mutable static, single-threaded example.
-        unsafe {
-            COUNTER = new_counter;
-        }
-
-        let duration_ms = (new_counter % 91).checked_add(10).expect("safe range");
+        let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let duration_ms = (counter % 91).checked_add(10).expect("safe range");
 
         thread::sleep(Duration::from_millis(duration_ms.into()));
         WORK_DURATION_MS.with(|e| e.observe(i64::from(duration_ms)));
 
         // Simulate processing some bytes (100-10000 bytes).
-        // SAFETY: Single read of mutable static, single-threaded example.
-        let counter = unsafe { COUNTER };
-        let new_counter = counter.wrapping_add(17);
-
-        // SAFETY: Single write to mutable static, single-threaded example.
-        unsafe {
-            COUNTER = new_counter;
-        }
-
-        let bytes = u16::from(new_counter)
+        let counter = COUNTER.fetch_add(17, Ordering::Relaxed);
+        let bytes = u16::from(counter)
             .checked_mul(39)
             .and_then(|v| v.checked_add(100))
             .expect("safe range");

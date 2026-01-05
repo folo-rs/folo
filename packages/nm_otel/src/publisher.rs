@@ -191,7 +191,13 @@ where
     fn is_counter_event(event: &EventMetrics) -> bool {
         // A counter event is one where all observations had magnitude 1.
         // This is indicated by count == sum and no histogram.
-        let count_as_i64 = i64::try_from(event.count()).unwrap_or(i64::MAX);
+        //
+        // If count is too large to fit in i64, we treat it as not a counter event
+        // since the comparison would be unreliable anyway.
+        let Ok(count_as_i64) = i64::try_from(event.count()) else {
+            return false;
+        };
+
         count_as_i64 == event.sum() && event.histogram().is_none()
     }
 }
