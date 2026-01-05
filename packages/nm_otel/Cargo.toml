@@ -17,7 +17,7 @@ default = []
 nm = { workspace = true }
 opentelemetry = { version = "0.31", default-features = false, features = ["metrics"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["metrics"] }
-tokio = { workspace = true, features = ["macros", "rt", "time"] }
+tick = { version = "0.1.2", default-features = false, features = ["tokio"] }
 
 [dev-dependencies]
 mutants = { workspace = true }

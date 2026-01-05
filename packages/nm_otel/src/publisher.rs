@@ -2,9 +2,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use nm::{EventMetrics, Report};
-use opentelemetry::metrics::{Counter, Histogram, Meter, MeterProvider, UpDownCounter};
-
-use crate::clock::{Clock, RealClock};
+use opentelemetry::metrics::{Histogram, Meter, MeterProvider, UpDownCounter};
+use tick::Clock;
 
 /// A publisher that periodically collects nm metrics and exports them to OpenTelemetry.
 ///
@@ -23,16 +22,13 @@ use crate::clock::{Clock, RealClock};
 /// # }
 /// ```
 #[derive(Debug)]
-pub struct Publisher<C = RealClock>
-where
-    C: Clock,
-{
+pub struct Publisher {
     meter: Meter,
     interval: Duration,
-    clock: C,
+    clock: Clock,
 }
 
-impl Publisher<RealClock> {
+impl Publisher {
     /// Creates a new publisher with a default meter.
     ///
     /// # Example
@@ -50,7 +46,7 @@ impl Publisher<RealClock> {
         Self {
             meter,
             interval: Duration::from_secs(60),
-            clock: RealClock,
+            clock: Clock::new_tokio(),
         }
     }
 
@@ -67,22 +63,17 @@ impl Publisher<RealClock> {
     /// let meter_provider = MeterProvider::builder().build();
     /// let meter = meter_provider.meter("my_app");
     ///
-    /// let publisher = Publisher::with_meter(meter);
+    /// let publisher = Publisher::meter(meter);
     /// ```
     #[must_use]
-    pub fn with_meter(meter: Meter) -> Self {
+    pub fn meter(meter: Meter) -> Self {
         Self {
             meter,
             interval: Duration::from_secs(60),
-            clock: RealClock,
+            clock: Clock::new_tokio(),
         }
     }
-}
 
-impl<C> Publisher<C>
-where
-    C: Clock,
-{
     /// Sets the interval between metric exports.
     ///
     /// # Example
@@ -100,26 +91,11 @@ where
         self
     }
 
-    /// Creates a publisher with a custom clock for testing.
-    #[cfg(test)]
-    #[expect(dead_code, reason = "will be used in future integration tests")]
-    pub(crate) fn with_clock(meter: Meter, clock: C) -> Self {
-        Self {
-            meter,
-            interval: Duration::from_secs(60),
-            clock,
-        }
-    }
-
     /// Runs one iteration of metric collection and export.
     ///
     /// This is exposed for testing purposes to allow testing the publishing logic
     /// without entering the infinite loop or dealing with delays.
-    #[expect(
-        clippy::unused_async,
-        reason = "async for API consistency, may become async in the future"
-    )]
-    pub async fn run_once_iteration(&self) {
+    pub fn run_one_iteration(&self) {
         let report = Report::collect();
         self.export_report(&report);
     }
@@ -144,8 +120,8 @@ where
     /// ```
     pub async fn publish_forever(&self) -> ! {
         loop {
-            self.run_once_iteration().await;
-            self.clock.sleep(self.interval).await;
+            self.run_one_iteration();
+            self.clock.delay(self.interval).await;
         }
     }
 
@@ -160,13 +136,12 @@ where
     fn export_event(&self, event: &EventMetrics, state: &mut InstrumentState) {
         let event_name = event.name();
 
-        // Decide what type of instrument to use based on the event characteristics.
-        if Self::is_counter_event(event) {
-            // This is a simple counter (only magnitude 1 events).
-            let counter = state.get_or_create_counter(&self.meter, event_name);
-            counter.add(event.count(), &[]);
-        } else if let Some(histogram_data) = event.histogram() {
-            // This event has a histogram, so we export it as an OpenTelemetry histogram.
+        // Decide what type of instrument to use based on the event metadata.
+        // We cannot make assumptions about the data (e.g., whether magnitudes are always 1)
+        // because nm events are flexible and can collect any magnitude at any time.
+        if let Some(histogram_data) = event.histogram() {
+            // This event has histogram buckets configured, so we export it as an
+            // OpenTelemetry histogram.
             let histogram = state.get_or_create_histogram(&self.meter, event_name);
 
             // Record each bucket's occurrences.
@@ -181,28 +156,16 @@ where
                 }
             }
         } else {
-            // This is a gauge-like metric (has arbitrary magnitudes but no histogram).
-            // We'll use an UpDownCounter to track the sum.
-            let gauge = state.get_or_create_updown_counter(&self.meter, event_name);
-            gauge.add(event.sum(), &[]);
+            // This event has no histogram buckets, so we use an UpDownCounter.
+            // We use UpDownCounter because it can handle arbitrary positive and negative
+            // magnitudes, matching the flexibility of nm events.
+            let counter = state.get_or_create_updown_counter(&self.meter, event_name);
+            counter.add(event.sum(), &[]);
         }
-    }
-
-    fn is_counter_event(event: &EventMetrics) -> bool {
-        // A counter event is one where all observations had magnitude 1.
-        // This is indicated by count == sum and no histogram.
-        //
-        // If count is too large to fit in i64, we treat it as not a counter event
-        // since the comparison would be unreliable anyway.
-        let Ok(count_as_i64) = i64::try_from(event.count()) else {
-            return false;
-        };
-
-        count_as_i64 == event.sum() && event.histogram().is_none()
     }
 }
 
-impl Default for Publisher<RealClock> {
+impl Default for Publisher {
     fn default() -> Self {
         Self::new()
     }
@@ -213,7 +176,6 @@ impl Default for Publisher<RealClock> {
 /// Instruments are created on-demand when events are first seen and reused
 /// in subsequent iterations.
 struct InstrumentState {
-    counters: HashMap<String, Counter<u64>>,
     histograms: HashMap<String, Histogram<f64>>,
     updown_counters: HashMap<String, UpDownCounter<i64>>,
 }
@@ -221,18 +183,9 @@ struct InstrumentState {
 impl InstrumentState {
     fn new() -> Self {
         Self {
-            counters: HashMap::new(),
             histograms: HashMap::new(),
             updown_counters: HashMap::new(),
         }
-    }
-
-    fn get_or_create_counter(&mut self, meter: &Meter, name: &str) -> Counter<u64> {
-        let name_owned = name.to_string();
-        self.counters
-            .entry(name_owned.clone())
-            .or_insert_with(|| meter.u64_counter(name_owned).build())
-            .clone()
     }
 
     fn get_or_create_histogram(&mut self, meter: &Meter, name: &str) -> Histogram<f64> {
@@ -257,28 +210,28 @@ impl InstrumentState {
 mod tests {
     use super::*;
 
-    #[test]
-    fn publisher_can_be_created() {
+    #[tokio::test]
+    async fn publisher_can_be_created() {
         let publisher = Publisher::new();
         assert_eq!(publisher.interval, Duration::from_secs(60));
     }
 
-    #[test]
-    fn publisher_interval_can_be_set() {
+    #[tokio::test]
+    async fn publisher_interval_can_be_set() {
         let publisher = Publisher::new().interval(Duration::from_secs(30));
         assert_eq!(publisher.interval, Duration::from_secs(30));
     }
 
-    #[test]
-    fn publisher_default_is_same_as_new() {
+    #[tokio::test]
+    async fn publisher_default_is_same_as_new() {
         let publisher1 = Publisher::new();
         let publisher2 = Publisher::default();
         assert_eq!(publisher1.interval, publisher2.interval);
     }
 
     #[tokio::test]
-    async fn run_once_iteration_does_not_panic() {
+    async fn run_one_iteration_does_not_panic() {
         let publisher = Publisher::new();
-        publisher.run_once_iteration().await;
+        publisher.run_one_iteration();
     }
 }

@@ -8,11 +8,19 @@ This crate provides a bridge between the `nm` metrics collection system and Open
 
 - Periodic export of `nm` metrics to OpenTelemetry
 - Automatic mapping of `nm` events to OpenTelemetry instruments:
-  - Simple counters (events with only magnitude 1) → `Counter`
-  - Events with arbitrary magnitudes → `UpDownCounter`
-  - Events with histograms → `Histogram`
+  - Events with histogram buckets → `Histogram`
+  - Events without histogram buckets → `UpDownCounter`
 - Instruments are created and destroyed on-demand as events appear/disappear
-- Testable design with clock abstraction for unit tests
+- Testable design using the `tick` crate for time control
+
+## Metric Type Mapping
+
+The `nm` crate does not assign types to events - events are flexible and can collect data of any magnitude at any time. The only metadata available is whether an event has histogram buckets configured. Therefore, we make mapping decisions based solely on metadata:
+
+- Events **with histogram buckets** → OpenTelemetry `Histogram<f64>`
+- Events **without histogram buckets** → OpenTelemetry `UpDownCounter<i64>`
+
+We use `UpDownCounter` for non-histogram events because it can handle arbitrary positive and negative magnitudes, matching the flexibility of `nm` events.
 
 ## Basic Usage
 
@@ -42,7 +50,7 @@ async fn main() {
     let meter_provider = SdkMeterProvider::builder().build();
     let meter = meter_provider.meter("my_app");
 
-    Publisher::with_meter(meter)
+    Publisher::meter(meter)
         .interval(Duration::from_secs(10))
         .publish_forever()
         .await;

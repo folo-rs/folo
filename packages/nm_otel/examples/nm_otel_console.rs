@@ -53,7 +53,7 @@ async fn main() {
     let meter = meter_provider.meter("nm_otel_example");
 
     // Start the nm_otel publisher in a separate task.
-    let publisher = Publisher::with_meter(meter).interval(Duration::from_secs(5));
+    let publisher = Publisher::meter(meter).interval(Duration::from_secs(5));
 
     tokio::spawn(async move {
         publisher.publish_forever().await;

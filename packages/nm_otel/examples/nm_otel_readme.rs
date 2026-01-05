@@ -6,8 +6,7 @@ use nm_otel::Publisher;
 use opentelemetry::metrics::MeterProvider;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 
-#[tokio::main]
-async fn main() {
+fn main() {
     // Exit early if running in a testing environment.
     if std::env::var("IS_TESTING").is_ok() {
         println!("Running in testing mode - exiting immediately");
@@ -28,10 +27,10 @@ async fn main() {
     let meter_provider = SdkMeterProvider::builder().build();
     let meter = meter_provider.meter("my_app");
 
-    let publisher = Publisher::with_meter(meter).interval(Duration::from_secs(10));
+    let publisher = Publisher::meter(meter).interval(Duration::from_secs(10));
 
     // Run one iteration to verify it works.
-    publisher.run_once_iteration().await;
+    publisher.run_one_iteration();
 
     println!("README examples verified successfully!");
 }

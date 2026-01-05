@@ -9,12 +9,12 @@ use nm_otel::Publisher;
 use opentelemetry::metrics::MeterProvider;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 
-/// Test that the publisher can collect and export a simple counter event.
+/// Test that the publisher can collect and export events without histogram buckets.
 #[tokio::test]
-async fn publisher_exports_counter_event() {
+async fn publisher_exports_updown_counter_event() {
     thread_local! {
         static TEST_EVENT: Event = Event::builder()
-            .name("test_counter_event_exports")
+            .name("test_updown_counter_event_exports")
             .build();
     }
 
@@ -26,20 +26,20 @@ async fn publisher_exports_counter_event() {
     // Create a publisher and run one iteration.
     let meter_provider = SdkMeterProvider::builder().build();
     let meter = meter_provider.meter("test");
-    let publisher = Publisher::with_meter(meter);
+    let publisher = Publisher::meter(meter);
 
-    publisher.run_once_iteration().await;
+    publisher.run_one_iteration();
 
-    // We cannot easily assert on the exported metrics without implementing a custom exporter,
-    // but we can verify that the operation completed without panicking.
+    // Verify that the operation completed without panicking.
+    // The actual metrics are exported to OpenTelemetry's internal state.
 }
 
-/// Test that the publisher can collect and export a gauge event.
+/// Test that the publisher can collect and export events with different magnitudes.
 #[tokio::test]
-async fn publisher_exports_gauge_event() {
+async fn publisher_exports_events_with_varying_magnitudes() {
     thread_local! {
         static TEST_EVENT: Event = Event::builder()
-            .name("test_gauge_event_exports")
+            .name("test_varying_magnitudes_event_exports")
             .build();
     }
 
@@ -51,9 +51,9 @@ async fn publisher_exports_gauge_event() {
     // Create a publisher and run one iteration.
     let meter_provider = SdkMeterProvider::builder().build();
     let meter = meter_provider.meter("test");
-    let publisher = Publisher::with_meter(meter);
+    let publisher = Publisher::meter(meter);
 
-    publisher.run_once_iteration().await;
+    publisher.run_one_iteration();
 }
 
 /// Test that the publisher can collect and export a histogram event.
@@ -78,9 +78,9 @@ async fn publisher_exports_histogram_event() {
     // Create a publisher and run one iteration.
     let meter_provider = SdkMeterProvider::builder().build();
     let meter = meter_provider.meter("test");
-    let publisher = Publisher::with_meter(meter);
+    let publisher = Publisher::meter(meter);
 
-    publisher.run_once_iteration().await;
+    publisher.run_one_iteration();
 }
 
 /// Test that the publisher can be configured with a custom interval.
@@ -89,10 +89,10 @@ async fn publisher_interval_configuration() {
     let meter_provider = SdkMeterProvider::builder().build();
     let meter = meter_provider.meter("test");
 
-    let publisher = Publisher::with_meter(meter).interval(Duration::from_secs(5));
+    let publisher = Publisher::meter(meter).interval(Duration::from_secs(5));
 
     // Run one iteration to verify it works.
-    publisher.run_once_iteration().await;
+    publisher.run_one_iteration();
 }
 
 /// Test that running multiple iterations works correctly.
@@ -106,18 +106,18 @@ async fn publisher_multiple_iterations() {
 
     let meter_provider = SdkMeterProvider::builder().build();
     let meter = meter_provider.meter("test");
-    let publisher = Publisher::with_meter(meter);
+    let publisher = Publisher::meter(meter);
 
     // Run first iteration.
     TEST_EVENT.with(Event::observe_once);
-    publisher.run_once_iteration().await;
+    publisher.run_one_iteration();
 
     // Run second iteration with more events.
     TEST_EVENT.with(Event::observe_once);
     TEST_EVENT.with(Event::observe_once);
-    publisher.run_once_iteration().await;
+    publisher.run_one_iteration();
 
     // Run third iteration.
     TEST_EVENT.with(Event::observe_once);
-    publisher.run_once_iteration().await;
+    publisher.run_one_iteration();
 }
