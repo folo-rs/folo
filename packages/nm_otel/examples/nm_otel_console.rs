@@ -47,9 +47,7 @@ async fn main() {
         .with_interval(Duration::from_secs(5))
         .build();
 
-    let meter_provider = SdkMeterProvider::builder()
-        .with_reader(reader)
-        .build();
+    let meter_provider = SdkMeterProvider::builder().with_reader(reader).build();
 
     global::set_meter_provider(meter_provider.clone());
     let meter = meter_provider.meter("nm_otel_example");
@@ -87,9 +85,7 @@ fn perform_fake_work() {
         // SAFETY: This is single-threaded and only used for demonstration.
         let duration_ms = unsafe {
             COUNTER = COUNTER.wrapping_add(1);
-            (COUNTER % 91)
-                .checked_add(10)
-                .expect("safe range")
+            (COUNTER % 91).checked_add(10).expect("safe range")
         };
 
         thread::sleep(Duration::from_millis(duration_ms.into()));

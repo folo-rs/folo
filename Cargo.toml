@@ -49,6 +49,7 @@ mutants = { version = "0.0.3", default-features = false }
 negative-impl = { version = "0.1", default-features = false }
 new_zealand = { version = "1.0.3", path = "packages/new_zealand", default-features = false }
 nm = { version = "0.1.23", path = "packages/nm", default-features = false }
+nm_otel = { version = "0.1.0", path = "packages/nm_otel", default-features = false }
 nonempty = { version = "0.12", default-features = false }
 num-integer = { version = "0.1.46", default-features = false }
 num-traits = { version = "0.2.19", default-features = false }
@@ -290,6 +291,7 @@ while_float = "warn"
 
 [workspace.metadata.cargo-udeps.ignore]
 development = ["mutants", "static_assertions"]
+normal = ["opentelemetry", "opentelemetry_sdk", "tokio"]
 
 [profile.release]
 # This ensures we have high quality data with proper stack traces when profiling.

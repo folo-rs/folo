@@ -22,8 +22,8 @@ impl Clock for RealClock {
 #[cfg(test)]
 pub(crate) mod mock {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     /// Mock clock for testing that tracks how many times sleep was called
     /// and what durations were requested.
