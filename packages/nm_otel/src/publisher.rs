@@ -115,6 +115,10 @@ where
     ///
     /// This is exposed for testing purposes to allow testing the publishing logic
     /// without entering the infinite loop or dealing with delays.
+    #[expect(
+        clippy::unused_async,
+        reason = "async for API consistency, may become async in the future"
+    )]
     pub async fn run_once_iteration(&self) {
         let report = Report::collect();
         self.export_report(&report);
@@ -157,7 +161,7 @@ where
         let event_name = event.name();
 
         // Decide what type of instrument to use based on the event characteristics.
-        if self.is_counter_event(event) {
+        if Self::is_counter_event(event) {
             // This is a simple counter (only magnitude 1 events).
             let counter = state.get_or_create_counter(&self.meter, event_name);
             counter.add(event.count(), &[]);
@@ -180,24 +184,14 @@ where
             // This is a gauge-like metric (has arbitrary magnitudes but no histogram).
             // We'll use an UpDownCounter to track the sum.
             let gauge = state.get_or_create_updown_counter(&self.meter, event_name);
-
-            #[expect(
-                clippy::cast_possible_wrap,
-                reason = "converting u64 count to i64 - wrap is acceptable for gauge semantics"
-            )]
             gauge.add(event.sum(), &[]);
         }
     }
 
-    fn is_counter_event(&self, event: &EventMetrics) -> bool {
+    fn is_counter_event(event: &EventMetrics) -> bool {
         // A counter event is one where all observations had magnitude 1.
         // This is indicated by count == sum and no histogram.
-        #[expect(
-            clippy::cast_possible_wrap,
-            reason = "converting u64 count to i64 for comparison - wrap is acceptable for heuristic"
-        )]
-        let count_as_i64 = event.count() as i64;
-
+        let count_as_i64 = i64::try_from(event.count()).unwrap_or(i64::MAX);
         count_as_i64 == event.sum() && event.histogram().is_none()
     }
 }

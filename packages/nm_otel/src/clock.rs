@@ -9,7 +9,8 @@ pub trait Clock: Send {
     fn sleep(&self, duration: Duration) -> impl Future<Output = ()> + Send;
 }
 
-/// Real clock implementation using tokio::time.
+/// Real clock implementation using `tokio::time`.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct RealClock;
 

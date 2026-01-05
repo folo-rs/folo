@@ -1,6 +1,6 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
-//! # nm_otel - OpenTelemetry bridge for nm metrics
+//! # `nm_otel` - OpenTelemetry bridge for nm metrics
 //!
 //! This crate provides a bridge between the [`nm`] metrics collection system and OpenTelemetry,
 //! allowing you to export metrics collected by `nm` to OpenTelemetry-compatible backends.

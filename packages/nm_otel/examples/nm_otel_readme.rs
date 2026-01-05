@@ -14,17 +14,15 @@ async fn main() {
         return;
     }
 
-    // Basic usage example from README.
-    #[expect(
-        clippy::diverging_sub_expression,
-        reason = "example code showing the API pattern"
-    )]
-    let _basic_usage = async {
+    // Basic usage example from README (just showing the pattern).
+    // This would run forever, so we just show the construction.
+    let _unused_future = async {
         Publisher::new()
             .interval(Duration::from_secs(10))
             .publish_forever()
             .await;
     };
+    drop(_unused_future); // Explicitly drop to avoid no_effect_underscore_binding warning
 
     // Custom meter provider example from README.
     let meter_provider = SdkMeterProvider::builder().build();

@@ -1,4 +1,4 @@
-//! Stand-alone example showcasing nm_otel functionality.
+//! Stand-alone example showcasing `nm_otel` functionality.
 //!
 //! This example demonstrates how to:
 //! 1. Define nm events to track metrics
@@ -79,27 +79,37 @@ fn perform_fake_work() {
 
     // Simulate processing 3 work items.
     for _ in 0..3 {
-        WORK_ITEMS_PROCESSED.with(|e| e.observe_once());
+        WORK_ITEMS_PROCESSED.with(Event::observe_once);
 
         // Simulate work taking some time (10-100ms).
-        // SAFETY: This is single-threaded and only used for demonstration.
-        let duration_ms = unsafe {
-            COUNTER = COUNTER.wrapping_add(1);
-            (COUNTER % 91).checked_add(10).expect("safe range")
-        };
+        // SAFETY: Single read of mutable static, single-threaded example.
+        let counter = unsafe { COUNTER };
+        let new_counter = counter.wrapping_add(1);
+
+        // SAFETY: Single write to mutable static, single-threaded example.
+        unsafe {
+            COUNTER = new_counter;
+        }
+
+        let duration_ms = (new_counter % 91).checked_add(10).expect("safe range");
 
         thread::sleep(Duration::from_millis(duration_ms.into()));
         WORK_DURATION_MS.with(|e| e.observe(i64::from(duration_ms)));
 
         // Simulate processing some bytes (100-10000 bytes).
-        // SAFETY: This is single-threaded and only used for demonstration.
-        let bytes = unsafe {
-            COUNTER = COUNTER.wrapping_add(17);
-            u16::from(COUNTER)
-                .checked_mul(39)
-                .and_then(|v| v.checked_add(100))
-                .expect("safe range")
-        };
+        // SAFETY: Single read of mutable static, single-threaded example.
+        let counter = unsafe { COUNTER };
+        let new_counter = counter.wrapping_add(17);
+
+        // SAFETY: Single write to mutable static, single-threaded example.
+        unsafe {
+            COUNTER = new_counter;
+        }
+
+        let bytes = u16::from(new_counter)
+            .checked_mul(39)
+            .and_then(|v| v.checked_add(100))
+            .expect("safe range");
 
         BYTES_PROCESSED.with(|e| e.observe(i64::from(bytes)));
     }

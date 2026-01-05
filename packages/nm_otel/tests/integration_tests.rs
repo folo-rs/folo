@@ -1,4 +1,4 @@
-//! Integration tests for nm_otel publisher.
+//! Integration tests for `nm_otel` publisher.
 //!
 //! These tests verify that the publisher correctly exports nm metrics to OpenTelemetry.
 
@@ -19,9 +19,9 @@ async fn publisher_exports_counter_event() {
     }
 
     // Observe some events.
-    TEST_EVENT.with(|e| e.observe_once());
-    TEST_EVENT.with(|e| e.observe_once());
-    TEST_EVENT.with(|e| e.observe_once());
+    TEST_EVENT.with(Event::observe_once);
+    TEST_EVENT.with(Event::observe_once);
+    TEST_EVENT.with(Event::observe_once);
 
     // Create a publisher and run one iteration.
     let meter_provider = SdkMeterProvider::builder().build();
@@ -109,15 +109,15 @@ async fn publisher_multiple_iterations() {
     let publisher = Publisher::with_meter(meter);
 
     // Run first iteration.
-    TEST_EVENT.with(|e| e.observe_once());
+    TEST_EVENT.with(Event::observe_once);
     publisher.run_once_iteration().await;
 
     // Run second iteration with more events.
-    TEST_EVENT.with(|e| e.observe_once());
-    TEST_EVENT.with(|e| e.observe_once());
+    TEST_EVENT.with(Event::observe_once);
+    TEST_EVENT.with(Event::observe_once);
     publisher.run_once_iteration().await;
 
     // Run third iteration.
-    TEST_EVENT.with(|e| e.observe_once());
+    TEST_EVENT.with(Event::observe_once);
     publisher.run_once_iteration().await;
 }
