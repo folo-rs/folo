@@ -5,9 +5,9 @@ use std::fmt::Debug;
 use derive_more::derive::Display;
 
 #[cfg(feature = "test-util")]
-use crate::fake::platform::FakeProcessor as TestUtilFakeProcessor;
+use crate::fake::platform::FakeProcessor;
 #[cfg(test)]
-use crate::pal::FakeProcessor;
+use crate::pal::MockProcessor;
 #[cfg(test)]
 use crate::pal::fallback::ProcessorImpl as FallbackProcessor;
 use crate::pal::{AbstractProcessor, ProcessorImpl};
@@ -20,11 +20,11 @@ pub(crate) enum ProcessorFacade {
     Fallback(FallbackProcessor),
 
     #[cfg(test)]
-    Fake(FakeProcessor),
+    Mock(MockProcessor),
 
     /// Fake processor for the public test-util feature.
     #[cfg(feature = "test-util")]
-    TestUtilFake(TestUtilFakeProcessor),
+    Fake(FakeProcessor),
 }
 
 impl ProcessorFacade {
@@ -37,7 +37,7 @@ impl ProcessorFacade {
             #[cfg(test)]
             _ => panic!("attempted to dereference facade into wrong type"),
             #[cfg(all(feature = "test-util", not(test)))]
-            Self::TestUtilFake(_) => panic!("attempted to dereference facade into wrong type"),
+            Self::Fake(_) => panic!("attempted to dereference facade into wrong type"),
         }
     }
 }
@@ -55,9 +55,9 @@ impl AbstractProcessor for ProcessorFacade {
             #[cfg(test)]
             Self::Fallback(p) => p.id(),
             #[cfg(test)]
-            Self::Fake(p) => p.id(),
+            Self::Mock(p) => p.id(),
             #[cfg(feature = "test-util")]
-            Self::TestUtilFake(p) => p.id(),
+            Self::Fake(p) => p.id(),
         }
     }
 
@@ -67,9 +67,9 @@ impl AbstractProcessor for ProcessorFacade {
             #[cfg(test)]
             Self::Fallback(p) => p.memory_region_id(),
             #[cfg(test)]
-            Self::Fake(p) => p.memory_region_id(),
+            Self::Mock(p) => p.memory_region_id(),
             #[cfg(feature = "test-util")]
-            Self::TestUtilFake(p) => p.memory_region_id(),
+            Self::Fake(p) => p.memory_region_id(),
         }
     }
 
@@ -79,9 +79,9 @@ impl AbstractProcessor for ProcessorFacade {
             #[cfg(test)]
             Self::Fallback(p) => p.efficiency_class(),
             #[cfg(test)]
-            Self::Fake(p) => p.efficiency_class(),
+            Self::Mock(p) => p.efficiency_class(),
             #[cfg(feature = "test-util")]
-            Self::TestUtilFake(p) => p.efficiency_class(),
+            Self::Fake(p) => p.efficiency_class(),
         }
     }
 }
@@ -93,9 +93,9 @@ impl From<ProcessorImpl> for ProcessorFacade {
 }
 
 #[cfg(test)]
-impl From<FakeProcessor> for ProcessorFacade {
-    fn from(p: FakeProcessor) -> Self {
-        Self::Fake(p)
+impl From<MockProcessor> for ProcessorFacade {
+    fn from(p: MockProcessor) -> Self {
+        Self::Mock(p)
     }
 }
 
@@ -107,9 +107,9 @@ impl Debug for ProcessorFacade {
             #[cfg(test)]
             Self::Fallback(inner) => inner.fmt(f),
             #[cfg(test)]
-            Self::Fake(inner) => inner.fmt(f),
+            Self::Mock(inner) => inner.fmt(f),
             #[cfg(feature = "test-util")]
-            Self::TestUtilFake(inner) => inner.fmt(f),
+            Self::Fake(inner) => inner.fmt(f),
         }
     }
 }

@@ -9,14 +9,14 @@ use crate::pal::{AbstractProcessor, Platform, ProcessorFacade};
 use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
 
 #[derive(Clone, Copy, Debug, Display, Eq, Hash, PartialEq)]
-#[display("FakeProcessor({index} in node {memory_region}, {efficiency_class:?})")]
-pub(crate) struct FakeProcessor {
+#[display("MockProcessor({index} in node {memory_region}, {efficiency_class:?})")]
+pub(crate) struct MockProcessor {
     pub(crate) index: ProcessorId,
     pub(crate) memory_region: MemoryRegionId,
     pub(crate) efficiency_class: EfficiencyClass,
 }
 
-impl AbstractProcessor for FakeProcessor {
+impl AbstractProcessor for MockProcessor {
     fn id(&self) -> ProcessorId {
         self.index
     }

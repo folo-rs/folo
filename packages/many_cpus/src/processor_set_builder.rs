@@ -986,7 +986,7 @@ mod tests {
 
     use super::*;
     use crate::fake::HardwareBuilder;
-    use crate::pal::{FakeProcessor, MockPlatform, ProcessorFacade};
+    use crate::pal::{MockProcessor, MockPlatform, ProcessorFacade};
 
     /// Creates a fake hardware instance with a given number of processors and memory regions.
     fn fake_hardware(processor_count: usize, memory_region_count: usize) -> SystemHardware {
@@ -999,12 +999,12 @@ mod tests {
     #[test]
     fn smoke_test() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1023,12 +1023,12 @@ mod tests {
     #[test]
     fn efficiency_class_filter_take() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1049,12 +1049,12 @@ mod tests {
     #[test]
     fn efficiency_class_filter_take_all() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1075,17 +1075,17 @@ mod tests {
     #[test]
     fn take_n_processors() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Performance,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 2,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
@@ -1105,12 +1105,12 @@ mod tests {
     #[test]
     fn take_n_not_enough_processors() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1150,12 +1150,12 @@ mod tests {
     #[test]
     fn take_n_not_enough_processor_time_quota_but_ignoring_quota() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1163,7 +1163,7 @@ mod tests {
         ];
 
         let mut platform = MockPlatform::new();
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+        let pal_processors = pal_processors.map(ProcessorFacade::Mock);
 
         // There is only 1.0 processors worth of quota available. This limitation should be ignored.
         // In fact, this call should not even be made - we have it here just to fail the test with
@@ -1187,12 +1187,12 @@ mod tests {
     #[test]
     fn take_n_quota_limit_min_1() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1200,7 +1200,7 @@ mod tests {
         ];
 
         let mut platform = MockPlatform::new();
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+        let pal_processors = pal_processors.map(ProcessorFacade::Mock);
 
         // There is 0.001 processors worth of quota available, which gets rounded UP to 1.0.
         // While we normally round down due to quality of service considerations. However, we still
@@ -1225,12 +1225,12 @@ mod tests {
     #[test]
     fn take_all_rounds_down_quota() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1238,7 +1238,7 @@ mod tests {
         ];
 
         let mut platform = MockPlatform::new();
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+        let pal_processors = pal_processors.map(ProcessorFacade::Mock);
 
         // There is 1.999 processors worth of quota available, which gets rounded to 1.0.
         platform
@@ -1262,12 +1262,12 @@ mod tests {
     #[test]
     fn take_all_min_1_despite_quota() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1275,7 +1275,7 @@ mod tests {
         ];
 
         let mut platform = MockPlatform::new();
-        let pal_processors = pal_processors.map(ProcessorFacade::Fake);
+        let pal_processors = pal_processors.map(ProcessorFacade::Mock);
 
         // There is 0.001 processors worth of quota available, which gets rounded UP to 1.0.
         // While we normally round down due to quality of service considerations. However, we still
@@ -1301,7 +1301,7 @@ mod tests {
 
     #[test]
     fn take_all_not_enough_processors() {
-        let pal_processors = nonempty![FakeProcessor {
+        let pal_processors = nonempty![MockProcessor {
             index: 0,
             memory_region: 0,
             efficiency_class: EfficiencyClass::Efficiency,
@@ -1321,12 +1321,12 @@ mod tests {
     #[test]
     fn except_filter_take() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1353,12 +1353,12 @@ mod tests {
     #[test]
     fn except_filter_take_all() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1384,12 +1384,12 @@ mod tests {
     #[test]
     fn custom_filter_take() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1411,12 +1411,12 @@ mod tests {
     #[test]
     fn custom_filter_take_all() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1438,12 +1438,12 @@ mod tests {
     #[test]
     fn same_memory_region_filter_take() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1463,12 +1463,12 @@ mod tests {
     #[test]
     fn same_memory_region_filter_take_all() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1488,22 +1488,22 @@ mod tests {
     #[test]
     fn different_memory_region_filter_take() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 2,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 3,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1528,22 +1528,22 @@ mod tests {
     #[test]
     fn different_memory_region_filter_take_all() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 2,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 3,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1568,17 +1568,17 @@ mod tests {
     #[test]
     fn filter_combinations() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 2,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Efficiency,
@@ -1607,17 +1607,17 @@ mod tests {
     #[test]
     fn same_memory_region_take_two_processors() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 2,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Efficiency,
@@ -1639,22 +1639,22 @@ mod tests {
     #[test]
     fn different_memory_region_and_efficiency_class_filters() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 2,
                 memory_region: 2,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 3,
                 memory_region: 3,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1679,7 +1679,7 @@ mod tests {
 
     #[test]
     fn performance_processors_but_all_efficiency() {
-        let pal_processors = nonempty![FakeProcessor {
+        let pal_processors = nonempty![MockProcessor {
             index: 0,
             memory_region: 0,
             efficiency_class: EfficiencyClass::Efficiency,
@@ -1700,12 +1700,12 @@ mod tests {
     #[test]
     fn require_different_single_region() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
@@ -1728,17 +1728,17 @@ mod tests {
     #[test]
     fn prefer_different_memory_regions_take_all() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 2,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Efficiency,
@@ -1761,22 +1761,22 @@ mod tests {
     #[test]
     fn prefer_different_memory_regions_take_n() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 2,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 3,
                 memory_region: 2,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1805,22 +1805,22 @@ mod tests {
     #[test]
     fn prefer_same_memory_regions_take_n() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 2,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 3,
                 memory_region: 2,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1846,22 +1846,22 @@ mod tests {
     #[test]
     fn prefer_different_memory_regions_take_n_not_enough() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 2,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 3,
                 memory_region: 2,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1884,22 +1884,22 @@ mod tests {
     #[test]
     fn prefer_same_memory_regions_take_n_not_enough() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 2,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 3,
                 memory_region: 2,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1929,22 +1929,22 @@ mod tests {
     #[test]
     fn prefer_same_memory_regions_take_n_picks_best_fit() {
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 2,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 3,
                 memory_region: 2,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1976,12 +1976,12 @@ mod tests {
         // This tests the MemoryRegionSelector::Any branch returning None when there
         // are not enough processors in the candidate set to satisfy the request.
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
@@ -1989,7 +1989,7 @@ mod tests {
         ];
 
         let mut platform = MockPlatform::new();
-        let pal_processors_facade = pal_processors.map(ProcessorFacade::Fake);
+        let pal_processors_facade = pal_processors.map(ProcessorFacade::Mock);
 
         // Set quota high enough that the request passes the quota check.
         // The actual selection logic in the Any branch will fail due to insufficient candidates.
@@ -2025,12 +2025,12 @@ mod tests {
         // The round-robin will pick 1 from each region (total 2), then have no more
         // candidates to pick from, so it returns None.
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 1,
                 efficiency_class: EfficiencyClass::Performance,
@@ -2038,7 +2038,7 @@ mod tests {
         ];
 
         let mut platform = MockPlatform::new();
-        let pal_processors_facade = pal_processors.map(ProcessorFacade::Fake);
+        let pal_processors_facade = pal_processors.map(ProcessorFacade::Mock);
 
         // Set quota high enough that the request passes the quota check.
         platform
@@ -2065,7 +2065,7 @@ mod tests {
         );
     }
 
-    fn new_mock_platform(processors: NonEmpty<FakeProcessor>) -> MockPlatform {
+    fn new_mock_platform(processors: NonEmpty<MockProcessor>) -> MockPlatform {
         new_mock_platform_with_get_count(processors, 1, 1)
     }
 
@@ -2074,12 +2074,12 @@ mod tests {
         reason = "unavoidable f64 conversion but all realistic values likely in safe bounds"
     )]
     fn new_mock_platform_with_get_count(
-        processors: NonEmpty<FakeProcessor>,
+        processors: NonEmpty<MockProcessor>,
         get_all_processors_count: usize,
         get_max_processor_time_count: usize,
     ) -> MockPlatform {
         let mut platform = MockPlatform::new();
-        let pal_processors = processors.map(ProcessorFacade::Fake);
+        let pal_processors = processors.map(ProcessorFacade::Mock);
 
         platform
             .expect_max_processor_time()

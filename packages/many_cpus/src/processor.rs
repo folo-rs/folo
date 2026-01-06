@@ -138,11 +138,11 @@ mod tests {
     use std::hash::DefaultHasher;
 
     use super::*;
-    use crate::pal::FakeProcessor;
+    use crate::pal::MockProcessor;
 
     #[test]
     fn smoke_test() {
-        let pal_processor = FakeProcessor {
+        let pal_processor = MockProcessor {
             index: 42,
             memory_region: 13,
             efficiency_class: EfficiencyClass::Efficiency,

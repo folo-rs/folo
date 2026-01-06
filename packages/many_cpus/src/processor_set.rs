@@ -405,7 +405,7 @@ mod tests {
     use nonempty::nonempty;
 
     use super::*;
-    use crate::pal::{FakeProcessor, MockPlatform};
+    use crate::pal::{MockProcessor, MockPlatform};
     use crate::EfficiencyClass;
     use crate::fake::HardwareBuilder;
 
@@ -439,12 +439,12 @@ mod tests {
         let platform = PlatformFacade::from_mock(platform);
 
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Performance,
@@ -666,25 +666,25 @@ mod tests {
         platform
             .expect_get_all_processors_core()
             .return_const(nonempty![
-                FakeProcessor {
+                MockProcessor {
                     index: 0,
                     memory_region: 0,
                     efficiency_class: EfficiencyClass::Efficiency,
                 }
                 .into(),
-                FakeProcessor {
+                MockProcessor {
                     index: 1,
                     memory_region: 0,
                     efficiency_class: EfficiencyClass::Efficiency,
                 }
                 .into(),
-                FakeProcessor {
+                MockProcessor {
                     index: 2,
                     memory_region: 0,
                     efficiency_class: EfficiencyClass::Efficiency,
                 }
                 .into(),
-                FakeProcessor {
+                MockProcessor {
                     index: 3,
                     memory_region: 0,
                     efficiency_class: EfficiencyClass::Efficiency,
@@ -695,22 +695,22 @@ mod tests {
         let platform = PlatformFacade::from_mock(platform);
 
         let pal_processors = nonempty![
-            FakeProcessor {
+            MockProcessor {
                 index: 0,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 1,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 2,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,
             },
-            FakeProcessor {
+            MockProcessor {
                 index: 3,
                 memory_region: 0,
                 efficiency_class: EfficiencyClass::Efficiency,

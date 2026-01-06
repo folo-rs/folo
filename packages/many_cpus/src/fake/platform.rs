@@ -196,7 +196,7 @@ impl Platform for FakePlatform {
         let facades: Vec<ProcessorFacade> = self
             .processors
             .iter()
-            .map(|p| ProcessorFacade::TestUtilFake(*p))
+            .map(|p| ProcessorFacade::Fake(*p))
             .collect();
 
         NonEmpty::from_vec(facades).expect("at least one processor was configured")
