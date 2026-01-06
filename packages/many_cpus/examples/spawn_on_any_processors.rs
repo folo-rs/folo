@@ -6,14 +6,14 @@
 
 use std::time::Instant;
 
-use many_cpus::ProcessorSet;
+use many_cpus::SystemHardware;
 
 fn main() {
     // We spawn N threads, where N is the number of processors.
     // However, we do not pin them to any specific processor.
     // This means that the OS can schedule them however it likes.
 
-    let processor_set = ProcessorSet::default();
+    let processor_set = SystemHardware::current().processors();
 
     let mut threads = Vec::with_capacity(processor_set.len());
 

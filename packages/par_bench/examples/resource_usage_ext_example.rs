@@ -2,10 +2,9 @@
 
 #[cfg(feature = "all_the_time")]
 use all_the_time::Session as TimeSession;
-// Conditionally import the sessions based on available features
 #[cfg(feature = "alloc_tracker")]
 use alloc_tracker::{Allocator, Session as AllocSession};
-use many_cpus::ProcessorSet;
+use many_cpus::SystemHardware;
 use par_bench::{ResourceUsageExt, Run, ThreadPool};
 
 // Set up global allocator for allocation tracking (if feature is enabled)
@@ -22,7 +21,7 @@ fn main() {
     let processor_time = TimeSession::new();
 
     // Create a thread pool for running benchmarks
-    let mut pool = ThreadPool::new(ProcessorSet::default());
+    let mut pool = ThreadPool::new(SystemHardware::current().processors());
 
     println!("Running combined resource usage tracking example...");
 

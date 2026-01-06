@@ -10,7 +10,7 @@ use alloc_tracker::{Allocator, Session as AllocSession};
 use criterion::{Criterion, criterion_group, criterion_main};
 use events_once::EventPool;
 use futures::executor::block_on;
-use many_cpus::ProcessorSet;
+use many_cpus::SystemHardware;
 use new_zealand::nz;
 use threadpool::ThreadPool;
 use vicinal::Pool;
@@ -25,7 +25,11 @@ fn simulate_work() -> u32 {
 
 fn entrypoint(c: &mut Criterion) {
     // Pin the main thread to a single processor to eliminate OS migration impact.
-    let one_processor = ProcessorSet::builder().take(nz!(1)).unwrap();
+    let one_processor = SystemHardware::current()
+        .processors()
+        .to_builder()
+        .take(nz!(1))
+        .unwrap();
     one_processor.pin_current_thread_to();
 
     let allocs = AllocSession::new();

@@ -44,10 +44,26 @@ follow these guidelines:
   enabled by default),
 
 If your resource constraints are already applied on process startup, you can use
-`ProcessorSet::default()` as the master set from which all other processor sets are derived using
-`ProcessorSet::default().to_builder()`. This will ensure the processor time quota is always obeyed
-because `ProcessorSet::default()` is guaranteed to obey the resource quota.
+`SystemHardware::current().processors()` as the master set from which all other
+processor sets are derived using either `.take()` or `.to_builder()`. This will ensure the
+processor time quota is obeyed because `processors()` is size-limited to the quota.
 
-```rust ignore
-let mail_senders = ProcessorSet::default().to_builder().take(MAIL_WORKER_COUNT).unwrap();
+```rust
+# use many_cpus::SystemHardware;
+# use new_zealand::nz;
+let hw = SystemHardware::current();
+
+// By taking both senders and receivers from the same original processor set, we
+// guarantee that all worker threads combined cannot exceed the processor time quota.
+let mail_senders = hw.processors()
+    .take(nz!(2))
+    .expect("need at least 2 processors for mail workers")
+    .spawn_threads(|_| send_mail());
+
+let mail_receivers = hw.processors()
+    .take(nz!(2))
+    .expect("need at least 2 processors for mail workers")
+    .spawn_threads(|_| receive_mail());
+# fn send_mail() {}
+# fn receive_mail() {}
 ```

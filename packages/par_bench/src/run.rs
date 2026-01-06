@@ -24,11 +24,11 @@ use crate::configure::RunInitial;
 /// use std::sync::Arc;
 /// use std::sync::atomic::{AtomicU64, Ordering};
 ///
-/// use many_cpus::ProcessorSet;
+/// use many_cpus::SystemHardware;
 /// use par_bench::{Run, ThreadPool};
 ///
 /// # fn main() {
-/// let mut pool = ThreadPool::new(&ProcessorSet::default());
+/// let mut pool = ThreadPool::new(&SystemHardware::current().processors());
 /// let counter = Arc::new(AtomicU64::new(0));
 ///
 /// let run = Run::new()
@@ -50,11 +50,11 @@ use crate::configure::RunInitial;
 /// ```
 /// use std::time::Instant;
 ///
-/// use many_cpus::ProcessorSet;
+/// use many_cpus::SystemHardware;
 /// use par_bench::{Run, ThreadPool};
 ///
 /// # fn main() {
-/// let mut pool = ThreadPool::new(&ProcessorSet::default());
+/// let mut pool = ThreadPool::new(&SystemHardware::current().processors());
 ///
 /// let run = Run::new()
 ///     .measure_wrapper(|_| Instant::now(), |start| start.elapsed())

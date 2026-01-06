@@ -4,14 +4,18 @@ On systems with 100+ logical processors, taking direct control over work placeme
 superior performance by ensuring data locality and avoiding expensive cross-processor transfers.
 
 ```rust
-use many_cpus::ProcessorSet;
+use many_cpus::SystemHardware;
 
-let threads = ProcessorSet::default().spawn_threads(|processor| {
-    println!("Spawned thread on processor {}", processor.id());
+let threads = SystemHardware::current()
+    .processors()
+    .take_all()
+    .expect("there is always at least one processor")
+    .spawn_threads(|processor| {
+        println!("Spawned thread on processor {}", processor.id());
 
-    // In a real service, you would start some work handler here, e.g. to read
-    // and process messages from a channel or to spawn a web handler.
-});
+        // In a real service, you would start some work handler here, e.g. to read
+        // and process messages from a channel or to spawn a web handler.
+    });
 ```
 
 ## See also

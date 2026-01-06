@@ -631,3 +631,11 @@ To exclude code from coverage measurement, mark it with `#[cfg_attr(coverage_nig
 also requires `#![cfg_attr(coverage_nightly, feature(coverage_attribute))]` on the crate level.
 
 When excluding code for any other reason than "it is test code", leave a comment to explain why.
+
+# Keep names simple and unadorned
+
+Avoid unnecessary and repetitive prefixes and suffixes.
+
+For example:
+
+* Builder methods are just a noun. It is `FooBuilder::bar(value)` not `FooBuilder::with_bar(value)`.

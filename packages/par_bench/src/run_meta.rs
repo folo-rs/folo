@@ -10,12 +10,12 @@ use std::num::NonZero;
 /// # Examples
 ///
 /// ```
-/// use many_cpus::ProcessorSet;
+/// use many_cpus::SystemHardware;
 /// use par_bench::{Run, ThreadPool};
 /// use new_zealand::nz;
 ///
 /// # fn main() {
-/// # if let Some(processors) = ProcessorSet::builder().take(nz!(4)) {
+/// # if let Some(processors) = SystemHardware::current().processors().to_builder().take(nz!(4)) {
 /// let mut pool = ThreadPool::new(&processors);
 ///
 /// let run = Run::new()

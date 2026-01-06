@@ -178,11 +178,11 @@ fn calculate_mean_duration(thread_count: NonZero<usize>, total_elapsed_nanos: u1
 /// ```
 /// use std::time::Duration;
 ///
-/// use many_cpus::ProcessorSet;
+/// use many_cpus::SystemHardware;
 /// use par_bench::{Run, ThreadPool};
 ///
 /// # fn main() {
-/// let mut pool = ThreadPool::new(&ProcessorSet::default());
+/// let mut pool = ThreadPool::new(&SystemHardware::current().processors());
 /// let results = Run::new()
 ///     .measure_wrapper(
 ///         |_| std::time::Instant::now(),
@@ -221,11 +221,11 @@ impl<MeasureOutput> RunSummary<MeasureOutput> {
     /// # Examples
     ///
     /// ```
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
     /// use par_bench::{Run, ThreadPool};
     ///
     /// # fn main() {
-    /// let mut pool = ThreadPool::new(&ProcessorSet::default());
+    /// let mut pool = ThreadPool::new(&SystemHardware::current().processors());
     /// let results = Run::new()
     ///     .iter(|_| std::hint::black_box(42 + 42))
     ///     .execute_on(&mut pool, 1000);
@@ -256,11 +256,11 @@ impl<MeasureOutput> RunSummary<MeasureOutput> {
     /// use std::sync::Arc;
     /// use std::sync::atomic::{AtomicU64, Ordering};
     ///
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
     /// use par_bench::{Run, ThreadPool};
     ///
     /// # fn main() {
-    /// let mut pool = ThreadPool::new(&ProcessorSet::default());
+    /// let mut pool = ThreadPool::new(&SystemHardware::current().processors());
     /// let run = Run::new()
     ///     .prepare_iter(|_| Arc::new(AtomicU64::new(0)))
     ///     .measure_wrapper(
@@ -304,11 +304,11 @@ impl<MeasureOutput> RunSummary<MeasureOutput> {
     /// # Examples
     ///
     /// ```
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
     /// use par_bench::{Run, ThreadPool};
     ///
     /// # fn main() {
-    /// let mut pool = ThreadPool::new(&ProcessorSet::default());
+    /// let mut pool = ThreadPool::new(&SystemHardware::current().processors());
     /// let mut results = Run::new()
     ///     .measure_wrapper(
     ///         |_| (),         // Start measurement
@@ -342,17 +342,29 @@ mod tests {
     use std::sync::LazyLock;
     use std::sync::atomic::{self, AtomicU64};
 
-    use many_cpus::ProcessorSet;
+    use many_cpus::{ProcessorSet, SystemHardware};
     use new_zealand::nz;
 
-    static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> =
-        LazyLock::new(|| ProcessorSet::builder().take(nz!(2)));
+    static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> = LazyLock::new(|| {
+        SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(2))
+    });
 
-    static THREE_PROCESSORS: LazyLock<Option<ProcessorSet>> =
-        LazyLock::new(|| ProcessorSet::builder().take(nz!(3)));
+    static THREE_PROCESSORS: LazyLock<Option<ProcessorSet>> = LazyLock::new(|| {
+        SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(3))
+    });
 
-    static FOUR_PROCESSORS: LazyLock<Option<ProcessorSet>> =
-        LazyLock::new(|| ProcessorSet::builder().take(nz!(4)));
+    static FOUR_PROCESSORS: LazyLock<Option<ProcessorSet>> = LazyLock::new(|| {
+        SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(4))
+    });
 
     use super::*;
     use crate::Run;
@@ -360,7 +372,11 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn single_iteration_minimal() {
-        let processors = ProcessorSet::builder().take(nz!(1)).unwrap();
+        let processors = SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(1))
+            .unwrap();
         let mut pool = ThreadPool::new(&processors);
         let iteration_count = Arc::new(AtomicU64::new(0));
 
@@ -380,7 +396,11 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn multiple_iterations_minimal() {
-        let processors = ProcessorSet::builder().take(nz!(1)).unwrap();
+        let processors = SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(1))
+            .unwrap();
         let mut pool = ThreadPool::new(&processors);
         let iteration_count = Arc::new(AtomicU64::new(0));
         let run_meta_seen = Arc::new(Mutex::new(None));
@@ -546,7 +566,13 @@ mod tests {
     #[should_panic]
     #[cfg_attr(miri, ignore)]
     fn one_processor_two_groups_panics() {
-        let mut pool = ThreadPool::new(ProcessorSet::single());
+        let mut pool = ThreadPool::new(
+            SystemHardware::current()
+                .processors()
+                .to_builder()
+                .take(nz!(1))
+                .unwrap(),
+        );
 
         let _result = Run::new()
             .groups(nz!(2))
@@ -557,7 +583,13 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn state_flow_from_thread_to_iteration_to_cleanup() {
-        let mut pool = ThreadPool::new(ProcessorSet::single());
+        let mut pool = ThreadPool::new(
+            SystemHardware::current()
+                .processors()
+                .to_builder()
+                .take(nz!(1))
+                .unwrap(),
+        );
         let cleanup_states = Arc::new(Mutex::new(Vec::new()));
 
         let _result = Run::new()
@@ -583,7 +615,13 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn measurement_wrapper_called_before_and_after_timed_execution() {
-        let mut pool = ThreadPool::new(ProcessorSet::single());
+        let mut pool = ThreadPool::new(
+            SystemHardware::current()
+                .processors()
+                .to_builder()
+                .take(nz!(1))
+                .unwrap(),
+        );
         let events = Arc::new(Mutex::new(Vec::new()));
 
         let result = Run::new()
@@ -652,7 +690,13 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn cleanup_executed_after_measurement_wrapper_end() {
-        let mut pool = ThreadPool::new(ProcessorSet::single());
+        let mut pool = ThreadPool::new(
+            SystemHardware::current()
+                .processors()
+                .to_builder()
+                .take(nz!(1))
+                .unwrap(),
+        );
         let events = Arc::new(Mutex::new(Vec::new()));
 
         let _result = Run::new()
@@ -761,7 +805,13 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     #[test]
     fn call_counts_one_processor() {
-        let mut pool = ThreadPool::new(ProcessorSet::single());
+        let mut pool = ThreadPool::new(
+            SystemHardware::current()
+                .processors()
+                .to_builder()
+                .take(nz!(1))
+                .unwrap(),
+        );
         test_call_counts(&mut pool, nz!(1));
     }
 

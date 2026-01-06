@@ -192,14 +192,16 @@ where
     /// use std::num::NonZero;
     ///
     /// use linked::InstancePerThread;
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
     /// use region_cached::RegionCached;
     ///
     /// let favorite_color_global = InstancePerThread::new(RegionCached::new("blue".to_string()));
     ///
     /// // We can use this to pin a thread to a specific processor, to demonstrate a
     /// // situation where you can rely on consistency guarantees for immediate visibility.
-    /// let one_processor = ProcessorSet::builder()
+    /// let one_processor = SystemHardware::current()
+    ///     .processors()
+    ///     .to_builder()
     ///     .take(NonZero::new(1).unwrap())
     ///     .unwrap();
     ///

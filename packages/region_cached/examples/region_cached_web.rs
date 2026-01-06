@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::routing::get;
-use many_cpus::HardwareInfo;
+use many_cpus::SystemHardware;
 use region_cached::{RegionCachedCopyExt, RegionCachedExt, region_cached};
 
 // A global variable whose latest value is cached in each memory region for fast local read access.
@@ -23,7 +23,7 @@ async fn main() {
     }
 
     // The beneficial impact will arise only on systems with multiple memory regions.
-    let memory_region_count = HardwareInfo::max_memory_region_count();
+    let memory_region_count = SystemHardware::current().max_memory_region_count();
     println!("the current system has {memory_region_count} memory regions");
 
     let app = Router::new()

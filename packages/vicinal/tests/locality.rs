@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use many_cpus::{HardwareTracker, ProcessorSet};
+use many_cpus::SystemHardware;
 use vicinal::Pool;
 
 #[test]
@@ -16,7 +16,7 @@ fn tasks_execute_on_spawning_processor() {
     let scheduler = pool.scheduler();
 
     // We will spawn tasks from different processors and verify they execute on the same processor.
-    let processors = ProcessorSet::builder().take_all().unwrap();
+    let processors = SystemHardware::current().processors();
 
     // Counter for tasks that executed on their expected processor.
     let correct_processor_count = Arc::new(AtomicUsize::new(0));
@@ -38,7 +38,7 @@ fn tasks_execute_on_spawning_processor() {
 
                 let handle = scheduler.spawn(move || {
                     // Check which processor we are executing on.
-                    let executing_processor_id = HardwareTracker::current_processor_id();
+                    let executing_processor_id = SystemHardware::current().current_processor_id();
 
                     total.fetch_add(1, Ordering::Relaxed);
 

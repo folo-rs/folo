@@ -10,14 +10,16 @@
 use std::thread;
 use std::time::Duration;
 
-use many_cpus::ProcessorSet;
+use many_cpus::SystemHardware;
 
 fn main() {
-    let inherited_processors = ProcessorSet::builder()
+    let inherited_processors = SystemHardware::current()
+        .processors().to_builder()
         // This causes soft limits on processor affinity to be respected.
         .where_available_for_current_thread()
         .take_all()
-        .expect("found no processors usable by the current thread - impossible because the thread is currently running on one");
+        .expect("found no processors usable by the current thread; \
+            this is impossible because the thread is currently running on one");
 
     println!(
         "After applying soft limits, we are allowed to use {} processors.",

@@ -43,12 +43,12 @@
 //! use std::sync::Arc;
 //! use std::sync::atomic::{AtomicU64, Ordering};
 //!
-//! use many_cpus::ProcessorSet;
+//! use many_cpus::SystemHardware;
 //! use par_bench::{Run, ThreadPool};
 //!
 //! # fn main() {
 //! // Create a thread pool with default processor set
-//! let mut pool = ThreadPool::new(&ProcessorSet::default());
+//! let mut pool = ThreadPool::new(&SystemHardware::current().processors());
 //!
 //! // Shared counter for all threads to increment
 //! let counter = Arc::new(AtomicU64::new(0));
@@ -76,12 +76,12 @@
 //! use std::sync::Arc;
 //! use std::sync::atomic::{AtomicU64, Ordering};
 //!
-//! use many_cpus::ProcessorSet;
+//! use many_cpus::SystemHardware;
 //! use new_zealand::nz;
 //! use par_bench::{Run, ThreadPool};
 //!
 //! # fn main() {
-//! # if let Some(processors) = ProcessorSet::builder().take(nz!(4)) {
+//! # if let Some(processors) = SystemHardware::current().processors().to_builder().take(nz!(4)) {
 //! let mut pool = ThreadPool::new(&processors);
 //!
 //! let reader_count = Arc::new(AtomicU64::new(0));
@@ -137,7 +137,7 @@
 //!
 //! let allocs = AllocSession::new();
 //! let processor_time = TimeSession::new();
-//! let mut pool = ThreadPool::new(&ProcessorSet::default());
+//! let mut pool = ThreadPool::new(&SystemHardware::current().processors().take_all().unwrap());
 //!
 //! let results = Run::new()
 //!     .measure_resource_usage(|measure| {

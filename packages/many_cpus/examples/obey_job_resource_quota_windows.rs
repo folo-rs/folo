@@ -21,7 +21,7 @@ fn main() {
 
 #[cfg(windows)]
 mod windows {
-    use many_cpus::{HardwareTracker, ProcessorSet};
+    use many_cpus::SystemHardware;
     use testing::{Job, ProcessorTimePct};
 
     pub(crate) fn main() {
@@ -38,12 +38,14 @@ mod windows {
         reason = "all expected values are in safe range"
     )]
     fn verify_limits_obeyed() {
+        let hw = SystemHardware::current();
+
         // This is "100%". This count may also include processors that are not available to the
         // current process (e.g. when job objects already constrain our processors due to
         // executing in a container).
-        let system_processor_count = HardwareTracker::active_processor_count();
+        let system_processor_count = hw.active_processor_count();
 
-        let resource_quota = HardwareTracker::resource_quota();
+        let resource_quota = hw.resource_quota();
 
         // This should say we are allowed to use 50% of the system processor time, which we
         // express as processor-seconds per second.
@@ -63,7 +65,7 @@ mod windows {
         );
 
         // The default processor set obeys all the limits that apply to the current process.
-        let quota_limited_processor_count = ProcessorSet::default().len();
+        let quota_limited_processor_count = hw.processors().len();
 
         println!(
             "The resource quota allows the current process to use {quota_limited_processor_count} out of a total of {system_processor_count} processors."

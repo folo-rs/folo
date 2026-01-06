@@ -7,7 +7,7 @@ use std::hint::black_box;
 use std::thread;
 use std::time::Duration;
 
-use many_cpus::ProcessorSet;
+use many_cpus::SystemHardware;
 use region_local::{RegionLocalExt, region_local};
 
 region_local! {
@@ -21,7 +21,7 @@ fn main() {
         return;
     }
 
-    let processor_set = ProcessorSet::default();
+    let processor_set = SystemHardware::current().processors();
 
     processor_set
         .spawn_threads(|_| DATA.with_local(|data| _ = black_box(data.len())))

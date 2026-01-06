@@ -21,22 +21,22 @@ impl Processor {
 
     /// The unique numeric ID of the processor, matching the ID used by operating system tools.
     ///
-    /// You can obtain the upper bound via [`HardwareInfo::max_processor_id()`][1].
+    /// You can obtain the upper bound via [`SystemHardware::max_processor_id()`][1].
     ///
     /// # Example
     ///
     /// ```
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
     ///
-    /// let processors = ProcessorSet::default();
+    /// let processors = SystemHardware::current().processors();
     ///
-    /// for processor in processors.processors() {
+    /// for processor in processors {
     ///     let id = processor.id();
     ///     println!("Default processor set includes processor {id}");
     /// }
     /// ```
     ///
-    /// [1]: crate::HardwareInfo::max_processor_id
+    /// [1]: crate::SystemHardware::max_processor_id
     #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     #[inline]
     #[must_use]
@@ -46,9 +46,9 @@ impl Processor {
 
     /// The unique numeric ID of the memory region, matching the ID used by operating system tools.
     ///
-    /// You can obtain the upper bound via [`HardwareInfo::max_memory_region_id()`][1].
+    /// You can obtain the upper bound via [`SystemHardware::max_memory_region_id()`][1].
     ///
-    /// [1]: crate::HardwareInfo::max_memory_region_id
+    /// [1]: crate::SystemHardware::max_memory_region_id
     #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     #[inline]
     #[must_use]
@@ -65,13 +65,13 @@ impl Processor {
     /// # Example
     ///
     /// ```
-    /// use many_cpus::{EfficiencyClass, ProcessorSet};
+    /// use many_cpus::{EfficiencyClass, SystemHardware};
     ///
-    /// let processors = ProcessorSet::default();
+    /// let processors = SystemHardware::current().processors();
     /// let mut performance_count = 0;
     /// let mut efficiency_count = 0;
     ///
-    /// for processor in processors.processors() {
+    /// for processor in processors {
     ///     match processor.efficiency_class() {
     ///         EfficiencyClass::Performance => {
     ///             performance_count += 1;

@@ -12,14 +12,14 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use many_cpus::ProcessorSet;
+use many_cpus::SystemHardware;
 use par_bench::{Run, ThreadPool};
 
 criterion_group!(benches, par_bench_overhead);
 criterion_main!(benches);
 
 fn par_bench_overhead(c: &mut Criterion) {
-    let mut thread_pool = ThreadPool::new(ProcessorSet::default());
+    let mut thread_pool = ThreadPool::new(SystemHardware::current().processors());
 
     let mut group = c.benchmark_group("overhead");
 

@@ -17,8 +17,8 @@ use crate::{
 /// Builds a [`ProcessorSet`] based on specified criteria. The default criteria include all
 /// available processors, with the maximum count determined by the process resource quota.
 ///
-/// You can obtain a builder via [`ProcessorSet::builder()`] or from an existing processor set
-/// via [`ProcessorSet::to_builder()`].
+/// You can obtain a builder via [`SystemHardware::processors()`][crate::SystemHardware::processors]
+/// or from an existing processor set via [`ProcessorSet::to_builder()`].
 #[doc = include_str!("../docs/snippets/external_constraints.md")]
 ///
 /// # Inheriting processor affinity from current thread
@@ -84,14 +84,15 @@ impl ProcessorSetBuilder {
     /// # Example
     ///
     /// ```
-    /// use std::num::NonZero;
-    ///
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
+    /// use new_zealand::nz;
     ///
     /// // Get up to 4 performance processors (or fewer if not available)
-    /// let performance_processors = ProcessorSet::builder()
+    /// let performance_processors = SystemHardware::current()
+    ///     .processors()
+    ///     .to_builder()
     ///     .performance_processors_only()
-    ///     .take(NonZero::new(4).unwrap());
+    ///     .take(nz!(4));
     ///
     /// if let Some(processors) = performance_processors {
     ///     println!("Found {} performance processors", processors.len());
@@ -114,10 +115,12 @@ impl ProcessorSetBuilder {
     /// ```
     /// use std::num::NonZero;
     ///
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
     ///
     /// // Get all available efficiency processors for background tasks
-    /// let efficiency_processors = ProcessorSet::builder()
+    /// let efficiency_processors = SystemHardware::current()
+    ///     .processors()
+    ///     .to_builder()
     ///     .efficiency_processors_only()
     ///     .take_all();
     ///
@@ -152,14 +155,15 @@ impl ProcessorSetBuilder {
     /// # Example
     ///
     /// ```
-    /// use std::num::NonZero;
-    ///
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
+    /// use new_zealand::nz;
     ///
     /// // Get one processor from each memory region for distributed processing
-    /// let distributed_processors = ProcessorSet::builder()
+    /// let distributed_processors = SystemHardware::current()
+    ///     .processors()
+    ///     .to_builder()
     ///     .different_memory_regions()
-    ///     .take(NonZero::new(4).unwrap());
+    ///     .take(nz!(4));
     ///
     /// if let Some(processors) = distributed_processors {
     ///     println!(
@@ -169,7 +173,7 @@ impl ProcessorSetBuilder {
     ///
     ///     // Each processor will be in a different memory region,
     ///     // ideal for parallel work on separate data sets
-    ///     for processor in processors.processors() {
+    ///     for processor in &processors {
     ///         println!(
     ///             "Processor {} in memory region {}",
     ///             processor.id(),
@@ -189,14 +193,15 @@ impl ProcessorSetBuilder {
     /// # Example
     ///
     /// ```
-    /// use std::num::NonZero;
-    ///
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
+    /// use new_zealand::nz;
     ///
     /// // Get processors from the same memory region for data locality
-    /// let local_processors = ProcessorSet::builder()
+    /// let local_processors = SystemHardware::current()
+    ///     .processors()
+    ///     .to_builder()
     ///     .same_memory_region()
-    ///     .take(NonZero::new(3).unwrap());
+    ///     .take(nz!(3));
     ///
     /// if let Some(processors) = local_processors {
     ///     println!(
@@ -256,17 +261,18 @@ impl ProcessorSetBuilder {
     /// # Example
     ///
     /// ```
-    /// use std::num::NonZero;
-    ///
-    /// use many_cpus::{EfficiencyClass, ProcessorSet};
+    /// use many_cpus::{EfficiencyClass, SystemHardware};
+    /// use new_zealand::nz;
     ///
     /// // Select only even-numbered performance processors
-    /// let filtered_processors = ProcessorSet::builder()
+    /// let filtered_processors = SystemHardware::current()
+    ///     .processors()
+    ///     .to_builder()
     ///     .filter(|p| p.efficiency_class() == EfficiencyClass::Performance && p.id() % 2 == 0)
-    ///     .take(NonZero::new(2).unwrap());
+    ///     .take(nz!(2));
     ///
     /// if let Some(processors) = filtered_processors {
-    ///     for processor in processors.processors() {
+    ///     for processor in &processors {
     ///         println!(
     ///             "Selected processor {} (performance, even ID)",
     ///             processor.id()
@@ -295,10 +301,10 @@ impl ProcessorSetBuilder {
     /// ```
     /// use std::num::NonZero;
     ///
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
     ///
     /// // Get the default set and remove the first processor
-    /// let all_processors = ProcessorSet::default();
+    /// let all_processors = SystemHardware::current().processors();
     /// let first_processor = all_processors.processors().first().clone();
     ///
     /// let remaining_processors = all_processors
@@ -335,10 +341,12 @@ impl ProcessorSetBuilder {
     /// # Example
     ///
     /// ```
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
     ///
     /// // Get processors available to the current thread (respects OS affinity settings)
-    /// let available_processors = ProcessorSet::builder()
+    /// let available_processors = SystemHardware::current()
+    ///     .processors()
+    ///     .to_builder()
     ///     .where_available_for_current_thread()
     ///     .take_all()
     ///     .expect("current thread must be running on at least one processor");
@@ -349,10 +357,7 @@ impl ProcessorSetBuilder {
     /// );
     ///
     /// // Compare with all processors on the system
-    /// let all_processors = ProcessorSet::builder()
-    ///     .ignoring_resource_quota()
-    ///     .take_all()
-    ///     .unwrap();
+    /// let all_processors = SystemHardware::current().all_processors();
     ///
     /// if available_processors.len() < all_processors.len() {
     ///     println!("Thread affinity is restricting processor usage");
@@ -383,16 +388,13 @@ impl ProcessorSetBuilder {
     /// # Example
     ///
     /// ```
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
     ///
     /// // Get all processors regardless of resource quota
-    /// let all_processors = ProcessorSet::builder()
-    ///     .ignoring_resource_quota()
-    ///     .take_all()
-    ///     .unwrap();
+    /// let all_processors = SystemHardware::current().all_processors();
     ///
     /// // Compare with quota-respecting set
-    /// let quota_processors = ProcessorSet::default();
+    /// let quota_processors = SystemHardware::current().processors();
     ///
     /// println!("Total processors available: {}", all_processors.len());
     /// println!("Processors within quota: {}", quota_processors.len());
@@ -601,13 +603,15 @@ impl ProcessorSetBuilder {
     /// # Example
     ///
     /// ```
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
     ///
     /// // Try to get all efficiency processors, but exclude the first two
-    /// let all_processors = ProcessorSet::default();
+    /// let all_processors = SystemHardware::current().processors();
     /// let first_two: Vec<_> = all_processors.processors().iter().take(2).collect();
     ///
-    /// let filtered_processors = ProcessorSet::builder()
+    /// let filtered_processors = SystemHardware::current()
+    ///     .processors()
+    ///     .to_builder()
     ///     .efficiency_processors_only()
     ///     .except(first_two)
     ///     .take_all();
@@ -845,11 +849,11 @@ enum ProcessorTypeSelector {
 mod tests_real {
     use new_zealand::nz;
 
-    use super::*;
+    use crate::SystemHardware;
 
     #[test]
     fn spawn_on_any_processor() {
-        let set = ProcessorSet::builder().take_all().unwrap();
+        let set = SystemHardware::current().processors();
         let result = set.spawn_thread(move |_| 1234).join().unwrap();
 
         assert_eq!(result, 1234);
@@ -857,7 +861,7 @@ mod tests_real {
 
     #[test]
     fn spawn_on_every_processor() {
-        let set = ProcessorSet::builder().take_all().unwrap();
+        let set = SystemHardware::current().processors();
         let processor_count = set.len();
 
         let join_handles = set.spawn_threads(move |_| 4567);
@@ -872,20 +876,26 @@ mod tests_real {
 
     #[test]
     fn filter_by_memory_region_real() {
+        let hw = SystemHardware::current();
+
         // We know there is at least one memory region, so these must succeed.
-        ProcessorSet::builder()
+        hw.processors()
+            .to_builder()
             .same_memory_region()
             .take_all()
             .unwrap();
-        ProcessorSet::builder()
+        hw.processors()
+            .to_builder()
             .same_memory_region()
             .take(nz!(1))
             .unwrap();
-        ProcessorSet::builder()
+        hw.processors()
+            .to_builder()
             .different_memory_regions()
             .take_all()
             .unwrap();
-        ProcessorSet::builder()
+        hw.processors()
+            .to_builder()
             .different_memory_regions()
             .take(nz!(1))
             .unwrap();
@@ -893,12 +903,16 @@ mod tests_real {
 
     #[test]
     fn filter_by_efficiency_class_real() {
+        let hw = SystemHardware::current();
+
         // There must be at least one.
-        ProcessorSet::builder()
+        hw.processors()
+            .to_builder()
             .performance_processors_only()
             .take_all()
             .unwrap();
-        ProcessorSet::builder()
+        hw.processors()
+            .to_builder()
             .performance_processors_only()
             .take(nz!(1))
             .unwrap();
@@ -906,12 +920,14 @@ mod tests_real {
         // There might not be any. We just try resolving it and ignore the result.
         // As long as it does not panic, we are good.
         drop(
-            ProcessorSet::builder()
+            hw.processors()
+                .to_builder()
                 .efficiency_processors_only()
                 .take_all(),
         );
         drop(
-            ProcessorSet::builder()
+            hw.processors()
+                .to_builder()
                 .efficiency_processors_only()
                 .take(nz!(1)),
         );
@@ -919,8 +935,10 @@ mod tests_real {
 
     #[test]
     fn filter_in_all() {
+        let hw = SystemHardware::current();
+
         // Ensure we use a constant starting set, in case we are running tests under constraints.
-        let starting_set = ProcessorSet::builder().take_all().unwrap();
+        let starting_set = hw.processors();
 
         // If we filter in all processors, we should get all of them.
         let processors = starting_set
@@ -935,9 +953,12 @@ mod tests_real {
 
     #[test]
     fn filter_out_all() {
+        let hw = SystemHardware::current();
+
         // If we filter out all processors, there should be nothing left.
         assert!(
-            ProcessorSet::builder()
+            hw.processors()
+                .to_builder()
                 .filter(|_| false)
                 .take_all()
                 .is_none()
@@ -946,8 +967,10 @@ mod tests_real {
 
     #[test]
     fn except_all() {
+        let hw = SystemHardware::current();
+
         // Ensure we use a constant starting set, in case we are running tests under constraints.
-        let starting_set = ProcessorSet::builder().take_all().unwrap();
+        let starting_set = hw.processors();
 
         // If we exclude all processors, there should be nothing left.
         assert!(

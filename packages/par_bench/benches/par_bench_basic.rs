@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, Criterion, criterion_group, criterion_main};
-use many_cpus::ProcessorSet;
+use many_cpus::SystemHardware;
+use new_zealand::nz;
 use par_bench::{Run, ThreadPool};
 
 criterion_group!(benches, entrypoint);
@@ -19,8 +20,14 @@ criterion_main!(benches);
 fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("atomic_increments");
 
-    let mut single_thread_pool = ThreadPool::new(ProcessorSet::single());
-    let mut multi_thread_pool = ThreadPool::new(ProcessorSet::default());
+    let mut single_thread_pool = ThreadPool::new(
+        SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(1))
+            .unwrap(),
+    );
+    let mut multi_thread_pool = ThreadPool::new(SystemHardware::current().processors());
 
     atomic_increments(&mut single_thread_pool, &mut group, "single_thread");
     atomic_increments(&mut multi_thread_pool, &mut group, "multi_thread");

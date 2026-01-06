@@ -1,4 +1,4 @@
-use many_cpus::{HardwareTracker, MemoryRegionId};
+use many_cpus::{MemoryRegionId, SystemHardware};
 
 #[cfg_attr(test, mockall::automock)]
 pub(crate) trait HardwareTrackerClient {
@@ -12,11 +12,11 @@ pub(crate) struct HardwareTrackerClientImpl;
 impl HardwareTrackerClient for HardwareTrackerClientImpl {
     #[cfg_attr(test, mutants::skip)] // Trivial fn, tested on lower levels - skip mutating.
     fn current_memory_region_id(&self) -> MemoryRegionId {
-        HardwareTracker::current_memory_region_id()
+        SystemHardware::current().current_memory_region_id()
     }
 
     #[cfg_attr(test, mutants::skip)] // Trivial fn, tested on lower levels - skip mutating.
     fn is_thread_memory_region_pinned(&self) -> bool {
-        HardwareTracker::is_thread_memory_region_pinned()
+        SystemHardware::current().is_thread_memory_region_pinned()
     }
 }

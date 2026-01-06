@@ -4,10 +4,12 @@
 //! This obeys the operating system enforced processor selection and resource quota constraints
 //! assigned to the current process (which is the default behavior).
 
-use many_cpus::ProcessorSet;
+use many_cpus::SystemHardware;
 
 fn main() {
-    for processor in ProcessorSet::default().processors() {
+    let processors = SystemHardware::current().processors();
+
+    for processor in processors {
         println!("{processor:?}");
     }
 }

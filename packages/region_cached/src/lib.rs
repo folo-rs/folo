@@ -130,7 +130,7 @@
 //!
 //! ```
 //! # use std::{hint::black_box, thread, time::Duration};
-//! # use many_cpus::ProcessorSet;
+//! # use many_cpus::SystemHardware;
 //! # use region_cached::{RegionCachedExt, region_cached};
 //! region_cached! {
 //!     // We allocate a 1 GB object in every memory region.
@@ -140,7 +140,7 @@
 //! }
 //!
 //! fn main() {
-//!     let processor_set = ProcessorSet::default();
+//!     let processor_set = SystemHardware::current().processors();
 //!
 //!     processor_set
 //!         .spawn_threads(|_| DATA.with_cached(|data| _ = black_box(data.len())))

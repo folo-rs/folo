@@ -4,6 +4,8 @@ use std::fmt::Debug;
 
 use derive_more::derive::Display;
 
+#[cfg(feature = "test-util")]
+use crate::fake::platform::FakeProcessor as TestUtilFakeProcessor;
 #[cfg(test)]
 use crate::pal::FakeProcessor;
 #[cfg(test)]
@@ -19,6 +21,10 @@ pub(crate) enum ProcessorFacade {
 
     #[cfg(test)]
     Fake(FakeProcessor),
+
+    /// Fake processor for the public test-util feature.
+    #[cfg(feature = "test-util")]
+    TestUtilFake(TestUtilFakeProcessor),
 }
 
 impl ProcessorFacade {
@@ -30,6 +36,8 @@ impl ProcessorFacade {
             Self::Target(p) => p,
             #[cfg(test)]
             _ => panic!("attempted to dereference facade into wrong type"),
+            #[cfg(all(feature = "test-util", not(test)))]
+            Self::TestUtilFake(_) => panic!("attempted to dereference facade into wrong type"),
         }
     }
 }
@@ -48,6 +56,8 @@ impl AbstractProcessor for ProcessorFacade {
             Self::Fallback(p) => p.id(),
             #[cfg(test)]
             Self::Fake(p) => p.id(),
+            #[cfg(feature = "test-util")]
+            Self::TestUtilFake(p) => p.id(),
         }
     }
 
@@ -58,6 +68,8 @@ impl AbstractProcessor for ProcessorFacade {
             Self::Fallback(p) => p.memory_region_id(),
             #[cfg(test)]
             Self::Fake(p) => p.memory_region_id(),
+            #[cfg(feature = "test-util")]
+            Self::TestUtilFake(p) => p.memory_region_id(),
         }
     }
 
@@ -68,6 +80,8 @@ impl AbstractProcessor for ProcessorFacade {
             Self::Fallback(p) => p.efficiency_class(),
             #[cfg(test)]
             Self::Fake(p) => p.efficiency_class(),
+            #[cfg(feature = "test-util")]
+            Self::TestUtilFake(p) => p.efficiency_class(),
         }
     }
 }
@@ -94,6 +108,8 @@ impl Debug for ProcessorFacade {
             Self::Fallback(inner) => inner.fmt(f),
             #[cfg(test)]
             Self::Fake(inner) => inner.fmt(f),
+            #[cfg(feature = "test-util")]
+            Self::TestUtilFake(inner) => inner.fmt(f),
         }
     }
 }

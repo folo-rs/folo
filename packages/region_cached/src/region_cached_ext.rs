@@ -39,7 +39,7 @@ pub trait RegionCachedExt<T> {
     /// immediately visible if the thread is pinned to a specific memory region.
     ///
     /// ```
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
     /// use region_cached::{region_cached, RegionCachedExt};
     /// use std::num::NonZero;
     ///
@@ -47,7 +47,9 @@ pub trait RegionCachedExt<T> {
     ///
     /// // We can use this to pin a thread to a specific processor, to demonstrate a
     /// // situation where you can rely on consistency guarantees for immediate visibility.
-    /// let one_processor = ProcessorSet::builder()
+    /// let one_processor = SystemHardware::current()
+    ///     .processors()
+    ///     .to_builder()
     ///     .take(NonZero::new(1).unwrap())
     ///     .unwrap();
     ///

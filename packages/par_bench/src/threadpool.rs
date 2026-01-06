@@ -14,16 +14,20 @@ use many_cpus::ProcessorSet;
 /// # Examples
 ///
 /// ```
-/// use many_cpus::ProcessorSet;
+/// use many_cpus::{ProcessorSet, SystemHardware};
 /// use new_zealand::nz;
 /// use par_bench::ThreadPool;
 ///
 /// // Create a thread pool using the default processor set
-/// let pool = ThreadPool::new(&ProcessorSet::default());
+/// let pool = ThreadPool::new(&SystemHardware::current().processors());
 /// println!("Default pool has {} threads", pool.thread_count());
 ///
 /// // Create a thread pool with a specific processor set
-/// if let Some(processors) = ProcessorSet::builder().take(nz!(2)) {
+/// if let Some(processors) = SystemHardware::current()
+///     .processors()
+///     .to_builder()
+///     .take(nz!(2))
+/// {
 ///     let pool = ThreadPool::new(&processors);
 ///     assert_eq!(pool.thread_count().get(), 2);
 /// }
@@ -48,12 +52,16 @@ impl ThreadPool {
     /// # Examples
     ///
     /// ```
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
     /// use new_zealand::nz;
     /// use par_bench::ThreadPool;
     ///
     /// // Create pool with specific processors
-    /// if let Some(processors) = ProcessorSet::builder().take(nz!(4)) {
+    /// if let Some(processors) = SystemHardware::current()
+    ///     .processors()
+    ///     .to_builder()
+    ///     .take(nz!(4))
+    /// {
     ///     let pool = ThreadPool::new(&processors);
     ///     assert_eq!(pool.thread_count().get(), 4);
     /// }
@@ -94,10 +102,10 @@ impl ThreadPool {
     /// # Examples
     ///
     /// ```
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
     /// use par_bench::ThreadPool;
     ///
-    /// let pool = ThreadPool::new(&ProcessorSet::default());
+    /// let pool = ThreadPool::new(&SystemHardware::current().processors());
     /// println!("Pool has {} worker threads", pool.thread_count());
     /// ```
     #[must_use]
@@ -213,6 +221,7 @@ fn worker_entrypoint(rx: &mpsc::Receiver<Command>) {
 mod tests {
     use std::sync::atomic::{self, AtomicUsize};
 
+    use many_cpus::SystemHardware;
     use new_zealand::nz;
 
     use super::*;
@@ -220,10 +229,10 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // ProcessorSet is not supported under Miri.
     fn smoke_test_all() {
-        let expected_default = ProcessorSet::default();
+        let expected_default = SystemHardware::current().processors();
         let expected_thread_count = expected_default.len();
 
-        let mut pool = ThreadPool::new(ProcessorSet::default());
+        let mut pool = ThreadPool::new(SystemHardware::current().processors());
 
         assert_eq!(pool.thread_count().get(), expected_thread_count);
 
@@ -245,7 +254,11 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // ProcessorSet is not supported under Miri.
     fn smoke_test_one() {
-        let processor_set = ProcessorSet::builder().take(nz!(1)).unwrap();
+        let processor_set = SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(1))
+            .unwrap();
         let expected_thread_count = processor_set.len();
 
         let mut pool = ThreadPool::new(&processor_set);

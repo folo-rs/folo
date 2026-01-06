@@ -9,7 +9,7 @@ use std::hint::black_box;
 use std::thread;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use many_cpus::ProcessorSet;
+use many_cpus::SystemHardware;
 use new_zealand::nz;
 use par_bench::{Run, ThreadPool};
 use region_local::{RegionLocalCopyExt, RegionLocalExt, region_local};
@@ -18,17 +18,27 @@ criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
-    let mut one_thread = ThreadPool::new(ProcessorSet::single());
+    let mut one_thread = ThreadPool::new(
+        SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(1))
+            .unwrap(),
+    );
 
     // Not every system is going to have at least two processors, so only some can do this.
-    let mut two_threads_same_region = ProcessorSet::builder()
+    let mut two_threads_same_region = SystemHardware::current()
+        .processors()
+        .to_builder()
         .same_memory_region()
         .performance_processors_only()
         .take(nz!(2))
         .map(|x| ThreadPool::new(&x));
 
     // Not every system is going to have multiple memory regions, so only some can do this.
-    let mut two_threads_different_region = ProcessorSet::builder()
+    let mut two_threads_different_region = SystemHardware::current()
+        .processors()
+        .to_builder()
         .performance_processors_only()
         .different_memory_regions()
         .take(nz!(2))

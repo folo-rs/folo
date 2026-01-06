@@ -31,7 +31,7 @@ mod windows {
     use std::sync::{Arc, Mutex};
 
     use criterion::Criterion;
-    use many_cpus::{HardwareInfo, HardwareTracker};
+    use many_cpus::SystemHardware;
     use many_cpus_benchmarking::{Payload, WorkDistribution, execute_runs};
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::System::Memory::{
@@ -315,7 +315,7 @@ mod windows {
 
     impl MemoryRegionSpecificHeap {
         fn new() -> Self {
-            let memory_region_count = HardwareInfo::max_memory_region_count();
+            let memory_region_count = SystemHardware::current().max_memory_region_count();
             let per_region_heaps = Arc::new(Mutex::new(
                 vec![None; memory_region_count].into_boxed_slice(),
             ));
@@ -345,7 +345,7 @@ mod windows {
             let mut current_region_heap = self.current_region_heap.borrow_mut();
 
             let heap = current_region_heap.get_or_insert_with(|| {
-                let region = HardwareTracker::current_memory_region_id();
+                let region = SystemHardware::current().current_memory_region_id();
 
                 let mut heaps = self.per_region_heaps.lock().unwrap();
 

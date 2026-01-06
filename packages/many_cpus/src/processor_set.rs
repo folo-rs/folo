@@ -1,31 +1,19 @@
 use std::fmt::Display;
-use std::sync::LazyLock;
+use std::num::NonZero;
 use std::thread;
 
 use itertools::Itertools;
-use new_zealand::nz;
 use nonempty::NonEmpty;
 
 use crate::pal::{Platform, PlatformFacade};
 use crate::{HardwareTrackerClient, HardwareTrackerClientFacade, Processor, ProcessorSetBuilder};
 
-/// Lazy-initialized default set that stays around forever once selected and does not get updated
-/// even if constraints are updated over time. Exposed via `ProcessorSet::default()`.
-static DEFAULT_PROCESSORS: LazyLock<ProcessorSet> = LazyLock::new(|| {
-    ProcessorSetBuilder::default()
-        .take_all()
-        .expect("there must be at least one processor - how could this code run if not")
-});
-
 /// One or more processors present on the system and available for use.
 ///
-/// You can obtain a default set of available processors via [`ProcessorSet::default()`]. The
-/// default set is designed to make efficient use of all available processors.
+/// To obtain a `ProcessorSet`, use [`SystemHardware::processors()`][crate::SystemHardware::processors]
+/// to get a builder that allows specifying selection criteria.
 ///
-/// To specify more fine-grained processor selection criteria, use [`ProcessorSet::builder()`].
-/// You can also call [`ProcessorSet::to_builder()`] to further narrow down an existing set.
-///
-/// One you have a [`ProcessorSet`], you can iterate over [`ProcessorSet::processors()`]
+/// Once you have a `ProcessorSet`, you can iterate over [`ProcessorSet::processors()`]
 /// to inspect the individual processors in the set. There are several ways to apply the processor
 /// set to threads:
 ///
@@ -48,38 +36,6 @@ pub struct ProcessorSet {
 }
 
 impl ProcessorSet {
-    /// Creates a builder that can be used to construct a processor set with specific criteria.
-    #[cfg_attr(test, mutants::skip)] // Mutates to itself via Default::default().
-    #[must_use]
-    #[inline]
-    pub fn builder() -> ProcessorSetBuilder {
-        ProcessorSetBuilder::default()
-    }
-
-    /// Returns a [`ProcessorSet`] containing a randomly chosen single processor from among
-    /// the processors of the default processor set.
-    ///
-    /// Beware that the default processor set may contain processors with different capabilities,
-    /// so this may return faster/slower processors for different calls.
-    #[must_use]
-    pub fn single() -> Self {
-        Self::builder()
-            .take(nz!(1))
-            .expect("there must be at least one processor - how could this code run if not")
-    }
-
-    /// Returns a [`ProcessorSetBuilder`] that is narrowed down to all processors in this
-    /// processor set.
-    ///
-    /// This can be used to further narrow down the set to a specific subset.
-    #[must_use]
-    pub fn to_builder(&self) -> ProcessorSetBuilder {
-        ProcessorSetBuilder::with_internals(self.tracker_client.clone(), self.pal.clone()).filter({
-            let processors = self.processors.clone();
-            move |p| processors.contains(p)
-        })
-    }
-
     #[must_use]
     pub(crate) fn new(
         processors: NonEmpty<Processor>,
@@ -91,6 +47,61 @@ impl ProcessorSet {
             tracker_client,
             pal,
         }
+    }
+
+    /// Returns a [`ProcessorSetBuilder`] that is narrowed down to all processors in this
+    /// processor set.
+    ///
+    /// This can be used to further narrow down the set to a specific subset.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::num::NonZero;
+    ///
+    /// use many_cpus::SystemHardware;
+    ///
+    /// let hardware = SystemHardware::current();
+    /// let all = hardware.processors();
+    ///
+    /// // Narrow down to just performance processors.
+    /// let performance = all.to_builder().performance_processors_only().take_all();
+    /// ```
+    #[must_use]
+    pub fn to_builder(&self) -> ProcessorSetBuilder {
+        ProcessorSetBuilder::with_internals(self.tracker_client.clone(), self.pal.clone()).filter({
+            let processors = self.processors.clone();
+            move |p| processors.contains(p)
+        })
+    }
+
+    /// Returns a subset of this processor set containing the specified number of processors.
+    ///
+    /// This is a convenience method equivalent to `.to_builder().take(count)`.
+    ///
+    /// If multiple subsets are possible, returns an arbitrary one of them. For example, if
+    /// this set contains six processors then `take(4)` may return any four of them.
+    ///
+    /// Returns `None` if there are not enough processors in the set to satisfy the request.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use many_cpus::SystemHardware;
+    /// use new_zealand::nz;
+    ///
+    /// let hardware = SystemHardware::current();
+    /// let all = hardware.processors();
+    ///
+    /// // Take 2 processors from the set.
+    /// if let Some(subset) = all.take(nz!(2)) {
+    ///     println!("Selected {} processors", subset.len());
+    /// }
+    /// ```
+    #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Trivial forwarder to builder.
+    pub fn take(&self, count: NonZero<usize>) -> Option<Self> {
+        self.to_builder().take(count)
     }
 
     /// Returns a [`ProcessorSet`] containing the provided processors.
@@ -129,6 +140,13 @@ impl ProcessorSet {
         self.processors.len()
     }
 
+    /// Returns an iterator over references to the processors in the set.
+    #[must_use]
+    #[inline]
+    pub fn iter(&self) -> nonempty::Iter<'_, Processor> {
+        self.processors.iter()
+    }
+
     /// Returns a reference to a collection containing all the processors in the set.
     #[must_use]
     #[inline]
@@ -145,12 +163,16 @@ impl ProcessorSet {
     /// use std::num::NonZero;
     /// use std::thread;
     ///
-    /// use many_cpus::{HardwareTracker, ProcessorSet};
+    /// use many_cpus::SystemHardware;
+    ///
+    /// let hw = SystemHardware::current();
     ///
     /// // Create a processor set with specific processors
-    /// let processors = ProcessorSet::builder()
+    /// let processors = hw
+    ///     .processors()
+    ///     .to_builder()
     ///     .take(NonZero::new(2).unwrap())
-    ///     .unwrap_or_else(|| ProcessorSet::default());
+    ///     .unwrap_or_else(|| hw.processors().clone());
     ///
     /// // Pin the current thread to those processors
     /// processors.pin_current_thread_to();
@@ -158,15 +180,17 @@ impl ProcessorSet {
     /// println!("Thread pinned to {} processor(s)", processors.len());
     ///
     /// // For single-processor sets, we can verify processor-level pinning
-    /// let single_processor = ProcessorSet::builder()
+    /// let single_processor = hw
+    ///     .processors()
+    ///     .to_builder()
     ///     .take(NonZero::new(1).unwrap())
     ///     .unwrap();
     ///
     /// thread::spawn(move || {
     ///     single_processor.pin_current_thread_to();
     ///
-    ///     // This thread is now pinned to exactly one processor
-    ///     assert!(HardwareTracker::is_thread_processor_pinned());
+    ///     // This thread is now pinned to exactly one processor.
+    ///     assert!(SystemHardware::current().is_thread_processor_pinned());
     ///     println!(
     ///         "Thread pinned to processor {}",
     ///         single_processor.processors().first().id()
@@ -253,19 +277,23 @@ impl ProcessorSet {
     /// ```
     /// use std::num::NonZero;
     ///
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
+    ///
+    /// let hw = SystemHardware::current();
     ///
     /// // Create a processor set with multiple processors
-    /// let processors = ProcessorSet::builder()
+    /// let processors = hw
+    ///     .processors()
+    ///     .to_builder()
     ///     .take(NonZero::new(2).unwrap())
-    ///     .unwrap_or_else(|| ProcessorSet::default());
+    ///     .unwrap_or_else(|| hw.processors().clone());
     ///
     /// // Spawn a single thread that can use any processor in the set
     /// let handle = processors.spawn_thread(|processor_set| {
     ///     println!("Thread can execute on {} processors", processor_set.len());
     ///
     ///     // The thread can move between processors in the set
-    ///     // but is restricted to only those processors
+    ///     // but is restricted to only those processors.
     ///     42
     /// });
     ///
@@ -292,33 +320,6 @@ impl ProcessorSet {
     }
 }
 
-impl Default for ProcessorSet {
-    /// Gets a [`ProcessorSet`] referencing all present and available processors on the
-    /// system, up to the resource quota assigned to the process.
-    ///
-    /// This is equivalent to calling `ProcessorSet::builder().take_all()`, except that the default
-    /// processor set is initialized on first use and never updated. If you expect the constraints
-    /// applied to the process to change at runtime, you should manually build a new processor set
-    /// via `ProcessorSet::builder().take_all()` whenever you wish to apply any updated constraints.
-    ///
-    /// # Resource quota
-    ///
-    /// If the current process is assigned a resource quota via operating system constraints, this
-    /// set may only include a random subset of all processors, to ensure that the quota is not
-    /// exceeded. You can use [`ProcessorSetBuilder::ignoring_resource_quota()`][1] to obtain a
-    /// processor set that ignores the resource quota.
-    ///
-    /// [1]: ProcessorSetBuilder::ignoring_resource_quota
-    #[inline]
-    fn default() -> Self {
-        // We clone the default set here, even though it is static. This is to better conform to
-        // Rust standard conventions where `Default::default()` is expected to return a new
-        // instance. If this is on a hot loop and the caller wants to cache this (which is fine),
-        // they can do their own caching.
-        DEFAULT_PROCESSORS.clone()
-    }
-}
-
 impl From<Processor> for ProcessorSet {
     #[inline]
     fn from(value: Processor) -> Self {
@@ -330,6 +331,29 @@ impl From<NonEmpty<Processor>> for ProcessorSet {
     #[inline]
     fn from(value: NonEmpty<Processor>) -> Self {
         Self::from_processors(value)
+    }
+}
+
+impl From<ProcessorSet> for ProcessorSetBuilder {
+    /// Converts a [`ProcessorSet`] into a [`ProcessorSetBuilder`] for further customization.
+    ///
+    /// This is equivalent to calling [`ProcessorSet::to_builder()`].
+    #[inline]
+    #[cfg_attr(test, mutants::skip)] // Trivial forwarder to to_builder.
+    fn from(value: ProcessorSet) -> Self {
+        value.to_builder()
+    }
+}
+
+impl From<&ProcessorSet> for ProcessorSetBuilder {
+    /// Converts a [`ProcessorSet`] reference into a [`ProcessorSetBuilder`] for further
+    /// customization.
+    ///
+    /// This is equivalent to calling [`ProcessorSet::to_builder()`].
+    #[inline]
+    #[cfg_attr(test, mutants::skip)] // Trivial forwarder to to_builder.
+    fn from(value: &ProcessorSet) -> Self {
+        value.to_builder()
     }
 }
 
@@ -346,6 +370,28 @@ impl Display for ProcessorSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let list = cpulist::emit(self.processors.iter().map(Processor::id));
         write!(f, " {list} ({} processors)", self.len())
+    }
+}
+
+impl IntoIterator for ProcessorSet {
+    type IntoIter = <NonEmpty<Processor> as IntoIterator>::IntoIter;
+    type Item = Processor;
+
+    /// Consumes the processor set and returns an iterator over the processors.
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.processors.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a ProcessorSet {
+    type IntoIter = nonempty::Iter<'a, Processor>;
+    type Item = &'a Processor;
+
+    /// Returns an iterator over references to the processors in the set.
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.processors.iter()
     }
 }
 
@@ -512,7 +558,13 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn from_processor_preserves_processor() {
-        let one = ProcessorSet::builder().take(nz!(1)).unwrap();
+        use crate::SystemHardware;
+
+        let one = SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(1))
+            .unwrap();
         let processor = one.processors().first().clone();
         let one_again = ProcessorSet::from_processor(processor.clone());
 
@@ -528,14 +580,16 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn from_processors_preserves_processors() {
-        if ProcessorSet::builder().take_all().unwrap().len() < 2 {
+        use crate::SystemHardware;
+
+        let hw = SystemHardware::current();
+
+        if hw.processors().len() < 2 {
             eprintln!("Skipping test because there are not enough processors");
             return;
         }
 
-        // We use 2 instead of just "all" because "all" interacts with
-        // ProcessorSet::default() in ways we want to isolate the test from.
-        let two = ProcessorSet::builder().take(nz!(2)).unwrap();
+        let two = hw.processors().take(nz!(2)).unwrap();
         let processors = NonEmpty::collect(two.processors().iter().cloned()).unwrap();
         let two_again = ProcessorSet::from_processors(processors.clone());
 
@@ -561,7 +615,13 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn from_processors_with_one_preserves_processors() {
-        let one = ProcessorSet::builder().take(nz!(1)).unwrap();
+        use crate::SystemHardware;
+
+        let one = SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(1))
+            .unwrap();
         let processors = one.processors().clone();
         let one_again = ProcessorSet::from_processors(processors);
 
@@ -572,7 +632,13 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn to_builder_preserves_processors() {
-        let set = ProcessorSet::builder().take(nz!(1)).unwrap();
+        use crate::SystemHardware;
+
+        let set = SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(1))
+            .unwrap();
 
         let builder = set.to_builder();
 
@@ -588,13 +654,18 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
     fn inherit_on_pinned() {
+        use crate::SystemHardware;
+
         thread::spawn(|| {
-            let one = ProcessorSet::builder().take(nz!(1)).unwrap();
+            let hw = SystemHardware::current();
+            let one = hw.processors().take(nz!(1)).unwrap();
 
             one.pin_current_thread_to();
 
             // Potential false negative here if the system only has one processor but that's fine.
-            let current_thread_allowed = ProcessorSet::builder()
+            let current_thread_allowed = hw
+                .processors()
+                .to_builder()
                 .where_available_for_current_thread()
                 .take_all()
                 .unwrap();
@@ -607,14 +678,6 @@ mod tests {
         })
         .join()
         .unwrap();
-    }
-
-    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
-    #[test]
-    fn single_contains_exactly_one_processor() {
-        let single_processor_set = ProcessorSet::single();
-
-        assert_eq!(single_processor_set.len(), 1);
     }
 
     #[test]
@@ -707,7 +770,7 @@ mod tests_fallback {
     use crate::clients::HardwareTrackerClientFacade;
     use crate::pal::fallback::{BUILD_TARGET_PLATFORM, ProcessorImpl as FallbackProcessor};
     use crate::pal::{PlatformFacade, ProcessorFacade};
-    use crate::{HardwareTracker, Processor, ProcessorSet};
+    use crate::{Processor, ProcessorSet, SystemHardware};
 
     #[test]
     #[cfg_attr(miri, ignore)] // `std::thread::available_parallelism()` is not supported under Miri.
@@ -773,8 +836,9 @@ mod tests_fallback {
         processor_set.pin_current_thread_to();
 
         // Verify that the tracker now reports pinning.
-        assert!(HardwareTracker::is_thread_processor_pinned());
-        assert!(HardwareTracker::is_thread_memory_region_pinned());
+        let hw = SystemHardware::current();
+        assert!(hw.is_thread_processor_pinned());
+        assert!(hw.is_thread_memory_region_pinned());
     }
 
     #[test]
@@ -797,7 +861,7 @@ mod tests_fallback {
 
         processor_set
             .spawn_thread(move |_| {
-                let is_pinned = HardwareTracker::is_thread_processor_pinned();
+                let is_pinned = SystemHardware::current().is_thread_processor_pinned();
                 tx.send(is_pinned).unwrap();
             })
             .join()
@@ -822,8 +886,8 @@ mod tests_fallback {
 
         let processor_set = ProcessorSet::new(processors, tracker_client, pal);
 
-        let threads =
-            processor_set.spawn_threads(|_| HardwareTracker::is_thread_processor_pinned());
+        let threads = processor_set
+            .spawn_threads(|_| SystemHardware::current().is_thread_processor_pinned());
 
         for thread in threads {
             let is_pinned = thread.join().unwrap();
@@ -853,12 +917,17 @@ mod tests_fallback {
     fn inherit_on_pinned() {
         use std::thread;
 
+        use crate::SystemHardware;
+
         thread::spawn(|| {
-            let one = ProcessorSet::builder().take(nz!(1)).unwrap();
+            let hw = SystemHardware::current();
+            let one = hw.processors().take(nz!(1)).unwrap();
 
             one.pin_current_thread_to();
 
-            let current_thread_allowed = ProcessorSet::builder()
+            let current_thread_allowed = hw
+                .processors()
+                .to_builder()
                 .where_available_for_current_thread()
                 .take_all()
                 .unwrap();
@@ -874,7 +943,13 @@ mod tests_fallback {
     #[test]
     #[cfg_attr(miri, ignore)] // `std::thread::available_parallelism()` is not supported under Miri.
     fn to_builder_preserves_processors() {
-        let set = ProcessorSet::builder().take(nz!(1)).unwrap();
+        use crate::SystemHardware;
+
+        let set = SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(1))
+            .unwrap();
 
         let builder = set.to_builder();
 
@@ -886,15 +961,18 @@ mod tests_fallback {
 
         assert_eq!(processor1.id(), processor2.id());
     }
+
     #[cfg_attr(miri, ignore)] // `std::thread::available_parallelism()` is not supported under Miri.
     #[test]
-    fn default_returns_all_processors() {
-        let default_set = ProcessorSet::default();
+    fn take_all_returns_all_processors() {
+        use crate::SystemHardware;
+
+        let all_set = SystemHardware::current().processors();
 
         let expected_count = thread::available_parallelism()
             .map(std::num::NonZero::get)
             .unwrap_or(1);
 
-        assert_eq!(default_set.len(), expected_count);
+        assert_eq!(all_set.len(), expected_count);
     }
 }

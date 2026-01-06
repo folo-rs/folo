@@ -12,7 +12,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use many_cpus::ProcessorSet;
+use many_cpus::SystemHardware;
+use new_zealand::nz;
 use par_bench::{Run, ThreadPool};
 
 criterion_group!(benches, entrypoint);
@@ -21,13 +22,19 @@ criterion_main!(benches);
 fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("atomic_increments");
 
-    let mut single_thread_pool = ThreadPool::new(ProcessorSet::single());
+    let mut single_thread_pool = ThreadPool::new(
+        SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(1))
+            .unwrap(),
+    );
 
     group.bench_function("single_thread", |b| {
         b.iter_custom(|iters| black_box(measure_atomic_increments(&mut single_thread_pool, iters)));
     });
 
-    let mut multi_thread_pool = ThreadPool::new(ProcessorSet::default());
+    let mut multi_thread_pool = ThreadPool::new(SystemHardware::current().processors());
 
     group.bench_function("multi_thread", |b| {
         b.iter_custom(|iters| black_box(measure_atomic_increments(&mut multi_thread_pool, iters)));

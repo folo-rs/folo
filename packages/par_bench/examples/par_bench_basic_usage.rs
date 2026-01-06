@@ -8,7 +8,8 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use many_cpus::ProcessorSet;
+use many_cpus::SystemHardware;
+use new_zealand::nz;
 use par_bench::{Run, ThreadPool};
 
 const ITERATIONS: u64 = 10_000;
@@ -21,8 +22,14 @@ fn main() {
     println!("single-threaded and multi-threaded atomic operations.");
     println!();
 
-    let mut single_thread_pool = ThreadPool::new(ProcessorSet::single());
-    let mut multi_thread_pool = ThreadPool::new(ProcessorSet::default());
+    let mut single_thread_pool = ThreadPool::new(
+        SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(1))
+            .unwrap(),
+    );
+    let mut multi_thread_pool = ThreadPool::new(SystemHardware::current().processors());
 
     println!(
         "Running {} iterations on 1 thread vs {} threads",

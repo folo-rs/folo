@@ -17,7 +17,7 @@
 /// # #[cfg(all(feature = "alloc_tracker", feature = "all_the_time"))]
 /// # fn example() {
 /// use alloc_tracker::{Allocator, Session as AllocSession};
-/// use many_cpus::ProcessorSet;
+/// use many_cpus::SystemHardware;
 /// use par_bench::{ResourceUsageExt, Run, ThreadPool};
 ///
 /// #[global_allocator]
@@ -25,7 +25,7 @@
 ///
 /// let allocs = AllocSession::new();
 /// let processor_time = TimeSession::new();
-/// let mut pool = ThreadPool::new(&ProcessorSet::default());
+/// let mut pool = ThreadPool::new(&SystemHardware::current().processors());
 ///
 /// let run = Run::new()
 ///     .measure_resource_usage("my_operation", |measure| {
@@ -76,14 +76,14 @@ pub trait ResourceUsageExt<'a, ThreadState> {
     /// # #[cfg(feature = "alloc_tracker")]
     /// # fn example() {
     /// use alloc_tracker::{Allocator, Session};
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
     /// use par_bench::{ResourceUsageExt, Run, ThreadPool};
     ///
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
     /// let allocs = Session::new();
-    /// let mut pool = ThreadPool::new(&ProcessorSet::default());
+    /// let mut pool = ThreadPool::new(&SystemHardware::current().processors());
     ///
     /// let run = Run::new()
     ///     .measure_resource_usage("vector_creation", |measure| measure.allocs(&allocs))
@@ -102,11 +102,11 @@ pub trait ResourceUsageExt<'a, ThreadState> {
     /// # #[cfg(feature = "all_the_time")]
     /// # fn example() {
     /// use all_the_time::Session;
-    /// use many_cpus::ProcessorSet;
+    /// use many_cpus::SystemHardware;
     /// use par_bench::{ResourceUsageExt, Run, ThreadPool};
     ///
     /// let processor_time = Session::new();
-    /// let mut pool = ThreadPool::new(&ProcessorSet::default());
+    /// let mut pool = ThreadPool::new(&SystemHardware::current().processors());
     ///
     /// let run = Run::new()
     ///     .measure_resource_usage("cpu_work", |measure| {
@@ -401,17 +401,25 @@ impl<'a, ThreadState, IterState> ResourceUsageExt<'a, ThreadState>
 mod tests {
     use std::sync::LazyLock;
 
-    use many_cpus::ProcessorSet;
+    use many_cpus::{ProcessorSet, SystemHardware};
     use new_zealand::nz;
 
     use super::ResourceUsageExt;
     use crate::{Run, ThreadPool};
 
-    static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> =
-        LazyLock::new(|| ProcessorSet::builder().take(nz!(2)));
+    static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> = LazyLock::new(|| {
+        SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(2))
+    });
 
-    static FOUR_PROCESSORS: LazyLock<Option<ProcessorSet>> =
-        LazyLock::new(|| ProcessorSet::builder().take(nz!(4)));
+    static FOUR_PROCESSORS: LazyLock<Option<ProcessorSet>> = LazyLock::new(|| {
+        SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(4))
+    });
 
     #[test]
     fn module_loads() {
@@ -426,7 +434,13 @@ mod tests {
     #[cfg(all(not(miri), feature = "alloc_tracker"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
     fn measure_resource_usage_allocs_only() {
         let allocs = alloc_tracker::Session::new();
-        let mut pool = ThreadPool::new(ProcessorSet::single());
+        let mut pool = ThreadPool::new(
+            SystemHardware::current()
+                .processors()
+                .to_builder()
+                .take(nz!(1))
+                .unwrap(),
+        );
 
         let results = Run::new()
             .measure_resource_usage("test_operation", |measure| measure.allocs(&allocs))
@@ -453,7 +467,13 @@ mod tests {
     #[cfg(all(not(miri), feature = "all_the_time"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
     fn measure_resource_usage_processor_time_only() {
         let processor_time = all_the_time::Session::new();
-        let mut pool = ThreadPool::new(ProcessorSet::single());
+        let mut pool = ThreadPool::new(
+            SystemHardware::current()
+                .processors()
+                .to_builder()
+                .take(nz!(1))
+                .unwrap(),
+        );
 
         let results = Run::new()
             .measure_resource_usage("test_operation", |measure| {
@@ -487,7 +507,13 @@ mod tests {
     fn measure_resource_usage_combined() {
         let allocs = alloc_tracker::Session::new();
         let processor_time = all_the_time::Session::new();
-        let mut pool = ThreadPool::new(ProcessorSet::single());
+        let mut pool = ThreadPool::new(
+            SystemHardware::current()
+                .processors()
+                .to_builder()
+                .take(nz!(1))
+                .unwrap(),
+        );
 
         let results = Run::new()
             .measure_resource_usage("test_operation", |measure| {
@@ -627,7 +653,13 @@ mod tests {
     #[cfg(all(not(miri), feature = "alloc_tracker"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
     fn measure_resource_usage_with_thread_state() {
         let allocs = alloc_tracker::Session::new();
-        let mut pool = ThreadPool::new(ProcessorSet::single());
+        let mut pool = ThreadPool::new(
+            SystemHardware::current()
+                .processors()
+                .to_builder()
+                .take(nz!(1))
+                .unwrap(),
+        );
 
         let results = Run::new()
             .prepare_thread(|_| String::from("thread_data"))

@@ -10,7 +10,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, LazyLock};
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use many_cpus::ProcessorSet;
+use many_cpus::{ProcessorSet, SystemHardware};
 use new_zealand::nz;
 use par_bench::{Run, ThreadPool};
 use seq_macro::seq;
@@ -41,11 +41,19 @@ impl TestSubject {
 
 linked::instances!(static TARGET: TestSubject = TestSubject::new());
 
-static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> =
-    LazyLock::new(|| ProcessorSet::builder().take(nz!(2)));
+static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> = LazyLock::new(|| {
+    SystemHardware::current()
+        .processors()
+        .take(nz!(2))
+});
 
 fn entrypoint(c: &mut Criterion) {
-    let mut one_thread = ThreadPool::new(ProcessorSet::single());
+    let mut one_thread = ThreadPool::new(
+        SystemHardware::current()
+            .processors()
+            .take(nz!(1))
+            .unwrap(),
+    );
     let mut two_threads = TWO_PROCESSORS.as_ref().map(ThreadPool::new);
 
     let mut g = c.benchmark_group("instances::get");

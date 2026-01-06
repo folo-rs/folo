@@ -8,7 +8,7 @@ use std::thread::{self, JoinHandle as ThreadJoinHandle};
 use std::{fmt, mem, panic};
 
 use event_listener::{Listener, listener};
-use many_cpus::{ProcessorId, ProcessorSet};
+use many_cpus::{ProcessorId, SystemHardware};
 use new_zealand::nz;
 use parking_lot::Mutex;
 use tracing::{debug, trace};
@@ -77,7 +77,9 @@ impl PoolInner {
                 ))
                 .spawn(move || {
                     // Pin worker thread to the target processor for cache locality.
-                    if let Some(processor_set) = ProcessorSet::builder()
+                    if let Some(processor_set) = SystemHardware::current()
+                        .processors()
+                        .to_builder()
                         .filter(|p| p.id() == processor_id)
                         .take_all()
                     {

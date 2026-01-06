@@ -10,7 +10,7 @@ use std::{env, mem};
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, Criterion, SamplingMode};
 use itertools::Itertools;
-use many_cpus::{Processor, ProcessorSet};
+use many_cpus::{Processor, ProcessorSet, SystemHardware};
 use new_zealand::nz;
 use nonempty::{NonEmpty, nonempty};
 use rand::rng;
@@ -125,7 +125,9 @@ fn execute_run<P: Payload, const BATCH_SIZE: u64>(
 fn calculate_worker_pair_count() -> NonZero<usize> {
     // One pair for every memory region. That's it.
     NonZero::new(
-        ProcessorSet::builder()
+        SystemHardware::current()
+            .processors()
+            .to_builder()
             .performance_processors_only()
             .take_all()
             .expect("must have at least one processor")
@@ -153,7 +155,9 @@ fn get_processor_set_pairs(
     let worker_pair_count = calculate_worker_pair_count();
 
     // If the system has efficiency processors, we do not want them.
-    let candidates = ProcessorSet::builder()
+    let candidates = SystemHardware::current()
+        .processors()
+        .to_builder()
         .performance_processors_only()
         .take_all()
         .expect("there must be at least one performance processor on any system, by definition");

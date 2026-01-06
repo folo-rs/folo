@@ -145,14 +145,21 @@ impl<'a, ThreadState, IterState> Iter<'a, ThreadState, IterState> {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use many_cpus::ProcessorSet;
+    use many_cpus::SystemHardware;
+    use new_zealand::nz;
 
     use crate::{Run, ThreadPool};
 
     #[test]
     #[cfg_attr(miri, ignore)]
     fn prepare_iter_meta_returns_correct_run_meta() {
-        let mut pool = ThreadPool::new(ProcessorSet::single());
+        let mut pool = ThreadPool::new(
+            SystemHardware::current()
+                .processors()
+                .to_builder()
+                .take(nz!(1))
+                .unwrap(),
+        );
         let observed_meta = Arc::new(Mutex::new(None));
 
         let _result = Run::new()
@@ -175,7 +182,13 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn measure_wrapper_begin_thread_state_returns_correct_state() {
-        let mut pool = ThreadPool::new(ProcessorSet::single());
+        let mut pool = ThreadPool::new(
+            SystemHardware::current()
+                .processors()
+                .to_builder()
+                .take(nz!(1))
+                .unwrap(),
+        );
         let observed_thread_state = Arc::new(Mutex::new(None));
 
         let _result = Run::new()

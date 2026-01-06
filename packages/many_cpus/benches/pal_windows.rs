@@ -31,8 +31,9 @@ mod windows {
     use std::time::Duration;
 
     use criterion::Criterion;
-    use many_cpus::ProcessorSet;
+    use many_cpus::SystemHardware;
     use many_cpus::pal::BUILD_TARGET_PLATFORM;
+    use new_zealand::nz;
     use par_bench::{Run, ThreadPool};
     use windows::Win32::System::SystemInformation::GROUP_AFFINITY;
 
@@ -74,13 +75,16 @@ mod windows {
             });
         });
 
+        let hw = SystemHardware::current();
+        let one_processor_set = hw.processors().take(nz!(1)).unwrap();
+
         // The thread pool is the same, so does pinning the same thread over and over
         // differ somehow from pinning new threads? Eeeh, maybe, maybe not - good enough.
-        let mut one_thread_for_repinning = ThreadPool::new(ProcessorSet::single());
+        let mut one_thread_for_repinning = ThreadPool::new(&one_processor_set);
 
         Run::new()
             .iter(|_| {
-                ProcessorSet::default().pin_current_thread_to();
+                hw.processors().pin_current_thread_to();
             })
             .execute_criterion_on(
                 &mut one_thread_for_repinning,

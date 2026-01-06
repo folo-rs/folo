@@ -10,7 +10,7 @@ use std::sync::{Arc, LazyLock};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use linked::InstancePerThreadSync;
-use many_cpus::ProcessorSet;
+use many_cpus::{ProcessorSet, SystemHardware};
 use new_zealand::nz;
 use par_bench::{Run, ThreadPool};
 
@@ -38,8 +38,11 @@ impl TestSubject {
     }
 }
 
-static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> =
-    LazyLock::new(|| ProcessorSet::builder().take(nz!(2)));
+static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> = LazyLock::new(|| {
+    SystemHardware::current()
+        .processors()
+        .take(nz!(2))
+});
 
 fn entrypoint(c: &mut Criterion) {
     local(c);
@@ -49,7 +52,12 @@ fn entrypoint(c: &mut Criterion) {
 }
 
 fn local(c: &mut Criterion) {
-    let mut one_thread = ThreadPool::new(ProcessorSet::single());
+    let mut one_thread = ThreadPool::new(
+        SystemHardware::current()
+            .processors()
+            .take(nz!(1))
+            .unwrap(),
+    );
 
     let mut g = c.benchmark_group("instance_per_thread_sync::create");
 
@@ -68,7 +76,12 @@ fn local(c: &mut Criterion) {
 }
 
 fn local_ref(c: &mut Criterion) {
-    let mut one_thread = ThreadPool::new(ProcessorSet::single());
+    let mut one_thread = ThreadPool::new(
+        SystemHardware::current()
+            .processors()
+            .take(nz!(1))
+            .unwrap(),
+    );
 
     let mut g = c.benchmark_group("instance_per_thread_sync::Ref");
 
@@ -128,7 +141,12 @@ fn local_ref_multithreaded(c: &mut Criterion) {
 }
 
 fn local_ref_access(c: &mut Criterion) {
-    let mut one_thread = ThreadPool::new(ProcessorSet::single());
+    let mut one_thread = ThreadPool::new(
+        SystemHardware::current()
+            .processors()
+            .take(nz!(1))
+            .unwrap(),
+    );
     let mut two_threads = TWO_PROCESSORS.as_ref().map(ThreadPool::new);
 
     let mut g = c.benchmark_group("instance_per_thread_sync::Ref::access");

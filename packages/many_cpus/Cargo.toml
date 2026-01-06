@@ -12,6 +12,8 @@ rust-version.workspace = true
 
 [features]
 default = []
+# Enables test utilities including the fake platform for simulating hardware configurations.
+test-util = []
 
 [dependencies]
 cpulist = { workspace = true }

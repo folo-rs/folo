@@ -12,7 +12,7 @@
 use std::num::NonZero;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use many_cpus::ProcessorSet;
+use many_cpus::SystemHardware;
 use par_bench::{Run, ThreadPool};
 
 fn main() {
@@ -30,7 +30,10 @@ const PROCESSOR_COUNT: NonZero<usize> = NonZero::new(2).unwrap();
 fn basic_usage_example() {
     println!("Running basic usage example...");
 
-    let two_processors = ProcessorSet::builder().take(PROCESSOR_COUNT);
+    let two_processors = SystemHardware::current()
+        .processors()
+        .to_builder()
+        .take(PROCESSOR_COUNT);
 
     let Some(two_processors) = two_processors else {
         println!("No multi-threading available, this example cannot run.");

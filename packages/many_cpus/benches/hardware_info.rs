@@ -1,4 +1,4 @@
-//! Benchmarking operations exposed by the `HardwareInfo` struct.
+//! Benchmarking hardware information operations exposed by `SystemHardware`.
 
 #![allow(
     missing_docs,
@@ -6,18 +6,20 @@
 )]
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use many_cpus::HardwareInfo;
+use many_cpus::SystemHardware;
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
-    let mut group = c.benchmark_group("HardwareInfo");
+    let hw = SystemHardware::current();
 
-    // Mostly pointless since all the accessors just load from a static lazy-initialize
-    // variable. Just here to detect anomalies if we do something strange and it gets slow.
+    let mut group = c.benchmark_group("SystemHardware_HardwareInfo");
+
+    // Mostly pointless since all the accessors just load from cached values.
+    // Just here to detect anomalies if we do something strange and it gets slow.
     group.bench_function("max_processor_id", |b| {
-        b.iter(HardwareInfo::max_processor_id);
+        b.iter(|| hw.max_processor_id());
     });
 
     group.finish();

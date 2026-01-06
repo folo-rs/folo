@@ -35,10 +35,12 @@ mutants = { workspace = true }
 [[bench]]
 name = "par_bench_overhead"
 harness = false
+required-features = ["criterion"]
 
 [[bench]]
 name = "par_bench_basic"
 harness = false
+required-features = ["criterion"]
 
 [[bench]]
 name = "par_bench_manual"

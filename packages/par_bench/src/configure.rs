@@ -464,7 +464,7 @@ where
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use many_cpus::ProcessorSet;
+    use many_cpus::SystemHardware;
     use new_zealand::nz;
 
     use crate::{Run, ThreadPool};
@@ -472,7 +472,11 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn run_with_thread_state_groups_sets_group_count() {
-        let Some(processors) = ProcessorSet::builder().take(nz!(2)) else {
+        let Some(processors) = SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(2))
+        else {
             println!(
                 "Skipping test run_with_thread_state_groups_sets_group_count: not enough processors"
             );

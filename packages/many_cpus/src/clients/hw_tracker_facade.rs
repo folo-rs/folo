@@ -12,6 +12,10 @@ use crate::{HardwareTrackerClient, HardwareTrackerClientImpl, MemoryRegionId, Pr
 pub(crate) enum HardwareTrackerClientFacade {
     Target(&'static HardwareTrackerClientImpl),
 
+    /// A client backed by a specific `SystemHardware` instance.
+    /// Used when building processor sets from a `SystemHardware` instance.
+    Hardware(crate::SystemHardware),
+
     #[cfg(test)]
     Mock(Arc<MockHardwareTrackerClient>),
 }
@@ -19,6 +23,10 @@ pub(crate) enum HardwareTrackerClientFacade {
 impl HardwareTrackerClientFacade {
     pub(crate) const fn target() -> Self {
         Self::Target(&HardwareTrackerClientImpl)
+    }
+
+    pub(crate) fn from_hardware(hardware: crate::SystemHardware) -> Self {
+        Self::Hardware(hardware)
     }
 
     #[cfg(test)]
@@ -41,6 +49,9 @@ impl HardwareTrackerClient for HardwareTrackerClientFacade {
         match self {
             Self::Target(real) => {
                 real.update_pin_status(processor_id, memory_region_id);
+            }
+            Self::Hardware(hardware) => {
+                hardware.update_pin_status(processor_id, memory_region_id);
             }
             #[cfg(test)]
             Self::Mock(mock) => {

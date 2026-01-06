@@ -3,7 +3,7 @@
 use std::iter;
 use std::sync::OnceLock;
 
-use many_cpus::{HardwareInfo, ProcessorId};
+use many_cpus::{ProcessorId, SystemHardware};
 
 use crate::ProcessorState;
 
@@ -21,7 +21,7 @@ pub(crate) struct ProcessorRegistry {
 
 impl ProcessorRegistry {
     pub(crate) fn new() -> Self {
-        let max_processors = HardwareInfo::max_processor_count();
+        let max_processors = SystemHardware::current().max_processor_count();
         let states = iter::repeat_with(OnceLock::new)
             .take(max_processors)
             .collect::<Vec<_>>()
@@ -32,7 +32,7 @@ impl ProcessorRegistry {
 
     #[allow(
         clippy::indexing_slicing,
-        reason = "processor_id is guaranteed to be in bounds by HardwareInfo"
+        reason = "processor_id is guaranteed to be in bounds by SystemHardware"
     )]
     pub(crate) fn get_or_init(&self, processor_id: ProcessorId) -> &ProcessorState {
         self.states[processor_id as usize].get_or_init(ProcessorState::new)

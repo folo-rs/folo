@@ -7,7 +7,8 @@
 
 use std::time::Duration;
 
-use many_cpus::ProcessorSet;
+use many_cpus::SystemHardware;
+use new_zealand::nz;
 use par_bench::{ResourceUsageExt, Run, ThreadPool};
 
 // Set up global allocator for allocation tracking tests
@@ -17,7 +18,13 @@ static ALLOCATOR: alloc_tracker::Allocator<std::alloc::System> = alloc_tracker::
 #[test]
 fn resource_usage_output_provides_meaningful_allocation_data() {
     let allocs = alloc_tracker::Session::new();
-    let mut pool = ThreadPool::new(ProcessorSet::single());
+    let mut pool = ThreadPool::new(
+        SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(1))
+            .unwrap(),
+    );
 
     let results = Run::new()
         .measure_resource_usage("test_allocations", |measure| measure.allocs(&allocs))
@@ -79,7 +86,13 @@ fn resource_usage_output_provides_meaningful_allocation_data() {
 #[test]
 fn resource_usage_output_provides_meaningful_processor_time_data() {
     let processor_time = all_the_time::Session::new();
-    let mut pool = ThreadPool::new(ProcessorSet::single());
+    let mut pool = ThreadPool::new(
+        SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(1))
+            .unwrap(),
+    );
 
     let results = Run::new()
         .measure_resource_usage("test_cpu_work", |measure| {
@@ -156,7 +169,13 @@ fn resource_usage_output_provides_meaningful_processor_time_data() {
 fn resource_usage_output_provides_meaningful_combined_data() {
     let allocs = alloc_tracker::Session::new();
     let processor_time = all_the_time::Session::new();
-    let mut pool = ThreadPool::new(ProcessorSet::single());
+    let mut pool = ThreadPool::new(
+        SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(1))
+            .unwrap(),
+    );
 
     let results = Run::new()
         .measure_resource_usage("combined_work", |measure| {
@@ -253,7 +272,13 @@ fn resource_usage_output_provides_meaningful_combined_data() {
 #[test]
 fn resource_usage_output_handles_no_allocations_gracefully() {
     let allocs = alloc_tracker::Session::new();
-    let mut pool = ThreadPool::new(ProcessorSet::single());
+    let mut pool = ThreadPool::new(
+        SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(1))
+            .unwrap(),
+    );
 
     let results = Run::new()
         .measure_resource_usage("no_alloc_work", |measure| measure.allocs(&allocs))
@@ -295,7 +320,13 @@ fn resource_usage_output_handles_no_allocations_gracefully() {
 #[test]
 fn resource_usage_output_tracks_multiple_operations() {
     let allocs = alloc_tracker::Session::new();
-    let mut pool = ThreadPool::new(ProcessorSet::single());
+    let mut pool = ThreadPool::new(
+        SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(1))
+            .unwrap(),
+    );
 
     // Run multiple different operations
     let results1 = Run::new()

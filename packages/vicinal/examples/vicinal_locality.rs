@@ -8,7 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use futures::executor::block_on;
-use many_cpus::HardwareTracker;
+use many_cpus::SystemHardware;
 use vicinal::Pool;
 
 fn main() {
@@ -27,7 +27,7 @@ fn main() {
 
     loop {
         let handle = scheduler.spawn(|| {
-            let processor_id = HardwareTracker::current_processor_id();
+            let processor_id = SystemHardware::current().current_processor_id();
             println!("Task executed on processor {processor_id}");
         });
 

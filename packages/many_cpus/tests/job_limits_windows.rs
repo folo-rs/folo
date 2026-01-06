@@ -2,14 +2,12 @@
 //! verify that the logic in our crate correctly detects these limits and behaves accordingly
 //! to keep its own behavior within those limits.
 //!
-//! NB! We `ProcessorSet::builder()` in all cases in this file to avoid `ProcessorSet::default()`
-//! which in the current implementation gets cached on first access - we do not want to cache
-//! anything from our tests here as they apply weird constants, and we also do not want to use
-//! a cached processor set from some other test, since it will not have had our constraints applied.
+//! NB! We do not cache any processor set in this file because we apply weird constraints and
+//! do not want to interfere with other tests.
 
 #![cfg(windows)]
 
-use many_cpus::{HardwareTracker, ProcessorSet};
+use many_cpus::SystemHardware;
 use new_zealand::nz;
 use testing::{Job, ProcessorTimePct, f64_diff_abs};
 
@@ -24,13 +22,9 @@ const CLOSE_ENOUGH: f64 = 0.01;
     reason = "we use absolute error, which is the right way to compare"
 )]
 fn obeys_processor_selection_limits() {
-    if ProcessorSet::builder()
-        .ignoring_resource_quota()
-        .take_all()
-        .unwrap()
-        .len()
-        <= 2
-    {
+    let hw = SystemHardware::current();
+
+    if hw.all_processors().len() <= 2 {
         eprintln!("Skipping test: not enough processors available.");
         return;
     }
@@ -38,13 +32,13 @@ fn obeys_processor_selection_limits() {
     // Restrict the current process to only use 2 processors for the duration of this test.
     let job = Job::builder().with_processor_count(nz!(2)).build();
 
-    let processor_count = ProcessorSet::builder().take_all().unwrap().len();
+    let processor_count = hw.processors().len();
     assert_eq!(processor_count, 2);
 
     // This must also constrain the processor time quota to 2 processors.
     // We require at least 3 processors to run this test, so without correct
     // limiting the behavior would round up and say at least 3.
-    let resource_quota = HardwareTracker::resource_quota();
+    let resource_quota = hw.resource_quota();
 
     assert_eq!(
         f64_diff_abs(resource_quota.max_processor_time(), 2.0, CLOSE_ENOUGH),
@@ -67,6 +61,8 @@ fn obeys_processor_selection_limits() {
     reason = "we use absolute error, which is the right way to compare"
 )]
 fn obeys_processor_time_limits() {
+    let hw = SystemHardware::current();
+
     // Restrict the current process to only use 50% of the system processor time.
     let job = Job::builder()
         .with_max_processor_time_pct(ProcessorTimePct::new_static::<50>())
@@ -75,9 +71,9 @@ fn obeys_processor_time_limits() {
     // This is "100%". This count may also include processors that are not available to the
     // current process (e.g. when job objects already constrain our processors due to
     // executing in a container).
-    let system_processor_count = HardwareTracker::active_processor_count();
+    let system_processor_count = hw.active_processor_count();
 
-    let resource_quota = HardwareTracker::resource_quota();
+    let resource_quota = hw.resource_quota();
 
     // This should say we are allowed to use 50% of the system processor time, which we
     // express as processor-seconds per second.
@@ -94,7 +90,7 @@ fn obeys_processor_time_limits() {
     );
 
     // Building a ProcessorSet will obey the resource quota by default.
-    let quota_limited_processor_count = ProcessorSet::builder().take_all().unwrap().len();
+    let quota_limited_processor_count = hw.processors().len();
 
     let expected_limited_processor_count = (system_processor_count as f64 * 0.5).ceil();
 
@@ -118,19 +114,17 @@ fn obeys_processor_time_limits() {
     reason = "we use absolute error, which is the right way to compare"
 )]
 fn noop_job_has_no_effect() {
-    let unconstrained_processor_count = ProcessorSet::builder()
-        .ignoring_resource_quota()
-        .take_all()
-        .unwrap()
-        .len();
+    let hw = SystemHardware::current();
+
+    let unconstrained_processor_count = hw.all_processors().len();
 
     // Create a job with no limits. This should not affect the current process.
     let job = Job::builder().build();
 
-    let processor_count = ProcessorSet::builder().take_all().unwrap().len();
+    let processor_count = hw.processors().len();
     assert_eq!(processor_count, unconstrained_processor_count);
 
-    let resource_quota = HardwareTracker::resource_quota();
+    let resource_quota = hw.resource_quota();
 
     #[expect(clippy::cast_precision_loss, reason = "unavoidable f64-usize casting")]
     {

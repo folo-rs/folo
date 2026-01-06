@@ -1,4 +1,4 @@
-use crate::{CURRENT_TRACKER, MemoryRegionId, ProcessorId};
+use crate::{MemoryRegionId, ProcessorId, SystemHardware};
 
 #[cfg_attr(test, mockall::automock)]
 pub(crate) trait HardwareTrackerClient {
@@ -19,8 +19,6 @@ impl HardwareTrackerClient for HardwareTrackerClientImpl {
         processor_id: Option<ProcessorId>,
         memory_region_id: Option<MemoryRegionId>,
     ) {
-        CURRENT_TRACKER.with_borrow_mut(|tracker| {
-            tracker.update_pin_status(processor_id, memory_region_id);
-        });
+        SystemHardware::current().update_pin_status(processor_id, memory_region_id);
     }
 }

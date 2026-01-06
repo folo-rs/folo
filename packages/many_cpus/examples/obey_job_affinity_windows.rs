@@ -24,7 +24,7 @@ fn main() {
 
 #[cfg(windows)]
 mod windows {
-    use many_cpus::ProcessorSet;
+    use many_cpus::SystemHardware;
     use new_zealand::nz;
     use testing::Job;
 
@@ -37,7 +37,7 @@ mod windows {
 
     fn verify_limits_obeyed() {
         // The default processor set obeys all the limits that apply to the current process.
-        let processor_count = ProcessorSet::default().len();
+        let processor_count = SystemHardware::current().processors().len();
         println!("Current process is allowed to use {processor_count} processors.");
 
         assert_eq!(processor_count, 2);

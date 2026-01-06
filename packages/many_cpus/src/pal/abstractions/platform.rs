@@ -5,6 +5,14 @@ use nonempty::NonEmpty;
 use crate::pal::ProcessorFacade;
 use crate::{MemoryRegionId, ProcessorId};
 
+/// Internal platform abstraction trait.
+///
+/// This trait defines the interface for platform-specific implementations that provide
+/// hardware topology and thread affinity functionality. Different implementations exist
+/// for Windows, Linux, unsupported platforms (fallback), and testing (mock/fake).
+///
+/// Note: This is distinct from the public `SystemHardware` type which wraps this trait and
+/// provides the user-facing API.
 pub(crate) trait Platform: Debug + Send + Sync + 'static {
     /// Returns all processors available to the current process.
     ///

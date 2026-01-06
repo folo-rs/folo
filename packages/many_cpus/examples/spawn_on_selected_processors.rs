@@ -1,19 +1,20 @@
 //! Selects a pair of processors and spawns a thread on each of them.
 //! This demonstrates arbitrary processor selection logic.
 
-use std::num::NonZero;
-
-use many_cpus::ProcessorSet;
-
-const PROCESSOR_COUNT: NonZero<usize> = NonZero::new(2).unwrap();
+use many_cpus::SystemHardware;
+use new_zealand::nz;
 
 fn main() {
-    let selected_processors = ProcessorSet::builder()
+    let hw = SystemHardware::current();
+
+    let selected_processors = hw
+        .processors()
+        .to_builder()
         .same_memory_region()
         .performance_processors_only()
-        .take(PROCESSOR_COUNT)
-        // If we do not have what we want, we fall back to default, just to make the example run.
-        .unwrap_or_default();
+        .take(nz!(2))
+        // If we do not have what we want, we fall back to the default set.
+        .unwrap_or_else(|| hw.processors().clone());
 
     let threads = selected_processors.spawn_threads(|processor| {
         println!("Spawned thread on processor {}", processor.id());

@@ -8,7 +8,7 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use many_cpus::ProcessorSet;
+use many_cpus::SystemHardware;
 use new_zealand::nz;
 use nm::{Event, Magnitude, MetricsPusher, Push, Report};
 use par_bench::{Run, ThreadPool};
@@ -17,8 +17,16 @@ criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
-    let mut one_thread = ThreadPool::new(ProcessorSet::single());
-    let mut two_threads = ProcessorSet::builder()
+    let mut one_thread = ThreadPool::new(
+        SystemHardware::current()
+            .processors()
+            .to_builder()
+            .take(nz!(1))
+            .unwrap(),
+    );
+    let mut two_threads = SystemHardware::current()
+        .processors()
+        .to_builder()
         .take(nz!(2))
         .map(|x| ThreadPool::new(&x));
 
