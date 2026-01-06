@@ -10,8 +10,7 @@ use rand::rng;
 
 use crate::pal::{Platform, PlatformFacade};
 use crate::{
-    EfficiencyClass, HardwareTrackerClientFacade, MemoryRegionId, Processor, ProcessorId,
-    ProcessorSet,
+    EfficiencyClass, MemoryRegionId, Processor, ProcessorId, ProcessorSet, SystemHardware,
 };
 
 /// Builds a [`ProcessorSet`] based on specified criteria. The default criteria include all
@@ -42,10 +41,9 @@ pub struct ProcessorSetBuilder {
 
     obey_resource_quota: bool,
 
-    // ProcessorSet needs this because it needs to inform the tracker
-    // about any changes to the pinning status of the current thread.
-    // We just carry it around and pass to any processor set we create.
-    tracker_client: HardwareTrackerClientFacade,
+    /// The hardware instance to use for pin status tracking.
+    /// Passed to any processor set we create.
+    hardware: SystemHardware,
 
     pal: PlatformFacade,
 }
@@ -59,22 +57,19 @@ impl ProcessorSetBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::with_internals(
-            HardwareTrackerClientFacade::target(),
+            SystemHardware::current().clone(),
             PlatformFacade::target(),
         )
     }
 
     #[must_use]
-    pub(crate) fn with_internals(
-        tracker_client: HardwareTrackerClientFacade,
-        pal: PlatformFacade,
-    ) -> Self {
+    pub(crate) fn with_internals(hardware: SystemHardware, pal: PlatformFacade) -> Self {
         Self {
             processor_type_selector: ProcessorTypeSelector::Any,
             memory_region_selector: MemoryRegionSelector::Any,
             except_indexes: HashSet::new(),
             obey_resource_quota: true,
-            tracker_client,
+            hardware,
             pal,
         }
     }
@@ -587,7 +582,7 @@ impl ProcessorSetBuilder {
 
         Some(ProcessorSet::new(
             NonEmpty::from_vec(processors)?,
-            self.tracker_client,
+            self.hardware,
             self.pal,
         ))
     }
@@ -700,7 +695,7 @@ impl ProcessorSetBuilder {
 
         Some(ProcessorSet::new(
             NonEmpty::from_vec(processors)?,
-            self.tracker_client,
+            self.hardware,
             self.pal,
         ))
     }
@@ -990,7 +985,16 @@ mod tests {
     use nonempty::nonempty;
 
     use super::*;
+    use crate::fake::HardwareBuilder;
     use crate::pal::{FakeProcessor, MockPlatform, ProcessorFacade};
+
+    /// Creates a fake hardware instance with a given number of processors and memory regions.
+    fn fake_hardware(processor_count: usize, memory_region_count: usize) -> SystemHardware {
+        SystemHardware::fake(HardwareBuilder::from_counts(
+            NonZero::new(processor_count).unwrap_or(nz!(1)),
+            NonZero::new(memory_region_count).unwrap_or(nz!(1)),
+        ))
+    }
 
     #[test]
     fn smoke_test() {
@@ -1009,10 +1013,7 @@ mod tests {
 
         let platform = new_mock_platform(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(2, 1), platform.into());
 
         // Simplest possible test, verify that we see all the processors.
         let set = builder.take_all().unwrap();
@@ -1037,7 +1038,7 @@ mod tests {
         let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.efficiency_processors_only().take_all().unwrap();
@@ -1063,7 +1064,7 @@ mod tests {
         let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.efficiency_processors_only().take_all().unwrap();
@@ -1094,7 +1095,7 @@ mod tests {
         let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.take(nz!(2)).unwrap();
@@ -1121,7 +1122,7 @@ mod tests {
         let platform = new_mock_platform_with_get_count(pal_processors, 0, 1);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.take(nz!(3));
@@ -1139,7 +1140,7 @@ mod tests {
             .return_const(1.0);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.take(nz!(2));
@@ -1175,7 +1176,7 @@ mod tests {
             .return_const(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.ignoring_resource_quota().take(nz!(2));
@@ -1213,7 +1214,7 @@ mod tests {
             .return_const(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.take(nz!(1));
@@ -1251,7 +1252,7 @@ mod tests {
             .return_const(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.take_all().unwrap();
@@ -1291,7 +1292,7 @@ mod tests {
             .return_const(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.take_all().unwrap();
@@ -1310,7 +1311,7 @@ mod tests {
         let platform = new_mock_platform_with_get_count(pal_processors, 1, 0);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.performance_processors_only().take_all();
@@ -1337,7 +1338,7 @@ mod tests {
         let platform = new_mock_platform_with_get_count(pal_processors, 3, 2);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
 
@@ -1369,7 +1370,7 @@ mod tests {
         let platform = new_mock_platform_with_get_count(pal_processors, 3, 2);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
@@ -1399,7 +1400,7 @@ mod tests {
         let platform = new_mock_platform_with_get_count(pal_processors, 2, 1);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.filter(|p| p.id() == 1).take_all().unwrap();
@@ -1426,7 +1427,7 @@ mod tests {
         let platform = new_mock_platform_with_get_count(pal_processors, 2, 1);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.filter(|p| p.id() == 1).take_all().unwrap();
@@ -1452,7 +1453,7 @@ mod tests {
         let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.same_memory_region().take_all().unwrap();
@@ -1477,7 +1478,7 @@ mod tests {
         let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.same_memory_region().take_all().unwrap();
@@ -1512,7 +1513,7 @@ mod tests {
         let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.different_memory_regions().take_all().unwrap();
@@ -1552,7 +1553,7 @@ mod tests {
         let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.different_memory_regions().take_all().unwrap();
@@ -1589,7 +1590,7 @@ mod tests {
         let platform = new_mock_platform_with_get_count(pal_processors, 3, 2);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
@@ -1626,7 +1627,7 @@ mod tests {
         let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.same_memory_region().take(nz!(2)).unwrap();
@@ -1663,7 +1664,7 @@ mod tests {
         let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder
@@ -1688,7 +1689,7 @@ mod tests {
         let platform = new_mock_platform_with_get_count(pal_processors, 1, 0);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
 
@@ -1714,7 +1715,7 @@ mod tests {
         let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.different_memory_regions().take(nz!(2));
@@ -1747,7 +1748,7 @@ mod tests {
         let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder
@@ -1785,7 +1786,7 @@ mod tests {
         let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder
@@ -1829,7 +1830,7 @@ mod tests {
         let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.prefer_same_memory_region().take(nz!(2)).unwrap();
@@ -1870,7 +1871,7 @@ mod tests {
         let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder
@@ -1908,7 +1909,7 @@ mod tests {
         let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.prefer_same_memory_region().take(nz!(3)).unwrap();
@@ -1953,7 +1954,7 @@ mod tests {
         let platform = new_mock_platform(pal_processors);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
         let set = builder.prefer_same_memory_region().take(nz!(2)).unwrap();
@@ -2003,7 +2004,7 @@ mod tests {
             .return_const(pal_processors_facade);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
 
@@ -2051,7 +2052,7 @@ mod tests {
             .return_const(pal_processors_facade);
 
         let builder = ProcessorSetBuilder::with_internals(
-            HardwareTrackerClientFacade::default_mock(),
+            fake_hardware(4, 2),
             platform.into(),
         );
 
@@ -2105,8 +2106,7 @@ mod tests_fallback {
 
     use new_zealand::nz;
 
-    use crate::ProcessorSetBuilder;
-    use crate::clients::HardwareTrackerClientFacade;
+    use crate::{ProcessorSetBuilder, SystemHardware};
     use crate::pal::PlatformFacade;
     use crate::pal::fallback::BUILD_TARGET_PLATFORM;
 
@@ -2115,9 +2115,9 @@ mod tests_fallback {
         let platform = &BUILD_TARGET_PLATFORM;
         let pal = PlatformFacade::Fallback(platform);
 
-        let tracker_client = HardwareTrackerClientFacade::target();
+        let hardware = SystemHardware::current().clone();
 
-        let builder = ProcessorSetBuilder::with_internals(tracker_client, pal);
+        let builder = ProcessorSetBuilder::with_internals(hardware, pal);
 
         let set = builder.take_all().unwrap();
 
@@ -2129,9 +2129,9 @@ mod tests_fallback {
         let platform = &BUILD_TARGET_PLATFORM;
         let pal = PlatformFacade::Fallback(platform);
 
-        let tracker_client = HardwareTrackerClientFacade::target();
+        let hardware = SystemHardware::current().clone();
 
-        let builder = ProcessorSetBuilder::with_internals(tracker_client, pal);
+        let builder = ProcessorSetBuilder::with_internals(hardware, pal);
 
         let set = builder.take(nz!(1));
 
@@ -2144,9 +2144,9 @@ mod tests_fallback {
         let platform = &BUILD_TARGET_PLATFORM;
         let pal = PlatformFacade::Fallback(platform);
 
-        let tracker_client = HardwareTrackerClientFacade::target();
+        let hardware = SystemHardware::current().clone();
 
-        let builder = ProcessorSetBuilder::with_internals(tracker_client, pal);
+        let builder = ProcessorSetBuilder::with_internals(hardware, pal);
 
         let set = builder.take_all().unwrap();
 
@@ -2163,9 +2163,9 @@ mod tests_fallback {
         let platform = &BUILD_TARGET_PLATFORM;
         let pal = PlatformFacade::Fallback(platform);
 
-        let tracker_client = HardwareTrackerClientFacade::target();
+        let hardware = SystemHardware::current().clone();
 
-        let builder = ProcessorSetBuilder::with_internals(tracker_client, pal);
+        let builder = ProcessorSetBuilder::with_internals(hardware, pal);
 
         let set = builder.performance_processors_only().take_all().unwrap();
 
@@ -2182,9 +2182,9 @@ mod tests_fallback {
         let platform = &BUILD_TARGET_PLATFORM;
         let pal = PlatformFacade::Fallback(platform);
 
-        let tracker_client = HardwareTrackerClientFacade::target();
+        let hardware = SystemHardware::current().clone();
 
-        let builder = ProcessorSetBuilder::with_internals(tracker_client, pal);
+        let builder = ProcessorSetBuilder::with_internals(hardware, pal);
 
         let set = builder.same_memory_region().take_all().unwrap();
 
@@ -2204,9 +2204,9 @@ mod tests_fallback {
         let platform = &BUILD_TARGET_PLATFORM;
         let pal = PlatformFacade::Fallback(platform);
 
-        let tracker_client = HardwareTrackerClientFacade::target();
+        let hardware = SystemHardware::current().clone();
 
-        let builder = ProcessorSetBuilder::with_internals(tracker_client, pal);
+        let builder = ProcessorSetBuilder::with_internals(hardware, pal);
 
         if platform.processor_count() > 1 {
             let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
@@ -2225,9 +2225,9 @@ mod tests_fallback {
         let platform = &BUILD_TARGET_PLATFORM;
         let pal = PlatformFacade::Fallback(platform);
 
-        let tracker_client = HardwareTrackerClientFacade::target();
+        let hardware = SystemHardware::current().clone();
 
-        let builder = ProcessorSetBuilder::with_internals(tracker_client, pal);
+        let builder = ProcessorSetBuilder::with_internals(hardware, pal);
 
         let set = builder.ignoring_resource_quota().take_all().unwrap();
 
@@ -2242,17 +2242,17 @@ mod tests_fallback {
             let platform = &BUILD_TARGET_PLATFORM;
             let pal = PlatformFacade::Fallback(platform);
 
-            let tracker_client = HardwareTrackerClientFacade::target();
+            let hardware = SystemHardware::current().clone();
 
             // First pin to one processor.
-            let one = ProcessorSetBuilder::with_internals(tracker_client.clone(), pal.clone())
+            let one = ProcessorSetBuilder::with_internals(hardware.clone(), pal.clone())
                 .take(nz!(1))
                 .unwrap();
 
             one.pin_current_thread_to();
 
             // Now build a new set inheriting the affinity.
-            let builder = ProcessorSetBuilder::with_internals(tracker_client, pal);
+            let builder = ProcessorSetBuilder::with_internals(hardware, pal);
 
             let set = builder.where_available_for_current_thread().take_all();
 
@@ -2268,9 +2268,9 @@ mod tests_fallback {
         let platform = &BUILD_TARGET_PLATFORM;
         let pal = PlatformFacade::Fallback(platform);
 
-        let tracker_client = HardwareTrackerClientFacade::target();
+        let hardware = SystemHardware::current().clone();
 
-        let builder = ProcessorSetBuilder::with_internals(tracker_client, pal);
+        let builder = ProcessorSetBuilder::with_internals(hardware, pal);
 
         let set = builder.take_all().unwrap();
 

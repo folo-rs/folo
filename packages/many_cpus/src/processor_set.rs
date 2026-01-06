@@ -6,7 +6,7 @@ use itertools::Itertools;
 use nonempty::NonEmpty;
 
 use crate::pal::{Platform, PlatformFacade};
-use crate::{HardwareTrackerClient, HardwareTrackerClientFacade, Processor, ProcessorSetBuilder};
+use crate::{Processor, ProcessorSetBuilder, SystemHardware};
 
 /// One or more processors present on the system and available for use.
 ///
@@ -28,9 +28,9 @@ use crate::{HardwareTrackerClient, HardwareTrackerClientFacade, Processor, Proce
 pub struct ProcessorSet {
     processors: NonEmpty<Processor>,
 
-    // We use this when we pin a thread, to update the tracker
-    // about the current thread's pinning status.
-    tracker_client: HardwareTrackerClientFacade,
+    /// The hardware instance this processor set is associated with.
+    /// Used to update pin status when a thread is pinned to this set.
+    hardware: SystemHardware,
 
     pal: PlatformFacade,
 }
@@ -39,12 +39,12 @@ impl ProcessorSet {
     #[must_use]
     pub(crate) fn new(
         processors: NonEmpty<Processor>,
-        tracker_client: HardwareTrackerClientFacade,
+        hardware: SystemHardware,
         pal: PlatformFacade,
     ) -> Self {
         Self {
             processors,
-            tracker_client,
+            hardware,
             pal,
         }
     }
@@ -69,7 +69,7 @@ impl ProcessorSet {
     /// ```
     #[must_use]
     pub fn to_builder(&self) -> ProcessorSetBuilder {
-        ProcessorSetBuilder::with_internals(self.tracker_client.clone(), self.pal.clone()).filter({
+        ProcessorSetBuilder::with_internals(self.hardware.clone(), self.pal.clone()).filter({
             let processors = self.processors.clone();
             move |p| processors.contains(p)
         })
@@ -113,7 +113,7 @@ impl ProcessorSet {
         // this should be easy to control.
         Self::new(
             processors,
-            HardwareTrackerClientFacade::target(),
+            SystemHardware::current().clone(),
             PlatformFacade::target(),
         )
     }
@@ -127,7 +127,7 @@ impl ProcessorSet {
         // this should be easy to control.
         Self::new(
             NonEmpty::singleton(processor),
-            HardwareTrackerClientFacade::target(),
+            SystemHardware::current().clone(),
             PlatformFacade::target(),
         )
     }
@@ -212,7 +212,7 @@ impl ProcessorSet {
             // If there is only one processor, both the processor and memory region are known.
             let processor = self.processors.first();
 
-            self.tracker_client
+            self.hardware
                 .update_pin_status(Some(processor.id()), Some(processor.memory_region_id()));
         } else if self
             .processors
@@ -225,11 +225,11 @@ impl ProcessorSet {
             // All processors are in the same memory region, so we can at least track that.
             let memory_region_id = self.processors.first().memory_region_id();
 
-            self.tracker_client
+            self.hardware
                 .update_pin_status(None, Some(memory_region_id));
         } else {
             // We got nothing, have to resolve from scratch every time the data is asked for.
-            self.tracker_client.update_pin_status(None, None);
+            self.hardware.update_pin_status(None, None);
         }
     }
 
@@ -250,14 +250,14 @@ impl ProcessorSet {
                 thread::spawn({
                     let processor = processor.clone();
                     let entrypoint = entrypoint.clone();
-                    let tracker_client = self.tracker_client.clone();
+                    let hardware = self.hardware.clone();
                     let pal = self.pal.clone();
 
                     move || {
                         let set = Self::new(
                             NonEmpty::from_vec(vec![processor.clone()])
                                 .expect("we provide 1-item vec as input, so it must be non-empty"),
-                            tracker_client.clone(),
+                            hardware.clone(),
                             pal.clone(),
                         );
                         set.pin_current_thread_to();
@@ -406,7 +406,8 @@ mod tests {
 
     use super::*;
     use crate::pal::{FakeProcessor, MockPlatform};
-    use crate::{EfficiencyClass, MockHardwareTrackerClient};
+    use crate::EfficiencyClass;
+    use crate::fake::HardwareBuilder;
 
     #[test]
     fn smoke_test() {
@@ -452,37 +453,10 @@ mod tests {
 
         let processors = pal_processors.map(move |p| Processor::new(p.into()));
 
-        let mut tracker_client = MockHardwareTrackerClient::new();
+        // Use fake hardware for tracking pin status.
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(2), nz!(1)));
 
-        tracker_client
-            .expect_update_pin_status()
-            // Once for entrypoint thread, once for spawn_thread().
-            .times(2)
-            .withf(|processor, memory_region| {
-                processor.is_none() && matches!(memory_region, Some(0))
-            })
-            .return_const(());
-
-        // Once for each of the threads in spawn_threads().
-        tracker_client
-            .expect_update_pin_status()
-            .times(1)
-            .withf(|processor, memory_region| {
-                matches!(processor, Some(0)) && matches!(memory_region, Some(0))
-            })
-            .return_const(());
-
-        tracker_client
-            .expect_update_pin_status()
-            .times(1)
-            .withf(|processor, memory_region| {
-                matches!(processor, Some(1)) && matches!(memory_region, Some(0))
-            })
-            .return_const(());
-
-        let tracker_client = HardwareTrackerClientFacade::from_mock(tracker_client);
-
-        let processor_set = ProcessorSet::new(processors, tracker_client, platform);
+        let processor_set = ProcessorSet::new(processors, hardware.clone(), platform);
 
         // Getters appear to get the expected values.
         assert_eq!(processor_set.len(), 2);
@@ -504,6 +478,11 @@ mod tests {
 
         // Pin calls into PAL to execute the pinning.
         processor_set.pin_current_thread_to();
+
+        // Since we pinned to 2 processors in same memory region,
+        // processor is not pinned but memory region is.
+        assert!(!hardware.is_thread_processor_pinned());
+        assert!(hardware.is_thread_memory_region_pinned());
 
         // spawn_thread() spawns and pins a single thread.
         let threads_spawned = Arc::new(AtomicUsize::new(0));
@@ -740,9 +719,10 @@ mod tests {
 
         let processors = pal_processors.map(move |p| Processor::new(p.into()));
 
-        let tracker_client = HardwareTrackerClientFacade::default_mock();
+        // Use fake hardware for the Display test - no actual pinning needed.
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(4), nz!(1)));
 
-        let processor_set = ProcessorSet::new(processors, tracker_client, platform);
+        let processor_set = ProcessorSet::new(processors, hardware, platform);
 
         let display_output = processor_set.to_string();
 
@@ -767,7 +747,6 @@ mod tests_fallback {
 
     use new_zealand::nz;
 
-    use crate::clients::HardwareTrackerClientFacade;
     use crate::pal::fallback::{BUILD_TARGET_PLATFORM, ProcessorImpl as FallbackProcessor};
     use crate::pal::{PlatformFacade, ProcessorFacade};
     use crate::{Processor, ProcessorSet, SystemHardware};
@@ -786,9 +765,9 @@ mod tests_fallback {
             Processor::new(ProcessorFacade::Fallback(FallbackProcessor::new(1)))
         ];
 
-        let tracker_client = HardwareTrackerClientFacade::target();
+        let hardware = SystemHardware::current().clone();
 
-        let processor_set = ProcessorSet::new(processors, tracker_client, pal);
+        let processor_set = ProcessorSet::new(processors, hardware, pal);
 
         assert_eq!(processor_set.len(), 2);
 
@@ -829,9 +808,9 @@ mod tests_fallback {
             FallbackProcessor::new(0)
         ))];
 
-        let tracker_client = HardwareTrackerClientFacade::target();
+        let hardware = SystemHardware::current().clone();
 
-        let processor_set = ProcessorSet::new(processors, tracker_client, pal);
+        let processor_set = ProcessorSet::new(processors, hardware, pal);
 
         processor_set.pin_current_thread_to();
 
@@ -853,9 +832,9 @@ mod tests_fallback {
             FallbackProcessor::new(0)
         ))];
 
-        let tracker_client = HardwareTrackerClientFacade::target();
+        let hardware = SystemHardware::current().clone();
 
-        let processor_set = ProcessorSet::new(processors, tracker_client, pal);
+        let processor_set = ProcessorSet::new(processors, hardware, pal);
 
         let (tx, rx) = mpsc::channel();
 
@@ -882,9 +861,9 @@ mod tests_fallback {
             Processor::new(ProcessorFacade::Fallback(FallbackProcessor::new(1)))
         ];
 
-        let tracker_client = HardwareTrackerClientFacade::target();
+        let hardware = SystemHardware::current().clone();
 
-        let processor_set = ProcessorSet::new(processors, tracker_client, pal);
+        let processor_set = ProcessorSet::new(processors, hardware, pal);
 
         let threads = processor_set
             .spawn_threads(|_| SystemHardware::current().is_thread_processor_pinned());

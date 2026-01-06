@@ -234,7 +234,6 @@
 #![doc(html_logo_url = "https://media.githubusercontent.com/media/folo-rs/folo/refs/heads/main/packages/many_cpus/icon.png")]
 #![doc(html_favicon_url = "https://media.githubusercontent.com/media/folo-rs/folo/refs/heads/main/packages/many_cpus/icon.ico")]
 
-mod clients;
 mod primitive_types;
 mod processor;
 mod processor_set;
@@ -245,7 +244,6 @@ mod system_hardware;
 #[cfg(feature = "test-util")]
 pub mod fake;
 
-pub(crate) use clients::*;
 pub use primitive_types::*;
 pub use processor::*;
 pub use processor_set::*;

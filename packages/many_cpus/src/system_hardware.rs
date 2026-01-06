@@ -20,8 +20,7 @@ use crate::fake::FakePlatform;
 use crate::fake::HardwareBuilder;
 use crate::pal::{AbstractProcessor, Platform as PlatformTrait, PlatformFacade};
 use crate::{
-    HardwareTrackerClientFacade, MemoryRegionId, Processor, ProcessorId, ProcessorSet,
-    ProcessorSetBuilder, ResourceQuota,
+    MemoryRegionId, Processor, ProcessorId, ProcessorSet, ProcessorSetBuilder, ResourceQuota,
 };
 
 /// The real system hardware singleton, initialized on first access.
@@ -205,12 +204,9 @@ impl SystemHardware {
     #[must_use]
     pub fn processors(&self) -> &ProcessorSet {
         self.inner.cached_processors.get_or_init(|| {
-            ProcessorSetBuilder::with_internals(
-                HardwareTrackerClientFacade::from_hardware(self.clone()),
-                self.inner.platform.clone(),
-            )
-            .take_all()
-            .expect("there is always at least one processor available because we are running on it")
+            ProcessorSetBuilder::with_internals(self.clone(), self.inner.platform.clone())
+                .take_all()
+                .expect("there is always at least one processor available because we are running on it")
         })
     }
 
@@ -243,7 +239,7 @@ impl SystemHardware {
 
             return Some(ProcessorSet::new(
                 NonEmpty::singleton(processor),
-                HardwareTrackerClientFacade::from_hardware(self.clone()),
+                self.clone(),
                 self.inner.platform.clone(),
             ));
         }
@@ -263,7 +259,7 @@ impl SystemHardware {
             if let Some(processors) = NonEmpty::from_vec(processors) {
                 return Some(ProcessorSet::new(
                     processors,
-                    HardwareTrackerClientFacade::from_hardware(self.clone()),
+                    self.clone(),
                     self.inner.platform.clone(),
                 ));
             }
@@ -302,13 +298,10 @@ impl SystemHardware {
     #[must_use]
     pub fn all_processors(&self) -> &ProcessorSet {
         self.inner.cached_all_processors.get_or_init(|| {
-            ProcessorSetBuilder::with_internals(
-                HardwareTrackerClientFacade::from_hardware(self.clone()),
-                self.inner.platform.clone(),
-            )
-            .ignoring_resource_quota()
-            .take_all()
-            .expect("there is always at least one processor available")
+            ProcessorSetBuilder::with_internals(self.clone(), self.inner.platform.clone())
+                .ignoring_resource_quota()
+                .take_all()
+                .expect("there is always at least one processor available")
         })
     }
 
