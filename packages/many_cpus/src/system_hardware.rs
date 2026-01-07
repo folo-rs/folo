@@ -105,7 +105,7 @@ impl SystemHardware {
     /// Returns a handle to the current real system hardware.
     ///
     /// This singleton represents the actual hardware the process is running on. The instance
-    /// is initialized on first access and reused thereafter. All instances are equivalent.
+    /// is initialized on first access and reused thereafter. All clones are equivalent.
     ///
     /// # Example
     ///
@@ -128,7 +128,8 @@ impl SystemHardware {
     /// actual hardware.
     ///
     /// Each fake hardware instance maintains its own state, enabling multiple
-    /// fake instances to coexist in parallel tests without interference.
+    /// fake instances to coexist in parallel tests without interference. Clones
+    /// are equivalent and represent the same fake hardware.
     ///
     /// # Example
     ///
