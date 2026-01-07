@@ -31,6 +31,8 @@ fn create_test_provider() -> (SdkMeterProvider, InMemoryMetricExporter) {
     (provider, exporter)
 }
 
+// OpenTelemetry SDK uses system time calls not available under Miri isolation.
+#[cfg_attr(miri, ignore)]
 #[test]
 fn publish_forever_collects_metrics_on_timer_tick() {
     const INTERVAL: Duration = Duration::from_secs(5);
