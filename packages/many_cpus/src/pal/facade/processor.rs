@@ -7,8 +7,6 @@ use derive_more::derive::Display;
 #[cfg(any(test, feature = "test-util"))]
 use crate::fake::platform::FakeProcessor;
 #[cfg(test)]
-use crate::pal::MockProcessor;
-#[cfg(test)]
 use crate::pal::fallback::ProcessorImpl as FallbackProcessor;
 use crate::pal::{AbstractProcessor, ProcessorImpl};
 
@@ -18,9 +16,6 @@ pub(crate) enum ProcessorFacade {
 
     #[cfg(test)]
     Fallback(FallbackProcessor),
-
-    #[cfg(test)]
-    Mock(MockProcessor),
 
     /// Fake processor for the public test-util feature.
     #[cfg(any(test, feature = "test-util"))]
@@ -54,8 +49,6 @@ impl AbstractProcessor for ProcessorFacade {
             Self::Target(p) => p.id(),
             #[cfg(test)]
             Self::Fallback(p) => p.id(),
-            #[cfg(test)]
-            Self::Mock(p) => p.id(),
             #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.id(),
         }
@@ -66,8 +59,6 @@ impl AbstractProcessor for ProcessorFacade {
             Self::Target(p) => p.memory_region_id(),
             #[cfg(test)]
             Self::Fallback(p) => p.memory_region_id(),
-            #[cfg(test)]
-            Self::Mock(p) => p.memory_region_id(),
             #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.memory_region_id(),
         }
@@ -78,8 +69,6 @@ impl AbstractProcessor for ProcessorFacade {
             Self::Target(p) => p.efficiency_class(),
             #[cfg(test)]
             Self::Fallback(p) => p.efficiency_class(),
-            #[cfg(test)]
-            Self::Mock(p) => p.efficiency_class(),
             #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.efficiency_class(),
         }
@@ -92,10 +81,10 @@ impl From<ProcessorImpl> for ProcessorFacade {
     }
 }
 
-#[cfg(test)]
-impl From<MockProcessor> for ProcessorFacade {
-    fn from(p: MockProcessor) -> Self {
-        Self::Mock(p)
+#[cfg(any(test, feature = "test-util"))]
+impl From<FakeProcessor> for ProcessorFacade {
+    fn from(p: FakeProcessor) -> Self {
+        Self::Fake(p)
     }
 }
 
@@ -106,8 +95,6 @@ impl Debug for ProcessorFacade {
             Self::Target(inner) => inner.fmt(f),
             #[cfg(test)]
             Self::Fallback(inner) => inner.fmt(f),
-            #[cfg(test)]
-            Self::Mock(inner) => inner.fmt(f),
             #[cfg(any(test, feature = "test-util"))]
             Self::Fake(inner) => inner.fmt(f),
         }

@@ -80,7 +80,7 @@
 //!
 //! Each fake hardware instance is independent, ensuring that multiple fake instances can
 //! coexist in parallel tests without interference.
-//! 
+//!
 //! [`SystemHardware`]: crate::SystemHardware
 //! [`SystemHardware::current()`]: crate::SystemHardware::current
 

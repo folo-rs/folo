@@ -7,8 +7,6 @@ use std::sync::Arc;
 #[cfg(any(test, feature = "test-util"))]
 use crate::fake::FakePlatform;
 #[cfg(test)]
-use crate::pal::MockPlatform;
-#[cfg(test)]
 use crate::pal::fallback::BuildTargetPlatform as FallbackPlatform;
 use crate::pal::{BUILD_TARGET_PLATFORM, BuildTargetPlatform, Platform, ProcessorFacade};
 
@@ -18,9 +16,6 @@ pub(crate) enum PlatformFacade {
 
     #[cfg(test)]
     Fallback(&'static FallbackPlatform),
-
-    #[cfg(test)]
-    Mock(Arc<MockPlatform>),
 
     /// Fake hardware for the public test-util feature.
     #[cfg(any(test, feature = "test-util"))]
@@ -44,8 +39,6 @@ impl Platform for PlatformFacade {
             Self::Target(p) => p.get_all_processors(),
             #[cfg(test)]
             Self::Fallback(p) => p.get_all_processors(),
-            #[cfg(test)]
-            Self::Mock(p) => p.get_all_processors(),
             #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.get_all_processors(),
         }
@@ -59,8 +52,6 @@ impl Platform for PlatformFacade {
             Self::Target(p) => p.pin_current_thread_to(processors),
             #[cfg(test)]
             Self::Fallback(p) => p.pin_current_thread_to(processors),
-            #[cfg(test)]
-            Self::Mock(p) => p.pin_current_thread_to(processors),
             #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.pin_current_thread_to(processors),
         }
@@ -71,8 +62,6 @@ impl Platform for PlatformFacade {
             Self::Target(p) => p.current_processor_id(),
             #[cfg(test)]
             Self::Fallback(p) => p.current_processor_id(),
-            #[cfg(test)]
-            Self::Mock(p) => p.current_processor_id(),
             #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.current_processor_id(),
         }
@@ -83,8 +72,6 @@ impl Platform for PlatformFacade {
             Self::Target(p) => p.max_processor_id(),
             #[cfg(test)]
             Self::Fallback(p) => p.max_processor_id(),
-            #[cfg(test)]
-            Self::Mock(p) => p.max_processor_id(),
             #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.max_processor_id(),
         }
@@ -95,8 +82,6 @@ impl Platform for PlatformFacade {
             Self::Target(p) => p.max_memory_region_id(),
             #[cfg(test)]
             Self::Fallback(p) => p.max_memory_region_id(),
-            #[cfg(test)]
-            Self::Mock(p) => p.max_memory_region_id(),
             #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.max_memory_region_id(),
         }
@@ -107,8 +92,6 @@ impl Platform for PlatformFacade {
             Self::Target(p) => p.current_thread_processors(),
             #[cfg(test)]
             Self::Fallback(p) => p.current_thread_processors(),
-            #[cfg(test)]
-            Self::Mock(p) => p.current_thread_processors(),
             #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.current_thread_processors(),
         }
@@ -119,8 +102,6 @@ impl Platform for PlatformFacade {
             Self::Target(p) => p.max_processor_time(),
             #[cfg(test)]
             Self::Fallback(p) => p.max_processor_time(),
-            #[cfg(test)]
-            Self::Mock(p) => p.max_processor_time(),
             #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.max_processor_time(),
         }
@@ -131,8 +112,6 @@ impl Platform for PlatformFacade {
             Self::Target(p) => p.active_processor_count(),
             #[cfg(test)]
             Self::Fallback(p) => p.active_processor_count(),
-            #[cfg(test)]
-            Self::Mock(p) => p.active_processor_count(),
             #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.active_processor_count(),
         }
@@ -145,13 +124,6 @@ impl From<&'static BuildTargetPlatform> for PlatformFacade {
     }
 }
 
-#[cfg(test)]
-impl From<MockPlatform> for PlatformFacade {
-    fn from(p: MockPlatform) -> Self {
-        Self::Mock(Arc::new(p))
-    }
-}
-
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl Debug for PlatformFacade {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -159,8 +131,6 @@ impl Debug for PlatformFacade {
             Self::Target(inner) => inner.fmt(f),
             #[cfg(test)]
             Self::Fallback(inner) => inner.fmt(f),
-            #[cfg(test)]
-            Self::Mock(inner) => inner.fmt(f),
             #[cfg(any(test, feature = "test-util"))]
             Self::Fake(inner) => inner.fmt(f),
         }

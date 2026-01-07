@@ -979,332 +979,200 @@ mod tests_real {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use new_zealand::nz;
-    use nonempty::nonempty;
 
     use super::*;
-    use crate::fake::HardwareBuilder;
-    use crate::pal::{MockPlatform, MockProcessor, ProcessorFacade};
+    use crate::fake::{HardwareBuilder, ProcessorBuilder};
 
-    /// Creates a fake hardware instance with a given number of processors and memory regions.
-    fn fake_hardware(processor_count: usize, memory_region_count: usize) -> SystemHardware {
-        SystemHardware::fake(HardwareBuilder::from_counts(
-            NonZero::new(processor_count).unwrap_or(nz!(1)),
-            NonZero::new(memory_region_count).unwrap_or(nz!(1)),
-        ))
+    /// Helper to build a `ProcessorBuilder` with the given properties.
+    fn proc(id: u32, memory_region: u32, efficiency_class: EfficiencyClass) -> ProcessorBuilder {
+        ProcessorBuilder::new()
+            .id(id)
+            .memory_region(memory_region)
+            .efficiency_class(efficiency_class)
     }
 
     #[test]
     fn smoke_test() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Performance)),
+        );
 
-        let platform = new_mock_platform(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(2, 1), platform.into());
-
-        // Simplest possible test, verify that we see all the processors.
-        let set = builder.take_all().unwrap();
+        let set = hw.processors().to_builder().take_all().unwrap();
         assert_eq!(set.len(), 2);
     }
 
     #[test]
     fn efficiency_class_filter_take() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Performance)),
+        );
 
-        let platform = new_mock_platform(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.efficiency_processors_only().take_all().unwrap();
+        let set = hw
+            .processors()
+            .to_builder()
+            .efficiency_processors_only()
+            .take_all()
+            .unwrap();
         assert_eq!(set.len(), 1);
         assert_eq!(set.processors().first().id(), 0);
     }
 
     #[test]
     fn efficiency_class_filter_take_all() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Performance)),
+        );
 
-        let platform = new_mock_platform(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.efficiency_processors_only().take_all().unwrap();
+        let set = hw
+            .processors()
+            .to_builder()
+            .efficiency_processors_only()
+            .take_all()
+            .unwrap();
         assert_eq!(set.len(), 1);
         assert_eq!(set.processors().first().id(), 0);
     }
 
     #[test]
     fn take_n_processors() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Performance,
-            },
-            MockProcessor {
-                index: 2,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Performance))
+                .processor(proc(2, 0, EfficiencyClass::Efficiency)),
+        );
 
-        let platform = new_mock_platform(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.take(nz!(2)).unwrap();
+        let set = hw.processors().to_builder().take(nz!(2)).unwrap();
         assert_eq!(set.len(), 2);
     }
 
     #[test]
     fn take_n_not_enough_processors() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        // Configure only 2 processors with low quota so the request for 3 fails.
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Performance))
+                .max_processor_time(2.0),
+        );
 
-        // The "max processor time" call will already abort the build early
-        // because it shows that not enough processor time is available.
-        let platform = new_mock_platform_with_get_count(pal_processors, 0, 1);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.take(nz!(3));
+        let set = hw.processors().to_builder().take(nz!(3));
         assert!(set.is_none());
     }
 
     #[test]
     fn take_n_not_enough_processor_time_quota() {
-        let mut platform = MockPlatform::new();
+        // Configure quota of only 1.0 processor time.
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Performance))
+                .max_processor_time(1.0),
+        );
 
-        // There is only 1.0 processors worth of quota available.
-        platform
-            .expect_max_processor_time()
-            .times(1)
-            .return_const(1.0);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.take(nz!(2));
+        let set = hw.processors().to_builder().take(nz!(2));
         assert!(set.is_none());
     }
 
     #[test]
     fn take_n_not_enough_processor_time_quota_but_ignoring_quota() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        // Configure quota of only 1.0 processor time but we will ignore it by
+        // calling ignoring_resource_quota() on the builder.
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Performance))
+                .max_processor_time(1.0),
+        );
 
-        let mut platform = MockPlatform::new();
-        let pal_processors = pal_processors.map(ProcessorFacade::Mock);
+        // First, verify that hw.processors() respects the quota limit.
+        let limited_set = hw.processors();
+        assert_eq!(limited_set.len(), 1);
 
-        // There is only 1.0 processors worth of quota available. This limitation should be ignored.
-        // In fact, this call should not even be made - we have it here just to fail the test with
-        // 1.0 (which is too low) if one day the call starts being made.
-        platform.expect_max_processor_time().return_const(1.0);
-
-        platform
-            .expect_get_all_processors_core()
-            .times(1)
-            .return_const(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.ignoring_resource_quota().take(nz!(2));
-
+        // Now verify we can bypass the quota by using ignoring_resource_quota() on a builder
+        // that starts from all_processors().
+        let set = hw
+            .all_processors()
+            .to_builder()
+            .ignoring_resource_quota()
+            .take(nz!(2));
         assert_eq!(set.unwrap().len(), 2);
     }
 
     #[test]
     fn take_n_quota_limit_min_1() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        // Configure quota of only 0.001 processor time, which should round UP to 1.
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Performance))
+                .max_processor_time(0.001),
+        );
 
-        let mut platform = MockPlatform::new();
-        let pal_processors = pal_processors.map(ProcessorFacade::Mock);
-
-        // There is 0.001 processors worth of quota available, which gets rounded UP to 1.0.
-        // While we normally round down due to quality of service considerations. However, we still
-        // need to return at least 1 processor because there is at least some some processor time
-        // available that we must allow to be spent - rounding to zero would be nonsense.
-        platform.expect_max_processor_time().return_const(0.001);
-
-        platform
-            .expect_get_all_processors_core()
-            .times(1)
-            .return_const(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.take(nz!(1));
-
+        let set = hw.processors().to_builder().take(nz!(1));
         assert_eq!(set.unwrap().len(), 1);
     }
 
     #[test]
     fn take_all_rounds_down_quota() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        // Configure quota of 1.999 which should round DOWN to 1.
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Performance))
+                .max_processor_time(1.999),
+        );
 
-        let mut platform = MockPlatform::new();
-        let pal_processors = pal_processors.map(ProcessorFacade::Mock);
-
-        // There is 1.999 processors worth of quota available, which gets rounded to 1.0.
-        platform
-            .expect_max_processor_time()
-            .times(1)
-            .return_const(1.999);
-
-        platform
-            .expect_get_all_processors_core()
-            .times(1)
-            .return_const(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.take_all().unwrap();
+        let set = hw.processors().to_builder().take_all().unwrap();
         assert_eq!(set.len(), 1);
     }
 
     #[test]
     fn take_all_min_1_despite_quota() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        // Configure quota of 0.001 which should round UP to 1 (never zero).
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Performance))
+                .max_processor_time(0.001),
+        );
 
-        let mut platform = MockPlatform::new();
-        let pal_processors = pal_processors.map(ProcessorFacade::Mock);
-
-        // There is 0.001 processors worth of quota available, which gets rounded UP to 1.0.
-        // While we normally round down due to quality of service considerations. However, we still
-        // need to return at least 1 processor because there is at least some some processor time
-        // available that we must allow to be spent - rounding to zero would be nonsense.
-        platform
-            .expect_max_processor_time()
-            .times(1)
-            .return_const(0.001);
-
-        platform
-            .expect_get_all_processors_core()
-            .times(1)
-            .return_const(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.take_all().unwrap();
+        let set = hw.processors().to_builder().take_all().unwrap();
         assert_eq!(set.len(), 1);
     }
 
     #[test]
     fn take_all_not_enough_processors() {
-        let pal_processors = nonempty![MockProcessor {
-            index: 0,
-            memory_region: 0,
-            efficiency_class: EfficiencyClass::Efficiency,
-        }];
+        // All processors are efficiency class, so performance filter should fail.
+        let hw = SystemHardware::fake(HardwareBuilder::new().processor(proc(
+            0,
+            0,
+            EfficiencyClass::Efficiency,
+        )));
 
-        // We expect 0 calls to max_processor_time() because we failed early in the build.
-        let platform = new_mock_platform_with_get_count(pal_processors, 1, 0);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.performance_processors_only().take_all();
+        let set = hw
+            .processors()
+            .to_builder()
+            .performance_processors_only()
+            .take_all();
         assert!(set.is_none());
     }
 
     #[test]
     fn except_filter_take() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Performance)),
+        );
 
-        // .filter() eagerly evaluates processors, so we need to allow +1 call.
-        // We call .take() twice, so need to allow +1 of each.
-        let platform = new_mock_platform_with_get_count(pal_processors, 3, 2);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
+        let builder = hw.processors().to_builder();
 
         let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
         assert_eq!(except_set.len(), 1);
@@ -1316,24 +1184,13 @@ mod tests {
 
     #[test]
     fn except_filter_take_all() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Performance)),
+        );
 
-        // .filter() eagerly evaluates processors, so we need to allow +1 call.
-        // We call .take() twice, so need to allow +1 of each.
-        let platform = new_mock_platform_with_get_count(pal_processors, 3, 2);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
+        let builder = hw.processors().to_builder();
         let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
         assert_eq!(except_set.len(), 1);
 
@@ -1344,125 +1201,90 @@ mod tests {
 
     #[test]
     fn custom_filter_take() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Performance)),
+        );
 
-        // .filter() eagerly evaluates processors, so we need to allow 2 calls.
-        let platform = new_mock_platform_with_get_count(pal_processors, 2, 1);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.filter(|p| p.id() == 1).take_all().unwrap();
+        let set = hw
+            .processors()
+            .to_builder()
+            .filter(|p| p.id() == 1)
+            .take_all()
+            .unwrap();
         assert_eq!(set.len(), 1);
         assert_eq!(set.processors().first().id(), 1);
     }
 
     #[test]
     fn custom_filter_take_all() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Performance)),
+        );
 
-        // .filter() eagerly evaluates processors, so we need to allow 2 calls.
-        let platform = new_mock_platform_with_get_count(pal_processors, 2, 1);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.filter(|p| p.id() == 1).take_all().unwrap();
+        let set = hw
+            .processors()
+            .to_builder()
+            .filter(|p| p.id() == 1)
+            .take_all()
+            .unwrap();
         assert_eq!(set.len(), 1);
         assert_eq!(set.processors().first().id(), 1);
     }
 
     #[test]
     fn same_memory_region_filter_take() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 1, EfficiencyClass::Performance)),
+        );
 
-        let platform = new_mock_platform(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.same_memory_region().take_all().unwrap();
+        let set = hw
+            .processors()
+            .to_builder()
+            .same_memory_region()
+            .take_all()
+            .unwrap();
         assert_eq!(set.len(), 1);
     }
 
     #[test]
     fn same_memory_region_filter_take_all() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 1, EfficiencyClass::Performance)),
+        );
 
-        let platform = new_mock_platform(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.same_memory_region().take_all().unwrap();
+        let set = hw
+            .processors()
+            .to_builder()
+            .same_memory_region()
+            .take_all()
+            .unwrap();
         assert_eq!(set.len(), 1);
     }
 
     #[test]
     fn different_memory_region_filter_take() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 2,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Performance,
-            },
-            MockProcessor {
-                index: 3,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Efficiency))
+                .processor(proc(2, 1, EfficiencyClass::Performance))
+                .processor(proc(3, 1, EfficiencyClass::Performance)),
+        );
 
-        let platform = new_mock_platform(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.different_memory_regions().take_all().unwrap();
+        let set = hw
+            .processors()
+            .to_builder()
+            .different_memory_regions()
+            .take_all()
+            .unwrap();
         assert_eq!(set.len(), 2);
 
         assert_ne!(
@@ -1473,33 +1295,20 @@ mod tests {
 
     #[test]
     fn different_memory_region_filter_take_all() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 2,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Performance,
-            },
-            MockProcessor {
-                index: 3,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Efficiency))
+                .processor(proc(2, 1, EfficiencyClass::Performance))
+                .processor(proc(3, 1, EfficiencyClass::Performance)),
+        );
 
-        let platform = new_mock_platform(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.different_memory_regions().take_all().unwrap();
+        let set = hw
+            .processors()
+            .to_builder()
+            .different_memory_regions()
+            .take_all()
+            .unwrap();
         assert_eq!(set.len(), 2);
 
         assert_ne!(
@@ -1510,29 +1319,14 @@ mod tests {
 
     #[test]
     fn filter_combinations() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Performance,
-            },
-            MockProcessor {
-                index: 2,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Efficiency,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 1, EfficiencyClass::Performance))
+                .processor(proc(2, 1, EfficiencyClass::Efficiency)),
+        );
 
-        // .filter() eagerly evaluates processors, so we need to allow +1 call.
-        // We call .take() twice, so need to allow +1 of each.
-        let platform = new_mock_platform_with_get_count(pal_processors, 3, 2);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
+        let builder = hw.processors().to_builder();
         let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
         let set = builder
             .efficiency_processors_only()
@@ -1546,28 +1340,19 @@ mod tests {
 
     #[test]
     fn same_memory_region_take_two_processors() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Performance,
-            },
-            MockProcessor {
-                index: 2,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Efficiency,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 1, EfficiencyClass::Performance))
+                .processor(proc(2, 1, EfficiencyClass::Efficiency)),
+        );
 
-        let platform = new_mock_platform(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.same_memory_region().take(nz!(2)).unwrap();
+        let set = hw
+            .processors()
+            .to_builder()
+            .same_memory_region()
+            .take(nz!(2))
+            .unwrap();
         assert_eq!(set.len(), 2);
         assert!(set.processors().iter().any(|p| p.id() == 1));
         assert!(set.processors().iter().any(|p| p.id() == 2));
@@ -1575,33 +1360,17 @@ mod tests {
 
     #[test]
     fn different_memory_region_and_efficiency_class_filters() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Performance,
-            },
-            MockProcessor {
-                index: 2,
-                memory_region: 2,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 3,
-                memory_region: 3,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 1, EfficiencyClass::Performance))
+                .processor(proc(2, 2, EfficiencyClass::Efficiency))
+                .processor(proc(3, 3, EfficiencyClass::Performance)),
+        );
 
-        let platform = new_mock_platform(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder
+        let set = hw
+            .processors()
+            .to_builder()
             .different_memory_regions()
             .efficiency_processors_only()
             .take_all()
@@ -1613,40 +1382,33 @@ mod tests {
 
     #[test]
     fn performance_processors_but_all_efficiency() {
-        let pal_processors = nonempty![MockProcessor {
-            index: 0,
-            memory_region: 0,
-            efficiency_class: EfficiencyClass::Efficiency,
-        }];
+        let hw = SystemHardware::fake(HardwareBuilder::new().processor(proc(
+            0,
+            0,
+            EfficiencyClass::Efficiency,
+        )));
 
-        // We expect 0 calls to max_processor_time() because we failed early in the build.
-        let platform = new_mock_platform_with_get_count(pal_processors, 1, 0);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-
-        let set = builder.performance_processors_only().take_all();
+        let set = hw
+            .processors()
+            .to_builder()
+            .performance_processors_only()
+            .take_all();
         assert!(set.is_none(), "No performance processors should be found.");
     }
 
     #[test]
     fn require_different_single_region() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Efficiency)),
+        );
 
-        let platform = new_mock_platform(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.different_memory_regions().take(nz!(2));
+        let set = hw
+            .processors()
+            .to_builder()
+            .different_memory_regions()
+            .take(nz!(2));
         assert!(
             set.is_none(),
             "Should fail because there's not enough distinct memory regions."
@@ -1655,28 +1417,16 @@ mod tests {
 
     #[test]
     fn prefer_different_memory_regions_take_all() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Performance,
-            },
-            MockProcessor {
-                index: 2,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Efficiency,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 1, EfficiencyClass::Performance))
+                .processor(proc(2, 1, EfficiencyClass::Efficiency)),
+        );
 
-        let platform = new_mock_platform(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder
+        let set = hw
+            .processors()
+            .to_builder()
             .prefer_different_memory_regions()
             .take_all()
             .unwrap();
@@ -1685,33 +1435,17 @@ mod tests {
 
     #[test]
     fn prefer_different_memory_regions_take_n() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Performance,
-            },
-            MockProcessor {
-                index: 2,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 3,
-                memory_region: 2,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 1, EfficiencyClass::Performance))
+                .processor(proc(2, 1, EfficiencyClass::Efficiency))
+                .processor(proc(3, 2, EfficiencyClass::Performance)),
+        );
 
-        let platform = new_mock_platform(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder
+        let set = hw
+            .processors()
+            .to_builder()
             .prefer_different_memory_regions()
             .take(nz!(2))
             .unwrap();
@@ -1726,33 +1460,20 @@ mod tests {
 
     #[test]
     fn prefer_same_memory_regions_take_n() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Performance,
-            },
-            MockProcessor {
-                index: 2,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 3,
-                memory_region: 2,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 1, EfficiencyClass::Performance))
+                .processor(proc(2, 1, EfficiencyClass::Efficiency))
+                .processor(proc(3, 2, EfficiencyClass::Performance)),
+        );
 
-        let platform = new_mock_platform(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.prefer_same_memory_region().take(nz!(2)).unwrap();
+        let set = hw
+            .processors()
+            .to_builder()
+            .prefer_same_memory_region()
+            .take(nz!(2))
+            .unwrap();
         assert_eq!(set.len(), 2);
         let regions: HashSet<_> = set
             .processors()
@@ -1764,33 +1485,17 @@ mod tests {
 
     #[test]
     fn prefer_different_memory_regions_take_n_not_enough() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Performance,
-            },
-            MockProcessor {
-                index: 2,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 3,
-                memory_region: 2,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 1, EfficiencyClass::Performance))
+                .processor(proc(2, 1, EfficiencyClass::Efficiency))
+                .processor(proc(3, 2, EfficiencyClass::Performance)),
+        );
 
-        let platform = new_mock_platform(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder
+        let set = hw
+            .processors()
+            .to_builder()
             .prefer_different_memory_regions()
             .take(nz!(4))
             .unwrap();
@@ -1799,33 +1504,20 @@ mod tests {
 
     #[test]
     fn prefer_same_memory_regions_take_n_not_enough() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Performance,
-            },
-            MockProcessor {
-                index: 2,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 3,
-                memory_region: 2,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 1, EfficiencyClass::Performance))
+                .processor(proc(2, 1, EfficiencyClass::Efficiency))
+                .processor(proc(3, 2, EfficiencyClass::Performance)),
+        );
 
-        let platform = new_mock_platform(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.prefer_same_memory_region().take(nz!(3)).unwrap();
+        let set = hw
+            .processors()
+            .to_builder()
+            .prefer_same_memory_region()
+            .take(nz!(3))
+            .unwrap();
         assert_eq!(set.len(), 3);
         let regions: HashSet<_> = set
             .processors()
@@ -1841,33 +1533,20 @@ mod tests {
 
     #[test]
     fn prefer_same_memory_regions_take_n_picks_best_fit() {
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Performance,
-            },
-            MockProcessor {
-                index: 2,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 3,
-                memory_region: 2,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 1, EfficiencyClass::Performance))
+                .processor(proc(2, 1, EfficiencyClass::Efficiency))
+                .processor(proc(3, 2, EfficiencyClass::Performance)),
+        );
 
-        let platform = new_mock_platform(pal_processors);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
-        let set = builder.prefer_same_memory_region().take(nz!(2)).unwrap();
+        let set = hw
+            .processors()
+            .to_builder()
+            .prefer_same_memory_region()
+            .take(nz!(2))
+            .unwrap();
         assert_eq!(set.len(), 2);
         let regions: HashSet<_> = set
             .processors()
@@ -1877,7 +1556,7 @@ mod tests {
         assert_eq!(
             1,
             regions.len(),
-            "should have picked from memory region 1 which  can accommodate the preference"
+            "should have picked from memory region 1 which can accommodate the preference"
         );
     }
 
@@ -1885,39 +1564,16 @@ mod tests {
     fn take_any_returns_none_when_not_enough_processors() {
         // This tests the MemoryRegionSelector::Any branch returning None when there
         // are not enough processors in the candidate set to satisfy the request.
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
-
-        let mut platform = MockPlatform::new();
-        let pal_processors_facade = pal_processors.map(ProcessorFacade::Mock);
-
-        // Set quota high enough that the request passes the quota check.
-        // The actual selection logic in the Any branch will fail due to insufficient candidates.
-        platform
-            .expect_max_processor_time()
-            .times(1)
-            .return_const(10.0);
-
-        platform
-            .expect_get_all_processors_core()
-            .times(1)
-            .return_const(pal_processors_facade);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 1, EfficiencyClass::Performance))
+                .max_processor_time(10.0),
+        );
 
         // Request more processors than exist (3 > 2). Quota is high so the quota check passes,
         // but there are not enough candidates in the Any branch.
-        let set = builder.take(nz!(3));
+        let set = hw.processors().to_builder().take(nz!(3));
         assert!(
             set.is_none(),
             "should return None when not enough processors available"
@@ -1931,71 +1587,24 @@ mod tests {
         // Configuration: 2 memory regions with 1 processor each. Request 3 processors.
         // The round-robin will pick 1 from each region (total 2), then have no more
         // candidates to pick from, so it returns None.
-        let pal_processors = nonempty![
-            MockProcessor {
-                index: 0,
-                memory_region: 0,
-                efficiency_class: EfficiencyClass::Efficiency,
-            },
-            MockProcessor {
-                index: 1,
-                memory_region: 1,
-                efficiency_class: EfficiencyClass::Performance,
-            }
-        ];
-
-        let mut platform = MockPlatform::new();
-        let pal_processors_facade = pal_processors.map(ProcessorFacade::Mock);
-
-        // Set quota high enough that the request passes the quota check.
-        platform
-            .expect_max_processor_time()
-            .times(1)
-            .return_const(10.0);
-
-        platform
-            .expect_get_all_processors_core()
-            .times(1)
-            .return_const(pal_processors_facade);
-
-        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 1, EfficiencyClass::Performance))
+                .max_processor_time(10.0),
+        );
 
         // Request 3 processors with prefer_different_memory_regions.
         // We only have 2 total, so after 2 rounds the candidates will be exhausted.
-        let set = builder.prefer_different_memory_regions().take(nz!(3));
+        let set = hw
+            .processors()
+            .to_builder()
+            .prefer_different_memory_regions()
+            .take(nz!(3));
         assert!(
             set.is_none(),
             "should return None when candidates exhausted in PreferDifferent mode"
         );
-    }
-
-    fn new_mock_platform(processors: NonEmpty<MockProcessor>) -> MockPlatform {
-        new_mock_platform_with_get_count(processors, 1, 1)
-    }
-
-    #[allow(
-        clippy::cast_precision_loss,
-        reason = "unavoidable f64 conversion but all realistic values likely in safe bounds"
-    )]
-    fn new_mock_platform_with_get_count(
-        processors: NonEmpty<MockProcessor>,
-        get_all_processors_count: usize,
-        get_max_processor_time_count: usize,
-    ) -> MockPlatform {
-        let mut platform = MockPlatform::new();
-        let pal_processors = processors.map(ProcessorFacade::Mock);
-
-        platform
-            .expect_max_processor_time()
-            .times(get_max_processor_time_count)
-            .return_const(pal_processors.len() as f64);
-
-        platform
-            .expect_get_all_processors_core()
-            .times(get_all_processors_count)
-            .return_const(pal_processors);
-
-        platform
     }
 }
 

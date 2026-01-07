@@ -27,8 +27,3 @@ pub(crate) mod fallback;
 
 #[cfg(not(any(target_os = "linux", windows)))]
 pub(crate) use fallback::*;
-
-#[cfg(test)]
-mod mocks;
-#[cfg(test)]
-pub(crate) use mocks::*;
