@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "all_the_time"
-version = "0.4.9"
+version = "0.4.10"
 dependencies = [
  "cpu-time",
  "criterion",
@@ -23,7 +23,7 @@ dependencies = [
 
 [[package]]
 name = "alloc_tracker"
-version = "0.5.13"
+version = "0.5.14"
 dependencies = [
  "criterion",
  "mutants",
@@ -358,7 +358,7 @@ checksum = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3"
 
 [[package]]
 name = "cargo-detect-package"
-version = "1.0.8"
+version = "1.0.9"
 dependencies = [
  "argh",
  "mockall",
@@ -640,7 +640,7 @@ version = "0.5.1"
 
 [[package]]
 name = "events_once"
-version = "0.5.13"
+version = "0.5.14"
 dependencies = [
  "criterion",
  "hash_hasher",
@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "fast_time"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "criterion",
  "libc",
@@ -1032,7 +1032,7 @@ dependencies = [
 
 [[package]]
 name = "infinity_pool"
-version = "0.8.5"
+version = "0.8.6"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -1096,7 +1096,7 @@ checksum = "37c93d8daa9d8a012fd8ab92f088405fb202ea0b6ab73ee2482ae66af4f42091"
 
 [[package]]
 name = "linked"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "criterion",
  "hash_hasher",
@@ -1112,7 +1112,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "linked_macros_impl",
  "proc-macro2",
@@ -1120,7 +1120,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros_impl"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1153,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus"
-version = "1.1.4"
+version = "1.1.5"
 dependencies = [
  "cpulist",
  "criterion",
@@ -1178,7 +1178,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_benchmarking"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "cpulist",
  "criterion",
@@ -1269,7 +1269,7 @@ version = "1.0.3"
 
 [[package]]
 name = "nm"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "criterion",
  "foldhash 0.2.0",
@@ -1404,7 +1404,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.26"
+version = "0.2.27"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -1677,7 +1677,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
 name = "region_cached"
-version = "1.0.8"
+version = "1.0.9"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1698,7 +1698,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "1.0.8"
+version = "1.0.9"
 dependencies = [
  "arc-swap",
  "axum",
@@ -2247,7 +2247,7 @@ checksum = "7ba6f5989077681266825251a52748b8c1d8a4ad098cc37e440103d0ea717fc0"
 
 [[package]]
 name = "vicinal"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
