@@ -20,8 +20,8 @@
 //!
 //! # Designing testable code
 //!
-//! To make your code testable with fake hardware, accept [`crate::SystemHardware`] as a parameter
-//! instead of always calling [`crate::SystemHardware::current()`]. This allows tests to substitute
+//! To make your code testable with fake hardware, accept [`SystemHardware`] as a parameter
+//! instead of always calling [`SystemHardware::current()`]. This allows tests to substitute
 //! fake hardware while production code uses real hardware.
 //!
 //! ```
@@ -80,6 +80,9 @@
 //!
 //! Each fake hardware instance is independent, ensuring that multiple fake instances can
 //! coexist in parallel tests without interference.
+//! 
+//! [`SystemHardware`]: crate::SystemHardware
+//! [`SystemHardware::current()`]: crate::SystemHardware::current
 
 mod builder;
 mod processor_builder;
