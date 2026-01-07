@@ -1,0 +1,34 @@
+[package]
+name = "nm_otel"
+description = "OpenTelemetry bridge for nm metrics"
+publish = true
+version = "0.1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+foldhash = { workspace = true }
+futures = { workspace = true }
+nm = { workspace = true }
+opentelemetry = { workspace = true, features = ["metrics"] }
+opentelemetry_sdk = { workspace = true, features = ["metrics"] }
+tick = { workspace = true }
+
+[dev-dependencies]
+mutants = { workspace = true }
+nm = { path = "../nm", features = ["test-util"] }
+opentelemetry-stdout = { workspace = true, features = ["metrics"] }
+opentelemetry_sdk = { workspace = true, features = ["metrics", "testing"] }
+static_assertions = { workspace = true }
+tick = { workspace = true, features = ["tokio", "test-util"] }
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
+
+[lints]
+workspace = true

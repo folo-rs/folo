@@ -126,7 +126,8 @@ Yet time makes fools of us all! Real-world data often shows surprising behaviors
 we would spawn 500 tasks, a surprise implementation detail from the HTTP stack may end up spawning
 500 million! Benchmarks and belief is not enough. [`nm`][nm] provides a very high performance
 and minimal metrics framework suitable for taking millions of measurements per second. Only with
-the real data can we be assured that we achieve real performance.
+the real data can we be assured that we achieve real performance. [`nm_otel`][nm_otel] bridges
+nm metrics to OpenTelemetry for export to any compatible backend.
 
 Many attempts to instrument high-performance logic are self-defeating because few people expect
 that time itself is slow. Measuring the time, that is! `Instant::now()` is a remarkably slow
@@ -171,6 +172,7 @@ Deprecated packages:
 [many_cpus]: packages/many_cpus/README.md
 [many_cpus_b]: packages/many_cpus_benchmarking/README.md
 [nm]: packages/nm/README.md
+[nm_otel]: packages/nm_otel/README.md
 [nonzero]: https://github.com/rust-lang/rfcs/pull/3786
 [numa]: https://www.kernel.org/doc/html/v4.18/vm/numa.html
 [par_bench]: packages/par_bench/README.md
