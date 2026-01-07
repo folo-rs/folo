@@ -1195,4 +1195,42 @@ mod tests {
         assert_eq!(buckets[3], (100, 5));
         assert_eq!(buckets[4], (Magnitude::MAX, 6));
     }
+
+    #[test]
+    fn event_metrics_fake_calculates_mean_correctly() {
+        // Test that fake() correctly calculates mean as sum / count.
+        let metrics = EventMetrics::fake("test_event", 10, 100, None);
+
+        assert_eq!(metrics.name(), "test_event");
+        assert_eq!(metrics.count(), 10);
+        assert_eq!(metrics.sum(), 100);
+        assert_eq!(metrics.mean(), 10); // 100 / 10 = 10
+        assert!(metrics.histogram().is_none());
+    }
+
+    #[test]
+    fn event_metrics_fake_calculates_mean_with_different_values() {
+        // Test with different values to ensure division is correct.
+        let metrics = EventMetrics::fake("test_event", 25, 500, None);
+
+        assert_eq!(metrics.mean(), 20); // 500 / 25 = 20
+    }
+
+    #[test]
+    fn event_metrics_fake_mean_zero_when_count_zero() {
+        // Test that when count is 0, mean is 0 (not NaN or panic).
+        let metrics = EventMetrics::fake("test_event", 0, 100, None);
+
+        assert_eq!(metrics.count(), 0);
+        assert_eq!(metrics.sum(), 100);
+        assert_eq!(metrics.mean(), 0);
+    }
+
+    #[test]
+    fn event_metrics_fake_mean_handles_integer_division() {
+        // Test that integer division correctly truncates the remainder.
+        let metrics = EventMetrics::fake("test_event", 3, 10, None);
+
+        assert_eq!(metrics.mean(), 3); // 10 / 3 = 3 (remainder discarded)
+    }
 }
