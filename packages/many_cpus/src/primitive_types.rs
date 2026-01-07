@@ -1,22 +1,27 @@
-/// A processor identifier, used to differentiate processors in the system. This will match
-/// the numeric identifier used by standard tooling of the operating system.
+/// Identifies a specific processor.
+/// 
+/// This will match the numeric identifier used by standard tooling of the operating system.
 ///
 /// It is important to highlight that the values used are not guaranteed to be sequential/contiguous
 /// or to start from zero (aspects that are also not guaranteed by operating system tooling).
 pub type ProcessorId = u32;
 
-/// A memory region identifier, used to differentiate memory regions in the system. This will match
-/// the numeric identifier used by standard tooling of the operating system.
+/// Identifies a specific memory region.
+/// 
+/// This will match the numeric identifier used by standard tooling of the operating system.
 ///
 /// It is important to highlight that the values used are not guaranteed to be sequential/contiguous
 /// or to start from zero (aspects that are also not guaranteed by operating system tooling).
 pub type MemoryRegionId = u32;
 
-/// Differentiates processors by their efficiency class, allowing work requiring high
-/// performance to be placed on the most performant processors at the expense of energy usage.
+/// Differentiates processors on the performance-efficiency axis.
 ///
-/// This is a relative measurement - the most performant processors in a system are always
-/// considered performance processors, with less performant ones considered efficiency processors.
+/// The idea behind this classification is that slower processors tend to be more energy-efficient,
+/// so we distinguish processors that should be preferred to get processing done fast from processors
+/// that should be preferred to conserve energy.
+///
+/// This is a relative measurement - the fastest processors in a system are always
+/// considered performance processors, with slower ones considered efficiency processors.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[expect(
     clippy::exhaustive_enums,

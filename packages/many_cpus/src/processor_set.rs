@@ -10,8 +10,8 @@ use crate::{Processor, ProcessorSetBuilder, SystemHardware};
 
 /// One or more processors present on the system and available for use.
 ///
-/// To obtain a `ProcessorSet`, use [`SystemHardware::processors()`][crate::SystemHardware::processors]
-/// to get a builder that allows specifying selection criteria.
+/// The typical way to obtain a `ProcessorSet` is to call [`SystemHardware::processors()`].
+/// You may reduce a `ProcessorSet` to a smaller subset by using [`ProcessorSet::to_builder()`].
 ///
 /// Once you have a `ProcessorSet`, you can iterate over [`ProcessorSet::processors()`]
 /// to inspect the individual processors in the set. There are several ways to apply the processor
@@ -24,6 +24,8 @@ use crate::{Processor, ProcessorSetBuilder, SystemHardware};
 /// 3. You can use [`ProcessorSet::spawn_threads()`] to spawn a set of threads, with one thread
 ///    for each of the processors in the set. Each thread will be pinned to its own processor.
 #[doc = include_str!("../docs/snippets/changes_at_runtime.md")]
+/// [`SystemHardware::processors()`]: crate::SystemHardware::processors
+/// [`ProcessorSet::to_builder()`]: crate::ProcessorSet::to_builder
 #[derive(Clone, Debug)]
 pub struct ProcessorSet {
     processors: NonEmpty<Processor>,

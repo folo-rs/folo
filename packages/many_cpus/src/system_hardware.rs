@@ -537,7 +537,10 @@ impl SystemHardware {
 
     /// Returns the number of currently active processors on the system.
     ///
-    /// This includes processors that are not available to the current process.
+    /// This includes processors that are not available to the current process and
+    /// not part of any processor set. This is rarely what you want and is typically only
+    /// relevant when interacting with operating system APIs that specifically work with
+    /// machine-level processor counts.
     ///
     /// # Example
     ///
@@ -646,6 +649,8 @@ impl std::fmt::Debug for SystemHardware {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use itertools::Itertools;
+
     use super::*;
 
     #[test]
@@ -671,7 +676,7 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
-    fn returns_positive_values() {
+    fn counts_are_positive_values() {
         let hardware = SystemHardware::current();
 
         // There must be at least one processor and one memory region.
@@ -715,8 +720,6 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn pinned_current_processor_id_is_unique() {
-        use itertools::Itertools;
-
         // We spawn a thread on every processor and check that the processor ID is unique.
         let hw = SystemHardware::current();
 
@@ -745,14 +748,15 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn active_processor_count_is_at_least_processor_set_len() {
-        // When we take_all() and build a ProcessorSet, we cannot get more processors
-        // than are actually active on the system. This is a sanity check to compare the two.
+        // The system may have processors that are not part of any processor set (e.g. because
+        // they are not available for the current process) but cannot have more processors in any
+        // processor set than the active processor count.
         let hw = SystemHardware::current();
-        let all_processors = hw.processors();
+        let all_processors = hw.all_processors();
 
         let active_processors = hw.active_processor_count();
 
-        // It is OK if take_all() returns less (there are more constraints than "is active").
+        // It is OK if all_processors() returns fewer (there are more constraints than "is active").
         assert!(active_processors >= all_processors.len());
     }
 
@@ -763,16 +767,15 @@ mod tests {
         clippy::cast_sign_loss,
         reason = "unavoidable f64-usize casting but we know the value is positive"
     )]
-    fn resource_quota_is_not_larger_than_processor_set_len() {
-        // The resource quota we observe cannot be greater than take_all() of processors
-        // because the take_all() default behavior is to use the resource quota as max limit.
+    fn resource_quota_is_followed_by_default() {
         let hw = SystemHardware::current();
         let max_processor_time = hw.resource_quota().max_processor_time();
-        let all_processors = hw.processors();
+        let processors = hw.processors();
 
-        let max_processor_time_usize = max_processor_time.floor() as usize;
+        // Must be at least 1, since 0 processors is invalid set size.
+        let quota_to_processor_time = (max_processor_time.floor() as usize).max(1);
 
-        assert!(max_processor_time_usize <= all_processors.len());
+        assert_eq!(quota_to_processor_time, processors.len());
     }
 
     #[test]

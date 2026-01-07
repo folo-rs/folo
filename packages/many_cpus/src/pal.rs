@@ -1,4 +1,4 @@
-//! Platform Abstraction Layer (PAL). This is private API, though `pub` in parts to allow
+//! Platform Abstraction Layer (PAL). This is private API, though (hidden) `pub` in parts to allow
 //! benchmark code to bypass public API layers for more accurate benchmarking.
 
 mod abstractions;

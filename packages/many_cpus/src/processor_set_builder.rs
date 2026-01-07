@@ -13,11 +13,10 @@ use crate::{
     EfficiencyClass, MemoryRegionId, Processor, ProcessorId, ProcessorSet, SystemHardware,
 };
 
-/// Builds a [`ProcessorSet`] based on specified criteria. The default criteria include all
-/// available processors, with the maximum count determined by the process resource quota.
+/// Builds a [`ProcessorSet`] based on specified criteria.
 ///
-/// You can obtain a builder via [`SystemHardware::processors()`][crate::SystemHardware::processors]
-/// or from an existing processor set via [`ProcessorSet::to_builder()`].
+/// You can obtain an instance by calling [`ProcessorSet::to_builder()`] on an existing [`ProcessorSet`],
+/// typically either [`SystemHardware::processors()`] or [`SystemHardware::all_processors()`].
 #[doc = include_str!("../docs/snippets/external_constraints.md")]
 ///
 /// # Inheriting processor affinity from current thread
@@ -27,11 +26,12 @@ use crate::{
 /// one wants to configure.
 ///
 /// However, if you do wish to inherit the processor affinity from the current thread, you may do
-/// so by calling [`.where_available_for_current_thread()`][1] on the builder. This filters out all
+/// so by calling [`.where_available_for_current_thread()`] on the builder. This filters out all
 /// processors that the current thread is not configured to execute on.
 ///
-/// [1]: ProcessorSetBuilder::where_available_for_current_thread
-/// [2]: ProcessorSetBuilder::ignoring_resource_quota
+/// [`.where_available_for_current_thread()`]: ProcessorSetBuilder::where_available_for_current_thread
+/// [`SystemHardware::processors()`]: crate::SystemHardware::processors
+/// [`SystemHardware::all_processors()`]: crate::SystemHardware::all_processors
 #[derive(Clone, Debug)]
 pub struct ProcessorSetBuilder {
     processor_type_selector: ProcessorTypeSelector,
@@ -49,16 +49,6 @@ pub struct ProcessorSetBuilder {
 }
 
 impl ProcessorSetBuilder {
-    /// Creates a new processor set builder with the default configuration.
-    ///
-    /// The default configuration considers every processor on the system as a valid candidate,
-    /// except those for which the operating system has defined hard limits. See type-level
-    /// documentation for more details on how operating system limits are handled.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::with_internals(SystemHardware::current().clone(), PlatformFacade::target())
-    }
-
     #[must_use]
     pub(crate) fn with_internals(hardware: SystemHardware, pal: PlatformFacade) -> Self {
         Self {
@@ -781,13 +771,6 @@ impl ProcessorSetBuilder {
         } else {
             None
         }
-    }
-}
-
-impl Default for ProcessorSetBuilder {
-    #[inline]
-    fn default() -> Self {
-        Self::new()
     }
 }
 
