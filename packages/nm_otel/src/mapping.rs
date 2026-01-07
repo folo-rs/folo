@@ -118,9 +118,7 @@ pub(crate) fn export_report(
 
         // Export count as counter (delta).
         let count_delta = event_state.count_delta(event.count());
-        if count_delta > 0 {
-            event_instruments.count_counter.add(count_delta, &[]);
-        }
+        add_count_delta(&event_instruments.count_counter, count_delta);
 
         // Export sum as gauge (absolute value).
         event_instruments.sum_gauge.record(event.sum(), &[]);
@@ -136,16 +134,36 @@ pub(crate) fn export_report(
                 event_state.histogram_deltas(histogram.magnitudes(), histogram.counts());
 
             for (i, (_magnitude, _cumulative, delta)) in bucket_deltas.into_iter().enumerate() {
-                if delta > 0 {
-                    let le_value = event_instruments
-                        .bucket_bounds
-                        .get(i)
-                        .expect("bucket_bounds length matches bucket_deltas length");
-                    let attributes = [KeyValue::new(LE_ATTRIBUTE, Arc::<str>::clone(le_value))];
-                    bucket_counter.add(delta, &attributes);
-                }
+                let le_value = event_instruments
+                    .bucket_bounds
+                    .get(i)
+                    .expect("bucket_bounds length matches bucket_deltas length");
+                add_bucket_delta(bucket_counter, delta, le_value);
             }
         }
+    }
+}
+
+/// Adds a count delta to a counter if positive.
+///
+/// This is a separate function to allow skipping equivalent mutations - adding 0 to a counter
+/// produces the same observable result as not calling add at all.
+#[cfg_attr(test, mutants::skip)]
+fn add_count_delta(counter: &Counter<u64>, delta: u64) {
+    if delta > 0 {
+        counter.add(delta, &[]);
+    }
+}
+
+/// Adds a bucket delta to a counter if positive.
+///
+/// This is a separate function to allow skipping equivalent mutations - adding 0 to a counter
+/// produces the same observable result as not calling add at all.
+#[cfg_attr(test, mutants::skip)]
+fn add_bucket_delta(counter: &Counter<u64>, delta: u64, le_value: &Arc<str>) {
+    if delta > 0 {
+        let attributes = [KeyValue::new(LE_ATTRIBUTE, Arc::<str>::clone(le_value))];
+        counter.add(delta, &attributes);
     }
 }
 
