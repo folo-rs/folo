@@ -1229,6 +1229,9 @@ mod tests {
     #[test]
     fn event_metrics_fake_mean_handles_integer_division() {
         // Test that integer division correctly truncates the remainder.
+        // This test specifically catches mutations that replace / with % or *.
+        // - If / were replaced with %, result would be 1 (10 % 3 = 1)
+        // - If / were replaced with *, result would be 30 (10 * 3 = 30)
         let metrics = EventMetrics::fake("test_event", 3, 10, None);
 
         assert_eq!(metrics.mean(), 3); // 10 / 3 = 3 (remainder discarded)
