@@ -159,8 +159,6 @@ impl Publisher {
     /// Runs the publisher forever, collecting and exporting metrics at each interval.
     ///
     /// This method never returns under normal operation. Drop the future to cancel the publishing.
-    // Infinite async loop - cannot meaningfully test that it returns `()`.
-    #[cfg_attr(test, mutants::skip)]
     pub async fn publish_forever(&mut self) {
         let mut timer = PeriodicTimer::new(&self.clock, self.interval);
 
