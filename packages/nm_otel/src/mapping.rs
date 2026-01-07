@@ -111,10 +111,8 @@ pub(crate) fn export_report(
 
         // Get cached instruments for this event (creates them if first time seeing this event).
         // Pass histogram magnitudes if present so bucket counter and bounds can be created.
-        let event_instruments = instruments.instruments(
-            event_name,
-            event.histogram().map(nm::Histogram::magnitudes),
-        );
+        let event_instruments =
+            instruments.instruments(event_name, event.histogram().map(nm::Histogram::magnitudes));
 
         // Export count as counter (delta).
         let count_delta = event_state.count_delta(event.count());
@@ -181,10 +179,11 @@ fn format_bucket_bound(magnitude: Magnitude) -> Arc<str> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use super::*;
     use nm::{EventMetrics, Histogram};
     use opentelemetry::metrics::MeterProvider;
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
+
+    use super::*;
 
     fn create_test_provider() -> (SdkMeterProvider, InMemoryMetricExporter) {
         let exporter = InMemoryMetricExporter::default();

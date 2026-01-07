@@ -14,9 +14,8 @@ use std::time::Duration;
 
 use nm::Event;
 use nm_otel::publisher;
-use opentelemetry_sdk::metrics::{
-    InMemoryMetricExporter, PeriodicReader, SdkMeterProvider, data::Sum,
-};
+use opentelemetry_sdk::metrics::data::Sum;
+use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 use tick::ClockControl;
 
 thread_local! {
