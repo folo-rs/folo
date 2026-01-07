@@ -895,7 +895,6 @@ dependencies = [
  "libc",
  "mockall",
  "mutants",
- "negative-impl",
  "new_zealand",
  "nonempty",
  "par_bench",
@@ -981,17 +980,6 @@ name = "mutants"
 version = "0.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc0287524726960e07b119cebd01678f852f147742ae0d925e6a520dca956126"
-
-[[package]]
-name = "negative-impl"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67670e6848468ee39b823ed93add8bd2adb66a132b0c25fce6e60af0b81d930a"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
 
 [[package]]
 name = "new_zealand"

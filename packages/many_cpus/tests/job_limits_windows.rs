@@ -16,7 +16,7 @@ use testing::{Job, ProcessorTimePct, f64_diff_abs};
 const CLOSE_ENOUGH: f64 = 0.01;
 
 #[test]
-#[cfg_attr(miri, ignore)] // Miri cannot talk to the real platform.
+#[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
 #[expect(
     clippy::float_cmp,
     reason = "we use absolute error, which is the right way to compare"
@@ -51,7 +51,7 @@ fn obeys_processor_selection_limits() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)] // Miri cannot talk to the real platform.
+#[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
 #[expect(
     clippy::cast_precision_loss,
     reason = "all expected values are in safe range"
@@ -108,7 +108,7 @@ fn obeys_processor_time_limits() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)] // Miri cannot talk to the real platform.
+#[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
 #[expect(
     clippy::float_cmp,
     reason = "we use absolute error, which is the right way to compare"

@@ -56,10 +56,7 @@ impl ProcessorSetBuilder {
     /// documentation for more details on how operating system limits are handled.
     #[must_use]
     pub fn new() -> Self {
-        Self::with_internals(
-            SystemHardware::current().clone(),
-            PlatformFacade::target(),
-        )
+        Self::with_internals(SystemHardware::current().clone(), PlatformFacade::target())
     }
 
     #[must_use]
@@ -838,7 +835,7 @@ enum ProcessorTypeSelector {
     Efficiency,
 }
 
-#[cfg(not(miri))] // Talking to the operating system is not possible under Miri.
+#[cfg(not(miri))] // Miri cannot call platform APIs.
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests_real {
@@ -986,7 +983,7 @@ mod tests {
 
     use super::*;
     use crate::fake::HardwareBuilder;
-    use crate::pal::{MockProcessor, MockPlatform, ProcessorFacade};
+    use crate::pal::{MockPlatform, MockProcessor, ProcessorFacade};
 
     /// Creates a fake hardware instance with a given number of processors and memory regions.
     fn fake_hardware(processor_count: usize, memory_region_count: usize) -> SystemHardware {
@@ -1037,10 +1034,7 @@ mod tests {
 
         let platform = new_mock_platform(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.efficiency_processors_only().take_all().unwrap();
         assert_eq!(set.len(), 1);
         assert_eq!(set.processors().first().id(), 0);
@@ -1063,10 +1057,7 @@ mod tests {
 
         let platform = new_mock_platform(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.efficiency_processors_only().take_all().unwrap();
         assert_eq!(set.len(), 1);
         assert_eq!(set.processors().first().id(), 0);
@@ -1094,10 +1085,7 @@ mod tests {
 
         let platform = new_mock_platform(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.take(nz!(2)).unwrap();
         assert_eq!(set.len(), 2);
     }
@@ -1121,10 +1109,7 @@ mod tests {
         // because it shows that not enough processor time is available.
         let platform = new_mock_platform_with_get_count(pal_processors, 0, 1);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.take(nz!(3));
         assert!(set.is_none());
     }
@@ -1139,10 +1124,7 @@ mod tests {
             .times(1)
             .return_const(1.0);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.take(nz!(2));
         assert!(set.is_none());
     }
@@ -1175,10 +1157,7 @@ mod tests {
             .times(1)
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.ignoring_resource_quota().take(nz!(2));
 
         assert_eq!(set.unwrap().len(), 2);
@@ -1213,10 +1192,7 @@ mod tests {
             .times(1)
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.take(nz!(1));
 
         assert_eq!(set.unwrap().len(), 1);
@@ -1251,10 +1227,7 @@ mod tests {
             .times(1)
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.take_all().unwrap();
         assert_eq!(set.len(), 1);
     }
@@ -1291,10 +1264,7 @@ mod tests {
             .times(1)
             .return_const(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.take_all().unwrap();
         assert_eq!(set.len(), 1);
     }
@@ -1310,10 +1280,7 @@ mod tests {
         // We expect 0 calls to max_processor_time() because we failed early in the build.
         let platform = new_mock_platform_with_get_count(pal_processors, 1, 0);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.performance_processors_only().take_all();
         assert!(set.is_none());
     }
@@ -1337,10 +1304,7 @@ mod tests {
         // We call .take() twice, so need to allow +1 of each.
         let platform = new_mock_platform_with_get_count(pal_processors, 3, 2);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
 
         let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
         assert_eq!(except_set.len(), 1);
@@ -1369,10 +1333,7 @@ mod tests {
         // We call .take() twice, so need to allow +1 of each.
         let platform = new_mock_platform_with_get_count(pal_processors, 3, 2);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
         assert_eq!(except_set.len(), 1);
 
@@ -1399,10 +1360,7 @@ mod tests {
         // .filter() eagerly evaluates processors, so we need to allow 2 calls.
         let platform = new_mock_platform_with_get_count(pal_processors, 2, 1);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.filter(|p| p.id() == 1).take_all().unwrap();
         assert_eq!(set.len(), 1);
         assert_eq!(set.processors().first().id(), 1);
@@ -1426,10 +1384,7 @@ mod tests {
         // .filter() eagerly evaluates processors, so we need to allow 2 calls.
         let platform = new_mock_platform_with_get_count(pal_processors, 2, 1);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.filter(|p| p.id() == 1).take_all().unwrap();
         assert_eq!(set.len(), 1);
         assert_eq!(set.processors().first().id(), 1);
@@ -1452,10 +1407,7 @@ mod tests {
 
         let platform = new_mock_platform(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.same_memory_region().take_all().unwrap();
         assert_eq!(set.len(), 1);
     }
@@ -1477,10 +1429,7 @@ mod tests {
 
         let platform = new_mock_platform(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.same_memory_region().take_all().unwrap();
         assert_eq!(set.len(), 1);
     }
@@ -1512,10 +1461,7 @@ mod tests {
 
         let platform = new_mock_platform(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.different_memory_regions().take_all().unwrap();
         assert_eq!(set.len(), 2);
 
@@ -1552,10 +1498,7 @@ mod tests {
 
         let platform = new_mock_platform(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.different_memory_regions().take_all().unwrap();
         assert_eq!(set.len(), 2);
 
@@ -1589,10 +1532,7 @@ mod tests {
         // We call .take() twice, so need to allow +1 of each.
         let platform = new_mock_platform_with_get_count(pal_processors, 3, 2);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
         let set = builder
             .efficiency_processors_only()
@@ -1626,10 +1566,7 @@ mod tests {
 
         let platform = new_mock_platform(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.same_memory_region().take(nz!(2)).unwrap();
         assert_eq!(set.len(), 2);
         assert!(set.processors().iter().any(|p| p.id() == 1));
@@ -1663,10 +1600,7 @@ mod tests {
 
         let platform = new_mock_platform(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder
             .different_memory_regions()
             .efficiency_processors_only()
@@ -1688,10 +1622,7 @@ mod tests {
         // We expect 0 calls to max_processor_time() because we failed early in the build.
         let platform = new_mock_platform_with_get_count(pal_processors, 1, 0);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
 
         let set = builder.performance_processors_only().take_all();
         assert!(set.is_none(), "No performance processors should be found.");
@@ -1714,10 +1645,7 @@ mod tests {
 
         let platform = new_mock_platform(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.different_memory_regions().take(nz!(2));
         assert!(
             set.is_none(),
@@ -1747,10 +1675,7 @@ mod tests {
 
         let platform = new_mock_platform(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder
             .prefer_different_memory_regions()
             .take_all()
@@ -1785,10 +1710,7 @@ mod tests {
 
         let platform = new_mock_platform(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder
             .prefer_different_memory_regions()
             .take(nz!(2))
@@ -1829,10 +1751,7 @@ mod tests {
 
         let platform = new_mock_platform(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.prefer_same_memory_region().take(nz!(2)).unwrap();
         assert_eq!(set.len(), 2);
         let regions: HashSet<_> = set
@@ -1870,10 +1789,7 @@ mod tests {
 
         let platform = new_mock_platform(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder
             .prefer_different_memory_regions()
             .take(nz!(4))
@@ -1908,10 +1824,7 @@ mod tests {
 
         let platform = new_mock_platform(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.prefer_same_memory_region().take(nz!(3)).unwrap();
         assert_eq!(set.len(), 3);
         let regions: HashSet<_> = set
@@ -1953,10 +1866,7 @@ mod tests {
 
         let platform = new_mock_platform(pal_processors);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
         let set = builder.prefer_same_memory_region().take(nz!(2)).unwrap();
         assert_eq!(set.len(), 2);
         let regions: HashSet<_> = set
@@ -2003,10 +1913,7 @@ mod tests {
             .times(1)
             .return_const(pal_processors_facade);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
 
         // Request more processors than exist (3 > 2). Quota is high so the quota check passes,
         // but there are not enough candidates in the Any branch.
@@ -2051,10 +1958,7 @@ mod tests {
             .times(1)
             .return_const(pal_processors_facade);
 
-        let builder = ProcessorSetBuilder::with_internals(
-            fake_hardware(4, 2),
-            platform.into(),
-        );
+        let builder = ProcessorSetBuilder::with_internals(fake_hardware(4, 2), platform.into());
 
         // Request 3 processors with prefer_different_memory_regions.
         // We only have 2 total, so after 2 rounds the candidates will be exhausted.
@@ -2097,27 +2001,28 @@ mod tests {
 
 /// Fallback PAL integration tests - these test the integration between `ProcessorSetBuilder`
 /// and the fallback platform abstraction layer.
-///
-/// Miri is excluded because `std::thread::available_parallelism()` is not supported under Miri.
-#[cfg(all(test, not(miri)))]
+#[cfg(all(test, not(miri)))] // Miri cannot call platform APIs.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests_fallback {
     use std::num::NonZero;
 
     use new_zealand::nz;
 
-    use crate::{ProcessorSetBuilder, SystemHardware};
     use crate::pal::PlatformFacade;
     use crate::pal::fallback::BUILD_TARGET_PLATFORM;
+    use crate::{ProcessorSetBuilder, SystemHardware};
+
+    /// Creates a fallback PAL and a cloned hardware instance for testing.
+    fn fallback_pal_and_hw() -> (PlatformFacade, SystemHardware) {
+        let pal = PlatformFacade::Fallback(&BUILD_TARGET_PLATFORM);
+        let hw = SystemHardware::current().clone();
+        (pal, hw)
+    }
 
     #[test]
     fn builder_smoke_test() {
-        let platform = &BUILD_TARGET_PLATFORM;
-        let pal = PlatformFacade::Fallback(platform);
-
-        let hardware = SystemHardware::current().clone();
-
-        let builder = ProcessorSetBuilder::with_internals(hardware, pal);
+        let (pal, hw) = fallback_pal_and_hw();
+        let builder = ProcessorSetBuilder::with_internals(hw, pal);
 
         let set = builder.take_all().unwrap();
 
@@ -2126,12 +2031,8 @@ mod tests_fallback {
 
     #[test]
     fn take_respects_limit() {
-        let platform = &BUILD_TARGET_PLATFORM;
-        let pal = PlatformFacade::Fallback(platform);
-
-        let hardware = SystemHardware::current().clone();
-
-        let builder = ProcessorSetBuilder::with_internals(hardware, pal);
+        let (pal, hw) = fallback_pal_and_hw();
+        let builder = ProcessorSetBuilder::with_internals(hw, pal);
 
         let set = builder.take(nz!(1));
 
@@ -2141,12 +2042,8 @@ mod tests_fallback {
 
     #[test]
     fn take_all_returns_all() {
-        let platform = &BUILD_TARGET_PLATFORM;
-        let pal = PlatformFacade::Fallback(platform);
-
-        let hardware = SystemHardware::current().clone();
-
-        let builder = ProcessorSetBuilder::with_internals(hardware, pal);
+        let (pal, hw) = fallback_pal_and_hw();
+        let builder = ProcessorSetBuilder::with_internals(hw, pal);
 
         let set = builder.take_all().unwrap();
 
@@ -2160,12 +2057,8 @@ mod tests_fallback {
     #[test]
     fn performance_only_filter() {
         // All processors on the fallback platform are Performance class.
-        let platform = &BUILD_TARGET_PLATFORM;
-        let pal = PlatformFacade::Fallback(platform);
-
-        let hardware = SystemHardware::current().clone();
-
-        let builder = ProcessorSetBuilder::with_internals(hardware, pal);
+        let (pal, hw) = fallback_pal_and_hw();
+        let builder = ProcessorSetBuilder::with_internals(hw, pal);
 
         let set = builder.performance_processors_only().take_all().unwrap();
 
@@ -2179,12 +2072,8 @@ mod tests_fallback {
     #[test]
     fn same_memory_region_filter() {
         // All processors on the fallback platform are in memory region 0.
-        let platform = &BUILD_TARGET_PLATFORM;
-        let pal = PlatformFacade::Fallback(platform);
-
-        let hardware = SystemHardware::current().clone();
-
-        let builder = ProcessorSetBuilder::with_internals(hardware, pal);
+        let (pal, hw) = fallback_pal_and_hw();
+        let builder = ProcessorSetBuilder::with_internals(hw, pal);
 
         let set = builder.same_memory_region().take_all().unwrap();
 
@@ -2201,14 +2090,10 @@ mod tests_fallback {
 
     #[test]
     fn except_filter() {
-        let platform = &BUILD_TARGET_PLATFORM;
-        let pal = PlatformFacade::Fallback(platform);
+        let (pal, hw) = fallback_pal_and_hw();
+        let builder = ProcessorSetBuilder::with_internals(hw, pal);
 
-        let hardware = SystemHardware::current().clone();
-
-        let builder = ProcessorSetBuilder::with_internals(hardware, pal);
-
-        if platform.processor_count() > 1 {
+        if BUILD_TARGET_PLATFORM.processor_count() > 1 {
             let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
             assert_eq!(except_set.len(), 1);
 
@@ -2222,12 +2107,8 @@ mod tests_fallback {
 
     #[test]
     fn ignoring_resource_quota() {
-        let platform = &BUILD_TARGET_PLATFORM;
-        let pal = PlatformFacade::Fallback(platform);
-
-        let hardware = SystemHardware::current().clone();
-
-        let builder = ProcessorSetBuilder::with_internals(hardware, pal);
+        let (pal, hw) = fallback_pal_and_hw();
+        let builder = ProcessorSetBuilder::with_internals(hw, pal);
 
         let set = builder.ignoring_resource_quota().take_all().unwrap();
 
@@ -2239,20 +2120,17 @@ mod tests_fallback {
         use std::thread;
 
         thread::spawn(|| {
-            let platform = &BUILD_TARGET_PLATFORM;
-            let pal = PlatformFacade::Fallback(platform);
-
-            let hardware = SystemHardware::current().clone();
+            let (pal, hw) = fallback_pal_and_hw();
 
             // First pin to one processor.
-            let one = ProcessorSetBuilder::with_internals(hardware.clone(), pal.clone())
+            let one = ProcessorSetBuilder::with_internals(hw.clone(), pal.clone())
                 .take(nz!(1))
                 .unwrap();
 
             one.pin_current_thread_to();
 
             // Now build a new set inheriting the affinity.
-            let builder = ProcessorSetBuilder::with_internals(hardware, pal);
+            let builder = ProcessorSetBuilder::with_internals(hw, pal);
 
             let set = builder.where_available_for_current_thread().take_all();
 
@@ -2265,12 +2143,8 @@ mod tests_fallback {
 
     #[test]
     fn obey_resource_quota_by_default() {
-        let platform = &BUILD_TARGET_PLATFORM;
-        let pal = PlatformFacade::Fallback(platform);
-
-        let hardware = SystemHardware::current().clone();
-
-        let builder = ProcessorSetBuilder::with_internals(hardware, pal);
+        let (pal, hw) = fallback_pal_and_hw();
+        let builder = ProcessorSetBuilder::with_internals(hw, pal);
 
         let set = builder.take_all().unwrap();
 

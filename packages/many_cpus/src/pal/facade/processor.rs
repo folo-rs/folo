@@ -4,7 +4,7 @@ use std::fmt::Debug;
 
 use derive_more::derive::Display;
 
-#[cfg(feature = "test-util")]
+#[cfg(any(test, feature = "test-util"))]
 use crate::fake::platform::FakeProcessor;
 #[cfg(test)]
 use crate::pal::MockProcessor;
@@ -23,7 +23,7 @@ pub(crate) enum ProcessorFacade {
     Mock(MockProcessor),
 
     /// Fake processor for the public test-util feature.
-    #[cfg(feature = "test-util")]
+    #[cfg(any(test, feature = "test-util"))]
     Fake(FakeProcessor),
 }
 
@@ -36,7 +36,7 @@ impl ProcessorFacade {
             Self::Target(p) => p,
             #[cfg(test)]
             _ => panic!("attempted to dereference facade into wrong type"),
-            #[cfg(all(feature = "test-util", not(test)))]
+            #[cfg(all(any(test, feature = "test-util"), not(test)))]
             Self::Fake(_) => panic!("attempted to dereference facade into wrong type"),
         }
     }
@@ -56,7 +56,7 @@ impl AbstractProcessor for ProcessorFacade {
             Self::Fallback(p) => p.id(),
             #[cfg(test)]
             Self::Mock(p) => p.id(),
-            #[cfg(feature = "test-util")]
+            #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.id(),
         }
     }
@@ -68,7 +68,7 @@ impl AbstractProcessor for ProcessorFacade {
             Self::Fallback(p) => p.memory_region_id(),
             #[cfg(test)]
             Self::Mock(p) => p.memory_region_id(),
-            #[cfg(feature = "test-util")]
+            #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.memory_region_id(),
         }
     }
@@ -80,7 +80,7 @@ impl AbstractProcessor for ProcessorFacade {
             Self::Fallback(p) => p.efficiency_class(),
             #[cfg(test)]
             Self::Mock(p) => p.efficiency_class(),
-            #[cfg(feature = "test-util")]
+            #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.efficiency_class(),
         }
     }
@@ -108,7 +108,7 @@ impl Debug for ProcessorFacade {
             Self::Fallback(inner) => inner.fmt(f),
             #[cfg(test)]
             Self::Mock(inner) => inner.fmt(f),
-            #[cfg(feature = "test-util")]
+            #[cfg(any(test, feature = "test-util"))]
             Self::Fake(inner) => inner.fmt(f),
         }
     }

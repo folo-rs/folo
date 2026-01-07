@@ -143,7 +143,7 @@ impl FakePlatform {
             Some(processors) => {
                 // Hash to one of the allowed processors.
                 let index = Self::hash_to_index(thread_id, processors.len());
-                self.index_into_nonempty(&processors, index)
+                Self::index_into_nonempty(&processors, index)
             }
             None => {
                 // Use all processor IDs.
@@ -152,12 +152,8 @@ impl FakePlatform {
         }
     }
 
-    /// Indexes into a NonEmpty slice. The index must be less than the length.
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "callers ensure index is in bounds via modulo"
-    )]
-    fn index_into_nonempty(&self, processors: &NonEmpty<ProcessorId>, index: usize) -> ProcessorId {
+    /// Indexes into a `NonEmpty` slice. The index must be less than the length.
+    fn index_into_nonempty(processors: &NonEmpty<ProcessorId>, index: usize) -> ProcessorId {
         processors[index]
     }
 
@@ -427,8 +423,8 @@ mod tests {
 
         let display = format!("{processor}");
 
-        assert!(display.contains("5"));
-        assert!(display.contains("2"));
+        assert!(display.contains('5'));
+        assert!(display.contains('2'));
         assert!(display.contains("Efficiency"));
     }
 

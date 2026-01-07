@@ -6,7 +6,7 @@
 //! parallel tests without interference.
 
 use std::any::type_name;
-#[cfg(feature = "test-util")]
+#[cfg(any(test, feature = "test-util"))]
 use std::borrow::Borrow;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::thread::ThreadId;
@@ -14,9 +14,9 @@ use std::thread::ThreadId;
 use foldhash::HashMap;
 use nonempty::NonEmpty;
 
-#[cfg(feature = "test-util")]
+#[cfg(any(test, feature = "test-util"))]
 use crate::fake::FakePlatform;
-#[cfg(feature = "test-util")]
+#[cfg(any(test, feature = "test-util"))]
 use crate::fake::HardwareBuilder;
 use crate::pal::{AbstractProcessor, Platform as PlatformTrait, PlatformFacade};
 use crate::{
@@ -78,11 +78,17 @@ struct SystemHardwareInner {
     /// Maximum memory region ID reported by the backend.
     max_memory_region_id: MemoryRegionId,
 
-    /// Cached default processor set (respects resource quotas).
-    cached_processors: OnceLock<ProcessorSet>,
+    /// Cached default processor list (respects resource quotas).
+    ///
+    /// We cache the processor list rather than a full `ProcessorSet` to avoid a reference cycle.
+    /// `ProcessorSet` contains a `SystemHardware` which would create a circular reference back
+    /// to `SystemHardwareInner` via its `Arc`.
+    cached_processors: OnceLock<NonEmpty<Processor>>,
 
-    /// Cached all processors set (ignores resource quotas).
-    cached_all_processors: OnceLock<ProcessorSet>,
+    /// Cached all processors list (ignores resource quotas).
+    ///
+    /// Same caching strategy as `cached_processors` to avoid reference cycles.
+    cached_all_processors: OnceLock<NonEmpty<Processor>>,
 }
 
 /// Per-thread state tracked within a hardware instance.
@@ -138,7 +144,7 @@ impl SystemHardware {
     /// assert_eq!(hardware.max_processor_count(), 4);
     /// assert_eq!(hardware.max_memory_region_count(), 2);
     /// ```
-    #[cfg(feature = "test-util")]
+    #[cfg(any(test, feature = "test-util"))]
     #[must_use]
     pub fn fake(builder: impl Borrow<HardwareBuilder>) -> Self {
         let backend = FakePlatform::from_builder(builder.borrow());
@@ -202,12 +208,17 @@ impl SystemHardware {
     ///     .take_all();
     /// ```
     #[must_use]
-    pub fn processors(&self) -> &ProcessorSet {
-        self.inner.cached_processors.get_or_init(|| {
+    pub fn processors(&self) -> ProcessorSet {
+        let cached = self.inner.cached_processors.get_or_init(|| {
             ProcessorSetBuilder::with_internals(self.clone(), self.inner.platform.clone())
                 .take_all()
-                .expect("there is always at least one processor available because we are running on it")
-        })
+                .expect(
+                    "there is always at least one processor available because we are running on it",
+                )
+                .into_processors()
+        });
+
+        ProcessorSet::new(cached.clone(), self.clone(), self.inner.platform.clone())
     }
 
     /// Returns the set of processors that the current thread is pinned to, or `None` if the
@@ -296,13 +307,16 @@ impl SystemHardware {
     /// }
     /// ```
     #[must_use]
-    pub fn all_processors(&self) -> &ProcessorSet {
-        self.inner.cached_all_processors.get_or_init(|| {
+    pub fn all_processors(&self) -> ProcessorSet {
+        let cached = self.inner.cached_all_processors.get_or_init(|| {
             ProcessorSetBuilder::with_internals(self.clone(), self.inner.platform.clone())
                 .ignoring_resource_quota()
                 .take_all()
                 .expect("there is always at least one processor available")
-        })
+                .into_processors()
+        });
+
+        ProcessorSet::new(cached.clone(), self.clone(), self.inner.platform.clone())
     }
 
     /// Returns the highest possible value for a processor ID.
@@ -634,7 +648,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn current_hardware_is_singleton() {
         let h1 = SystemHardware::current();
         let h2 = SystemHardware::current();
@@ -644,7 +658,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn returns_valid_processor_id() {
         let hardware = SystemHardware::current();
 
@@ -655,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn returns_positive_values() {
         let hardware = SystemHardware::current();
 
@@ -665,7 +679,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn pin_status_tracking_per_thread() {
         let hardware = SystemHardware::current();
 
@@ -689,7 +703,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn processors_returns_set() {
         let hardware = SystemHardware::current();
         let processors = hardware.processors();
@@ -698,7 +712,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn pinned_current_processor_id_is_unique() {
         use itertools::Itertools;
 
@@ -728,7 +742,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn active_processor_count_is_at_least_processor_set_len() {
         // When we take_all() and build a ProcessorSet, we cannot get more processors
         // than are actually active on the system. This is a sanity check to compare the two.
@@ -742,7 +756,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
+    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -761,6 +775,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     #[should_panic]
     fn panic_if_pinned_processor_with_unpinned_memory_region() {
         let hardware = SystemHardware::current();

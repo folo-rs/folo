@@ -90,7 +90,7 @@
 //!     .performance_processors_only()
 //!     .take(nz!(2))
 //!     // If we do not have what we want, we fall back to the default set.
-//!     .unwrap_or_else(|| hardware.processors().clone());
+//!     .unwrap_or_else(|| hardware.processors());
 //!
 //! let threads = selected_processors.spawn_threads(|processor| {
 //!     println!("Spawned thread on processor {}", processor.id());
@@ -231,8 +231,12 @@
 //! Applications running on unsupported platforms will not see performance improvements from using
 //! this package but will still function correctly.
 
-#![doc(html_logo_url = "https://media.githubusercontent.com/media/folo-rs/folo/refs/heads/main/packages/many_cpus/icon.png")]
-#![doc(html_favicon_url = "https://media.githubusercontent.com/media/folo-rs/folo/refs/heads/main/packages/many_cpus/icon.ico")]
+#![doc(
+    html_logo_url = "https://media.githubusercontent.com/media/folo-rs/folo/refs/heads/main/packages/many_cpus/icon.png"
+)]
+#![doc(
+    html_favicon_url = "https://media.githubusercontent.com/media/folo-rs/folo/refs/heads/main/packages/many_cpus/icon.ico"
+)]
 
 mod primitive_types;
 mod processor;
@@ -241,7 +245,7 @@ mod processor_set_builder;
 mod resource_quota;
 mod system_hardware;
 
-#[cfg(feature = "test-util")]
+#[cfg(any(test, feature = "test-util"))]
 pub mod fake;
 
 pub use primitive_types::*;

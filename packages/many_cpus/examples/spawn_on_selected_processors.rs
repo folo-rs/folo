@@ -14,7 +14,7 @@ fn main() {
         .performance_processors_only()
         .take(nz!(2))
         // If we do not have what we want, we fall back to the default set.
-        .unwrap_or_else(|| hw.processors().clone());
+        .unwrap_or_else(|| hw.processors());
 
     let threads = selected_processors.spawn_threads(|processor| {
         println!("Spawned thread on processor {}", processor.id());

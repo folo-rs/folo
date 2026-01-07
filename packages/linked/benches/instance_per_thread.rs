@@ -38,11 +38,8 @@ impl TestSubject {
     }
 }
 
-static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> = LazyLock::new(|| {
-    SystemHardware::current()
-        .processors()
-        .take(nz!(2))
-});
+static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> =
+    LazyLock::new(|| SystemHardware::current().processors().take(nz!(2)));
 
 fn entrypoint(c: &mut Criterion) {
     local(c);
@@ -52,12 +49,8 @@ fn entrypoint(c: &mut Criterion) {
 }
 
 fn local(c: &mut Criterion) {
-    let mut one_thread = ThreadPool::new(
-        SystemHardware::current()
-            .processors()
-            .take(nz!(1))
-            .unwrap(),
-    );
+    let mut one_thread =
+        ThreadPool::new(SystemHardware::current().processors().take(nz!(1)).unwrap());
 
     let mut g = c.benchmark_group("instance_per_thread::create");
 
@@ -76,12 +69,8 @@ fn local(c: &mut Criterion) {
 }
 
 fn local_ref(c: &mut Criterion) {
-    let mut one_thread = ThreadPool::new(
-        SystemHardware::current()
-            .processors()
-            .take(nz!(1))
-            .unwrap(),
-    );
+    let mut one_thread =
+        ThreadPool::new(SystemHardware::current().processors().take(nz!(1)).unwrap());
 
     let mut g = c.benchmark_group("instance_per_thread::Ref");
 
@@ -141,12 +130,8 @@ fn local_ref_multithreaded(c: &mut Criterion) {
 }
 
 fn local_ref_access(c: &mut Criterion) {
-    let mut one_thread = ThreadPool::new(
-        SystemHardware::current()
-            .processors()
-            .take(nz!(1))
-            .unwrap(),
-    );
+    let mut one_thread =
+        ThreadPool::new(SystemHardware::current().processors().take(nz!(1)).unwrap());
     let mut two_threads = TWO_PROCESSORS.as_ref().map(ThreadPool::new);
 
     let mut g = c.benchmark_group("instance_per_thread::Ref::access");

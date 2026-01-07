@@ -270,7 +270,10 @@ mod tests {
         let new_builder = HardwareBuilder::new();
 
         // Both should have no processors and no max_processor_time set.
-        assert_eq!(default_builder.processors.len(), new_builder.processors.len());
+        assert_eq!(
+            default_builder.processors.len(),
+            new_builder.processors.len()
+        );
         assert_eq!(
             default_builder.max_processor_time,
             new_builder.max_processor_time

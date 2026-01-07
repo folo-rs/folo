@@ -93,8 +93,14 @@ mod tests {
         let new_builder = ProcessorBuilder::new();
 
         assert_eq!(default_builder.explicit_id, new_builder.explicit_id);
-        assert_eq!(default_builder.memory_region_id, new_builder.memory_region_id);
-        assert_eq!(default_builder.efficiency_class, new_builder.efficiency_class);
+        assert_eq!(
+            default_builder.memory_region_id,
+            new_builder.memory_region_id
+        );
+        assert_eq!(
+            default_builder.efficiency_class,
+            new_builder.efficiency_class
+        );
     }
 
     #[test]

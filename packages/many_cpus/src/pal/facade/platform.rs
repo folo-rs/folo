@@ -4,7 +4,7 @@ use std::fmt::Debug;
 #[cfg(any(test, feature = "test-util"))]
 use std::sync::Arc;
 
-#[cfg(feature = "test-util")]
+#[cfg(any(test, feature = "test-util"))]
 use crate::fake::FakePlatform;
 #[cfg(test)]
 use crate::pal::MockPlatform;
@@ -23,7 +23,7 @@ pub(crate) enum PlatformFacade {
     Mock(Arc<MockPlatform>),
 
     /// Fake hardware for the public test-util feature.
-    #[cfg(feature = "test-util")]
+    #[cfg(any(test, feature = "test-util"))]
     Fake(Arc<FakePlatform>),
 }
 
@@ -32,12 +32,7 @@ impl PlatformFacade {
         Self::Target(&BUILD_TARGET_PLATFORM)
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_mock(mock: MockPlatform) -> Self {
-        Self::Mock(Arc::new(mock))
-    }
-
-    #[cfg(feature = "test-util")]
+    #[cfg(any(test, feature = "test-util"))]
     pub(crate) fn from_fake(fake: FakePlatform) -> Self {
         Self::Fake(Arc::new(fake))
     }
@@ -51,7 +46,7 @@ impl Platform for PlatformFacade {
             Self::Fallback(p) => p.get_all_processors(),
             #[cfg(test)]
             Self::Mock(p) => p.get_all_processors(),
-            #[cfg(feature = "test-util")]
+            #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.get_all_processors(),
         }
     }
@@ -66,7 +61,7 @@ impl Platform for PlatformFacade {
             Self::Fallback(p) => p.pin_current_thread_to(processors),
             #[cfg(test)]
             Self::Mock(p) => p.pin_current_thread_to(processors),
-            #[cfg(feature = "test-util")]
+            #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.pin_current_thread_to(processors),
         }
     }
@@ -78,7 +73,7 @@ impl Platform for PlatformFacade {
             Self::Fallback(p) => p.current_processor_id(),
             #[cfg(test)]
             Self::Mock(p) => p.current_processor_id(),
-            #[cfg(feature = "test-util")]
+            #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.current_processor_id(),
         }
     }
@@ -90,7 +85,7 @@ impl Platform for PlatformFacade {
             Self::Fallback(p) => p.max_processor_id(),
             #[cfg(test)]
             Self::Mock(p) => p.max_processor_id(),
-            #[cfg(feature = "test-util")]
+            #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.max_processor_id(),
         }
     }
@@ -102,7 +97,7 @@ impl Platform for PlatformFacade {
             Self::Fallback(p) => p.max_memory_region_id(),
             #[cfg(test)]
             Self::Mock(p) => p.max_memory_region_id(),
-            #[cfg(feature = "test-util")]
+            #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.max_memory_region_id(),
         }
     }
@@ -114,7 +109,7 @@ impl Platform for PlatformFacade {
             Self::Fallback(p) => p.current_thread_processors(),
             #[cfg(test)]
             Self::Mock(p) => p.current_thread_processors(),
-            #[cfg(feature = "test-util")]
+            #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.current_thread_processors(),
         }
     }
@@ -126,7 +121,7 @@ impl Platform for PlatformFacade {
             Self::Fallback(p) => p.max_processor_time(),
             #[cfg(test)]
             Self::Mock(p) => p.max_processor_time(),
-            #[cfg(feature = "test-util")]
+            #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.max_processor_time(),
         }
     }
@@ -138,7 +133,7 @@ impl Platform for PlatformFacade {
             Self::Fallback(p) => p.active_processor_count(),
             #[cfg(test)]
             Self::Mock(p) => p.active_processor_count(),
-            #[cfg(feature = "test-util")]
+            #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.active_processor_count(),
         }
     }
@@ -166,7 +161,7 @@ impl Debug for PlatformFacade {
             Self::Fallback(inner) => inner.fmt(f),
             #[cfg(test)]
             Self::Mock(inner) => inner.fmt(f),
-            #[cfg(feature = "test-util")]
+            #[cfg(any(test, feature = "test-util"))]
             Self::Fake(inner) => inner.fmt(f),
         }
     }
