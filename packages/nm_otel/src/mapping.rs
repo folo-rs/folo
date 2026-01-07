@@ -292,4 +292,66 @@ mod tests {
         let metrics = exporter.get_finished_metrics().unwrap();
         assert!(!metrics.is_empty());
     }
+
+    // OpenTelemetry SDK uses system time calls not available under Miri isolation.
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn export_report_zero_count_delta_does_not_add_to_counter() {
+        static BUCKETS: &[Magnitude] = &[10, 50];
+
+        let (provider, _exporter) = create_test_provider();
+        let meter = provider.meter("test");
+
+        let mut state = CollectionState::new();
+        let mut instruments = InstrumentRegistry::new(meter);
+
+        // First collection establishes baseline.
+        let histogram1 = Histogram::fake(BUCKETS, vec![5, 10], 2);
+        let event1 = EventMetrics::fake("test_event", 100, 500, Some(histogram1));
+        let report1 = Report::fake(vec![event1]);
+        export_report(&report1, &mut state, &mut instruments);
+
+        // Second collection with same count - zero delta.
+        let histogram2 = Histogram::fake(BUCKETS, vec![5, 10], 2);
+        let event2 = EventMetrics::fake("test_event", 100, 500, Some(histogram2));
+        let report2 = Report::fake(vec![event2]);
+
+        // This should complete without error even when delta is zero.
+        export_report(&report2, &mut state, &mut instruments);
+
+        // Verify the state shows zero delta was computed.
+        let event_state = state.event_state(&"test_event".into());
+        assert_eq!(event_state.count, 100);
+    }
+
+    // OpenTelemetry SDK uses system time calls not available under Miri isolation.
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn export_report_zero_bucket_delta_does_not_add_to_counter() {
+        static BUCKETS: &[Magnitude] = &[10, 50];
+
+        let (provider, _exporter) = create_test_provider();
+        let meter = provider.meter("test");
+
+        let mut state = CollectionState::new();
+        let mut instruments = InstrumentRegistry::new(meter);
+
+        // First collection establishes baseline.
+        let histogram1 = Histogram::fake(BUCKETS, vec![5, 10], 2);
+        let event1 = EventMetrics::fake("test_event", 10, 100, Some(histogram1));
+        let report1 = Report::fake(vec![event1]);
+        export_report(&report1, &mut state, &mut instruments);
+
+        // Second collection with same histogram bucket counts - zero bucket deltas.
+        let histogram2 = Histogram::fake(BUCKETS, vec![5, 10], 2);
+        let event2 = EventMetrics::fake("test_event", 10, 100, Some(histogram2));
+        let report2 = Report::fake(vec![event2]);
+
+        // This should complete without error even when bucket deltas are zero.
+        export_report(&report2, &mut state, &mut instruments);
+
+        // Verify histogram state is unchanged (same cumulative values).
+        let event_state = state.event_state(&"test_event".into());
+        assert_eq!(event_state.histogram_buckets, vec![5, 15, 17]);
+    }
 }
