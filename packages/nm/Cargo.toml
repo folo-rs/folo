@@ -12,6 +12,9 @@ rust-version.workspace = true
 
 [features]
 default = []
+# Enables test-only constructors for Report, EventMetrics, and Histogram.
+# Only use this in dev-dependencies.
+test-util = []
 
 [dependencies]
 foldhash = { workspace = true }

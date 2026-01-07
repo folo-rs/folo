@@ -101,6 +101,18 @@ impl Report {
     pub fn events(&self) -> impl Iterator<Item = &EventMetrics> {
         self.events.iter()
     }
+
+    /// Creates a `Report` instance with fake data for testing purposes.
+    ///
+    /// This constructor is only available with the `test-util` feature and allows
+    /// creating arbitrary test data without touching global state.
+    #[cfg(any(test, feature = "test-util"))]
+    #[must_use]
+    pub fn fake(events: Vec<EventMetrics>) -> Self {
+        Self {
+            events: events.into_boxed_slice(),
+        }
+    }
 }
 
 impl Display for Report {
@@ -314,6 +326,40 @@ impl EventMetrics {
     pub fn histogram(&self) -> Option<&Histogram> {
         self.histogram.as_ref()
     }
+
+    /// Creates an `EventMetrics` instance with fake data for testing purposes.
+    ///
+    /// This constructor is only available with the `test-util` feature and allows
+    /// creating arbitrary test data without touching global state.
+    #[cfg(any(test, feature = "test-util"))]
+    #[must_use]
+    pub fn fake(
+        name: impl Into<EventName>,
+        count: u64,
+        sum: Magnitude,
+        histogram: Option<Histogram>,
+    ) -> Self {
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "NonZero protects against division by zero"
+        )]
+        #[expect(
+            clippy::integer_division,
+            reason = "we accept that we lose the remainder - 100% precision not required"
+        )]
+        let mean = Magnitude::try_from(count)
+            .ok()
+            .and_then(NonZero::new)
+            .map_or(0, |count| sum / count.get());
+
+        Self {
+            name: name.into(),
+            count,
+            sum,
+            mean,
+            histogram,
+        }
+    }
 }
 
 impl Display for EventMetrics {
@@ -412,6 +458,28 @@ impl Histogram {
     /// occurrences that do not fit into any of the previous buckets.
     pub fn buckets(&self) -> impl Iterator<Item = (Magnitude, u64)> {
         self.magnitudes().zip(self.counts())
+    }
+
+    /// Creates a `Histogram` instance with fake data for testing purposes.
+    ///
+    /// This constructor is only available with the `test-util` feature and allows
+    /// creating arbitrary test data without touching global state.
+    ///
+    /// The `magnitudes` slice must be sorted in ascending order. The `counts` slice
+    /// must have the same length as `magnitudes`. The `plus_infinity_count` is the
+    /// count for the synthetic `Magnitude::MAX` bucket.
+    #[cfg(any(test, feature = "test-util"))]
+    #[must_use]
+    pub fn fake(
+        magnitudes: &'static [Magnitude],
+        counts: Vec<u64>,
+        plus_infinity_count: u64,
+    ) -> Self {
+        Self {
+            magnitudes,
+            counts: counts.into_boxed_slice(),
+            plus_infinity_bucket_count: plus_infinity_count,
+        }
     }
 }
 

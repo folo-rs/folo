@@ -116,6 +116,8 @@ run-examples:
         
         # Examples that are expected to panic or fail and should be excluded from run-examples
         $excluded_examples = @(
+            "nm_otel_console"     # This example runs an infinite loop by design
+            "nm_otel_readme"      # This example runs an infinite loop by design
             "panic_on_alloc_demo"  # This example intentionally panics to demonstrate functionality
         )
         
