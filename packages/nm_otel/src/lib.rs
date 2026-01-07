@@ -63,7 +63,7 @@
 //!
 //! - `interval()` - how often to collect and export metrics (default: 5 seconds)
 //! - `meter_name()` - OpenTelemetry meter name (default: "nm")
-//! - `meter_provider()` - custom [`SdkMeterProvider`][opentelemetry_sdk::metrics::SdkMeterProvider]
+//! - `provider()` - custom [`SdkMeterProvider`][opentelemetry_sdk::metrics::SdkMeterProvider]
 //!
 //! ## Requirements
 //!

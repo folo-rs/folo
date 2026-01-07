@@ -1257,7 +1257,7 @@ version = "1.0.3"
 
 [[package]]
 name = "nm"
-version = "0.1.24"
+version = "0.1.25"
 dependencies = [
  "criterion",
  "foldhash 0.2.0",
@@ -1271,7 +1271,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "foldhash 0.2.0",
  "futures",
@@ -2235,7 +2235,7 @@ checksum = "7ba6f5989077681266825251a52748b8c1d8a4ad098cc37e440103d0ea717fc0"
 
 [[package]]
 name = "vicinal"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "all_the_time",
  "alloc_tracker",

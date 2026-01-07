@@ -27,6 +27,8 @@ fn create_test_provider() -> (SdkMeterProvider, InMemoryMetricExporter) {
     (provider, exporter)
 }
 
+// OpenTelemetry SDK uses system time calls not available under Miri isolation.
+#[cfg_attr(miri, ignore)]
 #[test]
 fn run_one_iteration_computes_deltas_across_iterations() {
     // Record initial events.

@@ -48,7 +48,7 @@ mockall = { version = "0.13", default-features = false }
 mutants = { version = "0.0.3", default-features = false }
 negative-impl = { version = "0.1", default-features = false }
 new_zealand = { version = "1.0.3", path = "packages/new_zealand", default-features = false }
-nm = { version = "0.1.24", path = "packages/nm", default-features = false }
+nm = { version = "0.1.25", path = "packages/nm", default-features = false }
 nonempty = { version = "0.12", default-features = false }
 num-integer = { version = "0.1.46", default-features = false }
 num-traits = { version = "0.2.19", default-features = false }
@@ -83,7 +83,7 @@ tokio = { version = "1.43", default-features = false }
 toml = { version = "0.9.2", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 trybuild = { version = "1.0", default-features = false }
-vicinal = { version = "0.1.8", path = "packages/vicinal", default-features = false }
+vicinal = { version = "0.1.9", path = "packages/vicinal", default-features = false }
 windows = { version = "0.62", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
