@@ -9,7 +9,7 @@
 )]
 
 use nm::Event;
-use nm_otel::publisher;
+use nm_otel::Publisher;
 use opentelemetry_sdk::metrics::data::Sum;
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 use tick::Clock;
@@ -38,7 +38,7 @@ fn run_one_iteration_computes_deltas_across_iterations() {
 
     let (provider, exporter) = create_test_provider();
 
-    let mut pub_instance = publisher()
+    let mut pub_instance = Publisher::builder()
         .provider(provider.clone())
         .clock(Clock::new_frozen())
         .build();

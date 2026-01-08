@@ -11,7 +11,7 @@
 //! # // This example shows the general pattern but cannot run as a doctest because it
 //! # // would loop forever.
 //! use std::time::Duration;
-//! use nm_otel::publisher;
+//! use nm_otel::Publisher;
 //! use tick::Clock;
 //! # use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 //!
@@ -20,7 +20,7 @@
 //! # let reader = PeriodicReader::builder(exporter).build();
 //! # let my_meter_provider = SdkMeterProvider::builder().with_reader(reader).build();
 //! // In your async runtime, periodically export all nm metrics to OpenTelemetry.
-//! publisher()
+//! Publisher::builder()
 //!     .provider(my_meter_provider)
 //!     .clock(Clock::new_tokio())
 //!     .interval(Duration::from_secs(60))

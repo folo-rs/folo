@@ -21,7 +21,7 @@ async fn main() {
     let my_meter_provider = SdkMeterProvider::builder().with_reader(reader).build();
 
     // Create and run the nm-to-OpenTelemetry publisher.
-    let mut nm_publisher = nm_otel::publisher()
+    let mut nm_publisher = nm_otel::Publisher::builder()
         .provider(my_meter_provider)
         .clock(Clock::new_tokio())
         .interval(Duration::from_secs(60))
