@@ -641,6 +641,8 @@ impl SystemHardware {
     }
 }
 
+// We have no API contract for the Debug output format.
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl std::fmt::Debug for SystemHardware {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let processor_count = self
@@ -942,5 +944,68 @@ mod tests_fake {
         let processors = hardware.processors();
 
         assert_eq!(processors.len(), 4);
+    }
+
+    #[test]
+    fn thread_processors_returns_none_when_not_pinned() {
+        // Run in new thread to ensure clean pin state.
+        std::thread::spawn(|| {
+            let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(4), nz!(1)));
+
+            // Without any pinning, thread_processors() should return None.
+            let result = hardware.thread_processors();
+            assert!(result.is_none());
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn thread_processors_returns_single_processor_when_pinned_to_one() {
+        std::thread::spawn(|| {
+            let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(4), nz!(1)));
+
+            // Pin to a single processor.
+            let single = hardware.processors().take(nz!(1)).unwrap();
+            single.pin_current_thread_to();
+
+            // thread_processors() should return exactly that processor.
+            let result = hardware.thread_processors().unwrap();
+            assert_eq!(result.len(), 1);
+            assert_eq!(
+                result.processors().first().id(),
+                single.processors().first().id()
+            );
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn thread_processors_returns_all_region_processors_when_pinned_to_same_region() {
+        std::thread::spawn(|| {
+            // Create 4 processors, all in region 0.
+            let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(4), nz!(1)));
+
+            // Pin to 2 processors in the same region.
+            let two = hardware.processors().take(nz!(2)).unwrap();
+            two.pin_current_thread_to();
+
+            // thread_processors() should return all processors in that memory region.
+            let result = hardware.thread_processors().unwrap();
+
+            // With same memory region, we get all processors in that region.
+            assert_eq!(result.len(), 4);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn max_memory_region_id_returns_configured_value() {
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(8), nz!(4)));
+
+        // With 4 memory regions, max ID should be 3 (0-indexed).
+        assert_eq!(hardware.max_memory_region_id(), 3);
     }
 }

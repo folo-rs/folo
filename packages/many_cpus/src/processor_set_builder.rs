@@ -715,7 +715,7 @@ impl ProcessorSetBuilder {
 
     /// Takes the exact processors specified from the candidate set, returning a new
     /// [`ProcessorSet`] containing only those processors.
-    /// 
+    ///
     /// # Panics
     ///
     /// Panics if any of the specified processors are not present in the candidate set.
@@ -1131,6 +1131,21 @@ mod tests {
                 .processor(proc(0, 0, EfficiencyClass::Efficiency))
                 .processor(proc(1, 0, EfficiencyClass::Performance))
                 .max_processor_time(1.0),
+        );
+
+        let set = hw.processors().to_builder().take(nz!(2));
+        assert!(set.is_none());
+    }
+
+    #[test]
+    fn take_n_quota_floors_to_limit() {
+        // Configure quota of 1.5 processor time. The floor of 1.5 is 1, so requesting 2
+        // processors should fail because the quota limit is less than the requested count.
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Performance))
+                .max_processor_time(1.5),
         );
 
         let set = hw.processors().to_builder().take(nz!(2));
@@ -1718,12 +1733,19 @@ mod tests {
         let hw = SystemHardware::fake(
             HardwareBuilder::new()
                 .processor(proc(0, 0, EfficiencyClass::Efficiency))
-                .processor(proc(1, 1, EfficiencyClass::Performance))
+                .processor(proc(1, 0, EfficiencyClass::Performance))
                 .max_processor_time(10.0),
         );
 
         let candidates = hw.all_processors();
-        let p0 = candidates.processors().first().clone();
+
+        // Explicitly find the processor with ID 0 (not relying on ordering).
+        let p0 = candidates
+            .processors()
+            .iter()
+            .find(|p| p.id() == 0)
+            .cloned()
+            .unwrap();
 
         // Filter out processor 0, then try to take_exact with it - this should panic.
         drop(

@@ -314,4 +314,33 @@ mod tests {
         .join()
         .unwrap();
     }
+
+    #[test]
+    fn current_processor_id_returns_pinned_processor_when_pinned_to_one() {
+        // When a thread is pinned to exactly one processor, current_processor_id()
+        // should return that processor's ID.
+        std::thread::spawn(|| {
+            let platform = BuildTargetPlatform;
+            let processors = platform.get_processors();
+            let first_processor = processors.first();
+
+            // Pin to exactly one processor.
+            platform.pin_current_thread_to(&nonempty::nonempty![first_processor]);
+
+            // current_processor_id() should now return the pinned processor ID.
+            let current_id = platform.current_processor_id();
+            assert_eq!(current_id, first_processor.id());
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn active_processor_count_equals_processor_count() {
+        let platform = BuildTargetPlatform;
+        assert_eq!(
+            platform.active_processor_count(),
+            platform.processor_count()
+        );
+    }
 }

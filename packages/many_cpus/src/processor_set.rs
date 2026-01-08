@@ -468,6 +468,104 @@ mod tests {
     }
 
     #[test]
+    fn iter_returns_all_processors() {
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(3), nz!(1)));
+        let processor_set = hardware.processors();
+
+        let ids_via_iter: foldhash::HashSet<_> = processor_set.iter().map(Processor::id).collect();
+
+        assert_eq!(ids_via_iter.len(), 3);
+        assert!(ids_via_iter.contains(&0));
+        assert!(ids_via_iter.contains(&1));
+        assert!(ids_via_iter.contains(&2));
+    }
+
+    #[test]
+    fn into_iterator_for_owned_processor_set() {
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(3), nz!(1)));
+        let processor_set = hardware.processors();
+
+        // Use IntoIterator for owned ProcessorSet.
+        let ids: foldhash::HashSet<_> = processor_set.into_iter().map(|p| p.id()).collect();
+
+        assert_eq!(ids.len(), 3);
+        assert!(ids.contains(&0));
+        assert!(ids.contains(&1));
+        assert!(ids.contains(&2));
+    }
+
+    #[test]
+    fn into_iterator_for_ref_processor_set() {
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(3), nz!(1)));
+        let processor_set = hardware.processors();
+
+        // Use IntoIterator for &ProcessorSet (via for loop syntax).
+        let mut ids = foldhash::HashSet::default();
+        for processor in &processor_set {
+            ids.insert(processor.id());
+        }
+
+        assert_eq!(ids.len(), 3);
+        assert!(ids.contains(&0));
+        assert!(ids.contains(&1));
+        assert!(ids.contains(&2));
+
+        // ProcessorSet should still be usable after iteration (not consumed).
+        assert_eq!(processor_set.len(), 3);
+    }
+
+    #[test]
+    fn from_owned_processor_set_creates_builder() {
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(4), nz!(1)));
+        let processor_set = hardware.processors();
+
+        // Use From<ProcessorSet> for ProcessorSetBuilder.
+        let builder: ProcessorSetBuilder = processor_set.into();
+
+        // The builder should be able to produce a processor set with the same processors.
+        let rebuilt = builder.take_all().unwrap();
+        assert_eq!(rebuilt.len(), 4);
+    }
+
+    #[test]
+    fn from_ref_processor_set_creates_builder() {
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(4), nz!(1)));
+        let processor_set = hardware.processors();
+
+        // Use From<&ProcessorSet> for ProcessorSetBuilder.
+        let builder: ProcessorSetBuilder = (&processor_set).into();
+
+        // The builder should be able to produce a processor set with the same processors.
+        let rebuilt = builder.take_all().unwrap();
+        assert_eq!(rebuilt.len(), 4);
+
+        // Original processor set should still be usable.
+        assert_eq!(processor_set.len(), 4);
+    }
+
+    #[test]
+    fn pin_to_multiple_memory_regions_clears_region_pin() {
+        // Create processors across two memory regions.
+        let hardware = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(ProcessorBuilder::new().id(0).memory_region(0))
+                .processor(ProcessorBuilder::new().id(1).memory_region(1)),
+        );
+
+        // Get a processor set containing processors from both memory regions.
+        let processor_set = hardware.processors();
+        assert_eq!(processor_set.len(), 2);
+
+        // Pin to the set with multiple memory regions.
+        processor_set.pin_current_thread_to();
+
+        // Neither processor nor memory region should be considered pinned because
+        // we are pinned to processors across multiple memory regions.
+        assert!(!hardware.is_thread_processor_pinned());
+        assert!(!hardware.is_thread_memory_region_pinned());
+    }
+
+    #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn to_builder_preserves_processors() {
         let set = SystemHardware::current().processors().take(nz!(1)).unwrap();
