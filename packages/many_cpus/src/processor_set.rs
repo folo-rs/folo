@@ -66,7 +66,6 @@ impl ProcessorSet {
     #[must_use]
     pub fn to_builder(&self) -> ProcessorSetBuilder {
         ProcessorSetBuilder::with_internals(self.hardware.clone())
-            .ignoring_resource_quota()
             .with_source_processors(&self.processors)
     }
 

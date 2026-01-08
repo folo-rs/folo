@@ -15,15 +15,14 @@ This package treats platform constraints as follows:
   affinity via `taskset` on Linux, `start.exe /affinity 0xff` on Windows or similar mechanisms
   does not affect the set of processors this package will use by default, though you can opt in to
   this via [`.where_available_for_current_thread()`][crate::ProcessorSetBuilder::where_available_for_current_thread].
-* Limits on processor time are considered an upper bound on the number of processors that can be
-  included in a processor set. For example, if you configure a processor time limit of
-  10 seconds per second of real time on a 20-processor system, then the builder may return up
-  to 10 of the processors in the resulting processor set (though it may be a different 10 every
-  time you create a new processor set from scratch). This limit is optional and may be disabled
-  by using [`.ignoring_resource_quota()`][crate::ProcessorSetBuilder::ignoring_resource_quota].
-  See `examples/obey_job_resource_quota_limits_windows.rs` for a Windows-specific example.
+* Any operating system enforced processor time quota is taken as the upper bound for the processor
+  count of the processor set returned by [`SystemHardware::processors()`].
+* Any other processor set can be opt-in quota-limited when building the processor set. For example, by calling `SystemHardware::current().all_processors().to_builder().enforce_resource_quota().take_all()`.
 
-# Working with processor time constraints
+See `examples/obey_job_resource_quota_limits_windows.rs` for a Windows-specific example of processor
+time quota enforcement.
+
+# Avoiding operating system quota penalties
 
 If a process exceeds the processor time limit, the operating system will delay executing the
 process further until the "debt is paid off". This is undesirable for most workloads because:

@@ -57,7 +57,7 @@ impl ProcessorSetBuilder {
             processor_type_selector: ProcessorTypeSelector::Any,
             memory_region_selector: MemoryRegionSelector::Any,
             except_indexes: HashSet::new(),
-            obey_resource_quota: true,
+            obey_resource_quota: false,
             source_processor_ids: None,
             hardware,
         }
@@ -371,34 +371,34 @@ impl ProcessorSetBuilder {
         self
     }
 
-    /// Ignores the process resource quota when determining the maximum number of processors
+    /// Enforces the process resource quota when determining the maximum number of processors
     /// that can be included in the created processor set.
     ///
-    /// This can be valuable to identify the total set of available processors, though is typically
-    /// not a good idea when scheduling work on the processors. See the type-level documentation
-    /// for more details on resource quota handling best practices.
+    /// By default, the builder does not enforce the resource quota. Call this method to limit
+    /// the processor set to the quota. See the type-level documentation for more details on
+    /// resource quota handling best practices.
+    ///
+    /// Note that [`SystemHardware::processors()`] already enforces the resource quota, so you
+    /// do not need to call this method when deriving from that processor set.
     ///
     /// # Example
     ///
     /// ```
     /// use many_cpus::SystemHardware;
+    /// use new_zealand::nz;
     ///
-    /// // Get all processors regardless of resource quota
-    /// let all_processors = SystemHardware::current().all_processors();
-    ///
-    /// // Compare with quota-respecting set
-    /// let quota_processors = SystemHardware::current().processors();
-    ///
-    /// println!("Total processors available: {}", all_processors.len());
-    /// println!("Processors within quota: {}", quota_processors.len());
-    ///
-    /// if all_processors.len() > quota_processors.len() {
-    ///     println!("Resource quota is limiting processor usage");
-    /// }
+    /// // Get all processors and explicitly enforce resource quota.
+    /// let quota_processors = SystemHardware::current()
+    ///     .all_processors()
+    ///     .to_builder()
+    ///     .enforce_resource_quota()
+    ///     .take(nz!(4));
     /// ```
+    ///
+    /// [`SystemHardware::processors()`]: crate::SystemHardware::processors
     #[must_use]
-    pub fn ignoring_resource_quota(mut self) -> Self {
-        self.obey_resource_quota = false;
+    pub fn enforce_resource_quota(mut self) -> Self {
+        self.obey_resource_quota = true;
         self
     }
 
@@ -412,11 +412,11 @@ impl ProcessorSetBuilder {
     ///
     /// # Resource quota
     ///
-    /// Unless overridden by [`ignoring_resource_quota()`][1], the call will fail if the number of
-    /// requested processors is above the process resource quota. See the type-level
-    /// documentation for more details on resource quota handling best practices.
+    /// By default, the resource quota is not enforced. Call [`enforce_resource_quota()`][1]
+    /// to limit results to the quota. See the type-level documentation for more details on
+    /// resource quota handling best practices.
     ///
-    /// [1]: ProcessorSetBuilder::ignoring_resource_quota
+    /// [1]: ProcessorSetBuilder::enforce_resource_quota
     #[must_use]
     pub fn take(self, count: NonZero<usize>) -> Option<ProcessorSet> {
         if let Some(max_count) = self.resource_quota_processor_count_limit()
@@ -631,11 +631,11 @@ impl ProcessorSetBuilder {
     ///
     /// # Resource quota
     ///
-    /// Unless overridden by [`ignoring_resource_quota()`][1], the maximum number of processors
-    /// returned is limited by the process resource quota. See the type-level documentation
-    /// for more details on resource quota handling best practices.
+    /// By default, the resource quota is not enforced. Call [`enforce_resource_quota()`][1]
+    /// to limit results to the quota. See the type-level documentation for more details on
+    /// resource quota handling best practices.
     ///
-    /// [1]: ProcessorSetBuilder::ignoring_resource_quota
+    /// [1]: ProcessorSetBuilder::enforce_resource_quota
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Hangs due to recursive access of OnceLock.
     pub fn take_all(self) -> Option<ProcessorSet> {
@@ -1133,7 +1133,11 @@ mod tests {
                 .max_processor_time(1.0),
         );
 
-        let set = hw.processors().to_builder().take(nz!(2));
+        let set = hw
+            .all_processors()
+            .to_builder()
+            .enforce_resource_quota()
+            .take(nz!(2));
         assert!(set.is_none());
     }
 
@@ -1148,14 +1152,59 @@ mod tests {
                 .max_processor_time(1.5),
         );
 
-        let set = hw.processors().to_builder().take(nz!(2));
+        let set = hw
+            .all_processors()
+            .to_builder()
+            .enforce_resource_quota()
+            .take(nz!(2));
         assert!(set.is_none());
     }
 
     #[test]
-    fn take_n_not_enough_processor_time_quota_but_ignoring_quota() {
-        // Configure quota of only 1.0 processor time but we will ignore it by
-        // calling ignoring_resource_quota() on the builder.
+    fn take_n_exactly_at_quota_limit() {
+        // Configure quota of exactly 2.0 processor time and request exactly 2 processors.
+        // This tests the boundary condition where count == max_count (should succeed).
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Performance))
+                .max_processor_time(2.0),
+        );
+
+        let set = hw
+            .all_processors()
+            .to_builder()
+            .enforce_resource_quota()
+            .take(nz!(2));
+        assert!(set.is_some());
+        assert_eq!(set.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn take_n_under_quota_succeeds() {
+        // Configure quota of 3.0 processor time and request only 2 processors.
+        // This tests that the quota branch passes through when count < max_count.
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 0, EfficiencyClass::Performance))
+                .processor(proc(2, 0, EfficiencyClass::Efficiency))
+                .max_processor_time(3.0),
+        );
+
+        let set = hw
+            .all_processors()
+            .to_builder()
+            .enforce_resource_quota()
+            .take(nz!(2));
+        assert!(set.is_some());
+        assert_eq!(set.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn take_n_quota_not_enforced_by_default() {
+        // Configure quota of only 1.0 processor time. Since quota is not enforced by default,
+        // we should still be able to get all processors via all_processors().to_builder().
         let hw = SystemHardware::fake(
             HardwareBuilder::new()
                 .processor(proc(0, 0, EfficiencyClass::Efficiency))
@@ -1163,17 +1212,12 @@ mod tests {
                 .max_processor_time(1.0),
         );
 
-        // First, verify that hw.processors() respects the quota limit.
+        // Verify that hw.processors() respects the quota limit.
         let limited_set = hw.processors();
         assert_eq!(limited_set.len(), 1);
 
-        // Now verify we can bypass the quota by using ignoring_resource_quota() on a builder
-        // that starts from all_processors().
-        let set = hw
-            .all_processors()
-            .to_builder()
-            .ignoring_resource_quota()
-            .take(nz!(2));
+        // Verify that all_processors().to_builder() does NOT enforce quota by default.
+        let set = hw.all_processors().to_builder().take(nz!(2));
         assert_eq!(set.unwrap().len(), 2);
     }
 
@@ -1187,7 +1231,11 @@ mod tests {
                 .max_processor_time(0.001),
         );
 
-        let set = hw.processors().to_builder().take(nz!(1));
+        let set = hw
+            .all_processors()
+            .to_builder()
+            .enforce_resource_quota()
+            .take(nz!(1));
         assert_eq!(set.unwrap().len(), 1);
     }
 
@@ -1201,7 +1249,12 @@ mod tests {
                 .max_processor_time(1.999),
         );
 
-        let set = hw.processors().to_builder().take_all().unwrap();
+        let set = hw
+            .all_processors()
+            .to_builder()
+            .enforce_resource_quota()
+            .take_all()
+            .unwrap();
         assert_eq!(set.len(), 1);
     }
 
@@ -1215,7 +1268,12 @@ mod tests {
                 .max_processor_time(0.001),
         );
 
-        let set = hw.processors().to_builder().take_all().unwrap();
+        let set = hw
+            .all_processors()
+            .to_builder()
+            .enforce_resource_quota()
+            .take_all()
+            .unwrap();
         assert_eq!(set.len(), 1);
     }
 
@@ -1856,11 +1914,11 @@ mod tests_fallback {
     }
 
     #[test]
-    fn ignoring_resource_quota() {
+    fn enforce_resource_quota() {
         let hw = SystemHardware::fallback();
-        let builder = hw.processors().to_builder();
+        let builder = hw.all_processors().to_builder();
 
-        let set = builder.ignoring_resource_quota().take_all().unwrap();
+        let set = builder.enforce_resource_quota().take_all().unwrap();
 
         assert!(set.len() >= 1);
     }
@@ -1892,14 +1950,14 @@ mod tests_fallback {
     }
 
     #[test]
-    fn obey_resource_quota_by_default() {
+    fn quota_not_enforced_by_default_on_builder() {
         let hw = SystemHardware::fallback();
-        let builder = hw.processors().to_builder();
+        let builder = hw.all_processors().to_builder();
 
         let set = builder.take_all().unwrap();
 
-        // The fallback platform reports max_processor_time == processor_count,
-        // so the default behavior should return all processors.
+        // The fallback platform reports max_processor_time == processor_count.
+        // Since quota is NOT enforced by default, we should get all processors.
         let expected_count = std::thread::available_parallelism()
             .map(NonZero::get)
             .unwrap_or(1);

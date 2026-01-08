@@ -224,6 +224,7 @@ impl SystemHardware {
     pub fn processors(&self) -> ProcessorSet {
         let cached = self.inner.cached_processors.get_or_init(|| {
             ProcessorSetBuilder::with_internals(self.clone())
+                .enforce_resource_quota()
                 .take_all()
                 .expect(
                     "there is always at least one processor available because we are running on it",
@@ -318,7 +319,6 @@ impl SystemHardware {
     pub fn all_processors(&self) -> ProcessorSet {
         let cached = self.inner.cached_all_processors.get_or_init(|| {
             ProcessorSetBuilder::with_internals(self.clone())
-                .ignoring_resource_quota()
                 .take_all()
                 .expect("there is always at least one processor available")
                 .into_processors()
