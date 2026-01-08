@@ -733,7 +733,9 @@ impl ProcessorSetBuilder {
     /// let first_processor = candidates.processors().first().clone();
     ///
     /// // Create a new set containing exactly that processor.
-    /// let single_processor_set = candidates.to_builder().take_exact(nonempty![first_processor]);
+    /// let single_processor_set = candidates
+    ///     .to_builder()
+    ///     .take_exact(nonempty![first_processor]);
     ///
     /// assert_eq!(single_processor_set.len(), 1);
     /// ```
