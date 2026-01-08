@@ -41,6 +41,10 @@ pub struct ProcessorSetBuilder {
 
     obey_resource_quota: bool,
 
+    /// When set, only processors with IDs in this set are considered as candidates.
+    /// When `None`, all platform processors are considered.
+    source_processor_ids: Option<HashSet<ProcessorId>>,
+
     /// The hardware instance to use for pin status tracking and platform access.
     /// Passed to any processor set we create.
     hardware: SystemHardware,
@@ -54,8 +58,18 @@ impl ProcessorSetBuilder {
             memory_region_selector: MemoryRegionSelector::Any,
             except_indexes: HashSet::new(),
             obey_resource_quota: true,
+            source_processor_ids: None,
             hardware,
         }
+    }
+
+    /// Restricts the builder to only consider processors from the given set.
+    /// This is used internally when building from an existing `ProcessorSet`.
+    #[must_use]
+    pub(crate) fn with_source_processors(mut self, processors: &NonEmpty<Processor>) -> Self {
+        let ids: HashSet<ProcessorId> = processors.iter().map(Processor::id).collect();
+        self.source_processor_ids = Some(ids);
+        self
     }
 
     /// Requires that all processors in the set be marked as [performance processors][1].
@@ -264,7 +278,7 @@ impl ProcessorSetBuilder {
         // We invoke the filters immediately because the API gets really annoying if the
         // predicate has to borrow some stuff because it would need to be 'static and that
         // is cumbersome (since we do not return a generic-lifetimed thing back to the caller).
-        for processor in self.all_processors() {
+        for processor in self.candidate_processors() {
             if !predicate(&processor) {
                 self.except_indexes.insert(processor.id());
             }
@@ -348,7 +362,7 @@ impl ProcessorSetBuilder {
     pub fn where_available_for_current_thread(mut self) -> Self {
         let current_thread_processors = self.hardware.platform().current_thread_processors();
 
-        for processor in self.all_processors() {
+        for processor in self.candidate_processors() {
             if !current_thread_processors.contains(&processor.id()) {
                 self.except_indexes.insert(processor.id());
             }
@@ -699,6 +713,49 @@ impl ProcessorSetBuilder {
         processors
     }
 
+    /// Takes the exact processors specified from the candidate set, returning a new
+    /// [`ProcessorSet`] containing only those processors.
+    /// 
+    /// # Panics
+    ///
+    /// Panics if any of the specified processors are not present in the candidate set.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use many_cpus::SystemHardware;
+    /// use nonempty::nonempty;
+    ///
+    /// let hw = SystemHardware::current();
+    /// let candidates = hw.processors();
+    ///
+    /// // Get the first processor from the set.
+    /// let first_processor = candidates.processors().first().clone();
+    ///
+    /// // Create a new set containing exactly that processor.
+    /// let single_processor_set = candidates.to_builder().take_exact(nonempty![first_processor]);
+    ///
+    /// assert_eq!(single_processor_set.len(), 1);
+    /// ```
+    #[must_use]
+    pub fn take_exact(self, processors: NonEmpty<Processor>) -> ProcessorSet {
+        let candidates = self.candidates_by_memory_region();
+        let candidate_ids: HashSet<_> = candidates
+            .values()
+            .flat_map(|v| v.iter().map(Processor::id))
+            .collect();
+
+        for processor in &processors {
+            assert!(
+                candidate_ids.contains(&processor.id()),
+                "processor {} is not in the candidate set",
+                processor.id()
+            );
+        }
+
+        ProcessorSet::new(processors, self.hardware)
+    }
+
     /// Executes the first stage filters to kick out processors purely based on their individual
     /// characteristics. Whatever pass this filter are valid candidates for selection as long
     /// as the next stage of filtering (the memory region logic) permits it.
@@ -706,27 +763,30 @@ impl ProcessorSetBuilder {
     /// Returns candidates grouped by memory region, with each returned memory region having at
     /// least one candidate processor.
     fn candidates_by_memory_region(&self) -> HashMap<MemoryRegionId, Vec<Processor>> {
-        let candidates_iter = self.all_processors().into_iter().filter_map(move |p| {
-            if self.except_indexes.contains(&p.id()) {
-                return None;
-            }
-
-            let is_acceptable_type = match self.processor_type_selector {
-                ProcessorTypeSelector::Any => true,
-                ProcessorTypeSelector::Performance => {
-                    p.efficiency_class() == EfficiencyClass::Performance
+        let candidates_iter = self
+            .candidate_processors()
+            .into_iter()
+            .filter_map(move |p| {
+                if self.except_indexes.contains(&p.id()) {
+                    return None;
                 }
-                ProcessorTypeSelector::Efficiency => {
-                    p.efficiency_class() == EfficiencyClass::Efficiency
+
+                let is_acceptable_type = match self.processor_type_selector {
+                    ProcessorTypeSelector::Any => true,
+                    ProcessorTypeSelector::Performance => {
+                        p.efficiency_class() == EfficiencyClass::Performance
+                    }
+                    ProcessorTypeSelector::Efficiency => {
+                        p.efficiency_class() == EfficiencyClass::Efficiency
+                    }
+                };
+
+                if !is_acceptable_type {
+                    return None;
                 }
-            };
 
-            if !is_acceptable_type {
-                return None;
-            }
-
-            Some((p.memory_region_id(), p))
-        });
+                Some((p.memory_region_id(), p))
+            });
 
         let mut candidates = HashMap::new();
         for (region, processor) in candidates_iter {
@@ -737,6 +797,21 @@ impl ProcessorSetBuilder {
         }
 
         candidates
+    }
+
+    /// Returns the processors to consider as candidates. If a source processor set was provided
+    /// (via `with_source_processors`), only those processors are returned. Otherwise, all
+    /// platform processors are returned.
+    fn candidate_processors(&self) -> Vec<Processor> {
+        let all = self.all_processors();
+
+        match &self.source_processor_ids {
+            Some(source_ids) => all
+                .into_iter()
+                .filter(|p| source_ids.contains(&p.id()))
+                .collect(),
+            None => all.into_iter().collect(),
+        }
     }
 
     fn all_processors(&self) -> NonEmpty<Processor> {
@@ -960,6 +1035,7 @@ mod tests_real {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use new_zealand::nz;
+    use nonempty::nonempty;
 
     use super::*;
     use crate::fake::{HardwareBuilder, ProcessorBuilder};
@@ -1585,6 +1661,76 @@ mod tests {
         assert!(
             set.is_none(),
             "should return None when candidates exhausted in PreferDifferent mode"
+        );
+    }
+
+    #[test]
+    fn take_exact_returns_set_with_specified_processors() {
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 1, EfficiencyClass::Performance))
+                .processor(proc(2, 1, EfficiencyClass::Efficiency))
+                .max_processor_time(10.0),
+        );
+
+        let candidates = hw.all_processors();
+        let p1 = candidates.processors().first().clone();
+
+        let set = candidates.to_builder().take_exact(nonempty![p1.clone()]);
+        assert_eq!(set.len(), 1);
+        assert_eq!(set.processors().first().id(), p1.id());
+    }
+
+    #[test]
+    fn take_exact_with_multiple_processors() {
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 1, EfficiencyClass::Performance))
+                .processor(proc(2, 1, EfficiencyClass::Efficiency))
+                .max_processor_time(10.0),
+        );
+
+        let candidates = hw.all_processors();
+        let p0 = candidates
+            .processors()
+            .iter()
+            .find(|p| p.id() == 0)
+            .cloned()
+            .unwrap();
+        let p2 = candidates
+            .processors()
+            .iter()
+            .find(|p| p.id() == 2)
+            .cloned()
+            .unwrap();
+
+        let set = candidates.to_builder().take_exact(nonempty![p0, p2]);
+        assert_eq!(set.len(), 2);
+        assert!(set.processors().iter().any(|p| p.id() == 0));
+        assert!(set.processors().iter().any(|p| p.id() == 2));
+    }
+
+    #[test]
+    #[should_panic]
+    fn take_exact_panics_if_processor_not_in_candidates() {
+        let hw = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(proc(0, 0, EfficiencyClass::Efficiency))
+                .processor(proc(1, 1, EfficiencyClass::Performance))
+                .max_processor_time(10.0),
+        );
+
+        let candidates = hw.all_processors();
+        let p0 = candidates.processors().first().clone();
+
+        // Filter out processor 0, then try to take_exact with it - this should panic.
+        drop(
+            candidates
+                .to_builder()
+                .filter(|p| p.id() != 0)
+                .take_exact(nonempty![p0]),
         );
     }
 }

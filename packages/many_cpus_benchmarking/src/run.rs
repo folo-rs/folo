@@ -214,7 +214,7 @@ fn get_processor_set_pairs(
                     .cloned()
                     .zip(partners)
                     .map(|(p1, p2_set)| {
-                        let set1 = ProcessorSet::from_processors(nonempty![p1]);
+                        let set1 = candidates.to_builder().take_exact(nonempty![p1]);
                         (set1, p2_set)
                     })
                     .collect_vec(),
@@ -259,7 +259,7 @@ fn get_processor_set_pairs(
                     .cloned()
                     .zip(partners)
                     .map(|(p1, p2_set)| {
-                        let set1 = ProcessorSet::from_processors(nonempty![p1]);
+                        let set1 = candidates.to_builder().take_exact(nonempty![p1]);
                         (set1, p2_set)
                     })
                     .collect_vec(),
@@ -292,8 +292,8 @@ fn get_processor_set_pairs(
                         let p1 = pair.pop().expect("we asserted there are two");
                         let p2 = pair.pop().expect("we asserted there are two");
 
-                        let set1: ProcessorSet = p1.into();
-                        let set2: ProcessorSet = p2.into();
+                        let set1 = candidates.to_builder().take_exact(nonempty![p1]);
+                        let set2 = candidates.to_builder().take_exact(nonempty![p2]);
 
                         (set1, set2)
                     })
@@ -318,8 +318,8 @@ fn get_processor_set_pairs(
                     .processors()
                     .into_iter()
                     .map(|p| {
-                        let set1: ProcessorSet = p.clone().into();
-                        let set2: ProcessorSet = p.clone().into();
+                        let set1 = candidates.to_builder().take_exact(nonempty![p.clone()]);
+                        let set2 = candidates.to_builder().take_exact(nonempty![p.clone()]);
 
                         (set1, set2)
                     })
@@ -439,8 +439,8 @@ fn get_processor_set_pairs(
                             None => {
                                 // Nothing else left - that's fine.
                                 (
-                                    ProcessorSet::from_processors(nonempty![p1]),
-                                    ProcessorSet::from_processors(nonempty![p2]),
+                                    candidates.to_builder().take_exact(nonempty![p1]),
+                                    candidates.to_builder().take_exact(nonempty![p2]),
                                 )
                             }
                             Some(remaining) => {
@@ -456,7 +456,7 @@ fn get_processor_set_pairs(
                                     remaining_processors.split_at(remaining_processors.len() / 2);
 
                                 (
-                                    ProcessorSet::from_processors(
+                                    candidates.to_builder().take_exact(
                                         NonEmpty::from_vec(
                                             once(p1).chain(p1_more.iter().cloned()).collect_vec(),
                                         )
@@ -464,7 +464,7 @@ fn get_processor_set_pairs(
                                             "we know we have at least one processor for each pair",
                                         ),
                                     ),
-                                    ProcessorSet::from_processors(
+                                    candidates.to_builder().take_exact(
                                         NonEmpty::from_vec(
                                             once(p2).chain(p2_more.iter().cloned()).collect_vec(),
                                         )

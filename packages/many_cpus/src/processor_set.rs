@@ -65,10 +65,9 @@ impl ProcessorSet {
     /// ```
     #[must_use]
     pub fn to_builder(&self) -> ProcessorSetBuilder {
-        ProcessorSetBuilder::with_internals(self.hardware.clone()).filter({
-            let processors = self.processors.clone();
-            move |p| processors.contains(p)
-        })
+        ProcessorSetBuilder::with_internals(self.hardware.clone())
+            .ignoring_resource_quota()
+            .with_source_processors(&self.processors)
     }
 
     /// Returns a subset of this processor set containing the specified number of processors.
