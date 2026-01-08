@@ -23,14 +23,14 @@ const DEFAULT_METER_NAME: &str = "nm";
 ///
 /// ```
 /// use std::time::Duration;
-/// use nm_otel::publisher;
+/// use nm_otel::Publisher;
 /// use tick::Clock;
 /// # use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 ///
 /// # let exporter = InMemoryMetricExporter::default();
 /// # let reader = PeriodicReader::builder(exporter).build();
 /// # let my_meter_provider = SdkMeterProvider::builder().with_reader(reader).build();
-/// let publisher = publisher()
+/// let publisher = Publisher::builder()
 ///     .provider(my_meter_provider)
 ///     .clock(Clock::new_frozen())
 ///     .interval(Duration::from_secs(5))
@@ -118,12 +118,6 @@ impl PublisherBuilder {
     }
 }
 
-/// Creates a new publisher builder.
-#[must_use]
-pub fn publisher() -> PublisherBuilder {
-    PublisherBuilder::new()
-}
-
 /// Publishes nm metrics to OpenTelemetry.
 ///
 /// This type collects metrics from nm periodically and exports them to OpenTelemetry
@@ -133,14 +127,14 @@ pub fn publisher() -> PublisherBuilder {
 /// # Example
 ///
 /// ```no_run
-/// use nm_otel::publisher;
+/// use nm_otel::Publisher;
 /// use tick::Clock;
 /// # use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 ///
 /// # let exporter = InMemoryMetricExporter::default();
 /// # let reader = PeriodicReader::builder(exporter).build();
 /// # let provider = SdkMeterProvider::builder().with_reader(reader).build();
-/// # let mut publisher = publisher().provider(provider).clock(Clock::new_frozen()).build();
+/// # let mut publisher = Publisher::builder().provider(provider).clock(Clock::new_frozen()).build();
 /// # async fn example(mut publisher: nm_otel::Publisher) {
 /// // Spawn as a background task in your async runtime.
 /// publisher.publish_forever().await;
@@ -156,6 +150,33 @@ pub struct Publisher {
 }
 
 impl Publisher {
+    /// Creates a new publisher builder.
+    ///
+    /// This is the recommended way to create a publisher. Use the builder methods
+    /// to configure the publisher before calling `.build()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use nm_otel::Publisher;
+    /// use tick::Clock;
+    /// # use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
+    ///
+    /// # let exporter = InMemoryMetricExporter::default();
+    /// # let reader = PeriodicReader::builder(exporter).build();
+    /// # let my_meter_provider = SdkMeterProvider::builder().with_reader(reader).build();
+    /// let publisher = Publisher::builder()
+    ///     .provider(my_meter_provider)
+    ///     .clock(Clock::new_frozen())
+    ///     .interval(Duration::from_secs(5))
+    ///     .build();
+    /// ```
+    #[must_use]
+    pub fn builder() -> PublisherBuilder {
+        PublisherBuilder::new()
+    }
+
     /// Runs the publisher forever, collecting and exporting metrics at each interval.
     ///
     /// This method never returns under normal operation. Drop the future to cancel the publishing.
@@ -210,7 +231,7 @@ mod tests {
     fn builder_with_defaults() {
         let (provider, _exporter) = create_test_provider();
 
-        let publisher = publisher()
+        let publisher = Publisher::builder()
             .provider(provider)
             .clock(create_test_clock())
             .build();
@@ -222,7 +243,7 @@ mod tests {
     fn builder_with_custom_interval() {
         let (provider, _exporter) = create_test_provider();
 
-        let publisher = publisher()
+        let publisher = Publisher::builder()
             .provider(provider)
             .clock(create_test_clock())
             .interval(Duration::from_secs(5))
@@ -235,7 +256,7 @@ mod tests {
     fn builder_with_custom_meter_name() {
         let (provider, _exporter) = create_test_provider();
 
-        let _publisher = publisher()
+        let _publisher = Publisher::builder()
             .provider(provider)
             .clock(create_test_clock())
             .meter_name("custom_meter")
@@ -245,21 +266,21 @@ mod tests {
     #[test]
     #[should_panic]
     fn builder_without_provider_panics() {
-        let _publisher = publisher().clock(create_test_clock()).build();
+        let _publisher = Publisher::builder().clock(create_test_clock()).build();
     }
 
     #[test]
     #[should_panic]
     fn builder_without_clock_panics() {
         let (provider, _exporter) = create_test_provider();
-        let _publisher = publisher().provider(provider).build();
+        let _publisher = Publisher::builder().provider(provider).build();
     }
 
     #[test]
     fn run_one_iteration_collects_metrics() {
         let (provider, exporter) = create_test_provider();
 
-        let mut publisher = publisher()
+        let mut publisher = Publisher::builder()
             .provider(provider.clone())
             .clock(create_test_clock())
             .build();
@@ -280,7 +301,7 @@ mod tests {
     fn multiple_iterations_track_state() {
         let (provider, _exporter) = create_test_provider();
 
-        let mut publisher = publisher()
+        let mut publisher = Publisher::builder()
             .provider(provider)
             .clock(create_test_clock())
             .build();

@@ -13,7 +13,7 @@ use std::task::{Context, Waker};
 use std::time::Duration;
 
 use nm::Event;
-use nm_otel::publisher;
+use nm_otel::Publisher;
 use opentelemetry_sdk::metrics::data::Sum;
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 use tick::ClockControl;
@@ -48,7 +48,7 @@ fn publish_forever_collects_metrics_on_timer_tick() {
     let control = ClockControl::new();
     let clock = control.to_clock();
 
-    let mut pub_instance = publisher()
+    let mut pub_instance = Publisher::builder()
         .provider(provider.clone())
         .clock(clock)
         .interval(INTERVAL)

@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use nm::{Event, Magnitude};
-use nm_otel::publisher;
+use nm_otel::Publisher;
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use tick::Clock;
@@ -88,7 +88,7 @@ async fn main() {
     println!();
 
     // Create the nm-to-OpenTelemetry publisher.
-    let mut nm_publisher = publisher()
+    let mut nm_publisher = Publisher::builder()
         .provider(provider)
         .clock(clock)
         .interval(Duration::from_secs(2))
