@@ -118,20 +118,6 @@ impl PublisherBuilder {
     }
 }
 
-/// Creates a new publisher builder.
-///
-/// # Deprecated
-///
-/// Use [`Publisher::builder()`] instead. This function is kept for backwards compatibility.
-#[deprecated(
-    since = "0.1.0",
-    note = "Use Publisher::builder() instead for the more typical builder pattern"
-)]
-#[must_use]
-pub fn publisher() -> PublisherBuilder {
-    PublisherBuilder::new()
-}
-
 /// Publishes nm metrics to OpenTelemetry.
 ///
 /// This type collects metrics from nm periodically and exports them to OpenTelemetry
