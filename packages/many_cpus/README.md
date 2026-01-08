@@ -8,8 +8,6 @@ use many_cpus::SystemHardware;
 
 let threads = SystemHardware::current()
     .processors()
-    .take_all()
-    .expect("there is always at least one processor")
     .spawn_threads(|processor| {
         println!("Spawned thread on processor {}", processor.id());
 
