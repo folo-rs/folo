@@ -1,13 +1,13 @@
 //! Fake hardware backend implementation.
 
-use std::collections::hash_map::DefaultHasher;
 use std::fmt::Display;
-use std::hash::{Hash, Hasher};
 use std::sync::RwLock;
 use std::thread::ThreadId;
 
 use foldhash::{HashMap, HashMapExt};
 use nonempty::NonEmpty;
+use rand::prelude::*;
+use rand::rng;
 
 use crate::fake::HardwareBuilder;
 use crate::pal::{AbstractProcessor, Platform, ProcessorFacade};
@@ -126,7 +126,10 @@ impl FakePlatform {
         }
     }
 
-    /// Gets the "current processor ID" for a thread using a deterministic hash.
+    /// Gets the "current processor ID" for a thread using random selection.
+    ///
+    /// This simulates real-world behavior where unpinned threads can move between processors.
+    /// Each call may return a different processor from the allowed set.
     fn thread_processor_id(&self, thread_id: ThreadId) -> ProcessorId {
         // First check if the thread has a restricted set of processors.
         let allowed = {
@@ -141,48 +144,20 @@ impl FakePlatform {
 
         match allowed {
             Some(processors) => {
-                // Hash to one of the allowed processors.
-                let index = Self::hash_to_index(thread_id, processors.len());
-                Self::index_into_nonempty(&processors, index)
+                // Pick a random processor from the allowed set.
+                *processors
+                    .iter()
+                    .choose(&mut rng())
+                    .expect("allowed processors is non-empty")
             }
             None => {
-                // Use all processor IDs.
-                self.hash_to_processor_id(thread_id, self.processors.len())
+                // Pick a random processor from all processors.
+                self.processors
+                    .iter()
+                    .choose(&mut rng())
+                    .expect("at least one processor was configured")
+                    .id
             }
-        }
-    }
-
-    /// Indexes into a `NonEmpty` slice. The index must be less than the length.
-    fn index_into_nonempty(processors: &NonEmpty<ProcessorId>, index: usize) -> ProcessorId {
-        processors[index]
-    }
-
-    /// Hashes a thread ID to a processor ID in the range `[0, processor_count)`.
-    fn hash_to_processor_id(&self, thread_id: ThreadId, processor_count: usize) -> ProcessorId {
-        let index = Self::hash_to_index(thread_id, processor_count);
-
-        #[expect(
-            clippy::indexing_slicing,
-            reason = "index is guaranteed to be in bounds by the modulo operation"
-        )]
-        {
-            self.processors[index].id
-        }
-    }
-
-    /// Hashes a thread ID to an index in the range `[0, count)`.
-    fn hash_to_index(thread_id: ThreadId, count: usize) -> usize {
-        let mut hasher = DefaultHasher::new();
-        thread_id.hash(&mut hasher);
-        let hash = hasher.finish();
-
-        #[expect(clippy::arithmetic_side_effects, reason = "modulo cannot overflow")]
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "modulo result is always less than count which fits in usize"
-        )]
-        {
-            (hash as usize) % count
         }
     }
 }
@@ -329,15 +304,14 @@ mod tests {
     }
 
     #[test]
-    fn current_processor_id_is_deterministic() {
+    fn current_processor_id_is_from_valid_set() {
         let builder = HardwareBuilder::from_counts(nz!(4), nz!(1));
         let backend = FakePlatform::from_builder(&builder);
 
-        // Same thread should get same processor ID.
-        let id1 = backend.current_processor_id();
-        let id2 = backend.current_processor_id();
+        // Processor ID should be from the set of configured processors.
+        let id = backend.current_processor_id();
 
-        assert_eq!(id1, id2);
+        assert!(id < 4);
     }
 
     #[test]

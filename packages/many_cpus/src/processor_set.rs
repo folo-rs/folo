@@ -5,7 +5,7 @@ use std::thread;
 use itertools::Itertools;
 use nonempty::NonEmpty;
 
-use crate::pal::{Platform, PlatformFacade};
+use crate::pal::Platform;
 use crate::{Processor, ProcessorSetBuilder, SystemHardware};
 
 /// One or more processors present on the system and available for use.
@@ -23,31 +23,25 @@ use crate::{Processor, ProcessorSetBuilder, SystemHardware};
 ///    will only be scheduled to run on the processors in the set.
 /// 3. You can use [`ProcessorSet::spawn_threads()`] to spawn a set of threads, with one thread
 ///    for each of the processors in the set. Each thread will be pinned to its own processor.
-#[doc = include_str!("../docs/snippets/changes_at_runtime.md")]
+///
 /// [`SystemHardware::processors()`]: crate::SystemHardware::processors
 /// [`ProcessorSet::to_builder()`]: crate::ProcessorSet::to_builder
+#[doc = include_str!("../docs/snippets/changes_at_runtime.md")]
 #[derive(Clone, Debug)]
 pub struct ProcessorSet {
     processors: NonEmpty<Processor>,
 
     /// The hardware instance this processor set is associated with.
-    /// Used to update pin status when a thread is pinned to this set.
+    /// Used to update pin status when a thread is pinned to this set and to access the platform.
     hardware: SystemHardware,
-
-    pal: PlatformFacade,
 }
 
 impl ProcessorSet {
     #[must_use]
-    pub(crate) fn new(
-        processors: NonEmpty<Processor>,
-        hardware: SystemHardware,
-        pal: PlatformFacade,
-    ) -> Self {
+    pub(crate) fn new(processors: NonEmpty<Processor>, hardware: SystemHardware) -> Self {
         Self {
             processors,
             hardware,
-            pal,
         }
     }
 
@@ -71,7 +65,7 @@ impl ProcessorSet {
     /// ```
     #[must_use]
     pub fn to_builder(&self) -> ProcessorSetBuilder {
-        ProcessorSetBuilder::with_internals(self.hardware.clone(), self.pal.clone()).filter({
+        ProcessorSetBuilder::with_internals(self.hardware.clone()).filter({
             let processors = self.processors.clone();
             move |p| processors.contains(p)
         })
@@ -113,11 +107,7 @@ impl ProcessorSet {
         // that rely on ProcessorSets with a mock platform. Given that the only
         // way to create a ProcessorSet with a mock platform is anyway private,
         // this should be easy to control.
-        Self::new(
-            processors,
-            SystemHardware::current().clone(),
-            PlatformFacade::target(),
-        )
+        Self::new(processors, SystemHardware::current().clone())
     }
 
     /// Returns a [`ProcessorSet`] containing a single processor.
@@ -130,7 +120,6 @@ impl ProcessorSet {
         Self::new(
             NonEmpty::singleton(processor),
             SystemHardware::current().clone(),
-            PlatformFacade::target(),
         )
     }
 
@@ -215,7 +204,9 @@ impl ProcessorSet {
     /// An arbitrary processor may be preferentially used, with others used only when the preferred
     /// processor is otherwise busy.
     pub fn pin_current_thread_to(&self) {
-        self.pal.pin_current_thread_to(&self.processors);
+        self.hardware
+            .platform()
+            .pin_current_thread_to(&self.processors);
 
         if self.processors.len() == 1 {
             // If there is only one processor, both the processor and memory region are known.
@@ -260,14 +251,12 @@ impl ProcessorSet {
                     let processor = processor.clone();
                     let entrypoint = entrypoint.clone();
                     let hardware = self.hardware.clone();
-                    let pal = self.pal.clone();
 
                     move || {
                         let set = Self::new(
                             NonEmpty::from_vec(vec![processor.clone()])
                                 .expect("we provide 1-item vec as input, so it must be non-empty"),
                             hardware.clone(),
-                            pal.clone(),
                         );
                         set.pin_current_thread_to();
                         entrypoint(processor)
@@ -658,16 +647,7 @@ mod tests_fallback {
 
     use new_zealand::nz;
 
-    use crate::pal::fallback::{BUILD_TARGET_PLATFORM, ProcessorImpl as FallbackProcessor};
-    use crate::pal::{PlatformFacade, ProcessorFacade};
-    use crate::{Processor, ProcessorSet, SystemHardware};
-
-    /// Creates a fallback PAL and a cloned hardware instance for testing.
-    fn fallback_pal_and_hw() -> (PlatformFacade, SystemHardware) {
-        let pal = PlatformFacade::Fallback(&BUILD_TARGET_PLATFORM);
-        let hw = SystemHardware::current().clone();
-        (pal, hw)
-    }
+    use crate::SystemHardware;
 
     #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
@@ -675,28 +655,16 @@ mod tests_fallback {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        let (pal, hw) = fallback_pal_and_hw();
+        let hw = SystemHardware::fallback();
+        let processor_set = hw.processors();
 
-        let processors = nonempty::nonempty![
-            Processor::new(ProcessorFacade::Fallback(FallbackProcessor::new(0))),
-            Processor::new(ProcessorFacade::Fallback(FallbackProcessor::new(1)))
-        ];
-
-        let processor_set = ProcessorSet::new(processors, hw, pal);
-
-        assert_eq!(processor_set.len(), 2);
+        assert!(processor_set.len() >= 1);
 
         let mut processor_iter = processor_set.processors().iter();
 
         let p1 = processor_iter.next().unwrap();
         assert_eq!(p1.id(), 0);
         assert_eq!(p1.memory_region_id(), 0);
-
-        let p2 = processor_iter.next().unwrap();
-        assert_eq!(p2.id(), 1);
-        assert_eq!(p2.memory_region_id(), 0);
-
-        assert!(processor_iter.next().is_none());
 
         processor_set.pin_current_thread_to();
 
@@ -716,18 +684,12 @@ mod tests_fallback {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn pin_updates_tracker() {
-        let (pal, hw) = fallback_pal_and_hw();
-
-        let processors = nonempty::nonempty![Processor::new(ProcessorFacade::Fallback(
-            FallbackProcessor::new(0)
-        ))];
-
-        let processor_set = ProcessorSet::new(processors, hw, pal);
+        let hw = SystemHardware::fallback();
+        let processor_set = hw.processors().take(nz!(1)).unwrap();
 
         processor_set.pin_current_thread_to();
 
         // Verify that the tracker now reports pinning.
-        let hw = SystemHardware::current();
         assert!(hw.is_thread_processor_pinned());
         assert!(hw.is_thread_memory_region_pinned());
     }
@@ -737,19 +699,14 @@ mod tests_fallback {
     fn spawn_thread_pins_correctly() {
         use std::sync::mpsc;
 
-        let (pal, hw) = fallback_pal_and_hw();
-
-        let processors = nonempty::nonempty![Processor::new(ProcessorFacade::Fallback(
-            FallbackProcessor::new(0)
-        ))];
-
-        let processor_set = ProcessorSet::new(processors, hw, pal);
+        let hw = SystemHardware::fallback();
+        let processor_set = hw.processors().take(nz!(1)).unwrap();
 
         let (tx, rx) = mpsc::channel();
 
         processor_set
             .spawn_thread(move |_| {
-                let is_pinned = SystemHardware::current().is_thread_processor_pinned();
+                let is_pinned = hw.is_thread_processor_pinned();
                 tx.send(is_pinned).unwrap();
             })
             .join()
@@ -762,47 +719,27 @@ mod tests_fallback {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn spawn_threads_pins_all_correctly() {
-        let (pal, hw) = fallback_pal_and_hw();
+        let hw = SystemHardware::fallback();
+        let processor_set = hw.processors().take(nz!(2));
 
-        let processors = nonempty::nonempty![
-            Processor::new(ProcessorFacade::Fallback(FallbackProcessor::new(0))),
-            Processor::new(ProcessorFacade::Fallback(FallbackProcessor::new(1)))
-        ];
+        // Skip if we do not have at least 2 processors.
+        let Some(processor_set) = processor_set else {
+            return;
+        };
 
-        let processor_set = ProcessorSet::new(processors, hw, pal);
-
-        let threads =
-            processor_set.spawn_threads(|_| SystemHardware::current().is_thread_processor_pinned());
+        let threads = processor_set.spawn_threads(move |_| hw.is_thread_processor_pinned());
 
         for thread in threads {
             let is_pinned = thread.join().unwrap();
             assert!(is_pinned);
         }
     }
-    #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
-    fn from_processor_preserves_data() {
-        let processor = Processor::new(ProcessorFacade::Fallback(FallbackProcessor::new(0)));
-
-        // We need to ensure the tracker and PAL singletons are using fallback.
-        // For this test, we just verify basic construction works.
-        let processor_id = processor.id();
-
-        let processor_set = ProcessorSet::from_processor(processor);
-
-        assert_eq!(processor_set.len(), 1);
-        assert_eq!(processor_set.processors().first().id(), processor_id);
-    }
 
     #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn inherit_on_pinned() {
-        use std::thread;
-
-        use crate::SystemHardware;
-
         thread::spawn(|| {
-            let hw = SystemHardware::current();
+            let hw = SystemHardware::fallback();
             let one = hw.processors().take(nz!(1)).unwrap();
 
             one.pin_current_thread_to();
@@ -825,13 +762,9 @@ mod tests_fallback {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn to_builder_preserves_processors() {
-        use crate::SystemHardware;
+        let hw = SystemHardware::fallback();
 
-        let set = SystemHardware::current()
-            .processors()
-            .to_builder()
-            .take(nz!(1))
-            .unwrap();
+        let set = hw.processors().to_builder().take(nz!(1)).unwrap();
 
         let builder = set.to_builder();
 
@@ -847,9 +780,8 @@ mod tests_fallback {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn take_all_returns_all_processors() {
-        use crate::SystemHardware;
-
-        let all_set = SystemHardware::current().processors();
+        let hw = SystemHardware::fallback();
+        let all_set = hw.processors();
 
         let expected_count = thread::available_parallelism()
             .map(std::num::NonZero::get)

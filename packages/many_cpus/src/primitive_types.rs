@@ -1,5 +1,5 @@
 /// Identifies a specific processor.
-/// 
+///
 /// This will match the numeric identifier used by standard tooling of the operating system.
 ///
 /// It is important to highlight that the values used are not guaranteed to be sequential/contiguous
@@ -7,7 +7,7 @@
 pub type ProcessorId = u32;
 
 /// Identifies a specific memory region.
-/// 
+///
 /// This will match the numeric identifier used by standard tooling of the operating system.
 ///
 /// It is important to highlight that the values used are not guaranteed to be sequential/contiguous

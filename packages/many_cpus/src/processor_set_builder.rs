@@ -8,7 +8,7 @@ use nonempty::NonEmpty;
 use rand::prelude::*;
 use rand::rng;
 
-use crate::pal::{Platform, PlatformFacade};
+use crate::pal::Platform;
 use crate::{
     EfficiencyClass, MemoryRegionId, Processor, ProcessorId, ProcessorSet, SystemHardware,
 };
@@ -41,23 +41,20 @@ pub struct ProcessorSetBuilder {
 
     obey_resource_quota: bool,
 
-    /// The hardware instance to use for pin status tracking.
+    /// The hardware instance to use for pin status tracking and platform access.
     /// Passed to any processor set we create.
     hardware: SystemHardware,
-
-    pal: PlatformFacade,
 }
 
 impl ProcessorSetBuilder {
     #[must_use]
-    pub(crate) fn with_internals(hardware: SystemHardware, pal: PlatformFacade) -> Self {
+    pub(crate) fn with_internals(hardware: SystemHardware) -> Self {
         Self {
             processor_type_selector: ProcessorTypeSelector::Any,
             memory_region_selector: MemoryRegionSelector::Any,
             except_indexes: HashSet::new(),
             obey_resource_quota: true,
             hardware,
-            pal,
         }
     }
 
@@ -349,7 +346,7 @@ impl ProcessorSetBuilder {
     /// ```
     #[must_use]
     pub fn where_available_for_current_thread(mut self) -> Self {
-        let current_thread_processors = self.pal.current_thread_processors();
+        let current_thread_processors = self.hardware.platform().current_thread_processors();
 
         for processor in self.all_processors() {
             if !current_thread_processors.contains(&processor.id()) {
@@ -570,7 +567,6 @@ impl ProcessorSetBuilder {
         Some(ProcessorSet::new(
             NonEmpty::from_vec(processors)?,
             self.hardware,
-            self.pal,
         ))
     }
 
@@ -683,7 +679,6 @@ impl ProcessorSetBuilder {
         Some(ProcessorSet::new(
             NonEmpty::from_vec(processors)?,
             self.hardware,
-            self.pal,
         ))
     }
 
@@ -747,12 +742,15 @@ impl ProcessorSetBuilder {
     fn all_processors(&self) -> NonEmpty<Processor> {
         // Cheap conversion, reasonable to do it inline since we do not expect
         // processor set logic to be on the hot path anyway.
-        self.pal.get_all_processors().map(Processor::new)
+        self.hardware
+            .platform()
+            .get_all_processors()
+            .map(Processor::new)
     }
 
     fn resource_quota_processor_count_limit(&self) -> Option<usize> {
         if self.obey_resource_quota {
-            let max_processor_time = self.pal.max_processor_time();
+            let max_processor_time = self.hardware.platform().max_processor_time();
 
             // We round down the quota to get a whole number of processors.
             // We specifically round down because our goal with the resource quota is to never
@@ -1600,21 +1598,13 @@ mod tests_fallback {
 
     use new_zealand::nz;
 
-    use crate::pal::PlatformFacade;
+    use crate::SystemHardware;
     use crate::pal::fallback::BUILD_TARGET_PLATFORM;
-    use crate::{ProcessorSetBuilder, SystemHardware};
-
-    /// Creates a fallback PAL and a cloned hardware instance for testing.
-    fn fallback_pal_and_hw() -> (PlatformFacade, SystemHardware) {
-        let pal = PlatformFacade::Fallback(&BUILD_TARGET_PLATFORM);
-        let hw = SystemHardware::current().clone();
-        (pal, hw)
-    }
 
     #[test]
     fn builder_smoke_test() {
-        let (pal, hw) = fallback_pal_and_hw();
-        let builder = ProcessorSetBuilder::with_internals(hw, pal);
+        let hw = SystemHardware::fallback();
+        let builder = hw.processors().to_builder();
 
         let set = builder.take_all().unwrap();
 
@@ -1623,8 +1613,8 @@ mod tests_fallback {
 
     #[test]
     fn take_respects_limit() {
-        let (pal, hw) = fallback_pal_and_hw();
-        let builder = ProcessorSetBuilder::with_internals(hw, pal);
+        let hw = SystemHardware::fallback();
+        let builder = hw.processors().to_builder();
 
         let set = builder.take(nz!(1));
 
@@ -1634,8 +1624,8 @@ mod tests_fallback {
 
     #[test]
     fn take_all_returns_all() {
-        let (pal, hw) = fallback_pal_and_hw();
-        let builder = ProcessorSetBuilder::with_internals(hw, pal);
+        let hw = SystemHardware::fallback();
+        let builder = hw.processors().to_builder();
 
         let set = builder.take_all().unwrap();
 
@@ -1649,8 +1639,8 @@ mod tests_fallback {
     #[test]
     fn performance_only_filter() {
         // All processors on the fallback platform are Performance class.
-        let (pal, hw) = fallback_pal_and_hw();
-        let builder = ProcessorSetBuilder::with_internals(hw, pal);
+        let hw = SystemHardware::fallback();
+        let builder = hw.processors().to_builder();
 
         let set = builder.performance_processors_only().take_all().unwrap();
 
@@ -1664,8 +1654,8 @@ mod tests_fallback {
     #[test]
     fn same_memory_region_filter() {
         // All processors on the fallback platform are in memory region 0.
-        let (pal, hw) = fallback_pal_and_hw();
-        let builder = ProcessorSetBuilder::with_internals(hw, pal);
+        let hw = SystemHardware::fallback();
+        let builder = hw.processors().to_builder();
 
         let set = builder.same_memory_region().take_all().unwrap();
 
@@ -1682,8 +1672,8 @@ mod tests_fallback {
 
     #[test]
     fn except_filter() {
-        let (pal, hw) = fallback_pal_and_hw();
-        let builder = ProcessorSetBuilder::with_internals(hw, pal);
+        let hw = SystemHardware::fallback();
+        let builder = hw.processors().to_builder();
 
         if BUILD_TARGET_PLATFORM.processor_count() > 1 {
             let except_set = builder.clone().filter(|p| p.id() == 0).take_all().unwrap();
@@ -1699,8 +1689,8 @@ mod tests_fallback {
 
     #[test]
     fn ignoring_resource_quota() {
-        let (pal, hw) = fallback_pal_and_hw();
-        let builder = ProcessorSetBuilder::with_internals(hw, pal);
+        let hw = SystemHardware::fallback();
+        let builder = hw.processors().to_builder();
 
         let set = builder.ignoring_resource_quota().take_all().unwrap();
 
@@ -1712,19 +1702,19 @@ mod tests_fallback {
         use std::thread;
 
         thread::spawn(|| {
-            let (pal, hw) = fallback_pal_and_hw();
+            let hw = SystemHardware::fallback();
 
             // First pin to one processor.
-            let one = ProcessorSetBuilder::with_internals(hw.clone(), pal.clone())
-                .take(nz!(1))
-                .unwrap();
+            let one = hw.processors().to_builder().take(nz!(1)).unwrap();
 
             one.pin_current_thread_to();
 
             // Now build a new set inheriting the affinity.
-            let builder = ProcessorSetBuilder::with_internals(hw, pal);
-
-            let set = builder.where_available_for_current_thread().take_all();
+            let set = hw
+                .processors()
+                .to_builder()
+                .where_available_for_current_thread()
+                .take_all();
 
             assert!(set.is_some());
             assert_eq!(set.unwrap().len(), 1);
@@ -1735,8 +1725,8 @@ mod tests_fallback {
 
     #[test]
     fn obey_resource_quota_by_default() {
-        let (pal, hw) = fallback_pal_and_hw();
-        let builder = ProcessorSetBuilder::with_internals(hw, pal);
+        let hw = SystemHardware::fallback();
+        let builder = hw.processors().to_builder();
 
         let set = builder.take_all().unwrap();
 

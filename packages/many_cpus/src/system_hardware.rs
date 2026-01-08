@@ -152,6 +152,18 @@ impl SystemHardware {
         Self::from_platform(PlatformFacade::from_fake(backend))
     }
 
+    /// Creates a `SystemHardware` instance using the fallback platform.
+    ///
+    /// The fallback platform is a simple implementation that does not use platform-specific
+    /// APIs and is useful for testing cross-platform behavior.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn fallback() -> Self {
+        use crate::pal::fallback::BUILD_TARGET_PLATFORM;
+
+        Self::from_platform(PlatformFacade::Fallback(&BUILD_TARGET_PLATFORM))
+    }
+
     fn from_platform(platform: PlatformFacade) -> Self {
         let all_pal_processors = platform.get_all_processors();
         let max_processor_id = platform.max_processor_id();
@@ -211,7 +223,7 @@ impl SystemHardware {
     #[must_use]
     pub fn processors(&self) -> ProcessorSet {
         let cached = self.inner.cached_processors.get_or_init(|| {
-            ProcessorSetBuilder::with_internals(self.clone(), self.inner.platform.clone())
+            ProcessorSetBuilder::with_internals(self.clone())
                 .take_all()
                 .expect(
                     "there is always at least one processor available because we are running on it",
@@ -219,7 +231,7 @@ impl SystemHardware {
                 .into_processors()
         });
 
-        ProcessorSet::new(cached.clone(), self.clone(), self.inner.platform.clone())
+        ProcessorSet::new(cached.clone(), self.clone())
     }
 
     /// Returns the set of processors that the current thread is pinned to, or `None` if the
@@ -252,7 +264,6 @@ impl SystemHardware {
             return Some(ProcessorSet::new(
                 NonEmpty::singleton(processor),
                 self.clone(),
-                self.inner.platform.clone(),
             ));
         }
 
@@ -269,11 +280,7 @@ impl SystemHardware {
                 .collect();
 
             if let Some(processors) = NonEmpty::from_vec(processors) {
-                return Some(ProcessorSet::new(
-                    processors,
-                    self.clone(),
-                    self.inner.platform.clone(),
-                ));
+                return Some(ProcessorSet::new(processors, self.clone()));
             }
         }
 
@@ -310,14 +317,14 @@ impl SystemHardware {
     #[must_use]
     pub fn all_processors(&self) -> ProcessorSet {
         let cached = self.inner.cached_all_processors.get_or_init(|| {
-            ProcessorSetBuilder::with_internals(self.clone(), self.inner.platform.clone())
+            ProcessorSetBuilder::with_internals(self.clone())
                 .ignoring_resource_quota()
                 .take_all()
                 .expect("there is always at least one processor available")
                 .into_processors()
         });
 
-        ProcessorSet::new(cached.clone(), self.clone(), self.inner.platform.clone())
+        ProcessorSet::new(cached.clone(), self.clone())
     }
 
     /// Returns the highest possible value for a processor ID.
@@ -627,6 +634,11 @@ impl SystemHardware {
                 .expect("the system must have at least one processor for code to execute")
         }
     }
+
+    /// Returns a reference to the platform abstraction layer.
+    pub(crate) fn platform(&self) -> &PlatformFacade {
+        &self.inner.platform
+    }
 }
 
 impl std::fmt::Debug for SystemHardware {
@@ -841,17 +853,6 @@ mod tests_fake {
 
         // The ID should be within the configured range.
         assert!(id < 8);
-    }
-
-    #[test]
-    fn fake_hardware_is_deterministic() {
-        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(8), nz!(1)));
-
-        let id1 = hardware.current_processor_id();
-        let id2 = hardware.current_processor_id();
-
-        // Same thread should get same processor ID.
-        assert_eq!(id1, id2);
     }
 
     #[test]

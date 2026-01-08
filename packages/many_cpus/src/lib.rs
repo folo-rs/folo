@@ -174,8 +174,10 @@
 //!     // This causes soft limits on processor affinity to be respected.
 //!     .where_available_for_current_thread()
 //!     .take_all()
-//!     .expect("found no processors usable by the current thread; \
-//!         this is impossible because the thread is currently running on one");
+//!     .expect(
+//!         "found no processors usable by the current thread; \
+//!         this is impossible because the thread is currently running on one",
+//!     );
 //!
 //! println!(
 //!     "After applying soft limits, we are allowed to use {} processors.",

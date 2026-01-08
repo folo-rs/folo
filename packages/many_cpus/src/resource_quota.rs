@@ -2,7 +2,7 @@
 ///
 /// The active resource quota may change over time. You can use [`SystemHardware::resource_quota()`]
 /// to obtain fresh information about the current resource quota at any time.
-/// 
+///
 /// [`SystemHardware::resource_quota()`]: crate::SystemHardware::resource_quota
 #[derive(Debug)]
 pub struct ResourceQuota {
@@ -15,7 +15,7 @@ impl ResourceQuota {
     }
 
     /// How much processor time the process is allowed to use.
-    /// 
+    ///
     /// This is measured in seconds of processor time per second of real time.
     ///
     /// This will never be more than the number of processors available to the current process.
