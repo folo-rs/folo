@@ -100,29 +100,6 @@ impl ProcessorSet {
         self.to_builder().take(count)
     }
 
-    /// Returns a [`ProcessorSet`] containing the provided processors.
-    #[must_use]
-    pub fn from_processors(processors: NonEmpty<Processor>) -> Self {
-        // Note: this always uses the real platform, so do not use it in tests
-        // that rely on ProcessorSets with a mock platform. Given that the only
-        // way to create a ProcessorSet with a mock platform is anyway private,
-        // this should be easy to control.
-        Self::new(processors, SystemHardware::current().clone())
-    }
-
-    /// Returns a [`ProcessorSet`] containing a single processor.
-    #[must_use]
-    pub fn from_processor(processor: Processor) -> Self {
-        // Note: this always uses the real platform, so do not use it in tests
-        // that rely on ProcessorSets with a mock platform. Given that the only
-        // way to create a ProcessorSet with a mock platform is anyway private,
-        // this should be easy to control.
-        Self::new(
-            NonEmpty::singleton(processor),
-            SystemHardware::current().clone(),
-        )
-    }
-
     /// Returns the number of processors in the set. A processor set is never empty.
     #[must_use]
     #[inline]
@@ -162,14 +139,14 @@ impl ProcessorSet {
     /// use std::thread;
     ///
     /// use many_cpus::SystemHardware;
+    /// use new_zealand::nz;
     ///
     /// let hw = SystemHardware::current();
     ///
     /// // Create a processor set with specific processors
     /// let processors = hw
     ///     .processors()
-    ///     .to_builder()
-    ///     .take(NonZero::new(2).unwrap())
+    ///     .take(nz!(2))
     ///     .unwrap_or_else(|| hw.processors());
     ///
     /// // Pin the current thread to those processors
@@ -178,17 +155,13 @@ impl ProcessorSet {
     /// println!("Thread pinned to {} processor(s)", processors.len());
     ///
     /// // For single-processor sets, we can verify processor-level pinning
-    /// let single_processor = hw
-    ///     .processors()
-    ///     .to_builder()
-    ///     .take(NonZero::new(1).unwrap())
-    ///     .unwrap();
+    /// let single_processor = hw.processors().take(nz!(1)).unwrap();
     ///
     /// thread::spawn(move || {
     ///     single_processor.pin_current_thread_to();
     ///
     ///     // This thread is now pinned to exactly one processor.
-    ///     assert!(SystemHardware::current().is_thread_processor_pinned());
+    ///     assert!(hw.is_thread_processor_pinned());
     ///     println!(
     ///         "Thread pinned to processor {}",
     ///         single_processor.processors().first().id()
@@ -253,11 +226,8 @@ impl ProcessorSet {
                     let hardware = self.hardware.clone();
 
                     move || {
-                        let set = Self::new(
-                            NonEmpty::from_vec(vec![processor.clone()])
-                                .expect("we provide 1-item vec as input, so it must be non-empty"),
-                            hardware.clone(),
-                        );
+                        let set =
+                            Self::new(NonEmpty::singleton(processor.clone()), hardware.clone());
                         set.pin_current_thread_to();
                         entrypoint(processor)
                     }
@@ -276,14 +246,14 @@ impl ProcessorSet {
     /// use std::num::NonZero;
     ///
     /// use many_cpus::SystemHardware;
+    /// use new_zealand::nz;
     ///
     /// let hw = SystemHardware::current();
     ///
     /// // Create a processor set with multiple processors
     /// let processors = hw
     ///     .processors()
-    ///     .to_builder()
-    ///     .take(NonZero::new(2).unwrap())
+    ///     .take(nz!(2))
     ///     .unwrap_or_else(|| hw.processors());
     ///
     /// // Spawn a single thread that can use any processor in the set
@@ -315,20 +285,6 @@ impl ProcessorSet {
             set.pin_current_thread_to();
             entrypoint(set)
         })
-    }
-}
-
-impl From<Processor> for ProcessorSet {
-    #[inline]
-    fn from(value: Processor) -> Self {
-        Self::from_processor(value)
-    }
-}
-
-impl From<NonEmpty<Processor>> for ProcessorSet {
-    #[inline]
-    fn from(value: NonEmpty<Processor>) -> Self {
-        Self::from_processors(value)
     }
 }
 
@@ -514,88 +470,8 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
-    fn from_processor_preserves_processor() {
-        use crate::SystemHardware;
-
-        let one = SystemHardware::current()
-            .processors()
-            .to_builder()
-            .take(nz!(1))
-            .unwrap();
-        let processor = one.processors().first().clone();
-        let one_again = ProcessorSet::from_processor(processor.clone());
-
-        assert_eq!(one_again.len(), 1);
-        assert_eq!(one_again.processors().first(), one.processors().first());
-
-        let one_again = ProcessorSet::from(processor);
-
-        assert_eq!(one_again.len(), 1);
-        assert_eq!(one_again.processors().first(), one.processors().first());
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
-    fn from_processors_preserves_processors() {
-        use crate::SystemHardware;
-
-        let hw = SystemHardware::current();
-
-        if hw.processors().len() < 2 {
-            eprintln!("Skipping test because there are not enough processors");
-            return;
-        }
-
-        let two = hw.processors().take(nz!(2)).unwrap();
-        let processors = NonEmpty::collect(two.processors().iter().cloned()).unwrap();
-        let two_again = ProcessorSet::from_processors(processors.clone());
-
-        assert_eq!(two_again.len(), two.len());
-
-        // The public API does not make guarantees about the order of processors, so we do this
-        // clumsy contains() based check that does not make assumptions about the order.
-        for processor in two.processors() {
-            assert!(two_again.processors().contains(processor));
-        }
-
-        let two_again = ProcessorSet::from(processors);
-
-        assert_eq!(two_again.len(), two.len());
-
-        // The public API does not make guarantees about the order of processors, so we do this
-        // clumsy contains() based check that does not make assumptions about the order.
-        for processor in two.processors() {
-            assert!(two_again.processors().contains(processor));
-        }
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
-    fn from_processors_with_one_preserves_processors() {
-        use crate::SystemHardware;
-
-        let one = SystemHardware::current()
-            .processors()
-            .to_builder()
-            .take(nz!(1))
-            .unwrap();
-        let processors = one.processors().clone();
-        let one_again = ProcessorSet::from_processors(processors);
-
-        assert_eq!(one_again.len(), 1);
-        assert_eq!(one_again.processors().first(), one.processors().first());
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn to_builder_preserves_processors() {
-        use crate::SystemHardware;
-
-        let set = SystemHardware::current()
-            .processors()
-            .to_builder()
-            .take(nz!(1))
-            .unwrap();
+        let set = SystemHardware::current().processors().take(nz!(1)).unwrap();
 
         let builder = set.to_builder();
 
@@ -611,8 +487,6 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn inherit_on_pinned() {
-        use crate::SystemHardware;
-
         thread::spawn(|| {
             let hw = SystemHardware::current();
             let one = hw.processors().take(nz!(1)).unwrap();
@@ -643,6 +517,8 @@ mod tests {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests_fallback {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, mpsc};
     use std::thread;
 
     use new_zealand::nz;
@@ -652,9 +528,6 @@ mod tests_fallback {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn smoke_test() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
         let hw = SystemHardware::fallback();
         let processor_set = hw.processors();
 
@@ -697,8 +570,6 @@ mod tests_fallback {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn spawn_thread_pins_correctly() {
-        use std::sync::mpsc;
-
         let hw = SystemHardware::fallback();
         let processor_set = hw.processors().take(nz!(1)).unwrap();
 

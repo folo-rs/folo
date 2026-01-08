@@ -848,7 +848,7 @@ mod tests_real {
     }
 
     #[test]
-    fn filter_by_memory_region_real() {
+    fn filter_by_memory_region() {
         let hw = SystemHardware::current();
 
         // We know there is at least one memory region, so these must succeed.
@@ -875,7 +875,7 @@ mod tests_real {
     }
 
     #[test]
-    fn filter_by_efficiency_class_real() {
+    fn filter_by_efficiency_class() {
         let hw = SystemHardware::current();
 
         // There must be at least one.

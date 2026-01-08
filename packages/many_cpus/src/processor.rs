@@ -85,8 +85,7 @@ impl Processor {
     /// }
     ///
     /// println!(
-    ///     "System has {} performance and {} efficiency processors",
-    ///     performance_count, efficiency_count
+    ///     "System has {performance_count} performance and {efficiency_count} efficiency processors",
     /// );
     /// ```
     #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
