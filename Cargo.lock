@@ -358,7 +358,7 @@ checksum = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3"
 
 [[package]]
 name = "cargo-detect-package"
-version = "1.0.9"
+version = "1.0.10"
 dependencies = [
  "argh",
  "mockall",
@@ -1096,7 +1096,7 @@ checksum = "c5a2d376baa530d1238d133232d15e239abad80d05838b4b59354e5268af431f"
 
 [[package]]
 name = "linked"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "criterion",
  "hash_hasher",
@@ -1112,7 +1112,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "linked_macros_impl",
  "proc-macro2",
@@ -1120,7 +1120,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros_impl"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1153,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus"
-version = "1.1.5"
+version = "2.0.0"
 dependencies = [
  "cpulist",
  "criterion",
@@ -1177,7 +1177,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_benchmarking"
-version = "0.1.38"
+version = "0.1.39"
 dependencies = [
  "cpulist",
  "criterion",
@@ -1257,7 +1257,7 @@ version = "1.0.3"
 
 [[package]]
 name = "nm"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "criterion",
  "foldhash 0.2.0",
@@ -1271,7 +1271,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "foldhash 0.2.0",
  "futures",
@@ -1392,7 +1392,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.27"
+version = "0.2.28"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -1665,7 +1665,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
 name = "region_cached"
-version = "1.0.9"
+version = "1.0.10"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1686,7 +1686,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "1.0.9"
+version = "1.0.10"
 dependencies = [
  "arc-swap",
  "axum",
@@ -2235,7 +2235,7 @@ checksum = "7ba6f5989077681266825251a52748b8c1d8a4ad098cc37e440103d0ea717fc0"
 
 [[package]]
 name = "vicinal"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
