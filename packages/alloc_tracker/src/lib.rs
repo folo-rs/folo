@@ -23,7 +23,7 @@
 //!
 //! - `panic_on_next_alloc`: Enables the [`panic_on_next_alloc`] function for debugging
 //!   unexpected allocations. This feature adds some overhead to allocations, so it's optional.
-//!  
+//!
 //! # Simple Usage
 //!
 //! You can track allocations like this:
@@ -128,6 +128,7 @@
 //! this package under Miri.
 
 mod allocator;
+mod buckets;
 mod constants;
 mod operation;
 mod operation_metrics;
@@ -137,6 +138,7 @@ mod session;
 mod thread_span;
 
 pub use allocator::*;
+pub use buckets::AllocationBucket;
 pub(crate) use constants::*;
 pub use operation::*;
 pub(crate) use operation_metrics::*;

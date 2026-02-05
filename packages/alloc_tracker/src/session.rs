@@ -33,6 +33,7 @@ use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics, Report};
 #[derive(Debug)]
 pub struct Session {
     operations: Arc<Mutex<HashMap<String, Arc<Mutex<OperationMetrics>>>>>,
+    allocation_buckets_enabled: bool,
 }
 
 impl Session {
@@ -58,7 +59,43 @@ impl Session {
     pub fn new() -> Self {
         Self {
             operations: Arc::new(Mutex::new(HashMap::new())),
+            allocation_buckets_enabled: false,
         }
+    }
+
+    /// Enables detailed tracking of allocations by size bucket.
+    ///
+    /// When enabled, allocation counts are tracked separately for each size bucket,
+    /// allowing analysis of allocation size distribution. This information is then
+    /// available via [`ReportOperation::allocation_buckets()`](crate::ReportOperation::allocation_buckets).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use alloc_tracker::{Allocator, Session};
+    ///
+    /// #[global_allocator]
+    /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+    ///
+    /// let session = Session::new().enable_allocation_buckets();
+    /// let operation = session.operation("work");
+    /// {
+    ///     let _span = operation.measure_process();
+    ///     let _small = vec![0u8; 32];  // < 64B bucket
+    ///     let _large = vec![0u8; 1024]; // 1KB - 4KB bucket
+    /// }
+    ///
+    /// let report = session.to_report();
+    /// for (name, op) in report.operations() {
+    ///     for bucket in op.allocation_buckets() {
+    ///         println!("{}: {} allocations", bucket.label(), bucket.allocations());
+    ///     }
+    /// }
+    /// ```
+    #[must_use]
+    pub fn enable_allocation_buckets(mut self) -> Self {
+        self.allocation_buckets_enabled = true;
+        self
     }
 
     /// Creates or retrieves an operation with the given name.
@@ -98,7 +135,7 @@ impl Session {
             )
         };
 
-        Operation::new(name, operation_data)
+        Operation::new(name, operation_data, self.allocation_buckets_enabled)
     }
 
     /// Creates a thread-safe report from this session.

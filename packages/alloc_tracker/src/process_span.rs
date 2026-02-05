@@ -4,7 +4,8 @@ use std::cell::Cell;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
-use crate::allocator::{AllocationTotals, allocation_totals};
+use crate::allocator::{AllocationTotals, allocation_totals, bucket_totals};
+use crate::buckets::BucketCounts;
 use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 
 /// A tracked span of code that tracks process-wide allocations between creation and drop.
@@ -34,6 +35,7 @@ pub struct ProcessSpan {
     start_bytes: u64,
     start_count: u64,
     iterations: u64,
+    start_buckets: Option<BucketCounts>,
     _not_sync: PhantomData<Cell<()>>,
 }
 
@@ -46,11 +48,18 @@ impl ProcessSpan {
             count: start_count,
         } = allocation_totals();
 
+        let start_buckets = if operation.allocation_buckets_enabled() {
+            Some(bucket_totals())
+        } else {
+            None
+        };
+
         Self {
             metrics: operation.metrics(),
             start_bytes,
             start_count,
             iterations,
+            start_buckets,
             _not_sync: PhantomData,
         }
     }
@@ -91,7 +100,7 @@ impl ProcessSpan {
     /// Calculates the allocation deltas since this span was created.
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // The != 1 fork is broadly applicable, so mutations fail. Intentional.
-    fn to_deltas(&self) -> (u64, u64) {
+    fn to_deltas(&self) -> (u64, u64, Option<BucketCounts>) {
         let AllocationTotals {
             bytes: current_bytes,
             count: current_count,
@@ -105,6 +114,11 @@ impl ProcessSpan {
             .checked_sub(self.start_count)
             .expect("total allocations count could not possibly decrease");
 
+        let bucket_deltas = self
+            .start_buckets
+            .as_ref()
+            .map(|start| start.delta_from(&bucket_totals(), self.iterations));
+
         if self.iterations > 1 {
             // Divide total allocation by iterations to get per-iteration allocation
             let bytes_delta = total_bytes_delta
@@ -113,18 +127,21 @@ impl ProcessSpan {
             let count_delta = total_count_delta
                 .checked_div(self.iterations)
                 .expect("guarded by if condition");
-            (bytes_delta, count_delta)
+            (bytes_delta, count_delta, bucket_deltas)
         } else {
-            (total_bytes_delta, total_count_delta)
+            (total_bytes_delta, total_count_delta, bucket_deltas)
         }
     }
 }
 
 impl Drop for ProcessSpan {
     fn drop(&mut self) {
-        let (bytes_delta, count_delta) = self.to_deltas();
+        let (bytes_delta, count_delta, bucket_deltas) = self.to_deltas();
         let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.add_iterations(bytes_delta, count_delta, self.iterations);
+        if let Some(deltas) = bucket_deltas {
+            data.add_bucket_iterations(deltas, self.iterations);
+        }
     }
 }
 

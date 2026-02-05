@@ -10,6 +10,7 @@ use std::sync::atomic::{self, AtomicU64};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use crate::ERR_POISONED_LOCK;
+use crate::buckets::{BucketCounters, BucketCounts};
 
 /// Only the per-thread counters updated on each allocation. A global registry of all
 /// counters (including those from threads that have since exited) allows summation for
@@ -18,6 +19,7 @@ use crate::ERR_POISONED_LOCK;
 pub(crate) struct PerThreadCounters {
     bytes: AtomicU64,
     count: AtomicU64,
+    buckets: BucketCounters,
 }
 
 impl PerThreadCounters {
@@ -26,6 +28,7 @@ impl PerThreadCounters {
         Self {
             bytes: AtomicU64::new(0),
             count: AtomicU64::new(0),
+            buckets: BucketCounters::new(),
         }
     }
 
@@ -34,6 +37,7 @@ impl PerThreadCounters {
         // Relaxed is sufficient: we only need atomicity, not ordering w.r.t. other memory ops.
         self.bytes.fetch_add(bytes, atomic::Ordering::Relaxed);
         self.count.fetch_add(1, atomic::Ordering::Relaxed);
+        self.buckets.record(bytes);
     }
 
     #[inline]
@@ -44,6 +48,11 @@ impl PerThreadCounters {
     #[inline]
     pub(crate) fn count(&self) -> u64 {
         self.count.load(atomic::Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub(crate) fn bucket_counts(&self) -> BucketCounts {
+        self.buckets.counts()
     }
 }
 
@@ -115,6 +124,18 @@ pub(crate) fn allocation_totals() -> AllocationTotals {
     for c in reg.iter() {
         totals.bytes = totals.bytes.wrapping_add(c.bytes());
         totals.count = totals.count.wrapping_add(c.count());
+    }
+    totals
+}
+
+/// Sum all bucket counters across all registered threads (process-wide view at a point in time).
+#[inline]
+pub(crate) fn bucket_totals() -> BucketCounts {
+    let reg = REGISTRY.lock().expect(ERR_POISONED_LOCK);
+
+    let mut totals = BucketCounts::zero();
+    for c in reg.iter() {
+        totals.merge(&c.bucket_counts());
     }
     totals
 }

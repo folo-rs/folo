@@ -38,13 +38,19 @@ use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 #[derive(Debug)]
 pub struct Operation {
     metrics: Arc<Mutex<OperationMetrics>>,
+    allocation_buckets_enabled: bool,
 }
 
 impl Operation {
     #[must_use]
-    pub(crate) fn new(_name: String, operation_data: Arc<Mutex<OperationMetrics>>) -> Self {
+    pub(crate) fn new(
+        _name: String,
+        operation_data: Arc<Mutex<OperationMetrics>>,
+        allocation_buckets_enabled: bool,
+    ) -> Self {
         Self {
             metrics: operation_data,
+            allocation_buckets_enabled,
         }
     }
 
@@ -52,6 +58,12 @@ impl Operation {
     #[must_use]
     pub(crate) fn metrics(&self) -> Arc<Mutex<OperationMetrics>> {
         Arc::clone(&self.metrics)
+    }
+
+    /// Returns whether allocation bucket tracking is enabled for this operation.
+    #[must_use]
+    pub(crate) fn allocation_buckets_enabled(&self) -> bool {
+        self.allocation_buckets_enabled
     }
 
     /// Creates a span that tracks thread allocations from creation until it is dropped.

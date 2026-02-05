@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::buckets::{AllocationBucket, BucketCounts};
+
 /// Thread-safe memory allocation tracking report.
 ///
 /// A `Report` contains the captured memory allocation statistics from a [`Session`](crate::Session)
@@ -79,6 +81,7 @@ pub struct ReportOperation {
     total_bytes_allocated: u64,
     total_allocations_count: u64,
     total_iterations: u64,
+    bucket_counts: Option<BucketCounts>,
 }
 
 impl Report {
@@ -105,6 +108,7 @@ impl Report {
                         total_bytes_allocated: op_data.total_bytes_allocated,
                         total_allocations_count: op_data.total_allocations_count,
                         total_iterations: op_data.total_iterations,
+                        bucket_counts: op_data.bucket_counts,
                     },
                 )
             })
@@ -175,6 +179,17 @@ impl Report {
                         .total_iterations
                         .checked_add(b_op.total_iterations)
                         .expect("merging iteration counts overflows u64 - this indicates an unrealistic scenario");
+
+                    // Merge bucket counts if present in either
+                    match (&mut a_op.bucket_counts, &b_op.bucket_counts) {
+                        (Some(a_buckets), Some(b_buckets)) => {
+                            a_buckets.merge(b_buckets);
+                        }
+                        (None, Some(b_buckets)) => {
+                            a_op.bucket_counts = Some(*b_buckets);
+                        }
+                        _ => {}
+                    }
                 })
                 .or_insert_with(|| b_op.clone());
         }
@@ -303,6 +318,43 @@ impl ReportOperation {
     pub fn mean(&self) -> u64 {
         self.mean_bytes()
     }
+
+    /// Returns an iterator over allocation buckets from smallest to largest.
+    ///
+    /// Each bucket contains the number of allocations that fell within that size range.
+    /// Returns an empty iterator if bucket tracking was not enabled for this operation's session.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use alloc_tracker::{Allocator, Session};
+    ///
+    /// #[global_allocator]
+    /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+    ///
+    /// let session = Session::new().enable_allocation_buckets();
+    /// {
+    ///     let operation = session.operation("work");
+    ///     let _span = operation.measure_process();
+    ///     let _data = vec![0u8; 100]; // Allocates in 64B-256B bucket
+    /// }
+    ///
+    /// let report = session.to_report();
+    /// for (_, op) in report.operations() {
+    ///     for bucket in op.allocation_buckets() {
+    ///         if bucket.allocations() > 0 {
+    ///             println!("{}: {} allocations", bucket.label(), bucket.allocations());
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    pub fn allocation_buckets(&self) -> impl Iterator<Item = AllocationBucket> {
+        let buckets: Vec<AllocationBucket> = match &self.bucket_counts {
+            Some(counts) => counts.iter().collect(),
+            None => Vec::new(),
+        };
+        buckets.into_iter()
+    }
 }
 
 impl fmt::Display for ReportOperation {
@@ -381,7 +433,7 @@ impl fmt::Display for Report {
             )?;
 
             // Print table rows
-            for (name, operation) in sorted_ops {
+            for (name, operation) in &sorted_ops {
                 writeln!(
                     f,
                     "| {:<name_width$} | {:>bytes_width$} | {:>count_width$} |",
@@ -392,6 +444,30 @@ impl fmt::Display for Report {
                     bytes_width = max_bytes_width,
                     count_width = max_count_width
                 )?;
+            }
+
+            // Print allocation buckets if any operation has them enabled
+            let has_buckets = sorted_ops.iter().any(|(_, op)| op.bucket_counts.is_some());
+            if has_buckets {
+                writeln!(f)?;
+                writeln!(f, "Allocation buckets:")?;
+                writeln!(f)?;
+
+                for (name, operation) in &sorted_ops {
+                    if let Some(ref counts) = operation.bucket_counts {
+                        writeln!(f, "  {name}:")?;
+                        for bucket in counts.iter() {
+                            if bucket.allocations() > 0 {
+                                writeln!(
+                                    f,
+                                    "    {:>14}: {}",
+                                    bucket.label(),
+                                    bucket.allocations()
+                                )?;
+                            }
+                        }
+                    }
+                }
             }
         }
         Ok(())
@@ -533,6 +609,7 @@ mod tests {
             total_bytes_allocated: 0,
             total_allocations_count: 0,
             total_iterations: 1,
+            bucket_counts: None,
         };
 
         assert_eq!(operation.total_allocations_count(), 0);
@@ -544,6 +621,7 @@ mod tests {
             total_bytes_allocated: 500,
             total_allocations_count: 25,
             total_iterations: 5,
+            bucket_counts: None,
         };
 
         assert_eq!(operation.total_allocations_count(), 25);
@@ -579,6 +657,7 @@ mod tests {
             total_bytes_allocated: 1000,
             total_allocations_count: 10,
             total_iterations: 4,
+            bucket_counts: None,
         };
 
         let display_output = operation.to_string();
@@ -591,5 +670,36 @@ mod tests {
         let report = Report::new();
         let display_output = report.to_string();
         assert!(display_output.contains("No allocation statistics captured."));
+    }
+
+    #[test]
+    fn allocation_buckets_returns_empty_when_disabled() {
+        let session = Session::new(); // Buckets not enabled
+        {
+            let operation = session.operation("test");
+            let _span = operation.measure_thread();
+            register_fake_allocation(100, 1);
+        }
+
+        let report = session.to_report();
+        let (_, op) = report.operations().next().unwrap();
+        assert_eq!(op.allocation_buckets().count(), 0);
+    }
+
+    #[test]
+    fn allocation_buckets_returns_buckets_when_enabled() {
+        let session = Session::new().enable_allocation_buckets();
+        {
+            let operation = session.operation("test");
+            let _span = operation.measure_thread();
+            register_fake_allocation(100, 1);
+        }
+
+        let report = session.to_report();
+        let (_, op) = report.operations().next().unwrap();
+        let buckets: Vec<_> = op.allocation_buckets().collect();
+        assert_eq!(buckets.len(), 9); // All 9 buckets
+        assert_eq!(buckets[0].label(), "< 64B");
+        assert_eq!(buckets[8].label(), ">= 1MB");
     }
 }

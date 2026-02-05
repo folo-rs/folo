@@ -121,6 +121,7 @@ fn multithreaded_allocations_show_span_differences() {
             let _span = process_op.measure_process();
             spawn_workers();
         }
+        
         process_op.total_bytes_allocated()
     };
 

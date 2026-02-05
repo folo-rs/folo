@@ -1,3 +1,5 @@
+use crate::buckets::BucketCounts;
+
 /// Metrics tracked for each operation in the session.
 #[derive(Clone, Debug, Default)]
 #[expect(
@@ -8,6 +10,8 @@ pub(crate) struct OperationMetrics {
     pub(crate) total_bytes_allocated: u64,
     pub(crate) total_allocations_count: u64,
     pub(crate) total_iterations: u64,
+    /// Optional per-bucket allocation counts, only tracked when enabled.
+    pub(crate) bucket_counts: Option<BucketCounts>,
 }
 
 impl OperationMetrics {
@@ -39,6 +43,14 @@ impl OperationMetrics {
         self.total_iterations = self.total_iterations.checked_add(iterations).expect(
             "total iterations count overflows u64 - this indicates an unrealistic scenario",
         );
+    }
+
+    /// Adds bucket allocation deltas to the metrics.
+    ///
+    /// The deltas represent per-iteration bucket counts that will be multiplied by iterations.
+    pub(crate) fn add_bucket_iterations(&mut self, bucket_deltas: BucketCounts, iterations: u64) {
+        let counts = self.bucket_counts.get_or_insert(BucketCounts::zero());
+        counts.add_scaled(&bucket_deltas, iterations);
     }
 }
 
