@@ -73,10 +73,6 @@ pub struct Report {
 
 /// Memory allocation statistics for a single operation in a report.
 #[derive(Clone, Debug)]
-#[expect(
-    clippy::struct_field_names,
-    reason = "field names are descriptive and clear"
-)]
 pub struct ReportOperation {
     total_bytes_allocated: u64,
     total_allocations_count: u64,

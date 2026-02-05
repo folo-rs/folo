@@ -2,10 +2,6 @@ use crate::buckets::BucketCounts;
 
 /// Metrics tracked for each operation in the session.
 #[derive(Clone, Debug, Default)]
-#[expect(
-    clippy::struct_field_names,
-    reason = "field names are descriptive and clear"
-)]
 pub(crate) struct OperationMetrics {
     pub(crate) total_bytes_allocated: u64,
     pub(crate) total_allocations_count: u64,

@@ -66,6 +66,10 @@ impl BucketCounts {
 
     /// Merges another bucket counts into this one by adding counts.
     #[inline]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "index i from enumerate is always valid for same-sized arrays"
+    )]
     pub(crate) fn merge(&mut self, other: &Self) {
         for (i, &count) in other.counts.iter().enumerate() {
             self.counts[i] = self.counts[i]
@@ -77,6 +81,10 @@ impl BucketCounts {
     /// Computes the delta between this snapshot and an end snapshot,
     /// dividing by iterations if greater than 1.
     #[inline]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "index i from enumerate is always valid for same-sized arrays"
+    )]
     pub(crate) fn delta_from(&self, end: &Self, iterations: u64) -> Self {
         let mut result = [0_u64; BUCKET_COUNT];
         for (i, (&start, &end)) in self.counts.iter().zip(end.counts.iter()).enumerate() {
@@ -94,6 +102,10 @@ impl BucketCounts {
 
     /// Adds scaled bucket counts (multiplied by iterations) to this instance.
     #[inline]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "index i from enumerate is always valid for same-sized arrays"
+    )]
     pub(crate) fn add_scaled(&mut self, other: &Self, iterations: u64) {
         for (i, &delta) in other.counts.iter().enumerate() {
             let total = delta
@@ -107,6 +119,10 @@ impl BucketCounts {
 
     /// Returns an iterator over allocation buckets from smallest to largest.
     #[inline]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "BUCKET_LABELS has same length as counts array"
+    )]
     pub(crate) fn iter(&self) -> impl Iterator<Item = AllocationBucket> + '_ {
         self.counts
             .iter()
@@ -141,6 +157,10 @@ impl BucketCounters {
 
     /// Records an allocation of the given size into the appropriate bucket.
     #[inline]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "bucket_index always returns a valid index in 0..BUCKET_COUNT"
+    )]
     pub(crate) fn record(&self, size: u64) {
         let idx = bucket_index(size);
         self.counts[idx].fetch_add(1, atomic::Ordering::Relaxed);
@@ -148,6 +168,10 @@ impl BucketCounters {
 
     /// Returns a snapshot of current bucket counts.
     #[inline]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "std::array::from_fn generates valid indices for the array size"
+    )]
     pub(crate) fn counts(&self) -> BucketCounts {
         BucketCounts::from_array(std::array::from_fn(|i| {
             self.counts[i].load(atomic::Ordering::Relaxed)
