@@ -472,6 +472,7 @@ impl fmt::Display for Report {
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
+#[allow(clippy::indexing_slicing, reason = "panic on invalid index is acceptable in tests")]
 mod tests {
     use super::*;
     use crate::Session;
