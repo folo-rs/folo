@@ -117,6 +117,31 @@ impl BucketCounts {
         }
     }
 
+    /// Returns bucket counts divided by the number of iterations.
+    #[inline]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "index i from enumerate is always valid for same-sized arrays"
+    )]
+    #[expect(
+        clippy::integer_division,
+        reason = "we accept loss of precision for mean calculation"
+    )]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "division by zero is guarded by if-else"
+    )]
+    pub(crate) fn mean(&self, iterations: u64) -> Self {
+        if iterations == 0 {
+            return Self::zero();
+        }
+        let mut result = [0_u64; BUCKET_COUNT];
+        for (i, &count) in self.counts.iter().enumerate() {
+            result[i] = count / iterations;
+        }
+        Self { counts: result }
+    }
+
     /// Returns an iterator over allocation buckets from smallest to largest.
     #[inline]
     #[expect(
@@ -292,5 +317,26 @@ mod tests {
         assert_eq!(buckets[0].allocations(), 1);
         assert_eq!(buckets[8].label(), ">= 1MB");
         assert_eq!(buckets[8].allocations(), 9);
+    }
+
+    #[test]
+    fn bucket_counts_mean() {
+        let counts = BucketCounts::from_array([40, 20, 15, 10, 5, 0, 0, 0, 0]);
+        let mean = counts.mean(5);
+        assert_eq!(mean.counts, [8, 4, 3, 2, 1, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn bucket_counts_mean_zero_iterations() {
+        let counts = BucketCounts::from_array([10, 20, 30, 40, 50, 60, 70, 80, 90]);
+        let mean = counts.mean(0);
+        assert_eq!(mean.counts, [0; BUCKET_COUNT]);
+    }
+
+    #[test]
+    fn bucket_counts_mean_one_iteration() {
+        let counts = BucketCounts::from_array([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        let mean = counts.mean(1);
+        assert_eq!(mean.counts, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
     }
 }

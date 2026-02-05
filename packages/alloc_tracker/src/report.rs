@@ -317,8 +317,9 @@ impl ReportOperation {
 
     /// Returns an iterator over allocation buckets from smallest to largest.
     ///
-    /// Each bucket contains the number of allocations that fell within that size range.
-    /// Returns an empty iterator if bucket tracking was not enabled for this operation's session.
+    /// Each bucket contains the total number of allocations that fell within that size range
+    /// across all iterations. Returns an empty iterator if bucket tracking was not enabled
+    /// for this operation's session.
     ///
     /// # Examples
     ///
@@ -347,6 +348,44 @@ impl ReportOperation {
     pub fn allocation_buckets(&self) -> impl Iterator<Item = AllocationBucket> {
         let buckets: Vec<AllocationBucket> = match &self.bucket_counts {
             Some(counts) => counts.iter().collect(),
+            None => Vec::new(),
+        };
+        buckets.into_iter()
+    }
+
+    /// Returns an iterator over mean allocation buckets from smallest to largest.
+    ///
+    /// Each bucket contains the mean number of allocations per iteration that fell within
+    /// that size range. Returns an empty iterator if bucket tracking was not enabled
+    /// for this operation's session.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use alloc_tracker::{Allocator, Session};
+    ///
+    /// #[global_allocator]
+    /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+    ///
+    /// let session = Session::new().enable_allocation_buckets();
+    /// {
+    ///     let operation = session.operation("work");
+    ///     let _span = operation.measure_process();
+    ///     let _data = vec![0u8; 100]; // Allocates in 64B-256B bucket
+    /// }
+    ///
+    /// let report = session.to_report();
+    /// for (_, op) in report.operations() {
+    ///     for bucket in op.mean_allocation_buckets() {
+    ///         if bucket.allocations() > 0 {
+    ///             println!("{}: {} allocations/iter", bucket.label(), bucket.allocations());
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    pub fn mean_allocation_buckets(&self) -> impl Iterator<Item = AllocationBucket> {
+        let buckets: Vec<AllocationBucket> = match &self.bucket_counts {
+            Some(counts) => counts.mean(self.total_iterations).iter().collect(),
             None => Vec::new(),
         };
         buckets.into_iter()
@@ -698,5 +737,60 @@ mod tests {
         assert_eq!(buckets.len(), 9); // All 9 buckets
         assert_eq!(buckets[0].label(), "< 64B");
         assert_eq!(buckets[8].label(), ">= 1MB");
+    }
+
+    #[test]
+    fn mean_allocation_buckets_returns_empty_when_disabled() {
+        let session = Session::new(); // Buckets not enabled
+        {
+            let operation = session.operation("test");
+            let _span = operation.measure_thread();
+            register_fake_allocation(100, 1);
+        }
+
+        let report = session.to_report();
+        let (_, op) = report.operations().next().unwrap();
+        assert_eq!(op.mean_allocation_buckets().count(), 0);
+    }
+
+    #[test]
+    fn mean_allocation_buckets_divides_by_iterations() {
+        use crate::buckets::BucketCounts;
+
+        let operation = ReportOperation {
+            total_bytes_allocated: 1000,
+            total_allocations_count: 20,
+            total_iterations: 4,
+            bucket_counts: Some(BucketCounts::from_array([40, 20, 12, 8, 4, 0, 0, 0, 0])),
+        };
+
+        let buckets: Vec<_> = operation.mean_allocation_buckets().collect();
+        assert_eq!(buckets.len(), 9);
+        // 40/4=10, 20/4=5, 12/4=3, 8/4=2, 4/4=1
+        assert_eq!(buckets[0].allocations(), 10);
+        assert_eq!(buckets[1].allocations(), 5);
+        assert_eq!(buckets[2].allocations(), 3);
+        assert_eq!(buckets[3].allocations(), 2);
+        assert_eq!(buckets[4].allocations(), 1);
+        assert_eq!(buckets[5].allocations(), 0);
+    }
+
+    #[test]
+    fn mean_allocation_buckets_zero_iterations() {
+        use crate::buckets::BucketCounts;
+
+        let operation = ReportOperation {
+            total_bytes_allocated: 0,
+            total_allocations_count: 0,
+            total_iterations: 0,
+            bucket_counts: Some(BucketCounts::from_array([10, 20, 30, 0, 0, 0, 0, 0, 0])),
+        };
+
+        let buckets: Vec<_> = operation.mean_allocation_buckets().collect();
+        assert_eq!(buckets.len(), 9);
+        // All should be zero when iterations is zero
+        for bucket in buckets {
+            assert_eq!(bucket.allocations(), 0);
+        }
     }
 }
