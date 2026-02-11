@@ -46,6 +46,7 @@ criterion = { workspace = true }
 mockall = { workspace = true }
 mutants = { workspace = true }
 par_bench = { path = "../par_bench", features = ["criterion"] }
+serial_test = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
 

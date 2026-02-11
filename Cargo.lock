@@ -1165,6 +1165,7 @@ dependencies = [
  "nonempty",
  "par_bench",
  "rand 0.9.2",
+ "serial_test",
  "smallvec",
  "static_assertions",
  "testing",

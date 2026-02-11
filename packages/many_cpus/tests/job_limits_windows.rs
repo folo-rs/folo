@@ -10,11 +10,13 @@
 use many_cpus::SystemHardware;
 use new_zealand::nz;
 use testing::{Job, ProcessorTimePct, f64_diff_abs};
+use serial_test::serial;
 
 // Floating point comparison tolerance.
 // https://rust-lang.github.io/rust-clippy/master/index.html#float_cmp
 const CLOSE_ENOUGH: f64 = 0.01;
 
+#[serial] // Job objects are global state, so mutual exclusion is necessary.
 #[test]
 #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
 #[expect(
@@ -50,6 +52,7 @@ fn obeys_processor_selection_limits() {
     drop(job);
 }
 
+#[serial] // Job objects are global state, so mutual exclusion is necessary.
 #[test]
 #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
 #[expect(
@@ -107,6 +110,7 @@ fn obeys_processor_time_limits() {
     drop(job);
 }
 
+#[serial] // Job objects are global state, so mutual exclusion is necessary.
 #[test]
 #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
 #[expect(
