@@ -98,6 +98,35 @@ impl ProcessorSet {
         self.to_builder().take(count)
     }
 
+    /// Decomposes the processor set into individual single-processor sets.
+    ///
+    /// Each processor in the original set becomes its own `ProcessorSet` containing
+    /// exactly one processor. The number of resulting sets equals [`ProcessorSet::len()`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use many_cpus::SystemHardware;
+    ///
+    /// let hardware = SystemHardware::current();
+    /// let all = hardware.processors();
+    /// let original_len = all.len();
+    ///
+    /// let individual = all.decompose();
+    ///
+    /// assert_eq!(individual.len(), original_len);
+    ///
+    /// for set in &individual {
+    ///     assert_eq!(set.len(), 1);
+    /// }
+    /// ```
+    #[must_use]
+    pub fn decompose(&self) -> NonEmpty<Self> {
+        self.processors.clone().map(|processor| {
+            Self::new(NonEmpty::singleton(processor), self.hardware.clone())
+        })
+    }
+
     /// Returns the number of processors in the set. A processor set is never empty.
     #[must_use]
     #[inline]
@@ -540,6 +569,75 @@ mod tests {
 
         // Original processor set should still be usable.
         assert_eq!(processor_set.len(), 4);
+    }
+
+    #[test]
+    fn decompose_single_processor() {
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(1), nz!(1)));
+        let processor_set = hardware.processors();
+
+        let decomposed = processor_set.decompose();
+
+        assert_eq!(decomposed.len(), 1);
+        assert_eq!(decomposed.first().len(), 1);
+        assert_eq!(decomposed.first().processors().first().id(), 0);
+    }
+
+    #[test]
+    fn decompose_multiple_processors() {
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(3), nz!(1)));
+        let processor_set = hardware.processors();
+
+        let decomposed = processor_set.decompose();
+
+        assert_eq!(decomposed.len(), 3);
+
+        for set in &decomposed {
+            assert_eq!(set.len(), 1);
+        }
+
+        let ids: foldhash::HashSet<_> = decomposed
+            .iter()
+            .map(|set| set.processors().first().id())
+            .collect();
+
+        assert_eq!(ids.len(), 3);
+        assert!(ids.contains(&0));
+        assert!(ids.contains(&1));
+        assert!(ids.contains(&2));
+    }
+
+    #[test]
+    fn decompose_preserves_memory_regions() {
+        let hardware = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(ProcessorBuilder::new().id(0).memory_region(0))
+                .processor(ProcessorBuilder::new().id(1).memory_region(1)),
+        );
+
+        let decomposed = hardware.processors().decompose();
+
+        assert_eq!(decomposed.len(), 2);
+
+        let first = decomposed.first();
+        assert_eq!(first.processors().first().id(), 0);
+        assert_eq!(first.processors().first().memory_region_id(), 0);
+
+        let second = &decomposed.tail[0];
+        assert_eq!(second.processors().first().id(), 1);
+        assert_eq!(second.processors().first().memory_region_id(), 1);
+    }
+
+    #[test]
+    fn decompose_sets_can_pin() {
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(2), nz!(1)));
+        let decomposed = hardware.processors().decompose();
+
+        // Each decomposed set should be able to pin a thread.
+        decomposed.first().pin_current_thread_to();
+
+        assert!(hardware.is_thread_processor_pinned());
+        assert!(hardware.is_thread_memory_region_pinned());
     }
 
     #[test]

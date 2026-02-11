@@ -80,9 +80,9 @@ mutants:
         $args += "linux"
     }
 
-    # Heuristically, 4 processors per job seems to work out well to achieve high efficiency.
     $args += "--jobs"
-    $args += [Math]::Max([Environment]::ProcessorCount / 4, 1)
+    # Experimentally determined heuristics.
+    $args += [int]([Math]::Floor([Environment]::ProcessorCount / 6)) + 1
 
     # We must use Invoke-Expression to preserve the quotes around the wildcarded arguments on Linux.
     $expanded_args = [String]::join(" ", $args)
