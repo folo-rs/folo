@@ -340,10 +340,6 @@ mod tests {
 
     impl TokenCache {
         fn new(value: usize) -> Self {
-            #[expect(
-                clippy::mutex_atomic,
-                reason = "inner type is placeholder, for realistic usage"
-            )]
             let value = Arc::new(Mutex::new(value));
 
             linked::new!(Self {

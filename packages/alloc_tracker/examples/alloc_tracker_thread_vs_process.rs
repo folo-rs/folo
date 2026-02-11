@@ -5,7 +5,7 @@
 //! - `measure_thread()`: Tracks allocations for the current thread only
 //! - `measure_process()`: Tracks allocations for the entire process (all threads)
 //!
-//! Run with: `cargo run --example alloc_tracker_thread_vs_process`
+//! Run with: `cargo run --example alloc_tracker_thread_vs_process`.
 
 use std::hint::black_box;
 use std::thread;

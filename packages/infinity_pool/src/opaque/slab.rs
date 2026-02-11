@@ -1187,11 +1187,11 @@ mod tests {
 
         // Fill the slab to capacity
         for i in 0..capacity {
-            // SAFETY: u32 layout matches slab layout
             #[allow(
                 clippy::cast_possible_truncation,
                 reason = "test uses small capacity values"
             )]
+            // SAFETY: u32 layout matches slab layout
             let _handle = unsafe { insert(&mut slab, i as u32) };
         }
 

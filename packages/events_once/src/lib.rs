@@ -1,7 +1,9 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
+#![expect(clippy::unnecessary_safety_comment, reason = "clippy#16553")]
+
 //! Efficient oneshot events (channels) with support for single-threaded events,
-//! object embedding, event pools and event lakes
+//! object embedding, event pools and event lakes.
 //!
 //! An event is a pair of a sender and receiver, where the sender can be used at most once. When
 //! the event occurs, the sender submits a payload `T` to the receiver. Meanwhile, the receiver can

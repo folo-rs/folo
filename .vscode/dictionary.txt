@@ -16,6 +16,7 @@ deconflicting
 Deque
 doctest
 dpkg
+elidable
 foldhash
 Folo
 freelist

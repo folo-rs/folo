@@ -7,7 +7,7 @@
 //! where multiple independent session needs to be merged. The multithreading is just a simple
 //! example case.
 //!
-//! Run with: `cargo run --example alloc_tracker_threaded_reports`
+//! Run with: `cargo run --example alloc_tracker_threaded_reports`.
 
 use std::collections::HashMap;
 use std::hint::black_box;

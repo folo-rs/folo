@@ -4,7 +4,7 @@
 //! utilities that work with processor IDs, memory region IDs and similar numeric hardware
 //! identifiers.
 //!
-//! Example cpulist string: `0-9,32-35,40`
+//! Example cpulist string: `0-9,32-35,40`.
 //!
 //! This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
 //! high-performance hardware-aware programming in Rust.

@@ -4,7 +4,7 @@
 //! - `Session`: Manages processor time tracking state
 //! - `Operation`: Calculates mean processor time across multiple spans
 //!
-//! Run with: `cargo run --example all_the_time_basic`
+//! Run with: `cargo run --example all_the_time_basic`.
 #![expect(
     clippy::arithmetic_side_effects,
     clippy::cast_sign_loss,

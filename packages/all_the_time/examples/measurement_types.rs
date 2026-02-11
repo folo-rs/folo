@@ -5,7 +5,7 @@
 //! - `measure_thread()`: Tracks processor time for the current thread only
 //! - `measure_process()`: Tracks processor time for the entire process (all threads)
 //!
-//! Run with: `cargo run --example measurement_types`
+//! Run with: `cargo run --example measurement_types`.
 #![expect(
     clippy::arithmetic_side_effects,
     reason = "this is example code that doesn't need production-level safety"

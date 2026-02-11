@@ -127,7 +127,7 @@ impl Display for Report {
 
 /// A human- and machine-readable report about observed occurrences of a single event.
 ///
-/// Part of a collected [`Report`],
+/// Part of a collected [`Report`].
 #[derive(Debug)]
 pub struct EventMetrics {
     name: EventName,

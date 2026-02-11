@@ -7,7 +7,7 @@
 //! where multiple independent session needs to be merged. The multithreading is just a simple
 //! example case.
 //!
-//! Run with: `cargo run --example all_the_time_threaded_reports`
+//! Run with: `cargo run --example all_the_time_threaded_reports`.
 #![expect(
     clippy::arithmetic_side_effects,
     clippy::cast_sign_loss,

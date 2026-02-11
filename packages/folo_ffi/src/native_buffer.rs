@@ -197,7 +197,7 @@ impl<T: Sized> NativeBuffer<T> {
     /// any declared length.
     ///
     /// The `end` pointer is guaranteed to be aligned for `T` but is not valid for reading
-    /// or writing because it is at the end of the allocation
+    /// or writing because it is at the end of the allocation.
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand NonNull - every mutation is unviable waste of time.
     pub fn as_capacity_ptr_range(&self) -> Range<NonNull<T>> {

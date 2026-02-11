@@ -5,7 +5,7 @@
 //! tracking sessions and spans in the wrapper start function that remain active during the
 //! measured execution, then converts the sessions to reports in the wrapper end function.
 //!
-//! Run with: `cargo run --example measure_wrapper_tracking`
+//! Run with: `cargo run --example measure_wrapper_tracking`.
 
 #![allow(missing_docs, reason = "No need for API documentation in example code")]
 

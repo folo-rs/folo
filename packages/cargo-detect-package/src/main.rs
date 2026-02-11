@@ -16,19 +16,19 @@ use cargo_detect_package::{OutsidePackageAction, RunInput, RunOutcome, run};
 /// subcommand.
 #[derive(FromArgs)]
 struct Args {
-    /// path to the file to detect package for
+    /// path to the file to detect package for.
     #[argh(option)]
     path: PathBuf,
 
-    /// pass the detected package as an environment variable instead of as a cargo argument
+    /// pass the detected package as an environment variable instead of as a cargo argument.
     #[argh(option)]
     via_env: Option<String>,
 
-    /// action to take when path is not in any package (workspace, ignore, error)
+    /// action to take when path is not in any package (workspace, ignore, error).
     #[argh(option)]
     outside_package: Option<OutsidePackageAction>,
 
-    /// the subcommand to execute
+    /// the subcommand to execute.
     #[argh(positional, greedy)]
     subcommand: Vec<String>,
 }

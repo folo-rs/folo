@@ -1,4 +1,4 @@
-//! Basic usage examples for `infinity_pool`
+//! Basic usage examples for `infinity_pool`.
 
 use std::fmt::Display;
 
@@ -29,7 +29,7 @@ fn main() {
     print_item("BlindPool number", &display_number);
 }
 
-/// Function that accepts anything that can be borrowed as a Display trait object
+/// Function that accepts anything that can be borrowed as a Display trait object.
 fn print_item(label: &str, item: &impl AsRef<dyn Display>) {
     println!("{}: {}", label, item.as_ref());
 }

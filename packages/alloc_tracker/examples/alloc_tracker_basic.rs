@@ -1,6 +1,6 @@
 //! Demonstrating key `alloc_tracker` types working together.
 //!
-//! Run with: `cargo run --example comprehensive_tracking`
+//! Run with: `cargo run --example comprehensive_tracking`.
 
 use std::collections::HashMap;
 use std::hint::black_box;

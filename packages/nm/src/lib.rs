@@ -34,7 +34,7 @@
 //! }
 //! ```
 //!
-//! Recommended event name format: `big_medium_small_units`
+//! Recommended event name format: `big_medium_small_units`.
 //!
 //! The above two events are merely counters, so there are no units in the name.
 //!

@@ -54,8 +54,8 @@ where
 
     /// Sets the name of the event. This is a required property.
     ///
-    /// Recommended format: `big_medium_small_units`
-    /// For example: `net_http_connect_time_ns`
+    /// Recommended format: `big_medium_small_units`.
+    /// For example: `net_http_connect_time_ns`.
     ///
     /// # Example
     ///
