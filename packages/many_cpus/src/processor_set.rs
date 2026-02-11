@@ -98,6 +98,40 @@ impl ProcessorSet {
         self.to_builder().take(count)
     }
 
+    /// Returns a subset of this processor set containing only processors that satisfy the given
+    /// predicate.
+    ///
+    /// This is a convenience method equivalent to `.to_builder().filter(predicate).take_all()`.
+    ///
+    /// Returns `None` if no processors in the set satisfy the predicate.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use many_cpus::{EfficiencyClass, SystemHardware};
+    /// use new_zealand::nz;
+    ///
+    /// let hardware = SystemHardware::current();
+    /// let all = hardware.processors();
+    ///
+    /// // Filter to only performance processors.
+    /// if let Some(performance) = all.filter(|p| {
+    ///     p.efficiency_class() == EfficiencyClass::Performance
+    /// }) {
+    ///     println!("Selected {} performance processors", performance.len());
+    /// }
+    ///
+    /// // Filter to processors with even IDs.
+    /// if let Some(even_ids) = all.filter(|p| p.id() % 2 == 0) {
+    ///     println!("Selected {} processors with even IDs", even_ids.len());
+    /// }
+    /// ```
+    #[must_use]
+    #[cfg_attr(test, mutants::skip)] // Trivial forwarder to builder.
+    pub fn filter(&self, predicate: impl Fn(&Processor) -> bool) -> Option<Self> {
+        self.to_builder().filter(predicate).take_all()
+    }
+
     /// Returns the number of processors in the set. A processor set is never empty.
     #[must_use]
     #[inline]
@@ -605,6 +639,122 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+
+    #[test]
+    fn filter_by_efficiency_class() {
+        let hardware = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(ProcessorBuilder::new().id(0).efficiency_class(EfficiencyClass::Efficiency))
+                .processor(ProcessorBuilder::new().id(1).efficiency_class(EfficiencyClass::Performance))
+                .processor(ProcessorBuilder::new().id(2).efficiency_class(EfficiencyClass::Efficiency))
+                .processor(ProcessorBuilder::new().id(3).efficiency_class(EfficiencyClass::Performance)),
+        );
+
+        let all = hardware.processors();
+        assert_eq!(all.len(), 4);
+
+        let performance = all.filter(|p| p.efficiency_class() == EfficiencyClass::Performance).unwrap();
+        assert_eq!(performance.len(), 2);
+
+        let performance_ids: foldhash::HashSet<_> = performance.iter().map(Processor::id).collect();
+        assert!(performance_ids.contains(&1));
+        assert!(performance_ids.contains(&3));
+
+        let efficiency = all.filter(|p| p.efficiency_class() == EfficiencyClass::Efficiency).unwrap();
+        assert_eq!(efficiency.len(), 2);
+
+        let efficiency_ids: foldhash::HashSet<_> = efficiency.iter().map(Processor::id).collect();
+        assert!(efficiency_ids.contains(&0));
+        assert!(efficiency_ids.contains(&2));
+    }
+
+    #[test]
+    fn filter_by_processor_id() {
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(6), nz!(1)));
+
+        let all = hardware.processors();
+        assert_eq!(all.len(), 6);
+
+        let even_ids = all.filter(|p| p.id() % 2 == 0).unwrap();
+        assert_eq!(even_ids.len(), 3);
+
+        let ids: foldhash::HashSet<_> = even_ids.iter().map(Processor::id).collect();
+        assert!(ids.contains(&0));
+        assert!(ids.contains(&2));
+        assert!(ids.contains(&4));
+
+        let odd_ids = all.filter(|p| p.id() % 2 == 1).unwrap();
+        assert_eq!(odd_ids.len(), 3);
+
+        let ids: foldhash::HashSet<_> = odd_ids.iter().map(Processor::id).collect();
+        assert!(ids.contains(&1));
+        assert!(ids.contains(&3));
+        assert!(ids.contains(&5));
+    }
+
+    #[test]
+    fn filter_returns_none_when_no_matches() {
+        let hardware = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(ProcessorBuilder::new().id(0).efficiency_class(EfficiencyClass::Efficiency))
+                .processor(ProcessorBuilder::new().id(1).efficiency_class(EfficiencyClass::Efficiency)),
+        );
+
+        let all = hardware.processors();
+
+        let performance = all.filter(|p| p.efficiency_class() == EfficiencyClass::Performance);
+        assert!(performance.is_none());
+    }
+
+    #[test]
+    fn filter_by_memory_region() {
+        let hardware = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(ProcessorBuilder::new().id(0).memory_region(0))
+                .processor(ProcessorBuilder::new().id(1).memory_region(1))
+                .processor(ProcessorBuilder::new().id(2).memory_region(0))
+                .processor(ProcessorBuilder::new().id(3).memory_region(1)),
+        );
+
+        let all = hardware.processors();
+        assert_eq!(all.len(), 4);
+
+        let region_0 = all.filter(|p| p.memory_region_id() == 0).unwrap();
+        assert_eq!(region_0.len(), 2);
+
+        let ids: foldhash::HashSet<_> = region_0.iter().map(Processor::id).collect();
+        assert!(ids.contains(&0));
+        assert!(ids.contains(&2));
+    }
+
+    #[test]
+    fn filter_on_subset() {
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(8), nz!(1)));
+
+        let all = hardware.processors();
+
+        let first_half = all.take(nz!(4)).unwrap();
+        assert_eq!(first_half.len(), 4);
+
+        let even_from_first_half = first_half.filter(|p| p.id() % 2 == 0).unwrap();
+
+        // The filter should only include even IDs that were in the first_half.
+        let first_half_ids: foldhash::HashSet<_> = first_half.iter().map(Processor::id).collect();
+        let even_ids: foldhash::HashSet<_> = even_from_first_half.iter().map(Processor::id).collect();
+
+        // All IDs in the filtered set must be even.
+        for id in &even_ids {
+            assert_eq!(id % 2, 0);
+        }
+
+        // All IDs in the filtered set must have been in the original first_half.
+        for id in &even_ids {
+            assert!(first_half_ids.contains(id));
+        }
+
+        // The filtered set should contain at least one processor.
+        assert!(!even_ids.is_empty());
     }
 }
 
