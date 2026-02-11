@@ -655,7 +655,7 @@ mod tests {
         assert_eq!(first.processors().first().id(), 0);
         assert_eq!(first.processors().first().memory_region_id(), 0);
 
-        let second = &decomposed.tail[0];
+        let second = decomposed.tail.first().unwrap();
         assert_eq!(second.processors().first().id(), 1);
         assert_eq!(second.processors().first().memory_region_id(), 1);
     }
