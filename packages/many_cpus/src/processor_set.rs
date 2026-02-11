@@ -651,13 +651,18 @@ mod tests {
 
         assert_eq!(decomposed.len(), 2);
 
-        let first = decomposed.first();
-        assert_eq!(first.processors().first().id(), 0);
-        assert_eq!(first.processors().first().memory_region_id(), 0);
+        // Collect (id, memory_region_id) pairs without assuming order.
+        let pairs: foldhash::HashSet<_> = decomposed
+            .iter()
+            .map(|set| {
+                assert_eq!(set.len(), 1);
+                let p = set.processors().first();
+                (p.id(), p.memory_region_id())
+            })
+            .collect();
 
-        let second = decomposed.tail.first().unwrap();
-        assert_eq!(second.processors().first().id(), 1);
-        assert_eq!(second.processors().first().memory_region_id(), 1);
+        assert!(pairs.contains(&(0, 0)));
+        assert!(pairs.contains(&(1, 1)));
     }
 
     #[test]
