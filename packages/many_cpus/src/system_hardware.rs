@@ -1002,6 +1002,14 @@ mod tests_fake {
     }
 
     #[test]
+    fn max_processor_id_returns_configured_value() {
+        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(8), nz!(4)));
+
+        // With 8 processors, max ID should be 7 (0-indexed).
+        assert_eq!(hardware.max_processor_id(), 7);
+    }
+
+    #[test]
     fn max_memory_region_id_returns_configured_value() {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(8), nz!(4)));
 
