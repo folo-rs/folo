@@ -9,8 +9,8 @@
 
 use many_cpus::SystemHardware;
 use new_zealand::nz;
-use testing::{Job, ProcessorTimePct, f64_diff_abs};
 use serial_test::serial;
+use testing::{Job, ProcessorTimePct, f64_diff_abs};
 
 // Floating point comparison tolerance.
 // https://rust-lang.github.io/rust-clippy/master/index.html#float_cmp

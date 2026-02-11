@@ -1,7 +1,10 @@
-#![cfg_attr(test, expect(
-    clippy::struct_field_names,
-    reason = "false positive from automock generated code"
-))]
+#![cfg_attr(
+    test,
+    expect(
+        clippy::struct_field_names,
+        reason = "false positive from automock generated code"
+    )
+)]
 
 use std::fmt::Debug;
 
