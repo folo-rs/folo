@@ -1,22 +1,17 @@
 //! Job objects can impose various limits on the Windows processes they govern. These tests
 //! verify that the logic in our crate correctly detects these limits and behaves accordingly
 //! to keep its own behavior within those limits.
-//!
-//! NB! We do not cache any processor set in this file because we apply weird constraints and
-//! do not want to interfere with other tests.
 
 #![cfg(windows)]
 
 use many_cpus::SystemHardware;
 use new_zealand::nz;
-use serial_test::serial;
 use testing::{Job, ProcessorTimePct, f64_diff_abs};
 
 // Floating point comparison tolerance.
 // https://rust-lang.github.io/rust-clippy/master/index.html#float_cmp
 const CLOSE_ENOUGH: f64 = 0.01;
 
-#[serial] // Job objects are global state, so mutual exclusion is necessary.
 #[test]
 #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
 #[expect(
@@ -52,7 +47,6 @@ fn obeys_processor_selection_limits() {
     drop(job);
 }
 
-#[serial] // Job objects are global state, so mutual exclusion is necessary.
 #[test]
 #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
 #[expect(
@@ -110,7 +104,6 @@ fn obeys_processor_time_limits() {
     drop(job);
 }
 
-#[serial] // Job objects are global state, so mutual exclusion is necessary.
 #[test]
 #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
 #[expect(
@@ -120,13 +113,16 @@ fn obeys_processor_time_limits() {
 fn noop_job_has_no_effect() {
     let hw = SystemHardware::current();
 
-    let unconstrained_processor_count = hw.all_processors().len();
+    // NB! The process may already be in a job (e.g. because it is running in a container)!
+    // The most we can do is apply additional constraints on top of any existing job we are in.
+    // Therefore, we need to take the **constrained** original processor count as the "expected" value.
+    let expected_processor_count = hw.processors().len();
 
     // Create a job with no limits. This should not affect the current process.
     let job = Job::builder().build();
 
     let processor_count = hw.processors().len();
-    assert_eq!(processor_count, unconstrained_processor_count);
+    assert_eq!(processor_count, expected_processor_count);
 
     let resource_quota = hw.resource_quota();
 
@@ -135,12 +131,12 @@ fn noop_job_has_no_effect() {
         assert_eq!(
             f64_diff_abs(
                 resource_quota.max_processor_time(),
-                unconstrained_processor_count as f64,
+                expected_processor_count as f64,
                 CLOSE_ENOUGH
             ),
             0.0,
-            "The resource quota should match the unconstrained processor count: {}, Actual: {}",
-            unconstrained_processor_count,
+            "The resource quota should match the expected processor count: {}, Actual: {}",
+            expected_processor_count,
             resource_quota.max_processor_time()
         );
     }

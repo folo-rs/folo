@@ -50,7 +50,6 @@ static_assertions = { workspace = true }
 testing = { path = "../testing" }
 
 [target.'cfg(windows)'.dev-dependencies]
-serial_test = { workspace = true }
 windows = { workspace = true, features = ["Win32_Security"] }
 
 [[bench]]
