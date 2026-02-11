@@ -43,3 +43,6 @@ workspace = true
 [[bench]]
 name = "vicinal_benches"
 harness = false
+
+[package.metadata.docs.rs]
+all-features = true

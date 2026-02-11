@@ -22,3 +22,6 @@ syn = { workspace = true, features = ["full", "parsing", "printing"] }
 
 [lints]
 workspace = true
+
+[package.metadata.docs.rs]
+all-features = true

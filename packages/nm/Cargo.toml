@@ -34,3 +34,6 @@ workspace = true
 [[bench]]
 name = "nm_performance"
 harness = false
+
+[package.metadata.docs.rs]
+all-features = true

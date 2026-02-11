@@ -52,3 +52,6 @@ required-features = ["alloc_tracker"]
 
 [lints]
 workspace = true
+
+[package.metadata.docs.rs]
+all-features = true

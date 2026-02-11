@@ -41,3 +41,6 @@ harness = false
 [[bench]]
 name = "ev_once_vs_3p"
 harness = false
+
+[package.metadata.docs.rs]
+all-features = true

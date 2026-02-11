@@ -33,3 +33,6 @@ workspace = true
 [[bench]]
 name = "timestamp_performance"
 harness = false
+
+[package.metadata.docs.rs]
+all-features = true
