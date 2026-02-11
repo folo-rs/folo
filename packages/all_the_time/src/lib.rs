@@ -99,6 +99,13 @@
 //! # }
 //! ```
 
+#![doc(
+    html_logo_url = "https://media.githubusercontent.com/media/folo-rs/folo/refs/heads/main/packages/all_the_time/icon.png"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/folo-rs/folo/refs/heads/main/packages/all_the_time/icon.ico"
+)]
+
 mod constants;
 mod operation;
 mod operation_metrics;
