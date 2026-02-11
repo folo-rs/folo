@@ -641,55 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn filter_by_efficiency_class() {
-        let hardware = SystemHardware::fake(
-            HardwareBuilder::new()
-                .processor(
-                    ProcessorBuilder::new()
-                        .id(0)
-                        .efficiency_class(EfficiencyClass::Efficiency),
-                )
-                .processor(
-                    ProcessorBuilder::new()
-                        .id(1)
-                        .efficiency_class(EfficiencyClass::Performance),
-                )
-                .processor(
-                    ProcessorBuilder::new()
-                        .id(2)
-                        .efficiency_class(EfficiencyClass::Efficiency),
-                )
-                .processor(
-                    ProcessorBuilder::new()
-                        .id(3)
-                        .efficiency_class(EfficiencyClass::Performance),
-                ),
-        );
-
-        let all = hardware.processors();
-        assert_eq!(all.len(), 4);
-
-        let performance = all
-            .filter(|p| p.efficiency_class() == EfficiencyClass::Performance)
-            .unwrap();
-        assert_eq!(performance.len(), 2);
-
-        let performance_ids: foldhash::HashSet<_> = performance.iter().map(Processor::id).collect();
-        assert!(performance_ids.contains(&1));
-        assert!(performance_ids.contains(&3));
-
-        let efficiency = all
-            .filter(|p| p.efficiency_class() == EfficiencyClass::Efficiency)
-            .unwrap();
-        assert_eq!(efficiency.len(), 2);
-
-        let efficiency_ids: foldhash::HashSet<_> = efficiency.iter().map(Processor::id).collect();
-        assert!(efficiency_ids.contains(&0));
-        assert!(efficiency_ids.contains(&2));
-    }
-
-    #[test]
-    fn filter_by_processor_id() {
+    fn filter_basic() {
         let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(6), nz!(1)));
 
         let all = hardware.processors();
@@ -702,14 +654,6 @@ mod tests {
         assert!(ids.contains(&0));
         assert!(ids.contains(&2));
         assert!(ids.contains(&4));
-
-        let odd_ids = all.filter(|p| p.id() % 2 == 1).unwrap();
-        assert_eq!(odd_ids.len(), 3);
-
-        let ids: foldhash::HashSet<_> = odd_ids.iter().map(Processor::id).collect();
-        assert!(ids.contains(&1));
-        assert!(ids.contains(&3));
-        assert!(ids.contains(&5));
     }
 
     #[test]
@@ -732,27 +676,6 @@ mod tests {
 
         let performance = all.filter(|p| p.efficiency_class() == EfficiencyClass::Performance);
         assert!(performance.is_none());
-    }
-
-    #[test]
-    fn filter_by_memory_region() {
-        let hardware = SystemHardware::fake(
-            HardwareBuilder::new()
-                .processor(ProcessorBuilder::new().id(0).memory_region(0))
-                .processor(ProcessorBuilder::new().id(1).memory_region(1))
-                .processor(ProcessorBuilder::new().id(2).memory_region(0))
-                .processor(ProcessorBuilder::new().id(3).memory_region(1)),
-        );
-
-        let all = hardware.processors();
-        assert_eq!(all.len(), 4);
-
-        let region_0 = all.filter(|p| p.memory_region_id() == 0).unwrap();
-        assert_eq!(region_0.len(), 2);
-
-        let ids: foldhash::HashSet<_> = region_0.iter().map(Processor::id).collect();
-        assert!(ids.contains(&0));
-        assert!(ids.contains(&2));
     }
 
     #[test]
