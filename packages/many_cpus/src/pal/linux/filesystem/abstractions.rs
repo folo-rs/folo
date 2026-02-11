@@ -1,3 +1,8 @@
+#![cfg_attr(test, expect(
+    clippy::struct_field_names,
+    reason = "false positive from automock generated code"
+))]
+
 use std::fmt::Debug;
 
 /// Linux has this funny notion of exposing various OS APIs as a virtual filesystem. This trait
@@ -44,12 +49,12 @@ pub(crate) trait Filesystem: Debug + Send + Sync + 'static {
     /// Gets the contents of the /proc/self/cgroup file for the current process.
     fn get_proc_self_cgroup(&self) -> Option<String>;
 
-    /// Contents of `/sys/fs/cgroup/cpu/{name}/cpu.cfs_quota_us`
+    /// Contents of `/sys/fs/cgroup/cpu/{name}/cpu.cfs_quota_us`.
     fn get_v1_cgroup_cpu_quota(&self, cgroup_name: &str) -> Option<String>;
 
-    /// Contents of `/sys/fs/cgroup/cpu/{name}/cpu.cfs_period_us`
+    /// Contents of `/sys/fs/cgroup/cpu/{name}/cpu.cfs_period_us`.
     fn get_v1_cgroup_cpu_period(&self, cgroup_name: &str) -> Option<String>;
 
-    /// Contents of `/sys/fs/cgroup/{name}/cpu.max`
+    /// Contents of `/sys/fs/cgroup/{name}/cpu.max`.
     fn get_v2_cgroup_cpu_quota_and_period(&self, cgroup_name: &str) -> Option<String>;
 }
