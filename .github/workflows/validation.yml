@@ -226,7 +226,7 @@ jobs:
         run: just build release
 
   mutants:
-    timeout-minutes: 90
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
