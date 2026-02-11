@@ -10,6 +10,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 default = []
 
@@ -43,6 +46,3 @@ workspace = true
 [[bench]]
 name = "vicinal_benches"
 harness = false
-
-[package.metadata.docs.rs]
-all-features = true

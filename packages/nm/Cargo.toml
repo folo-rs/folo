@@ -10,6 +10,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 default = []
 # Enables test-only constructors for Report, EventMetrics, and Histogram.
@@ -34,6 +37,3 @@ workspace = true
 [[bench]]
 name = "nm_performance"
 harness = false
-
-[package.metadata.docs.rs]
-all-features = true

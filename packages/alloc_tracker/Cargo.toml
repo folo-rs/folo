@@ -14,6 +14,9 @@ rust-version.workspace = true
 # Depends on enabled features and dev-dependencies cannot be optional.
 development = ["serial_test"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 default = []
 panic_on_next_alloc = []
@@ -36,6 +39,3 @@ harness = false
 
 [lints]
 workspace = true
-
-[package.metadata.docs.rs]
-all-features = true

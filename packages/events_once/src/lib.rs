@@ -1,5 +1,4 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
-
 #![expect(clippy::unnecessary_safety_comment, reason = "clippy#16553")]
 
 //! Efficient oneshot events (channels) with support for single-threaded events,

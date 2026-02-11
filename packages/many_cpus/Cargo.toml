@@ -10,6 +10,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 default = []
 # Enables test utilities including the fake platform for simulating hardware configurations.
@@ -67,6 +70,3 @@ harness = false
 
 [lints]
 workspace = true
-
-[package.metadata.docs.rs]
-all-features = true

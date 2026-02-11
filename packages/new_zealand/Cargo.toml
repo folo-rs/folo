@@ -10,6 +10,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lib]
 doc = false
 
@@ -22,6 +25,3 @@ default = []
 
 [lints]
 workspace = true
-
-[package.metadata.docs.rs]
-all-features = true

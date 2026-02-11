@@ -11,6 +11,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 argh = { workspace = true }
 toml = { workspace = true, features = ["parse", "serde"] }
@@ -23,6 +26,3 @@ tempfile = { workspace = true }
 
 [lints]
 workspace = true
-
-[package.metadata.docs.rs]
-all-features = true
