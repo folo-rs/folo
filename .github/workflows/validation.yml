@@ -156,7 +156,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [ubuntu-latest, macos-latest, windows-latest]
+        # macos-latest intentionally excluded because maintainers lack local PC to do the necessary "dependency trial and error" on.
+        platform: [ubuntu-latest, windows-latest]
 
     runs-on: ${{ matrix.platform }}
 
