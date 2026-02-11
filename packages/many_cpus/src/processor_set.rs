@@ -115,9 +115,8 @@ impl ProcessorSet {
     /// let all = hardware.processors();
     ///
     /// // Filter to only performance processors.
-    /// if let Some(performance) = all.filter(|p| {
-    ///     p.efficiency_class() == EfficiencyClass::Performance
-    /// }) {
+    /// if let Some(performance) = all.filter(|p| p.efficiency_class() == EfficiencyClass::Performance)
+    /// {
     ///     println!("Selected {} performance processors", performance.len());
     /// }
     ///
@@ -645,23 +644,43 @@ mod tests {
     fn filter_by_efficiency_class() {
         let hardware = SystemHardware::fake(
             HardwareBuilder::new()
-                .processor(ProcessorBuilder::new().id(0).efficiency_class(EfficiencyClass::Efficiency))
-                .processor(ProcessorBuilder::new().id(1).efficiency_class(EfficiencyClass::Performance))
-                .processor(ProcessorBuilder::new().id(2).efficiency_class(EfficiencyClass::Efficiency))
-                .processor(ProcessorBuilder::new().id(3).efficiency_class(EfficiencyClass::Performance)),
+                .processor(
+                    ProcessorBuilder::new()
+                        .id(0)
+                        .efficiency_class(EfficiencyClass::Efficiency),
+                )
+                .processor(
+                    ProcessorBuilder::new()
+                        .id(1)
+                        .efficiency_class(EfficiencyClass::Performance),
+                )
+                .processor(
+                    ProcessorBuilder::new()
+                        .id(2)
+                        .efficiency_class(EfficiencyClass::Efficiency),
+                )
+                .processor(
+                    ProcessorBuilder::new()
+                        .id(3)
+                        .efficiency_class(EfficiencyClass::Performance),
+                ),
         );
 
         let all = hardware.processors();
         assert_eq!(all.len(), 4);
 
-        let performance = all.filter(|p| p.efficiency_class() == EfficiencyClass::Performance).unwrap();
+        let performance = all
+            .filter(|p| p.efficiency_class() == EfficiencyClass::Performance)
+            .unwrap();
         assert_eq!(performance.len(), 2);
 
         let performance_ids: foldhash::HashSet<_> = performance.iter().map(Processor::id).collect();
         assert!(performance_ids.contains(&1));
         assert!(performance_ids.contains(&3));
 
-        let efficiency = all.filter(|p| p.efficiency_class() == EfficiencyClass::Efficiency).unwrap();
+        let efficiency = all
+            .filter(|p| p.efficiency_class() == EfficiencyClass::Efficiency)
+            .unwrap();
         assert_eq!(efficiency.len(), 2);
 
         let efficiency_ids: foldhash::HashSet<_> = efficiency.iter().map(Processor::id).collect();
@@ -697,8 +716,16 @@ mod tests {
     fn filter_returns_none_when_no_matches() {
         let hardware = SystemHardware::fake(
             HardwareBuilder::new()
-                .processor(ProcessorBuilder::new().id(0).efficiency_class(EfficiencyClass::Efficiency))
-                .processor(ProcessorBuilder::new().id(1).efficiency_class(EfficiencyClass::Efficiency)),
+                .processor(
+                    ProcessorBuilder::new()
+                        .id(0)
+                        .efficiency_class(EfficiencyClass::Efficiency),
+                )
+                .processor(
+                    ProcessorBuilder::new()
+                        .id(1)
+                        .efficiency_class(EfficiencyClass::Efficiency),
+                ),
         );
 
         let all = hardware.processors();
@@ -741,7 +768,8 @@ mod tests {
 
         // The filter should only include even IDs that were in the first_half.
         let first_half_ids: foldhash::HashSet<_> = first_half.iter().map(Processor::id).collect();
-        let even_ids: foldhash::HashSet<_> = even_from_first_half.iter().map(Processor::id).collect();
+        let even_ids: foldhash::HashSet<_> =
+            even_from_first_half.iter().map(Processor::id).collect();
 
         // All IDs in the filtered set must be even.
         for id in &even_ids {
