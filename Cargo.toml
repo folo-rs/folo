@@ -43,7 +43,7 @@ libc = { version = "0.2", default-features = false }
 linked = { version = "1.0.6", path = "packages/linked", default-features = false }
 linked_macros = { version = "1.0.6", path = "packages/linked_macros", default-features = false }
 linked_macros_impl = { version = "1.0.6", path = "packages/linked_macros_impl", default-features = false }
-many_cpus = { version = "2.0.1", path = "packages/many_cpus", default-features = false }
+many_cpus = { version = "2.1.0", path = "packages/many_cpus", default-features = false }
 mockall = { version = "0.13", default-features = false }
 mutants = { version = "0.0.3", default-features = false }
 negative-impl = { version = "0.1", default-features = false }
