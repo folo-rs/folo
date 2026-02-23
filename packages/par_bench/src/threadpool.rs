@@ -80,7 +80,11 @@ impl ThreadPool {
             .spawn_threads({
                 let rxs = Arc::clone(&rxs);
                 move |_| {
-                    let rx = rxs.lock().unwrap().pop().unwrap();
+                    let rx = rxs
+                        .lock()
+                        .expect("no worker thread panics while holding this lock")
+                        .pop()
+                        .expect("one receiver per spawned thread");
                     worker_entrypoint(&rx);
                 }
             })
@@ -195,11 +199,14 @@ impl Drop for ThreadPool {
         }
 
         for tx in self.command_txs.drain(..) {
-            tx.send(Command::Shutdown).unwrap();
+            tx.send(Command::Shutdown)
+                .expect("worker channel is open during orderly shutdown");
         }
 
         for handle in self.join_handles.drain(..) {
-            handle.join().unwrap();
+            handle
+                .join()
+                .expect("worker thread completes orderly shutdown without panicking");
         }
     }
 }
@@ -211,7 +218,10 @@ enum Command {
 
 #[cfg_attr(test, mutants::skip)] // Impractical to test that things do not happen when worker function is missing.
 fn worker_entrypoint(rx: &mpsc::Receiver<Command>) {
-    while let Command::Execute(f) = rx.recv().unwrap() {
+    while let Command::Execute(f) = rx
+        .recv()
+        .expect("command channel is open while pool exists")
+    {
         f();
     }
 }

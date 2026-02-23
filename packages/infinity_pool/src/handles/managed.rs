@@ -289,7 +289,7 @@ mod tests {
 
         // Type that is Send + Sync but !Unpin
         struct NotUnpin {
-            #[allow(dead_code, reason = "Field used to give struct non-zero size")]
+            #[expect(dead_code, reason = "Field used to give struct non-zero size")]
             data: i32,
             _marker: PhantomPinned,
         }

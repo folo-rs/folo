@@ -30,7 +30,7 @@ static SAMPLE_LOG_LINES: &[&str] = &[
     "info: everything is fine",
     "error: something went wrong",
     "warning: this is a warning",
-    "panic: oh no, we're doomed",
+    "panic: oh no, we are doomed",
 ];
 
 fn main() {

@@ -743,7 +743,7 @@ mod tests {
         // SAFETY: Only used in single-threaded local test environment, never shared across threads
         unsafe impl Sync for NonSendType {}
 
-        // LocalPinnedPool should work with non-Send types since it's single-threaded
+        // LocalPinnedPool should work with non-Send types since it is single-threaded
         use std::cell::RefCell;
         use std::rc::Rc;
 

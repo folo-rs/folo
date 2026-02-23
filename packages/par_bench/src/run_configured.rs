@@ -102,7 +102,11 @@ where
             let group_indexes = Arc::clone(&group_indexes);
 
             move || {
-                let group_index = group_indexes.lock().unwrap().pop().unwrap();
+                let group_index = group_indexes
+                    .lock()
+                    .expect("no worker thread panics while holding this lock")
+                    .pop()
+                    .expect("one group index per spawned thread");
 
                 let meta = RunMeta::new(group_index, group_count, thread_count, iterations);
 

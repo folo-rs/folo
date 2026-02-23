@@ -70,7 +70,7 @@ use counters::{CountResult, EventCounter};
 linked::instances!(static RECORDS_PROCESSED: EventCounter = EventCounter::new());
 
 // Here we have some code that takes ownership of abstract count results. In this simple example
-// there is of course no real "need" for us to use an abstraction but let's pretend we have a
+// there is of course no real "need" for us to use an abstraction but let us pretend we have a
 // reason to do so.
 #[expect(clippy::needless_pass_by_value, reason = "adding realism to example")]
 fn finalize_counter_processing(result: Box<dyn CountResult>) {

@@ -77,7 +77,7 @@ fn entrypoint(c: &mut Criterion) {
                     handles.push(scheduler.spawn(move || black_box(simulate_work())));
                 }
 
-                #[allow(
+                #[expect(
                     clippy::iter_with_drain,
                     reason = "we reuse the vector in the next iteration"
                 )]
@@ -138,7 +138,7 @@ fn entrypoint(c: &mut Criterion) {
                     handles.push(scheduler.spawn_urgent(move || black_box(simulate_work())));
                 }
 
-                #[allow(
+                #[expect(
                     clippy::iter_with_drain,
                     reason = "we reuse the vector in the next iteration"
                 )]
@@ -185,7 +185,7 @@ fn entrypoint(c: &mut Criterion) {
                     handles.push(thread::spawn(move || black_box(simulate_work())));
                 }
 
-                #[allow(
+                #[expect(
                     clippy::iter_with_drain,
                     reason = "we reuse the vector in the next iteration"
                 )]
@@ -281,7 +281,7 @@ fn entrypoint(c: &mut Criterion) {
                     });
                 }
 
-                #[allow(
+                #[expect(
                     clippy::iter_with_drain,
                     reason = "we reuse the vector in the next iteration"
                 )]
@@ -361,7 +361,7 @@ fn entrypoint(c: &mut Criterion) {
                     });
                 }
 
-                #[allow(
+                #[expect(
                     clippy::iter_with_drain,
                     reason = "we reuse the vector in the next iteration"
                 )]
@@ -433,7 +433,7 @@ fn entrypoint(c: &mut Criterion) {
                     });
                 }
 
-                #[allow(
+                #[expect(
                     clippy::iter_with_drain,
                     reason = "we reuse the vector in the next iteration"
                 )]

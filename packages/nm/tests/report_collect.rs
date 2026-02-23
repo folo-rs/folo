@@ -71,7 +71,7 @@ fn report_collect_aggregates_data_from_multiple_threads() {
     let counter_metrics = report
         .events()
         .find(|e| e.name() == "integration_test_counter")
-        .expect("counter event should be in the report");
+        .unwrap();
 
     // Total count: 3 (main) + 2 (thread 1) + 5 (thread 2) = 10
     assert_eq!(counter_metrics.count(), 10);
@@ -86,7 +86,7 @@ fn report_collect_aggregates_data_from_multiple_threads() {
     let histogram_metrics = report
         .events()
         .find(|e| e.name() == "integration_test_histogram")
-        .expect("histogram event should be in the report");
+        .unwrap();
 
     // Total count: 3 (main) + 2 (thread 1) + 2 (thread 2) = 7
     assert_eq!(histogram_metrics.count(), 7);
@@ -98,9 +98,7 @@ fn report_collect_aggregates_data_from_multiple_threads() {
     assert_eq!(histogram_metrics.mean(), 472);
 
     // Verify histogram is present and has correct structure.
-    let histogram = histogram_metrics
-        .histogram()
-        .expect("histogram should be present");
+    let histogram = histogram_metrics.histogram().unwrap();
 
     // Collect bucket data.
     let buckets: Vec<_> = histogram.buckets().collect();

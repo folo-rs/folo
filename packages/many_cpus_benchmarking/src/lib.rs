@@ -186,7 +186,7 @@
 //! ```
 //!
 //! 3. **Choose appropriate work distribution modes**. Since both workers perform the same action,
-//!    payload exchange doesn't change the benchmark semantics, so you can exclude "self" modes:
+//!    payload exchange does not change the benchmark semantics, so you can exclude "self" modes:
 //!
 //! ```rust ignore (benchmark)
 //! use criterion::Criterion;
@@ -207,7 +207,7 @@
 //! - Designate one worker as the initializer to avoid race conditions during setup
 //! - Both workers should perform identical operations in `process()`
 //! - Consider using `WorkDistribution::all_with_unique_processors_without_self()` since payload
-//!   exchange doesn't affect the benchmark when workers do the same thing
+//!   exchange does not affect the benchmark when workers do the same thing
 //! - Memory locality effects will be most visible when workers are in different memory regions
 //!
 //! ## Scenario 2: Multiple threads performing different actions (producer-consumer pattern)

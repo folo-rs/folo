@@ -86,7 +86,8 @@ where
                 "overflow impossible unless we far exceed any realistic processor ID range",
             );
 
-            write!(result, "{start},{second_processor_id}").unwrap();
+            write!(result, "{start},{second_processor_id}")
+                .expect("writing to a String is infallible");
         } else {
             let last_processor_id = start
                 .checked_add(len)
@@ -94,7 +95,8 @@ where
                 .checked_sub(1)
                 .expect("cannot underflow because len is NonZero");
 
-            write!(result, "{start}-{last_processor_id}").unwrap();
+            write!(result, "{start}-{last_processor_id}")
+                .expect("writing to a String is infallible");
         }
     }
 

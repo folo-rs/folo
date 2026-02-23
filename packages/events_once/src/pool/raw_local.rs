@@ -232,7 +232,6 @@ unsafe impl<T: 'static> Sync for RawLocalEventPool<T> {}
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::iter;
-    use std::pin::pin;
     use std::task::{self, Poll, Waker};
 
     use static_assertions::assert_impl_all;
@@ -244,7 +243,7 @@ mod tests {
 
     #[test]
     fn len() {
-        let pool = pin!(RawLocalEventPool::<i32>::new());
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         assert_eq!(pool.len(), 0);
 
@@ -265,7 +264,7 @@ mod tests {
 
     #[test]
     fn send_receive() {
-        let pool = pin!(RawLocalEventPool::<i32>::new());
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         assert!(pool.is_empty());
 
@@ -274,7 +273,7 @@ mod tests {
         assert!(!pool.is_empty());
 
         {
-            let mut receiver = pin!(receiver);
+            let mut receiver = Box::pin(receiver);
 
             sender.send(42);
 
@@ -291,13 +290,13 @@ mod tests {
     fn send_receive_reused() {
         const ITERATIONS: usize = 32;
 
-        let pool = pin!(RawLocalEventPool::<i32>::new());
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         assert!(pool.is_empty());
 
         for _ in 0..ITERATIONS {
             let (sender, receiver) = unsafe { pool.as_ref().rent() };
-            let mut receiver = pin!(receiver);
+            let mut receiver = Box::pin(receiver);
 
             sender.send(42);
 
@@ -315,7 +314,7 @@ mod tests {
         const ITERATIONS: usize = 4;
         const BATCH_SIZE: usize = 8;
 
-        let pool = pin!(RawLocalEventPool::<i32>::new());
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         for _ in 0..ITERATIONS {
             let endpoints = iter::repeat_with(|| unsafe { pool.as_ref().rent() })
@@ -323,7 +322,7 @@ mod tests {
                 .collect::<Vec<_>>();
 
             for (sender, receiver) in endpoints {
-                let mut receiver = pin!(receiver);
+                let mut receiver = Box::pin(receiver);
 
                 sender.send(42);
 
@@ -337,7 +336,7 @@ mod tests {
 
     #[test]
     fn drop_send() {
-        let pool = pin!(RawLocalEventPool::<i32>::new());
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         let (sender, _) = unsafe { pool.as_ref().rent() };
 
@@ -346,10 +345,10 @@ mod tests {
 
     #[test]
     fn drop_receive() {
-        let pool = pin!(RawLocalEventPool::<i32>::new());
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         let (_, receiver) = unsafe { pool.as_ref().rent() };
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
 
@@ -359,10 +358,10 @@ mod tests {
 
     #[test]
     fn receive_drop_receive() {
-        let pool = pin!(RawLocalEventPool::<i32>::new());
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
 
@@ -377,7 +376,7 @@ mod tests {
 
     #[test]
     fn receive_drop_send() {
-        let pool = pin!(RawLocalEventPool::<i32>::new());
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
         let mut receiver = Box::pin(receiver);
@@ -394,7 +393,7 @@ mod tests {
 
     #[test]
     fn receive_drop_drop_receiver_first() {
-        let pool = pin!(RawLocalEventPool::<i32>::new());
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
         let mut receiver = Box::pin(receiver);
@@ -410,7 +409,7 @@ mod tests {
 
     #[test]
     fn receive_drop_drop_sender_first() {
-        let pool = pin!(RawLocalEventPool::<i32>::new());
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
         let mut receiver = Box::pin(receiver);
@@ -426,7 +425,7 @@ mod tests {
 
     #[test]
     fn drop_drop_receiver_first() {
-        let pool = pin!(RawLocalEventPool::<i32>::new());
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
 
@@ -436,7 +435,7 @@ mod tests {
 
     #[test]
     fn drop_drop_sender_first() {
-        let pool = pin!(RawLocalEventPool::<i32>::new());
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
 
@@ -446,10 +445,10 @@ mod tests {
 
     #[test]
     fn is_ready() {
-        let pool = pin!(RawLocalEventPool::<i32>::new());
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         assert!(!receiver.is_ready());
 
@@ -465,10 +464,10 @@ mod tests {
 
     #[test]
     fn drop_is_ready() {
-        let pool = pin!(RawLocalEventPool::<i32>::new());
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         assert!(!receiver.is_ready());
 
@@ -484,7 +483,7 @@ mod tests {
 
     #[test]
     fn into_value() {
-        let pool = pin!(RawLocalEventPool::<i32>::new());
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
 
@@ -500,10 +499,10 @@ mod tests {
     #[test]
     #[should_panic]
     fn panic_poll_after_completion() {
-        let pool = pin!(RawLocalEventPool::<i32>::new());
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         sender.send(42);
 
@@ -520,10 +519,10 @@ mod tests {
     #[test]
     #[should_panic]
     fn panic_is_ready_after_completion() {
-        let pool = pin!(RawLocalEventPool::<i32>::new());
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         sender.send(42);
 
@@ -540,13 +539,13 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn inspect_awaiters_inspects_only_awaited() {
-        let pool = pin!(RawLocalEventPool::<i32>::new());
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         let (_sender1, receiver1) = unsafe { pool.as_ref().rent() };
         let (sender2, receiver2) = unsafe { pool.as_ref().rent() };
         let (_sender3, _receiver3) = unsafe { pool.as_ref().rent() };
 
-        let mut receiver1 = pin!(receiver1);
+        let mut receiver1 = Box::pin(receiver1);
         let mut receiver2 = Box::pin(receiver2);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -575,12 +574,12 @@ mod tests {
 
     #[test]
     fn default_creates_functional_pool() {
-        let pool = pin!(RawLocalEventPool::<i32>::default());
+        let pool = Box::pin(RawLocalEventPool::<i32>::default());
 
         assert!(pool.is_empty());
 
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         sender.send(42);
 

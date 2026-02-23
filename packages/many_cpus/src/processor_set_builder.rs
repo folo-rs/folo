@@ -66,7 +66,7 @@ impl ProcessorSetBuilder {
     /// Restricts the builder to only consider processors from the given set.
     /// This is used internally when building from an existing `ProcessorSet`.
     #[must_use]
-    pub(crate) fn with_source_processors(mut self, processors: &NonEmpty<Processor>) -> Self {
+    pub(crate) fn source_processors(mut self, processors: &NonEmpty<Processor>) -> Self {
         let ids: HashSet<ProcessorId> = processors.iter().map(Processor::id).collect();
         self.source_processor_ids = Some(ids);
         self
@@ -802,7 +802,7 @@ impl ProcessorSetBuilder {
     }
 
     /// Returns the processors to consider as candidates. If a source processor set was provided
-    /// (via `with_source_processors`), only those processors are returned. Otherwise, all
+    /// (via `source_processors`), only those processors are returned. Otherwise, all
     /// platform processors are returned.
     fn candidate_processors(&self) -> Vec<Processor> {
         let all = self.all_processors();
@@ -1543,7 +1543,7 @@ mod tests {
             .take(nz!(2));
         assert!(
             set.is_none(),
-            "Should fail because there's not enough distinct memory regions."
+            "Should fail because there is not enough distinct memory regions."
         );
     }
 

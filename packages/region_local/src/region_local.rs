@@ -139,7 +139,7 @@ where
                 Err(callback) => f = callback,
             }
 
-            // If we got here then the regional state is not initialized. Let's initialize it.
+            // If we got here then the regional state is not initialized. Let us initialize it.
             regional_state.initialize(self.global_state.initializer);
         }
     }
@@ -389,7 +389,7 @@ where
             let cleanup_signal = Arc::clone(&attempt_signal);
             let cleanup_self = self; // Create a reference for the cleanup
             let cleanup_guard = scopeguard::guard((), move |()| {
-                // If we're still in panic mode when this guard executes, reset the
+                // If we are still in panic mode when this guard executes, reset the
                 // initializing state to None and signal waiters so they can retry.
                 cleanup_self.value.store(None);
                 cleanup_signal.set();
@@ -438,7 +438,9 @@ enum RegionalValue<T> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{self, AssertUnwindSafe};
     use std::sync::Arc;
+    use std::sync::mpsc;
     use std::{ptr, thread};
 
     use super::*;
@@ -786,7 +788,7 @@ mod tests {
         assert_eq!(local.get_local(), 42);
 
         // Second call with panicking closure.
-        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let panic_result = panic::catch_unwind(AssertUnwindSafe(|| {
             local.with_local(|_| {
                 panic!("User callback panicked!");
             })
@@ -830,7 +832,7 @@ mod tests {
         let local = RegionLocal::with_clients(|| 42, &hardware_info, hardware_tracker);
 
         // First call with panicking closure should fail but not break state.
-        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let panic_result = panic::catch_unwind(AssertUnwindSafe(|| {
             local.with_local(|_| {
                 panic!("User callback panicked during initialization!");
             })
@@ -847,8 +849,8 @@ mod tests {
         use std::sync::{Arc, Barrier};
         use std::thread;
 
-        // Since we need a function pointer for the initializer, we'll use a different approach.
-        // We'll create a type that panics during Drop, which will be called by the initializer.
+        // Since we need a function pointer for the initializer, we will use a different approach.
+        // We will create a type that panics during Drop, which will be called by the initializer.
         static mut PANIC_ON_FIRST_CALL: bool = true;
 
         fn panicking_initializer() -> i32 {
@@ -894,24 +896,27 @@ mod tests {
 
         let barrier1 = Arc::clone(&barrier);
         let local1 = Arc::clone(&local);
+        let (tx, rx) = mpsc::channel::<()>();
         let handle1 = thread::spawn(move || {
             barrier1.wait();
             // This thread will trigger the panicking initializer.
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| local1.get_local()))
+            let result = panic::catch_unwind(AssertUnwindSafe(|| local1.get_local()));
+            // Signal that initialization attempt is complete.
+            tx.send(()).unwrap();
+            result
         });
 
         let barrier2 = Arc::clone(&barrier);
         let local2 = Arc::clone(&local);
         let handle2 = thread::spawn(move || {
             barrier2.wait();
-            // This thread should succeed after the first one panics.
-            // Give the first thread a small head start.
-            thread::sleep(std::time::Duration::from_millis(50));
+            // Wait for thread 1 to finish its initialization attempt.
+            rx.recv().unwrap();
             local2.get_local()
         });
 
-        let result1 = handle1.join().expect("Thread 1 should not panic");
-        let result2 = handle2.join().expect("Thread 2 should not panic");
+        let result1 = handle1.join().unwrap();
+        let result2 = handle2.join().unwrap();
 
         // First thread should have caught the panic.
         result1.unwrap_err();

@@ -29,7 +29,7 @@ fn obeys_processor_selection_limits() {
     }
 
     // Restrict the current process to only use 2 processors for the duration of this test.
-    let job = Job::builder().with_processor_count(nz!(2)).build();
+    let job = Job::builder().processor_count(nz!(2)).build();
 
     let processor_count = hw.processors().len();
     assert_eq!(processor_count, 2);

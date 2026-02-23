@@ -48,7 +48,6 @@ impl<'g> LocalEventRegistry<'g> {
             .register(self.thread_id, name, observation_bag);
     }
 
-    /// The count of events registered in the local registry.
     #[cfg(test)]
     pub(crate) fn event_count(&self) -> usize {
         self.observation_bags.borrow().len()
@@ -109,7 +108,7 @@ impl GlobalEventRegistry {
             }
         }
 
-        // The thread was not registered. Let's register it now.
+        // The thread was not registered. Let us register it now.
         let mut state = self.state.write().expect(ERR_POISONED_LOCK);
 
         let thread_bags = state
@@ -286,7 +285,7 @@ mod tests {
         thread1_local_registry.register(TEST_EVENT_NAME.into(), Arc::clone(&thread1_observations));
 
         thread::scope(|s| {
-            // Now let's switch to a new thread, register the event there, and inspect.
+            // Now let us switch to a new thread, register the event there, and inspect.
             // We expect to see the observation bags of both threads when inspecting.
             s.spawn(|| {
                 let thread2_observations = Arc::new(ObservationBagSync::new(&[]));

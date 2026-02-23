@@ -1,3 +1,4 @@
+use std::mem;
 use std::ptr::{self, NonNull};
 
 /// Remembers how to drop an object while forgetting its type.
@@ -26,7 +27,7 @@ impl Dropper {
 
         // Erase the type of the pointer in the function arguments.
         // SAFETY: We are just changing the target of the pointer arg, everything is ABI-equal.
-        let drop_fn = unsafe { std::mem::transmute::<fn(NonNull<T>), fn(NonNull<()>)>(drop_fn) };
+        let drop_fn = unsafe { mem::transmute::<fn(NonNull<T>), fn(NonNull<()>)>(drop_fn) };
 
         Self {
             ptr: target.cast(),

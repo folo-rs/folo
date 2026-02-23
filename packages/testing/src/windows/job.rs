@@ -115,7 +115,7 @@ impl JobBuilder {
     /// The implementation will choose the specific processors, all you can do as caller is
     /// to specify the number of processors.
     #[must_use]
-    pub fn with_processor_count(mut self, processor_count: NonZero<u32>) -> Self {
+    pub fn processor_count(mut self, processor_count: NonZero<u32>) -> Self {
         self.processor_count = Some(processor_count);
         self
     }
@@ -123,9 +123,9 @@ impl JobBuilder {
     /// Sets the maximum processor time percentage for the job.
     ///
     /// 100% is all available processors on the system, without caring how many of those are usable
-    /// to the current process (i.e. this does not consider `with_processor_count()`).
+    /// to the current process (i.e. this does not consider `processor_count()`).
     #[must_use]
-    pub fn with_max_processor_time_pct(mut self, pct: ProcessorTimePct) -> Self {
+    pub fn max_processor_time_pct(mut self, pct: ProcessorTimePct) -> Self {
         self.max_processor_time_pct = Some(pct);
         self
     }
@@ -242,8 +242,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Miri cannot use the real operating system APIs.
     fn one_job() {
         let job = Job::builder()
-            .with_processor_count(nz!(1))
-            .with_max_processor_time_pct(ProcessorTimePct::new_static::<50>())
+            .processor_count(nz!(1))
+            .max_processor_time_pct(ProcessorTimePct::new_static::<50>())
             .build();
 
         drop(job);
@@ -253,15 +253,15 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Miri cannot use the real operating system APIs.
     fn two_jobs() {
         let job = Job::builder()
-            .with_processor_count(nz!(1))
-            .with_max_processor_time_pct(ProcessorTimePct::new_static::<50>())
+            .processor_count(nz!(1))
+            .max_processor_time_pct(ProcessorTimePct::new_static::<50>())
             .build();
 
         drop(job);
 
         let job = Job::builder()
-            .with_processor_count(nz!(2))
-            .with_max_processor_time_pct(ProcessorTimePct::new_static::<60>())
+            .processor_count(nz!(2))
+            .max_processor_time_pct(ProcessorTimePct::new_static::<60>())
             .build();
 
         drop(job);

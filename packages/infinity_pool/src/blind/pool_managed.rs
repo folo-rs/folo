@@ -576,7 +576,7 @@ mod tests {
 
         let pool = BlindPool::new();
 
-        // Create an object that tracks when it's dropped
+        // Create an object that tracks when it is dropped
         let tracker = DropTracker {
             counter: Arc::clone(&drop_count),
         };
@@ -609,7 +609,7 @@ mod tests {
 
         // Now the object should be dropped
         // Note: Due to Arc cleanup timing, we might need to yield to ensure cleanup happens
-        // For testing purposes, we'll check that the drop eventually happens
+        // For testing purposes, we will check that the drop eventually happens
         let mut attempts = 0;
         loop {
             let count = drop_count.load(Ordering::Relaxed);

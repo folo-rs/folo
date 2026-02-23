@@ -1,4 +1,5 @@
 use std::any::type_name;
+use std::fmt;
 use std::sync::atomic::{self, AtomicU64};
 use std::sync::{Arc, OnceLock};
 
@@ -140,7 +141,7 @@ where
             }
 
             loop {
-                // If we got here then the regional state is not initialized. Let's initialize it.
+                // If we got here then the regional state is not initialized. Let us initialize it.
                 // We now need a value to initialize the region state with. The latest written value
                 // (for our weakly consistent definition of "latest") is stored in the global state.
                 // Note that other threads in the region may also be racing to initialize. While
@@ -283,8 +284,8 @@ struct GenerationValue<T> {
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
-impl<T> std::fmt::Debug for GenerationValue<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T> fmt::Debug for GenerationValue<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("generation", &self.generation)
             .field("value", &format_args!("<{}>", type_name::<T>()))
@@ -314,11 +315,11 @@ where
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
-impl<T> std::fmt::Debug for GlobalState<T>
+impl<T> fmt::Debug for GlobalState<T>
 where
     T: Clone + Send + Sync + 'static,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field(
                 "latest_value",
@@ -480,7 +481,7 @@ where
             let cleanup_signal = Arc::clone(&attempt_signal);
             let cleanup_self = self; // Create a reference for the cleanup
             let cleanup_guard = scopeguard::guard((), move |()| {
-                // If we're still in panic mode when this guard executes, reset the
+                // If we are still in panic mode when this guard executes, reset the
                 // initializing state to None and signal waiters so they can retry.
                 cleanup_self.value.store(None);
                 cleanup_signal.set();
@@ -531,7 +532,9 @@ enum RegionalValue<T> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{self, AssertUnwindSafe};
     use std::sync::Arc;
+    use std::sync::mpsc;
     use std::{ptr, thread};
 
     use super::*;
@@ -880,7 +883,7 @@ mod tests {
         assert_eq!(local.get_cached(), 42);
 
         // Second call with panicking closure.
-        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let panic_result = panic::catch_unwind(AssertUnwindSafe(|| {
             local.with_cached(|_| {
                 panic!("User callback panicked!");
             })
@@ -924,7 +927,7 @@ mod tests {
         let local = RegionCached::with_clients(42, &hardware_info, hardware_tracker);
 
         // First call with panicking closure should fail but not break state.
-        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let panic_result = panic::catch_unwind(AssertUnwindSafe(|| {
             local.with_cached(|_| {
                 panic!("User callback panicked during initialization!");
             })
@@ -993,26 +996,27 @@ mod tests {
 
         let barrier1 = Arc::clone(&barrier);
         let local1 = Arc::clone(&local);
+        let (tx, rx) = mpsc::channel::<()>();
         let handle1 = thread::spawn(move || {
             barrier1.wait();
             // This thread will trigger the panicking clone.
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                local1.with_cached(|v| v.value)
-            }))
+            let result = panic::catch_unwind(AssertUnwindSafe(|| local1.with_cached(|v| v.value)));
+            // Signal that initialization attempt is complete.
+            tx.send(()).unwrap();
+            result
         });
 
         let barrier2 = Arc::clone(&barrier);
         let local2 = Arc::clone(&local);
         let handle2 = thread::spawn(move || {
             barrier2.wait();
-            // This thread should succeed after the first one panics.
-            // Give the first thread a small head start.
-            thread::sleep(std::time::Duration::from_millis(50));
+            // Wait for thread 1 to finish its initialization attempt.
+            rx.recv().unwrap();
             local2.with_cached(|v| v.value)
         });
 
-        let result1 = handle1.join().expect("Thread 1 should not panic");
-        let result2 = handle2.join().expect("Thread 2 should not panic");
+        let result1 = handle1.join().unwrap();
+        let result2 = handle2.join().unwrap();
 
         // First thread should have caught the panic.
         result1.unwrap_err();

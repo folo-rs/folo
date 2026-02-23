@@ -16,28 +16,28 @@
 //! This package is not meant for use in production, serving only as a development tool for
 //! benchmarking and performance analysis.
 //!
-//! # Operating Principles
+//! # Operating principles
 //!
-//! ## Thread Groups
+//! ## Thread groups
 //!
 //! Benchmarks can divide threads into equal-sized groups, allowing for scenarios where different
 //! groups perform different roles (e.g., readers vs writers, producers vs consumers). Each thread
 //! receives metadata about which group it belongs to and can behave differently based on this.
 //!
-//! ## State Management
+//! ## State management
 //!
 //! The framework supports multiple levels of state:
 //! - **Thread State**: Created once per thread, shared across all iterations
 //! - **Iteration State**: Created for each iteration, allowing per-iteration setup
 //! - **Cleanup State**: Returned by iteration functions, dropped after measurement
 //!
-//! ## Measurement Timing
+//! ## Measurement timing
 //!
 //! Measurement wrappers allow precise control over what gets measured. The framework separates
 //! preparation (unmeasured) from execution (measured) phases, ensuring benchmarks capture only
 //! the intended work.
 //!
-//! # Basic Example
+//! # Basic example
 //!
 //! ```
 //! use std::sync::Arc;
@@ -70,7 +70,7 @@
 //! # }
 //! ```
 //!
-//! # Multi-Group Example
+//! # Multi-group example
 //!
 //! ```
 //! use std::sync::Arc;
@@ -122,7 +122,7 @@
 //! # }
 //! ```
 //!
-//! # Resource Usage Tracking
+//! # Resource usage tracking
 //!
 //! When either the `alloc_tracker` or `all_the_time` features are enabled, the [`ResourceUsageExt`]
 //! extension trait becomes available, providing convenient resource usage tracking for benchmarks:

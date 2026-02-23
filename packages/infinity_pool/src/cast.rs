@@ -109,7 +109,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output = $crate::Pooled<dyn $trait_name>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 fn [<cast_ $trait_name:snake>](self) -> Self::Output {
                     // SAFETY: We guarantee that the closure references the same object
                     // in both its input and output, satisfying the safety requirement.
@@ -125,7 +125,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output = $crate::LocalPooled<dyn $trait_name>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 fn [<cast_ $trait_name:snake>](self) -> Self::Output {
                     // SAFETY: We guarantee that the closure references the same object
                     // in both its input and output, satisfying the safety requirement.
@@ -141,7 +141,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output = $crate::PooledMut<dyn $trait_name>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 fn [<cast_ $trait_name:snake>](self) -> Self::Output {
                     // SAFETY: We guarantee that the closure references the same object
                     // in both its input and output, satisfying the safety requirement.
@@ -157,7 +157,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output = $crate::LocalPooledMut<dyn $trait_name>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 fn [<cast_ $trait_name:snake>](self) -> Self::Output {
                     // SAFETY: We guarantee that the closure references the same object
                     // in both its input and output, satisfying the safety requirement.
@@ -173,7 +173,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output = $crate::BlindPooled<dyn $trait_name>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 fn [<cast_ $trait_name:snake>](self) -> Self::Output {
                     // SAFETY: We guarantee that the closure references the same object
                     // in both its input and output, satisfying the safety requirement.
@@ -189,7 +189,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output = $crate::LocalBlindPooled<dyn $trait_name>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 fn [<cast_ $trait_name:snake>](self) -> Self::Output {
                     // SAFETY: We guarantee that the closure references the same object
                     // in both its input and output, satisfying the safety requirement.
@@ -205,7 +205,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output = $crate::BlindPooledMut<dyn $trait_name>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 fn [<cast_ $trait_name:snake>](self) -> Self::Output {
                     // SAFETY: We guarantee that the closure references the same object
                     // in both its input and output, satisfying the safety requirement.
@@ -221,7 +221,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output = $crate::LocalBlindPooledMut<dyn $trait_name>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 fn [<cast_ $trait_name:snake>](self) -> Self::Output {
                     // SAFETY: We guarantee that the closure references the same object
                     // in both its input and output, satisfying the safety requirement.
@@ -261,7 +261,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output = $crate::RawPooled<dyn $trait_name>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 unsafe fn [<cast_ $trait_name:snake>](self) -> Self::Output {
                     // SAFETY: We guarantee that the closure references the same object
                     // in both its input and output, satisfying the safety requirement.
@@ -278,7 +278,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output = $crate::RawPooledMut<dyn $trait_name>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 unsafe fn [<cast_ $trait_name:snake>](self) -> Self::Output {
                     // SAFETY: We guarantee that the closure references the same object
                     // in both its input and output, satisfying the safety requirement.
@@ -295,7 +295,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output = $crate::RawBlindPooled<dyn $trait_name>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 unsafe fn [<cast_ $trait_name:snake>](self) -> Self::Output {
                     // SAFETY: We guarantee that the closure references the same object
                     // in both its input and output, satisfying the safety requirement.
@@ -312,7 +312,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output = $crate::RawBlindPooledMut<dyn $trait_name>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 unsafe fn [<cast_ $trait_name:snake>](self) -> Self::Output {
                     // SAFETY: We guarantee that the closure references the same object
                     // in both its input and output, satisfying the safety requirement.
@@ -342,7 +342,7 @@ macro_rules! define_pooled_dyn_cast {
                 /// The cast is performed through safe reference coercion - if the concrete
                 /// type does not implement the required trait, compilation will fail.
                 ///
-                /// # Type Parameters
+                /// # Type parameters
                 ///
                 /// The type parameters must be specified at the call site to determine
                 /// the exact trait object type.
@@ -360,7 +360,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output<$($type_param),+> = $crate::Pooled<dyn $trait_name<$($type_param),+>>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 fn [<cast_ $trait_name:snake>]<$($type_param),+>(self) -> Self::Output<$($type_param),+>
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,
@@ -379,7 +379,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output<$($type_param),+> = $crate::LocalPooled<dyn $trait_name<$($type_param),+>>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 fn [<cast_ $trait_name:snake>]<$($type_param),+>(self) -> Self::Output<$($type_param),+>
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,
@@ -398,7 +398,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output<$($type_param),+> = $crate::PooledMut<dyn $trait_name<$($type_param),+>>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 fn [<cast_ $trait_name:snake>]<$($type_param),+>(self) -> Self::Output<$($type_param),+>
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,
@@ -417,7 +417,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output<$($type_param),+> = $crate::LocalPooledMut<dyn $trait_name<$($type_param),+>>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 fn [<cast_ $trait_name:snake>]<$($type_param),+>(self) -> Self::Output<$($type_param),+>
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,
@@ -436,7 +436,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output<$($type_param),+> = $crate::BlindPooled<dyn $trait_name<$($type_param),+>>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 fn [<cast_ $trait_name:snake>]<$($type_param),+>(self) -> Self::Output<$($type_param),+>
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,
@@ -455,7 +455,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output<$($type_param),+> = $crate::LocalBlindPooled<dyn $trait_name<$($type_param),+>>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 fn [<cast_ $trait_name:snake>]<$($type_param),+>(self) -> Self::Output<$($type_param),+>
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,
@@ -474,7 +474,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output<$($type_param),+> = $crate::BlindPooledMut<dyn $trait_name<$($type_param),+>>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 fn [<cast_ $trait_name:snake>]<$($type_param),+>(self) -> Self::Output<$($type_param),+>
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,
@@ -493,7 +493,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output<$($type_param),+> = $crate::LocalBlindPooledMut<dyn $trait_name<$($type_param),+>>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 fn [<cast_ $trait_name:snake>]<$($type_param),+>(self) -> Self::Output<$($type_param),+>
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,
@@ -520,7 +520,7 @@ macro_rules! define_pooled_dyn_cast {
                 /// The cast is performed through safe reference coercion - if the concrete
                 /// type does not implement the required trait, compilation will fail.
                 ///
-                /// # Type Parameters
+                /// # Type parameters
                 ///
                 /// The type parameters must be specified at the call site to determine
                 /// the exact trait object type.
@@ -543,7 +543,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output<$($type_param),+> = $crate::RawPooled<dyn $trait_name<$($type_param),+>>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 unsafe fn [<cast_ $trait_name:snake>]<$($type_param),+>(self) -> Self::Output<$($type_param),+>
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,
@@ -563,7 +563,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output<$($type_param),+> = $crate::RawPooledMut<dyn $trait_name<$($type_param),+>>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 unsafe fn [<cast_ $trait_name:snake>]<$($type_param),+>(self) -> Self::Output<$($type_param),+>
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,
@@ -583,7 +583,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output<$($type_param),+> = $crate::RawBlindPooled<dyn $trait_name<$($type_param),+>>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 unsafe fn [<cast_ $trait_name:snake>]<$($type_param),+>(self) -> Self::Output<$($type_param),+>
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,
@@ -603,7 +603,7 @@ macro_rules! define_pooled_dyn_cast {
             {
                 type Output<$($type_param),+> = $crate::RawBlindPooledMut<dyn $trait_name<$($type_param),+>>;
 
-                #[allow(trivial_casts, reason = "necessary for syntax reasons")]
+                #[expect(trivial_casts, reason = "necessary for syntax reasons")]
                 unsafe fn [<cast_ $trait_name:snake>]<$($type_param),+>(self) -> Self::Output<$($type_param),+>
                 where
                     __PooledT: $trait_name<$($type_param),+> + 'static,

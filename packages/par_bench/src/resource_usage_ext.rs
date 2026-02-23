@@ -686,7 +686,7 @@ mod tests {
     #[test]
     #[cfg(all(not(miri), feature = "alloc_tracker"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
     fn create_resource_usage_state_factory_divides_iterations_correctly() {
-        // Skip test if there's only one processor to avoid division by 1 (no effect)
+        // Skip test if there is only one processor to avoid division by 1 (no effect)
         let Some(processors) = FOUR_PROCESSORS.as_ref() else {
             println!(
                 "Skipping test create_resource_usage_state_factory_divides_iterations_correctly: not enough processors"
@@ -709,7 +709,7 @@ mod tests {
         let results = Run::new()
             .measure_resource_usage("iteration_division_test", |measure| measure.allocs(&allocs))
             .iter(|_| {
-                // For this test, we do not need to actually allocate since we're just
+                // For this test, we do not need to actually allocate since we are just
                 // testing the iteration division logic, not the allocation tracking itself
                 std::hint::black_box(42);
             })

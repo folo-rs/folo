@@ -599,7 +599,7 @@ mod tests {
         assert_eq!(iter.len(), 1);
         assert_eq!(iter.size_hint(), (1, Some(1)));
 
-        let ptr = iter.next().expect("should have one item");
+        let ptr = iter.next().unwrap();
         let value = unsafe { ptr.as_ref() };
         assert_eq!(*value, 42);
 
@@ -634,15 +634,15 @@ mod tests {
         assert_eq!(iter.len(), 3);
 
         // Take one from front
-        let _front = iter.next().expect("should have front item");
+        let _front = iter.next().unwrap();
         assert_eq!(iter.len(), 2);
 
         // Take one from back
-        let _back = iter.next_back().expect("should have back item");
+        let _back = iter.next_back().unwrap();
         assert_eq!(iter.len(), 1);
 
         // Take remaining
-        let _remaining = iter.next().expect("should have remaining item");
+        let _remaining = iter.next().unwrap();
         assert_eq!(iter.len(), 0);
         assert!(iter.next().is_none());
         assert!(iter.next_back().is_none());

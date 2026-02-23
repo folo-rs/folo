@@ -309,7 +309,7 @@ where
     fn current_thread_instance(&self) -> Rc<T> {
         let thread_id = thread::current().id();
 
-        // First, an optimistic pass - let's assume it is already initialized for our thread.
+        // First, an optimistic pass - let us assume it is already initialized for our thread.
         {
             let map = self.thread_specific.read().expect(ERR_POISONED_LOCK);
 
@@ -320,21 +320,21 @@ where
             }
         }
 
-        // The state for the current thread is not yet initialized. Let's initialize!
+        // The state for the current thread is not yet initialized. Let us initialize!
         // Note that we create this instance outside any locks, both to reduce the
         // lock durations but also because cloning a linked object may execute arbitrary code,
         // including potentially code that tries to grab the same lock.
         let instance: Rc<T> = Rc::new(self.family.clone().into());
 
-        // Let's add the new instance to the map.
+        // Let us add the new instance to the map.
         let mut map = self.thread_specific.write().expect(ERR_POISONED_LOCK);
 
         // In some wild corner cases, it is perhaps possible that the arbitrary code in the
         // linked object clone logic may already have filled the map with our value? It is
-        // a bit of a stretch of imagination but let's accept the possibility to be thorough.
+        // a bit of a stretch of imagination but let us accept the possibility to be thorough.
         match map.entry(thread_id) {
             hash_map::Entry::Occupied(occupied_entry) => {
-                // There already is something in the entry. That's fine, we just ignore the
+                // There already is something in the entry. That is fine, we just ignore the
                 // new instance we created and pretend we are on the optimistic path.
                 let state = occupied_entry.get();
 
@@ -343,7 +343,7 @@ where
                 unsafe { state.clone_instance() }
             }
             hash_map::Entry::Vacant(vacant_entry) => {
-                // We are the first thread to create an instance. Let's insert it.
+                // We are the first thread to create an instance. Let us insert it.
                 // SAFETY: We must guarantee that any further access (taking the Rc or dropping)
                 // takes place on the same thread as was used to call this function. We ensure this
                 // by the thread ID lookup in the map key - we can only ever directly access map

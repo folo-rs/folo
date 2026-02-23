@@ -8,7 +8,7 @@ use crate::configure::RunInitial;
 /// A `Run` must first be configured, after which it can be executed. The run logic separates
 /// preparation (unmeasured) from execution (measured) phases.
 ///
-/// # Execution Phases
+/// # Execution phases
 ///
 /// 1. **Thread Preparation**: Each thread executes the thread preparation callback once
 /// 2. **Iteration Preparation**: Each thread prepares state for every iteration (unmeasured)  

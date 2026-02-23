@@ -1,7 +1,7 @@
 //! Benchmarks to measure the compute overhead of `all_the_time` logic itself.
 //!
 //! These benchmarks measure the overhead of the tracking infrastructure by
-//! benchmarking empty spans - spans that don't do any actual work but still incur
+//! benchmarking empty spans - spans that do not do any actual work but still incur
 //! the measurement overhead.
 
 #![allow(

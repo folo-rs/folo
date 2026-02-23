@@ -519,13 +519,13 @@ mod tests {
         // SAFETY: Only used in single-threaded local test environment, never shared across threads
         unsafe impl Sync for NonSendType {}
 
-        // LocalBlindPool should work with non-Send types since it's single-threaded
+        // LocalBlindPool should work with non-Send types since it is single-threaded
         use std::cell::RefCell;
         use std::rc::Rc;
 
         let pool = LocalBlindPool::new();
 
-        // Rc is not Send, but LocalBlindPool should handle it since it's single-threaded
+        // Rc is not Send, but LocalBlindPool should handle it since it is single-threaded
         let rc_handle = pool.insert(Rc::new("Non-Send data".to_string()));
         assert_eq!(pool.len(), 1);
         assert_eq!(&**rc_handle, "Non-Send data");
@@ -595,7 +595,7 @@ mod tests {
 
         let pool = LocalBlindPool::new();
 
-        // Create an object that tracks when it's dropped
+        // Create an object that tracks when it is dropped
         let tracker = LocalDropTracker {
             counter: Rc::clone(&drop_count),
         };

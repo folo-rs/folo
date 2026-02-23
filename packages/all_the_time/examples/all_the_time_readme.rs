@@ -5,7 +5,7 @@
 #![expect(
     clippy::arithmetic_side_effects,
     clippy::unseparated_literal_suffix,
-    reason = "this is example code that doesn't need production-level safety"
+    reason = "this is example code that does not need production-level safety"
 )]
 
 use all_the_time::Session;

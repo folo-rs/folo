@@ -838,7 +838,7 @@ mod tests {
     fn remove_with_panicking_drop_keeps_slab_valid() {
         // Object that always panics on drop
         struct PanickingDrop {
-            #[allow(dead_code, reason = "Field used to give struct non-zero size")]
+            #[expect(dead_code, reason = "Field used to give struct non-zero size")]
             value: u32,
         }
 
@@ -904,7 +904,7 @@ mod tests {
     fn insert_with_partial_object_initialize() {
         struct PartiallyInitializable {
             a: u32,
-            #[allow(dead_code, reason = "Field intentionally not initialized in test")]
+            #[expect(dead_code, reason = "Field intentionally not initialized in test")]
             b: MaybeUninit<u64>,
         }
 
@@ -1073,7 +1073,7 @@ mod tests {
         static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
 
         struct DropCounter {
-            #[allow(dead_code, reason = "Field used to give struct non-zero size")]
+            #[expect(dead_code, reason = "Field used to give struct non-zero size")]
             value: u8,
         }
 
@@ -1187,7 +1187,7 @@ mod tests {
 
         // Fill the slab to capacity
         for i in 0..capacity {
-            #[allow(
+            #[expect(
                 clippy::cast_possible_truncation,
                 reason = "test uses small capacity values"
             )]
@@ -1249,7 +1249,7 @@ mod tests {
             assert_eq!(slab.len(), i + 1);
             assert!(!slab.is_empty());
 
-            // Check if we're now full
+            // Check if we are now full
             if i + 1 == capacity {
                 // Should be full now
                 assert!(slab.is_full());
@@ -1391,7 +1391,7 @@ mod tests {
         let mut iter = slab.iter();
 
         // First item should be the object we inserted
-        let ptr = iter.next().expect("should have one item");
+        let ptr = iter.next().unwrap();
 
         // SAFETY: We know this points to a u32 we just inserted
         let value = unsafe { ptr.cast::<u32>().as_ref() };
@@ -1550,17 +1550,17 @@ mod tests {
         let mut iter = slab.iter();
 
         // Iterate from the back
-        let last_ptr = iter.next_back().expect("should have last item");
+        let last_ptr = iter.next_back().unwrap();
         // SAFETY: We know this points to a u32 we inserted
         let last_value = unsafe { *last_ptr.cast::<u32>().as_ref() };
         assert_eq!(last_value, 300);
 
-        let middle_ptr = iter.next_back().expect("should have middle item");
+        let middle_ptr = iter.next_back().unwrap();
         // SAFETY: We know this points to a u32 we inserted
         let middle_value = unsafe { *middle_ptr.cast::<u32>().as_ref() };
         assert_eq!(middle_value, 200);
 
-        let first_ptr = iter.next_back().expect("should have first item");
+        let first_ptr = iter.next_back().unwrap();
         // SAFETY: We know this points to a u32 we inserted
         let first_value = unsafe { *first_ptr.cast::<u32>().as_ref() };
         assert_eq!(first_value, 100);
@@ -1591,35 +1591,35 @@ mod tests {
         assert_eq!(iter.len(), 5);
 
         // Get first from front
-        let first_ptr = iter.next().expect("should have first item");
+        let first_ptr = iter.next().unwrap();
         // SAFETY: We know this points to a u32 we inserted
         let first_value = unsafe { *first_ptr.cast::<u32>().as_ref() };
         assert_eq!(first_value, 100);
         assert_eq!(iter.len(), 4);
 
         // Get last from back
-        let last_ptr = iter.next_back().expect("should have last item");
+        let last_ptr = iter.next_back().unwrap();
         // SAFETY: We know this points to a u32 we inserted
         let last_value = unsafe { *last_ptr.cast::<u32>().as_ref() };
         assert_eq!(last_value, 500);
         assert_eq!(iter.len(), 3);
 
         // Get second from front
-        let second_ptr = iter.next().expect("should have second item");
+        let second_ptr = iter.next().unwrap();
         // SAFETY: We know this points to a u32 we inserted
         let second_value = unsafe { *second_ptr.cast::<u32>().as_ref() };
         assert_eq!(second_value, 200);
         assert_eq!(iter.len(), 2);
 
         // Get fourth from back
-        let fourth_ptr = iter.next_back().expect("should have fourth item");
+        let fourth_ptr = iter.next_back().unwrap();
         // SAFETY: We know this points to a u32 we inserted
         let fourth_value = unsafe { *fourth_ptr.cast::<u32>().as_ref() };
         assert_eq!(fourth_value, 400);
         assert_eq!(iter.len(), 1);
 
         // Get middle item
-        let middle_ptr = iter.next().expect("should have middle item");
+        let middle_ptr = iter.next().unwrap();
         // SAFETY: We know this points to a u32 we inserted
         let middle_value = unsafe { *middle_ptr.cast::<u32>().as_ref() };
         assert_eq!(middle_value, 300);
@@ -1666,21 +1666,21 @@ mod tests {
         assert_eq!(iter.len(), 3);
 
         // Get from back first (should be 500 at index 4)
-        let back_ptr = iter.next_back().expect("should have back item");
+        let back_ptr = iter.next_back().unwrap();
         // SAFETY: We know this points to a u32 we inserted
         let back_value = unsafe { *back_ptr.cast::<u32>().as_ref() };
         assert_eq!(back_value, 500);
         assert_eq!(iter.len(), 2);
 
         // Get from front (should be 100 at index 0)
-        let front_ptr = iter.next().expect("should have front item");
+        let front_ptr = iter.next().unwrap();
         // SAFETY: We know this points to a u32 we inserted
         let front_value = unsafe { *front_ptr.cast::<u32>().as_ref() };
         assert_eq!(front_value, 100);
         assert_eq!(iter.len(), 1);
 
         // Get remaining (should be 300 at index 2)
-        let remaining_ptr = iter.next().expect("should have remaining item");
+        let remaining_ptr = iter.next().unwrap();
         // SAFETY: We know this points to a u32 we inserted
         let remaining_value = unsafe { *remaining_ptr.cast::<u32>().as_ref() };
         assert_eq!(remaining_value, 300);
@@ -1744,7 +1744,7 @@ mod tests {
 
         // Object that always panics on drop but still increments the counter
         struct AlwaysPanickingDrop {
-            #[allow(dead_code, reason = "Field used to give struct non-zero size")]
+            #[allow(dead_code, reason = "field used to give struct non-zero size")]
             id: u32,
         }
 

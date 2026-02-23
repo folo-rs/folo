@@ -126,7 +126,7 @@ fn determine_capacity(slot_size: NonZero<usize>) -> NonZero<usize> {
     // If no other condition preempts us, we want to have this capacity.
     const IDEAL_CAPACITY: NonZero<usize> = nz!(128);
 
-    // A slab is meant for bulk allocation, so let's ensure there is at least some bulk.
+    // A slab is meant for bulk allocation, so let us ensure there is at least some bulk.
     // As long as MIN_CAPACITY is met, we increase capacity until we reach this size,
     // rounding up to avoid partial pages. This may still leave us under IDEAL_CAPACITY.
     //
@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn for_type_with_large_alignment() {
         #[repr(align(128))]
-        #[allow(
+        #[expect(
             dead_code,
             reason = "Test struct to verify layout calculations with large alignment"
         )]

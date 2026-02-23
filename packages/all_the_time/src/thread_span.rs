@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn correctly_divides_by_iterations_count_single() {
         // Test case for single iteration (no division)
-        // Since we cannot modify fake platform after creation, we'll test
+        // Since we cannot modify fake platform after creation, we will test
         // the behavior with a zero-time scenario
         let session = create_test_session();
         let operation = session.operation("test");
@@ -308,7 +308,7 @@ mod tests {
 
         // Should record 10 spans
         assert_eq!(operation.total_iterations(), 10);
-        // Each span should be the divided duration (but since we're using a fake platform
+        // Each span should be the divided duration (but since we are using a fake platform
         // that starts at 0 and does not advance, total will be 0)
         assert_eq!(operation.total_processor_time(), Duration::ZERO);
     }
@@ -390,7 +390,7 @@ mod tests {
         let span = operation.measure_thread().iterations(5);
 
         // Since our fake platform does not automatically advance time,
-        // and we cannot modify it after creation, let's test with
+        // and we cannot modify it after creation, let us test with
         // a different approach - verify the logic through calculation
         let test_total_duration = Duration::from_nanos(1000);
         let iterations = 5_u64;

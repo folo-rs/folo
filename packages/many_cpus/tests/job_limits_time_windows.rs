@@ -28,7 +28,7 @@ fn obeys_processor_time_limits() {
 
     // Restrict the current process to only use 50% of the system processor time.
     let job = Job::builder()
-        .with_max_processor_time_pct(ProcessorTimePct::new_static::<50>())
+        .max_processor_time_pct(ProcessorTimePct::new_static::<50>())
         .build();
 
     // This is "100%". This count may also include processors that are not available to the

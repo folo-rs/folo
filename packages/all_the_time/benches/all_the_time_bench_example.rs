@@ -8,7 +8,7 @@
 )]
 #![expect(
     clippy::arithmetic_side_effects,
-    reason = "this is benchmark code that doesn't need production-level safety"
+    reason = "this is benchmark code that does not need production-level safety"
 )]
 
 use std::cell::Cell;

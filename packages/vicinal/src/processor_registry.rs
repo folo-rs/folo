@@ -30,7 +30,7 @@ impl ProcessorRegistry {
         Self { states }
     }
 
-    #[allow(
+    #[expect(
         clippy::indexing_slicing,
         reason = "processor_id is guaranteed to be in bounds by SystemHardware"
     )]
@@ -39,7 +39,7 @@ impl ProcessorRegistry {
     }
 
     #[cfg(test)]
-    #[allow(
+    #[expect(
         clippy::indexing_slicing,
         reason = "processor_id is guaranteed to be in bounds by HardwareInfo"
     )]
@@ -62,7 +62,7 @@ impl ProcessorRegistry {
     }
 
     #[cfg(test)]
-    #[allow(
+    #[expect(
         clippy::cast_possible_truncation,
         reason = "index is guaranteed to fit in ProcessorId because the registry is sized exactly to max_processor_count"
     )]

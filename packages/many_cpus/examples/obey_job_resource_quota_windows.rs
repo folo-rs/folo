@@ -27,7 +27,7 @@ mod windows {
     pub(crate) fn main() {
         // Restrict the current process to only use 50% of the system processor time.
         let _job = Job::builder()
-            .with_max_processor_time_pct(ProcessorTimePct::new_static::<50>())
+            .max_processor_time_pct(ProcessorTimePct::new_static::<50>())
             .build();
 
         verify_limits_obeyed();

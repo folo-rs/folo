@@ -3,6 +3,8 @@
 //! This contains the same code that appears in the `fast_time` package `README.md`.
 
 fn main() {
+    use std::time::{Duration, Instant};
+
     use fast_time::Clock;
 
     // Create a clock for efficient timestamp capture
@@ -12,7 +14,7 @@ fn main() {
     let start = clock.now();
 
     // Simulate some work
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    std::thread::sleep(Duration::from_millis(10));
 
     let elapsed = start.elapsed(&mut clock);
     println!("Work completed in: {elapsed:?}");
@@ -23,9 +25,9 @@ fn main() {
         timestamps.push(clock.now());
     }
 
-    // Convert to std::time::Instant for interoperability
+    // Convert to std Instant for interoperability.
     let fast_instant = clock.now();
-    let std_instant: std::time::Instant = fast_instant.into();
+    let std_instant: Instant = fast_instant.into();
 
     println!("Collected {} timestamps", timestamps.len());
     println!("Converted instant: {std_instant:?}");

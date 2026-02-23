@@ -1,5 +1,5 @@
 use std::error::Error;
-use std::fmt::Display;
+use std::fmt::{self, Display};
 
 /// Indicates that a sender-receiver pair has disconnected.
 #[derive(Debug, Eq, PartialEq)]
@@ -9,7 +9,7 @@ pub struct Disconnected;
 impl Error for Disconnected {}
 
 impl Display for Disconnected {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "sender-receiver pair has disconnected")
     }
 }

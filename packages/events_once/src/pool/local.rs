@@ -167,7 +167,6 @@ impl<T: 'static> fmt::Debug for LocalPoolCore<T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::iter;
-    use std::pin::pin;
     use std::task::{self, Poll, Waker};
 
     use static_assertions::assert_not_impl_any;
@@ -209,7 +208,7 @@ mod tests {
         assert!(!pool.is_empty());
 
         {
-            let mut receiver = pin!(receiver);
+            let mut receiver = Box::pin(receiver);
 
             sender.send(42);
 
@@ -232,7 +231,7 @@ mod tests {
 
         for _ in 0..ITERATIONS {
             let (sender, receiver) = pool.rent();
-            let mut receiver = pin!(receiver);
+            let mut receiver = Box::pin(receiver);
 
             sender.send(42);
 
@@ -258,7 +257,7 @@ mod tests {
                 .collect::<Vec<_>>();
 
             for (sender, receiver) in endpoints {
-                let mut receiver = pin!(receiver);
+                let mut receiver = Box::pin(receiver);
 
                 sender.send(42);
 
@@ -284,7 +283,7 @@ mod tests {
         let pool = LocalEventPool::<i32>::new();
 
         let (_, receiver) = pool.rent();
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
 
@@ -297,7 +296,7 @@ mod tests {
         let pool = LocalEventPool::<i32>::new();
 
         let (sender, receiver) = pool.rent();
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
 
@@ -384,7 +383,7 @@ mod tests {
         let pool = LocalEventPool::<i32>::new();
 
         let (sender, receiver) = pool.rent();
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         assert!(!receiver.is_ready());
 
@@ -403,7 +402,7 @@ mod tests {
         let pool = LocalEventPool::<i32>::new();
 
         let (sender, receiver) = pool.rent();
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         assert!(!receiver.is_ready());
 
@@ -438,7 +437,7 @@ mod tests {
         let pool = LocalEventPool::<i32>::new();
 
         let (sender, receiver) = pool.rent();
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         sender.send(42);
 
@@ -458,7 +457,7 @@ mod tests {
         let pool = LocalEventPool::<i32>::new();
 
         let (sender, receiver) = pool.rent();
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         sender.send(42);
 
@@ -480,7 +479,7 @@ mod tests {
 
         drop(pool);
 
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         sender.send(42);
 
@@ -499,7 +498,7 @@ mod tests {
         let (sender2, receiver2) = pool.rent();
         let (_sender3, _receiver3) = pool.rent();
 
-        let mut receiver1 = pin!(receiver1);
+        let mut receiver1 = Box::pin(receiver1);
         let mut receiver2 = Box::pin(receiver2);
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -537,8 +536,8 @@ mod tests {
 
         let mut cx = task::Context::from_waker(Waker::noop());
 
-        let mut receiver1 = pin!(receiver1);
-        let mut receiver2 = pin!(receiver2);
+        let mut receiver1 = Box::pin(receiver1);
+        let mut receiver2 = Box::pin(receiver2);
 
         _ = receiver1.as_mut().poll(&mut cx);
         _ = receiver2.as_mut().poll(&mut cx);
@@ -568,7 +567,7 @@ mod tests {
         assert!(pool.is_empty());
 
         let (sender, receiver) = pool.rent();
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         sender.send(42);
 

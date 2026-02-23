@@ -3,6 +3,7 @@
 // This module contains logic for validating that paths are within a Cargo workspace
 // and finding the workspace root.
 
+use std::error;
 use std::path::{Path, PathBuf};
 
 use toml::Value;
@@ -19,7 +20,7 @@ use crate::pal::Filesystem;
 pub(crate) fn validate_workspace_context(
     target_path: &Path,
     fs: &impl Filesystem,
-) -> Result<WorkspaceContext, Box<dyn std::error::Error>> {
+) -> Result<WorkspaceContext, Box<dyn error::Error>> {
     let current_dir = fs.current_dir()?;
 
     // Find workspace root from the current directory.
@@ -88,7 +89,7 @@ pub(crate) fn validate_workspace_context(
 fn find_workspace_root(
     start_path: &Path,
     fs: &impl Filesystem,
-) -> Result<PathBuf, Box<dyn std::error::Error>> {
+) -> Result<PathBuf, Box<dyn error::Error>> {
     let mut current_dir = start_path;
 
     loop {
@@ -198,7 +199,7 @@ edition = "2021"
 
         std::env::set_current_dir(original_dir).unwrap();
 
-        result.expect("Should validate successfully when both paths are in the same workspace");
+        result.unwrap();
     }
 
     #[test]

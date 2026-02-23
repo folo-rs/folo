@@ -8,6 +8,7 @@
 use std::any::type_name;
 #[cfg(any(test, feature = "test-util"))]
 use std::borrow::Borrow;
+use std::fmt;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::thread::ThreadId;
 
@@ -643,8 +644,8 @@ impl SystemHardware {
 
 // We have no API contract for the Debug output format.
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl std::fmt::Debug for SystemHardware {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for SystemHardware {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let processor_count = self
             .inner
             .all_processors_slice

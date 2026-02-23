@@ -19,7 +19,8 @@ use alloc_tracker::{Allocator, Report, Session};
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 fn main() {
-    println!("=== Threaded Allocation Tracking Example ===\n");
+    println!("=== Threaded Allocation Tracking Example ===");
+    println!();
 
     // Create two worker threads that each do their own measurements
     let handle1 = thread::spawn(|| worker_thread("Thread-1"));

@@ -584,7 +584,7 @@ mod tests {
             assert_eq!(iter.len(), 1);
 
             // First item should be the object we inserted
-            let ptr = iter.next().expect("should have one item");
+            let ptr = iter.next().unwrap();
 
             // SAFETY: We know this points to a u32 we just inserted
             let value = unsafe { ptr.cast::<u32>().as_ref() };
@@ -626,17 +626,17 @@ mod tests {
 
         pool.with_iter(|mut iter| {
             // Iterate from the back
-            let last_ptr = iter.next_back().expect("should have last item");
+            let last_ptr = iter.next_back().unwrap();
             // SAFETY: We know this points to a u32 we inserted
             let last_value = unsafe { *last_ptr.cast::<u32>().as_ref() };
             assert_eq!(last_value, 300);
 
-            let middle_ptr = iter.next_back().expect("should have middle item");
+            let middle_ptr = iter.next_back().unwrap();
             // SAFETY: We know this points to a u32 we inserted
             let middle_value = unsafe { *middle_ptr.cast::<u32>().as_ref() };
             assert_eq!(middle_value, 200);
 
-            let first_ptr = iter.next().expect("should have first item");
+            let first_ptr = iter.next().unwrap();
             // SAFETY: We know this points to a u32 we inserted
             let first_value = unsafe { *first_ptr.cast::<u32>().as_ref() };
             assert_eq!(first_value, 100);
@@ -980,7 +980,7 @@ mod tests {
         assert_eq!(pool.len(), 1);
         assert_eq!(&*handle, "initial value");
 
-        // Modify the value while it's in the pool
+        // Modify the value while it is in the pool
         handle.push_str(" - modified");
         assert_eq!(&*handle, "initial value - modified");
         assert_eq!(pool.len(), 1);
@@ -1007,13 +1007,13 @@ mod tests {
         // SAFETY: Only used in single-threaded local test environment, never shared across threads
         unsafe impl Sync for NonSendType {}
 
-        // LocalOpaquePool should work with non-Send types since it's single-threaded
+        // LocalOpaquePool should work with non-Send types since it is single-threaded
         use std::cell::RefCell;
         use std::rc::Rc;
 
         let pool = LocalOpaquePool::with_layout_of::<Rc<String>>();
 
-        // Rc is not Send, but LocalOpaquePool should handle it since it's single-threaded
+        // Rc is not Send, but LocalOpaquePool should handle it since it is single-threaded
         let rc_handle = pool.insert(Rc::new("Non-Send data".to_string()));
         assert_eq!(pool.len(), 1);
         assert_eq!(&**rc_handle, "Non-Send data");

@@ -493,7 +493,7 @@ fn parse_v1_cgroup_cpu_quota_and_period_us(
     Some((quota, period))
 }
 
-#[allow(
+#[expect(
     clippy::arithmetic_side_effects,
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
@@ -875,7 +875,8 @@ mod tests {
             NonEmpty::from_vec(memory_region_index.iter().copied().unique().collect_vec())
                 .expect("simulating zero nodes is not supported");
         let mut node_indexes_cpulist = cpulist::emit(node_indexes);
-        // \n might or might not be present, so let's verify that it gets trimmed if it is.
+        // \n might or might not be present, so let us verify that it gets
+        // trimmed if it is.
         node_indexes_cpulist.push('\n');
 
         let processors_per_node = memory_region_index
@@ -903,7 +904,8 @@ mod tests {
                 .withf(move |p| *p == processor_id)
                 .times(1)
                 .return_const(if is_online {
-                    // \n might or might not be present, so let's verify that it gets trimmed if it is.
+                    // \n might or might not be present, so let us verify
+                    // that it gets trimmed if it is.
                     Some("1\n".to_string())
                 } else {
                     Some("0".to_string())
@@ -917,7 +919,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(",");
 
-            // This might or might not be present, so let's verify that it gets trimmed if it is.
+            // This might or might not be present, so let us verify that it gets trimmed if it is.
             cpulist.push('\n');
 
             fs.expect_get_numa_node_cpulist_contents()

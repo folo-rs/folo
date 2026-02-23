@@ -66,7 +66,7 @@ impl ProcessorSet {
     #[must_use]
     pub fn to_builder(&self) -> ProcessorSetBuilder {
         ProcessorSetBuilder::with_internals(self.hardware.clone())
-            .with_source_processors(&self.processors)
+            .source_processors(&self.processors)
     }
 
     /// Returns a subset of this processor set containing the specified number of processors.
@@ -724,7 +724,7 @@ mod tests {
 
             one.pin_current_thread_to();
 
-            // Potential false negative here if the system only has one processor but that's fine.
+            // Potential false negative here if the system only has one processor but that is fine.
             let current_thread_allowed = hw
                 .processors()
                 .to_builder()

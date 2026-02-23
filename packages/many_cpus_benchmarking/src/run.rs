@@ -123,7 +123,7 @@ fn execute_run<P: Payload, const BATCH_SIZE: u64>(
 /// All work distributions use the same number of pairs as the reference scenario, for
 /// optimal comparability between different distributions.
 fn calculate_worker_pair_count() -> NonZero<usize> {
-    // One pair for every memory region. That's it.
+    // One pair for every memory region. That is it.
     NonZero::new(
         SystemHardware::current()
             .processors()
@@ -437,7 +437,7 @@ fn get_processor_set_pairs(
                         // Without caring for how many there are, give half to each member of the pair.
                         match remaining {
                             None => {
-                                // Nothing else left - that's fine.
+                                // Nothing else left - that is fine.
                                 (
                                     candidates.to_builder().take_exact(nonempty![p1]),
                                     candidates.to_builder().take_exact(nonempty![p2]),

@@ -1,12 +1,12 @@
 error[E0015]: cannot call non-const function `get_value` in constants
-  --> tests/ui/new_zealand/nz_non_const_method_fail.rs:11:40
+  --> tests/ui/new_zealand/nz_non_const_method_fail.rs:12:40
    |
-11 |     let _non_const: NonZero<u64> = nz!(get_value());
+12 |     let _non_const: NonZero<u64> = nz!(get_value());
    |                                        ^^^^^^^^^^^
    |
 note: function `get_value` is not const
-  --> tests/ui/new_zealand/nz_non_const_method_fail.rs:5:1
+  --> tests/ui/new_zealand/nz_non_const_method_fail.rs:6:1
    |
- 5 | fn get_value() -> u64 {
+ 6 | fn get_value() -> u64 {
    | ^^^^^^^^^^^^^^^^^^^^^
    = note: calls in constants are limited to constant functions, tuple structs and tuple variants

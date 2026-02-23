@@ -30,7 +30,7 @@ mod windows {
 
     pub(crate) fn main() {
         // Restrict the current process to only use 2 processors.
-        let _job = Job::builder().with_processor_count(nz!(2)).build();
+        let _job = Job::builder().processor_count(nz!(2)).build();
 
         verify_limits_obeyed();
     }

@@ -524,7 +524,6 @@ impl<T: 'static> fmt::Debug for LocalEvent<T> {
 #[expect(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::pin::pin;
     use std::task::{self, Poll};
 
     use static_assertions::assert_not_impl_any;
@@ -537,7 +536,7 @@ mod tests {
     #[test]
     fn boxed_send_receive() {
         let (sender, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         sender.send(42);
 
@@ -550,7 +549,7 @@ mod tests {
     #[test]
     fn boxed_send_receive_unit() {
         let (sender, receiver) = LocalEvent::<()>::boxed();
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         sender.send(());
 
@@ -563,7 +562,7 @@ mod tests {
     #[test]
     fn boxed_send_receive_u128() {
         let (sender, receiver) = LocalEvent::<u128>::boxed();
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         sender.send(42);
 
@@ -576,7 +575,7 @@ mod tests {
     #[test]
     fn boxed_send_receive_array() {
         let (sender, receiver) = LocalEvent::<[u128; 4]>::boxed();
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         sender.send([42, 43, 44, 45]);
 
@@ -589,7 +588,7 @@ mod tests {
     #[test]
     fn boxed_receive_send_receive() {
         let (sender, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
 
@@ -612,7 +611,7 @@ mod tests {
     #[test]
     fn boxed_drop_receive() {
         let (_, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
 
@@ -623,7 +622,7 @@ mod tests {
     #[test]
     fn boxed_receive_drop_receive() {
         let (sender, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
 
@@ -698,7 +697,7 @@ mod tests {
     #[test]
     fn boxed_is_ready() {
         let (sender, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         assert!(!receiver.is_ready());
 
@@ -715,7 +714,7 @@ mod tests {
     #[test]
     fn boxed_drop_is_ready() {
         let (sender, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         assert!(!receiver.is_ready());
 
@@ -758,7 +757,7 @@ mod tests {
     #[should_panic]
     fn boxed_panic_poll_after_completion() {
         let (sender, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         sender.send(42);
 
@@ -777,7 +776,7 @@ mod tests {
     #[should_panic]
     fn boxed_panic_is_ready_after_completion() {
         let (sender, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         sender.send(42);
 
@@ -796,7 +795,7 @@ mod tests {
     fn placed_send_receive() {
         let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         sender.send(42);
 
@@ -810,7 +809,7 @@ mod tests {
     fn placed_receive_send_receive() {
         let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
 
@@ -835,7 +834,7 @@ mod tests {
     fn placed_drop_receive() {
         let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (_, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
 
@@ -847,7 +846,7 @@ mod tests {
     fn placed_receive_drop_receive() {
         let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         let mut cx = task::Context::from_waker(Waker::noop());
 
@@ -928,7 +927,7 @@ mod tests {
     fn placed_is_ready() {
         let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         assert!(!receiver.is_ready());
 
@@ -946,7 +945,7 @@ mod tests {
     fn placed_drop_is_ready() {
         let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         assert!(!receiver.is_ready());
 
@@ -992,7 +991,7 @@ mod tests {
     fn placed_panic_poll_after_completion() {
         let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         sender.send(42);
 
@@ -1012,7 +1011,7 @@ mod tests {
     fn placed_panic_is_ready_after_completion() {
         let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
 
         sender.send(42);
 
@@ -1049,7 +1048,7 @@ mod tests {
         let (_sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
 
         let mut cx = task::Context::from_waker(Waker::noop());
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
         _ = receiver.as_mut().poll(&mut cx);
 
         let mut called = false;
@@ -1068,7 +1067,7 @@ mod tests {
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
 
         let mut cx = task::Context::from_waker(Waker::noop());
-        let mut receiver = pin!(receiver);
+        let mut receiver = Box::pin(receiver);
         _ = receiver.as_mut().poll(&mut cx);
 
         drop(sender);

@@ -7,6 +7,7 @@
 #![allow(missing_docs, reason = "No need for API documentation in example code")]
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use many_cpus::SystemHardware;
 use new_zealand::nz;
@@ -51,7 +52,7 @@ fn main() {
     );
 
     // Calculate and display the speedup ratio.
-    #[allow(
+    #[expect(
         clippy::cast_precision_loss,
         reason = "precision loss acceptable for display purposes"
     )]
@@ -72,7 +73,7 @@ fn main() {
 }
 
 /// Measures the time to perform atomic increments using the given thread pool.
-fn measure_atomic_increments(pool: &mut ThreadPool) -> std::time::Duration {
+fn measure_atomic_increments(pool: &mut ThreadPool) -> Duration {
     // Shared atomic counter that all threads will increment.
     let counter = AtomicU64::new(0);
 

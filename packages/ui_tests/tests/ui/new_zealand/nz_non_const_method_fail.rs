@@ -1,4 +1,5 @@
-// This test should fail to compile because we're trying to call a non-const method in nz! expression
+// This test should fail to compile because we are trying to call a non-const
+// method in nz! expression.
 use std::num::NonZero;
 use new_zealand::nz;
 

@@ -36,7 +36,7 @@
 //! # }
 //! ```
 //!
-//! # Thread vs Process Processor Time
+//! # Thread vs process processor time
 //!
 //! You can choose between tracking thread processor time or process processor time:
 //!

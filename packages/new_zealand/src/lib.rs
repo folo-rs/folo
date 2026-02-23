@@ -141,7 +141,7 @@ mod tests {
         let subtraction: NonZero<i32> = nz!(20 - 5);
         assert_eq!(subtraction.get(), 15);
 
-        #[allow(
+        #[expect(
             clippy::integer_division,
             reason = "intentional for testing division expressions"
         )]

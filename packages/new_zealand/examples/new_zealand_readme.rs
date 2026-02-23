@@ -23,7 +23,7 @@ fn main() {
     foo(nz!(1));
     foo(nz!(100));
 
-    // Demonstrate that it's a compile-time check
+    // Demonstrate that it is a compile-time check
     let compile_time_value = nz!(123);
     println!("Compile-time non-zero value: {compile_time_value}");
 

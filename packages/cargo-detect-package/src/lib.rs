@@ -199,10 +199,10 @@ version = "0.1.0"
         let mock = create_simple_workspace_mock();
         let fs = FilesystemFacade::from_mock(mock);
 
-        let context = validate_workspace_context(Path::new("/workspace/package_a/src/lib.rs"), &fs)
-            .expect("workspace validation should succeed");
+        let context =
+            validate_workspace_context(Path::new("/workspace/package_a/src/lib.rs"), &fs).unwrap();
 
-        let result = detect_package(&context, &fs).expect("package detection should succeed");
+        let result = detect_package(&context, &fs).unwrap();
 
         assert_eq!(result, DetectedPackage::Package("package_a".to_string()));
     }
@@ -212,10 +212,9 @@ version = "0.1.0"
         let mock = create_simple_workspace_mock();
         let fs = FilesystemFacade::from_mock(mock);
 
-        let context = validate_workspace_context(Path::new("/workspace/README.md"), &fs)
-            .expect("workspace validation should succeed");
+        let context = validate_workspace_context(Path::new("/workspace/README.md"), &fs).unwrap();
 
-        let result = detect_package(&context, &fs).expect("package detection should succeed");
+        let result = detect_package(&context, &fs).unwrap();
 
         assert_eq!(result, DetectedPackage::Workspace);
     }
@@ -461,7 +460,7 @@ version = "0.1.0"
             workspace_root: PathBuf::from("/workspace"),
         };
 
-        let result = detect_package(&context, &fs).expect("package detection should succeed");
+        let result = detect_package(&context, &fs).unwrap();
 
         assert_eq!(
             result,
@@ -480,7 +479,7 @@ version = "0.1.0"
             workspace_root: PathBuf::from("/workspace"),
         };
 
-        let result = detect_package(&context, &fs).expect("package detection should succeed");
+        let result = detect_package(&context, &fs).unwrap();
 
         assert_eq!(result, DetectedPackage::Package("package_a".to_string()));
     }
@@ -559,7 +558,7 @@ version = "0.1.0"
         // Since the file is at root and there is no package-level Cargo.toml (only workspace),
         // and we will hit None from try_get_parent when trying to go above root,
         // detect_package should return Workspace.
-        let result = detect_package(&context, &fs).expect("detection should succeed");
+        let result = detect_package(&context, &fs).unwrap();
 
         assert_eq!(result, DetectedPackage::Workspace);
     }

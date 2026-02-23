@@ -9,7 +9,7 @@
     clippy::arithmetic_side_effects,
     clippy::cast_sign_loss,
     clippy::unseparated_literal_suffix,
-    reason = "this is example code that doesn't need production-level safety"
+    reason = "this is example code that does not need production-level safety"
 )]
 
 use std::collections::HashMap;
@@ -19,11 +19,13 @@ use std::hint::black_box;
 use all_the_time::Session;
 
 fn main() {
-    println!("=== Processor Time Tracking Example ===\n");
+    println!("=== Processor Time Tracking Example ===");
+    println!();
 
     // Create a tracking session - this enables processor time monitoring.
     let session = Session::new();
-    println!("✓ Created tracking session\n");
+    println!("✓ Created tracking session");
+    println!();
 
     // Track string formatting - do more work to get measurable processor time.
     {
@@ -87,5 +89,6 @@ fn main() {
     }
 
     session.print_to_stdout();
-    println!("\nSession automatically cleaned up when dropped.");
+    println!();
+    println!("Session automatically cleaned up when dropped.");
 }

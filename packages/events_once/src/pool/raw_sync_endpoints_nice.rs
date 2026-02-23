@@ -130,7 +130,6 @@ impl<T: Send + 'static> fmt::Debug for RawPooledReceiver<T> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::pin::pin;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
@@ -145,7 +144,7 @@ mod tests {
 
     #[test]
     fn into_value_disconnected() {
-        let pool = pin!(RawEventPool::<i32>::new());
+        let pool = Box::pin(RawEventPool::<i32>::new());
 
         // SAFETY: We guarantee the pool outlives the endpoints.
         let (sender, receiver) = unsafe { pool.as_ref().rent() };

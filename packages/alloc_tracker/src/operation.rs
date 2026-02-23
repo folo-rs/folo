@@ -166,17 +166,16 @@ impl Operation {
 
     /// Returns the total number of iterations recorded.
     #[must_use]
-    #[allow(dead_code, reason = "Used in tests")]
     #[cfg(test)]
     fn total_iterations(&self) -> u64 {
-        let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
+        let data = self.metrics.lock().unwrap();
         data.total_iterations
     }
 
     /// Returns the total bytes allocated across all iterations.
     #[must_use]
     pub fn total_bytes_allocated(&self) -> u64 {
-        let data = self.metrics.lock().expect("ERR_POISONED_LOCK");
+        let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.total_bytes_allocated
     }
 }
@@ -213,7 +212,7 @@ mod tests {
 
         // Directly test the metrics
         {
-            let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
+            let mut metrics = operation.metrics.lock().unwrap();
             metrics.add_iterations(100, 1, 1);
         }
 
@@ -228,7 +227,7 @@ mod tests {
 
         // Directly test the metrics
         {
-            let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
+            let mut metrics = operation.metrics.lock().unwrap();
             metrics.add_iterations(100, 1, 1); // 100 bytes, 1 allocation, 1 iteration
             metrics.add_iterations(200, 2, 1); // 200 bytes, 2 allocations, 1 iteration  
             metrics.add_iterations(300, 3, 1); // 300 bytes, 3 allocations, 1 iteration
@@ -245,7 +244,7 @@ mod tests {
 
         // Directly test the metrics
         {
-            let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
+            let mut metrics = operation.metrics.lock().unwrap();
             metrics.add_iterations(0, 0, 1);
             metrics.add_iterations(0, 0, 1);
         }
@@ -361,7 +360,7 @@ mod tests {
 
             // Directly test the metrics
             {
-                let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
+                let mut metrics = operation.metrics.lock().unwrap();
                 metrics.add_iterations(100, 2, 5);
             }
             // operation is dropped here, merging data into session
@@ -386,7 +385,7 @@ mod tests {
 
         // Directly manipulate the metrics
         {
-            let mut metrics = op1.metrics.lock().expect(ERR_POISONED_LOCK);
+            let mut metrics = op1.metrics.lock().unwrap();
             metrics.add_iterations(100, 1, 2); // 200 bytes, 2 allocations, 2 iterations
             metrics.add_iterations(200, 2, 3); // 600 bytes, 6 allocations, 3 iterations
         }
@@ -414,7 +413,7 @@ mod tests {
         // Add some data to have a non-zero mean.
         // add_iterations(bytes_delta, count_delta, iterations) means bytes_delta * iterations total bytes.
         {
-            let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
+            let mut metrics = operation.metrics.lock().unwrap();
             metrics.add_iterations(250, 5, 2); // 250 * 2 = 500 total bytes / 2 = 250 mean
         }
 

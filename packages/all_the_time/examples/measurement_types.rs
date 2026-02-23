@@ -8,7 +8,7 @@
 //! Run with: `cargo run --example measurement_types`.
 #![expect(
     clippy::arithmetic_side_effects,
-    reason = "this is example code that doesn't need production-level safety"
+    reason = "this is example code that does not need production-level safety"
 )]
 
 use std::hint::black_box;
@@ -47,42 +47,47 @@ fn multithreaded_work() {
 
     // Wait for all threads to complete.
     for handle in handles {
-        handle.join().expect("thread should complete successfully");
+        handle.join().expect("worker threads do not panic");
     }
 }
 
 fn main() {
-    println!("=== Processor Time Measurement Types Example ===\n");
+    println!("=== Processor Time Measurement Types Example ===");
+    println!();
 
     let session = Session::new();
 
-    // Example 1: Using measure_thread() - only measures current thread's processor time.
-    // Even though multithreaded_work() spawns multiple threads, measure_thread()
-    // only captures the processor time used by the main thread (mostly coordination overhead).
-    {
-        let thread_op = session.operation("thread_span_multithreaded");
-
-        for _ in 0..3 {
-            let _span = thread_op.measure_thread();
-            multithreaded_work();
-        }
-    }
-
-    // Example 2: Using measure_process() - measures entire process processor time.
-    // This captures processor time from all threads spawned by multithreaded_work().
-    {
-        let process_op = session.operation("process_span_multithreaded");
-
-        for _ in 0..3 {
-            let _span = process_op.measure_process();
-            multithreaded_work();
-        }
-    }
+    measure_thread_time(&session);
+    measure_process_time(&session);
 
     session.print_to_stdout();
 
-    println!("\nNote: measure_thread should show much lower times than measure_process.");
+    println!();
+    println!("Note: measure_thread should show much lower times than measure_process.");
     println!("This is because measure_thread only measures the main thread's processor time,");
     println!("while measure_process measures processor time from all threads in the process.");
     println!("The main thread mostly just coordinates the worker threads.");
+}
+
+/// Measures only the current thread's processor time using `measure_thread()`.
+/// Even though `multithreaded_work()` spawns multiple threads, `measure_thread()`
+/// only captures the processor time used by the main thread.
+fn measure_thread_time(session: &Session) {
+    let thread_op = session.operation("thread_span_multithreaded");
+
+    for _ in 0..3 {
+        let _span = thread_op.measure_thread();
+        multithreaded_work();
+    }
+}
+
+/// Measures the entire process's processor time using `measure_process()`.
+/// This captures processor time from all threads spawned by `multithreaded_work()`.
+fn measure_process_time(session: &Session) {
+    let process_op = session.operation("process_span_multithreaded");
+
+    for _ in 0..3 {
+        let _span = process_op.measure_process();
+        multithreaded_work();
+    }
 }

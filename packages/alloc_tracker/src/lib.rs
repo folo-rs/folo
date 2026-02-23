@@ -22,9 +22,9 @@
 //! # Features
 //!
 //! - `panic_on_next_alloc`: Enables the [`panic_on_next_alloc`] function for debugging
-//!   unexpected allocations. This feature adds some overhead to allocations, so it's optional.
+//!   unexpected allocations. This feature adds some overhead to allocations, so it is optional.
 //!  
-//! # Simple Usage
+//! # Simple usage
 //!
 //! You can track allocations like this:
 //!
@@ -51,7 +51,7 @@
 //! }
 //! ```
 //!
-//! # Tracking Mean Allocations
+//! # Tracking mean allocations
 //!
 //! For benchmarking scenarios, where you run multiple iterations of an operation, use [`Operation`]:
 //!

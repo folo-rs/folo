@@ -1,6 +1,6 @@
 //! Fake hardware backend implementation.
 
-use std::fmt::Display;
+use std::fmt::{self, Display};
 use std::sync::RwLock;
 use std::thread::ThreadId;
 
@@ -25,7 +25,7 @@ pub(crate) struct FakeProcessor {
 }
 
 impl Display for FakeProcessor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "FakeProcessor({} in region {}, {:?})",

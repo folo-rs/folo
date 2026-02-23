@@ -16,6 +16,7 @@ impl Platform for RustPlatform {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code, reason = "conditional")]
 pub(crate) struct RustTimeSource;
 
 impl TimeSource for RustTimeSource {

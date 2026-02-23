@@ -2,6 +2,7 @@
 //
 // This module contains the core logic for detecting which Cargo package a file belongs to.
 
+use std::error;
 use std::path::{Path, PathBuf};
 
 use toml::Value;
@@ -38,7 +39,7 @@ pub(crate) struct WorkspaceContext {
 pub(crate) fn detect_package(
     context: &WorkspaceContext,
     fs: &impl Filesystem,
-) -> Result<DetectedPackage, Box<dyn std::error::Error>> {
+) -> Result<DetectedPackage, Box<dyn error::Error>> {
     let absolute_path = &context.absolute_target_path;
     let workspace_root = &context.workspace_root;
 
@@ -69,7 +70,7 @@ pub(crate) fn detect_package(
 pub(crate) fn extract_package_name(
     dir: &Path,
     fs: &impl Filesystem,
-) -> Result<DetectedPackage, Box<dyn std::error::Error>> {
+) -> Result<DetectedPackage, Box<dyn error::Error>> {
     let contents = fs.read_cargo_toml(dir)?;
     let value: Value = toml::from_str(&contents)?;
 

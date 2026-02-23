@@ -12,7 +12,7 @@
     clippy::arithmetic_side_effects,
     clippy::cast_sign_loss,
     clippy::unseparated_literal_suffix,
-    reason = "this is example code that doesn't need production-level safety"
+    reason = "this is example code that does not need production-level safety"
 )]
 
 use std::collections::HashMap;
@@ -23,7 +23,8 @@ use std::thread;
 use all_the_time::{Report, Session};
 
 fn main() {
-    println!("=== Threaded Processor Time Tracking Example ===\n");
+    println!("=== Threaded Processor Time Tracking Example ===");
+    println!();
 
     // Create two worker threads that each do their own measurements
     let handle1 = thread::spawn(|| worker_thread("Thread-1"));

@@ -596,7 +596,7 @@ impl HistogramScale {
 
         // Each character in the histogram bar represents this many events for auto-scaling
         // purposes. We use integers, so this can suffer from aliasing effects if there are
-        // not many events. That's fine - the relative sizes will still be fine and the numbers
+        // not many events. That is fine - the relative sizes will still be fine and the numbers
         // will give the ground truth even if the rendering is not perfect.
         #[expect(
             clippy::integer_division,
@@ -718,7 +718,7 @@ mod tests {
         assert!(output.contains("value <=  100 [      2 ]: "));
         assert!(output.contains("value <= +inf [      1 ]: "));
 
-        // We do not want to reproduce the auto-scaling logic here, so let's just ensure that
+        // We do not want to reproduce the auto-scaling logic here, so let us just ensure that
         // the lines are not hilariously long (e.g. 66666 chars), as a basic sanity check.
         // NB! Recall that String::len() counts BYTES and that the "boxes" we draw are non-ASCII
         // characters that take up more than one byte each! So we leave some extra room with a

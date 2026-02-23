@@ -11,11 +11,13 @@ use alloc_tracker::{Allocator, Session};
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 fn main() {
-    println!("=== Allocation Tracking Example ===\n");
+    println!("=== Allocation Tracking Example ===");
+    println!();
 
     // Create a tracking session - this enables allocation monitoring
     let session = Session::new();
-    println!("✓ Created tracking session\n");
+    println!("✓ Created tracking session");
+    println!();
 
     // Track string formatting - batch operation for efficiency
     {
@@ -52,5 +54,6 @@ fn main() {
 
     session.print_to_stdout();
 
-    println!("\nSession automatically cleaned up when dropped.");
+    println!();
+    println!("Session automatically cleaned up when dropped.");
 }

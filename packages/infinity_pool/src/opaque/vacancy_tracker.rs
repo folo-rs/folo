@@ -100,7 +100,7 @@ impl VacancyTracker {
         debug_assert_ne!(has_vacancy, slab_previously_had_vacancy);
 
         if has_vacancy {
-            // If we just added a vacancy, and it's the lowest-index vacancy, update our cache.
+            // If we just added a vacancy, and it is the lowest-index vacancy, update our cache.
             if let Some(next_vacancy) = self.next_vacancy {
                 if slab_index < next_vacancy {
                     self.next_vacancy = Some(slab_index);

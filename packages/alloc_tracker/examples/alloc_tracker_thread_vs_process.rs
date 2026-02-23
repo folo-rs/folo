@@ -49,44 +49,42 @@ fn multithreaded_allocations() {
 
     // Wait for all threads to complete
     for handle in handles {
-        handle.join().expect("thread should complete successfully");
+        handle.join().expect("worker threads do not panic");
     }
 }
 
 fn main() {
-    println!(
-        "=== Thread vs Process Allocation Tracking ===
-"
-    );
+    println!("=== Thread vs Process Allocation Tracking ===");
+    println!();
 
     let session = Session::new();
 
-    // Track thread-local allocations
-    {
-        println!("🧵 Tracking thread-local allocations (3 iterations)");
-        let thread_op = session.operation("thread_span_multithreaded");
-        let _span = thread_op.measure_thread().iterations(3);
-        for _i in 0..3 {
-            multithreaded_allocations();
-        }
-    }
-
-    // Track process-wide allocations
-    {
-        println!("🌐 Tracking process-wide allocations (3 iterations)");
-        let process_op = session.operation("process_span_multithreaded");
-        let _span = process_op.measure_process().iterations(3);
-        for _i in 0..3 {
-            multithreaded_allocations();
-        }
-    }
+    track_thread_local_allocations(&session);
+    track_process_wide_allocations(&session);
 
     session.print_to_stdout();
 
-    println!(
-        "\nNote: measure_thread should show much lower allocation counts than measure_process."
-    );
+    println!();
+    println!("Note: measure_thread should show much lower allocation counts than measure_process.");
     println!("This is because measure_thread only measures the main thread's allocations,");
     println!("while measure_process measures allocations from all threads in the process.");
     println!("The main thread only allocates a small amount compared to the worker threads.");
+}
+
+fn track_thread_local_allocations(session: &Session) {
+    println!("🧵 Tracking thread-local allocations (3 iterations)");
+    let thread_op = session.operation("thread_span_multithreaded");
+    let _span = thread_op.measure_thread().iterations(3);
+    for _i in 0..3 {
+        multithreaded_allocations();
+    }
+}
+
+fn track_process_wide_allocations(session: &Session) {
+    println!("🌐 Tracking process-wide allocations (3 iterations)");
+    let process_op = session.operation("process_span_multithreaded");
+    let _span = process_op.measure_process().iterations(3);
+    for _i in 0..3 {
+        multithreaded_allocations();
+    }
 }

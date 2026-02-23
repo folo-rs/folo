@@ -32,8 +32,8 @@ mod windows {
         }
 
         let job = Job::builder()
-            .with_processor_count(nz!(8))
-            .with_max_processor_time_pct(ProcessorTimePct::new_static::<50>())
+            .processor_count(nz!(8))
+            .max_processor_time_pct(ProcessorTimePct::new_static::<50>())
             .build();
 
         println!("Starting with limit of 8 processors and 50% processor time.");
@@ -49,8 +49,8 @@ mod windows {
         println!("Switching to 8 processors and 1% processor time.");
 
         let job = Job::builder()
-            .with_processor_count(nz!(1))
-            .with_max_processor_time_pct(ProcessorTimePct::new_static::<1>())
+            .processor_count(nz!(1))
+            .max_processor_time_pct(ProcessorTimePct::new_static::<1>())
             .build();
 
         thread::sleep(Duration::from_secs(SLEEP_TIME_SECS));
@@ -59,8 +59,8 @@ mod windows {
         println!("Switching to 1 processor and 80% processor time.");
 
         let job = Job::builder()
-            .with_processor_count(nz!(1))
-            .with_max_processor_time_pct(ProcessorTimePct::new_static::<80>())
+            .processor_count(nz!(1))
+            .max_processor_time_pct(ProcessorTimePct::new_static::<80>())
             .build();
 
         thread::sleep(Duration::from_secs(SLEEP_TIME_SECS));
@@ -69,8 +69,8 @@ mod windows {
         println!("Switching to 4 processors and 75% processor time.");
 
         let job = Job::builder()
-            .with_processor_count(nz!(4))
-            .with_max_processor_time_pct(ProcessorTimePct::new_static::<75>())
+            .processor_count(nz!(4))
+            .max_processor_time_pct(ProcessorTimePct::new_static::<75>())
             .build();
 
         thread::sleep(Duration::from_secs(SLEEP_TIME_SECS));

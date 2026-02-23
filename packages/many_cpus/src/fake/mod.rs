@@ -89,6 +89,6 @@ mod processor_builder;
 
 pub(crate) mod platform;
 
-pub use builder::HardwareBuilder;
+pub use builder::*;
 pub(crate) use platform::FakePlatform;
-pub use processor_builder::ProcessorBuilder;
+pub use processor_builder::*;

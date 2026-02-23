@@ -194,7 +194,6 @@ impl<T: Send + 'static> ErasedPool for PoolWrapper<T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use core::task;
-    use std::pin::pin;
     use std::task::Waker;
 
     use static_assertions::assert_impl_all;
@@ -246,16 +245,16 @@ mod tests {
             sender1.send("Hello".to_string());
             sender2.send(42);
 
-            let receiver1 = pin!(receiver1);
-            let receiver2 = pin!(receiver2);
+            let mut receiver1 = Box::pin(receiver1);
+            let mut receiver2 = Box::pin(receiver2);
 
             let mut cx = task::Context::from_waker(Waker::noop());
 
             assert_eq!(
-                receiver1.poll(&mut cx),
+                receiver1.as_mut().poll(&mut cx),
                 task::Poll::Ready(Ok("Hello".to_string()))
             );
-            assert_eq!(receiver2.poll(&mut cx), task::Poll::Ready(Ok(42)));
+            assert_eq!(receiver2.as_mut().poll(&mut cx), task::Poll::Ready(Ok(42)));
         }
 
         assert!(lake.is_empty());
@@ -273,16 +272,16 @@ mod tests {
         sender1.send("Hello".to_string());
         sender2.send(42);
 
-        let receiver1 = pin!(receiver1);
-        let receiver2 = pin!(receiver2);
+        let mut receiver1 = Box::pin(receiver1);
+        let mut receiver2 = Box::pin(receiver2);
 
         let mut cx = task::Context::from_waker(Waker::noop());
 
         assert_eq!(
-            receiver1.poll(&mut cx),
+            receiver1.as_mut().poll(&mut cx),
             task::Poll::Ready(Ok("Hello".to_string()))
         );
-        assert_eq!(receiver2.poll(&mut cx), task::Poll::Ready(Ok(42)));
+        assert_eq!(receiver2.as_mut().poll(&mut cx), task::Poll::Ready(Ok(42)));
     }
 
     #[test]
@@ -296,7 +295,7 @@ mod tests {
         let (_sender3, _receiver3) = lake.rent::<f64>();
 
         let mut receiver1 = Box::pin(receiver1);
-        let mut receiver2 = pin!(receiver2);
+        let mut receiver2 = Box::pin(receiver2);
 
         let mut cx = task::Context::from_waker(Waker::noop());
 

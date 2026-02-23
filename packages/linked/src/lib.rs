@@ -347,7 +347,7 @@
 //! The linked object pattern does not change the fact that synchronized state is expensive.
 //! Whenever possible, linked objects should operate on local state for optimal efficiency.
 //!
-//! Let's extend `Thing` from above with a local counter that counts the number of times the value
+//! Let us extend `Thing` from above with a local counter that counts the number of times the value
 //! has been modified via the current instance. This is local behavior that does not require any
 //! synchronization with other instances.
 //!

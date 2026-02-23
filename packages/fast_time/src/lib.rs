@@ -7,7 +7,7 @@
 //! The clock prioritizes efficiency over absolute precision, making it ideal for applications
 //! that need to capture thousands of timestamps per second.
 //!
-//! # Key Features
+//! # Key features
 //!
 //! - **Low overhead**: Optimized for rapid, repeated timestamp capture on supported platforms
 //! - **Monotonic timestamps**: Guarantees that timestamps always increase
@@ -31,7 +31,7 @@
 //! | Windows                  |        2 ns |       25 ns |
 //! | Linux                    |        6 ns |       19 ns |
 //!
-//! # Basic Usage
+//! # Basic usage
 //!
 //! ```rust
 //! use fast_time::Clock;

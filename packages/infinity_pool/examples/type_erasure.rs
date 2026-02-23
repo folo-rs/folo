@@ -72,7 +72,8 @@ fn demonstrate_mixed_handles() {
     let shared_typed_clone = shared_typed.clone();
     let shared_erased = shared_typed.clone().erase();
 
-    println!("\nMixed handles demonstration:");
+    println!();
+    println!("Mixed handles demonstration:");
     println!("Created 1 typed handle + 2 clones (1 typed, 1 erased)");
 
     // Both typed handles can access the resource.

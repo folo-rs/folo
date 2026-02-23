@@ -2,8 +2,9 @@
 //
 // This module contains logic for executing subcommands with package information.
 
+use std::io;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 
 use crate::detection::DetectedPackage;
 
@@ -12,10 +13,10 @@ pub(crate) fn execute_with_cargo_args(
     working_dir: &Path,
     detected_package: &DetectedPackage,
     subcommand: &[String],
-) -> Result<std::process::ExitStatus, std::io::Error> {
+) -> Result<ExitStatus, io::Error> {
     if subcommand.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
             "No subcommand provided",
         ));
     }
@@ -75,10 +76,10 @@ pub(crate) fn execute_with_env_var(
     env_var: &str,
     detected_package: &DetectedPackage,
     subcommand: &[String],
-) -> Result<std::process::ExitStatus, std::io::Error> {
+) -> Result<ExitStatus, io::Error> {
     let Some(first_arg) = subcommand.first() else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
             "No subcommand provided",
         ));
     };
@@ -209,17 +210,15 @@ edition = "2021"
     #[test]
     fn execute_with_cargo_args_no_subcommand_returns_error() {
         let result = execute_with_cargo_args(Path::new("."), &DetectedPackage::Workspace, &[]);
-        assert!(result.is_err());
         let error = result.unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
     fn execute_with_env_var_no_subcommand_returns_error() {
         let result =
             execute_with_env_var(Path::new("."), "TEST_ENV", &DetectedPackage::Workspace, &[]);
-        assert!(result.is_err());
         let error = result.unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 }

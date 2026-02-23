@@ -98,7 +98,7 @@ mod tests {
         assert!(pool.is_empty());
         assert_eq!(pool.capacity(), 0);
 
-        // Verify it's functional
+        // Verify it is functional
         let handle = pool.insert(123_u32);
         assert_eq!(unsafe { *handle.as_ref() }, 123);
         // SAFETY: Handle is valid and from this pool

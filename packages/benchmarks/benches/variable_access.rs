@@ -120,7 +120,7 @@ fn entrypoint(c: &mut Criterion) {
     group.bench_function("local_unsafe_cell", |b| {
         b.iter(|| {
             assert_eq!(
-                // SAFETY: It's all good.
+                // SAFETY: It is all good.
                 black_box(unsafe { *local_unsafe_cell.get() }),
                 EXPECTED_VALUE
             );

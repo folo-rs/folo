@@ -81,7 +81,8 @@ fn main() {
 
     // Access measurement outputs
     let measure_count = results.measure_outputs().count();
-    println!("\nCollected {measure_count} resource usage measurement reports");
+    println!();
+    println!("Collected {measure_count} resource usage measurement reports");
 
     // Demonstrate accessing the individual reports
     for (i, output) in results.measure_outputs().enumerate() {

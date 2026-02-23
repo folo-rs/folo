@@ -102,7 +102,7 @@ fn multithreaded_allocations_show_span_differences() {
         for i in 0..MAIN_THREAD_ALLOCATIONS {
             #[expect(
                 clippy::cast_possible_truncation,
-                reason = "small test values won't truncate"
+                reason = "small test values will not truncate"
             )]
             let data = vec![i as u8; 100];
             black_box(data);
@@ -110,7 +110,7 @@ fn multithreaded_allocations_show_span_differences() {
 
         // Wait for all threads to complete
         for handle in handles {
-            handle.join().expect("thread should complete successfully");
+            handle.join().unwrap();
         }
     };
 
@@ -165,7 +165,7 @@ fn mixed_span_types_in_multithreaded_context() {
             // Also allocate on main thread
             let data = vec![0_u8; 100];
             black_box(data);
-            handle.join().expect("thread should complete successfully");
+            handle.join().unwrap();
         } else {
             let _span = mixed_op.measure_thread();
             // Spawn a thread that allocates memory (will not be captured by thread span)
@@ -176,7 +176,7 @@ fn mixed_span_types_in_multithreaded_context() {
             // Only main thread allocation should be captured
             let data = vec![0_u8; 100];
             black_box(data);
-            handle.join().expect("thread should complete successfully");
+            handle.join().unwrap();
         }
     }
 
@@ -252,7 +252,7 @@ fn report_mean_with_known_allocations() {
     assert!(mean_bytes > 0);
 
     // Basic sanity check: mean should be total / iterations (integer division is intentional)
-    #[allow(
+    #[expect(
         clippy::integer_division,
         reason = "Integer division is intended for mean calculation"
     )]
@@ -300,8 +300,8 @@ fn process_report_includes_allocations_from_multiple_threads() {
         let main_alloc = vec![2_u8; 64];
         black_box(&main_alloc);
 
-        let a_bytes = handle_a.join().expect("thread A joined");
-        let b_bytes = handle_b.join().expect("thread B joined");
+        let a_bytes = handle_a.join().unwrap();
+        let b_bytes = handle_b.join().unwrap();
 
         // Basic sanity: ensure we actually performed the expected sizes.
         assert_eq!(a_bytes, THREAD_A_ALLOCS * SIZE_A);

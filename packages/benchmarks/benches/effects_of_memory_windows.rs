@@ -138,7 +138,7 @@ mod windows {
         }
     }
 
-    // SAFETY: It just complains due to the pointers - that's fine, all is well.
+    // SAFETY: It just complains due to the pointers - that is fine, all is well.
     unsafe impl Send for AllocPerThreadHeap {}
 
     /// Allocates and frees memory on the a custom per-thread thread-safe Windows heap.
@@ -180,7 +180,7 @@ mod windows {
         }
     }
 
-    // SAFETY: It just complains due to the pointers - that's fine, all is well.
+    // SAFETY: It just complains due to the pointers - that is fine, all is well.
     unsafe impl Send for AllocPerThreadHeapThreadSafe {}
 
     /// Allocates and frees memory on the a custom per-thread thread-safe Windows heap.
@@ -219,7 +219,7 @@ mod windows {
         }
     }
 
-    // SAFETY: It just complains due to the pointers - that's fine, all is well.
+    // SAFETY: It just complains due to the pointers - that is fine, all is well.
     unsafe impl Send for AllocPerMemoryRegionHeap {}
 
     thread_local!(static PER_THREAD_HEAP_THREAD_SAFE: ThreadSafeCustomHeap = ThreadSafeCustomHeap::new());

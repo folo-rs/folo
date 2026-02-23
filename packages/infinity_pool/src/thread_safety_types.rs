@@ -3,6 +3,7 @@
 //! To simplify these assertions, we define type aliases for common thread
 //! safety related types here.
 
+use std::cell::Cell;
 use std::marker::PhantomData;
 
 use static_assertions::{assert_impl_all, assert_not_impl_any};
@@ -13,7 +14,7 @@ assert_impl_all!(SendAndSync: Send, Sync);
 pub(crate) type NotSendNotSync = *const ();
 assert_not_impl_any!(NotSendNotSync: Send, Sync);
 
-pub(crate) type SendNotSync = std::cell::Cell<()>;
+pub(crate) type SendNotSync = Cell<()>;
 assert_impl_all!(SendNotSync: Send);
 assert_not_impl_any!(SendNotSync: Sync);
 

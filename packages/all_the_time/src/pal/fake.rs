@@ -44,10 +44,7 @@ impl FakePlatform {
     /// This affects all clones of this platform, allowing tests to simulate
     /// time progression during measurement.
     pub(crate) fn set_thread_time(&self, time: Duration) {
-        self.state
-            .lock()
-            .expect("FakePlatform state lock should not be poisoned")
-            .thread_time = time;
+        self.state.lock().unwrap().thread_time = time;
     }
 
     /// Sets the process processor time value.
@@ -55,27 +52,18 @@ impl FakePlatform {
     /// This affects all clones of this platform, allowing tests to simulate
     /// time progression during measurement.
     pub(crate) fn set_process_time(&self, time: Duration) {
-        self.state
-            .lock()
-            .expect("FakePlatform state lock should not be poisoned")
-            .process_time = time;
+        self.state.lock().unwrap().process_time = time;
     }
 }
 
 #[cfg(test)]
 impl Platform for FakePlatform {
     fn thread_time(&self) -> Duration {
-        self.state
-            .lock()
-            .expect("FakePlatform state lock should not be poisoned")
-            .thread_time
+        self.state.lock().unwrap().thread_time
     }
 
     fn process_time(&self) -> Duration {
-        self.state
-            .lock()
-            .expect("FakePlatform state lock should not be poisoned")
-            .process_time
+        self.state.lock().unwrap().process_time
     }
 }
 

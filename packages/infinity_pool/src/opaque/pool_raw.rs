@@ -898,7 +898,7 @@ mod tests {
         assert_eq!(iter.len(), 1);
 
         // First item should be the object we inserted
-        let ptr = iter.next().expect("should have one item");
+        let ptr = iter.next().unwrap();
 
         let value = unsafe { ptr.cast::<u32>().as_ref() };
         assert_eq!(*value, 42);
@@ -931,7 +931,7 @@ mod tests {
         let mut pool = RawOpaquePool::with_layout_of::<u8>();
 
         // Insert enough items to span multiple slabs
-        #[allow(
+        #[expect(
             clippy::collection_is_never_read,
             reason = "handles are used for ownership"
         )]
@@ -1049,15 +1049,15 @@ mod tests {
         let mut iter = pool.iter();
 
         // Iterate from the back
-        let last_ptr = iter.next_back().expect("should have last item");
+        let last_ptr = iter.next_back().unwrap();
         let last_value = unsafe { *last_ptr.cast::<u32>().as_ref() };
         assert_eq!(last_value, 300);
 
-        let middle_ptr = iter.next_back().expect("should have middle item");
+        let middle_ptr = iter.next_back().unwrap();
         let middle_value = unsafe { *middle_ptr.cast::<u32>().as_ref() };
         assert_eq!(middle_value, 200);
 
-        let first_ptr = iter.next_back().expect("should have first item");
+        let first_ptr = iter.next_back().unwrap();
         let first_value = unsafe { *first_ptr.cast::<u32>().as_ref() };
         assert_eq!(first_value, 100);
 
@@ -1081,31 +1081,31 @@ mod tests {
         assert_eq!(iter.len(), 5);
 
         // Get first from front
-        let first_ptr = iter.next().expect("should have first item");
+        let first_ptr = iter.next().unwrap();
         let first_value = unsafe { *first_ptr.cast::<u32>().as_ref() };
         assert_eq!(first_value, 100);
         assert_eq!(iter.len(), 4);
 
         // Get last from back
-        let last_ptr = iter.next_back().expect("should have last item");
+        let last_ptr = iter.next_back().unwrap();
         let last_value = unsafe { *last_ptr.cast::<u32>().as_ref() };
         assert_eq!(last_value, 500);
         assert_eq!(iter.len(), 3);
 
         // Get second from front
-        let second_ptr = iter.next().expect("should have second item");
+        let second_ptr = iter.next().unwrap();
         let second_value = unsafe { *second_ptr.cast::<u32>().as_ref() };
         assert_eq!(second_value, 200);
         assert_eq!(iter.len(), 2);
 
         // Get fourth from back
-        let fourth_ptr = iter.next_back().expect("should have fourth item");
+        let fourth_ptr = iter.next_back().unwrap();
         let fourth_value = unsafe { *fourth_ptr.cast::<u32>().as_ref() };
         assert_eq!(fourth_value, 400);
         assert_eq!(iter.len(), 1);
 
         // Get middle item
-        let middle_ptr = iter.next().expect("should have middle item");
+        let middle_ptr = iter.next().unwrap();
         let middle_value = unsafe { *middle_ptr.cast::<u32>().as_ref() };
         assert_eq!(middle_value, 300);
         assert_eq!(iter.len(), 0);

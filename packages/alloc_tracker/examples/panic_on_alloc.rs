@@ -44,7 +44,7 @@ fn main() {
     println!("Sum of modified data: {sum}");
 
     // The panic flag is still enabled, so the next allocation will panic
-    // Let's disable it manually before doing more allocations
+    // Let us disable it manually before doing more allocations
     println!("Disabling panic-on-next-allocation...");
     panic_on_next_alloc(false);
 
@@ -61,9 +61,9 @@ fn main() {
     println!("Demonstrating one-shot behavior - enabling and then allocating twice...");
     panic_on_next_alloc(true);
 
-    // First allocation would panic (but we'll skip it in this safe example)
+    // First allocation would panic (but we will skip it in this safe example)
     // The second allocation would work because the flag auto-resets
-    println!("Flag is enabled but we won't actually allocate to avoid panic");
+    println!("Flag is enabled but we will not actually allocate to avoid panic");
     panic_on_next_alloc(false); // Disable to continue safely
 
     println!("Example completed successfully!");

@@ -522,7 +522,7 @@ impl BuildTargetPlatform {
             };
 
             // In theory, it could still have failed with "insufficient buffer" because the set of
-            // processors available to us can change at any time. Super unlikely but let's be safe.
+            // processors available to us can change at any time. Super unlikely but let us be safe.
             match check_logical_processor_info_result(&real_result) {
                 LogicalProcessorInfoResult::Retry => continue,
                 LogicalProcessorInfoResult::Proceed => {}

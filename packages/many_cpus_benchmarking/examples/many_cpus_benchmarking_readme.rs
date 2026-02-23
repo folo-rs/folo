@@ -31,7 +31,7 @@ impl Payload for MyBenchmark {
 }
 
 // Run benchmarks with different work distribution modes
-#[allow(dead_code, reason = "function shown for documentation purposes")]
+#[expect(dead_code, reason = "function shown for documentation purposes")]
 fn benchmark(c: &mut criterion::Criterion) {
     execute_runs::<MyBenchmark, 1>(c, WorkDistribution::all());
 }

@@ -5,7 +5,7 @@
 //! purpose and intentionally omits features like iteration, complex slicing, or bit
 //! arithmetic.
 
-use std::ops::RangeBounds;
+use std::ops::{Bound, RangeBounds};
 
 use num_integer::Integer;
 
@@ -128,15 +128,15 @@ impl VacancyMap {
     /// Returns `None` if the range is out of bounds.
     pub(crate) fn get(&self, range: impl RangeBounds<usize>) -> Option<VacancyMapSlice<'_>> {
         let start = match range.start_bound() {
-            std::ops::Bound::Included(&s) => s,
-            std::ops::Bound::Excluded(&s) => s.checked_add(1)?,
-            std::ops::Bound::Unbounded => 0,
+            Bound::Included(&s) => s,
+            Bound::Excluded(&s) => s.checked_add(1)?,
+            Bound::Unbounded => 0,
         };
 
         let end = match range.end_bound() {
-            std::ops::Bound::Included(&e) => e.checked_add(1)?,
-            std::ops::Bound::Excluded(&e) => e,
-            std::ops::Bound::Unbounded => self.len_bits,
+            Bound::Included(&e) => e.checked_add(1)?,
+            Bound::Excluded(&e) => e,
+            Bound::Unbounded => self.len_bits,
         };
 
         if start > end || end > self.len_bits {
