@@ -10,8 +10,8 @@ target_package := if package == "" { " --workspace" } else { " -p " + package }
 _default:
     @just --list
 
-import 'just_basics.just'
-import 'just_quality.just'
-import 'just_release.just'
-import 'just_setup.just'
-import 'just_testing.just'
+import 'justfiles/just_basics.just'
+import 'justfiles/just_quality.just'
+import 'justfiles/just_release.just'
+import 'justfiles/just_setup.just'
+import 'justfiles/just_testing.just'

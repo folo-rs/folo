@@ -25,6 +25,7 @@ heapless
 Initializable
 itertools
 JOBOBJECT
+justfiles
 libc
 lifecycles
 mandb
