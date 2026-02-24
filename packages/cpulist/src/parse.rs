@@ -29,54 +29,58 @@ fn parse_part(part: &str) -> crate::Result<Vec<Item>> {
 
 fn parse_range(range_start: &str, range_end_inc: &str) -> crate::Result<Vec<Item>> {
     // This is a range, with optional stride.
-    let range_start = range_start
-        .parse::<Item>()
-        .map_err(|inner| crate::Error::InvalidSyntax {
-            invalid_value: range_start.to_string(),
-            problem: format!("range start could not be parsed as an integer: {inner}"),
-        })?;
+    let range_start = range_start.parse::<Item>().map_err(|inner| {
+        crate::Error::caused_by(
+            range_start.to_string(),
+            "range start could not be parsed as an integer".to_string(),
+            inner,
+        )
+    })?;
 
     // If no stride is specified, we just default to 1 and pretend it was specified.
     let (range_end_inc, stride) =
         if let Some((range_end_inc, stride)) = range_end_inc.split_once(':') {
             (
-                range_end_inc
-                    .parse::<Item>()
-                    .map_err(|inner| crate::Error::InvalidSyntax {
-                        invalid_value: range_end_inc.to_string(),
-                        problem: format!("range end could not be parsed as an integer: {inner}"),
-                    })?,
-                stride
-                    .parse::<Item>()
-                    .map_err(|inner| crate::Error::InvalidSyntax {
-                        invalid_value: stride.to_string(),
-                        problem: format!("range stride could not be parsed as an integer: {inner}"),
-                    })?,
+                range_end_inc.parse::<Item>().map_err(|inner| {
+                    crate::Error::caused_by(
+                        range_end_inc.to_string(),
+                        "range end could not be parsed as an integer".to_string(),
+                        inner,
+                    )
+                })?,
+                stride.parse::<Item>().map_err(|inner| {
+                    crate::Error::caused_by(
+                        stride.to_string(),
+                        "range stride could not be parsed as an integer".to_string(),
+                        inner,
+                    )
+                })?,
             )
         } else {
             (
-                range_end_inc
-                    .parse::<Item>()
-                    .map_err(|inner| crate::Error::InvalidSyntax {
-                        invalid_value: range_end_inc.to_string(),
-                        problem: format!("range end could not be parsed as an integer: {inner}"),
-                    })?,
+                range_end_inc.parse::<Item>().map_err(|inner| {
+                    crate::Error::caused_by(
+                        range_end_inc.to_string(),
+                        "range end could not be parsed as an integer".to_string(),
+                        inner,
+                    )
+                })?,
                 1,
             )
         };
 
     if stride == 0 {
-        return Err(crate::Error::InvalidSyntax {
-            invalid_value: stride.to_string(),
-            problem: "range stride must not be zero".to_string(),
-        });
+        return Err(crate::Error::new(
+            stride.to_string(),
+            "range stride must not be zero".to_string(),
+        ));
     }
 
     if range_start > range_end_inc {
-        return Err(crate::Error::InvalidSyntax {
-            invalid_value: format!("{range_start}-{range_end_inc}"),
-            problem: "range start must be <= end".to_string(),
-        });
+        return Err(crate::Error::new(
+            format!("{range_start}-{range_end_inc}"),
+            "range start must be <= end".to_string(),
+        ));
     }
 
     Ok((range_start..=range_end_inc)
@@ -85,14 +89,13 @@ fn parse_range(range_start: &str, range_end_inc: &str) -> crate::Result<Vec<Item
 }
 
 fn parse_single(single_item_part: &str) -> crate::Result<Item> {
-    single_item_part
-        .parse::<Item>()
-        .map_err(|inner| crate::Error::InvalidSyntax {
-            invalid_value: single_item_part.to_string(),
-            problem: format!(
-                "part was not a range but could not be parsed as an integer either: {inner}"
-            ),
-        })
+    single_item_part.parse::<Item>().map_err(|inner| {
+        crate::Error::caused_by(
+            single_item_part.to_string(),
+            "part was not a range but could not be parsed as an integer either".to_string(),
+            inner,
+        )
+    })
 }
 
 #[cfg(test)]

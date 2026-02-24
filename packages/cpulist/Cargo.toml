@@ -19,7 +19,7 @@ default = []
 [dependencies]
 itertools = { workspace = true }
 new_zealand = { workspace = true }
-thiserror = { workspace = true }
+ohno = { workspace = true }
 
 [dev-dependencies]
 static_assertions = { workspace = true }

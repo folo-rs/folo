@@ -52,6 +52,7 @@ nm = { version = "0.1.27", path = "packages/nm", default-features = false }
 nonempty = { version = "0.12", default-features = false }
 num-integer = { version = "0.1.46", default-features = false }
 num-traits = { version = "0.2.19", default-features = false }
+ohno = { version = "0.3", default-features = false }
 oneshot = { version = "0.1", default-features = false, features = [
     "std",
     "async",
@@ -76,7 +77,6 @@ spin_on = { version = "0.1.1", default-features = false }
 static_assertions = { version = "1", default-features = false }
 syn = { version = "2.0", default-features = false }
 tempfile = { version = "3.20", default-features = false }
-thiserror = { version = "2.0", default-features = false }
 threadpool = { version = "1.8.1", default-features = false }
 tick = { version = "0.1", default-features = false }
 tokio = { version = "1.43", default-features = false }

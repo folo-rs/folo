@@ -490,8 +490,8 @@ version = "1.0.4"
 dependencies = [
  "itertools 0.14.0",
  "new_zealand",
+ "ohno",
  "static_assertions",
- "thiserror",
 ]
 
 [[package]]
@@ -1313,6 +1313,27 @@ checksum = "91df4bbde75afed763b708b7eee1e8e7651e02d97f6d5dd763e89367e957b23b"
 dependencies = [
  "hermit-abi",
  "libc",
+]
+
+[[package]]
+name = "ohno"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ded938ea5c95b58460485bda64557bdcbf9067099fd7003ae23af0620bdc7a48"
+dependencies = [
+ "ohno_macros",
+ "typeid",
+]
+
+[[package]]
+name = "ohno_macros"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c13afa6566040d0a66174d23ddd75fdee2c93e205cd57ff9abbecfb709014f6b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -2182,6 +2203,12 @@ dependencies = [
  "termcolor",
  "toml",
 ]
+
+[[package]]
+name = "typeid"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc7d623258602320d5c55d1bc22793b57daff0ec7efc270ea7d55ce1d5f5471c"
 
 [[package]]
 name = "ui_tests"

@@ -808,8 +808,7 @@ mod tests {
         let even_from_subset = subset.filter(|p| p.id() % 2 == 0).unwrap();
 
         let subset_ids: foldhash::HashSet<_> = subset.iter().map(Processor::id).collect();
-        let even_ids: foldhash::HashSet<_> =
-            even_from_subset.iter().map(Processor::id).collect();
+        let even_ids: foldhash::HashSet<_> = even_from_subset.iter().map(Processor::id).collect();
 
         // All IDs in the filtered set must be even.
         for id in &even_ids {
