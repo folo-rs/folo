@@ -2,7 +2,7 @@
 name = "nm"
 description = "Minimalistic high-performance metrics collection in highly concurrent environments"
 publish = true
-version = "0.1.27"
+version = "0.1.28"
 
 authors.workspace = true
 edition.workspace = true
