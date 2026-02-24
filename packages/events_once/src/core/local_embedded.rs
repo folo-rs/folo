@@ -72,10 +72,26 @@ impl<T: 'static> fmt::Debug for EmbeddedLocalEvent<T> {
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
+#[expect(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
 mod tests {
     use static_assertions::assert_not_impl_any;
 
     use super::*;
+    use crate::LocalEvent;
 
     assert_not_impl_any!(EmbeddedLocalEvent<u32>: Send, Sync);
+
+    #[test]
+    fn default_creates_usable_container() {
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::default());
+
+        let (sender, receiver) = unsafe { LocalEvent::placed(place.as_mut()) };
+        let mut receiver = Box::pin(receiver);
+
+        sender.send(42);
+
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, std::task::Poll::Ready(Ok(42))));
+    }
 }

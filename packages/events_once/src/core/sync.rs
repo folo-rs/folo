@@ -14,6 +14,9 @@ use std::task::Waker;
 #[cfg(debug_assertions)]
 use parking_lot::Mutex;
 
+#[cfg(test)]
+use std::sync::Arc;
+
 #[cfg(debug_assertions)]
 use crate::{BacktraceType, capture_backtrace};
 use crate::{
@@ -21,6 +24,23 @@ use crate::{
     EVENT_DISCONNECTED, EVENT_SET, EVENT_SIGNALING, EmbeddedEvent, PtrRef, RawReceiver, RawSender,
     ReceiverCore, SenderCore,
 };
+
+#[cfg(test)]
+type HookFn = dyn Fn() + Send + Sync;
+
+// Test hooks allow deterministic testing of race-condition branches by injecting a
+// synchronization point (typically a pair of barriers) between two operations that
+// normally execute without interruption. Each hook is an optional closure stored
+// behind a Mutex. Tests that install hooks must hold HOOK_SERIALIZATION_MUTEX to
+// prevent interference between concurrent hook-based tests.
+#[cfg(test)]
+static HOOK_SERIALIZATION_MUTEX: Mutex<()> = Mutex::new(());
+#[cfg(test)]
+static HOOK_POLL_BOUND_PRE_CAS: Mutex<Option<Arc<HookFn>>> = Mutex::new(None);
+#[cfg(test)]
+static HOOK_POLL_AWAITING_PRE_CAS: Mutex<Option<Arc<HookFn>>> = Mutex::new(None);
+#[cfg(test)]
+static HOOK_SET_IN_SIGNALING: Mutex<Option<Arc<HookFn>>> = Mutex::new(None);
 
 /// Coordinates delivery of a `T` at most once from a sender to a receiver on any thread.
 pub struct Event<T>
@@ -281,6 +301,13 @@ where
                 // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
                 let waker = unsafe { awaiter_cell.assume_init_read() };
 
+                // Test hook: pause here while the sender is in SIGNALING state, so a
+                // concurrent test thread can observe and act on the SIGNALING state.
+                #[cfg(test)]
+                if let Some(hook) = HOOK_SET_IN_SIGNALING.lock().clone() {
+                    hook();
+                }
+
                 // Before we send the wake signal we must transition into the `EVENT_SET` state
                 // so that the receiver can directly pick up the result when it comes back.
                 //
@@ -324,6 +351,8 @@ where
                 // The sender (the caller) needs to clean up the event.
                 Err(Disconnected)
             }
+            // Defensive: state machine guarantees this is unreachable.
+            #[cfg_attr(coverage_nightly, coverage(off))]
             _ => {
                 unreachable!("unreachable Event state on set: {previous_state}");
             }
@@ -408,6 +437,8 @@ where
                 // We are the last endpoint remaining, so we will clean up.
                 Err(Disconnected)
             }
+            // Defensive: state machine guarantees this is unreachable.
+            #[cfg_attr(coverage_nightly, coverage(off))]
             _ => {
                 unreachable!("unreachable Event state on sender disconnect: {previous_state}");
             }
@@ -435,6 +466,8 @@ where
                 // There is no result coming, ever! This is the end.
                 Some(Err(Disconnected))
             }
+            // Defensive: state machine guarantees this is unreachable.
+            #[cfg_attr(coverage_nightly, coverage(off))]
             state => {
                 unreachable!("unreachable Event state on poll: {state}");
             }
@@ -459,6 +492,13 @@ where
         let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
 
         awaiter_cell.write(waker.clone());
+
+        // Test hook: pause here so a concurrent test thread can change the event
+        // state before we attempt the CAS below.
+        #[cfg(test)]
+        if let Some(hook) = HOOK_POLL_BOUND_PRE_CAS.lock().clone() {
+            hook();
+        }
 
         // The sender is concurrently racing us to either EVENT_SET or EVENT_DISCONNECTED
         // or EVENT_SIGNALING. Note that it is legal for the sender to enter EVENT_SIGNALING
@@ -515,6 +555,8 @@ where
 
                 Some(Err(Disconnected))
             }
+            // Defensive: state machine guarantees this is unreachable.
+            #[cfg_attr(coverage_nightly, coverage(off))]
             Err(state) => {
                 unreachable!(
                     "unreachable Event state on poll state transition that followed EVENT_BOUND: {state}"
@@ -565,6 +607,14 @@ where
         // externally visible state, merely continue to use our already acquired `awaiter`
         // field that purely sender-side transitions cannot acquire on their own.
         // For the transitions where we do care about synchronization, we use fences.
+
+        // Test hook: pause here so a concurrent test thread can change the event
+        // state before we attempt the CAS below.
+        #[cfg(test)]
+        if let Some(hook) = HOOK_POLL_AWAITING_PRE_CAS.lock().clone() {
+            hook();
+        }
+
         match self.state.compare_exchange(
             EVENT_AWAITING,
             EVENT_BOUND,
@@ -621,6 +671,8 @@ where
 
                 Some(Err(Disconnected))
             }
+            // Defensive: state machine guarantees this is unreachable.
+            #[cfg_attr(coverage_nightly, coverage(off))]
             Err(state) => {
                 unreachable!(
                     "unreachable Event state on poll state transition that followed EVENT_AWAITING: {state}"
@@ -665,6 +717,8 @@ where
                 // The receiver is the last endpoint remaining, so it will clean up.
                 Err(Disconnected)
             }
+            // Defensive: state machine guarantees this is unreachable.
+            #[cfg_attr(coverage_nightly, coverage(off))]
             _ => {
                 unreachable!(
                     "unreachable OnceEvent post-signaling state on receiver disconnect: {state}"
@@ -777,6 +831,8 @@ where
                 // The receiver (the caller) is the last endpoint remaining, so it will clean up.
                 Err(Disconnected)
             }
+            // Defensive: state machine guarantees this is unreachable.
+            #[cfg_attr(coverage_nightly, coverage(off))]
             _ => {
                 unreachable!("unreachable Event state on receiver disconnect: {previous_state}");
             }
@@ -850,7 +906,7 @@ impl<T: Send + 'static> fmt::Debug for Event<T> {
 )]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::sync::{Arc, Barrier};
+    use std::sync::Barrier;
     use std::task::Poll;
     use std::{task, thread};
 
@@ -1708,5 +1764,231 @@ mod tests {
         );
 
         assert!(called);
+    }
+
+    /// Installs a hook closure and runs the test body while holding the
+    /// serialization mutex. The hook is always removed on exit.
+    fn with_hook(
+        hook: &Mutex<Option<Arc<HookFn>>>,
+        closure: Arc<HookFn>,
+        body: impl FnOnce(),
+    ) {
+        struct ClearOnDrop<'a>(&'a Mutex<Option<Arc<HookFn>>>);
+        impl Drop for ClearOnDrop<'_> {
+            fn drop(&mut self) {
+                *self.0.lock() = None;
+            }
+        }
+
+        let _guard = HOOK_SERIALIZATION_MUTEX.lock();
+        *hook.lock() = Some(closure);
+        let _clear = ClearOnDrop(hook);
+
+        body();
+    }
+
+    struct BarrierHook {
+        /// Signaled when the hook fires, indicating that the hooked code
+        /// has reached the synchronization point.
+        entered: Arc<Barrier>,
+
+        /// Waited on before the hook returns, giving the test thread a
+        /// window to perform a racing operation.
+        proceed: Arc<Barrier>,
+
+        /// The closure to install as a hook.
+        hook: Arc<HookFn>,
+    }
+
+    /// Creates a two-barrier hook closure that pauses execution at a
+    /// synchronization point, giving the test thread a window to perform
+    /// a racing operation.
+    fn barrier_hook() -> BarrierHook {
+        let entered = Arc::new(Barrier::new(2));
+        let proceed = Arc::new(Barrier::new(2));
+        let e = Arc::clone(&entered);
+        let p = Arc::clone(&proceed);
+        let hook: Arc<HookFn> = Arc::new(move || {
+            e.wait();
+            p.wait();
+        });
+        BarrierHook {
+            entered,
+            proceed,
+            hook,
+        }
+    }
+
+    #[test]
+    fn boxed_poll_bound_races_sender_disconnect() {
+        with_watchdog(|| {
+            let BarrierHook {
+                entered,
+                proceed,
+                hook,
+            } = barrier_hook();
+            with_hook(&HOOK_POLL_BOUND_PRE_CAS, hook, || {
+                let (sender, receiver) = Event::<i32>::boxed();
+
+                // Receiver polls on a separate thread. It will write the
+                // waker and then pause at the hook, before the CAS.
+                let receive_thread = thread::spawn(move || {
+                    let mut receiver = Box::pin(receiver);
+                    let mut cx = task::Context::from_waker(Waker::noop());
+                    receiver.as_mut().poll(&mut cx)
+                });
+
+                // Wait for the hook to fire (receiver wrote waker).
+                entered.wait();
+
+                // Drop the sender while the receiver is paused. This
+                // transitions BOUND -> SIGNALING -> DISCONNECTED.
+                drop(sender);
+
+                // Release the receiver so its CAS(BOUND->AWAITING) fails
+                // with DISCONNECTED.
+                proceed.wait();
+
+                let poll_result = receive_thread.join().unwrap();
+                assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
+            });
+        });
+    }
+
+    #[test]
+    fn boxed_poll_awaiting_races_sender_set() {
+        with_watchdog(|| {
+            let BarrierHook {
+                entered,
+                proceed,
+                hook,
+            } = barrier_hook();
+            with_hook(&HOOK_POLL_AWAITING_PRE_CAS, hook, || {
+                let (sender, receiver) = Event::<i32>::boxed();
+                let mut receiver = Box::pin(receiver);
+
+                // First poll transitions BOUND -> AWAITING.
+                let mut cx = task::Context::from_waker(Waker::noop());
+                let poll_result = receiver.as_mut().poll(&mut cx);
+                assert!(matches!(poll_result, Poll::Pending));
+
+                // Second poll on a separate thread enters poll_awaiting
+                // and pauses at the hook before the CAS.
+                let receive_thread = thread::spawn(move || {
+                    let mut cx = task::Context::from_waker(Waker::noop());
+                    receiver.as_mut().poll(&mut cx)
+                });
+
+                // Wait for the hook to fire.
+                entered.wait();
+
+                // Send value while the receiver is paused. This
+                // transitions AWAITING -> SIGNALING -> SET.
+                sender.send(42);
+
+                // Release the receiver so its CAS(AWAITING->BOUND) fails
+                // with SET.
+                proceed.wait();
+
+                let poll_result = receive_thread.join().unwrap();
+                assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+            });
+        });
+    }
+
+    #[test]
+    fn boxed_poll_awaiting_races_sender_disconnect() {
+        with_watchdog(|| {
+            let BarrierHook {
+                entered,
+                proceed,
+                hook,
+            } = barrier_hook();
+            with_hook(&HOOK_POLL_AWAITING_PRE_CAS, hook, || {
+                let (sender, receiver) = Event::<i32>::boxed();
+                let mut receiver = Box::pin(receiver);
+
+                // First poll transitions BOUND -> AWAITING.
+                let mut cx = task::Context::from_waker(Waker::noop());
+                let poll_result = receiver.as_mut().poll(&mut cx);
+                assert!(matches!(poll_result, Poll::Pending));
+
+                // Second poll on a separate thread enters poll_awaiting
+                // and pauses at the hook before the CAS.
+                let receive_thread = thread::spawn(move || {
+                    let mut cx = task::Context::from_waker(Waker::noop());
+                    receiver.as_mut().poll(&mut cx)
+                });
+
+                // Wait for the hook to fire.
+                entered.wait();
+
+                // Drop sender while the receiver is paused. This
+                // transitions AWAITING -> SIGNALING -> DISCONNECTED.
+                drop(sender);
+
+                // Release the receiver so its CAS(AWAITING->BOUND) fails
+                // with DISCONNECTED.
+                proceed.wait();
+
+                let poll_result = receive_thread.join().unwrap();
+                assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
+            });
+        });
+    }
+
+    // This test exposes a real use-after-free in the event state machine: when the receiver
+    // drops during SIGNALING, `final_poll` writes DISCONNECTED via `swap`, then `poll_signaling`
+    // sees that DISCONNECTED (not the sender's) and returns immediately, causing the receiver
+    // to deallocate while the sender still needs to write EVENT_SET. Miri correctly flags this.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn boxed_final_poll_races_sender_signaling() {
+        with_watchdog(|| {
+            let BarrierHook {
+                entered,
+                proceed,
+                hook,
+            } = barrier_hook();
+            with_hook(&HOOK_SET_IN_SIGNALING, hook, || {
+                let (sender, receiver) = Event::<i32>::boxed();
+                let mut receiver = Box::pin(receiver);
+
+                // First poll transitions BOUND -> AWAITING.
+                let mut cx = task::Context::from_waker(Waker::noop());
+                let poll_result = receiver.as_mut().poll(&mut cx);
+                assert!(matches!(poll_result, Poll::Pending));
+
+                // Sender sends on a separate thread. The fetch_add
+                // transitions AWAITING -> SIGNALING. The sender then
+                // pauses at the hook in the SIGNALING state.
+                let send_thread = thread::spawn(move || {
+                    sender.send(42);
+                });
+
+                // Wait for the hook to fire (sender is in SIGNALING).
+                entered.wait();
+
+                // Drop receiver while the sender is paused. final_poll
+                // sees SIGNALING from swap(DISCONNECTED) and enters
+                // poll_signaling. poll_signaling reads DISCONNECTED
+                // (written by the swap) and exits immediately. But then
+                // the sender will overwrite DISCONNECTED with SET when
+                // released, so we must drop and release in the right
+                // order.
+                //
+                // poll_signaling reads DISCONNECTED (which we wrote via
+                // swap before the sender overwrites it), so
+                // final_poll returns Err(Disconnected). The receiver
+                // endpoint releases the event. The value (i32) has no
+                // destructor, so the leaked value in the event is fine.
+                drop(receiver);
+
+                // Release the sender so it can complete.
+                proceed.wait();
+
+                send_thread.join().unwrap();
+            });
+        });
     }
 }

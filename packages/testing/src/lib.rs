@@ -13,11 +13,14 @@ mod windows;
 #[cfg(windows)]
 pub use windows::*;
 
-/// Runs a test with a 10-second timeout to prevent infinite hangs.
+/// Runs a test with a timeout to prevent infinite hangs.
 ///
 /// This function wraps a test closure with a timeout mechanism. If the test
-/// takes longer than 10 seconds to complete, the process will be terminated
+/// takes longer than the timeout to complete, the process will be terminated
 /// to prevent CI/build systems from hanging.
+///
+/// The timeout is 10 seconds under normal conditions and 60 seconds under
+/// Miri, where thread synchronization primitives are significantly slower.
 ///
 /// When the `MUTATION_TESTING` environment variable is set to "1", the watchdog
 /// is disabled and the test function is executed directly. This allows mutation
@@ -25,7 +28,7 @@ pub use windows::*;
 ///
 /// # Panics
 ///
-/// Panics if the test times out after 10 seconds (when not in mutation testing mode).
+/// Panics if the test exceeds the timeout (when not in mutation testing mode).
 ///
 /// # Example
 ///
@@ -57,8 +60,16 @@ where
         drop(tx.send(result));
     });
 
-    // Wait for either the test to complete or timeout
-    match rx.recv_timeout(Duration::from_secs(10)) {
+    // Miri is dramatically slower for thread synchronization, so we use a
+    // longer timeout to avoid false positives while still catching real hangs.
+    let timeout = if cfg!(miri) {
+        Duration::from_secs(60)
+    } else {
+        Duration::from_secs(10)
+    };
+
+    // Wait for either the test to complete or timeout.
+    match rx.recv_timeout(timeout) {
         Ok(result) => {
             // Test completed successfully, join the thread to clean up
             test_handle.join().expect("Test thread should not panic");

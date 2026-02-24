@@ -295,6 +295,8 @@ impl<T: 'static> LocalEvent<T> {
 
                 Err(Disconnected)
             }
+            // Defensive: state machine guarantees this is unreachable.
+            #[cfg_attr(coverage_nightly, coverage(off))]
             _ => {
                 unreachable!("unreachable LocalEvent state on set: {previous_state}");
             }
@@ -365,6 +367,8 @@ impl<T: 'static> LocalEvent<T> {
                 // There is no result coming, ever! This is the end.
                 Some(Err(Disconnected))
             }
+            // Defensive: state machine guarantees this is unreachable.
+            #[cfg_attr(coverage_nightly, coverage(off))]
             state => {
                 unreachable!("unreachable LocalEvent state on poll: {state}");
             }
@@ -413,6 +417,8 @@ impl<T: 'static> LocalEvent<T> {
                 // The sender is the last endpoint remaining, so it will clean up.
                 Err(Disconnected)
             }
+            // Defensive: state machine guarantees this is unreachable.
+            #[cfg_attr(coverage_nightly, coverage(off))]
             _ => {
                 unreachable!("unreachable LocalEvent state on sender disconnect: {previous_state}");
             }
@@ -492,6 +498,8 @@ impl<T: 'static> LocalEvent<T> {
                 // The receiver is the last endpoint remaining, so it will clean up.
                 Err(Disconnected)
             }
+            // Defensive: state machine guarantees this is unreachable.
+            #[cfg_attr(coverage_nightly, coverage(off))]
             _ => {
                 unreachable!(
                     "unreachable LocalEvent state on receiver disconnect: {previous_state}"
@@ -1024,6 +1032,28 @@ mod tests {
 
         // Should panic - invalid to access receiver after it completes.
         _ = receiver.is_ready();
+    }
+
+    #[test]
+    fn boxed_double_poll_replaces_waker() {
+        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        // First poll transitions BOUND → AWAITING.
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Pending));
+
+        // Second poll enters the EVENT_AWAITING branch (replaces waker).
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Pending));
+
+        sender.send(42);
+
+        // Third poll picks up the value.
+        let poll_result = receiver.as_mut().poll(&mut cx);
+        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
     }
 
     #[cfg(debug_assertions)]
