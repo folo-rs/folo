@@ -259,7 +259,7 @@ It is fine to suppress Clippy and compiler lints in the code if it is justified.
 must have a `reason` field to justify them.
 
 Prefer `expect` over `allow` suppressions, except when applying a broadly-scoped suppression that
-applies to a whole file or module using outer attributes, in which case "allow" is preferred.
+applies to a whole file or module using inner attributes, in which case "allow" is preferred.
 
 # Panic in drop()
 

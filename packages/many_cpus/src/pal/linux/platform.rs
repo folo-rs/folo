@@ -493,16 +493,16 @@ fn parse_v1_cgroup_cpu_quota_and_period_us(
     Some((quota, period))
 }
 
-#[expect(
-    clippy::arithmetic_side_effects,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::indexing_slicing,
-    reason = "we need not worry in tests"
-)]
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    #![allow(
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::indexing_slicing,
+        reason = "we need not worry in tests"
+    )]
     use std::fmt::Write;
 
     use testing::f64_diff_abs;
