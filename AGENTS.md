@@ -568,14 +568,14 @@ one level of subdirectory.
 
 Do not use `version = "1.2.3"` or `workspace = true` when adding a package from the same workspace as a dev-dependency. Within the same workspace, dev-dependencies must always be `path = "../foo"` style path-references.
 
-# Test presence of auto traits via static assertions
+# Test presence of traits via static assertions
 
 Use `static_assertions::assert_impl_all!` and `static_assertions::assert_not_impl_any!` to check
-for the presence or absence of auto traits where the API documentation makes claims about them,
+for the presence or absence of traits where the API documentation makes claims about them,
 for example in terms of being thread-mobile (Send + !Sync), thread-safe (Send + Sync)
 or single-threaded (neither).
 
-If generic type parameters are involved, these assertions should use some randomly selected typical
+If generic type parameters are involved, these assertions should use some arbitrarily selected typical
 types that may be encountered in user code.
 
 # Macros may need public-private visibility

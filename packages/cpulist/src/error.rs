@@ -19,3 +19,27 @@ pub enum Error {
 /// A specialized `Result` type for cpulist operations, returning the crate's
 /// [`Error`] type as the error value.
 pub(crate) type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::fmt::Debug;
+
+    use static_assertions::assert_impl_all;
+
+    use super::*;
+
+    assert_impl_all!(Error: Send, Sync, Debug);
+
+    #[test]
+    fn invalid_syntax_is_error() {
+        let error = Error::InvalidSyntax {
+            invalid_value: "abc".to_string(),
+            problem: "not a number".to_string(),
+        };
+
+        // Verify it is a valid Error that can be used in Result context.
+        let result: Result<()> = Err(error);
+        assert!(result.is_err());
+    }
+}

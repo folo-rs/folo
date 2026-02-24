@@ -22,6 +22,7 @@ new_zealand = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+static_assertions = { workspace = true }
 
 [lints]
 workspace = true

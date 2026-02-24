@@ -315,4 +315,93 @@ mod tests {
             current = unsafe { current.add(1) };
         }
     }
+
+    #[test]
+    fn new_rounds_up_small_size() {
+        // Request fewer bytes than a single u64 requires. The buffer must
+        // round up to at least size_of::<u64>() so it can hold one item.
+        let buffer = NativeBuffer::<u64>::new(NonZero::new(1).unwrap());
+        assert!(buffer.capacity_bytes() >= size_of::<u64>());
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn new_exact_size() {
+        let buffer = NativeBuffer::<u64>::new(NonZero::new(size_of::<u64>()).unwrap());
+        assert_eq!(buffer.capacity_bytes(), size_of::<u64>());
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn new_larger_than_item_size() {
+        let requested = size_of::<u64>() * 4;
+        let buffer = NativeBuffer::<u64>::new(NonZero::new(requested).unwrap());
+        assert_eq!(buffer.capacity_bytes(), requested);
+    }
+
+    #[test]
+    fn emplace_standalone() {
+        let mut buffer = NativeBuffer::<u32>::new(NonZero::new(size_of::<u32>()).unwrap());
+        assert!(buffer.is_empty());
+
+        buffer.emplace(42_u32);
+
+        assert_eq!(buffer.len_bytes(), size_of::<u32>());
+        assert!(!buffer.is_empty());
+
+        // SAFETY: We just emplaced a valid u32.
+        let value = unsafe { buffer.as_ref().assume_init_read() };
+        assert_eq!(value, 42_u32);
+    }
+
+    #[test]
+    fn from_items_preserves_order() {
+        let items = [10_u32, 20, 30, 40, 50];
+        let buffer = NativeBuffer::from_items(items);
+
+        let mut current = buffer.as_data_ptr_range().start;
+        for expected in &items {
+            // SAFETY: We are within the data range of the buffer.
+            let value = unsafe { current.read() };
+            assert_eq!(value, *expected);
+
+            // SAFETY: We stay within the buffer data range.
+            current = unsafe { current.add(1) };
+        }
+    }
+
+    #[test]
+    fn capacity_ptr_range_multi_item() {
+        let item_count = 8;
+        let requested = size_of::<u64>() * item_count;
+        let buffer = NativeBuffer::<u64>::new(NonZero::new(requested).unwrap());
+
+        let range = buffer.as_capacity_ptr_range();
+        // The capacity range should span exactly the requested number of items.
+        // SAFETY: Computing the expected end pointer within the allocation.
+        let expected_end = unsafe { range.start.add(item_count) };
+        assert_eq!(range.end, expected_end);
+    }
+
+    #[test]
+    #[should_panic]
+    fn set_len_bytes_beyond_capacity_panics() {
+        let mut buffer = NativeBuffer::<u64>::new(NonZero::new(size_of::<u64>()).unwrap());
+        let over = buffer.capacity_bytes() + 1;
+
+        // SAFETY: We are intentionally passing an invalid length to trigger the panic.
+        unsafe {
+            buffer.set_len_bytes(over);
+        }
+    }
+
+    #[test]
+    fn from_items_single_item() {
+        let buffer = NativeBuffer::from_items([999_i32]);
+        assert_eq!(buffer.len_bytes(), size_of::<i32>());
+
+        // SAFETY: We wrote exactly one item.
+        let value = unsafe { buffer.as_ptr().read() };
+        assert_eq!(value, 999_i32);
+    }
 }
