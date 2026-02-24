@@ -415,6 +415,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use new_zealand::nz;
+    use testing::with_watchdog;
 
     use super::*;
     use crate::EfficiencyClass;
@@ -422,89 +423,95 @@ mod tests {
 
     #[test]
     fn smoke_test() {
-        // Use fake hardware for pin status tracking and processor configuration.
-        let hardware = SystemHardware::fake(
-            HardwareBuilder::new()
-                .processor(ProcessorBuilder::new().efficiency_class(EfficiencyClass::Efficiency))
-                .processor(ProcessorBuilder::new().efficiency_class(EfficiencyClass::Performance)),
-        );
+        with_watchdog(|| {
+            // Use fake hardware for pin status tracking and processor configuration.
+            let hardware = SystemHardware::fake(
+                HardwareBuilder::new()
+                    .processor(
+                        ProcessorBuilder::new().efficiency_class(EfficiencyClass::Efficiency),
+                    )
+                    .processor(
+                        ProcessorBuilder::new().efficiency_class(EfficiencyClass::Performance),
+                    ),
+            );
 
-        let processor_set = hardware.processors();
+            let processor_set = hardware.processors();
 
-        // Getters appear to get the expected values.
-        assert_eq!(processor_set.len(), 2);
+            // Getters appear to get the expected values.
+            assert_eq!(processor_set.len(), 2);
 
-        // Iterator iterates through the expected stuff.
-        let mut processor_iter = processor_set.processors().iter();
+            // Iterator iterates through the expected stuff.
+            let mut processor_iter = processor_set.processors().iter();
 
-        let p1 = processor_iter.next().unwrap();
-        assert_eq!(p1.id(), 0);
-        assert_eq!(p1.memory_region_id(), 0);
-        assert_eq!(p1.efficiency_class(), EfficiencyClass::Efficiency);
+            let p1 = processor_iter.next().unwrap();
+            assert_eq!(p1.id(), 0);
+            assert_eq!(p1.memory_region_id(), 0);
+            assert_eq!(p1.efficiency_class(), EfficiencyClass::Efficiency);
 
-        let p2 = processor_iter.next().unwrap();
-        assert_eq!(p2.id(), 1);
-        assert_eq!(p2.memory_region_id(), 0);
-        assert_eq!(p2.efficiency_class(), EfficiencyClass::Performance);
+            let p2 = processor_iter.next().unwrap();
+            assert_eq!(p2.id(), 1);
+            assert_eq!(p2.memory_region_id(), 0);
+            assert_eq!(p2.efficiency_class(), EfficiencyClass::Performance);
 
-        assert!(processor_iter.next().is_none());
+            assert!(processor_iter.next().is_none());
 
-        // Pin calls into PAL to execute the pinning.
-        processor_set.pin_current_thread_to();
+            // Pin calls into PAL to execute the pinning.
+            processor_set.pin_current_thread_to();
 
-        // Since we pinned to 2 processors in same memory region,
-        // processor is not pinned but memory region is.
-        assert!(!hardware.is_thread_processor_pinned());
-        assert!(hardware.is_thread_memory_region_pinned());
+            // Since we pinned to 2 processors in same memory region,
+            // processor is not pinned but memory region is.
+            assert!(!hardware.is_thread_processor_pinned());
+            assert!(hardware.is_thread_memory_region_pinned());
 
-        // spawn_thread() spawns and pins a single thread.
-        let threads_spawned = Arc::new(AtomicUsize::new(0));
+            // spawn_thread() spawns and pins a single thread.
+            let threads_spawned = Arc::new(AtomicUsize::new(0));
 
-        // We create one clone for the worker thread to use.
-        // We do not create any additional clones (spawn_thread() is guaranteed to only spawn 1).
-        let threads_spawned_clone = Arc::clone(&threads_spawned);
+            // We create one clone for the worker thread to use.
+            // We do not create any additional clones (spawn_thread() is guaranteed to only spawn 1).
+            let threads_spawned_clone = Arc::clone(&threads_spawned);
 
-        let non_copy_value = "foo".to_string();
+            let non_copy_value = "foo".to_string();
 
-        processor_set
-            .spawn_thread({
-                fn process_string(_s: String) {}
+            processor_set
+                .spawn_thread({
+                    fn process_string(_s: String) {}
 
-                move |spawned_processor_set| {
-                    // Verify that we appear to have been given the expected processor set.
-                    assert_eq!(spawned_processor_set.len(), 2);
+                    move |spawned_processor_set| {
+                        // Verify that we appear to have been given the expected processor set.
+                        assert_eq!(spawned_processor_set.len(), 2);
 
-                    // We prove that the callback can use !Copy values by calling this fn.
-                    process_string(non_copy_value);
+                        // We prove that the callback can use !Copy values by calling this fn.
+                        process_string(non_copy_value);
 
-                    threads_spawned_clone.fetch_add(1, Ordering::Relaxed);
-                }
-            })
-            .join()
-            .unwrap();
+                        threads_spawned_clone.fetch_add(1, Ordering::Relaxed);
+                    }
+                })
+                .join()
+                .unwrap();
 
-        assert_eq!(threads_spawned.load(Ordering::Relaxed), 1);
+            assert_eq!(threads_spawned.load(Ordering::Relaxed), 1);
 
-        // spawn_threads() spawns multiple threads and pins each.
-        let threads_spawned = Arc::new(AtomicUsize::new(0));
+            // spawn_threads() spawns multiple threads and pins each.
+            let threads_spawned = Arc::new(AtomicUsize::new(0));
 
-        processor_set
-            .spawn_threads({
-                let threads_spawned = Arc::clone(&threads_spawned);
-                move |_| {
-                    threads_spawned.fetch_add(1, Ordering::Relaxed);
-                }
-            })
-            .into_vec()
-            .into_iter()
-            .for_each(|h| h.join().unwrap());
+            processor_set
+                .spawn_threads({
+                    let threads_spawned = Arc::clone(&threads_spawned);
+                    move |_| {
+                        threads_spawned.fetch_add(1, Ordering::Relaxed);
+                    }
+                })
+                .into_vec()
+                .into_iter()
+                .for_each(|h| h.join().unwrap());
 
-        assert_eq!(threads_spawned.load(Ordering::Relaxed), 2);
+            assert_eq!(threads_spawned.load(Ordering::Relaxed), 2);
 
-        // A clone appears to contain the same stuff.
-        let cloned_processor_set = processor_set.clone();
+            // A clone appears to contain the same stuff.
+            let cloned_processor_set = processor_set.clone();
 
-        assert_eq!(cloned_processor_set.len(), 2);
+            assert_eq!(cloned_processor_set.len(), 2);
+        });
     }
 
     #[test]
@@ -718,28 +725,30 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn inherit_on_pinned() {
-        thread::spawn(|| {
-            let hw = SystemHardware::current();
-            let one = hw.processors().take(nz!(1)).unwrap();
+        with_watchdog(|| {
+            thread::spawn(|| {
+                let hw = SystemHardware::current();
+                let one = hw.processors().take(nz!(1)).unwrap();
 
-            one.pin_current_thread_to();
+                one.pin_current_thread_to();
 
-            // Potential false negative here if the system only has one processor but that is fine.
-            let current_thread_allowed = hw
-                .processors()
-                .to_builder()
-                .where_available_for_current_thread()
-                .take_all()
-                .unwrap();
+                // Potential false negative here if the system only has one processor but that is fine.
+                let current_thread_allowed = hw
+                    .processors()
+                    .to_builder()
+                    .where_available_for_current_thread()
+                    .take_all()
+                    .unwrap();
 
-            assert_eq!(current_thread_allowed.len(), 1);
-            assert_eq!(
-                current_thread_allowed.processors().first(),
-                one.processors().first()
-            );
-        })
-        .join()
-        .unwrap();
+                assert_eq!(current_thread_allowed.len(), 1);
+                assert_eq!(
+                    current_thread_allowed.processors().first(),
+                    one.processors().first()
+                );
+            })
+            .join()
+            .unwrap();
+        });
     }
 
     #[test]
@@ -821,6 +830,7 @@ mod tests_fallback {
     use std::thread;
 
     use new_zealand::nz;
+    use testing::with_watchdog;
 
     use crate::SystemHardware;
 
@@ -869,40 +879,44 @@ mod tests_fallback {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn spawn_thread_pins_correctly() {
-        let hw = SystemHardware::fallback();
-        let processor_set = hw.processors().take(nz!(1)).unwrap();
+        with_watchdog(|| {
+            let hw = SystemHardware::fallback();
+            let processor_set = hw.processors().take(nz!(1)).unwrap();
 
-        let (tx, rx) = mpsc::channel();
+            let (tx, rx) = mpsc::channel();
 
-        processor_set
-            .spawn_thread(move |_| {
-                let is_pinned = hw.is_thread_processor_pinned();
-                tx.send(is_pinned).unwrap();
-            })
-            .join()
-            .unwrap();
+            processor_set
+                .spawn_thread(move |_| {
+                    let is_pinned = hw.is_thread_processor_pinned();
+                    tx.send(is_pinned).unwrap();
+                })
+                .join()
+                .unwrap();
 
-        let is_pinned = rx.recv().unwrap();
-        assert!(is_pinned);
+            let is_pinned = rx.recv().unwrap();
+            assert!(is_pinned);
+        });
     }
 
     #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn spawn_threads_pins_all_correctly() {
-        let hw = SystemHardware::fallback();
-        let processor_set = hw.processors().take(nz!(2));
+        with_watchdog(|| {
+            let hw = SystemHardware::fallback();
+            let processor_set = hw.processors().take(nz!(2));
 
-        // Skip if we do not have at least 2 processors.
-        let Some(processor_set) = processor_set else {
-            return;
-        };
+            // Skip if we do not have at least 2 processors.
+            let Some(processor_set) = processor_set else {
+                return;
+            };
 
-        let threads = processor_set.spawn_threads(move |_| hw.is_thread_processor_pinned());
+            let threads = processor_set.spawn_threads(move |_| hw.is_thread_processor_pinned());
 
-        for thread in threads {
-            let is_pinned = thread.join().unwrap();
-            assert!(is_pinned);
-        }
+            for thread in threads {
+                let is_pinned = thread.join().unwrap();
+                assert!(is_pinned);
+            }
+        });
     }
 
     #[test]

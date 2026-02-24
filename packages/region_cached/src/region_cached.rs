@@ -537,6 +537,8 @@ mod tests {
     use std::sync::mpsc;
     use std::{ptr, thread};
 
+    use testing::with_watchdog;
+
     use super::*;
     use crate::{
         MockHardwareInfoClient, MockHardwareTrackerClient, RegionCachedCopyExt, RegionCachedExt,
@@ -941,86 +943,90 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Test uses thread::sleep which is not supported by Miri
     fn clone_panic_does_not_block_other_threads() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::{Arc, Barrier};
-        use std::thread;
+        with_watchdog(|| {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            use std::sync::{Arc, Barrier};
+            use std::thread;
 
-        // Create a custom type that panics on clone for the first attempt.
-        #[derive(Debug)]
-        struct PanickingClone {
-            value: i32,
-            panic_counter: Arc<AtomicUsize>,
-        }
+            // Create a custom type that panics on clone for the first attempt.
+            #[derive(Debug)]
+            struct PanickingClone {
+                value: i32,
+                panic_counter: Arc<AtomicUsize>,
+            }
 
-        impl Clone for PanickingClone {
-            fn clone(&self) -> Self {
-                let count = self.panic_counter.fetch_add(1, Ordering::SeqCst);
-                assert!(count != 0, "Clone panicked!");
-                Self {
-                    value: self.value,
-                    panic_counter: Arc::clone(&self.panic_counter),
+            impl Clone for PanickingClone {
+                fn clone(&self) -> Self {
+                    let count = self.panic_counter.fetch_add(1, Ordering::SeqCst);
+                    assert!(count != 0, "Clone panicked!");
+                    Self {
+                        value: self.value,
+                        panic_counter: Arc::clone(&self.panic_counter),
+                    }
                 }
             }
-        }
 
-        let panic_counter = Arc::new(AtomicUsize::new(0));
-        let panicking_value = PanickingClone {
-            value: 42,
-            panic_counter: Arc::clone(&panic_counter),
-        };
+            let panic_counter = Arc::new(AtomicUsize::new(0));
+            let panicking_value = PanickingClone {
+                value: 42,
+                panic_counter: Arc::clone(&panic_counter),
+            };
 
-        let mut hardware_tracker = MockHardwareTrackerClient::new();
-        hardware_tracker
-            .expect_is_thread_memory_region_pinned()
-            .return_const(false);
+            let mut hardware_tracker = MockHardwareTrackerClient::new();
+            hardware_tracker
+                .expect_is_thread_memory_region_pinned()
+                .return_const(false);
 
-        // Calls from both threads to the same region.
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(2)
-            .return_const(0 as MemoryRegionId);
+            // Calls from both threads to the same region.
+            hardware_tracker
+                .expect_current_memory_region_id()
+                .times(2)
+                .return_const(0 as MemoryRegionId);
 
-        let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
+            let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
 
-        let mut hardware_info = MockHardwareInfoClient::new();
-        hardware_info
-            .expect_max_memory_region_count()
-            .return_const(10_usize);
+            let mut hardware_info = MockHardwareInfoClient::new();
+            hardware_info
+                .expect_max_memory_region_count()
+                .return_const(10_usize);
 
-        let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
+            let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local = RegionCached::with_clients(panicking_value, &hardware_info, hardware_tracker);
+            let local =
+                RegionCached::with_clients(panicking_value, &hardware_info, hardware_tracker);
 
-        let barrier = Arc::new(Barrier::new(2));
-        let local = Arc::new(local);
+            let barrier = Arc::new(Barrier::new(2));
+            let local = Arc::new(local);
 
-        let barrier1 = Arc::clone(&barrier);
-        let local1 = Arc::clone(&local);
-        let (tx, rx) = mpsc::channel::<()>();
-        let handle1 = thread::spawn(move || {
-            barrier1.wait();
-            // This thread will trigger the panicking clone.
-            let result = panic::catch_unwind(AssertUnwindSafe(|| local1.with_cached(|v| v.value)));
-            // Signal that initialization attempt is complete.
-            tx.send(()).unwrap();
-            result
+            let barrier1 = Arc::clone(&barrier);
+            let local1 = Arc::clone(&local);
+            let (tx, rx) = mpsc::channel::<()>();
+            let handle1 = thread::spawn(move || {
+                barrier1.wait();
+                // This thread will trigger the panicking clone.
+                let result =
+                    panic::catch_unwind(AssertUnwindSafe(|| local1.with_cached(|v| v.value)));
+                // Signal that initialization attempt is complete.
+                tx.send(()).unwrap();
+                result
+            });
+
+            let barrier2 = Arc::clone(&barrier);
+            let local2 = Arc::clone(&local);
+            let handle2 = thread::spawn(move || {
+                barrier2.wait();
+                // Wait for thread 1 to finish its initialization attempt.
+                rx.recv().unwrap();
+                local2.with_cached(|v| v.value)
+            });
+
+            let result1 = handle1.join().unwrap();
+            let result2 = handle2.join().unwrap();
+
+            // First thread should have caught the panic.
+            result1.unwrap_err();
+            // Second thread should have succeeded.
+            assert_eq!(result2, 42);
         });
-
-        let barrier2 = Arc::clone(&barrier);
-        let local2 = Arc::clone(&local);
-        let handle2 = thread::spawn(move || {
-            barrier2.wait();
-            // Wait for thread 1 to finish its initialization attempt.
-            rx.recv().unwrap();
-            local2.with_cached(|v| v.value)
-        });
-
-        let result1 = handle1.join().unwrap();
-        let result2 = handle2.join().unwrap();
-
-        // First thread should have caught the panic.
-        result1.unwrap_err();
-        // Second thread should have succeeded.
-        assert_eq!(result2, 42);
     }
 }

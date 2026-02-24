@@ -33,6 +33,7 @@ mockall = { workspace = true }
 mutants = { workspace = true }
 par_bench = { path = "../par_bench", features = ["criterion"] }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
 
 [[bench]]

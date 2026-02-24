@@ -28,6 +28,7 @@ oneshot = { workspace = true }
 pin-project = { workspace = true }
 spin_on = { workspace = true }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
 
 [lints]

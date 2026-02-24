@@ -443,6 +443,8 @@ mod tests {
     use std::sync::mpsc;
     use std::{ptr, thread};
 
+    use testing::with_watchdog;
+
     use super::*;
     use crate::{MockHardwareInfoClient, MockHardwareTrackerClient, RegionLocalExt, region_local};
 
@@ -846,81 +848,83 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Test uses thread::sleep which is not supported by Miri
     fn initializer_panic_does_not_block_other_threads() {
-        use std::sync::{Arc, Barrier};
-        use std::thread;
+        with_watchdog(|| {
+            use std::sync::{Arc, Barrier};
+            use std::thread;
 
-        // Since we need a function pointer for the initializer, we will use a different approach.
-        // We will create a type that panics during Drop, which will be called by the initializer.
-        static mut PANIC_ON_FIRST_CALL: bool = true;
+            // Since we need a function pointer for the initializer, we will use a different approach.
+            // We will create a type that panics during Drop, which will be called by the initializer.
+            static mut PANIC_ON_FIRST_CALL: bool = true;
 
-        fn panicking_initializer() -> i32 {
-            // SAFETY: We access a mutable static variable in test code.
-            // This is safe because tests are single-threaded with respect to this static.
-            let should_panic = unsafe { PANIC_ON_FIRST_CALL };
-            if should_panic {
-                // SAFETY: We modify a mutable static variable in test code.
+            fn panicking_initializer() -> i32 {
+                // SAFETY: We access a mutable static variable in test code.
                 // This is safe because tests are single-threaded with respect to this static.
-                unsafe {
-                    PANIC_ON_FIRST_CALL = false;
+                let should_panic = unsafe { PANIC_ON_FIRST_CALL };
+                if should_panic {
+                    // SAFETY: We modify a mutable static variable in test code.
+                    // This is safe because tests are single-threaded with respect to this static.
+                    unsafe {
+                        PANIC_ON_FIRST_CALL = false;
+                    }
+                    panic!("Initializer panicked!");
                 }
-                panic!("Initializer panicked!");
+                42
             }
-            42
-        }
 
-        let mut hardware_tracker = MockHardwareTrackerClient::new();
-        hardware_tracker
-            .expect_is_thread_memory_region_pinned()
-            .return_const(false);
+            let mut hardware_tracker = MockHardwareTrackerClient::new();
+            hardware_tracker
+                .expect_is_thread_memory_region_pinned()
+                .return_const(false);
 
-        // Calls from both threads to the same region.
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(2)
-            .return_const(0 as MemoryRegionId);
+            // Calls from both threads to the same region.
+            hardware_tracker
+                .expect_current_memory_region_id()
+                .times(2)
+                .return_const(0 as MemoryRegionId);
 
-        let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
+            let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
 
-        let mut hardware_info = MockHardwareInfoClient::new();
-        hardware_info
-            .expect_max_memory_region_count()
-            .return_const(10_usize);
+            let mut hardware_info = MockHardwareInfoClient::new();
+            hardware_info
+                .expect_max_memory_region_count()
+                .return_const(10_usize);
 
-        let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
+            let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
 
-        let local =
-            RegionLocal::with_clients(panicking_initializer, &hardware_info, hardware_tracker);
+            let local =
+                RegionLocal::with_clients(panicking_initializer, &hardware_info, hardware_tracker);
 
-        let barrier = Arc::new(Barrier::new(2));
-        let local = Arc::new(local);
+            let barrier = Arc::new(Barrier::new(2));
+            let local = Arc::new(local);
 
-        let barrier1 = Arc::clone(&barrier);
-        let local1 = Arc::clone(&local);
-        let (tx, rx) = mpsc::channel::<()>();
-        let handle1 = thread::spawn(move || {
-            barrier1.wait();
-            // This thread will trigger the panicking initializer.
-            let result = panic::catch_unwind(AssertUnwindSafe(|| local1.get_local()));
-            // Signal that initialization attempt is complete.
-            tx.send(()).unwrap();
-            result
+            let barrier1 = Arc::clone(&barrier);
+            let local1 = Arc::clone(&local);
+            let (tx, rx) = mpsc::channel::<()>();
+            let handle1 = thread::spawn(move || {
+                barrier1.wait();
+                // This thread will trigger the panicking initializer.
+                let result = panic::catch_unwind(AssertUnwindSafe(|| local1.get_local()));
+                // Signal that initialization attempt is complete.
+                tx.send(()).unwrap();
+                result
+            });
+
+            let barrier2 = Arc::clone(&barrier);
+            let local2 = Arc::clone(&local);
+            let handle2 = thread::spawn(move || {
+                barrier2.wait();
+                // Wait for thread 1 to finish its initialization attempt.
+                rx.recv().unwrap();
+                local2.get_local()
+            });
+
+            let result1 = handle1.join().unwrap();
+            let result2 = handle2.join().unwrap();
+
+            // First thread should have caught the panic.
+            result1.unwrap_err();
+            // Second thread should have succeeded.
+            assert_eq!(result2, 42);
         });
-
-        let barrier2 = Arc::clone(&barrier);
-        let local2 = Arc::clone(&local);
-        let handle2 = thread::spawn(move || {
-            barrier2.wait();
-            // Wait for thread 1 to finish its initialization attempt.
-            rx.recv().unwrap();
-            local2.get_local()
-        });
-
-        let result1 = handle1.join().unwrap();
-        let result2 = handle2.join().unwrap();
-
-        // First thread should have caught the panic.
-        result1.unwrap_err();
-        // Second thread should have succeeded.
-        assert_eq!(result2, 42);
     }
 }

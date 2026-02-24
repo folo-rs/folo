@@ -646,6 +646,7 @@ dependencies = [
  "pin-project",
  "spin_on",
  "static_assertions",
+ "testing",
  "tokio",
 ]
 
@@ -1667,6 +1668,7 @@ dependencies = [
  "scopeguard",
  "simple-mermaid",
  "static_assertions",
+ "testing",
  "tokio",
 ]
 
@@ -1688,6 +1690,7 @@ dependencies = [
  "scopeguard",
  "simple-mermaid",
  "static_assertions",
+ "testing",
  "tokio",
 ]
 
