@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{self, AtomicU8};
 use std::task::Waker;
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, test))]
 use parking_lot::Mutex;
 
 #[cfg(debug_assertions)]
