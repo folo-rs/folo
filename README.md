@@ -152,19 +152,18 @@ Packages present in the repo but not relevant to a general audience:
 * `benchmarks` - random pile of benchmarks to explore relevant scenarios and guide Folo development.
 * `folo_ffi` - utilities for working with FFI logic; exists for internal use in Folo packages; no stable API surface.
 * `folo_utils` - utilities for internal use in Folo packages; exists for internal use in Folo packages; no stable API surface.
+* `linked_macros` - internal proc-macro dependency of the `linked` package; do not reference directly.
+* `linked_macros_impl` - internal proc-macro dependency of the `linked_macros` package; do not reference directly.
 * `testing` - private helpers for testing and examples in Folo packages.
+* `ui_tests` - compile-time UI tests for workspace packages; not published.
 
 Deprecated packages:
 
 * `events` - deprecated, use `events_once` which offers more refined API surface, as well as improved correctness and performance.
-* `blind_pool` - deprecated, use `infinity_pool` which offers a similar API but is internally structured in a more maintainable manner.
-* `opaque_pool` - deprecated, use `infinity_pool` which offers a similar API but is internally structured in a more maintainable manner.
-* `pinned_pool` - deprecated, use `infinity_pool` which offers a similar API but is internally structured in a more maintainable manner.
 
 [all_the_time]: packages/all_the_time/README.md
 [alloc_tracker]: packages/alloc_tracker/README.md
 [criterion]: https://bheisler.github.io/criterion.rs/book/criterion_rs.html
-[events]: packages/events/README.md
 [events_once]: packages/events_once/README.md
 [fast_time]: packages/fast_time/README.md
 [infinity_pool]: packages/infinity_pool/README.md
