@@ -29,7 +29,7 @@ simple-mermaid = { workspace = true }
 [dev-dependencies]
 axum = { workspace = true, features = ["http1", "tokio"] }
 criterion = { workspace = true }
-mockall = { workspace = true }
+many_cpus = { path = "../many_cpus", features = ["test-util"] }
 mutants = { workspace = true }
 par_bench = { path = "../par_bench", features = ["criterion"] }
 static_assertions = { workspace = true }

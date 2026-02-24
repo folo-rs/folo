@@ -4,13 +4,8 @@ use std::sync::atomic::{self, AtomicU64};
 use std::sync::{Arc, OnceLock};
 
 use arc_swap::{ArcSwap, ArcSwapOption};
-use many_cpus::MemoryRegionId;
+use many_cpus::{MemoryRegionId, SystemHardware};
 use rsevents::{Awaitable, EventState, ManualResetEvent};
-
-use crate::{
-    HardwareInfoClient, HardwareInfoClientFacade, HardwareTrackerClient,
-    HardwareTrackerClientFacade,
-};
 
 /// Provides access to an instance of `T` that is locally cached in the current memory region.
 ///
@@ -29,7 +24,7 @@ where
 
     global_state: Arc<GlobalState<T>>,
 
-    hardware_tracker: HardwareTrackerClientFacade,
+    hardware: SystemHardware,
 }
 
 impl<T> RegionCached<T>
@@ -51,41 +46,36 @@ where
     /// [3]: linked
     #[must_use]
     pub fn new(initial_value: T) -> Self {
-        Self::with_clients(
-            initial_value,
-            &HardwareInfoClientFacade::real(),
-            HardwareTrackerClientFacade::real(),
-        )
+        Self::with_hardware(initial_value, SystemHardware::current().clone())
     }
 
+    /// Creates a new instance of `RegionCached` using the given [`SystemHardware`] to determine
+    /// hardware topology. This allows injecting a fake hardware configuration (created via
+    /// `SystemHardware::fake()`) for testing.
     #[must_use]
-    pub(crate) fn with_clients(
-        initial_value: T,
-        hardware_info: &HardwareInfoClientFacade,
-        hardware_tracker: HardwareTrackerClientFacade,
-    ) -> Self {
-        let memory_region_count = hardware_info.max_memory_region_count();
+    pub fn with_hardware(initial_value: T, hardware: SystemHardware) -> Self {
+        let memory_region_count = hardware.max_memory_region_count();
 
         let global_state = Arc::new(GlobalState::new(initial_value, memory_region_count));
 
         linked::new!(Self {
-            regional_state: Self::try_locate_regional_state(&global_state, &hardware_tracker),
+            regional_state: Self::try_locate_regional_state(&global_state, &hardware),
             global_state: Arc::clone(&global_state),
-            hardware_tracker: hardware_tracker.clone(),
+            hardware: hardware.clone(),
         })
     }
 
     fn try_locate_regional_state(
         global_state: &Arc<GlobalState<T>>,
-        hardware_tracker: &HardwareTrackerClientFacade,
+        hardware: &SystemHardware,
     ) -> Option<Arc<RegionalState<T>>> {
-        if !hardware_tracker.is_thread_memory_region_pinned() {
+        if !hardware.is_thread_memory_region_pinned() {
             return None;
         }
 
         // This thread is pinned to a specific memory region, so we can directly access the
         // state of that region and skip the regional state lookup on every access.
-        let memory_region_id = hardware_tracker.current_memory_region_id();
+        let memory_region_id = hardware.current_memory_region_id();
         Some(global_state.with_regional_state(memory_region_id, Arc::clone))
     }
 
@@ -120,7 +110,7 @@ where
 
         // We fix the memory region ID at this point. It may be that the thread migrates to a
         // different memory region during the rest of this function - we do not care about that.
-        let memory_region_id = self.hardware_tracker.current_memory_region_id();
+        let memory_region_id = self.hardware.current_memory_region_id();
 
         self.global_state
             .with_regional_state(memory_region_id, |regional_state| {
@@ -533,17 +523,37 @@ enum RegionalValue<T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::panic::{self, AssertUnwindSafe};
-    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
+    use std::sync::{Arc, Barrier};
     use std::{ptr, thread};
 
+    use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
     use testing::with_watchdog;
 
     use super::*;
-    use crate::{
-        MockHardwareInfoClient, MockHardwareTrackerClient, RegionCachedCopyExt, RegionCachedExt,
-        region_cached,
-    };
+    use crate::{RegionCachedCopyExt, RegionCachedExt, region_cached};
+
+    /// Creates a fake `SystemHardware` with 3 processors in 3 different memory regions
+    /// (regions 0, 1, and 9) plus filler processors to ensure 10 total regions exist.
+    fn fake_hardware_3_regions() -> SystemHardware {
+        SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(ProcessorBuilder::new().id(0).memory_region(0))
+                .processor(ProcessorBuilder::new().id(1).memory_region(1))
+                .processor(ProcessorBuilder::new().id(9).memory_region(9)),
+        )
+    }
+
+    /// Pins the current thread to the processor with the given ID in the given hardware,
+    /// placing it in the associated memory region.
+    fn pin_to_processor(hardware: &SystemHardware, processor_id: u32) {
+        hardware
+            .all_processors()
+            .filter(|p| p.id() == processor_id)
+            .unwrap()
+            .pin_current_thread_to();
+    }
 
     #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
     #[test]
@@ -644,310 +654,167 @@ mod tests {
 
     #[test]
     fn different_regions_have_different_clones() {
-        let mut hardware_tracker = MockHardwareTrackerClient::new();
+        let hardware = fake_hardware_3_regions();
 
-        hardware_tracker
-            .expect_is_thread_memory_region_pinned()
-            .return_const(false);
+        thread::spawn(move || {
+            let local = RegionCached::with_hardware("foo".to_string(), hardware.clone());
 
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(0 as MemoryRegionId);
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(1 as MemoryRegionId);
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(9 as MemoryRegionId);
+            pin_to_processor(&hardware, 0);
+            let value1 = local.with_cached(ptr::from_ref);
 
-        let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
+            pin_to_processor(&hardware, 1);
+            let value2 = local.with_cached(ptr::from_ref);
 
-        let mut hardware_info = MockHardwareInfoClient::new();
+            pin_to_processor(&hardware, 9);
+            let value3 = local.with_cached(ptr::from_ref);
 
-        hardware_info
-            .expect_max_memory_region_count()
-            .return_const(10_usize);
-
-        let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
-
-        let local =
-            RegionCached::with_clients(|| "foo".to_string(), &hardware_info, hardware_tracker);
-
-        let value1 = local.with_cached(ptr::from_ref);
-        let value2 = local.with_cached(ptr::from_ref);
-        let value3 = local.with_cached(ptr::from_ref);
-
-        assert_ne!(value1, value2);
-        assert_ne!(value1, value3);
+            assert_ne!(value1, value2);
+            assert_ne!(value1, value3);
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
     fn initial_value_propagates_to_all_regions() {
-        let mut hardware_tracker = MockHardwareTrackerClient::new();
+        let hardware = fake_hardware_3_regions();
 
-        hardware_tracker
-            .expect_is_thread_memory_region_pinned()
-            .return_const(false);
+        thread::spawn(move || {
+            let local = RegionCached::with_hardware(42, hardware.clone());
 
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(0 as MemoryRegionId);
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(1 as MemoryRegionId);
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(9 as MemoryRegionId);
+            pin_to_processor(&hardware, 0);
+            assert_eq!(local.get_cached(), 42);
 
-        let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
+            pin_to_processor(&hardware, 1);
+            assert_eq!(local.get_cached(), 42);
 
-        let mut hardware_info = MockHardwareInfoClient::new();
-
-        hardware_info
-            .expect_max_memory_region_count()
-            .return_const(10_usize);
-
-        let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
-
-        let local = RegionCached::with_clients(42, &hardware_info, hardware_tracker);
-
-        assert_eq!(local.get_cached(), 42);
-        assert_eq!(local.get_cached(), 42);
-        assert_eq!(local.get_cached(), 42);
+            pin_to_processor(&hardware, 9);
+            assert_eq!(local.get_cached(), 42);
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
     fn update_propagates_to_all_regions() {
-        let mut hardware_tracker = MockHardwareTrackerClient::new();
+        let hardware = fake_hardware_3_regions();
 
-        hardware_tracker
-            .expect_is_thread_memory_region_pinned()
-            .return_const(false);
+        thread::spawn(move || {
+            let local = RegionCached::with_hardware(42, hardware.clone());
 
-        // Initial read.
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(5 as MemoryRegionId);
+            pin_to_processor(&hardware, 0);
+            assert_eq!(local.get_cached(), 42);
+            local.set_global(43);
 
-        // Reads to verify.
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(0 as MemoryRegionId);
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(1 as MemoryRegionId);
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(9 as MemoryRegionId);
+            pin_to_processor(&hardware, 0);
+            assert_eq!(local.get_cached(), 43);
 
-        let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
+            pin_to_processor(&hardware, 1);
+            assert_eq!(local.get_cached(), 43);
 
-        let mut hardware_info = MockHardwareInfoClient::new();
-
-        hardware_info
-            .expect_max_memory_region_count()
-            .return_const(10_usize);
-
-        let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
-
-        let local = RegionCached::with_clients(42, &hardware_info, hardware_tracker);
-
-        assert_eq!(local.get_cached(), 42);
-        local.set_global(43);
-
-        assert_eq!(local.get_cached(), 43);
-        assert_eq!(local.get_cached(), 43);
-        assert_eq!(local.get_cached(), 43);
+            pin_to_processor(&hardware, 9);
+            assert_eq!(local.get_cached(), 43);
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
     fn immediate_set_propagates_to_all_regions() {
-        let mut hardware_tracker = MockHardwareTrackerClient::new();
+        let hardware = fake_hardware_3_regions();
 
-        hardware_tracker
-            .expect_is_thread_memory_region_pinned()
-            .return_const(false);
+        thread::spawn(move || {
+            let local = RegionCached::with_hardware(42, hardware.clone());
 
-        // Reads to verify.
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(0 as MemoryRegionId);
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(1 as MemoryRegionId);
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(9 as MemoryRegionId);
+            local.set_global(43);
 
-        let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
+            pin_to_processor(&hardware, 0);
+            assert_eq!(local.get_cached(), 43);
 
-        let mut hardware_info = MockHardwareInfoClient::new();
+            pin_to_processor(&hardware, 1);
+            assert_eq!(local.get_cached(), 43);
 
-        hardware_info
-            .expect_max_memory_region_count()
-            .return_const(10_usize);
-
-        let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
-
-        let local = RegionCached::with_clients(42, &hardware_info, hardware_tracker);
-
-        local.set_global(43);
-
-        assert_eq!(local.get_cached(), 43);
-        assert_eq!(local.get_cached(), 43);
-        assert_eq!(local.get_cached(), 43);
+            pin_to_processor(&hardware, 9);
+            assert_eq!(local.get_cached(), 43);
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
     fn pinned_thread_has_direct_access_to_regional_state() {
-        let mut hardware_tracker = MockHardwareTrackerClient::new();
+        let hardware = fake_hardware_3_regions();
 
-        hardware_tracker
-            .expect_is_thread_memory_region_pinned()
-            .return_const(true);
+        thread::spawn(move || {
+            // Pin before constructing so the constructor sees the thread as pinned.
+            pin_to_processor(&hardware, 0);
 
-        // Even though we read 3 times, we only expect this to be called once and then never again
-        // because we are a pinned thread and the RegionCached will directly access the state.
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(0 as MemoryRegionId);
+            let local = RegionCached::with_hardware(42, hardware);
 
-        let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
-
-        let mut hardware_info = MockHardwareInfoClient::new();
-
-        hardware_info
-            .expect_max_memory_region_count()
-            .return_const(10_usize);
-
-        let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
-
-        let local = RegionCached::with_clients(42, &hardware_info, hardware_tracker);
-
-        assert_eq!(local.get_cached(), 42);
-        assert_eq!(local.get_cached(), 42);
-        assert_eq!(local.get_cached(), 42);
+            // Regional state is cached because the thread is pinned. Multiple reads
+            // should all succeed without needing to re-resolve the memory region.
+            assert_eq!(local.get_cached(), 42);
+            assert_eq!(local.get_cached(), 42);
+            assert_eq!(local.get_cached(), 42);
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
     fn callback_panic_leaves_consistent_state() {
-        let mut hardware_tracker = MockHardwareTrackerClient::new();
+        let hardware = fake_hardware_3_regions();
 
-        hardware_tracker
-            .expect_is_thread_memory_region_pinned()
-            .return_const(false);
+        thread::spawn(move || {
+            let local = RegionCached::with_hardware(42, hardware.clone());
 
-        // First successful call to initialize.
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(0 as MemoryRegionId);
+            pin_to_processor(&hardware, 0);
 
-        // Second call where callback panics.
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(0 as MemoryRegionId);
+            // First call succeeds and initializes the region.
+            assert_eq!(local.get_cached(), 42);
 
-        // Third call to verify state is still consistent.
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(0 as MemoryRegionId);
+            // Second call with panicking closure.
+            let panic_result = panic::catch_unwind(AssertUnwindSafe(|| {
+                local.with_cached(|_| {
+                    panic!("User callback panicked!");
+                })
+            }));
+            assert!(panic_result.is_err());
 
-        let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
-
-        let mut hardware_info = MockHardwareInfoClient::new();
-
-        hardware_info
-            .expect_max_memory_region_count()
-            .return_const(10_usize);
-
-        let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
-
-        let local = RegionCached::with_clients(42, &hardware_info, hardware_tracker);
-
-        // First call succeeds and initializes the region.
-        assert_eq!(local.get_cached(), 42);
-
-        // Second call with panicking closure.
-        let panic_result = panic::catch_unwind(AssertUnwindSafe(|| {
-            local.with_cached(|_| {
-                panic!("User callback panicked!");
-            })
-        }));
-        assert!(panic_result.is_err());
-
-        // Third call should still work and return the cached value.
-        assert_eq!(local.get_cached(), 42);
+            // Third call should still work and return the cached value.
+            assert_eq!(local.get_cached(), 42);
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
     fn callback_panic_during_initialization() {
-        let mut hardware_tracker = MockHardwareTrackerClient::new();
+        let hardware = fake_hardware_3_regions();
 
-        hardware_tracker
-            .expect_is_thread_memory_region_pinned()
-            .return_const(false);
+        thread::spawn(move || {
+            let local = RegionCached::with_hardware(42, hardware.clone());
 
-        // Call where callback panics during initialization.
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(0 as MemoryRegionId);
+            pin_to_processor(&hardware, 0);
 
-        // Second call to verify initialization can still proceed.
-        hardware_tracker
-            .expect_current_memory_region_id()
-            .times(1)
-            .return_const(0 as MemoryRegionId);
+            // First call with panicking closure should fail but not break state.
+            let panic_result = panic::catch_unwind(AssertUnwindSafe(|| {
+                local.with_cached(|_| {
+                    panic!("User callback panicked during initialization!");
+                })
+            }));
+            assert!(panic_result.is_err());
 
-        let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
-
-        let mut hardware_info = MockHardwareInfoClient::new();
-
-        hardware_info
-            .expect_max_memory_region_count()
-            .return_const(10_usize);
-
-        let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
-
-        let local = RegionCached::with_clients(42, &hardware_info, hardware_tracker);
-
-        // First call with panicking closure should fail but not break state.
-        let panic_result = panic::catch_unwind(AssertUnwindSafe(|| {
-            local.with_cached(|_| {
-                panic!("User callback panicked during initialization!");
-            })
-        }));
-        assert!(panic_result.is_err());
-
-        // Second call should successfully initialize and work.
-        assert_eq!(local.get_cached(), 42);
+            // Second call should successfully initialize and work.
+            assert_eq!(local.get_cached(), 42);
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Test uses thread::sleep which is not supported by Miri
     fn clone_panic_does_not_block_other_threads() {
         with_watchdog(|| {
-            use std::sync::atomic::{AtomicUsize, Ordering};
-            use std::sync::{Arc, Barrier};
-            use std::thread;
-
             // Create a custom type that panics on clone for the first attempt.
             #[derive(Debug)]
             struct PanickingClone {
@@ -972,36 +839,21 @@ mod tests {
                 panic_counter: Arc::clone(&panic_counter),
             };
 
-            let mut hardware_tracker = MockHardwareTrackerClient::new();
-            hardware_tracker
-                .expect_is_thread_memory_region_pinned()
-                .return_const(false);
+            let hardware = SystemHardware::fake(
+                HardwareBuilder::new().processor(ProcessorBuilder::new().id(0).memory_region(0)),
+            );
 
-            // Calls from both threads to the same region.
-            hardware_tracker
-                .expect_current_memory_region_id()
-                .times(2)
-                .return_const(0 as MemoryRegionId);
-
-            let hardware_tracker = HardwareTrackerClientFacade::from_mock(hardware_tracker);
-
-            let mut hardware_info = MockHardwareInfoClient::new();
-            hardware_info
-                .expect_max_memory_region_count()
-                .return_const(10_usize);
-
-            let hardware_info = HardwareInfoClientFacade::from_mock(hardware_info);
-
-            let local =
-                RegionCached::with_clients(panicking_value, &hardware_info, hardware_tracker);
+            let local = RegionCached::with_hardware(panicking_value, hardware.clone());
 
             let barrier = Arc::new(Barrier::new(2));
             let local = Arc::new(local);
 
             let barrier1 = Arc::clone(&barrier);
             let local1 = Arc::clone(&local);
+            let hardware1 = hardware.clone();
             let (tx, rx) = mpsc::channel::<()>();
             let handle1 = thread::spawn(move || {
+                pin_to_processor(&hardware1, 0);
                 barrier1.wait();
                 // This thread will trigger the panicking clone.
                 let result =
@@ -1014,6 +866,7 @@ mod tests {
             let barrier2 = Arc::clone(&barrier);
             let local2 = Arc::clone(&local);
             let handle2 = thread::spawn(move || {
+                pin_to_processor(&hardware, 0);
                 barrier2.wait();
                 // Wait for thread 1 to finish its initialization attempt.
                 rx.recv().unwrap();

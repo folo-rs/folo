@@ -8,7 +8,7 @@ list of available commands. Some relevant ones are:
 * `just test` - test the entire workspace; this does NOT run doctests, use `just test-docs` for that
 * `just docs` - build API documentation
 
-The `package` argument must be the first argument to any `just` command, if used.
+The `package` argument must be the first argument to any `just` command, if used. You can specify it on most commands to scope them down to a specific package instead of running them on the entire repo (which is slow).
 
 Avoid running `just bench`, as the benchmarks take a lot of time and `just test` will anyway run
 a single benchmark iteration to validate they are still working.
@@ -23,7 +23,7 @@ Do not use VS Code tasks, relying instead on `just` and, if necessary, `cargo` c
 # Validating changes
 
 Validate changes via `just validate-local`. This runs a number of different checks and will
-uncover most issues.
+uncover most issues. If you only touched a few packages, scope it to them via `package=foo`.
 
 We operate under a "zero warnings allowed" requirement - fix all warnings that validation generates.
 
