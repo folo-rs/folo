@@ -531,8 +531,7 @@ enum RegionalValue<T> {
 mod tests {
     use std::panic::{self, AssertUnwindSafe};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::mpsc;
-    use std::sync::{Arc, Barrier};
+    use std::sync::{Arc, Barrier, mpsc};
     use std::{ptr, thread};
 
     use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};

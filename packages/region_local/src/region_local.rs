@@ -436,8 +436,7 @@ enum RegionalValue<T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::panic::{self, AssertUnwindSafe};
-    use std::sync::mpsc;
-    use std::sync::{Arc, Barrier};
+    use std::sync::{Arc, Barrier, mpsc};
     use std::{ptr, thread};
 
     use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};

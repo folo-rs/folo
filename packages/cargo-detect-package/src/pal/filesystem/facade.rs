@@ -3,11 +3,10 @@
 // The facade pattern allows the same code to work with both real and mock implementations,
 // with the mock variant only available in test builds.
 
-use std::fmt;
-use std::io;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::Arc;
+use std::{fmt, io};
 
 #[cfg(test)]
 use crate::pal::MockFilesystem;

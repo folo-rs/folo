@@ -10,7 +10,7 @@ pub struct Error {
 
 impl Error {
     /// The specific value that was invalid.
-    /// 
+    ///
     /// This may either be the entire cpulist
     /// string or a specific part of it, depending on the problem.
     #[must_use]

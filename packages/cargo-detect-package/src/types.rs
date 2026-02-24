@@ -2,11 +2,9 @@
 //
 // These types are used by main.rs and exposed via the crate's public API.
 
-use std::error;
-use std::fmt;
-use std::io;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::{error, fmt, io};
 
 /// Action to take when a path is not within any package.
 #[derive(Clone, Debug, Eq, PartialEq)]
