@@ -8,14 +8,13 @@ use std::marker::PhantomPinned;
 use std::mem::{MaybeUninit, offset_of};
 use std::pin::Pin;
 use std::ptr::NonNull;
+#[cfg(test)]
+use std::sync::Arc;
 use std::sync::atomic::{self, AtomicU8};
 use std::task::Waker;
 
 #[cfg(debug_assertions)]
 use parking_lot::Mutex;
-
-#[cfg(test)]
-use std::sync::Arc;
 
 #[cfg(debug_assertions)]
 use crate::{BacktraceType, capture_backtrace};
@@ -1768,11 +1767,7 @@ mod tests {
 
     /// Installs a hook closure and runs the test body while holding the
     /// serialization mutex. The hook is always removed on exit.
-    fn with_hook(
-        hook: &Mutex<Option<Arc<HookFn>>>,
-        closure: Arc<HookFn>,
-        body: impl FnOnce(),
-    ) {
+    fn with_hook(hook: &Mutex<Option<Arc<HookFn>>>, closure: Arc<HookFn>, body: impl FnOnce()) {
         struct ClearOnDrop<'a>(&'a Mutex<Option<Arc<HookFn>>>);
         impl Drop for ClearOnDrop<'_> {
             fn drop(&mut self) {
