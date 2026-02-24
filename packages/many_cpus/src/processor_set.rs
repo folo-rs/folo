@@ -791,32 +791,39 @@ mod tests {
 
     #[test]
     fn filter_on_subset() {
-        let hardware = SystemHardware::fake(HardwareBuilder::from_counts(nz!(8), nz!(1)));
+        // We use explicit processor IDs to make this test deterministic. Previously, using
+        // `take(4)` on 8 processors could randomly select all odd IDs, causing the even
+        // filter below to return no matches.
+        let hardware = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(ProcessorBuilder::new().id(0))
+                .processor(ProcessorBuilder::new().id(1))
+                .processor(ProcessorBuilder::new().id(2))
+                .processor(ProcessorBuilder::new().id(3)),
+        );
 
-        let all = hardware.processors();
+        let subset = hardware.processors();
+        assert_eq!(subset.len(), 4);
 
-        let first_half = all.take(nz!(4)).unwrap();
-        assert_eq!(first_half.len(), 4);
+        let even_from_subset = subset.filter(|p| p.id() % 2 == 0).unwrap();
 
-        let even_from_first_half = first_half.filter(|p| p.id() % 2 == 0).unwrap();
-
-        // The filter should only include even IDs that were in the first_half.
-        let first_half_ids: foldhash::HashSet<_> = first_half.iter().map(Processor::id).collect();
+        let subset_ids: foldhash::HashSet<_> = subset.iter().map(Processor::id).collect();
         let even_ids: foldhash::HashSet<_> =
-            even_from_first_half.iter().map(Processor::id).collect();
+            even_from_subset.iter().map(Processor::id).collect();
 
         // All IDs in the filtered set must be even.
         for id in &even_ids {
             assert_eq!(id % 2, 0);
         }
 
-        // All IDs in the filtered set must have been in the original first_half.
+        // All IDs in the filtered set must have been in the original subset.
         for id in &even_ids {
-            assert!(first_half_ids.contains(id));
+            assert!(subset_ids.contains(id));
         }
 
-        // The filtered set should contain at least one processor.
-        assert!(!even_ids.is_empty());
+        assert_eq!(even_ids.len(), 2);
+        assert!(even_ids.contains(&0));
+        assert!(even_ids.contains(&2));
     }
 }
 
