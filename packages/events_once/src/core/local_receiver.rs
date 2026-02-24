@@ -88,9 +88,9 @@ where
                     // Defensive: state machine guarantees final_poll
                     // always returns Some or Err when state is SET or
                     // DISCONNECTED.
-                    #[cfg_attr(coverage_nightly, coverage(off))]
                     Ok(None) => {
-                        // This should not happen - final_poll should return Some(value) or Err(Disconnected)
+                        // Defensive: state machine guarantees final_poll
+                        // always returns Some or Err when state is SET or DISCONNECTED.
                         unreachable!("final_poll returned None")
                     }
                     Err(Disconnected) => {
@@ -100,7 +100,6 @@ where
                 }
             }
             // Defensive: state machine guarantees this is unreachable.
-            #[cfg_attr(coverage_nightly, coverage(off))]
             _ => {
                 unreachable!("Invalid event state: {}", current_state)
             }

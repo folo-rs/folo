@@ -351,7 +351,6 @@ where
                 Err(Disconnected)
             }
             // Defensive: state machine guarantees this is unreachable.
-            #[cfg_attr(coverage_nightly, coverage(off))]
             _ => {
                 unreachable!("unreachable Event state on set: {previous_state}");
             }
@@ -437,7 +436,6 @@ where
                 Err(Disconnected)
             }
             // Defensive: state machine guarantees this is unreachable.
-            #[cfg_attr(coverage_nightly, coverage(off))]
             _ => {
                 unreachable!("unreachable Event state on sender disconnect: {previous_state}");
             }
@@ -466,7 +464,6 @@ where
                 Some(Err(Disconnected))
             }
             // Defensive: state machine guarantees this is unreachable.
-            #[cfg_attr(coverage_nightly, coverage(off))]
             state => {
                 unreachable!("unreachable Event state on poll: {state}");
             }
@@ -555,7 +552,6 @@ where
                 Some(Err(Disconnected))
             }
             // Defensive: state machine guarantees this is unreachable.
-            #[cfg_attr(coverage_nightly, coverage(off))]
             Err(state) => {
                 unreachable!(
                     "unreachable Event state on poll state transition that followed EVENT_BOUND: {state}"
@@ -671,7 +667,6 @@ where
                 Some(Err(Disconnected))
             }
             // Defensive: state machine guarantees this is unreachable.
-            #[cfg_attr(coverage_nightly, coverage(off))]
             Err(state) => {
                 unreachable!(
                     "unreachable Event state on poll state transition that followed EVENT_AWAITING: {state}"
@@ -717,7 +712,6 @@ where
                 Err(Disconnected)
             }
             // Defensive: state machine guarantees this is unreachable.
-            #[cfg_attr(coverage_nightly, coverage(off))]
             _ => {
                 unreachable!(
                     "unreachable OnceEvent post-signaling state on receiver disconnect: {state}"
@@ -843,7 +837,6 @@ where
             }
             // Defensive: state machine guarantees this is unreachable because the CAS loop
             // spins on SIGNALING and only breaks on BOUND, SET, or DISCONNECTED.
-            #[cfg_attr(coverage_nightly, coverage(off))]
             _ => {
                 unreachable!("unreachable Event state on receiver disconnect: {previous_state}");
             }

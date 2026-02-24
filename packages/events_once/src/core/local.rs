@@ -296,7 +296,6 @@ impl<T: 'static> LocalEvent<T> {
                 Err(Disconnected)
             }
             // Defensive: state machine guarantees this is unreachable.
-            #[cfg_attr(coverage_nightly, coverage(off))]
             _ => {
                 unreachable!("unreachable LocalEvent state on set: {previous_state}");
             }
@@ -368,7 +367,6 @@ impl<T: 'static> LocalEvent<T> {
                 Some(Err(Disconnected))
             }
             // Defensive: state machine guarantees this is unreachable.
-            #[cfg_attr(coverage_nightly, coverage(off))]
             state => {
                 unreachable!("unreachable LocalEvent state on poll: {state}");
             }
@@ -418,7 +416,6 @@ impl<T: 'static> LocalEvent<T> {
                 Err(Disconnected)
             }
             // Defensive: state machine guarantees this is unreachable.
-            #[cfg_attr(coverage_nightly, coverage(off))]
             _ => {
                 unreachable!("unreachable LocalEvent state on sender disconnect: {previous_state}");
             }
@@ -499,7 +496,6 @@ impl<T: 'static> LocalEvent<T> {
                 Err(Disconnected)
             }
             // Defensive: state machine guarantees this is unreachable.
-            #[cfg_attr(coverage_nightly, coverage(off))]
             _ => {
                 unreachable!(
                     "unreachable LocalEvent state on receiver disconnect: {previous_state}"
