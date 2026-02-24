@@ -782,16 +782,40 @@ where
             }
         }
 
+        // We must transition the event into DISCONNECTED, but we cannot do so while the
+        // sender is in the middle of a SIGNALING transition — writing DISCONNECTED via swap
+        // would clobber SIGNALING and the sender would then write SET/DISCONNECTED into
+        // memory that the receiver has already released (use-after-free). Instead, we use a
+        // CAS loop that spins on SIGNALING, waiting for the sender to finish its transition
+        // before we write DISCONNECTED.
+        //
         // It is legal to set DISCONNECTED here, permitting dealloc, even though we still
         // hold an &event reference here, which ordinarily means it is still illegal to
         // deallocate the object. However, the dangling reference in this method is an
         // `UnsafeCell` which is allowed to dangle, so we are fine even if the object is
         // immediately destroyed after this line.
-        //
-        // We use Release because we are releasing the synchronization block of the event.
-        let previous_state = event
-            .state
-            .swap(EVENT_DISCONNECTED, atomic::Ordering::Release);
+        let previous_state = loop {
+            let current = event.state.load(atomic::Ordering::Relaxed);
+
+            if current == EVENT_SIGNALING {
+                // The sender is mid-transition. It will complete in just a few instructions,
+                // so we spin until it finishes and writes the final state.
+                spin_loop();
+                continue;
+            }
+
+            // We use Release because we are releasing the synchronization block of the event.
+            match event.state.compare_exchange(
+                current,
+                EVENT_DISCONNECTED,
+                atomic::Ordering::Release,
+                atomic::Ordering::Relaxed,
+            ) {
+                Ok(_) => break current,
+                // Another thread changed the state between our load and the CAS. Retry.
+                Err(_) => continue,
+            }
+        };
 
         match previous_state {
             EVENT_BOUND => {
@@ -810,19 +834,6 @@ where
                 // The receiver (the caller) will clean up.
                 Ok(Some(value))
             }
-            EVENT_SIGNALING => {
-                // We had started listening for the value and the sender is currently in the
-                // middle of signaling us that it has set the value or disconnected.
-                // We need to wait for the sender to finish its work first so we can identify
-                // which one of us needs to clean up (the sender is going to overwrite
-                // the DISCONNECTED state that we wrote because we wrote it during signaling).
-                match event.poll_signaling() {
-                    // The receiver (the caller) will clean up.
-                    Ok(value) => Ok(Some(value)),
-                    // The receiver (the caller) is the last endpoint remaining, so it will clean up.
-                    Err(Disconnected) => Err(Disconnected),
-                }
-            }
             EVENT_DISCONNECTED => {
                 // We need to ensure we see any writes the sender made before it disconnected.
                 atomic::fence(atomic::Ordering::Acquire);
@@ -830,7 +841,8 @@ where
                 // The receiver (the caller) is the last endpoint remaining, so it will clean up.
                 Err(Disconnected)
             }
-            // Defensive: state machine guarantees this is unreachable.
+            // Defensive: state machine guarantees this is unreachable because the CAS loop
+            // spins on SIGNALING and only breaks on BOUND, SET, or DISCONNECTED.
             #[cfg_attr(coverage_nightly, coverage(off))]
             _ => {
                 unreachable!("unreachable Event state on receiver disconnect: {previous_state}");
@@ -1932,12 +1944,13 @@ mod tests {
         });
     }
 
-    // This test exposes a real use-after-free in the event state machine: when the receiver
-    // drops during SIGNALING, `final_poll` writes DISCONNECTED via `swap`, then `poll_signaling`
-    // sees that DISCONNECTED (not the sender's) and returns immediately, causing the receiver
-    // to deallocate while the sender still needs to write EVENT_SET. Miri correctly flags this.
+    // This test verifies that `final_poll` correctly handles the case where the sender is
+    // mid-SIGNALING when the receiver is dropped. The fix uses a CAS loop in `final_poll`
+    // that spins on SIGNALING, so the receiver waits for the sender to finish before writing
+    // DISCONNECTED. The receiver-drop must happen on a separate thread because `final_poll`
+    // will spin until the sender completes, and the sender is blocked on the hook barrier.
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Barrier-heavy threading pattern is too slow for Miri.
     fn boxed_final_poll_races_sender_signaling() {
         with_watchdog(|| {
             let BarrierHook {
@@ -1964,25 +1977,21 @@ mod tests {
                 // Wait for the hook to fire (sender is in SIGNALING).
                 entered.wait();
 
-                // Drop receiver while the sender is paused. final_poll
-                // sees SIGNALING from swap(DISCONNECTED) and enters
-                // poll_signaling. poll_signaling reads DISCONNECTED
-                // (written by the swap) and exits immediately. But then
-                // the sender will overwrite DISCONNECTED with SET when
-                // released, so we must drop and release in the right
-                // order.
-                //
-                // poll_signaling reads DISCONNECTED (which we wrote via
-                // swap before the sender overwrites it), so
-                // final_poll returns Err(Disconnected). The receiver
-                // endpoint releases the event. The value (i32) has no
-                // destructor, so the leaked value in the event is fine.
-                drop(receiver);
+                // Drop the receiver on a separate thread. final_poll
+                // will spin on SIGNALING until the sender completes
+                // its transition, so we cannot block this thread — we
+                // need it to release the sender via proceed.wait().
+                let drop_thread = thread::spawn(move || {
+                    drop(receiver);
+                });
 
-                // Release the sender so it can complete.
+                // Release the sender so it can complete its transition
+                // from SIGNALING -> SET. This unblocks final_poll's
+                // spin, which then sees SET and reads the value.
                 proceed.wait();
 
                 send_thread.join().unwrap();
+                drop_thread.join().unwrap();
             });
         });
     }
