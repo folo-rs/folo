@@ -79,6 +79,13 @@ where
         Some(global_state.with_regional_state(memory_region_id, Arc::clone))
     }
 
+    /// Returns whether this instance has a cached regional state, meaning access will use the
+    /// fast path instead of looking up the memory region on every access.
+    #[cfg(test)]
+    fn has_regional_state(&self) -> bool {
+        self.regional_state.is_some()
+    }
+
     /// Executes the provided function with a reference to the cached value
     /// in the current memory region.
     ///
@@ -750,6 +757,9 @@ mod tests {
             pin_to_processor(&hardware, 0);
 
             let local = RegionCached::with_hardware(42, hardware);
+
+            // The constructor must have detected the pinned thread and cached the regional state.
+            assert!(local.has_regional_state());
 
             // Regional state is cached because the thread is pinned. Multiple reads
             // should all succeed without needing to re-resolve the memory region.
