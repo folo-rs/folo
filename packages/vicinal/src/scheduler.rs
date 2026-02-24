@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use many_cpus::SystemHardware;
 use tracing::trace;
 
 use crate::metrics::CLOCK;
@@ -150,7 +149,7 @@ impl Scheduler {
         // Capture spawn time for metrics.
         let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
 
-        let processor_id = SystemHardware::current().current_processor_id();
+        let processor_id = self.inner.hardware.current_processor_id();
 
         // Ensure workers are spawned for this processor (lazy initialization).
         self.inner.ensure_workers_spawned(processor_id);
@@ -201,7 +200,7 @@ impl Scheduler {
         // Capture spawn time for metrics.
         let spawn_time = CLOCK.with_borrow_mut(fast_time::Clock::now);
 
-        let processor_id = SystemHardware::current().current_processor_id();
+        let processor_id = self.inner.hardware.current_processor_id();
 
         // Ensure workers are spawned for this processor (lazy initialization).
         self.inner.ensure_workers_spawned(processor_id);

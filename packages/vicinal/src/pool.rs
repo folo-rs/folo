@@ -23,6 +23,7 @@ static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct PoolInner {
     pub(crate) pool_id: u64,
+    pub(crate) hardware: SystemHardware,
     pub(crate) registry: ProcessorRegistry,
     pub(crate) workers_per_processor: NonZero<u32>,
     pub(crate) worker_handles: Mutex<Vec<ThreadJoinHandle<()>>>,
@@ -77,7 +78,8 @@ impl PoolInner {
                 ))
                 .spawn(move || {
                     // Pin worker thread to the target processor for cache locality.
-                    if let Some(processor_set) = SystemHardware::current()
+                    if let Some(processor_set) = inner_clone
+                        .hardware
                         .processors()
                         .to_builder()
                         .filter(|p| p.id() == processor_id)
@@ -269,12 +271,14 @@ impl Drop for Pool {
 #[derive(Debug)]
 pub struct PoolBuilder {
     workers_per_processor: NonZero<u32>,
+    hardware: Option<SystemHardware>,
 }
 
 impl PoolBuilder {
     fn new() -> Self {
         Self {
             workers_per_processor: DEFAULT_WORKERS_PER_PROCESSOR,
+            hardware: None,
         }
     }
 
@@ -285,12 +289,28 @@ impl PoolBuilder {
         self
     }
 
+    /// Sets the [`SystemHardware`] instance that the pool uses to determine hardware topology.
+    ///
+    /// By default the pool uses [`SystemHardware::current()`], which queries the real hardware
+    /// of the system. Pass a custom instance (for example one created via
+    /// `SystemHardware::fake()`) to override this.
+    #[must_use]
+    pub fn hardware(mut self, hardware: SystemHardware) -> Self {
+        self.hardware = hardware.into();
+        self
+    }
+
     /// Builds the pool with the configured settings.
     #[must_use]
     pub fn build(self) -> Pool {
+        let hardware = self
+            .hardware
+            .unwrap_or_else(|| SystemHardware::current().clone());
+
         let inner = Arc::new(PoolInner {
             pool_id: NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed),
-            registry: ProcessorRegistry::new(),
+            registry: ProcessorRegistry::new(&hardware),
+            hardware,
             workers_per_processor: self.workers_per_processor,
             worker_handles: Mutex::new(Vec::new()),
             shutdown: AtomicBool::new(false),
@@ -304,6 +324,10 @@ impl PoolBuilder {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::num::NonZero;
+
+    use many_cpus::SystemHardware;
+    use many_cpus::fake::HardwareBuilder;
+    use new_zealand::nz;
 
     use crate::Pool;
 
@@ -320,6 +344,14 @@ mod tests {
         let pool = Pool::builder()
             .workers_per_processor(NonZero::new(4).unwrap())
             .build();
+        drop(pool);
+    }
+
+    #[test]
+    fn pool_builder_accepts_custom_hardware() {
+        let hardware =
+            SystemHardware::fake(HardwareBuilder::from_counts(nz!(2_usize), nz!(1_usize)));
+        let pool = Pool::builder().hardware(hardware).build();
         drop(pool);
     }
 

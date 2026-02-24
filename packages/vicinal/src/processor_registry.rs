@@ -20,8 +20,8 @@ pub(crate) struct ProcessorRegistry {
 }
 
 impl ProcessorRegistry {
-    pub(crate) fn new() -> Self {
-        let max_processors = SystemHardware::current().max_processor_count();
+    pub(crate) fn new(hardware: &SystemHardware) -> Self {
+        let max_processors = hardware.max_processor_count();
         let states = iter::repeat_with(OnceLock::new)
             .take(max_processors)
             .collect::<Vec<_>>()
@@ -79,33 +79,43 @@ impl ProcessorRegistry {
 mod tests {
     use std::sync::atomic::Ordering;
 
+    use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
+
     use super::*;
 
-    // We cannot easily test ProcessorRegistry in unit tests because it depends on
-    // HardwareInfo::max_processor_count() which queries the real hardware.
-    // Integration tests will cover this functionality.
+    fn fake_hardware(processor_count: usize) -> SystemHardware {
+        let builder = (0..processor_count).fold(HardwareBuilder::new(), |b, i| {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "test values are small enough to fit"
+            )]
+            b.processor(ProcessorBuilder::new().id(i as u32))
+        });
+        SystemHardware::fake(builder)
+    }
 
-    #[cfg_attr(miri, ignore)]
     #[test]
-    fn new_creates_registry() {
-        let registry = ProcessorRegistry::new();
+    fn new_creates_registry_with_correct_capacity() {
+        let hardware = fake_hardware(4);
+        let registry = ProcessorRegistry::new(&hardware);
 
         // Initially no processors should be initialized.
         assert_eq!(registry.initialized_count(), 0);
     }
 
-    #[cfg_attr(miri, ignore)]
     #[test]
     fn get_returns_none_for_uninitialized() {
-        let registry = ProcessorRegistry::new();
+        let hardware = fake_hardware(4);
+        let registry = ProcessorRegistry::new(&hardware);
 
         assert!(registry.get(0).is_none());
+        assert!(registry.get(3).is_none());
     }
 
-    #[cfg_attr(miri, ignore)]
     #[test]
     fn get_or_init_initializes_state() {
-        let registry = ProcessorRegistry::new();
+        let hardware = fake_hardware(4);
+        let registry = ProcessorRegistry::new(&hardware);
 
         let state = registry.get_or_init(0);
         assert_eq!(state.get_tasks_spawned(), 0);
@@ -113,10 +123,10 @@ mod tests {
         assert_eq!(registry.initialized_count(), 1);
     }
 
-    #[cfg_attr(miri, ignore)]
     #[test]
     fn get_or_init_returns_same_state() {
-        let registry = ProcessorRegistry::new();
+        let hardware = fake_hardware(4);
+        let registry = ProcessorRegistry::new(&hardware);
 
         let state1 = registry.get_or_init(0);
         state1.record_task_spawned();
@@ -128,10 +138,10 @@ mod tests {
         assert_eq!(registry.initialized_count(), 1);
     }
 
-    #[cfg_attr(miri, ignore)]
     #[test]
     fn signal_shutdown_all_signals_all_initialized() {
-        let registry = ProcessorRegistry::new();
+        let hardware = fake_hardware(4);
+        let registry = ProcessorRegistry::new(&hardware);
 
         // Initialize a few processors.
         let state0 = registry.get_or_init(0);
@@ -146,10 +156,10 @@ mod tests {
         assert!(state1.shutdown_flag.load(Ordering::Acquire));
     }
 
-    #[cfg_attr(miri, ignore)]
     #[test]
     fn iter_initialized_yields_only_initialized() {
-        let registry = ProcessorRegistry::new();
+        let hardware = fake_hardware(4);
+        let registry = ProcessorRegistry::new(&hardware);
 
         registry.get_or_init(0);
         registry.get_or_init(2);
@@ -160,5 +170,27 @@ mod tests {
         let ids: Vec<_> = initialized.iter().map(|(id, _)| *id).collect();
         assert!(ids.contains(&0));
         assert!(ids.contains(&2));
+    }
+
+    #[test]
+    fn multiple_processors_can_be_initialized() {
+        let hardware = fake_hardware(3);
+        let registry = ProcessorRegistry::new(&hardware);
+
+        registry.get_or_init(0);
+        registry.get_or_init(1);
+        registry.get_or_init(2);
+
+        assert_eq!(registry.initialized_count(), 3);
+    }
+
+    #[test]
+    fn registry_with_single_processor() {
+        let hardware = fake_hardware(1);
+        let registry = ProcessorRegistry::new(&hardware);
+
+        let state = registry.get_or_init(0);
+        assert_eq!(state.get_tasks_spawned(), 0);
+        assert_eq!(registry.initialized_count(), 1);
     }
 }

@@ -9,6 +9,9 @@ use std::thread;
 
 use events_once::EventPool;
 use futures::executor::block_on;
+use many_cpus::SystemHardware;
+use many_cpus::fake::HardwareBuilder;
+use new_zealand::nz;
 use testing::with_watchdog;
 use vicinal::Pool;
 
@@ -242,5 +245,140 @@ fn spawn_and_forget_multiple_tasks() {
         }
 
         assert_eq!(completed.load(Ordering::Relaxed), 50);
+    });
+}
+
+#[cfg_attr(miri, ignore)]
+#[test]
+fn spawn_and_await_with_fake_hardware() {
+    with_watchdog(|| {
+        let hardware =
+            SystemHardware::fake(HardwareBuilder::from_counts(nz!(2_usize), nz!(1_usize)));
+        let pool = Pool::builder().hardware(hardware).build();
+        let scheduler = pool.scheduler();
+
+        let handle = scheduler.spawn(|| 42);
+        assert_eq!(block_on(handle), 42);
+    });
+}
+
+#[cfg_attr(miri, ignore)]
+#[test]
+fn spawn_many_tasks_with_single_processor_hardware() {
+    with_watchdog(|| {
+        let hardware =
+            SystemHardware::fake(HardwareBuilder::from_counts(nz!(1_usize), nz!(1_usize)));
+        let pool = Pool::builder().hardware(hardware).build();
+        let scheduler = pool.scheduler();
+
+        for (i, handle) in (0..50).map(|i| scheduler.spawn(move || i)).enumerate() {
+            assert_eq!(block_on(handle), i);
+        }
+    });
+}
+
+#[cfg_attr(miri, ignore)]
+#[test]
+fn fire_and_forget_with_fake_hardware() {
+    with_watchdog(|| {
+        let hardware =
+            SystemHardware::fake(HardwareBuilder::from_counts(nz!(2_usize), nz!(1_usize)));
+        let pool = Pool::builder().hardware(hardware).build();
+        let scheduler = pool.scheduler();
+        let event_pool = EventPool::<()>::new();
+
+        let (tx, rx) = event_pool.rent();
+        scheduler.spawn_and_forget(move || {
+            tx.send(());
+        });
+
+        block_on(rx).unwrap();
+    });
+}
+
+#[cfg_attr(miri, ignore)]
+#[test]
+fn concurrent_spawns_with_fake_hardware() {
+    with_watchdog(|| {
+        let hardware =
+            SystemHardware::fake(HardwareBuilder::from_counts(nz!(4_usize), nz!(2_usize)));
+        let pool = Pool::builder().hardware(hardware).build();
+        let scheduler = pool.scheduler();
+        let completed = Arc::new(AtomicUsize::new(0));
+
+        let thread_handles: Vec<_> = std::iter::repeat_with(|| {
+            let scheduler = scheduler.clone();
+            let completed = Arc::clone(&completed);
+
+            thread::spawn(move || {
+                let handles: Vec<_> = (0..10)
+                    .map(|i| {
+                        let completed = Arc::clone(&completed);
+                        scheduler.spawn(move || {
+                            completed.fetch_add(1, Ordering::Relaxed);
+                            i
+                        })
+                    })
+                    .collect();
+
+                for handle in handles {
+                    block_on(handle);
+                }
+            })
+        })
+        .take(4)
+        .collect();
+
+        for handle in thread_handles {
+            handle.join().unwrap();
+        }
+
+        assert_eq!(completed.load(Ordering::Relaxed), 40);
+    });
+}
+
+#[cfg_attr(miri, ignore)]
+#[test]
+#[should_panic]
+fn spawn_and_await_panic_with_fake_hardware() {
+    with_watchdog(|| {
+        let hardware =
+            SystemHardware::fake(HardwareBuilder::from_counts(nz!(2_usize), nz!(1_usize)));
+        let pool = Pool::builder().hardware(hardware).build();
+        let scheduler = pool.scheduler();
+
+        let handle = scheduler.spawn(|| panic!("intentional panic"));
+        block_on(handle);
+    });
+}
+
+#[cfg_attr(miri, ignore)]
+#[test]
+fn spawn_urgent_with_fake_hardware() {
+    with_watchdog(|| {
+        let hardware =
+            SystemHardware::fake(HardwareBuilder::from_counts(nz!(3_usize), nz!(1_usize)));
+        let pool = Pool::builder().hardware(hardware).build();
+        let scheduler = pool.scheduler();
+
+        let handle = scheduler.spawn_urgent(|| "urgent result");
+        assert_eq!(block_on(handle), "urgent result");
+    });
+}
+
+#[cfg_attr(miri, ignore)]
+#[test]
+fn nested_spawn_with_fake_hardware() {
+    with_watchdog(|| {
+        let hardware =
+            SystemHardware::fake(HardwareBuilder::from_counts(nz!(2_usize), nz!(1_usize)));
+        let pool = Pool::builder().hardware(hardware).build();
+        let scheduler = pool.scheduler();
+
+        let scheduler_clone = scheduler.clone();
+        let outer_handle = scheduler.spawn(move || scheduler_clone.spawn(|| 99));
+
+        let inner_handle = block_on(outer_handle);
+        assert_eq!(block_on(inner_handle), 99);
     });
 }
