@@ -191,8 +191,10 @@ impl Drop for Remover {
 mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
+    use std::borrow::Borrow;
+
     use super::*;
-    use crate::{NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};
+    use crate::{LocalBlindPool, NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};
 
     assert_not_impl_any!(LocalBlindPooled<SendAndSync>: Send, Sync);
     assert_not_impl_any!(LocalBlindPooled<SendNotSync>: Send, Sync);
@@ -203,6 +205,87 @@ mod tests {
     assert_impl_all!(LocalBlindPooled<SendAndSync>: Clone);
 
     assert_not_impl_any!(Remover: Send, Sync);
+
+    // Must have a destructor because we need to remove the object on destroy.
+    assert_impl_all!(Remover: Drop);
+
+    #[test]
+    fn as_pin_returns_pinned_reference() {
+        let pool = LocalBlindPool::new();
+        let shared = pool.insert(42_u32).into_shared();
+
+        let pinned = shared.as_pin();
+        assert_eq!(*pinned.get_ref(), 42);
+    }
+
+    #[test]
+    fn deref_returns_reference_to_value() {
+        let pool = LocalBlindPool::new();
+        let shared = pool.insert(42_u32).into_shared();
+
+        assert_eq!(*shared, 42);
+    }
+
+    #[test]
+    fn borrow_returns_reference() {
+        let pool = LocalBlindPool::new();
+        let shared = pool.insert(42_u32).into_shared();
+
+        let borrowed: &u32 = shared.borrow();
+        assert_eq!(*borrowed, 42);
+    }
+
+    #[test]
+    fn as_ref_returns_reference() {
+        let pool = LocalBlindPool::new();
+        let shared = pool.insert(42_u32).into_shared();
+
+        let reference: &u32 = shared.as_ref();
+        assert_eq!(*reference, 42);
+    }
+
+    #[test]
+    fn erase_extends_lifetime() {
+        let pool = LocalBlindPool::new();
+        let shared = pool.insert(42_u32).into_shared();
+
+        let erased = shared.clone().erase();
+
+        assert_eq!(pool.len(), 1);
+        assert_eq!(*shared, 42);
+
+        drop(shared);
+        assert_eq!(pool.len(), 1);
+
+        drop(erased);
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn clone_creates_independent_handle() {
+        let pool = LocalBlindPool::new();
+        let shared = pool.insert(42_u32).into_shared();
+
+        let cloned = shared.clone();
+        assert_eq!(*cloned, 42);
+
+        drop(shared);
+        assert_eq!(pool.len(), 1);
+        assert_eq!(*cloned, 42);
+
+        drop(cloned);
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn from_mut_converts_to_shared() {
+        let pool = LocalBlindPool::new();
+        let handle = pool.insert(42_u32);
+
+        let shared: LocalBlindPooled<u32> = LocalBlindPooled::from(handle);
+        assert_eq!(*shared, 42);
+        assert_eq!(pool.len(), 1);
+    }
 
     // Must have a destructor because we need to remove the object on destroy.
     assert_impl_all!(Remover: Drop);

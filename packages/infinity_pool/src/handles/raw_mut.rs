@@ -284,4 +284,75 @@ mod tests {
             assert!(handle.slab_index() < pool.capacity());
         }
     }
+
+    #[test]
+    fn as_pin_returns_pinned_reference() {
+        let mut pool = RawPinnedPool::<u32>::new();
+        let handle = pool.insert(42);
+
+        // SAFETY: Handle is valid and pool is still alive.
+        let pinned = unsafe { handle.as_pin() };
+        assert_eq!(*pinned.get_ref(), 42);
+    }
+
+    #[test]
+    fn as_pin_mut_returns_pinned_mutable_reference() {
+        let mut pool = RawPinnedPool::<u32>::new();
+        let mut handle = pool.insert(42);
+
+        // SAFETY: Handle is valid and pool is still alive.
+        *unsafe { handle.as_pin_mut() }.get_mut() = 99;
+
+        // SAFETY: Handle is valid and pool is still alive.
+        assert_eq!(*unsafe { handle.as_ref() }, 99);
+    }
+
+    #[test]
+    fn as_ref_returns_reference() {
+        let mut pool = RawPinnedPool::<u32>::new();
+        let handle = pool.insert(42);
+
+        // SAFETY: Handle is valid and pool is still alive.
+        let reference = unsafe { handle.as_ref() };
+        assert_eq!(*reference, 42);
+    }
+
+    #[test]
+    fn as_mut_returns_mutable_reference() {
+        let mut pool = RawPinnedPool::<u32>::new();
+        let mut handle = pool.insert(42);
+
+        // SAFETY: Handle is valid and pool is still alive.
+        *unsafe { handle.as_mut() } = 99;
+
+        // SAFETY: Handle is valid and pool is still alive.
+        assert_eq!(*unsafe { handle.as_ref() }, 99);
+    }
+
+    #[test]
+    fn erase_creates_type_erased_handle() {
+        let mut pool = RawPinnedPool::<u32>::new();
+        let handle = pool.insert(42);
+
+        let erased = handle.erase();
+
+        assert_eq!(pool.len(), 1);
+
+        // SAFETY: Handle is valid and pool is still alive.
+        unsafe {
+            pool.remove(erased);
+        }
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn into_shared_converts_to_shared() {
+        let mut pool = RawPinnedPool::<u32>::new();
+        let handle = pool.insert(42);
+
+        let shared = handle.into_shared();
+
+        // SAFETY: Handle is valid and pool is still alive.
+        assert_eq!(*unsafe { shared.as_ref() }, 42);
+    }
 }

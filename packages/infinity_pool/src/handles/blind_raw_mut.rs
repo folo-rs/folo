@@ -172,7 +172,7 @@ mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
-    use crate::{NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};
+    use crate::{NotSendNotSync, NotSendSync, RawBlindPool, SendAndSync, SendNotSync};
 
     assert_impl_all!(RawBlindPooledMut<SendAndSync>: Send, Sync);
     assert_impl_all!(RawBlindPooledMut<SendNotSync>: Send, Sync);
@@ -190,8 +190,6 @@ mod tests {
 
     #[test]
     fn unique_handle_can_cross_threads_with_send_only() {
-        use crate::RawBlindPool;
-
         // A type that is Send but not Sync.
         struct Counter {
             value: Cell<i32>,
@@ -239,5 +237,76 @@ mod tests {
         // Back in main thread.
         // SAFETY: Handle is valid and pool is still alive.
         assert_eq!(unsafe { handle_in_thread.ptr().as_ref() }.get(), 2);
+    }
+
+    #[test]
+    fn as_pin_returns_pinned_reference() {
+        let mut pool = RawBlindPool::new();
+        let handle = pool.insert(42_u32);
+
+        // SAFETY: Handle is valid and pool is still alive.
+        let pinned = unsafe { handle.as_pin() };
+        assert_eq!(*pinned.get_ref(), 42);
+    }
+
+    #[test]
+    fn as_pin_mut_returns_pinned_mutable_reference() {
+        let mut pool = RawBlindPool::new();
+        let mut handle = pool.insert(42_u32);
+
+        // SAFETY: Handle is valid and pool is still alive.
+        *unsafe { handle.as_pin_mut() }.get_mut() = 99;
+
+        // SAFETY: Handle is valid and pool is still alive.
+        assert_eq!(*unsafe { handle.as_ref() }, 99);
+    }
+
+    #[test]
+    fn as_ref_returns_reference() {
+        let mut pool = RawBlindPool::new();
+        let handle = pool.insert(42_u32);
+
+        // SAFETY: Handle is valid and pool is still alive.
+        let reference = unsafe { handle.as_ref() };
+        assert_eq!(*reference, 42);
+    }
+
+    #[test]
+    fn as_mut_returns_mutable_reference() {
+        let mut pool = RawBlindPool::new();
+        let mut handle = pool.insert(42_u32);
+
+        // SAFETY: Handle is valid and pool is still alive.
+        *unsafe { handle.as_mut() } = 99;
+
+        // SAFETY: Handle is valid and pool is still alive.
+        assert_eq!(*unsafe { handle.as_ref() }, 99);
+    }
+
+    #[test]
+    fn erase_creates_type_erased_handle() {
+        let mut pool = RawBlindPool::new();
+        let handle = pool.insert(42_u32);
+
+        let erased = handle.erase();
+
+        assert_eq!(pool.len(), 1);
+
+        // SAFETY: Handle is valid and pool is still alive.
+        unsafe {
+            pool.remove(erased);
+        }
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn into_shared_converts_to_shared() {
+        let mut pool = RawBlindPool::new();
+        let handle = pool.insert(42_u32);
+
+        let shared = handle.into_shared();
+
+        // SAFETY: Handle is valid and pool is still alive.
+        assert_eq!(*unsafe { shared.as_ref() }, 42);
     }
 }

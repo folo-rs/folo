@@ -260,8 +260,11 @@ impl<T: ?Sized> Drop for LocalPooledMut<T> {
 mod tests {
     use static_assertions::assert_not_impl_any;
 
+    use std::borrow::Borrow;
+    use std::borrow::BorrowMut;
+
     use super::*;
-    use crate::{NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};
+    use crate::{LocalOpaquePool, NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};
 
     assert_not_impl_any!(LocalPooledMut<SendAndSync>: Send, Sync);
     assert_not_impl_any!(LocalPooledMut<SendNotSync>: Send, Sync);
@@ -276,8 +279,6 @@ mod tests {
 
     #[test]
     fn erase_extends_lifetime() {
-        use crate::LocalOpaquePool;
-
         let pool = LocalOpaquePool::with_layout_of::<u32>();
         let handle = pool.insert(42);
 
@@ -290,5 +291,108 @@ mod tests {
         // Drop erased handle, object is removed.
         drop(erased);
         assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn as_pin_returns_pinned_reference() {
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
+        let handle = pool.insert(42_u32);
+
+        let pinned = handle.as_pin();
+        assert_eq!(*pinned.get_ref(), 42);
+    }
+
+    #[test]
+    fn as_pin_mut_returns_pinned_mutable_reference() {
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
+        let mut handle = pool.insert(42_u32);
+
+        *handle.as_pin_mut().get_mut() = 99;
+        assert_eq!(*handle, 99);
+    }
+
+    #[test]
+    fn deref_returns_reference_to_value() {
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
+        let handle = pool.insert(42_u32);
+
+        assert_eq!(*handle, 42);
+    }
+
+    #[test]
+    fn deref_mut_allows_mutation() {
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
+        let mut handle = pool.insert(42_u32);
+
+        *handle = 99;
+        assert_eq!(*handle, 99);
+    }
+
+    #[test]
+    fn borrow_returns_reference() {
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
+        let handle = pool.insert(42_u32);
+
+        let borrowed: &u32 = handle.borrow();
+        assert_eq!(*borrowed, 42);
+    }
+
+    #[test]
+    fn borrow_mut_returns_mutable_reference() {
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
+        let mut handle = pool.insert(42_u32);
+
+        let borrowed: &mut u32 = handle.borrow_mut();
+        *borrowed = 99;
+        assert_eq!(*handle, 99);
+    }
+
+    #[test]
+    fn as_ref_returns_reference() {
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
+        let handle = pool.insert(42_u32);
+
+        let reference: &u32 = handle.as_ref();
+        assert_eq!(*reference, 42);
+    }
+
+    #[test]
+    fn as_mut_returns_mutable_reference() {
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
+        let mut handle = pool.insert(42_u32);
+
+        let reference: &mut u32 = handle.as_mut();
+        *reference = 99;
+        assert_eq!(*handle, 99);
+    }
+
+    #[test]
+    fn into_inner_returns_value() {
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
+        let handle = pool.insert(42_u32);
+
+        let value = handle.into_inner();
+        assert_eq!(value, 42);
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn into_shared_converts_to_shared_handle() {
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
+        let handle = pool.insert(42_u32);
+
+        let shared = handle.into_shared();
+        assert_eq!(*shared, 42);
+        assert_eq!(pool.len(), 1);
+    }
+
+    #[test]
+    fn from_converts_mut_to_shared() {
+        let pool = LocalOpaquePool::with_layout_of::<u32>();
+        let handle = pool.insert(42_u32);
+
+        let shared: LocalPooled<u32> = LocalPooled::from(handle);
+        assert_eq!(*shared, 42);
+        assert_eq!(pool.len(), 1);
     }
 }
