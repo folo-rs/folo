@@ -1,4 +1,5 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 //! Provides efficient mechanisms to capture the current timestamp and measure elapsed time.
 //!
