@@ -331,14 +331,12 @@ mod tests {
 
     use crate::Pool;
 
-    #[cfg_attr(miri, ignore)]
     #[test]
     fn pool_new_creates_pool() {
         let pool = Pool::new();
         drop(pool);
     }
 
-    #[cfg_attr(miri, ignore)]
     #[test]
     fn pool_builder_allows_configuration() {
         let pool = Pool::builder()
@@ -355,7 +353,6 @@ mod tests {
         drop(pool);
     }
 
-    #[cfg_attr(miri, ignore)]
     #[test]
     fn scheduler_can_be_obtained() {
         let pool = Pool::new();

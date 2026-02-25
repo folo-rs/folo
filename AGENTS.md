@@ -513,6 +513,8 @@ is even better. However, this is not always possible.
 Miri is too slow when running tests with large data sets (anything with 100s or 1000s of items).
 Exclude such tests from running under Miri.
 
+Doctests are not executed under Miri. There is no need to make doctests Miri-compatible.
+
 # Mutation testing coverage and skipping mutations
 
 We expect all mutations to either be unviable or to be caught. Uncaught mutations and mutants that

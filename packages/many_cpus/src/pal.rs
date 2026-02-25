@@ -7,23 +7,23 @@ pub(crate) use abstractions::*;
 mod facade;
 pub(crate) use facade::*;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(miri)))]
 mod linux;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(miri)))]
 pub(crate) use linux::*;
 
-#[cfg(windows)]
+#[cfg(all(windows, not(miri)))]
 mod windows;
-#[cfg(windows)]
+#[cfg(all(windows, not(miri)))]
 pub use windows::*;
 
-// The fallback module is compiled in test mode on all platforms, and as the primary
-// implementation on unsupported platforms. However, we only glob-import it when it is
-// the primary implementation (i.e. on unsupported platforms). On supported platforms
-// in test mode, it must be accessed via the explicit path `fallback::` to avoid ambiguity
-// with the platform-specific implementation.
-#[cfg(any(test, not(any(target_os = "linux", windows))))]
+// The fallback module is compiled in test mode on all platforms, under Miri, and as the primary
+// implementation on unsupported platforms. However, we only glob-import it when it is the primary
+// implementation (i.e. on unsupported platforms or under Miri). On supported platforms in test
+// mode, it must be accessed via the explicit path `fallback::` to avoid ambiguity with the
+// platform-specific implementation.
+#[cfg(any(test, miri, not(any(target_os = "linux", windows))))]
 pub(crate) mod fallback;
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(any(miri, not(any(target_os = "linux", windows))))]
 pub(crate) use fallback::*;

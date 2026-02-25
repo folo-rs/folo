@@ -12,7 +12,6 @@ use testing::with_watchdog;
 use vicinal::Pool;
 
 #[test]
-#[cfg_attr(miri, ignore)] // Miri does not support the Windows APIs used by many_cpus
 fn tasks_execute_on_spawning_processor() {
     let pool = Pool::new();
     let scheduler = pool.scheduler();
@@ -76,7 +75,6 @@ fn tasks_execute_on_spawning_processor() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)] // Miri does not support the Windows APIs used by many_cpus.
 fn tasks_execute_on_spawning_processor_with_fake_hardware() {
     with_watchdog(|| {
         let hardware = SystemHardware::fake(

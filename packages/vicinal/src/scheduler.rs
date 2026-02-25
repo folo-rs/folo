@@ -245,7 +245,6 @@ mod tests {
 
     use crate::Pool;
 
-    #[cfg_attr(miri, ignore)]
     #[test]
     fn spawn_returns_join_handle() {
         let pool = Pool::new();
@@ -257,7 +256,6 @@ mod tests {
         assert_eq!(result, 42);
     }
 
-    #[cfg_attr(miri, ignore)]
     #[test]
     fn spawn_urgent_returns_join_handle() {
         let pool = Pool::new();
@@ -269,7 +267,6 @@ mod tests {
         assert_eq!(result, "urgent result");
     }
 
-    #[cfg_attr(miri, ignore)]
     #[test]
     fn scheduler_is_cloneable() {
         let pool = Pool::new();
@@ -283,7 +280,6 @@ mod tests {
         assert_eq!(block_on(handle2), 2);
     }
 
-    #[cfg_attr(miri, ignore)]
     #[test]
     fn spawn_captures_panic() {
         use std::panic;
@@ -299,7 +295,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[cfg_attr(miri, ignore)]
     #[test]
     fn spawn_accepts_not_unpin_task() {
         let pool = Pool::new();
@@ -316,7 +311,6 @@ mod tests {
         assert_eq!(result, 42);
     }
 
-    #[cfg_attr(miri, ignore)]
     #[test]
     fn spawn_and_forget_completes() {
         let pool = Pool::new();
@@ -331,7 +325,6 @@ mod tests {
         block_on(rx).unwrap();
     }
 
-    #[cfg_attr(miri, ignore)]
     #[test]
     fn spawn_urgent_and_forget_completes() {
         let pool = Pool::new();

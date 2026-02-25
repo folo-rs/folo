@@ -707,7 +707,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn to_builder_preserves_processors() {
         let set = SystemHardware::current().processors().take(nz!(1)).unwrap();
 
@@ -723,7 +722,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn inherit_on_pinned() {
         with_watchdog(|| {
             thread::spawn(|| {
@@ -841,7 +839,6 @@ mod tests_fallback {
     use crate::SystemHardware;
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn smoke_test() {
         let hw = SystemHardware::fallback();
         let processor_set = hw.processors();
@@ -870,7 +867,6 @@ mod tests_fallback {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn pin_updates_tracker() {
         let hw = SystemHardware::fallback();
         let processor_set = hw.processors().take(nz!(1)).unwrap();
@@ -883,7 +879,6 @@ mod tests_fallback {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn spawn_thread_pins_correctly() {
         with_watchdog(|| {
             let hw = SystemHardware::fallback();
@@ -905,7 +900,6 @@ mod tests_fallback {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn spawn_threads_pins_all_correctly() {
         with_watchdog(|| {
             let hw = SystemHardware::fallback();
@@ -926,7 +920,6 @@ mod tests_fallback {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn inherit_on_pinned() {
         thread::spawn(|| {
             let hw = SystemHardware::fallback();
@@ -950,7 +943,6 @@ mod tests_fallback {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn to_builder_preserves_processors() {
         let hw = SystemHardware::fallback();
 
@@ -968,7 +960,6 @@ mod tests_fallback {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn take_all_returns_all_processors() {
         let hw = SystemHardware::fallback();
         let all_set = hw.processors();

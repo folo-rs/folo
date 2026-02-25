@@ -237,7 +237,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg_attr(miri, ignore)] // ProcessorSet is not supported under Miri.
     fn smoke_test_all() {
         let expected_default = SystemHardware::current().processors();
         let expected_thread_count = expected_default.len();
@@ -262,7 +261,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // ProcessorSet is not supported under Miri.
     fn smoke_test_one() {
         let processor_set = SystemHardware::current()
             .processors()

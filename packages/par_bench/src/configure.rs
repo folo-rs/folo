@@ -470,7 +470,6 @@ mod tests {
     use crate::{Run, ThreadPool};
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn run_with_thread_state_groups_sets_group_count() {
         let Some(processors) = SystemHardware::current()
             .processors()

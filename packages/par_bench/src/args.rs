@@ -151,7 +151,6 @@ mod tests {
     use crate::{Run, ThreadPool};
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn prepare_iter_meta_returns_correct_run_meta() {
         let mut pool = ThreadPool::new(
             SystemHardware::current()
@@ -180,7 +179,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn measure_wrapper_begin_thread_state_returns_correct_state() {
         let mut pool = ThreadPool::new(
             SystemHardware::current()

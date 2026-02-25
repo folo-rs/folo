@@ -1,7 +1,7 @@
 //! Integration tests for the vicinal worker pool.
 //!
 //! These tests verify full pool functionality with real threads. They are ignored under Miri
-//! because Miri does not support thread spawning and platform-specific calls.
+//! because the `parking_lot` crate uses platform-specific FFI calls that Miri does not support.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

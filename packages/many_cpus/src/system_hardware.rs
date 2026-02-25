@@ -669,7 +669,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn current_hardware_is_singleton() {
         let h1 = SystemHardware::current();
         let h2 = SystemHardware::current();
@@ -679,7 +678,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn returns_valid_processor_id() {
         let hardware = SystemHardware::current();
 
@@ -690,7 +688,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn counts_are_positive_values() {
         let hardware = SystemHardware::current();
 
@@ -700,7 +697,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn pin_status_tracking_per_thread() {
         let hardware = SystemHardware::current();
 
@@ -724,7 +720,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn processors_returns_set() {
         let hardware = SystemHardware::current();
         let processors = hardware.processors();
@@ -733,7 +728,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn pinned_current_processor_id_is_unique() {
         // We spawn a thread on every processor and check that the processor ID is unique.
         let hw = SystemHardware::current();
@@ -761,7 +755,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     fn active_processor_count_is_at_least_processor_set_len() {
         // The system may have processors that are not part of any processor set (e.g. because
         // they are not available for the current process) but cannot have more processors in any
@@ -776,7 +769,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -794,7 +786,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Miri cannot call platform APIs.
     #[should_panic]
     fn panic_if_pinned_processor_with_unpinned_memory_region() {
         let hardware = SystemHardware::current();

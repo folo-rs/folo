@@ -232,6 +232,14 @@
 //! it does not provide the performance benefits of actual processor pinning and topology awareness.
 //! Applications running on unsupported platforms will not see performance improvements from using
 //! this package but will still function correctly.
+//!
+//! ## Miri
+//!
+//! When running under [Miri](https://github.com/rust-lang/miri), this package uses the same
+//! fallback implementation as unsupported platforms because Miri cannot execute the platform-
+//! specific system calls used by the native implementations. This means `SystemHardware::current()`
+//! returns fallback hardware under Miri, enabling dependent crates to run their test suites under
+//! Miri without any special handling as long as the test logic is compatible with the fallback behavior.
 
 #![doc(
     html_logo_url = "https://media.githubusercontent.com/media/folo-rs/folo/refs/heads/main/packages/many_cpus/icon.png"
