@@ -2,6 +2,7 @@
 // Copyright (c) Folo authors.
 
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 //! Mechanisms for creating families of linked objects that can collaborate across threads,
 //! with each instance only used from a single thread.

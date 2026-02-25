@@ -1,4 +1,5 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 //! A Cargo tool to detect the package that a file belongs to, passing the package name
 //! to a subcommand.

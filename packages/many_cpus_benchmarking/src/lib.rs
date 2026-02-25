@@ -1,4 +1,5 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // This is currently impractical to test as we lack the capability to simulate mock processor configurations.
 #![cfg_attr(coverage_nightly, coverage(off))]
 #![expect(clippy::unnecessary_safety_comment, reason = "clippy#16553")]

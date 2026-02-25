@@ -1,4 +1,5 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 //! On many-processor systems with multiple memory regions, there is an extra cost associated with
 //! accessing data in physical memory modules that are in a different memory region than the current
