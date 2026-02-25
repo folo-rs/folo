@@ -256,7 +256,7 @@ mod tests {
     use std::task::{self, Poll, Waker};
     use std::{iter, thread};
 
-    use spin_on::spin_on;
+    use futures::executor::block_on;
     use static_assertions::assert_impl_all;
     use testing::with_watchdog;
 
@@ -611,7 +611,7 @@ mod tests {
                 first_poll_completed_clone.wait();
 
                 // We do not know how many polls this will take, so we switch into real async.
-                spin_on(async {
+                block_on(async {
                     let result = &mut receiver.await;
                     assert!(matches!(result, Ok(42)));
                 });
@@ -630,7 +630,7 @@ mod tests {
             let (sender, receiver) = unsafe { pool.as_ref().rent() };
 
             let receive_thread = thread::spawn(move || {
-                spin_on(async {
+                block_on(async {
                     let result = &mut receiver.await;
                     assert!(matches!(result, Ok(42)));
                 });
@@ -653,7 +653,7 @@ mod tests {
             let (sender, receiver) = unsafe { pool.as_ref().rent() };
 
             let receive_thread = thread::spawn(move || {
-                spin_on(async {
+                block_on(async {
                     let result = &mut receiver.await;
                     assert!(matches!(result, Err(Disconnected)));
                 });

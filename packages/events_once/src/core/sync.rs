@@ -914,7 +914,7 @@ mod tests {
     use std::task::Poll;
     use std::{task, thread};
 
-    use spin_on::spin_on;
+    use futures::executor::block_on;
     use static_assertions::assert_impl_all;
     use testing::with_watchdog;
 
@@ -1463,7 +1463,7 @@ mod tests {
                 first_poll_completed_clone.wait();
 
                 // We do not know how many polls this will take, so we switch into real async.
-                spin_on(async {
+                block_on(async {
                     let result = &mut receiver.await;
                     assert!(matches!(result, Ok(42)));
                 });
@@ -1480,7 +1480,7 @@ mod tests {
             let (sender, receiver) = Event::<i32>::boxed();
 
             let receive_thread = thread::spawn(move || {
-                spin_on(async {
+                block_on(async {
                     let result = &mut receiver.await;
                     assert!(matches!(result, Ok(42)));
                 });
@@ -1501,7 +1501,7 @@ mod tests {
             let (sender, receiver) = Event::<i32>::boxed();
 
             let receive_thread = thread::spawn(move || {
-                spin_on(async {
+                block_on(async {
                     let result = &mut receiver.await;
                     assert!(matches!(result, Err(Disconnected)));
                 });
@@ -1612,7 +1612,7 @@ mod tests {
                 first_poll_completed_clone.wait();
 
                 // We do not know how many polls this will take, so we switch into real async.
-                spin_on(async {
+                block_on(async {
                     let result = &mut receiver.await;
                     assert!(matches!(result, Ok(42)));
                 });
@@ -1630,7 +1630,7 @@ mod tests {
             let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
             let receive_thread = thread::spawn(move || {
-                spin_on(async {
+                block_on(async {
                     let result = &mut receiver.await;
                     assert!(matches!(result, Ok(42)));
                 });
@@ -1652,7 +1652,7 @@ mod tests {
             let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
             let receive_thread = thread::spawn(move || {
-                spin_on(async {
+                block_on(async {
                     let result = &mut receiver.await;
                     assert!(matches!(result, Err(Disconnected)));
                 });
