@@ -8,6 +8,9 @@ changelog_update = false
 # All we care about is crates.io, Git releases are not used.
 git_release_enable = false
 
+# It complains about timeouts now and then. Not convinced it is really timing out but.
+publish_timeout = "45m"
+
 [[package]]
 name = "linked"
 

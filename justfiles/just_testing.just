@@ -19,6 +19,15 @@ miri FILTER="":
 
 [group('testing')]
 [script]
+miri-harder FILTER="":
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    $env:MIRIFLAGS = "-Zmiri-many-seeds=..64"
+    cargo +nightly miri test {{ target_package }} --no-fail-fast --all-features --lib {{ FILTER }} --locked -- --quiet
+
+[group('testing')]
+[script]
 miri-example EXAMPLE:
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true

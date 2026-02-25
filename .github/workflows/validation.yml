@@ -152,6 +152,35 @@ jobs:
       - name: Run miri on ${{ matrix.platform }}
         run: just miri
 
+  # Miri with many seeds is very slow, so we only run it for select packages on Windows.
+  miri-harder-events-once:
+    timeout-minutes: 120
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run miri-harder for events_once on windows-latest
+        run: just package=events_once miri-harder
+
+  miri-harder-infinity-pool:
+    timeout-minutes: 120
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run miri-harder for infinity_pool on windows-latest
+        run: just package=infinity_pool miri-harder
+
   machete:
     strategy:
       fail-fast: false
