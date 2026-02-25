@@ -268,13 +268,11 @@ impl<T: ?Sized> Drop for BlindPooledMut<T> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::borrow::{Borrow, BorrowMut};
     use std::cell::Cell;
     use std::thread;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
-
-    use std::borrow::Borrow;
-    use std::borrow::BorrowMut;
 
     use super::*;
     use crate::{BlindPool, NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};

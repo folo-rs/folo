@@ -195,9 +195,9 @@ impl Drop for Remover {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use static_assertions::{assert_impl_all, assert_not_impl_any};
-
     use std::borrow::Borrow;
+
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
     use crate::{BlindPool, NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};
