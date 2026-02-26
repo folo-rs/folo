@@ -199,11 +199,15 @@ mod tests {
 
         let cloned = shared;
         let copied = shared;
+        #[expect(clippy::clone_on_copy, reason = "explicitly testing Clone impl")]
+        let explicitly_cloned = shared.clone();
 
         // SAFETY: Handles are valid and pool is still alive.
         assert_eq!(unsafe { *cloned.as_ref() }, 42);
         // SAFETY: Handles are valid and pool is still alive.
         assert_eq!(unsafe { *copied.as_ref() }, 42);
+        // SAFETY: Handles are valid and pool is still alive.
+        assert_eq!(unsafe { *explicitly_cloned.as_ref() }, 42);
     }
 
     #[test]

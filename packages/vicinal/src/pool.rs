@@ -21,6 +21,19 @@ const DEFAULT_WORKERS_PER_PROCESSOR: NonZero<u32> = nz!(2_u32);
 
 static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+type HookFn = dyn Fn() + Send + Sync;
+
+// Test hooks allow deterministic testing of race-condition branches by injecting a
+// synchronization point (typically a pair of barriers) between two operations that
+// normally execute without interruption. Each hook is an optional closure stored
+// behind a Mutex. Tests that install hooks must hold HOOK_SERIALIZATION_MUTEX to
+// prevent interference between concurrent hook-based tests.
+#[cfg(test)]
+static HOOK_SERIALIZATION_MUTEX: Mutex<()> = Mutex::new(());
+#[cfg(test)]
+static HOOK_ENSURE_WORKERS_POST_SPAWN: Mutex<Option<Arc<HookFn>>> = Mutex::new(None);
+
 pub(crate) struct PoolInner {
     pub(crate) pool_id: u64,
     pub(crate) hardware: SystemHardware,
@@ -101,6 +114,13 @@ impl PoolInner {
                 .expect("failed to spawn worker thread: thread spawning failure is not supported");
 
             new_handles.push(handle);
+        }
+
+        // Test hook: pause here so a concurrent test thread can trigger shutdown
+        // before we acquire the lock below, exercising the re-check branch.
+        #[cfg(test)]
+        if let Some(hook) = HOOK_ENSURE_WORKERS_POST_SPAWN.lock().clone() {
+            hook();
         }
 
         let mut worker_handles = self.worker_handles.lock();
@@ -324,10 +344,14 @@ impl PoolBuilder {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::num::NonZero;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
     use many_cpus::SystemHardware;
     use many_cpus::fake::HardwareBuilder;
     use new_zealand::nz;
+    use parking_lot::Mutex;
 
     use crate::Pool;
 
@@ -357,5 +381,138 @@ mod tests {
     fn scheduler_can_be_obtained() {
         let pool = Pool::new();
         let _scheduler = pool.scheduler();
+    }
+
+    #[test]
+    fn pool_default_creates_pool() {
+        let pool = Pool::default();
+        let _scheduler = pool.scheduler();
+    }
+
+    #[test]
+    fn ensure_workers_spawned_returns_early_when_shutdown() {
+        let hardware =
+            SystemHardware::fake(HardwareBuilder::from_counts(nz!(2_usize), nz!(1_usize)));
+
+        let inner = Arc::new(super::PoolInner {
+            pool_id: super::NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed),
+            registry: super::ProcessorRegistry::new(&hardware),
+            hardware,
+            workers_per_processor: nz!(1_u32),
+            worker_handles: Mutex::new(Vec::new()),
+            shutdown: AtomicBool::new(false),
+        });
+
+        // Trigger shutdown so the flag is set.
+        inner.join_all_workers();
+
+        // Now call ensure_workers_spawned - it should return immediately
+        // because the shutdown flag is already true.
+        inner.ensure_workers_spawned(0);
+
+        assert!(inner.worker_handles.lock().is_empty());
+    }
+
+    /// Installs a hook closure and runs the test body while holding the
+    /// serialization mutex. The hook is always removed on exit.
+    fn with_hook(
+        hook: &Mutex<Option<Arc<super::HookFn>>>,
+        closure: Arc<super::HookFn>,
+        body: impl FnOnce(),
+    ) {
+        struct ClearOnDrop<'a>(&'a Mutex<Option<Arc<super::HookFn>>>);
+        impl Drop for ClearOnDrop<'_> {
+            fn drop(&mut self) {
+                *self.0.lock() = None;
+            }
+        }
+
+        let _guard = super::HOOK_SERIALIZATION_MUTEX.lock();
+        *hook.lock() = Some(closure);
+        let _clear = ClearOnDrop(hook);
+
+        body();
+    }
+
+    struct BarrierHook {
+        /// Signaled when the hook fires, indicating that the hooked code
+        /// has reached the synchronization point.
+        entered: Arc<Barrier>,
+
+        /// Waited on before the hook returns, giving the test thread a
+        /// window to perform a racing operation.
+        proceed: Arc<Barrier>,
+
+        /// The closure to install as a hook.
+        hook: Arc<super::HookFn>,
+    }
+
+    /// Creates a two-barrier hook closure that pauses execution at a
+    /// synchronization point, giving the test thread a window to perform
+    /// a racing operation.
+    fn barrier_hook() -> BarrierHook {
+        let entered = Arc::new(Barrier::new(2));
+        let proceed = Arc::new(Barrier::new(2));
+        let e = Arc::clone(&entered);
+        let p = Arc::clone(&proceed);
+        let hook: Arc<super::HookFn> = Arc::new(move || {
+            e.wait();
+            p.wait();
+        });
+        BarrierHook {
+            entered,
+            proceed,
+            hook,
+        }
+    }
+
+    #[test]
+    fn ensure_workers_spawned_joins_inline_on_concurrent_shutdown() {
+        testing::with_watchdog(|| {
+            let BarrierHook {
+                entered,
+                proceed,
+                hook,
+            } = barrier_hook();
+
+            with_hook(&super::HOOK_ENSURE_WORKERS_POST_SPAWN, hook, || {
+                let hardware =
+                    SystemHardware::fake(HardwareBuilder::from_counts(nz!(2_usize), nz!(1_usize)));
+
+                let inner = Arc::new(super::PoolInner {
+                    pool_id: super::NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed),
+                    registry: super::ProcessorRegistry::new(&hardware),
+                    hardware,
+                    workers_per_processor: nz!(1_u32),
+                    worker_handles: Mutex::new(Vec::new()),
+                    shutdown: AtomicBool::new(false),
+                });
+
+                let inner_clone = Arc::clone(&inner);
+
+                // Spawn ensure_workers_spawned on a background thread.
+                // It will spawn workers then pause at the hook before
+                // acquiring the worker_handles lock.
+                let spawner = thread::spawn(move || {
+                    inner_clone.ensure_workers_spawned(0);
+                });
+
+                // Wait for the hook to fire (workers spawned, lock not
+                // yet acquired).
+                entered.wait();
+
+                // Trigger shutdown while the spawner is paused.
+                inner.join_all_workers();
+
+                // Release the spawner. It will see shutdown=true under
+                // the lock and join its handles inline.
+                proceed.wait();
+
+                spawner.join().unwrap();
+
+                // All handles should have been joined (none leaked).
+                assert!(inner.worker_handles.lock().is_empty());
+            });
+        });
     }
 }

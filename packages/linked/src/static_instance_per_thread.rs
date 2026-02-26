@@ -27,6 +27,9 @@ where
     /// Note: this function exists to serve the inner workings of the
     /// `linked::thread_local_rc!` macro and should not be used directly.
     /// It is not part of the public API and may be removed or changed at any time.
+    // Only ever called in const context by macros. Coverage instrumentation
+    // cannot detect const context execution.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     #[doc(hidden)]
     #[must_use]
     pub const fn new(get_storage: fn() -> &'static LocalKey<Rc<T>>) -> Self {

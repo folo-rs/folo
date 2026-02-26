@@ -82,6 +82,11 @@ pub(crate) struct FakePlatform {
 
     /// Per-thread state for tracking affinity.
     thread_states: RwLock<HashMap<ThreadId, FakeThreadState>>,
+
+    /// Test-only override: when set, `current_processor_id()` returns this value
+    /// instead of picking from configured processors.
+    #[cfg(test)]
+    processor_id_override: RwLock<Option<ProcessorId>>,
 }
 
 impl FakePlatform {
@@ -123,6 +128,8 @@ impl FakePlatform {
             max_memory_region_id,
             max_processor_time,
             thread_states: RwLock::new(HashMap::new()),
+            #[cfg(test)]
+            processor_id_override: RwLock::new(None),
         }
     }
 
@@ -160,6 +167,17 @@ impl FakePlatform {
             }
         }
     }
+
+    /// Sets an override so that `current_processor_id()` returns the given value
+    /// regardless of thread affinity. This allows testing fallback paths when the
+    /// returned processor ID does not correspond to a configured processor.
+    #[cfg(test)]
+    pub(crate) fn set_processor_id_override(&self, id: Option<ProcessorId>) {
+        *self
+            .processor_id_override
+            .write()
+            .expect("processor_id_override lock should never be poisoned") = id;
+    }
 }
 
 impl Platform for FakePlatform {
@@ -192,6 +210,15 @@ impl Platform for FakePlatform {
     }
 
     fn current_processor_id(&self) -> ProcessorId {
+        #[cfg(test)]
+        if let Some(id) = *self
+            .processor_id_override
+            .read()
+            .unwrap()
+        {
+            return id;
+        }
+
         let thread_id = std::thread::current().id();
         self.thread_processor_id(thread_id)
     }

@@ -548,4 +548,68 @@ mod tests {
         // Should be back to 2 here - the thread-local state was dropped when the thread exited.
         assert_eq!(Arc::strong_count(&cache.shared_value), 2);
     }
+
+    // The type used to trigger the Occupied branch in current_thread_instance().
+    // During instance creation, the factory re-entrantly calls acquire() on the same
+    // InstancePerThreadSync, which populates the map entry before the outer call checks it.
+    //
+    // The factory closure must be Fn + Send + Sync. We use a Mutex<Option<...>> that the
+    // factory clones out of, releasing the lock before calling acquire() to avoid deadlock.
+    #[linked::object]
+    struct ReentrantType {}
+
+    impl ReentrantType {
+        fn new(
+            shared_ipt: Arc<Mutex<Option<InstancePerThreadSync<Self>>>>,
+            reentry_flag: Arc<atomic::AtomicBool>,
+        ) -> Self {
+            linked::__private::new(move |link| {
+                // Clone the IPT out (if armed) so we release the lock before
+                // the re-entrant acquire() tries to lock the same Mutex.
+                let maybe_ipt = shared_ipt.lock().unwrap().clone();
+
+                if let Some(ipt) = maybe_ipt
+                    && reentry_flag
+                        .compare_exchange(
+                            false,
+                            true,
+                            atomic::Ordering::Relaxed,
+                            atomic::Ordering::Relaxed,
+                        )
+                        .is_ok()
+                {
+                    // Re-entrantly acquire - inserts into the map via the Vacant
+                    // branch. The outer call will then find Entry::Occupied.
+                    let _inner_ref = ipt.acquire();
+                }
+
+                Self {
+                    __private_linked_link: link,
+                }
+            })
+        }
+    }
+
+    #[test]
+    fn reentrant_acquire_hits_occupied_branch() {
+        let shared_ipt: Arc<Mutex<Option<InstancePerThreadSync<ReentrantType>>>> =
+            Arc::new(Mutex::new(None));
+        let reentry_flag = Arc::new(atomic::AtomicBool::new(false));
+
+        // Create the first instance without re-entry (shared_ipt is None).
+        let first = ReentrantType::new(Arc::clone(&shared_ipt), Arc::clone(&reentry_flag));
+
+        let ipt = InstancePerThreadSync::new(first);
+
+        // Arm the trigger: factory can now see the InstancePerThreadSync.
+        *shared_ipt.lock().unwrap() = Some(ipt.clone());
+
+        // This acquire() will:
+        // 1. Fail the read-lock optimistic check (no entry yet).
+        // 2. Create instance via factory -> factory re-entrantly calls acquire().
+        // 3. Inner acquire() takes the Vacant path, inserting into the map.
+        // 4. Outer acquire() finds Entry::Occupied.
+        let _outer_ref = ipt.acquire();
+        assert!(reentry_flag.load(atomic::Ordering::Relaxed));
+    }
 }

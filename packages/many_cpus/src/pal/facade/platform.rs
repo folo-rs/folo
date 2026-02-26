@@ -31,6 +31,15 @@ impl PlatformFacade {
     pub(crate) fn from_fake(fake: FakePlatform) -> Self {
         Self::Fake(Arc::new(fake))
     }
+
+    /// Returns a reference to the inner `FakePlatform`, panicking if not a fake.
+    #[cfg(test)]
+    pub(crate) fn as_fake(&self) -> &FakePlatform {
+        match self {
+            Self::Fake(inner) => inner,
+            _ => panic!("expected PlatformFacade::Fake"),
+        }
+    }
 }
 
 impl Platform for PlatformFacade {

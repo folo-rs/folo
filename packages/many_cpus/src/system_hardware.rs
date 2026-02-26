@@ -1008,4 +1008,35 @@ mod tests_fake {
         // With 4 memory regions, max ID should be 3 (0-indexed).
         assert_eq!(hardware.max_memory_region_id(), 3);
     }
+
+    #[test]
+    fn get_processor_falls_back_for_unknown_id() {
+        // Create hardware with a gap: only processors 0 and 5 exist.
+        let hardware = SystemHardware::fake(
+            HardwareBuilder::new()
+                .processor(ProcessorBuilder::new().id(0).memory_region(0))
+                .processor(ProcessorBuilder::new().id(5).memory_region(0)),
+        );
+
+        // Override the current processor ID to return 3, which is a gap.
+        hardware
+            .platform()
+            .as_fake()
+            .set_processor_id_override(Some(3));
+
+        // with_current_processor() calls get_processor() internally.
+        // It should fall back to the first available processor (ID 0).
+        hardware.with_current_processor(|processor| {
+            assert!(processor.id() == 0 || processor.id() == 5);
+        });
+
+        // Also exercise current_memory_region_id() which uses the same path.
+        let region = hardware.current_memory_region_id();
+        assert_eq!(region, 0);
+
+        hardware
+            .platform()
+            .as_fake()
+            .set_processor_id_override(None);
+    }
 }

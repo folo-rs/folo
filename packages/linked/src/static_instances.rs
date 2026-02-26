@@ -44,6 +44,9 @@ where
     /// This function exists to serve the inner workings of the
     /// `linked::instances!` macro and should not be used directly.
     /// It is not part of the public API and may be removed or changed at any time.
+    // Only ever called in const context by macros. Coverage instrumentation
+    // cannot detect const context execution.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     #[doc(hidden)]
     #[must_use]
     pub const fn new(
