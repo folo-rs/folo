@@ -211,11 +211,7 @@ impl Platform for FakePlatform {
 
     fn current_processor_id(&self) -> ProcessorId {
         #[cfg(test)]
-        if let Some(id) = *self
-            .processor_id_override
-            .read()
-            .unwrap()
-        {
+        if let Some(id) = *self.processor_id_override.read().unwrap() {
             return id;
         }
 
