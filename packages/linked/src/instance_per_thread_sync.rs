@@ -611,5 +611,9 @@ mod tests {
         // 4. Outer acquire() finds Entry::Occupied.
         let _outer_ref = ipt.acquire();
         assert!(reentry_flag.load(atomic::Ordering::Relaxed));
+
+        // Break the reference cycle: the factory closure (inside ipt) captures shared_ipt,
+        // and shared_ipt holds a clone of ipt. Clear the mutex to allow both to be freed.
+        *shared_ipt.lock().unwrap() = None;
     }
 }
