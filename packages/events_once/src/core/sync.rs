@@ -537,10 +537,18 @@ where
                 Some(Ok(self.poll_set()))
             }
             Err(EVENT_SIGNALING) => {
-                // The sender is in the middle of a state transition. It is using the awaiter,
-                // so we cannot touch it any more. We really cannot do anything here
-                // except wait for the sender to complete its state transition into
-                // EVENT_SET or EVENT_DISCONNECTED.
+                // The sender entered SIGNALING via `swap` in `sender_dropped_without_set`.
+                // Since we were in `poll_bound`, the state was BOUND when the sender did
+                // the swap, so the sender saw `previous = BOUND` and will not touch the
+                // awaiter field. We must clean up the waker we just wrote ourselves.
+
+                // SAFETY: The sender is not touching the awaiter (it swapped from BOUND).
+                // The receiver is !Sync, so we have the only reference.
+                // We wrote the waker above, so it is initialized.
+                unsafe {
+                    self.destroy_awaiter();
+                }
+
                 Some(self.poll_signaling())
             }
             Err(EVENT_DISCONNECTED) => {
