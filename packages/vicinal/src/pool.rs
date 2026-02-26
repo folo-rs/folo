@@ -34,6 +34,13 @@ static HOOK_SERIALIZATION_MUTEX: Mutex<()> = Mutex::new(());
 #[cfg(test)]
 static HOOK_ENSURE_WORKERS_POST_SPAWN: Mutex<Option<Arc<HookFn>>> = Mutex::new(None);
 
+#[cfg(test)]
+thread_local! {
+    /// Marks the current thread as a participant in a hook-based test. Only threads with
+    /// this flag set to `true` will trigger test hooks when they reach a hook callsite.
+    static HOOK_PARTICIPANT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 pub(crate) struct PoolInner {
     pub(crate) pool_id: u64,
     pub(crate) hardware: SystemHardware,
@@ -119,7 +126,9 @@ impl PoolInner {
         // Test hook: pause here so a concurrent test thread can trigger shutdown
         // before we acquire the lock below, exercising the re-check branch.
         #[cfg(test)]
-        if let Some(hook) = HOOK_ENSURE_WORKERS_POST_SPAWN.lock().clone() {
+        if HOOK_PARTICIPANT.get()
+            && let Some(hook) = HOOK_ENSURE_WORKERS_POST_SPAWN.lock().clone()
+        {
             hook();
         }
 
@@ -494,6 +503,7 @@ mod tests {
                 // It will spawn workers then pause at the hook before
                 // acquiring the worker_handles lock.
                 let spawner = thread::spawn(move || {
+                    super::HOOK_PARTICIPANT.set(true);
                     inner_clone.ensure_workers_spawned(0);
                 });
 

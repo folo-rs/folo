@@ -32,6 +32,10 @@ type HookFn = dyn Fn() + Send + Sync;
 // normally execute without interruption. Each hook is an optional closure stored
 // behind a Mutex. Tests that install hooks must hold HOOK_SERIALIZATION_MUTEX to
 // prevent interference between concurrent hook-based tests.
+//
+// Only threads that have set the HOOK_PARTICIPANT thread-local to `true` will trigger
+// the hooks. This prevents unrelated tests that happen to poll concurrently from
+// accidentally entering a barrier and causing deadlocks.
 #[cfg(test)]
 static HOOK_SERIALIZATION_MUTEX: Mutex<()> = Mutex::new(());
 #[cfg(test)]
@@ -40,6 +44,13 @@ static HOOK_POLL_BOUND_PRE_CAS: Mutex<Option<Arc<HookFn>>> = Mutex::new(None);
 static HOOK_POLL_AWAITING_PRE_CAS: Mutex<Option<Arc<HookFn>>> = Mutex::new(None);
 #[cfg(test)]
 static HOOK_SET_IN_SIGNALING: Mutex<Option<Arc<HookFn>>> = Mutex::new(None);
+
+#[cfg(test)]
+thread_local! {
+    /// Marks the current thread as a participant in a hook-based test. Only threads with
+    /// this flag set to `true` will trigger test hooks when they reach a hook callsite.
+    static HOOK_PARTICIPANT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 /// Coordinates delivery of a `T` at most once from a sender to a receiver on any thread.
 pub struct Event<T>
@@ -297,7 +308,9 @@ where
                 // Test hook: pause here while the sender is in SIGNALING state, so a
                 // concurrent test thread can observe and act on the SIGNALING state.
                 #[cfg(test)]
-                if let Some(hook) = HOOK_SET_IN_SIGNALING.lock().clone() {
+                if HOOK_PARTICIPANT.get()
+                    && let Some(hook) = HOOK_SET_IN_SIGNALING.lock().clone()
+                {
                     hook();
                 }
 
@@ -483,7 +496,9 @@ where
         // Test hook: pause here so a concurrent test thread can change the event
         // state before we attempt the CAS below.
         #[cfg(test)]
-        if let Some(hook) = HOOK_POLL_BOUND_PRE_CAS.lock().clone() {
+        if HOOK_PARTICIPANT.get()
+            && let Some(hook) = HOOK_POLL_BOUND_PRE_CAS.lock().clone()
+        {
             hook();
         }
 
@@ -595,7 +610,9 @@ where
         // Test hook: pause here so a concurrent test thread can change the event
         // state before we attempt the CAS below.
         #[cfg(test)]
-        if let Some(hook) = HOOK_POLL_AWAITING_PRE_CAS.lock().clone() {
+        if HOOK_PARTICIPANT.get()
+            && let Some(hook) = HOOK_POLL_AWAITING_PRE_CAS.lock().clone()
+        {
             hook();
         }
 
@@ -1820,6 +1837,7 @@ mod tests {
                 // Receiver polls on a separate thread. It will write the
                 // waker and then pause at the hook, before the CAS.
                 let receive_thread = thread::spawn(move || {
+                    HOOK_PARTICIPANT.set(true);
                     let mut receiver = Box::pin(receiver);
                     let mut cx = task::Context::from_waker(Waker::noop());
                     receiver.as_mut().poll(&mut cx)
@@ -1862,6 +1880,7 @@ mod tests {
                 // Second poll on a separate thread enters poll_awaiting
                 // and pauses at the hook before the CAS.
                 let receive_thread = thread::spawn(move || {
+                    HOOK_PARTICIPANT.set(true);
                     let mut cx = task::Context::from_waker(Waker::noop());
                     receiver.as_mut().poll(&mut cx)
                 });
@@ -1903,6 +1922,7 @@ mod tests {
                 // Second poll on a separate thread enters poll_awaiting
                 // and pauses at the hook before the CAS.
                 let receive_thread = thread::spawn(move || {
+                    HOOK_PARTICIPANT.set(true);
                     let mut cx = task::Context::from_waker(Waker::noop());
                     receiver.as_mut().poll(&mut cx)
                 });
@@ -1951,6 +1971,7 @@ mod tests {
                 // transitions AWAITING -> SIGNALING. The sender then
                 // pauses at the hook in the SIGNALING state.
                 let send_thread = thread::spawn(move || {
+                    HOOK_PARTICIPANT.set(true);
                     sender.send(42);
                 });
 
