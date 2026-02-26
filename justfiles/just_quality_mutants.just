@@ -49,7 +49,7 @@ mutants:
         # This package is literally full of synchronization primitives, so 95% of mutations will
         # just cause tests to time out and never complete - pointless to try mutate this stuff.
         "-e"
-        "events"
+        "events_once"
         
         # All this is code only used in tests/benchmarks - we do not test this code itself.
         "-e"

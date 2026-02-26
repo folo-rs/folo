@@ -90,7 +90,6 @@ where
     /// This is for internal use only and is wrapped by public methods that also
     /// wire up the sender and receiver after doing the initialization. An event
     /// without a sender and receiver is invalid.
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     pub(crate) fn new_in_inner(place: &mut UnsafeCell<MaybeUninit<Self>>) {
         // The key here is that we can skip initializing the MaybeUninit fields because
         // they start uninitialized by design and the UnsafeCell wrapper is transparent,
@@ -119,7 +118,6 @@ where
     }
 
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub(crate) fn boxed_core() -> (SenderCore<BoxedRef<T>, T>, ReceiverCore<BoxedRef<T>, T>) {
         let (sender_event_ref, receiver_event_ref) = BoxedRef::new_pair();
 
@@ -152,7 +150,6 @@ where
     /// # }
     /// ```
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub fn boxed() -> (BoxedSender<T>, BoxedReceiver<T>) {
         let (sender_core, receiver_core) = Self::boxed_core();
 
@@ -163,7 +160,6 @@ where
     }
 
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub(crate) unsafe fn placed_core(
         place: Pin<&mut UnsafeCell<MaybeUninit<Self>>>,
     ) -> (SenderCore<PtrRef<T>, T>, ReceiverCore<PtrRef<T>, T>) {
@@ -212,7 +208,6 @@ where
     /// # }
     /// ```
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub unsafe fn placed(place: Pin<&mut EmbeddedEvent<T>>) -> (RawSender<T>, RawReceiver<T>) {
         // SAFETY: Not moving anything, just breaking through the public wrapper API.
         let place = unsafe { place.map_unchecked_mut(|container| &mut container.inner) };
@@ -239,7 +234,6 @@ where
     /// Sets the value of the event and notifies the receiver's awaiter, if there is one.
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     pub(crate) fn set(event_cell: &UnsafeCell<Self>, value: T) -> Result<(), Disconnected> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
@@ -360,7 +354,6 @@ where
     /// Marks the event as having been disconnected early from the sender side.
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     pub(crate) fn sender_dropped_without_set(
         event_cell: &UnsafeCell<Self>,
     ) -> Result<(), Disconnected> {
@@ -447,7 +440,6 @@ where
     /// If `Some` is returned, the caller is the last remaining endpoint and responsible
     /// for cleaning up the event.
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         #[cfg(debug_assertions)]
         self.backtrace.lock().replace(capture_backtrace());
@@ -474,7 +466,6 @@ where
     ///
     /// Assumes acquired synchronization block for `awaiter`.
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn poll_bound(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         // The sender has not yet set any value, so we will have to wait.
 
@@ -564,7 +555,6 @@ where
     ///
     /// Assumes acquired synchronization block for `value`.
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn poll_set(&self) -> T {
         // The sender has delivered a value and we can complete the event.
         // We know that the sender will have gone away by this point.
@@ -585,7 +575,6 @@ where
     ///
     /// Assumes acquired synchronization block for `awaiter`.
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn poll_awaiting(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         // We are re-polling after previously starting a wait. This is fine
         // and we just need to clean up the previous waker, replacing it with
@@ -676,7 +665,6 @@ where
     }
 
     /// `poll()` impl for `EVENT_SIGNALING` state.
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn poll_signaling(&self) -> Result<T, Disconnected> {
         // This is pretty much a mutex - we are locked out of touching the event state until
         // the sender completes its state transition into either EVENT_SET or EVENT_DISCONNECTED.
@@ -740,7 +728,6 @@ where
     /// Returns `Ok(Some(value))` if the sender sender has already sent a value.
     /// Returns `Err` if the sender has already disconnected without sending a value.
     /// In both of these cases, the receiver must clean up the event now.
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     pub(crate) fn final_poll(event_cell: &UnsafeCell<Self>) -> Result<Option<T>, Disconnected> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must

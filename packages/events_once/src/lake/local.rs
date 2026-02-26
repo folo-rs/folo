@@ -76,7 +76,6 @@ impl LocalEventLake {
     ///
     /// The event will be returned to the lake when both endpoints are dropped.
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub fn rent<T: 'static>(&self) -> (PooledLocalSender<T>, PooledLocalReceiver<T>) {
         let type_id = TypeId::of::<T>();
 
@@ -143,7 +142,6 @@ impl<T: 'static> PoolWrapper<T> {
         }
     }
 
-    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     fn rent(&self) -> (PooledLocalSender<T>, PooledLocalReceiver<T>) {
         self.inner.rent()
     }

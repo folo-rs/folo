@@ -77,7 +77,6 @@ where
     /// # Panics
     ///
     /// Panics if the value has already been received via `Future::poll()`.
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     pub(crate) fn into_value(self) -> Result<T, IntoValueError<Self>> {
         let event_ref = self
             .event_ref
@@ -138,7 +137,6 @@ where
 {
     type Output = Result<T, Disconnected>;
 
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
         let event_ref = self
             .event_ref
@@ -176,7 +174,6 @@ where
     E: EventRef<T>,
     T: Send + 'static,
 {
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn drop(&mut self) {
         if let Some(event_ref) = self.event_ref.take() {
             match Event::final_poll(&event_ref) {

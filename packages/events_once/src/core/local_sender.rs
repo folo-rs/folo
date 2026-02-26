@@ -33,7 +33,6 @@ where
     ///
     /// This method consumes the sender and always succeeds, regardless of whether
     /// there is a receiver waiting.
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     pub(crate) fn send(self, value: T) {
         // The drop logic is different before/after set(), so we switch to manual drop here.
         let mut this = ManuallyDrop::new(self);
@@ -56,7 +55,6 @@ where
     E: LocalRef<T>,
     T: 'static,
 {
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     fn drop(&mut self) {
         if self.event_ref.sender_dropped_without_set() == Err(Disconnected) {
             // The other endpoint has disconnected, so we need to clean up the event.

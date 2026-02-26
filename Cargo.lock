@@ -642,7 +642,6 @@ dependencies = [
  "futures",
  "hash_hasher",
  "infinity_pool",
- "mutants",
  "oneshot",
  "parking_lot",
  "pin-project",

@@ -57,7 +57,6 @@ impl<T: 'static> fmt::Debug for RawLocalEventPool<T> {
 }
 
 impl<T: 'static> Drop for RawLocalEventPool<T> {
-    #[cfg_attr(test, mutants::skip)] // Impractical to test deallocation - Miri will complain if we leak.
     fn drop(&mut self) {
         // SAFETY: We are the owner of the core, so we know it remains valid.
         // Anyone calling rent() has to promise that we outlive the rented event
@@ -104,7 +103,6 @@ impl<T: 'static> RawLocalEventPool<T> {
     ///
     /// The caller must guarantee that the pool outlives the endpoints.
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub unsafe fn rent(self: Pin<&Self>) -> (RawLocalPooledSender<T>, RawLocalPooledReceiver<T>) {
         let storage = {
             // SAFETY: We are the owner of the core, so we know it remains valid. We only ever

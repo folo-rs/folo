@@ -66,7 +66,6 @@ impl<T: 'static> LocalEvent<T> {
     /// This is for internal use only and is wrapped by public methods that also
     /// wire up the sender and receiver after doing the initialization. An event
     /// without a sender and receiver is invalid.
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     pub(crate) fn new_in_inner(place: &mut MaybeUninit<Self>) -> NonNull<Self> {
         // We can skip initializing the MaybeUninit fields because they start uninitialized
         // by design and the UnsafeCell wrapper is transparent, only affecting accesses and
@@ -98,7 +97,6 @@ impl<T: 'static> LocalEvent<T> {
     }
 
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub(crate) fn boxed_core() -> (
         LocalSenderCore<BoxedLocalRef<T>, T>,
         LocalReceiverCore<BoxedLocalRef<T>, T>,
@@ -134,7 +132,6 @@ impl<T: 'static> LocalEvent<T> {
     /// # }
     /// ```
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub fn boxed() -> (BoxedLocalSender<T>, BoxedLocalReceiver<T>) {
         let (sender_core, receiver_core) = Self::boxed_core();
 
@@ -145,7 +142,6 @@ impl<T: 'static> LocalEvent<T> {
     }
 
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub(crate) unsafe fn placed_core(
         place: Pin<&mut MaybeUninit<Self>>,
     ) -> (
@@ -192,7 +188,6 @@ impl<T: 'static> LocalEvent<T> {
     /// # }
     /// ```
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub unsafe fn placed(
         place: Pin<&mut EmbeddedLocalEvent<T>>,
     ) -> (RawLocalSender<T>, RawLocalReceiver<T>) {
@@ -224,7 +219,6 @@ impl<T: 'static> LocalEvent<T> {
     /// Sets the value of the event and notifies the awaiter, if there is one.
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     pub(crate) fn set(&self, result: T) -> Result<(), Disconnected> {
         let value_cell = self.value.get();
 
@@ -308,7 +302,6 @@ impl<T: 'static> LocalEvent<T> {
     /// If `Some` result is returned, the caller is the last remaining endpoint and responsible
     /// for cleaning up the event.
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         #[cfg(debug_assertions)]
         self.backtrace.replace(Some(capture_backtrace()));
@@ -376,7 +369,6 @@ impl<T: 'static> LocalEvent<T> {
     /// Marks the event as having been disconnected early from the sender side.
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     pub(crate) fn sender_dropped_without_set(&self) -> Result<(), Disconnected> {
         let previous_state = self.state.get();
 
@@ -437,7 +429,6 @@ impl<T: 'static> LocalEvent<T> {
     /// Returns `Ok(Some(value))` if the sender sender has already sent a value.
     /// Returns `Err` if the sender has already disconnected without sending a value.
     /// In both of these cases, the receiver must clean up the event now.
-    #[cfg_attr(test, mutants::skip)] // Critical - mutation can cause UB, timeouts and hailstorms.
     pub(crate) fn final_poll(&self) -> Result<Option<T>, Disconnected> {
         let previous_state = self.state.get();
 

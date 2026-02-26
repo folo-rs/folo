@@ -37,7 +37,6 @@ impl<T> EventRef<T> for PtrRef<T>
 where
     T: Send + 'static,
 {
-    #[cfg_attr(test, mutants::skip)] // Does nothing, so nothing to test.
     fn release_event(&self) {}
 }
 
@@ -103,7 +102,6 @@ impl<T> EventRef<T> for BoxedRef<T>
 where
     T: Send + 'static,
 {
-    #[cfg_attr(test, mutants::skip)] // Impractical to test deallocation - Miri will complain if we leak.
     fn release_event(&self) {
         // The caller tells us that they are the last endpoint, so nothing else can possibly
         // be accessing the event any more. We can safely release the memory.

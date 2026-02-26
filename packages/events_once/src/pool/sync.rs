@@ -68,7 +68,6 @@ impl<T: Send + 'static> EventPool<T> {
     ///
     /// The event will be returned to the pool when both endpoints are dropped.
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub fn rent(&self) -> (PooledSender<T>, PooledReceiver<T>) {
         let storage = {
             let mut pool = self.core.pool.lock();

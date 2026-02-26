@@ -92,7 +92,6 @@ impl RawLocalEventLake {
     ///
     /// The caller must guarantee that the lake outlives the endpoints.
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     pub unsafe fn rent<T: 'static>(&self) -> (RawLocalPooledSender<T>, RawLocalPooledReceiver<T>) {
         let type_id = TypeId::of::<T>();
 
@@ -194,7 +193,6 @@ impl Default for RawLocalEventLake {
 }
 
 impl Drop for RawLocalEventLake {
-    #[cfg_attr(test, mutants::skip)] // Impractical to test deallocation - Miri will complain if we leak.
     fn drop(&mut self) {
         // SAFETY: We are the owner of the core, so we know it remains valid.
         // Anyone calling rent() has to promise that we outlive the rented event
@@ -214,7 +212,6 @@ impl<T: 'static> PoolWrapper<T> {
         }
     }
 
-    #[cfg_attr(test, mutants::skip)] // Cargo-mutants tries a boatload of unviable mutations and wastes time on this.
     fn rent(self: Pin<&Self>) -> (RawLocalPooledSender<T>, RawLocalPooledReceiver<T>) {
         // SAFETY: Nothing is being moved here, we are just using the inner pinned value.
         let inner = unsafe { self.map_unchecked(|s| &s.inner) };
