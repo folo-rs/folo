@@ -2,7 +2,7 @@
 name = "region_local"
 description = "Isolated variable storage per memory region, similar to `thread_local_rc!`"
 publish = true
-version = "1.0.12"
+version = "1.0.13"
 
 authors.workspace = true
 edition.workspace = true

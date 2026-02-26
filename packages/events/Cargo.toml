@@ -2,7 +2,7 @@
 name = "events"
 description = "Superseded - use events_once instead"
 publish = true
-version = "0.5.2"
+version = "0.5.3"
 
 authors.workspace = true
 edition.workspace = true
