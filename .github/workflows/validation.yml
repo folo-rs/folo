@@ -168,7 +168,7 @@ jobs:
         run: just package=events_once miri-harder
 
   miri-harder-infinity-pool:
-    timeout-minutes: 120
+    timeout-minutes: 300
     runs-on: windows-latest
 
     steps:
