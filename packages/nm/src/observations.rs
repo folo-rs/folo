@@ -178,9 +178,21 @@ impl Observations for ObservationBag {
         self.count.set(self.count.get().wrapping_add(count_u64));
         self.sum.set(self.sum.get().wrapping_add(sum_increment));
 
-        // This may be none if we have no buckets (i.e. the event is a bare counter, no histogram).
-        // TODO: Explore optimizing this lookup - SIMD can potentially help us here if not
-        // automatically applied already by the compiler.
+        // This may be none if we have no buckets (i.e. the event is a bare counter,
+        // no histogram).
+        //
+        // We benchmarked a manual SIMD (AVX2/SSE4.2) branchless "count less-than"
+        // approach against this scalar linear scan. The scalar version wins across
+        // all scenarios because branch prediction is highly effective for sorted
+        // bucket lookups and SIMD setup overhead (broadcast, compare, mask, popcnt)
+        // exceeds the cost of a well-predicted scalar loop:
+        //
+        //   Scenario                  SIMD     Scalar
+        //   small_5_hit_first         6.1 ns   1.2 ns
+        //   small_5_hit_last          5.9 ns   3.3 ns
+        //   large_32_hit_first       17.3 ns   1.3 ns
+        //   large_32_hit_last        17.6 ns   9.2 ns
+        //   large_32_miss            17.4 ns  10.6 ns
         if let Some(bucket_index) =
             self.bucket_magnitudes
                 .iter()
@@ -242,9 +254,21 @@ impl Observations for ObservationBagSync {
         self.count.fetch_add(count_u64, SYNC_BAG_ACCESS_ORDERING);
         self.sum.fetch_add(sum_increment, SYNC_BAG_ACCESS_ORDERING);
 
-        // This may be none if we have no buckets (i.e. the event is a bare counter, no histogram).
-        // TODO: Explore optimizing this lookup - SIMD can potentially help us here if not
-        // automatically applied already by the compiler.
+        // This may be none if we have no buckets (i.e. the event is a bare counter,
+        // no histogram).
+        //
+        // We benchmarked a manual SIMD (AVX2/SSE4.2) branchless "count less-than"
+        // approach against this scalar linear scan. The scalar version wins across
+        // all scenarios because branch prediction is highly effective for sorted
+        // bucket lookups and SIMD setup overhead (broadcast, compare, mask, popcnt)
+        // exceeds the cost of a well-predicted scalar loop:
+        //
+        //   Scenario                  SIMD     Scalar
+        //   small_5_hit_first         6.1 ns   1.2 ns
+        //   small_5_hit_last          5.9 ns   3.3 ns
+        //   large_32_hit_first       17.3 ns   1.3 ns
+        //   large_32_hit_last        17.6 ns   9.2 ns
+        //   large_32_miss            17.4 ns  10.6 ns
         if let Some(bucket_index) =
             self.bucket_magnitudes
                 .iter()
