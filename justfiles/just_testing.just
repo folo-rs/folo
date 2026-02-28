@@ -15,7 +15,7 @@ bench TARGET="":
 
 [group('testing')]
 miri FILTER="":
-    cargo +nightly miri nextest run {{ target_package }} --no-fail-fast --all-features {{ FILTER }} --locked --no-tests=pass
+    cargo +{{ env_var('RUST_NIGHTLY') }} miri nextest run {{ target_package }} --no-fail-fast --all-features {{ FILTER }} --locked --no-tests=pass
 
 [group('testing')]
 [script]
@@ -24,7 +24,7 @@ miri-harder FILTER="":
     $PSNativeCommandUseErrorActionPreference = $true
 
     $env:MIRIFLAGS = "-Zmiri-many-seeds=..64"
-    cargo +nightly miri test {{ target_package }} --no-fail-fast --all-features --lib {{ FILTER }} --locked -- --quiet
+    cargo +$env:RUST_NIGHTLY miri test {{ target_package }} --no-fail-fast --all-features --lib {{ FILTER }} --locked -- --quiet
 
 [group('testing')]
 [script]
@@ -33,21 +33,21 @@ miri-example EXAMPLE:
     $PSNativeCommandUseErrorActionPreference = $true
 
     if ("{{ package }}" -eq "") {
-        cargo +nightly miri run --all-features --example {{ EXAMPLE }} --locked
+        cargo +$env:RUST_NIGHTLY miri run --all-features --example {{ EXAMPLE }} --locked
     } else {
-        cargo +nightly miri run -p {{ package }} --all-features --example {{ EXAMPLE }} --locked
+        cargo +$env:RUST_NIGHTLY miri run -p {{ package }} --all-features --example {{ EXAMPLE }} --locked
     }
 
 [group('testing')]
 test FILTER="":
-    cargo nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast
+    cargo +{{ env_var('RUST_MSRV') }} nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast
 
 # Runs regular tests as well as doing one iteration of benchmarks.
 # We separate it from "test" because benchmarks are quite slow,
 # so we tend to only run them as part of a full validation pass.
 [group('testing')]
 test-more FILTER="":
-    cargo nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast --tests --benches
+    cargo +{{ env_var('RUST_MSRV') }} nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast --tests --benches
 
 [group('testing')]
 [script]
@@ -60,7 +60,7 @@ test-docs FILTER="":
     
     if ($target_package_var -eq " --workspace") {
         # Workspace-wide doctests - run normally
-        cargo test --all-features --doc {{ FILTER }} --locked
+        cargo +$env:RUST_MSRV test --all-features --doc {{ FILTER }} --locked
     } else {
         # Single package - check if it's a library crate
         $package_name = $target_package_var -replace "^ -p ", ""
@@ -68,7 +68,7 @@ test-docs FILTER="":
         
         if (Test-Path $lib_path) {
             # Library crate - run doctests
-            cargo test {{ target_package }} --all-features --doc {{ FILTER }} --locked
+            cargo +$env:RUST_MSRV test {{ target_package }} --all-features --doc {{ FILTER }} --locked
         } else {
             # Binary-only crate - skip doctests because Cargo expects library targets for doctests.
             # Binary crates (with only main.rs) cannot contain doctests, so running `cargo test --doc`

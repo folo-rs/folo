@@ -2,6 +2,13 @@
 
 Update this ".github/workflows/AGENT.md" file if you change the GitHub workflows.
 
+## Toolchain versions
+
+Rust toolchain versions are defined in `constants.env` (loaded via just's dotenv support) and
+`rust-toolchain.toml`. All `just` commands reference these variables instead of hardcoding
+version numbers. The GitHub workflows call `just install-tools` and `just <command>`, so
+toolchain versions flow automatically from `constants.env` without any duplication in workflows.
+
 ## Overview
 
 The CI workflows in this repository run individual `just` commands as separate parallel jobs instead of combined `validate-local` and `validate-extra-local` commands. This design provides faster feedback by parallelizing checks and clearer failure identification.

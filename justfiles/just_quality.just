@@ -6,32 +6,32 @@ clippy PROFILE='dev':
 coverage-measure:
     # Before running the tests, we need to clear old test coverage data because the coverage report
     # simply sums up all the data in the target folder, even if it is from old builds.
-    cargo +nightly llvm-cov clean --workspace
+    cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov clean --workspace
 
     # This will run tests and generate test coverage data files, to be analyzed separately.
-    cargo +nightly llvm-cov nextest {{ target_package }} --no-fail-fast --all-targets --no-report --all-features --locked
+    cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov nextest {{ target_package }} --no-fail-fast --all-targets --no-report --all-features --locked
 
 # This tool needs a different way to specify the package.
 coverage-package := if package == "" { "" } else { "-p " + package }
 
 [group('quality')]
 coverage-report:
-    cargo +nightly llvm-cov report {{ coverage-package }} --open
+    cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov report {{ coverage-package }} --open
 
 [group('quality')]
 coverage-report-ci:
-    cargo +nightly llvm-cov report --lcov --output-path lcov.info
+    cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov report --lcov --output-path lcov.info
 
 [group('quality')]
 [no-cd]
 format:
-    cargo +nightly fmt --verbose --all -- --config-path ./unstable-rustfmt.toml
+    cargo +{{ env_var('RUST_NIGHTLY') }} fmt --verbose --all -- --config-path ./unstable-rustfmt.toml
     cargo sort --workspace
     cargo sort-derives
 
 [group('quality')]
 format-check:
-    cargo +nightly fmt --verbose --all --check
+    cargo +{{ env_var('RUST_NIGHTLY') }} fmt --verbose --all --check
     cargo sort --workspace --check
     cargo sort-derives --check
 
@@ -42,8 +42,8 @@ hack:
 [group('quality')]
 machete:
     cargo machete --skip-target-dir
-    cargo +nightly udeps
-    cargo +nightly udeps --all-targets
+    cargo +{{ env_var('RUST_NIGHTLY') }} udeps
+    cargo +{{ env_var('RUST_NIGHTLY') }} udeps --all-targets
 
 [group('quality')]
 default-features-check:
@@ -51,7 +51,7 @@ default-features-check:
 
 [group('quality')]
 careful FILTER="":
-    cargo +nightly careful test {{ target_package }} --no-fail-fast --all-features {{ FILTER }} --locked
+    cargo +{{ env_var('RUST_NIGHTLY') }} careful test {{ target_package }} --no-fail-fast --all-features {{ FILTER }} --locked
 
 # Separate file because it is a giant script.
 import 'just_quality_mutants.just'

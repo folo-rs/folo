@@ -3,6 +3,11 @@
 //! To simplify these assertions, we define type aliases for common thread
 //! safety related types here.
 
+#![allow(
+    dead_code,
+    reason = "old toolchains cannot identify that these aliases are used in static assertions"
+)]
+
 use std::cell::Cell;
 use std::marker::PhantomData;
 
