@@ -287,22 +287,3 @@ pub use pusher::*;
 pub(crate) use registries::*;
 pub use reports::*;
 pub(crate) use sealed::*;
-
-/// Items exposed for benchmarking internals in isolation.
-#[cfg(any(test, feature = "test-util"))]
-#[doc(hidden)]
-pub mod private {
-    use crate::Magnitude;
-
-    /// Scalar bucket lookup, finding the first bucket where `magnitude <= bucket`.
-    #[inline]
-    #[must_use]
-    pub fn find_bucket_index(
-        magnitude: Magnitude,
-        bucket_magnitudes: &[Magnitude],
-    ) -> Option<usize> {
-        bucket_magnitudes
-            .iter()
-            .position(|&bucket_magnitude| magnitude <= bucket_magnitude)
-    }
-}
