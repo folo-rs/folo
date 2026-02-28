@@ -1,6 +1,8 @@
+use std::cell::RefCell;
 use std::marker::PhantomData;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use fast_time::Clock;
 use num_traits::AsPrimitive;
 
 use crate::{EventBuilder, Magnitude, Observe, PublishModel, Pull};
@@ -98,6 +100,10 @@ where
 {
     publish_model: P,
 
+    /// Low-overhead clock for duration observation. We store one per event to maximize
+    /// cache efficiency of the underlying platform time source.
+    clock: RefCell<Clock>,
+
     _single_threaded: PhantomData<*const ()>,
 }
 
@@ -118,6 +124,7 @@ where
     pub(crate) fn new(publish_model: P) -> Self {
         Self {
             publish_model,
+            clock: RefCell::new(Clock::new()),
             _single_threaded: PhantomData,
         }
     }
@@ -147,6 +154,10 @@ where
     }
 
     /// Observes the duration of a function call, in milliseconds.
+    ///
+    /// Uses a low-precision clock optimized for high-frequency capture. The measurement
+    /// has a granularity of roughly 1-20 ms. Durations shorter than the granularity may
+    /// appear as zero.
     #[inline]
     pub fn observe_duration_millis<F, R>(&self, f: F) -> R
     where
@@ -238,18 +249,24 @@ where
     }
 
     /// Observes the duration of a function call, in milliseconds.
+    ///
+    /// Uses a low-precision clock optimized for high-frequency capture. The measurement
+    /// has a granularity of roughly 1-20 ms. Durations shorter than the granularity may
+    /// appear as zero.
     #[inline]
     pub fn observe_duration_millis<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R,
     {
-        // TODO: Use low precision time to make this faster.
-        // TODO: Consider supporting ultra low precision time from external source.
-        let start = Instant::now();
+        let mut clock = self.event.clock.borrow_mut();
+        let start = clock.now();
 
         let result = f();
 
-        self.observe_millis(start.elapsed());
+        let elapsed = start.elapsed(&mut clock);
+        drop(clock);
+
+        self.observe_millis(elapsed);
 
         result
     }
@@ -340,6 +357,7 @@ mod tests {
 
         let event = Event {
             publish_model: Pull { observations },
+            clock: RefCell::new(Clock::new()),
             _single_threaded: PhantomData,
         };
 
@@ -388,6 +406,7 @@ mod tests {
 
         let event = Event {
             publish_model: Push { observations },
+            clock: RefCell::new(Clock::new()),
             _single_threaded: PhantomData,
         };
 

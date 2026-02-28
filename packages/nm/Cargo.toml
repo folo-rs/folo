@@ -20,6 +20,7 @@ default = []
 test-util = []
 
 [dependencies]
+fast_time = { workspace = true }
 foldhash = { workspace = true }
 new_zealand = { workspace = true }
 num-traits = { workspace = true }

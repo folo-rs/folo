@@ -136,9 +136,9 @@
 //! # fn do_http_connect() {}
 //! ```
 //!
-//! This captures the duration of the function call in milliseconds. The measurement has
-//! a platform-defined measurement granularity (typically around 1-20 ms). This means that
-//! faster operations may indicate a duration of zero.
+//! This captures the duration of the function call in milliseconds using a low-precision
+//! clock optimized for high-frequency capture. The measurement has a granularity of
+//! roughly 1-20 ms. Durations shorter than the granularity may appear as zero.
 //!
 //! It is not practical to measure the duration of individual operations at a finer level of
 //! precision because the measurement overhead becomes prohibitive. If you are observing

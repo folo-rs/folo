@@ -1255,6 +1255,7 @@ name = "nm"
 version = "0.1.29"
 dependencies = [
  "criterion",
+ "fast_time",
  "foldhash 0.2.0",
  "many_cpus",
  "mutants",

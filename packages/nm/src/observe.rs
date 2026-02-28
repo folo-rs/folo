@@ -76,6 +76,10 @@ pub trait Observe {
 
     /// Observes the duration of a function call, in milliseconds.
     ///
+    /// Uses a low-precision clock optimized for high-frequency capture. The measurement
+    /// has a granularity of roughly 1-20 ms. Durations shorter than the granularity may
+    /// appear as zero.
+    ///
     /// # Example
     ///
     /// ```
