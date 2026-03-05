@@ -268,15 +268,10 @@ impl Slab {
             },
         );
 
-        // We have a safety requirement that the object must exist in the slab, so this is only
-        // an extra check to go above and beyond the call of duty in debug builds, to help detect
-        // violations of this safety requirement.
-        #[cfg(debug_assertions)]
+        // Detect double-remove: if the slot was already vacant, the freelist is about to be
+        // corrupted (creating a cycle or losing entries). We restore the previous state and panic
+        // immediately so that the actual misuse site is visible in the backtrace.
         if !matches!(old_meta, SlotMeta::Occupied { .. }) {
-            // Uh-oh, we were told to remove an object that did not actually exist.
-            // While this is a no-no and we will panic, we still need to preserve
-            // the pool in a valid state after this (if only for a proper drop to happen).
-
             // All we did was overwrite the slot with a "vacant" sign,
             // so to restore the previous state we just put back the old meta.
             *slot_meta = old_meta;
@@ -342,15 +337,10 @@ impl Slab {
             },
         );
 
-        // We have a safety requirement that the object must exist in the slab, so this is only
-        // an extra check to go above and beyond the call of duty in debug builds, to help detect
-        // violations of this safety requirement.
-        #[cfg(debug_assertions)]
+        // Detect double-remove: if the slot was already vacant, the freelist is about to be
+        // corrupted (creating a cycle or losing entries). We restore the previous state and panic
+        // immediately so that the actual misuse site is visible in the backtrace.
         if !matches!(old_meta, SlotMeta::Occupied { .. }) {
-            // Uh-oh, we were told to remove an object that did not actually exist.
-            // While this is a no-no and we will panic, we still need to preserve
-            // the pool in a valid state after this (if only for a proper drop to happen).
-
             // All we did was overwrite the slot with a "vacant" sign,
             // so to restore the previous state we just put back the old meta.
             *slot_meta = old_meta;
