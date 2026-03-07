@@ -7,8 +7,89 @@ on:
     branches: [main]
 
 jobs:
-  # Formatting is platform-agnostic, so run only on Ubuntu for efficiency
+  # Determines which packages are impacted by changes in a PR branch compared
+  # to origin/main. On push to main (backstop), all packages are validated.
+  delta:
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.compute.outputs.packages }}
+      packages_json: ${{ steps.compute.outputs.packages_json }}
+      skip_all: ${{ steps.compute.outputs.skip_all }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cargo-delta
+
+      - name: Install cargo-delta
+        run: cargo install cargo-delta --locked
+
+      - name: Compute delta
+        id: compute
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "Push to main detected, running full workspace validation."
+            echo "packages=" >> $GITHUB_OUTPUT
+            echo "packages_json=[]" >> $GITHUB_OUTPUT
+            echo "skip_all=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          CONFIG_PATH="$(pwd)/delta.toml"
+          WORKTREE_DIR="$(mktemp -d)"
+          BASELINE_JSON="$(mktemp)"
+
+          cleanup_worktree() {
+            git worktree remove "$WORKTREE_DIR" --force >/dev/null 2>&1 || true
+            rm -rf "$WORKTREE_DIR" >/dev/null 2>&1 || true
+            rm -f "$BASELINE_JSON" >/dev/null 2>&1 || true
+          }
+          trap cleanup_worktree EXIT
+
+          echo "Analyzing current branch..."
+          cargo delta -c "$CONFIG_PATH" analyze > current.json
+
+          echo "Analyzing baseline (origin/main)..."
+          git worktree add "$WORKTREE_DIR" origin/main
+          pushd "$WORKTREE_DIR"
+          cargo delta -c "$CONFIG_PATH" analyze > "$BASELINE_JSON"
+          popd
+          git worktree remove "$WORKTREE_DIR" --force
+
+          echo "Computing delta..."
+          cargo delta -c "$CONFIG_PATH" run --baseline "$BASELINE_JSON" --current current.json > delta.json
+
+          cat delta.json
+
+          PACKAGES=$(jq -r '.Affected // [] | join(" ")' delta.json)
+          PACKAGES_JSON=$(jq -c '.Affected // []' delta.json)
+
+          if [ -z "$PACKAGES" ]; then
+            echo "No packages affected by changes."
+            echo "packages=" >> $GITHUB_OUTPUT
+            echo "packages_json=[]" >> $GITHUB_OUTPUT
+            echo "skip_all=true" >> $GITHUB_OUTPUT
+          else
+            echo "Affected packages: $PACKAGES"
+            echo "packages=$PACKAGES" >> $GITHUB_OUTPUT
+            echo "packages_json=$PACKAGES_JSON" >> $GITHUB_OUTPUT
+            echo "skip_all=false" >> $GITHUB_OUTPUT
+          fi
+
+  # Formatting is platform-agnostic, so run only on Ubuntu for efficiency.
   format-check:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -21,8 +102,10 @@ jobs:
       - name: Run format-check
         run: just format-check
 
-  # Default features check is platform-agnostic, so run only on Ubuntu for efficiency
+  # Default features check is platform-agnostic, so run only on Ubuntu for efficiency.
   default-features-check:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -36,6 +119,8 @@ jobs:
         run: just default-features-check
 
   check-dev:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -51,9 +136,11 @@ jobs:
         uses: ./.github/actions/setup-environment
 
       - name: Run check dev on ${{ matrix.platform }}
-        run: just check dev
+        run: just package="${{ needs.delta.outputs.packages }}" check dev
 
   clippy-dev:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -69,9 +156,11 @@ jobs:
         uses: ./.github/actions/setup-environment
 
       - name: Run clippy dev on ${{ matrix.platform }}
-        run: just clippy dev
+        run: just package="${{ needs.delta.outputs.packages }}" clippy dev
 
   test-more:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -87,7 +176,7 @@ jobs:
         uses: ./.github/actions/setup-environment
 
       - name: Run test-more on ${{ matrix.platform }}
-        run: just test-more
+        run: just package="${{ needs.delta.outputs.packages }}" test-more
 
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
@@ -99,6 +188,8 @@ jobs:
           report_type: test_results
 
   test-docs:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -114,9 +205,11 @@ jobs:
         uses: ./.github/actions/setup-environment
 
       - name: Run test-docs on ${{ matrix.platform }}
-        run: just test-docs
+        run: just package="${{ needs.delta.outputs.packages }}" test-docs
 
   docs:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -132,9 +225,11 @@ jobs:
         uses: ./.github/actions/setup-environment
 
       - name: Run docs on ${{ matrix.platform }}
-        run: just docs
+        run: just package="${{ needs.delta.outputs.packages }}" docs
 
   miri:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -150,10 +245,15 @@ jobs:
         uses: ./.github/actions/setup-environment
 
       - name: Run miri on ${{ matrix.platform }}
-        run: just miri
+        run: just package="${{ needs.delta.outputs.packages }}" miri
 
   # Miri with many seeds is very slow, so we only run it for select packages on Windows.
+  # These jobs only run when their specific package is affected by changes.
   miri-harder-events-once:
+    needs: [delta]
+    if: >-
+      needs.delta.outputs.skip_all != 'true'
+      && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'events_once'))
     timeout-minutes: 120
     runs-on: windows-latest
 
@@ -168,6 +268,10 @@ jobs:
         run: just package=events_once miri-harder
 
   miri-harder-infinity-pool:
+    needs: [delta]
+    if: >-
+      needs.delta.outputs.skip_all != 'true'
+      && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'infinity_pool'))
     timeout-minutes: 300
     runs-on: windows-latest
 
@@ -182,6 +286,8 @@ jobs:
         run: just package=infinity_pool miri-harder
 
   machete:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -201,6 +307,8 @@ jobs:
         run: just machete
 
   check-release:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -216,9 +324,11 @@ jobs:
         uses: ./.github/actions/setup-environment
 
       - name: Run check release on ${{ matrix.platform }}
-        run: just check release
+        run: just package="${{ needs.delta.outputs.packages }}" check release
 
   clippy-release:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -234,9 +344,11 @@ jobs:
         uses: ./.github/actions/setup-environment
 
       - name: Run clippy release on ${{ matrix.platform }}
-        run: just clippy release
+        run: just package="${{ needs.delta.outputs.packages }}" clippy release
 
   build-release:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -252,9 +364,11 @@ jobs:
         uses: ./.github/actions/setup-environment
 
       - name: Run build release on ${{ matrix.platform }}
-        run: just build release
+        run: just package="${{ needs.delta.outputs.packages }}" build release
 
   mutants:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
     timeout-minutes: 240
     strategy:
       fail-fast: false
@@ -271,9 +385,11 @@ jobs:
         uses: ./.github/actions/setup-environment
 
       - name: Run mutants on ${{ matrix.platform }}
-        run: just mutants
+        run: just package="${{ needs.delta.outputs.packages }}" mutants
 
   run-examples:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -290,9 +406,11 @@ jobs:
         uses: ./.github/actions/setup-environment
 
       - name: Run examples on ${{ matrix.platform }}
-        run: just run-examples
+        run: just package="${{ needs.delta.outputs.packages }}" run-examples
 
   hack:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -309,9 +427,11 @@ jobs:
         uses: ./.github/actions/setup-environment
 
       - name: Run hack on ${{ matrix.platform }}
-        run: just hack
-  
+        run: just package="${{ needs.delta.outputs.packages }}" hack
+
   careful:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -327,9 +447,11 @@ jobs:
         uses: ./.github/actions/setup-environment
 
       - name: Run careful on ${{ matrix.platform }}
-        run: just careful
+        run: just package="${{ needs.delta.outputs.packages }}" careful
 
   coverage:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -346,7 +468,7 @@ jobs:
 
       - name: Generate coverage on ${{ matrix.platform }}
         run: |
-          just coverage-measure
+          just package="${{ needs.delta.outputs.packages }}" coverage-measure
           just coverage-report-ci
 
       - name: Upload coverage to Codecov
