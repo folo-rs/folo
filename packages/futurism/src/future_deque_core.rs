@@ -1,35 +1,40 @@
 use std::{
     collections::VecDeque,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    task::{Context, Poll, Wake, Waker},
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll, Waker},
 };
 
-use infinity_pool::{RawBlindPool, RawBlindPooledMut};
+use parking_lot::Mutex;
 
-use crate::deque_future::{DequeFuture, RawPooledCastDequeFuture as _};
+use crate::{
+    deque_future::DequeFuture,
+    waker_meta::{self, MetaPtr},
+};
+
+/// Abstracts over managed ([`BlindPooledMut`][infinity_pool::BlindPooledMut]) and raw
+/// pool handles, allowing [`FutureDequeCore`] to work with both Send and !Send variants.
+pub(crate) trait FutureHandle<T> {
+    fn as_pin_mut(&mut self) -> Pin<&mut dyn DequeFuture<T>>;
+}
 
 /// Shared core implementation for both [`FutureDeque`][crate::FutureDeque]
 /// and [`LocalFutureDeque`][crate::LocalFutureDeque].
-pub(crate) struct FutureDequeCore<T> {
-    pool: RawBlindPool,
-    slots: VecDeque<Slot<T>>,
+///
+/// Generic over `H`, the pool handle type. The Send variant uses managed handles
+/// (auto-remove on drop), while the Local variant uses raw handles wrapped in a
+/// type that removes on drop via a shared pool reference.
+pub(crate) struct FutureDequeCore<T, H> {
+    pub(crate) shared_parent: Arc<Mutex<Option<Waker>>>,
+    slots: VecDeque<Slot<T, H>>,
 }
 
-enum Slot<T> {
-    Pending {
-        handle: RawBlindPooledMut<dyn DequeFuture<T>>,
-        activated: Arc<AtomicBool>,
-        slot_waker: Option<Arc<SlotWaker>>,
-    },
-    Ready {
-        value: T,
-    },
+enum Slot<T, H> {
+    Pending { handle: H, meta: MetaPtr },
+    Ready { value: T },
 }
 
-impl<T> Slot<T> {
+impl<T, H> Slot<T, H> {
     fn is_ready(&self) -> bool {
         matches!(self, Self::Ready { .. })
     }
@@ -45,34 +50,24 @@ impl<T> Slot<T> {
     }
 }
 
-/// Custom waker that sets a per-slot activation flag and wakes the parent task.
-struct SlotWaker {
-    activated: Arc<AtomicBool>,
-    parent_waker: Waker,
-}
-
-impl Wake for SlotWaker {
-    // Rarely called; most futures use wake_by_ref to avoid consuming the waker.
-    // The companion wake_by_ref is exercised by tests.
-    #[cfg_attr(test, mutants::skip)]
-    #[cfg_attr(coverage_nightly, coverage(off))] // Identical to wake_by_ref.
-    fn wake(self: Arc<Self>) {
-        self.activated.store(true, Ordering::Release);
-        self.parent_waker.wake_by_ref();
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.activated.store(true, Ordering::Release);
-        self.parent_waker.wake_by_ref();
-    }
-}
-
-impl<T> FutureDequeCore<T> {
+impl<T, H> FutureDequeCore<T, H> {
     pub(crate) fn new() -> Self {
         Self {
-            pool: RawBlindPool::new(),
+            shared_parent: Arc::new(Mutex::new(None)),
             slots: VecDeque::new(),
         }
+    }
+
+    /// Adds a pre-inserted pool handle to the back of the deque.
+    pub(crate) fn push_back_handle(&mut self, handle: H) {
+        let meta = waker_meta::create_waker_meta(&self.shared_parent);
+        self.slots.push_back(Slot::Pending { handle, meta });
+    }
+
+    /// Adds a pre-inserted pool handle to the front of the deque.
+    pub(crate) fn push_front_handle(&mut self, handle: H) {
+        let meta = waker_meta::create_waker_meta(&self.shared_parent);
+        self.slots.push_front(Slot::Pending { handle, meta });
     }
 
     /// Returns the number of entries (both pending and ready) in the deque.
@@ -83,34 +78,6 @@ impl<T> FutureDequeCore<T> {
     /// Returns `true` if the deque contains no entries.
     pub(crate) fn is_empty(&self) -> bool {
         self.slots.is_empty()
-    }
-
-    /// Adds a future to the back of the deque.
-    pub(crate) fn push_back<F: DequeFuture<T> + 'static>(&mut self, future: F) {
-        let handle = self.pool.insert(future);
-
-        // SAFETY: The concrete type F implements DequeFuture<T>, so the cast is valid.
-        let handle = unsafe { handle.cast_deque_future::<T>() };
-
-        self.slots.push_back(Slot::Pending {
-            handle,
-            activated: Arc::new(AtomicBool::new(true)),
-            slot_waker: None,
-        });
-    }
-
-    /// Adds a future to the front of the deque.
-    pub(crate) fn push_front<F: DequeFuture<T> + 'static>(&mut self, future: F) {
-        let handle = self.pool.insert(future);
-
-        // SAFETY: The concrete type F implements DequeFuture<T>, so the cast is valid.
-        let handle = unsafe { handle.cast_deque_future::<T>() };
-
-        self.slots.push_front(Slot::Pending {
-            handle,
-            activated: Arc::new(AtomicBool::new(true)),
-            slot_waker: None,
-        });
     }
 
     /// Pops the front result if the frontmost future has completed.
@@ -132,62 +99,49 @@ impl<T> FutureDequeCore<T> {
             None
         }
     }
+}
 
+impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
     /// Polls all activated futures front-to-back, transitioning completed ones to ready.
     pub(crate) fn drive(&mut self, cx: &Context<'_>) {
-        Self::drive_inner(&mut self.pool, &mut self.slots, cx);
-    }
+        // Update the shared parent waker if it has changed. All slot wakers read
+        // the parent through this shared location, so a single update here ensures
+        // every future's waker uses the latest parent without per-slot iteration.
+        {
+            let mut parent = self.shared_parent.lock();
+            if !parent.as_ref().is_some_and(|w| w.will_wake(cx.waker())) {
+                *parent = Some(cx.waker().clone());
+            }
+        }
 
-    fn drive_inner(pool: &mut RawBlindPool, slots: &mut VecDeque<Slot<T>>, cx: &Context<'_>) {
-        for slot in slots.iter_mut() {
+        for slot in &mut self.slots {
             let poll_result = {
-                let Slot::Pending {
-                    handle,
-                    activated,
-                    slot_waker,
-                } = slot
-                else {
+                let Slot::Pending { handle, meta } = slot else {
                     continue;
                 };
 
-                // If the parent waker has changed since the last poll, the future
-                // must be re-polled to receive an updated SlotWaker — otherwise
-                // wake notifications would be routed to the stale parent.
-                let parent_changed = slot_waker
-                    .as_ref()
-                    .is_some_and(|sw| !sw.parent_waker.will_wake(cx.waker()));
-
                 // Atomically read and clear the activation flag. Using swap ensures
                 // that a concurrent wake between the read and clear is not lost.
-                // Re-poll if activated OR if the parent waker has changed.
-                if !activated.swap(false, Ordering::AcqRel) && !parent_changed {
+                if !waker_meta::check_activated(*meta) {
                     continue;
                 }
 
-                // Create or reuse the SlotWaker.
-                if parent_changed || slot_waker.is_none() {
-                    *slot_waker = Some(Arc::new(SlotWaker {
-                        activated: Arc::clone(activated),
-                        parent_waker: cx.waker().clone(),
-                    }));
-                }
-
-                let waker = Waker::from(Arc::clone(
-                    slot_waker
-                        .as_ref()
-                        .expect("we always populate the slot waker above"),
-                ));
+                let waker = waker_meta::make_waker(*meta);
                 let sub_cx = &mut Context::from_waker(&waker);
 
-                // SAFETY: The pool guarantees that the handle points to a valid,
-                // pinned allocation that has not been removed.
-                let pin_fut = unsafe { handle.as_pin_mut() };
-                pin_fut.poll_deque(sub_cx)
+                handle.as_pin_mut().poll_deque(sub_cx)
             };
 
             if let Poll::Ready(value) = poll_result {
                 let old = std::mem::replace(slot, Slot::Ready { value });
-                Self::remove_pending_from_pool(pool, old);
+
+                // Release the Slot's metadata reference. The handle is dropped as
+                // part of the old Slot destruction, which auto-removes the future
+                // from the futures pool (managed handles) or explicitly removes it
+                // (local handles with Drop).
+                if let Slot::Pending { meta, .. } = old {
+                    waker_meta::release_ref(meta);
+                }
             }
         }
     }
@@ -204,48 +158,26 @@ impl<T> FutureDequeCore<T> {
             Poll::Pending
         }
     }
-
-    // We only poll Pending slots, so the replaced slot is always Pending. Using a
-    // helper with coverage(off) because the else branch of the if-let is defensive
-    // and unreachable under normal operation. Skipped from mutation testing because
-    // the pool also cleans up handles on drop — this is defense in depth.
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    #[cfg_attr(test, mutants::skip)]
-    fn remove_pending_from_pool(pool: &mut RawBlindPool, old: Slot<T>) {
-        if let Slot::Pending { handle, .. } = old {
-            // SAFETY: We own the handle and the pool; the handle came from
-            // this pool's insert call and has not been removed yet.
-            unsafe {
-                pool.remove(handle);
-            }
-        }
-    }
 }
 
-impl<T> Drop for FutureDequeCore<T> {
-    // Defense in depth: proactively remove pending futures from the pool before it is
-    // dropped. With the default DropPolicy (MayDropContents), RawBlindPool will drop
-    // occupied entries when the pool is dropped, but we still explicitly remove them
-    // here so their Drop runs while we hold &mut self and before the pool's slabs are
-    // torn down, and to remain correct if a non-dropping policy is ever used.
+impl<T, H> Drop for FutureDequeCore<T, H> {
+    // Defense in depth: release metadata references for all pending slots. The handles
+    // are dropped as part of slot destruction, which removes futures from their pools.
     #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Defense in depth.
     fn drop(&mut self) {
         for slot in self.slots.drain(..) {
-            if let Slot::Pending { handle, .. } = slot {
-                // SAFETY: Each handle was inserted into this pool and has not been removed.
-                unsafe {
-                    self.pool.remove(handle);
-                }
+            if let Slot::Pending { meta, .. } = slot {
+                waker_meta::release_ref(meta);
             }
         }
     }
 }
 
-// The futures stored in the deque are pinned by the RawBlindPool's heap-allocated slabs,
-// not by FutureDequeCore's own fields. The FutureDequeCore struct only holds handles
+// The futures stored in the deque are pinned by pool slabs (heap-allocated, stable
+// addresses), not by FutureDequeCore's own fields. The struct only holds handles
 // (pointers + metadata) and result values, none of which require pinning guarantees.
-impl<T> Unpin for FutureDequeCore<T> {}
+impl<T, H> Unpin for FutureDequeCore<T, H> {}
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -254,11 +186,10 @@ mod tests {
         future::Future,
         pin::Pin,
         sync::{
-            Arc, Once,
+            Arc,
             atomic::{AtomicBool, AtomicUsize, Ordering},
         },
         task::{Context, Poll, Waker},
-        time::Duration,
     };
 
     use futures::{Stream, StreamExt, executor::block_on};
@@ -274,6 +205,8 @@ mod tests {
         // native cargo test. Under Miri, tests are too slow for a timed watchdog.
         #[cfg(not(miri))]
         {
+            use std::{sync::Once, time::Duration};
+
             static INIT: Once = Once::new();
             INIT.call_once(|| {
                 std::thread::spawn(|| {
@@ -339,32 +272,6 @@ mod tests {
             self.poll_count.fetch_add(1, Ordering::Relaxed);
             Poll::Pending
         }
-    }
-
-    // Two wakers created from clones of the same raw waker compare as equal
-    // via `will_wake`, while wakers from different calls compare as different.
-    //
-    // We use a manual `RawWaker` instead of `impl Wake` because the `Wake` trait's
-    // `From<Arc<W>>` and `clone_waker` functions each create their own static copy
-    // of the vtable. The compiler may not deduplicate these const promotions, causing
-    // `will_wake()` to return `false` even for clones of the same waker.
-    fn test_waker() -> Waker {
-        static VTABLE: std::task::RawWakerVTable = std::task::RawWakerVTable::new(
-            |data| std::task::RawWaker::new(data, &VTABLE),
-            |_| {},
-            |_| {},
-            |_| {},
-        );
-
-        // Each call to test_waker() uses a unique token so that wakers from
-        // separate calls compare as different via will_wake().
-        static NEXT_TOKEN: AtomicUsize = AtomicUsize::new(1);
-        let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
-
-        // SAFETY: The vtable functions are correctly paired with the data pointer.
-        // The data pointer is a non-null sentinel (not a real allocation) used only
-        // for identity comparison in will_wake().
-        unsafe { Waker::from_raw(std::task::RawWaker::new(token as *const (), &VTABLE)) }
     }
 
     #[test]
@@ -616,11 +523,11 @@ mod tests {
         let waker = Waker::noop();
         let cx = &mut Context::from_waker(waker);
 
-        // First poll: future returns Pending and sets activation via SlotWaker.
+        // First poll: future returns Pending and wakes itself via the slot waker.
         let result = Pin::new(&mut deque).poll_next(cx);
         assert!(result.is_pending());
 
-        // Second poll: future is re-activated and completes.
+        // Second poll: future was re-activated and completes.
         let result = Pin::new(&mut deque).poll_next(cx);
         assert_eq!(result, Poll::Ready(Some(42)));
     }
@@ -633,11 +540,8 @@ mod tests {
             poll_count: Arc::clone(&poll_count),
         });
 
-        // Use test_waker() so will_wake() returns true for clones (single shared
-        // vtable). Waker::noop() and Arc<W: Wake> wakers may have vtable pointer
-        // mismatches across clone boundaries.
-        let waker = test_waker();
-        let cx = &mut Context::from_waker(&waker);
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
 
         // First poll: the future is activated (newly inserted) and gets polled.
         let result = Pin::new(&mut deque).poll_next(cx);
@@ -649,30 +553,6 @@ mod tests {
         let result = Pin::new(&mut deque).poll_next(cx);
         assert!(result.is_pending());
         assert_eq!(poll_count.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn parent_waker_change_triggers_repoll() {
-        let poll_count = Arc::new(AtomicUsize::new(0));
-        let mut deque = LocalFutureDeque::new();
-        deque.push_back(SilentPendingFuture {
-            poll_count: Arc::clone(&poll_count),
-        });
-
-        // First poll with one waker.
-        let waker1 = test_waker();
-        let cx1 = &mut Context::from_waker(&waker1);
-        let result = Pin::new(&mut deque).poll_next(cx1);
-        assert!(result.is_pending());
-        assert_eq!(poll_count.load(Ordering::Relaxed), 1);
-
-        // Second poll with a different waker. The future was not activated,
-        // but the parent waker change must trigger a re-poll.
-        let waker2 = test_waker();
-        let cx2 = &mut Context::from_waker(&waker2);
-        let result = Pin::new(&mut deque).poll_next(cx2);
-        assert!(result.is_pending());
-        assert_eq!(poll_count.load(Ordering::Relaxed), 2);
     }
 
     #[test]
@@ -760,7 +640,7 @@ mod tests {
     }
 
     // Multithreaded tests using events_once::Event for cross-thread signaling.
-    // These exercise the full waker chain (SlotWaker -> activation flag -> parent
+    // These exercise the full waker chain (slot waker -> activation flag -> parent
     // waker) across real OS threads and are especially valuable under Miri with
     // many-seeds (miri-harder) to detect data races in atomic operations.
 
@@ -794,7 +674,7 @@ mod tests {
         deque.push_back(async move { receiver.await.unwrap() });
 
         // Pre-poll with a noop waker so the future registers an initial
-        // SlotWaker. Then switch to block_on (different parent waker) while
+        // slot waker. Then switch to block_on (different parent waker) while
         // the sender fires from another thread.
         let waker = Waker::noop();
         let cx = &mut Context::from_waker(waker);
@@ -806,8 +686,9 @@ mod tests {
             sender.send(99);
         });
 
-        // block_on uses a different parent waker. drive_inner detects the
-        // change and re-polls the future so it receives an updated SlotWaker.
+        // block_on uses a different parent waker. drive() updates the shared
+        // parent, so wake notifications from the slot waker reach the correct
+        // executor.
         block_on(async {
             assert_eq!(deque.next().await, Some(99));
         });

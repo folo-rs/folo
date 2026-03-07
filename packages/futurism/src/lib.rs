@@ -42,6 +42,7 @@ mod deque_future;
 mod future_deque;
 mod future_deque_core;
 mod local_future_deque;
+mod waker_meta;
 
 pub use future_deque::*;
 pub use local_future_deque::*;

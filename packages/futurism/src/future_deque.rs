@@ -6,8 +6,22 @@ use std::{
 };
 
 use futures::Stream;
+use infinity_pool::{BlindPool, BlindPooledMut};
 
-use crate::future_deque_core::FutureDequeCore;
+use crate::{
+    deque_future::{DequeFuture, PooledCastDequeFuture as _},
+    future_deque_core::{FutureDequeCore, FutureHandle},
+};
+
+thread_local! {
+    static FUTURES_POOL: BlindPool = BlindPool::new();
+}
+
+impl<T> FutureHandle<T> for BlindPooledMut<dyn DequeFuture<T>> {
+    fn as_pin_mut(&mut self) -> Pin<&mut dyn DequeFuture<T>> {
+        BlindPooledMut::as_pin_mut(self)
+    }
+}
 
 /// A deque of futures with deterministic front-to-back polling order.
 ///
@@ -16,10 +30,10 @@ use crate::future_deque_core::FutureDequeCore;
 /// to be popped from either end with strict deque semantics (only the actual front or back
 /// item can be popped, and only if it has completed).
 ///
-/// Futures are stored in a pool-backed allocation scheme using
-/// [`RawBlindPool`][infinity_pool::RawBlindPool], avoiding per-future heap allocations.
-/// Each future gets its own waker that tracks activation state, so only futures that have
-/// been woken since the last poll cycle are re-polled.
+/// Futures and per-slot waker metadata are stored in thread-local object pools, avoiding
+/// per-future heap allocations after pool warm-up. Each future gets its own waker that
+/// tracks activation state, so only futures that have been woken since the last poll
+/// cycle are re-polled.
 ///
 /// This type requires all inserted futures to be `Send`. For a variant that allows `!Send`
 /// futures, see [`LocalFutureDeque`][crate::LocalFutureDeque].
@@ -32,7 +46,8 @@ use crate::future_deque_core::FutureDequeCore;
 /// within an async context).
 #[non_exhaustive]
 pub struct FutureDeque<T> {
-    core: FutureDequeCore<T>,
+    futures_pool: BlindPool,
+    core: FutureDequeCore<T, BlindPooledMut<dyn DequeFuture<T>>>,
 }
 
 impl<T> FutureDeque<T> {
@@ -40,18 +55,23 @@ impl<T> FutureDeque<T> {
     #[must_use]
     pub fn new() -> Self {
         Self {
+            futures_pool: FUTURES_POOL.with(BlindPool::clone),
             core: FutureDequeCore::new(),
         }
     }
 
     /// Adds a future to the back of the deque.
     pub fn push_back(&mut self, future: impl Future<Output = T> + Send + 'static) {
-        self.core.push_back(future);
+        let handle = self.futures_pool.insert(future);
+        let handle = handle.cast_deque_future::<T>();
+        self.core.push_back_handle(handle);
     }
 
     /// Adds a future to the front of the deque.
     pub fn push_front(&mut self, future: impl Future<Output = T> + Send + 'static) {
-        self.core.push_front(future);
+        let handle = self.futures_pool.insert(future);
+        let handle = handle.cast_deque_future::<T>();
+        self.core.push_front_handle(handle);
     }
 
     /// Pops the front result if the frontmost future has completed.
@@ -93,7 +113,7 @@ impl<T> fmt::Debug for FutureDeque<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FutureDeque")
             .field("len", &self.core.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -105,19 +125,17 @@ impl<T> Stream for FutureDeque<T> {
     }
 }
 
-// SAFETY: All inserted futures are required to be Send (enforced by the push method bounds).
-// The RawBlindPool is !Send by default as a conservative guard, but its documentation states
-// that if all stored items are Send, the owner may treat the pool as Send via unsafe code.
-// FutureDeque enforces the Send bound on all inserted futures, satisfying this requirement.
+// SAFETY: All inserted futures are required to be Send (enforced by push method bounds).
+// Pool handles (BlindPooledMut) are Send when contents are Send. The shared_parent Arc
+// and MetaPtr are Send+Sync. The BlindPool clone is Send+Sync.
 unsafe impl<T: Send> Send for FutureDeque<T> {}
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use static_assertions::{assert_impl_all, assert_not_impl_any};
+    use static_assertions::assert_impl_all;
 
     use super::*;
 
-    assert_impl_all!(FutureDeque<u32>: Send, Unpin);
-    assert_not_impl_any!(FutureDeque<u32>: Sync);
+    assert_impl_all!(FutureDeque<u32>: Send, Sync, Unpin);
 }
