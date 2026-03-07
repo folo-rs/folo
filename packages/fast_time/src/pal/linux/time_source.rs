@@ -58,10 +58,14 @@ impl TimeSource for TimeSourceImpl {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use mockall::Sequence;
 
     use super::*;
     use crate::pal::linux::bindings::MockBindings;
+
+    static_assertions::assert_impl_all!(TimeSourceImpl: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn smoke_test() {
