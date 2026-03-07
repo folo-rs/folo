@@ -22,7 +22,8 @@ pub(crate) struct WakerMeta {
     ref_count: AtomicUsize,
 
     // Per-slot activation flag. Set by the waker when the future is woken,
-    // cleared by drive_inner when the future is polled.
+    // cleared by drive_inner when the future is polled. Represented as an
+    // AtomicUsize with strict 0/1 semantics: 0 = not activated, 1 = activated.
     pub(crate) activated: AtomicUsize,
 
     // Shared parent waker, one per FutureDequeCore instance. All slots in the same deque
@@ -189,10 +190,15 @@ unsafe fn wake_by_ref_raw_waker(data: *const ()) {
 
     // Only wake the parent if we are the first to set the activation flag.
     // If it was already set, the parent was already woken by a prior activation.
-    if meta.activated.swap(1, Ordering::AcqRel) == 0
-        && let Some(parent) = meta.shared_parent.lock().as_ref()
-    {
-        parent.wake_by_ref();
+    if meta.activated.swap(1, Ordering::AcqRel) == 0 {
+        // Clone the parent waker under the lock, then drop the lock before waking
+        // to avoid potential deadlock if the wake path re-enters and tries to lock
+        // shared_parent again (e.g. some executor waker implementations).
+        let parent = meta.shared_parent.lock().clone();
+
+        if let Some(parent) = parent {
+            parent.wake_by_ref();
+        }
     }
 }
 
