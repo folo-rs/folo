@@ -515,6 +515,16 @@ Exclude such tests from running under Miri.
 
 Doctests are not executed under Miri. There is no need to make doctests Miri-compatible.
 
+# Testing atomic operations and custom synchronization
+
+Any code that uses atomic operations, custom wakers, or other synchronization primitives must
+include tests that exercise real multithreaded scenarios (e.g. signaling completion from another
+thread via `events_once::Event`). These tests should be Miri-compatible (no OS-specific calls)
+and verified via `just package=<name> miri-harder`, which runs Miri with many random seeds
+(`-Zmiri-many-seeds=..64`). The combination of true multithreaded tests and miri-harder is
+highly effective at detecting data races, incorrect memory orderings, and other concurrency bugs
+that are nearly impossible to catch with single-threaded tests alone.
+
 # Mutation testing coverage and skipping mutations
 
 We expect all mutations to either be unviable or to be caught. Uncaught mutations and mutants that

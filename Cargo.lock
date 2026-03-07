@@ -841,6 +841,7 @@ name = "futurism"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "events_once",
  "futures",
  "infinity_pool",
  "mutants",

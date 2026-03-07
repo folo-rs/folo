@@ -22,6 +22,7 @@ enum Slot<T> {
     Pending {
         handle: RawBlindPooledMut<dyn DequeFuture<T>>,
         activated: Arc<AtomicBool>,
+        slot_waker: Option<Arc<SlotWaker>>,
     },
     Ready {
         value: T,
@@ -90,6 +91,7 @@ impl<T> FutureDequeCore<T> {
         self.slots.push_back(Slot::Pending {
             handle,
             activated: Arc::new(AtomicBool::new(true)),
+            slot_waker: None,
         });
     }
 
@@ -103,6 +105,7 @@ impl<T> FutureDequeCore<T> {
         self.slots.push_front(Slot::Pending {
             handle,
             activated: Arc::new(AtomicBool::new(true)),
+            slot_waker: None,
         });
     }
 
@@ -134,20 +137,43 @@ impl<T> FutureDequeCore<T> {
     fn drive_inner(pool: &mut RawBlindPool, slots: &mut VecDeque<Slot<T>>, cx: &Context<'_>) {
         for slot in slots.iter_mut() {
             let poll_result = {
-                let Slot::Pending { handle, activated } = slot else {
+                let Slot::Pending {
+                    handle,
+                    activated,
+                    slot_waker,
+                } = slot
+                else {
                     continue;
                 };
 
-                if !activated.load(Ordering::Acquire) {
+                // If the parent waker has changed since the last poll, the future
+                // must be re-polled to receive an updated SlotWaker — otherwise
+                // wake notifications would be routed to the stale parent.
+                let parent_changed = slot_waker
+                    .as_ref()
+                    .is_some_and(|sw| !sw.parent_waker.will_wake(cx.waker()));
+
+                // Atomically read and clear the activation flag. Using swap ensures
+                // that a concurrent wake between the read and clear is not lost.
+                // Re-poll if activated OR if the parent waker has changed.
+                if !activated.swap(false, Ordering::AcqRel) && !parent_changed {
                     continue;
                 }
-                activated.store(false, Ordering::Relaxed);
 
-                let child_waker = Waker::from(Arc::new(SlotWaker {
-                    activated: Arc::clone(activated),
-                    parent_waker: cx.waker().clone(),
-                }));
-                let sub_cx = &mut Context::from_waker(&child_waker);
+                // Create or reuse the SlotWaker.
+                if parent_changed || slot_waker.is_none() {
+                    *slot_waker = Some(Arc::new(SlotWaker {
+                        activated: Arc::clone(activated),
+                        parent_waker: cx.waker().clone(),
+                    }));
+                }
+
+                let waker = Waker::from(Arc::clone(
+                    slot_waker
+                        .as_ref()
+                        .expect("we always populate the slot waker above"),
+                ));
+                let sub_cx = &mut Context::from_waker(&waker);
 
                 // SAFETY: The pool guarantees that the handle points to a valid,
                 // pinned allocation that has not been removed.
@@ -183,11 +209,12 @@ impl<T> FutureDequeCore<T> {
 }
 
 impl<T> Drop for FutureDequeCore<T> {
-    // Defense in depth; the pool cleans up items via its own Drop.
+    // Defense in depth: ensure no pending futures remain in the pool before it is dropped.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
         // We must remove all pending futures from the pool before the pool is dropped,
-        // as the pool does not automatically drop its contents.
+        // because RawBlindPool frees its backing memory but does not invoke the drop
+        // logic of stored values on its own.
         for slot in self.slots.drain(..) {
             if let Slot::Pending { handle, .. } = slot {
                 // SAFETY: Each handle was inserted into this pool and has not been removed.
@@ -620,5 +647,90 @@ mod tests {
         deque.push_back(CountdownFuture::ready(2));
         assert!(!deque.is_empty());
         assert_eq!(deque.len(), 2);
+    }
+
+    // Multithreaded tests using events_once::Event for cross-thread signaling.
+    // These exercise the full waker chain (SlotWaker -> activation flag -> parent
+    // waker) across real OS threads and are especially valuable under Miri with
+    // many-seeds (miri-harder) to detect data races in atomic operations.
+
+    #[test]
+    fn cross_thread_event_completion() {
+        watchdog();
+
+        let (sender, receiver) = events_once::Event::<i32>::boxed();
+
+        let mut deque = FutureDeque::new();
+        deque.push_back(async move { receiver.await.unwrap() });
+
+        std::thread::spawn(move || {
+            sender.send(42);
+        })
+        .join()
+        .unwrap();
+
+        block_on(async {
+            assert_eq!(deque.next().await, Some(42));
+        });
+    }
+
+    #[test]
+    fn cross_thread_event_waker_activation() {
+        watchdog();
+
+        let (sender, receiver) = events_once::Event::<i32>::boxed();
+
+        let mut deque = FutureDeque::new();
+        deque.push_back(async move { receiver.await.unwrap() });
+
+        // Pre-poll with a noop waker so the future registers an initial
+        // SlotWaker. Then switch to block_on (different parent waker) while
+        // the sender fires from another thread.
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+        let result = Pin::new(&mut deque).poll_next(cx);
+        assert!(result.is_pending());
+
+        // Signal from another thread. May arrive before or during block_on.
+        let handle = std::thread::spawn(move || {
+            sender.send(99);
+        });
+
+        // block_on uses a different parent waker. drive_inner detects the
+        // change and re-polls the future so it receives an updated SlotWaker.
+        block_on(async {
+            assert_eq!(deque.next().await, Some(99));
+        });
+
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn cross_thread_multiple_events() {
+        watchdog();
+
+        let (sender1, receiver1) = events_once::Event::<i32>::boxed();
+        let (sender2, receiver2) = events_once::Event::<i32>::boxed();
+        let (sender3, receiver3) = events_once::Event::<i32>::boxed();
+
+        let mut deque = FutureDeque::new();
+        deque.push_back(async move { receiver1.await.unwrap() });
+        deque.push_back(async move { receiver2.await.unwrap() });
+        deque.push_back(async move { receiver3.await.unwrap() });
+
+        // Signal all events from separate threads.
+        let t1 = std::thread::spawn(move || sender1.send(10));
+        let t2 = std::thread::spawn(move || sender2.send(20));
+        let t3 = std::thread::spawn(move || sender3.send(30));
+        t1.join().unwrap();
+        t2.join().unwrap();
+        t3.join().unwrap();
+
+        // Results come out in deque order, not completion order.
+        block_on(async {
+            assert_eq!(deque.next().await, Some(10));
+            assert_eq!(deque.next().await, Some(20));
+            assert_eq!(deque.next().await, Some(30));
+        });
     }
 }
