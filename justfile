@@ -9,12 +9,13 @@ set dotenv-path := "./constants.env"
 set dotenv-required := true
 
 package := ""
-target_package := if package == "" { " --workspace" } else { " -p " + package }
+target_package := if package == "" { " --workspace" } else { " -p " + replace(package, " ", " -p ") }
 
 _default:
     @just --list
 
 import 'justfiles/just_basics.just'
+import 'justfiles/just_delta.just'
 import 'justfiles/just_quality.just'
 import 'justfiles/just_release.just'
 import 'justfiles/just_setup.just'

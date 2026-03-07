@@ -62,18 +62,22 @@ test-docs FILTER="":
         # Workspace-wide doctests - run normally
         cargo +$env:RUST_MSRV test --all-features --doc {{ FILTER }} --locked
     } else {
-        # Single package - check if it's a library crate
-        $package_name = $target_package_var -replace "^ -p ", ""
-        $lib_path = "packages/$package_name/src/lib.rs"
-        
-        if (Test-Path $lib_path) {
-            # Library crate - run doctests
-            cargo +$env:RUST_MSRV test {{ target_package }} --all-features --doc {{ FILTER }} --locked
-        } else {
-            # Binary-only crate - skip doctests because Cargo expects library targets for doctests.
-            # Binary crates (with only main.rs) cannot contain doctests, so running `cargo test --doc`
-            # on them results in an error rather than gracefully running zero tests.
-            Write-Host "Skipping doctests for binary-only package: $package_name"
+        # One or more packages specified via -p flags. We need to check each package
+        # individually because binary-only crates do not support doctests.
+        $package_names = "{{ package }}".Split(" ", [StringSplitOptions]::RemoveEmptyEntries)
+
+        foreach ($pkg in $package_names) {
+            $lib_path = "packages/$pkg/src/lib.rs"
+
+            if (Test-Path $lib_path) {
+                cargo +$env:RUST_MSRV test -p $pkg --all-features --doc {{ FILTER }} --locked
+            } else {
+                # Binary-only crate - skip doctests because Cargo expects library targets
+                # for doctests. Binary crates (with only main.rs) cannot contain doctests,
+                # so running `cargo test --doc` on them results in an error rather than
+                # gracefully running zero tests.
+                Write-Host "Skipping doctests for binary-only package: $pkg"
+            }
         }
     }
 
@@ -99,7 +103,8 @@ run-examples:
         $workspace_members = Get-ChildItem -Path "packages" -Directory | Where-Object { Test-Path (Join-Path $_.FullName "Cargo.toml") }
         $packages_to_process = $workspace_members | ForEach-Object { $_.Name }
     } else {
-        $packages_to_process = @("{{ package }}")
+        # Support space-separated package lists (e.g. from cargo-delta output).
+        $packages_to_process = "{{ package }}".Split(" ", [StringSplitOptions]::RemoveEmptyEntries)
     }
     
     Write-Host "Running examples for packages: $($packages_to_process -join ', ')"

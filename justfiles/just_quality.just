@@ -12,7 +12,7 @@ coverage-measure:
     cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov nextest {{ target_package }} --no-fail-fast --all-targets --no-report --all-features --locked
 
 # This tool needs a different way to specify the package.
-coverage-package := if package == "" { "" } else { "-p " + package }
+coverage-package := if package == "" { "" } else { "-p " + replace(package, " ", " -p ") }
 
 [group('quality')]
 coverage-report:
@@ -37,7 +37,7 @@ format-check:
 
 [group('quality')]
 hack:
-    cargo hack check --feature-powerset --locked
+    cargo hack check {{ target_package }} --feature-powerset --locked
 
 [group('quality')]
 machete:

@@ -1,0 +1,35 @@
+# cargo-delta configuration file
+# See https://github.com/tekian/cargo-delta for documentation.
+
+# Files and folders to exclude from analysis.
+file_exclude_patterns = ["target", "mutants.out", "mutants.out.old", ".*"]
+
+# Trip wire patterns - if any changed file matches these patterns,
+# all crates in the workspace are considered impacted. This is used
+# for files that affect the entire workspace, such as configuration
+# files, workflow definitions and the build system itself.
+trip_wire_patterns = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    "clippy.toml",
+    "unstable-rustfmt.toml",
+    "constants.env",
+    "release-plz.toml",
+    "cargo-delta.toml",
+    "justfile",
+    "justfiles/**",
+    ".github/**",
+]
+
+[parser]
+# The simple-mermaid crate provides a mermaid!() macro that includes .mermaid
+# diagram files at compile time, similar to include_str!().
+include_macros = [
+    "include_str",
+    "include_bytes",
+    "mermaid",
+]
+
+[git]
+remote_branch = "origin/main"
