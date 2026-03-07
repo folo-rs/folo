@@ -207,8 +207,10 @@ impl<T> FutureDequeCore<T> {
 
     // We only poll Pending slots, so the replaced slot is always Pending. Using a
     // helper with coverage(off) because the else branch of the if-let is defensive
-    // and unreachable under normal operation.
+    // and unreachable under normal operation. Skipped from mutation testing because
+    // the pool also cleans up handles on drop — this is defense in depth.
     #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(test, mutants::skip)]
     fn remove_pending_from_pool(pool: &mut RawBlindPool, old: Slot<T>) {
         if let Slot::Pending { handle, .. } = old {
             // SAFETY: We own the handle and the pool; the handle came from
