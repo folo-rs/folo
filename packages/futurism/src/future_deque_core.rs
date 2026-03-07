@@ -223,13 +223,14 @@ impl<T> FutureDequeCore<T> {
 }
 
 impl<T> Drop for FutureDequeCore<T> {
-    // Defense in depth: ensure no pending futures remain in the pool before it is dropped.
+    // Defense in depth: proactively remove pending futures from the pool before it is
+    // dropped. With the default DropPolicy (MayDropContents), RawBlindPool will drop
+    // occupied entries when the pool is dropped, but we still explicitly remove them
+    // here so their Drop runs while we hold &mut self and before the pool's slabs are
+    // torn down, and to remain correct if a non-dropping policy is ever used.
     #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Defense in depth.
     fn drop(&mut self) {
-        // We must remove all pending futures from the pool before the pool is dropped,
-        // because RawBlindPool frees its backing memory but does not invoke the drop
-        // logic of stored values on its own.
         for slot in self.slots.drain(..) {
             if let Slot::Pending { handle, .. } = slot {
                 // SAFETY: Each handle was inserted into this pool and has not been removed.
