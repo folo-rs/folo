@@ -254,7 +254,11 @@ jobs:
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'events_once'))
-    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1/4, 2/4, 3/4, 4/4]
+    timeout-minutes: 60
     runs-on: windows-latest
 
     steps:
@@ -264,15 +268,19 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
-      - name: Run miri-harder for events_once on windows-latest
-        run: just package=events_once miri-harder
+      - name: Run miri-harder for events_once on windows-latest (shard ${{ matrix.shard }})
+        run: just package=events_once miri-harder ${{ matrix.shard }}
 
   miri-harder-infinity-pool:
     needs: [delta]
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'infinity_pool'))
-    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1/8, 2/8, 3/8, 4/8, 5/8, 6/8, 7/8, 8/8]
+    timeout-minutes: 60
     runs-on: windows-latest
 
     steps:
@@ -282,8 +290,8 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
-      - name: Run miri-harder for infinity_pool on windows-latest
-        run: just package=infinity_pool miri-harder
+      - name: Run miri-harder for infinity_pool on windows-latest (shard ${{ matrix.shard }})
+        run: just package=infinity_pool miri-harder ${{ matrix.shard }}
 
   machete:
     needs: [delta]
