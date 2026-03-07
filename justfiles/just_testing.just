@@ -30,9 +30,35 @@ miri-harder SHARD="" FILTER="":
         $seedRange = "..$totalSeeds"
     } else {
         $parts = $shard -split "/"
-        $shardIndex = [int]$parts[0]
-        $shardCount = [int]$parts[1]
+
+        if ($parts.Length -ne 2) {
+            Write-Error "Invalid SHARD value '$shard'. Expected format 'N/M'."
+            exit 1
+        }
+
+        $shardIndex = 0
+        $shardCount = 0
+        if (-not [int]::TryParse($parts[0], [ref]$shardIndex) -or -not [int]::TryParse($parts[1], [ref]$shardCount)) {
+            Write-Error "Invalid SHARD value '$shard'. N and M must be integers in 'N/M'."
+            exit 1
+        }
+
+        if ($shardCount -le 0) {
+            Write-Error "Invalid SHARD value '$shard'. M must be a positive integer in 'N/M'."
+            exit 1
+        }
+
+        if ($shardIndex -lt 1 -or $shardIndex -gt $shardCount) {
+            Write-Error "Invalid SHARD value '$shard'. N must satisfy 1 <= N <= M in 'N/M'."
+            exit 1
+        }
+
         $seedsPerShard = [math]::Floor($totalSeeds / $shardCount)
+        if ($seedsPerShard -lt 1) {
+            Write-Error "Invalid SHARD value '$shard'. Too many shards for $totalSeeds seeds."
+            exit 1
+        }
+
         $start = ($shardIndex - 1) * $seedsPerShard
         if ($shardIndex -eq $shardCount) {
             # Last shard picks up any remainder from uneven division.

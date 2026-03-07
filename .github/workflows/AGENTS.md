@@ -30,8 +30,10 @@ Split from the monolithic `just validate-local` into individual jobs:
   - test-docs
   - **docs** — Multi-platform because conditional compilation affects generated documentation
   - miri
-  - **miri-harder-events-once** / **miri-harder-infinity-pool** — Windows-only, `timeout-minutes: 120`
+  - **miri-harder-events-once** / **miri-harder-infinity-pool** — Windows-only, sharded
     - Runs Miri with 64 seeds per test (`-Zmiri-many-seeds=..64`) for select packages
+    - Sharded across parallel runners to reduce wall-clock time (4 shards for events_once,
+      8 shards for infinity_pool)
     - Very slow, so only run for specific packages on a single platform
   - **machete** — Multi-platform because conditional compilation affects dependency analysis
   - check-release
@@ -60,7 +62,7 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
 2. **Platform matrix considerations**:
    - `format-check` is single-platform (Ubuntu) to save resources
    - `docs` and `machete` remain multi-platform due to conditional compilation differences
-   - `miri-harder-*` jobs are Windows-only due to high cost; one job per package
+   - `miri-harder-*` jobs are Windows-only due to high cost; sharded across parallel runners
    - All other checks run on 3 platforms (ubuntu, macos, windows)
 
 3. **Timeouts**:
