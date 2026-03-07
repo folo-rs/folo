@@ -52,6 +52,7 @@ impl Wake for SlotWaker {
     // Rarely called; most futures use wake_by_ref to avoid consuming the waker.
     // The companion wake_by_ref is exercised by tests.
     #[cfg_attr(test, mutants::skip)]
+    #[cfg_attr(coverage_nightly, coverage(off))] // Identical to wake_by_ref.
     fn wake(self: Arc<Self>) {
         self.activated.store(true, Ordering::Release);
         self.parent_waker.wake_by_ref();
@@ -211,6 +212,7 @@ impl<T> FutureDequeCore<T> {
 impl<T> Drop for FutureDequeCore<T> {
     // Defense in depth: ensure no pending futures remain in the pool before it is dropped.
     #[cfg_attr(test, mutants::skip)]
+    #[cfg_attr(coverage_nightly, coverage(off))] // Defense in depth.
     fn drop(&mut self) {
         // We must remove all pending futures from the pool before the pool is dropped,
         // because RawBlindPool frees its backing memory but does not invoke the drop
