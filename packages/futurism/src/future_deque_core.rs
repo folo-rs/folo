@@ -240,7 +240,7 @@ mod tests {
         pin::Pin,
         sync::{
             Arc, Once,
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
         },
         task::{Context, Poll, Waker},
         time::Duration,
@@ -307,6 +307,49 @@ mod tests {
                 Poll::Pending
             }
         }
+    }
+
+    /// A future that always returns `Pending` without waking itself.
+    /// Tracks the number of times it has been polled.
+    struct SilentPendingFuture {
+        poll_count: Arc<AtomicUsize>,
+    }
+
+    impl Unpin for SilentPendingFuture {}
+
+    impl Future for SilentPendingFuture {
+        type Output = ();
+
+        fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<()> {
+            self.poll_count.fetch_add(1, Ordering::Relaxed);
+            Poll::Pending
+        }
+    }
+
+    // Two wakers created from clones of the same raw waker compare as equal
+    // via `will_wake`, while wakers from different calls compare as different.
+    //
+    // We use a manual `RawWaker` instead of `impl Wake` because the `Wake` trait's
+    // `From<Arc<W>>` and `clone_waker` functions each create their own static copy
+    // of the vtable. The compiler may not deduplicate these const promotions, causing
+    // `will_wake()` to return `false` even for clones of the same waker.
+    fn test_waker() -> Waker {
+        static VTABLE: std::task::RawWakerVTable = std::task::RawWakerVTable::new(
+            |data| std::task::RawWaker::new(data, &VTABLE),
+            |_| {},
+            |_| {},
+            |_| {},
+        );
+
+        // Each call to test_waker() uses a unique token so that wakers from
+        // separate calls compare as different via will_wake().
+        static NEXT_TOKEN: AtomicUsize = AtomicUsize::new(1);
+        let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
+
+        // SAFETY: The vtable functions are correctly paired with the data pointer.
+        // The data pointer is a non-null sentinel (not a real allocation) used only
+        // for identity comparison in will_wake().
+        unsafe { Waker::from_raw(std::task::RawWaker::new(token as *const (), &VTABLE)) }
     }
 
     #[test]
@@ -565,6 +608,56 @@ mod tests {
         // Second poll: future is re-activated and completes.
         let result = Pin::new(&mut deque).poll_next(cx);
         assert_eq!(result, Poll::Ready(Some(42)));
+    }
+
+    #[test]
+    fn non_activated_future_is_not_repolled() {
+        let poll_count = Arc::new(AtomicUsize::new(0));
+        let mut deque = LocalFutureDeque::new();
+        deque.push_back(SilentPendingFuture {
+            poll_count: Arc::clone(&poll_count),
+        });
+
+        // Use test_waker() so will_wake() returns true for clones (single shared
+        // vtable). Waker::noop() and Arc<W: Wake> wakers may have vtable pointer
+        // mismatches across clone boundaries.
+        let waker = test_waker();
+        let cx = &mut Context::from_waker(&waker);
+
+        // First poll: the future is activated (newly inserted) and gets polled.
+        let result = Pin::new(&mut deque).poll_next(cx);
+        assert!(result.is_pending());
+        assert_eq!(poll_count.load(Ordering::Relaxed), 1);
+
+        // Second poll with the same waker: the future did not wake itself,
+        // so it should not be re-polled.
+        let result = Pin::new(&mut deque).poll_next(cx);
+        assert!(result.is_pending());
+        assert_eq!(poll_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn parent_waker_change_triggers_repoll() {
+        let poll_count = Arc::new(AtomicUsize::new(0));
+        let mut deque = LocalFutureDeque::new();
+        deque.push_back(SilentPendingFuture {
+            poll_count: Arc::clone(&poll_count),
+        });
+
+        // First poll with one waker.
+        let waker1 = test_waker();
+        let cx1 = &mut Context::from_waker(&waker1);
+        let result = Pin::new(&mut deque).poll_next(cx1);
+        assert!(result.is_pending());
+        assert_eq!(poll_count.load(Ordering::Relaxed), 1);
+
+        // Second poll with a different waker. The future was not activated,
+        // but the parent waker change must trigger a re-poll.
+        let waker2 = test_waker();
+        let cx2 = &mut Context::from_waker(&waker2);
+        let result = Pin::new(&mut deque).poll_next(cx2);
+        assert!(result.is_pending());
+        assert_eq!(poll_count.load(Ordering::Relaxed), 2);
     }
 
     #[test]
