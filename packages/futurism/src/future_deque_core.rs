@@ -34,6 +34,9 @@ impl<T> Slot<T> {
         matches!(self, Self::Ready { .. })
     }
 
+    // Callers always verify is_ready() before calling take_value(), so the
+    // Pending branch is unreachable under normal operation.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn take_value(self) -> Option<T> {
         match self {
             Self::Ready { value } => Some(value),
@@ -184,13 +187,7 @@ impl<T> FutureDequeCore<T> {
 
             if let Poll::Ready(value) = poll_result {
                 let old = std::mem::replace(slot, Slot::Ready { value });
-                if let Slot::Pending { handle, .. } = old {
-                    // SAFETY: We own the handle and the pool; the handle came from
-                    // this pool's insert call and has not been removed yet.
-                    unsafe {
-                        pool.remove(handle);
-                    }
-                }
+                Self::remove_pending_from_pool(pool, old);
             }
         }
     }
@@ -205,6 +202,20 @@ impl<T> FutureDequeCore<T> {
             Poll::Ready(None)
         } else {
             Poll::Pending
+        }
+    }
+
+    // We only poll Pending slots, so the replaced slot is always Pending. Using a
+    // helper with coverage(off) because the else branch of the if-let is defensive
+    // and unreachable under normal operation.
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn remove_pending_from_pool(pool: &mut RawBlindPool, old: Slot<T>) {
+        if let Slot::Pending { handle, .. } = old {
+            // SAFETY: We own the handle and the pool; the handle came from
+            // this pool's insert call and has not been removed yet.
+            unsafe {
+                pool.remove(handle);
+            }
         }
     }
 }
@@ -234,6 +245,7 @@ impl<T> Drop for FutureDequeCore<T> {
 impl<T> Unpin for FutureDequeCore<T> {}
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::{
         future::Future,

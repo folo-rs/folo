@@ -101,6 +101,7 @@ impl<T> Stream for LocalFutureDeque<T> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use static_assertions::assert_not_impl_any;
 
