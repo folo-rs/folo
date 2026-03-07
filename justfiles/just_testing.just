@@ -19,11 +19,32 @@ miri FILTER="":
 
 [group('testing')]
 [script]
-miri-harder FILTER="":
+miri-harder SHARD="" FILTER="":
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    $env:MIRIFLAGS = "-Zmiri-many-seeds=..64"
+    $totalSeeds = 64
+    $shard = "{{ SHARD }}"
+
+    if ($shard -eq "") {
+        $seedRange = "..$totalSeeds"
+    } else {
+        $parts = $shard -split "/"
+        $shardIndex = [int]$parts[0]
+        $shardCount = [int]$parts[1]
+        $seedsPerShard = [math]::Floor($totalSeeds / $shardCount)
+        $start = ($shardIndex - 1) * $seedsPerShard
+        if ($shardIndex -eq $shardCount) {
+            # Last shard picks up any remainder from uneven division.
+            $end = $totalSeeds
+        } else {
+            $end = $shardIndex * $seedsPerShard
+        }
+        $seedRange = "$start..$end"
+    }
+
+    $env:MIRIFLAGS = "-Zmiri-many-seeds=$seedRange"
+    Write-Host "Running miri-harder with seed range: $seedRange"
     cargo +$env:RUST_NIGHTLY miri test {{ target_package }} --no-fail-fast --all-features --lib {{ FILTER }} --locked -- --quiet
 
 [group('testing')]

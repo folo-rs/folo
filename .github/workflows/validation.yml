@@ -254,6 +254,32 @@ jobs:
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'events_once'))
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1/4, 2/4, 3/4, 4/4]
+    timeout-minutes: 60
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run miri-harder for events_once on windows-latest (shard ${{ matrix.shard }})
+        run: just package=events_once miri-harder ${{ matrix.shard }}
+
+  miri-harder-infinity-pool:
+    needs: [delta]
+    if: >-
+      needs.delta.outputs.skip_all != 'true'
+      && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'infinity_pool'))
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1/4, 2/4, 3/4, 4/4]
     timeout-minutes: 120
     runs-on: windows-latest
 
@@ -264,26 +290,8 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
-      - name: Run miri-harder for events_once on windows-latest
-        run: just package=events_once miri-harder
-
-  miri-harder-infinity-pool:
-    needs: [delta]
-    if: >-
-      needs.delta.outputs.skip_all != 'true'
-      && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'infinity_pool'))
-    timeout-minutes: 300
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-
-      - name: Run miri-harder for infinity_pool on windows-latest
-        run: just package=infinity_pool miri-harder
+      - name: Run miri-harder for infinity_pool on windows-latest (shard ${{ matrix.shard }})
+        run: just package=infinity_pool miri-harder ${{ matrix.shard }}
 
   machete:
     needs: [delta]
