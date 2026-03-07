@@ -17,6 +17,7 @@ trip_wire_patterns = [
     "constants.env",
     "release-plz.toml",
     "cargo-delta.toml",
+    "delta.toml",
     "justfile",
     "justfiles/**",
     ".github/**",

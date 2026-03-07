@@ -23,11 +23,11 @@ delta:
         $baseline_json = Join-Path $temp_dir "baseline.json"
         $current_json = Join-Path $temp_dir "current.json"
         $delta_json = Join-Path $temp_dir "delta.json"
-        $config_path = (Resolve-Path "cargo-delta.toml").Path
+        $config_path = (Resolve-Path "delta.toml").Path
 
         # Analyze the current branch first (we are already on it).
         Write-Host "Analyzing current branch..."
-        cargo delta analyze -c $config_path | Out-File -FilePath $current_json -Encoding utf8
+        cargo delta -c $config_path analyze | Out-File -FilePath $current_json -Encoding utf8
 
         # Use a git worktree to analyze origin/main without switching branches.
         $worktree_dir = Join-Path $temp_dir "main-worktree"
@@ -36,7 +36,7 @@ delta:
         try {
             Write-Host "Analyzing baseline (origin/main)..."
             Push-Location $worktree_dir
-            cargo delta analyze -c $config_path | Out-File -FilePath $baseline_json -Encoding utf8
+            cargo delta -c $config_path analyze | Out-File -FilePath $baseline_json -Encoding utf8
             Pop-Location
         } finally {
             git worktree remove $worktree_dir --force
@@ -44,7 +44,7 @@ delta:
 
         # Compare to find impacted crates.
         Write-Host "Computing delta..."
-        cargo delta run -c $config_path --baseline $baseline_json --current $current_json | Out-File -FilePath $delta_json -Encoding utf8
+        cargo delta -c $config_path run --baseline $baseline_json --current $current_json | Out-File -FilePath $delta_json -Encoding utf8
 
         # Parse the delta output to extract the "Affected" package list.
         $delta = Get-Content $delta_json -Raw | ConvertFrom-Json

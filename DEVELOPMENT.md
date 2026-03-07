@@ -83,7 +83,7 @@ are impacted by your changes, rather than running full workspace validation.
 which packages are directly modified and which are indirectly affected (via dependency chains).
 Only those packages are validated.
 
-Certain files are designated as "trip wires" (see `cargo-delta.toml`). If any trip wire file is
+Certain files are designated as "trip wires" (see `delta.toml`). If any trip wire file is
 changed, all packages are validated regardless. Trip wires include workspace-wide configuration
 files (`Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, etc.), workflow definitions and the
 build system itself.
@@ -115,4 +115,4 @@ just package="events_once infinity_pool" validate-local
 
 Pull request builds use delta to validate only impacted packages. Push-to-main builds act as a
 backstop and always validate the full workspace. If the backstop catches something that the delta
-build missed, the `cargo-delta.toml` configuration should be updated to prevent recurrence.
+build missed, the `delta.toml` configuration should be updated to prevent recurrence.

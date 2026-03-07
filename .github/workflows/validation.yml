@@ -43,20 +43,20 @@ jobs:
             exit 0
           fi
 
-          CONFIG_PATH="$(pwd)/cargo-delta.toml"
+          CONFIG_PATH="$(pwd)/delta.toml"
 
           echo "Analyzing current branch..."
-          cargo delta analyze -c "$CONFIG_PATH" > current.json
+          cargo delta -c "$CONFIG_PATH" analyze > current.json
 
           echo "Analyzing baseline (origin/main)..."
           git worktree add /tmp/main-worktree origin/main
           pushd /tmp/main-worktree
-          cargo delta analyze -c "$CONFIG_PATH" > /tmp/baseline.json
+          cargo delta -c "$CONFIG_PATH" analyze > /tmp/baseline.json
           popd
           git worktree remove /tmp/main-worktree --force
 
           echo "Computing delta..."
-          cargo delta run -c "$CONFIG_PATH" --baseline /tmp/baseline.json --current current.json > delta.json
+          cargo delta -c "$CONFIG_PATH" run --baseline /tmp/baseline.json --current current.json > delta.json
 
           cat delta.json
 
