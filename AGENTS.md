@@ -645,3 +645,9 @@ Avoid unnecessary and repetitive prefixes and suffixes.
 For example:
 
 * Builder methods are just a noun. It is `FooBuilder::bar(value)` not `FooBuilder::with_bar(value)`.
+
+# Creating GitHub pull requests
+
+When creating PRs with `gh pr create`, do not pass the `--body` flag with an inline string because
+PowerShell mangles backticks and special characters. Instead, write the PR body to a temporary file
+and use `--body-file path/to/file.md`.

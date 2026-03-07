@@ -44,3 +44,13 @@ impl Bindings for BuildTargetBindings {
         Instant::now()
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use super::*;
+
+    static_assertions::assert_impl_all!(BuildTargetBindings: UnwindSafe, RefUnwindSafe);
+}

@@ -264,10 +264,14 @@ impl From<Instant> for std::time::Instant {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use mockall::Sequence;
 
     use super::*;
     use crate::pal::{MockPlatform, MockTimeSource};
+
+    static_assertions::assert_impl_all!(Instant: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn saturating_duration_since_can_math() {
