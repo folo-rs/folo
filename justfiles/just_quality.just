@@ -65,7 +65,7 @@ validate: validate-local validate-linux
 # Performs the part of the `validate` recipe that must run on Linux, when commanded from Windows.
 [group('quality')]
 validate-linux:
-    wsl -e bash -l -c "just package={{ package }} validate-local"
+    wsl -e bash -l -c "just package='{{ package }}' validate-local"
 
 # Full validation of primary factors, as you would do in a build pipeline before a release.
 # Performs validation on the current platform, whatever that may be.
@@ -91,7 +91,7 @@ validate-extra: validate-extra-local validate-extra-linux
 # Performs the part of the `validate-extra` recipe that must run on Linux, when commanded from Windows.
 [group('quality')]
 validate-extra-linux:
-    wsl -e bash -l -c "just package={{ package }} validate-extra-local"
+    wsl -e bash -l -c "just package='{{ package }}' validate-extra-local"
 
 # Validation of extra factors that take potentially too long to run in regular validation.
 # Performs validation on the current platform, whatever that may be.

@@ -46,19 +46,28 @@ jobs:
           fi
 
           CONFIG_PATH="$(pwd)/delta.toml"
+          WORKTREE_DIR="$(mktemp -d)"
+          BASELINE_JSON="$(mktemp)"
+
+          cleanup_worktree() {
+            git worktree remove "$WORKTREE_DIR" --force >/dev/null 2>&1 || true
+            rm -rf "$WORKTREE_DIR" >/dev/null 2>&1 || true
+            rm -f "$BASELINE_JSON" >/dev/null 2>&1 || true
+          }
+          trap cleanup_worktree EXIT
 
           echo "Analyzing current branch..."
           cargo delta -c "$CONFIG_PATH" analyze > current.json
 
           echo "Analyzing baseline (origin/main)..."
-          git worktree add /tmp/main-worktree origin/main
-          pushd /tmp/main-worktree
-          cargo delta -c "$CONFIG_PATH" analyze > /tmp/baseline.json
+          git worktree add "$WORKTREE_DIR" origin/main
+          pushd "$WORKTREE_DIR"
+          cargo delta -c "$CONFIG_PATH" analyze > "$BASELINE_JSON"
           popd
-          git worktree remove /tmp/main-worktree --force
+          git worktree remove "$WORKTREE_DIR" --force
 
           echo "Computing delta..."
-          cargo delta -c "$CONFIG_PATH" run --baseline /tmp/baseline.json --current current.json > delta.json
+          cargo delta -c "$CONFIG_PATH" run --baseline "$BASELINE_JSON" --current current.json > delta.json
 
           cat delta.json
 
