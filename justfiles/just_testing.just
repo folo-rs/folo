@@ -120,6 +120,17 @@ run-examples:
             continue
         }
         
+        # Pre-compile all examples for this package so compilation time does not eat into the
+        # per-example execution timeout. On slow CI runners, first-time compilation can exceed the
+        # timeout even though the example itself exits instantly.
+        Write-Host "Building examples for package '$pkg'..." -ForegroundColor DarkGray
+        $env:IS_TESTING = "1"
+        cargo build --package $pkg --examples --all-features --locked
+        if ($LASTEXITCODE -ne 0) {
+            $failures += "$pkg::* (build failed)"
+            continue
+        }
+
         # Find .rs files directly in examples directory
         $example_files = Get-ChildItem -Path $examples_dir -Filter "*.rs" | Where-Object { $_.Name -ne "mod.rs" }
         
