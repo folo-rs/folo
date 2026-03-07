@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       packages: ${{ steps.compute.outputs.packages }}
+      packages_json: ${{ steps.compute.outputs.packages_json }}
       skip_all: ${{ steps.compute.outputs.skip_all }}
 
     steps:
@@ -39,6 +40,7 @@ jobs:
           if [ "${{ github.event_name }}" = "push" ]; then
             echo "Push to main detected, running full workspace validation."
             echo "packages=" >> $GITHUB_OUTPUT
+            echo "packages_json=[]" >> $GITHUB_OUTPUT
             echo "skip_all=false" >> $GITHUB_OUTPUT
             exit 0
           fi
@@ -61,14 +63,17 @@ jobs:
           cat delta.json
 
           PACKAGES=$(jq -r '.Affected // [] | join(" ")' delta.json)
+          PACKAGES_JSON=$(jq -c '.Affected // []' delta.json)
 
           if [ -z "$PACKAGES" ]; then
             echo "No packages affected by changes."
             echo "packages=" >> $GITHUB_OUTPUT
+            echo "packages_json=[]" >> $GITHUB_OUTPUT
             echo "skip_all=true" >> $GITHUB_OUTPUT
           else
             echo "Affected packages: $PACKAGES"
             echo "packages=$PACKAGES" >> $GITHUB_OUTPUT
+            echo "packages_json=$PACKAGES_JSON" >> $GITHUB_OUTPUT
             echo "skip_all=false" >> $GITHUB_OUTPUT
           fi
 
@@ -239,7 +244,7 @@ jobs:
     needs: [delta]
     if: >-
       needs.delta.outputs.skip_all != 'true'
-      && (needs.delta.outputs.packages == '' || contains(needs.delta.outputs.packages, 'events_once'))
+      && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'events_once'))
     timeout-minutes: 120
     runs-on: windows-latest
 
@@ -257,7 +262,7 @@ jobs:
     needs: [delta]
     if: >-
       needs.delta.outputs.skip_all != 'true'
-      && (needs.delta.outputs.packages == '' || contains(needs.delta.outputs.packages, 'infinity_pool'))
+      && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'infinity_pool'))
     timeout-minutes: 300
     runs-on: windows-latest
 

@@ -1,8 +1,8 @@
 # cargo-delta configuration file
 # See https://github.com/tekian/cargo-delta for documentation.
 
-# Files and folders to exclude from analysis.
-file_exclude_patterns = ["target", "mutants.out", "mutants.out.old", ".*"]
+# Exclude build artifacts, mutation outputs, and dotfiles/directories.
+file_exclude_patterns = ["target", "mutants.out", "mutants.out.old", "**/.*"]
 
 # Trip wire patterns - if any changed file matches these patterns,
 # all crates in the workspace are considered impacted. This is used

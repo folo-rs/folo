@@ -31,7 +31,7 @@ delta:
 
         # Use a git worktree to analyze origin/main without switching branches.
         $worktree_dir = Join-Path $temp_dir "main-worktree"
-        git worktree add $worktree_dir origin/main --quiet
+        git worktree add --quiet $worktree_dir origin/main
 
         try {
             Write-Host "Analyzing baseline (origin/main)..."
