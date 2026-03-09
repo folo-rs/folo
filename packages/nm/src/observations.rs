@@ -357,7 +357,13 @@ impl ObservationBagSnapshot {
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
+    use std::iter;
+    use std::sync::Arc;
+    use std::thread;
+
     use super::*;
+
+    static_assertions::assert_impl_all!(ObservationBagSync: Send, Sync);
 
     #[test]
     fn observations_are_recorded() {
@@ -681,5 +687,136 @@ mod tests {
         assert_eq!(snapshot_after.bucket_counts[3], 4); // le 10
         assert_eq!(snapshot_after.bucket_counts[4], 5); // le 100
         // Note: observations with magnitude 1000 do not go into any bucket.
+    }
+
+    // Multithreaded tests exercising concurrent access patterns on ObservationBagSync.
+    // These are designed to run under Miri (via miri-harder) to detect data races.
+
+    #[test]
+    fn sync_concurrent_inserts_accumulate_correctly() {
+        const THREADS: usize = 4;
+        const INSERTS_PER_THREAD: usize = 10;
+        const MAGNITUDE: Magnitude = 7;
+
+        let bag = Arc::new(ObservationBagSync::new(&[]));
+
+        let handles: Vec<_> = iter::repeat_with(|| {
+            let bag = Arc::clone(&bag);
+            thread::spawn(move || {
+                for _ in 0..INSERTS_PER_THREAD {
+                    bag.insert(MAGNITUDE, 1);
+                }
+            })
+        })
+        .take(THREADS)
+        .collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let snapshot = bag.snapshot();
+        assert_eq!(snapshot.count, (THREADS * INSERTS_PER_THREAD) as u64);
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "small test value, wrapping is not possible"
+        )]
+        let expected_sum = (THREADS * INSERTS_PER_THREAD) as i64 * MAGNITUDE;
+        assert_eq!(snapshot.sum, expected_sum);
+    }
+
+    #[test]
+    fn sync_concurrent_inserts_with_histogram_accumulate_correctly() {
+        const THREADS: usize = 4;
+        const INSERTS_PER_THREAD: usize = 10;
+
+        let bag = Arc::new(ObservationBagSync::new(&[-100, -10, 0, 10, 100]));
+
+        let handles: Vec<_> = iter::repeat_with(|| {
+            let bag = Arc::clone(&bag);
+            thread::spawn(move || {
+                for _ in 0..INSERTS_PER_THREAD {
+                    // Magnitude 5 should land in the "le 10" bucket (index 3).
+                    bag.insert(5, 1);
+                }
+            })
+        })
+        .take(THREADS)
+        .collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let snapshot = bag.snapshot();
+        let total = (THREADS * INSERTS_PER_THREAD) as u64;
+        assert_eq!(snapshot.count, total);
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "small test value, wrapping is not possible"
+        )]
+        let total_i64 = total as i64;
+        assert_eq!(snapshot.sum, total_i64 * 5);
+        assert_eq!(snapshot.bucket_counts[3], total);
+    }
+
+    #[test]
+    fn sync_concurrent_insert_and_snapshot() {
+        // One thread inserts observations while another takes snapshots.
+        // This exercises the concurrent read/write paths that
+        // ObservationBagSync is designed for. Miri will detect any
+        // data races on the atomic operations.
+        let bag = Arc::new(ObservationBagSync::new(&[-100, -10, 0, 10, 100]));
+
+        let bag_writer = Arc::clone(&bag);
+        let bag_reader = Arc::clone(&bag);
+
+        let writer = thread::spawn(move || {
+            for _ in 0..20 {
+                bag_writer.insert(5, 1);
+            }
+        });
+
+        let reader = thread::spawn(move || {
+            for _ in 0..20 {
+                let _snapshot = bag_reader.snapshot();
+            }
+        });
+
+        writer.join().unwrap();
+        reader.join().unwrap();
+
+        // After both threads complete, the final snapshot must be fully consistent.
+        let snapshot = bag.snapshot();
+        assert_eq!(snapshot.count, 20);
+        assert_eq!(snapshot.sum, 100);
+    }
+
+    #[test]
+    fn sync_concurrent_merge_from_while_inserting() {
+        // One thread inserts into a source bag while another merges
+        // from the source into a target. This exercises concurrent
+        // reads on the source bag via merge_from.
+        let source = Arc::new(ObservationBagSync::new(&[-100, 0, 100]));
+        let target = Arc::new(ObservationBagSync::new(&[-100, 0, 100]));
+
+        let source_writer = Arc::clone(&source);
+        let source_reader = Arc::clone(&source);
+        let target_merger = Arc::clone(&target);
+
+        let writer = thread::spawn(move || {
+            for _ in 0..20 {
+                source_writer.insert(5, 1);
+            }
+        });
+
+        let merger = thread::spawn(move || {
+            for _ in 0..5 {
+                target_merger.merge_from(&source_reader);
+            }
+        });
+
+        writer.join().unwrap();
+        merger.join().unwrap();
     }
 }

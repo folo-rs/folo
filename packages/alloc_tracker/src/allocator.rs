@@ -301,10 +301,14 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Allocator<A> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::iter;
+    use std::thread;
+
     use super::*;
 
-    // Static assertions for thread safety
+    // Static assertions for thread safety.
     static_assertions::assert_impl_all!(Allocator<std::alloc::System>: Send, Sync);
+    static_assertions::assert_impl_all!(PerThreadCounters: Send, Sync);
 
     #[test]
     #[cfg(feature = "panic_on_next_alloc")]
@@ -319,5 +323,76 @@ mod tests {
         // Disable panic on next allocation
         panic_on_next_alloc(false);
         assert!(!PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));
+    }
+
+    // Multithreaded tests exercising concurrent access to PerThreadCounters and the
+    // global REGISTRY. These are designed to run under Miri to detect data races in the
+    // atomic operations and TLS initialization paths.
+
+    #[test]
+    fn concurrent_threads_register_and_totals_reflect_all() {
+        const THREADS: usize = 4;
+        const BYTES_PER_THREAD: u64 = 100;
+        const COUNT_PER_THREAD: u64 = 10;
+
+        // Record the baseline to account for allocations from other tests,
+        // since the global REGISTRY is shared across all tests.
+        let baseline = allocation_totals();
+
+        let handles: Vec<_> = iter::repeat_with(|| {
+            thread::spawn(move || {
+                register_fake_allocation(BYTES_PER_THREAD, COUNT_PER_THREAD);
+            })
+        })
+        .take(THREADS)
+        .collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let final_totals = allocation_totals();
+
+        // The delta must be at least what we added. It may be higher due to
+        // real allocations from the test infrastructure (thread spawning, etc.).
+        let bytes_delta = final_totals.bytes.wrapping_sub(baseline.bytes);
+        let count_delta = final_totals.count.wrapping_sub(baseline.count);
+
+        assert!(bytes_delta >= THREADS as u64 * BYTES_PER_THREAD);
+        assert!(count_delta >= THREADS as u64 * COUNT_PER_THREAD);
+    }
+
+    #[test]
+    fn concurrent_register_and_read_totals() {
+        const WRITER_THREADS: usize = 4;
+        const BYTES_PER_WRITER: u64 = 50;
+
+        // One set of threads registers allocations while another reads
+        // totals concurrently. This exercises concurrent atomic reads of
+        // PerThreadCounters while other threads perform atomic writes.
+        let baseline = allocation_totals();
+
+        let mut handles = Vec::new();
+
+        for _ in 0..WRITER_THREADS {
+            handles.push(thread::spawn(move || {
+                register_fake_allocation(BYTES_PER_WRITER, 1);
+            }));
+        }
+
+        // Reader thread takes snapshots while writers are active.
+        handles.push(thread::spawn(move || {
+            for _ in 0..10 {
+                let _totals = allocation_totals();
+            }
+        }));
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let final_totals = allocation_totals();
+        let bytes_delta = final_totals.bytes.wrapping_sub(baseline.bytes);
+        assert!(bytes_delta >= WRITER_THREADS as u64 * BYTES_PER_WRITER);
     }
 }
