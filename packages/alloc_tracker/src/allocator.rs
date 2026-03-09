@@ -372,13 +372,13 @@ mod tests {
         // PerThreadCounters while other threads perform atomic writes.
         let baseline = allocation_totals();
 
-        let mut handles = Vec::new();
-
-        for _ in 0..WRITER_THREADS {
-            handles.push(thread::spawn(move || {
+        let mut handles: Vec<_> = iter::repeat_with(|| {
+            thread::spawn(move || {
                 register_fake_allocation(BYTES_PER_WRITER, 1);
-            }));
-        }
+            })
+        })
+        .take(WRITER_THREADS)
+        .collect();
 
         // Reader thread takes snapshots while writers are active.
         handles.push(thread::spawn(move || {
