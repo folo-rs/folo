@@ -365,34 +365,39 @@ mod tests {
     #[test]
     fn concurrent_register_and_read_totals() {
         const WRITER_THREADS: usize = 4;
-        const BYTES_PER_WRITER: u64 = 50;
+        const ALLOCS_PER_WRITER: u64 = 10;
+        const BYTES_PER_ALLOC: u64 = 50;
 
         // One set of threads registers allocations while another reads
         // totals concurrently. This exercises concurrent atomic reads of
         // PerThreadCounters while other threads perform atomic writes.
         let baseline = allocation_totals();
 
-        let mut handles: Vec<_> = iter::repeat_with(|| {
+        // Spawn the reader thread first so it is already running when
+        // the writers start, maximizing concurrent read/write overlap.
+        let reader = thread::spawn(move || {
+            for _ in 0..20 {
+                let _totals = allocation_totals();
+            }
+        });
+
+        let writers: Vec<_> = iter::repeat_with(|| {
             thread::spawn(move || {
-                register_fake_allocation(BYTES_PER_WRITER, 1);
+                for _ in 0..ALLOCS_PER_WRITER {
+                    register_fake_allocation(BYTES_PER_ALLOC, 1);
+                }
             })
         })
         .take(WRITER_THREADS)
         .collect();
 
-        // Reader thread takes snapshots while writers are active.
-        handles.push(thread::spawn(move || {
-            for _ in 0..10 {
-                let _totals = allocation_totals();
-            }
-        }));
-
-        for handle in handles {
+        for handle in writers {
             handle.join().unwrap();
         }
+        reader.join().unwrap();
 
         let final_totals = allocation_totals();
         let bytes_delta = final_totals.bytes.wrapping_sub(baseline.bytes);
-        assert!(bytes_delta >= WRITER_THREADS as u64 * BYTES_PER_WRITER);
+        assert!(bytes_delta >= WRITER_THREADS as u64 * ALLOCS_PER_WRITER * BYTES_PER_ALLOC);
     }
 }
