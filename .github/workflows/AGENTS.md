@@ -46,11 +46,20 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
 - **mutants** — `timeout-minutes: 90`
   - Runs mutation testing (very slow)
   
-- **run-examples** — `timeout-minutes: 30`
+- **run-examples** — `timeout-minutes: 90`
   - Executes all example binaries
   
-- **hack** — `timeout-minutes: 30`
+- **hack** — `timeout-minutes: 90`
   - Tests all feature combinations with `cargo hack --feature-powerset`
+
+### cache-warmup.yml
+
+A scheduled workflow that keeps GitHub Actions caches warm. GitHub evicts caches after
+7 days of inactivity, and a cold cache means every parallel validation job must independently
+compile all Rust dependencies from scratch (the setup-environment step becomes very expensive).
+This workflow runs once daily on all three platforms (ubuntu, macos, windows) to ensure the
+`shared-key: prerequisites` Rust cache is always populated. It also supports `workflow_dispatch`
+for manual cache warming after toolchain updates.
 
 ## Design Decisions
 

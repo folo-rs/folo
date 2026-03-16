@@ -1,0 +1,26 @@
+name: Cache warmup
+
+# Keeps GitHub Actions caches warm to prevent expensive cold setups in validation
+# workflows. GitHub evicts caches after 7 days of inactivity, so periodic access
+# ensures the Rust compilation cache is always available for real CI runs.
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  warmup:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, windows-latest, macos-latest]
+
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
