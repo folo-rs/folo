@@ -9,6 +9,7 @@ use std::sync::Mutex;
 
 use hash_hasher::HashedMap;
 
+use crate::NEVER_POISONED;
 use crate::{EventPool, PooledReceiver, PooledSender};
 
 /// Rents out thread-safe events of different payloads.
@@ -80,11 +81,7 @@ impl EventLake {
     pub fn rent<T: Send + 'static>(&self) -> (PooledSender<T>, PooledReceiver<T>) {
         let type_id = TypeId::of::<T>();
 
-        let mut pools = self
-            .core
-            .pools
-            .lock()
-            .expect("we never panic while holding this lock");
+        let mut pools = self.core.pools.lock().expect(NEVER_POISONED);
 
         let entry = pools
             .entry(type_id)
@@ -101,22 +98,14 @@ impl EventLake {
     /// Returns `true` if no events have currently been rented from the lake.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        let pools = self
-            .core
-            .pools
-            .lock()
-            .expect("we never panic while holding this lock");
+        let pools = self.core.pools.lock().expect(NEVER_POISONED);
         pools.values().all(|x| x.is_empty())
     }
 
     /// Returns the number of events that have currently been rented from the lake.
     #[must_use]
     pub fn len(&self) -> usize {
-        let pools = self
-            .core
-            .pools
-            .lock()
-            .expect("we never panic while holding this lock");
+        let pools = self.core.pools.lock().expect(NEVER_POISONED);
         pools.values().map(|x| x.len()).sum()
     }
 
@@ -130,18 +119,26 @@ impl EventLake {
     /// in the past.
     #[cfg(debug_assertions)]
     pub fn inspect_awaiters(&self, mut f: impl FnMut(&Backtrace)) {
-        let pools = self
-            .core
-            .pools
-            .lock()
-            .expect("we never panic while holding this lock");
-        let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            for entry in pools.values() {
+        let pools = self.core.pools.lock().expect(NEVER_POISONED);
+
+        let mut panic_payload = None;
+        for entry in pools.values() {
+            // We catch panics from the user closure to drop the pools guard cleanly,
+            // preventing mutex poisoning.
+            // AssertUnwindSafe: only covers `&mut f` (inherently !UnwindSafe due to
+            // &mut). The user closure itself determines unwind safety of captured state.
+            let result = panic::catch_unwind(AssertUnwindSafe(|| {
                 entry.inspect_awaiters(&mut f);
+            }));
+            if let Err(payload) = result {
+                panic_payload = Some(payload);
+                break;
             }
-        }));
+        }
+
         drop(pools);
-        if let Err(payload) = result {
+
+        if let Some(payload) = panic_payload {
             panic::resume_unwind(payload);
         }
     }

@@ -13,9 +13,13 @@ use std::sync::Arc;
 use std::sync::atomic::{self, AtomicU8};
 use std::task::Waker;
 
+#[cfg(debug_assertions)]
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 #[cfg(any(debug_assertions, test))]
 use std::sync::Mutex;
 
+#[cfg(debug_assertions)]
+use crate::NEVER_POISONED;
 #[cfg(debug_assertions)]
 use crate::{BacktraceType, capture_backtrace};
 use crate::{
@@ -238,22 +242,22 @@ where
     /// The closure receives `None` if no one is awaiting the event.
     #[cfg(debug_assertions)]
     pub(crate) fn inspect_awaiter(&self, f: impl FnOnce(Option<&Backtrace>)) {
-        let guard = self
-            .backtrace
-            .lock()
-            .expect("we never panic while holding this lock");
+        let guard = self.backtrace.lock().expect(NEVER_POISONED);
 
         // We catch panics from the closure to drop the guard cleanly, preventing
         // poisoning of the backtrace mutex. Without this, a panicking closure would
         // poison the mutex, and the receiver's drop handler (which calls final_poll)
         // would double-panic when trying to lock it during unwinding.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        //
+        // AssertUnwindSafe: only covers the MutexGuard, which is inherently
+        // !UnwindSafe. We drop it cleanly before resume_unwind.
+        let result = catch_unwind(AssertUnwindSafe(|| {
             f(guard.as_ref());
         }));
         drop(guard);
 
         if let Err(payload) = result {
-            std::panic::resume_unwind(payload);
+            resume_unwind(payload);
         }
     }
 
@@ -472,7 +476,7 @@ where
         #[cfg(debug_assertions)]
         self.backtrace
             .lock()
-            .expect("we never panic while holding this lock")
+            .expect(NEVER_POISONED)
             .replace(capture_backtrace());
 
         // We use Acquire because we are (depending on the state) acquiring the synchronization
@@ -783,7 +787,7 @@ where
         event
             .backtrace
             .lock()
-            .expect("we never panic while holding this lock")
+            .expect(NEVER_POISONED)
             .replace(capture_backtrace());
 
         // The receiver (who is calling this) may still own the waker if the waker has not
@@ -944,6 +948,7 @@ impl<T: Send + 'static> fmt::Debug for Event<T> {
 )]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
     use std::sync::Barrier;
     use std::task::Poll;
     use std::{task, thread};
@@ -1812,13 +1817,13 @@ mod tests {
 
         // We catch panics from the test body so that we can clean up the hook and
         // drop the serialization guard while not panicking, preventing mutex poisoning.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+        let result = catch_unwind(AssertUnwindSafe(body));
 
         *hook.lock().unwrap() = None;
         drop(guard);
 
         if let Err(payload) = result {
-            std::panic::resume_unwind(payload);
+            resume_unwind(payload);
         }
     }
 

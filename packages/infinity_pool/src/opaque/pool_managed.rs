@@ -1,10 +1,11 @@
 use std::alloc::Layout;
 use std::iter::FusedIterator;
 use std::mem::MaybeUninit;
-use std::panic::{AssertUnwindSafe, UnwindSafe, catch_unwind};
+use std::panic::{AssertUnwindSafe, UnwindSafe, catch_unwind, resume_unwind};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
+use crate::NEVER_POISONED;
 use crate::opaque::pool_raw::RawOpaquePoolIterator;
 use crate::{PooledMut, RawOpaquePool, RawOpaquePoolThreadSafe};
 
@@ -130,58 +131,40 @@ impl OpaquePool {
     #[must_use]
     #[inline]
     pub fn object_layout(&self) -> Layout {
-        self.inner
-            .lock()
-            .expect("we never panic while holding this lock")
-            .object_layout()
+        self.inner.lock().expect(NEVER_POISONED).object_layout()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_len.md")]
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        self.inner
-            .lock()
-            .expect("we never panic while holding this lock")
-            .len()
+        self.inner.lock().expect(NEVER_POISONED).len()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_capacity.md")]
     #[must_use]
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.inner
-            .lock()
-            .expect("we never panic while holding this lock")
-            .capacity()
+        self.inner.lock().expect(NEVER_POISONED).capacity()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.inner
-            .lock()
-            .expect("we never panic while holding this lock")
-            .is_empty()
+        self.inner.lock().expect(NEVER_POISONED).is_empty()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
     #[inline]
     pub fn reserve(&self, additional: usize) {
-        self.inner
-            .lock()
-            .expect("we never panic while holding this lock")
-            .reserve(additional);
+        self.inner.lock().expect(NEVER_POISONED).reserve(additional);
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     #[inline]
     pub fn shrink_to_fit(&self) {
-        self.inner
-            .lock()
-            .expect("we never panic while holding this lock")
-            .shrink_to_fit();
+        self.inner.lock().expect(NEVER_POISONED).shrink_to_fit();
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert.md")]
@@ -192,11 +175,7 @@ impl OpaquePool {
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert<T: Send + 'static>(&self, value: T) -> PooledMut<T> {
-        let inner = self
-            .inner
-            .lock()
-            .expect("we never panic while holding this lock")
-            .insert(value);
+        let inner = self.inner.lock().expect(NEVER_POISONED).insert(value);
 
         // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
         unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
@@ -212,7 +191,7 @@ impl OpaquePool {
         let inner = unsafe {
             self.inner
                 .lock()
-                .expect("we never panic while holding this lock")
+                .expect(NEVER_POISONED)
                 .insert_unchecked(value)
         };
 
@@ -264,11 +243,12 @@ impl OpaquePool {
         T: Send + 'static,
         F: FnOnce(&mut MaybeUninit<T>) + UnwindSafe,
     {
-        let mut inner = self
-            .inner
-            .lock()
-            .expect("we never panic while holding this lock");
+        let mut inner = self.inner.lock().expect(NEVER_POISONED);
 
+        // AssertUnwindSafe: the user closure `f` is already UnwindSafe by bound.
+        // This assertion only covers the MutexGuard (`inner`), which is inherently
+        // !UnwindSafe. We drop it cleanly before resume_unwind, so it is never
+        // observed in a potentially inconsistent state.
         let result = catch_unwind(AssertUnwindSafe(|| {
             // SAFETY: Forwarding safety guarantees from caller.
             unsafe { inner.insert_with(f) }
@@ -280,7 +260,7 @@ impl OpaquePool {
                 // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
                 unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
             }
-            Err(payload) => std::panic::resume_unwind(payload),
+            Err(payload) => resume_unwind(payload),
         }
     }
 
@@ -299,11 +279,12 @@ impl OpaquePool {
         T: Send + 'static,
         F: FnOnce(&mut MaybeUninit<T>) + UnwindSafe,
     {
-        let mut inner = self
-            .inner
-            .lock()
-            .expect("we never panic while holding this lock");
+        let mut inner = self.inner.lock().expect(NEVER_POISONED);
 
+        // AssertUnwindSafe: the user closure `f` is already UnwindSafe by bound.
+        // This assertion only covers the MutexGuard (`inner`), which is inherently
+        // !UnwindSafe. We drop it cleanly before resume_unwind, so it is never
+        // observed in a potentially inconsistent state.
         let result = catch_unwind(AssertUnwindSafe(|| {
             // SAFETY: Forwarding safety guarantees from caller.
             unsafe { inner.insert_with_unchecked(f) }
@@ -315,7 +296,7 @@ impl OpaquePool {
                 // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
                 unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
             }
-            Err(payload) => std::panic::resume_unwind(payload),
+            Err(payload) => resume_unwind(payload),
         }
     }
 
@@ -355,17 +336,18 @@ impl OpaquePool {
     where
         F: FnOnce(OpaquePoolIterator<'_>) -> R + UnwindSafe,
     {
-        let guard = self
-            .inner
-            .lock()
-            .expect("we never panic while holding this lock");
+        let guard = self.inner.lock().expect(NEVER_POISONED);
         let iter = OpaquePoolIterator::new(&guard);
+        // AssertUnwindSafe: the user closure `f` is already UnwindSafe by bound.
+        // This assertion only covers `iter`, which borrows from a MutexGuard and
+        // is therefore inherently !UnwindSafe. We drop the guard cleanly before
+        // resume_unwind, so it is never observed in a potentially inconsistent state.
         let result = catch_unwind(AssertUnwindSafe(|| f(iter)));
         drop(guard);
 
         match result {
             Ok(value) => value,
-            Err(payload) => std::panic::resume_unwind(payload),
+            Err(payload) => resume_unwind(payload),
         }
     }
 }

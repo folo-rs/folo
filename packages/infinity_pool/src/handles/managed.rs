@@ -6,6 +6,7 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
+use crate::NEVER_POISONED;
 use crate::{PooledMut, RawOpaquePoolThreadSafe, RawPooled, RawPooledMut};
 
 // Note that while this is a thread-safe handle, we do not require `T: Send` because
@@ -187,10 +188,7 @@ impl fmt::Debug for Remover {
 
 impl Drop for Remover {
     fn drop(&mut self) {
-        let mut pool = self
-            .pool
-            .lock()
-            .expect("we never panic while holding this lock");
+        let mut pool = self.pool.lock().expect(NEVER_POISONED);
 
         // SAFETY: The remover controls the shared object lifetime and is the only thing
         // that can remove the item from the pool.

@@ -12,6 +12,7 @@ use many_cpus::{ProcessorId, SystemHardware};
 use new_zealand::nz;
 use tracing::{debug, trace};
 
+use crate::NEVER_POISONED;
 use crate::{IterationResult, ProcessorRegistry, Scheduler, WorkerCore};
 
 /// Experimentally determined as providing good throughput under
@@ -52,11 +53,7 @@ pub(crate) struct PoolInner {
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl fmt::Debug for PoolInner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let handle_count = self
-            .worker_handles
-            .lock()
-            .expect("we never panic while holding this lock")
-            .len();
+        let handle_count = self.worker_handles.lock().expect(NEVER_POISONED).len();
 
         f.debug_struct(type_name::<Self>())
             .field("pool_id", &self.pool_id)
@@ -135,10 +132,7 @@ impl PoolInner {
             hook();
         }
 
-        let mut worker_handles = self
-            .worker_handles
-            .lock()
-            .expect("we never panic while holding this lock");
+        let mut worker_handles = self.worker_handles.lock().expect(NEVER_POISONED);
 
         // Re-check shutdown flag under the lock to avoid race condition where
         // join_all_workers() runs concurrently and we add new handles after it
@@ -175,12 +169,7 @@ impl PoolInner {
         // ensure_workers_spawned() will not add any new handles to the list after
         // we release the lock (or if it does, it will see the shutdown flag and
         // return early).
-        let handles = mem::take(
-            &mut *self
-                .worker_handles
-                .lock()
-                .expect("we never panic while holding this lock"),
-        );
+        let handles = mem::take(&mut *self.worker_handles.lock().expect(NEVER_POISONED));
 
         for handle in handles {
             if let Err(payload) = handle.join() {
@@ -224,16 +213,8 @@ fn worker_loop(inner: &PoolInner, processor_id: ProcessorId, worker_index: u32) 
 
                 // Re-check after registering listener to avoid lost wakeups.
                 // Acquire ordering synchronizes with Release in signal_shutdown and task push.
-                if !state
-                    .urgent_queue
-                    .lock()
-                    .expect("we never panic while holding this lock")
-                    .is_empty()
-                    || !state
-                        .regular_queue
-                        .lock()
-                        .expect("we never panic while holding this lock")
-                        .is_empty()
+                if !state.urgent_queue.lock().expect(NEVER_POISONED).is_empty()
+                    || !state.regular_queue.lock().expect(NEVER_POISONED).is_empty()
                     || state.shutdown_flag.load(Ordering::Acquire)
                 {
                     continue;
@@ -372,6 +353,7 @@ impl PoolBuilder {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::num::NonZero;
+    use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -452,13 +434,13 @@ mod tests {
 
         // We catch panics from the test body so that we can clean up the hook and
         // drop the serialization guard while not panicking, preventing mutex poisoning.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+        let result = catch_unwind(AssertUnwindSafe(body));
 
         *hook.lock().unwrap() = None;
         drop(guard);
 
         if let Err(payload) = result {
-            std::panic::resume_unwind(payload);
+            resume_unwind(payload);
         }
     }
 

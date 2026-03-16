@@ -6,6 +6,7 @@ use std::sync::atomic::{self, AtomicBool, Ordering};
 use infinity_pool::BlindPooledMut;
 use std::sync::Mutex;
 
+use crate::NEVER_POISONED;
 use crate::VicinalTask;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,21 +46,13 @@ impl<'a> WorkerCore<'a> {
             return IterationResult::Shutdown;
         }
 
-        let task = self
-            .urgent_queue
-            .lock()
-            .expect("we never panic while holding this lock")
-            .pop_front();
+        let task = self.urgent_queue.lock().expect(NEVER_POISONED).pop_front();
         if let Some(mut task) = task {
             task.as_pin_mut().call();
             return IterationResult::ExecutedUrgent;
         }
 
-        let task = self
-            .regular_queue
-            .lock()
-            .expect("we never panic while holding this lock")
-            .pop_front();
+        let task = self.regular_queue.lock().expect(NEVER_POISONED).pop_front();
         if let Some(mut task) = task {
             task.as_pin_mut().call();
             return IterationResult::ExecutedRegular;

@@ -11,6 +11,7 @@ use std::sync::Mutex;
 
 use hash_hasher::HashedMap;
 
+use crate::NEVER_POISONED;
 use crate::{RawEventPool, RawPooledReceiver, RawPooledSender};
 
 /// Rents out events of different payloads.
@@ -108,10 +109,7 @@ impl RawEventLake {
         // SAFETY: UnsafeCell pointer is never null.
         let core = unsafe { core_maybe.unwrap_unchecked() };
 
-        let mut pools = core
-            .pools
-            .lock()
-            .expect("we never panic while holding this lock");
+        let mut pools = core.pools.lock().expect(NEVER_POISONED);
 
         let entry = pools
             .entry(type_id)
@@ -141,10 +139,7 @@ impl RawEventLake {
         // SAFETY: UnsafeCell pointer is never null.
         let core = unsafe { core_maybe.unwrap_unchecked() };
 
-        let pools = core
-            .pools
-            .lock()
-            .expect("we never panic while holding this lock");
+        let pools = core.pools.lock().expect(NEVER_POISONED);
 
         pools.values().all(|x| x.is_empty())
     }
@@ -162,10 +157,7 @@ impl RawEventLake {
         // SAFETY: UnsafeCell pointer is never null.
         let core = unsafe { core_maybe.unwrap_unchecked() };
 
-        let pools = core
-            .pools
-            .lock()
-            .expect("we never panic while holding this lock");
+        let pools = core.pools.lock().expect(NEVER_POISONED);
 
         pools.values().map(|x| x.len()).sum()
     }
@@ -190,17 +182,26 @@ impl RawEventLake {
         // SAFETY: UnsafeCell pointer is never null.
         let core = unsafe { core_maybe.unwrap_unchecked() };
 
-        let pools = core
-            .pools
-            .lock()
-            .expect("we never panic while holding this lock");
-        let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            for entry in pools.values() {
+        let pools = core.pools.lock().expect(NEVER_POISONED);
+
+        let mut panic_payload = None;
+        for entry in pools.values() {
+            // We catch panics from the user closure to drop the pools guard cleanly,
+            // preventing mutex poisoning.
+            // AssertUnwindSafe: only covers `&mut f` (inherently !UnwindSafe due to
+            // &mut). The user closure itself determines unwind safety of captured state.
+            let result = panic::catch_unwind(AssertUnwindSafe(|| {
                 entry.inspect_awaiters(&mut f);
+            }));
+            if let Err(payload) = result {
+                panic_payload = Some(payload);
+                break;
             }
-        }));
+        }
+
         drop(pools);
-        if let Err(payload) = result {
+
+        if let Some(payload) = panic_payload {
             panic::resume_unwind(payload);
         }
     }

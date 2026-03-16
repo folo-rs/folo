@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use tracing::trace;
 
+use crate::NEVER_POISONED;
 use crate::metrics::CLOCK;
 use crate::{JoinHandle, PoolInner, PooledCastVicinalTask, wrap_task};
 
@@ -171,7 +172,7 @@ impl Scheduler {
             state
                 .urgent_queue
                 .lock()
-                .expect("we never panic while holding this lock")
+                .expect(NEVER_POISONED)
                 .push_back(dyn_task);
             trace!(
                 pool_id = self.inner.pool_id,
@@ -181,7 +182,7 @@ impl Scheduler {
             state
                 .regular_queue
                 .lock()
-                .expect("we never panic while holding this lock")
+                .expect(NEVER_POISONED)
                 .push_back(dyn_task);
             trace!(
                 pool_id = self.inner.pool_id,
@@ -227,7 +228,7 @@ impl Scheduler {
             state
                 .urgent_queue
                 .lock()
-                .expect("we never panic while holding this lock")
+                .expect(NEVER_POISONED)
                 .push_back(dyn_task);
             trace!(
                 pool_id = self.inner.pool_id,
@@ -237,7 +238,7 @@ impl Scheduler {
             state
                 .regular_queue
                 .lock()
-                .expect("we never panic while holding this lock")
+                .expect(NEVER_POISONED)
                 .push_back(dyn_task);
             trace!(
                 pool_id = self.inner.pool_id,
