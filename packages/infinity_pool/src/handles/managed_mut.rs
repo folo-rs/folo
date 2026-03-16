@@ -29,11 +29,7 @@ use crate::{Pooled, RawOpaquePoolThreadSafe, RawPooledMut};
 ///
 /// # Thread safety
 ///
-/// The handle provides access to an object of type `T`, so its thread-safety characteristics
-/// are determined by the type of the object it references.
-///
-/// If the underlying object `T` is `Send` then the handle is `Send`.
-/// If the underlying object `T` is `Sync` then the handle is `Sync`.
+/// The handle is always `Sync`. The handle is `Send` if `T` is `Send`.
 pub struct PooledMut<T: ?Sized> {
     // We inherit our thread-safety traits from this one (Send from T, Sync always).
     inner: RawPooledMut<T>,
@@ -76,8 +72,8 @@ impl<T: ?Sized> PooledMut<T> {
     ///
     /// # Thread Safety
     ///
-    /// The resulting shared handle will only be `Send` if `T: Send + Sync`. This is a stronger
-    /// requirement than for unique handles, which only require `T: Send`.
+    /// The resulting shared handle has the same `Send` bound as the unique handle -
+    /// it is `Send` if `T: Send`.
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.

@@ -62,8 +62,7 @@ impl<T: ?Sized> LocalPooledMut<T> {
     ///
     /// # Thread Safety
     ///
-    /// The resulting shared handle will only be `Send` if `T: Send + Sync`. This is a stronger
-    /// requirement than for unique handles, which only require `T: Send`.
+    /// The resulting shared handle is single-threaded, same as the source unique handle.
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.

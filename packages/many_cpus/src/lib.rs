@@ -191,7 +191,7 @@
 //!   process will be executed on. Any new processor sets you create should be subsets of this set,
 //!   thereby ensuring that all worker threads combined do not exceed the quota.
 //! * Ensure that the original processor set is constructed while obeying the resource quota (which is
-//!   enabled by default),
+//!   enabled by default).
 //!
 //! If your resource constraints are already applied on process startup, you can use
 //! `SystemHardware::current().processors()` as the master set from which all other

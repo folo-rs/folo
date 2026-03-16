@@ -191,7 +191,7 @@ impl OpaquePool {
 
     /// Inserts an object into the pool and returns a handle to it.
     ///
-    ///  # Panics
+    /// # Panics
     /// Panics if the layout of `T` does not match the object layout of the pool.
     #[inline]
     #[must_use]
