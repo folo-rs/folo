@@ -15,8 +15,17 @@ use crate::{PooledMut, RawOpaquePool, RawOpaquePoolIterator, RawOpaquePoolThread
 /// All values in the pool remain pinned for their entire lifetime.
 ///
 /// The pool automatically expands its capacity when needed.
-#[doc = include_str!("../../doc/snippets/managed_pool_lifetimes.md")]
-#[doc = include_str!("../../doc/snippets/managed_pool_is_thread_safe.md")]
+/// # Lifetime management
+///
+/// When inserting an object into the pool, a handle to the object is returned.
+/// The object is removed from the pool when the last remaining handle to the object
+/// is dropped (`Arc`-like behavior).
+///
+/// Clones of the pool are functionally equivalent views over the same memory capacity.
+///
+/// # Thread safety
+///
+/// The pool is thread-safe (`Send` and `Sync`) and requires that any inserted items are `Send`.
 ///
 /// # Example: unique object ownership
 ///
@@ -111,40 +120,51 @@ where
         }
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_len.md")]
+    /// The number of objects currently in the pool.
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
         self.inner.lock().len()
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_capacity.md")]
+    /// The total capacity of the pool.
+    ///
+    /// This is the maximum number of objects (including current contents) that the pool can contain
+    /// without capacity extension. The pool will automatically extend its capacity if more than
+    /// this many objects are inserted.
     #[must_use]
     #[inline]
     pub fn capacity(&self) -> usize {
         self.inner.lock().capacity()
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
+    /// Whether the pool contains zero objects.
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.inner.lock().is_empty()
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
+    /// Ensures that the pool has capacity for at least `additional` more objects.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new capacity would exceed the size of virtual memory (`usize::MAX`).
     #[inline]
     pub fn reserve(&self, additional: usize) {
         self.inner.lock().reserve(additional);
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
+    /// Drops unused pool capacity to reduce memory usage.
+    ///
+    /// There is no guarantee that any unused capacity can be dropped. The exact outcome depends
+    /// on the specific pool structure and which objects remain in the pool.
     #[inline]
     pub fn shrink_to_fit(&self) {
         self.inner.lock().shrink_to_fit();
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_insert.md")]
+    /// Inserts an object into the pool and returns a handle to it.
     #[inline]
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
@@ -155,7 +175,15 @@ where
         unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
+    /// Inserts an object into the pool via closure and returns a handle to it.
+    ///
+    /// This method allows the caller to partially initialize the object, skipping any `MaybeUninit`
+    /// fields that are intentionally not initialized at insertion time. This can make insertion of
+    /// objects containing `MaybeUninit` fields faster, although requires unsafe code to implement.
+    ///
+    /// This method is NOT faster than `insert()` for fully initialized objects.
+    /// Prefer `insert()` for a better safety posture if you do not intend to
+    /// skip initialization of any `MaybeUninit` fields.
     ///
     /// # Example
     ///
@@ -188,7 +216,8 @@ where
     /// ```
     ///
     /// # Safety
-    #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
+    /// The closure must correctly initialize the object. All fields that
+    /// are not `MaybeUninit` must be initialized when the closure returns.
     #[inline]
     #[must_use]
     pub unsafe fn insert_with<F>(&self, f: F) -> PooledMut<T>
