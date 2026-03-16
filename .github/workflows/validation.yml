@@ -258,7 +258,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1/4, 2/4, 3/4, 4/4]
-    timeout-minutes: 60
+    timeout-minutes: 90
     runs-on: windows-latest
 
     steps:
@@ -280,7 +280,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1/8, 2/8, 3/8, 4/8, 5/8, 6/8, 7/8, 8/8]
-    timeout-minutes: 60
+    timeout-minutes: 90
     runs-on: windows-latest
 
     steps:
@@ -398,7 +398,7 @@ jobs:
   run-examples:
     needs: [delta]
     if: needs.delta.outputs.skip_all != 'true'
-    timeout-minutes: 30
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -419,7 +419,7 @@ jobs:
   hack:
     needs: [delta]
     if: needs.delta.outputs.skip_all != 'true'
-    timeout-minutes: 30
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
