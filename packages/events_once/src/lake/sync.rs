@@ -343,4 +343,20 @@ mod tests {
 
         assert_eq!(call_count, 1);
     }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic]
+    fn inspect_awaiters_propagates_panic_from_closure() {
+        let lake = EventLake::new();
+        let (_sender, receiver) = lake.rent::<i32>();
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = receiver.as_mut().poll(&mut cx);
+
+        lake.inspect_awaiters(|_| {
+            panic!();
+        });
+    }
 }

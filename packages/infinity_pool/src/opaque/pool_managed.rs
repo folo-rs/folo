@@ -1180,4 +1180,43 @@ mod tests {
         drop(handle4);
         assert_eq!(pool.len(), 0);
     }
+
+    #[test]
+    #[should_panic]
+    fn insert_with_propagates_panic_from_closure() {
+        let pool = OpaquePool::with_layout_of::<u32>();
+
+        // SAFETY: The closure panics before initialization completes. The pool catches
+        // the panic to drop the mutex guard cleanly, then re-throws via resume_unwind.
+        unsafe {
+            drop(pool.insert_with(|_: &mut MaybeUninit<u32>| {
+                panic!();
+            }));
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn insert_with_unchecked_propagates_panic_from_closure() {
+        let pool = OpaquePool::with_layout_of::<u32>();
+
+        // SAFETY: The closure panics before initialization completes, and the layout
+        // matches. The pool catches the panic and re-throws via resume_unwind.
+        unsafe {
+            drop(pool.insert_with_unchecked(|_: &mut MaybeUninit<u32>| {
+                panic!();
+            }));
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn with_iter_propagates_panic_from_closure() {
+        let pool = OpaquePool::with_layout_of::<u32>();
+        let _handle = pool.insert(42_u32);
+
+        pool.with_iter(|_iter| {
+            panic!();
+        });
+    }
 }

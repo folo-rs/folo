@@ -238,11 +238,23 @@ where
     /// The closure receives `None` if no one is awaiting the event.
     #[cfg(debug_assertions)]
     pub(crate) fn inspect_awaiter(&self, f: impl FnOnce(Option<&Backtrace>)) {
-        let backtrace = self
+        let guard = self
             .backtrace
             .lock()
             .expect("we never panic while holding this lock");
-        f(backtrace.as_ref());
+
+        // We catch panics from the closure to drop the guard cleanly, preventing
+        // poisoning of the backtrace mutex. Without this, a panicking closure would
+        // poison the mutex, and the receiver's drop handler (which calls final_poll)
+        // would double-panic when trying to lock it during unwinding.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            f(guard.as_ref());
+        }));
+        drop(guard);
+
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
     }
 
     /// Sets the value of the event and notifies the receiver's awaiter, if there is one.

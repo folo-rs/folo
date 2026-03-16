@@ -646,4 +646,18 @@ mod tests {
             thread::yield_now();
         }
     }
+
+    #[test]
+    #[should_panic]
+    fn insert_with_propagates_panic_from_closure() {
+        let pool = BlindPool::new();
+
+        // SAFETY: The closure panics before initialization completes. The pool catches
+        // the panic to drop the mutex guard cleanly, then re-throws via resume_unwind.
+        unsafe {
+            drop(pool.insert_with(|_: &mut MaybeUninit<u32>| {
+                panic!();
+            }));
+        }
+    }
 }

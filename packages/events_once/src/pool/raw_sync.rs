@@ -757,4 +757,22 @@ mod tests {
         let poll_result = receiver.as_mut().poll(&mut cx);
         assert!(matches!(poll_result, Poll::Ready(Ok(42))));
     }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic]
+    fn inspect_awaiters_propagates_panic_from_closure() {
+        let pool = Box::pin(RawEventPool::<i32>::new());
+
+        // SAFETY: The pool outlives both endpoints.
+        let (_sender, receiver) = unsafe { pool.as_ref().rent() };
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = receiver.as_mut().poll(&mut cx);
+
+        pool.as_ref().inspect_awaiters(|_bt| {
+            panic!();
+        });
+    }
 }

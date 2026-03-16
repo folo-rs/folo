@@ -811,4 +811,29 @@ mod tests {
         assert_eq!(&*handle1, "Thread test 1");
         assert_eq!(&*handle2, "Thread test 2");
     }
+
+    #[test]
+    #[should_panic]
+    fn insert_with_propagates_panic_from_closure() {
+        let pool = PinnedPool::<u32>::new();
+
+        // SAFETY: The closure panics before initialization completes. The pool catches
+        // the panic to drop the mutex guard cleanly, then re-throws via resume_unwind.
+        unsafe {
+            drop(pool.insert_with(|_: &mut MaybeUninit<u32>| {
+                panic!();
+            }));
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn with_iter_propagates_panic_from_closure() {
+        let pool = PinnedPool::<u32>::new();
+        let _handle = pool.insert(42_u32);
+
+        pool.with_iter(|_iter| {
+            panic!();
+        });
+    }
 }

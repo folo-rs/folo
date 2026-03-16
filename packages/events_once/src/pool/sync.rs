@@ -750,4 +750,20 @@ mod tests {
         let poll_result = receiver.as_mut().poll(&mut cx);
         assert!(matches!(poll_result, Poll::Ready(Ok(42))));
     }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic]
+    fn inspect_awaiters_propagates_panic_from_closure() {
+        let pool = EventPool::<i32>::new();
+        let (_sender, receiver) = pool.rent();
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = receiver.as_mut().poll(&mut cx);
+
+        pool.inspect_awaiters(|_bt| {
+            panic!();
+        });
+    }
 }
