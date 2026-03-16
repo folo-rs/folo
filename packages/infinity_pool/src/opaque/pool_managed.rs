@@ -1,10 +1,9 @@
 use std::alloc::Layout;
 use std::iter::FusedIterator;
 use std::mem::MaybeUninit;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::NonNull;
-use std::sync::Arc;
-
-use parking_lot::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::opaque::pool_raw::RawOpaquePoolIterator;
 use crate::{PooledMut, RawOpaquePool, RawOpaquePoolThreadSafe};
@@ -131,40 +130,58 @@ impl OpaquePool {
     #[must_use]
     #[inline]
     pub fn object_layout(&self) -> Layout {
-        self.inner.lock().object_layout()
+        self.inner
+            .lock()
+            .expect("we never panic while holding this lock")
+            .object_layout()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_len.md")]
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        self.inner.lock().len()
+        self.inner
+            .lock()
+            .expect("we never panic while holding this lock")
+            .len()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_capacity.md")]
     #[must_use]
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.inner.lock().capacity()
+        self.inner
+            .lock()
+            .expect("we never panic while holding this lock")
+            .capacity()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.inner.lock().is_empty()
+        self.inner
+            .lock()
+            .expect("we never panic while holding this lock")
+            .is_empty()
     }
 
     #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
     #[inline]
     pub fn reserve(&self, additional: usize) {
-        self.inner.lock().reserve(additional);
+        self.inner
+            .lock()
+            .expect("we never panic while holding this lock")
+            .reserve(additional);
     }
 
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     #[inline]
     pub fn shrink_to_fit(&self) {
-        self.inner.lock().shrink_to_fit();
+        self.inner
+            .lock()
+            .expect("we never panic while holding this lock")
+            .shrink_to_fit();
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert.md")]
@@ -175,7 +192,11 @@ impl OpaquePool {
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert<T: Send + 'static>(&self, value: T) -> PooledMut<T> {
-        let inner = self.inner.lock().insert(value);
+        let inner = self
+            .inner
+            .lock()
+            .expect("we never panic while holding this lock")
+            .insert(value);
 
         // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
         unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
@@ -188,7 +209,12 @@ impl OpaquePool {
     #[must_use]
     pub unsafe fn insert_unchecked<T: Send + 'static>(&self, value: T) -> PooledMut<T> {
         // SAFETY: Forwarding safety guarantees from caller.
-        let inner = unsafe { self.inner.lock().insert_unchecked(value) };
+        let inner = unsafe {
+            self.inner
+                .lock()
+                .expect("we never panic while holding this lock")
+                .insert_unchecked(value)
+        };
 
         // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
         unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
@@ -238,11 +264,24 @@ impl OpaquePool {
         T: Send + 'static,
         F: FnOnce(&mut MaybeUninit<T>),
     {
-        // SAFETY: Forwarding safety guarantees from caller.
-        let inner = unsafe { self.inner.lock().insert_with(f) };
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("we never panic while holding this lock");
 
-        // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
-        unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: Forwarding safety guarantees from caller.
+            unsafe { inner.insert_with(f) }
+        }));
+        drop(inner);
+
+        match result {
+            Ok(inner) => {
+                // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
+                unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
+            }
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
@@ -260,11 +299,24 @@ impl OpaquePool {
         T: Send + 'static,
         F: FnOnce(&mut MaybeUninit<T>),
     {
-        // SAFETY: Forwarding safety guarantees from caller.
-        let inner = unsafe { self.inner.lock().insert_with_unchecked(f) };
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("we never panic while holding this lock");
 
-        // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
-        unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: Forwarding safety guarantees from caller.
+            unsafe { inner.insert_with_unchecked(f) }
+        }));
+        drop(inner);
+
+        match result {
+            Ok(inner) => {
+                // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
+                unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
+            }
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     /// Calls a closure with an iterator over all objects in the pool.
@@ -303,9 +355,18 @@ impl OpaquePool {
     where
         F: FnOnce(OpaquePoolIterator<'_>) -> R,
     {
-        let guard = self.inner.lock();
+        let guard = self
+            .inner
+            .lock()
+            .expect("we never panic while holding this lock");
         let iter = OpaquePoolIterator::new(&guard);
-        f(iter)
+        let result = catch_unwind(AssertUnwindSafe(|| f(iter)));
+        drop(guard);
+
+        match result {
+            Ok(value) => value,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 }
 
@@ -836,7 +897,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Blocking on a parking_lot Mutex in Miri is not supported.
     fn concurrent_access_basic() {
         use std::sync::{Arc, Barrier};
         use std::thread;
@@ -856,7 +916,7 @@ mod tests {
 
                 let value = (i + 1) * 100;
                 let handle = {
-                    let pool_guard = pool_clone.lock();
+                    let pool_guard = pool_clone.lock().unwrap();
                     pool_guard.insert(value)
                 };
 
@@ -877,7 +937,7 @@ mod tests {
 
         // Verify final pool state
         {
-            let pool_guard = pool.lock();
+            let pool_guard = pool.lock().unwrap();
             assert_eq!(pool_guard.len(), 3);
 
             let mut values: Vec<u32> = pool_guard.with_iter(|iter| {

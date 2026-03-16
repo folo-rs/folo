@@ -35,7 +35,11 @@ impl<T: Send + 'static> Clone for PooledRef<T> {
 
 impl<T: Send + 'static> EventRef<T> for PooledRef<T> {
     fn release_event(&self) {
-        let mut pool = self.core.pool.lock();
+        let mut pool = self
+            .core
+            .pool
+            .lock()
+            .expect("we never panic while holding this lock");
 
         // SAFETY: The event state machine guarantees that nothing references the event
         // once it signals the "you need to clean me up now". We hold the last reference.

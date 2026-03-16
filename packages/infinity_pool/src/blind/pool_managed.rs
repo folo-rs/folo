@@ -1,8 +1,7 @@
 use std::alloc::Layout;
 use std::mem::MaybeUninit;
-use std::sync::Arc;
-
-use parking_lot::MutexGuard;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::{Arc, MutexGuard};
 
 use crate::{
     BlindPoolCore, BlindPoolInnerMap, BlindPooledMut, LayoutKey, RawOpaquePool,
@@ -104,7 +103,10 @@ impl BlindPool {
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        let core = self.core.lock();
+        let core = self
+            .core
+            .lock()
+            .expect("we never panic while holding this lock");
 
         core.values().map(|pool| pool.len()).sum()
     }
@@ -115,7 +117,10 @@ impl BlindPool {
     pub fn capacity_for<T: Send + 'static>(&self) -> usize {
         let key = LayoutKey::with_layout_of::<T>();
 
-        let core = self.core.lock();
+        let core = self
+            .core
+            .lock()
+            .expect("we never panic while holding this lock");
 
         core.get(&key)
             .map(|pool| pool.capacity())
@@ -132,7 +137,10 @@ impl BlindPool {
     #[doc = include_str!("../../doc/snippets/blind_pool_reserve.md")]
     #[inline]
     pub fn reserve_for<T: Send + 'static>(&self, additional: usize) {
-        let mut core = self.core.lock();
+        let mut core = self
+            .core
+            .lock()
+            .expect("we never panic while holding this lock");
 
         let pool = ensure_inner_pool::<T>(&mut core);
 
@@ -142,7 +150,10 @@ impl BlindPool {
     #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
     #[inline]
     pub fn shrink_to_fit(&self) {
-        let mut core = self.core.lock();
+        let mut core = self
+            .core
+            .lock()
+            .expect("we never panic while holding this lock");
 
         for pool in core.values_mut() {
             pool.shrink_to_fit();
@@ -154,7 +165,10 @@ impl BlindPool {
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert<T: Send + 'static>(&self, value: T) -> BlindPooledMut<T> {
-        let mut core = self.core.lock();
+        let mut core = self
+            .core
+            .lock()
+            .expect("we never panic while holding this lock");
 
         let pool = ensure_inner_pool::<T>(&mut core);
 
@@ -211,21 +225,32 @@ impl BlindPool {
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {
-        let mut core = self.core.lock();
+        let mut core = self
+            .core
+            .lock()
+            .expect("we never panic while holding this lock");
 
         let pool = ensure_inner_pool::<T>(&mut core);
 
-        // SAFETY: inner pool selector guarantees matching layout.
-        // Initialization guarantee is forwarded from the caller.
-        let inner_handle = unsafe { pool.insert_with_unchecked(f) };
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: inner pool selector guarantees matching layout.
+            // Initialization guarantee is forwarded from the caller.
+            unsafe { pool.insert_with_unchecked(f) }
+        }));
+        drop(core);
 
-        // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
-        unsafe {
-            BlindPooledMut::new(
-                inner_handle,
-                LayoutKey::with_layout_of::<T>(),
-                Arc::clone(&self.core),
-            )
+        match result {
+            Ok(inner_handle) => {
+                // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
+                unsafe {
+                    BlindPooledMut::new(
+                        inner_handle,
+                        LayoutKey::with_layout_of::<T>(),
+                        Arc::clone(&self.core),
+                    )
+                }
+            }
+            Err(payload) => std::panic::resume_unwind(payload),
         }
     }
 }

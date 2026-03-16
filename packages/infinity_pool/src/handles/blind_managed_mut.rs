@@ -150,7 +150,7 @@ where
     pub fn into_inner(self) -> T {
         let (inner, key, core) = self.into_parts();
 
-        let mut core = core.lock();
+        let mut core = core.lock().expect("we never panic while holding this lock");
 
         let pool = core
             .get_mut(&key)
@@ -250,7 +250,10 @@ impl<T: ?Sized> Drop for BlindPooledMut<T> {
         // SAFETY: The target is valid for reads.
         let inner = unsafe { ptr::read(&raw const self.inner) };
 
-        let mut core = self.core.lock();
+        let mut core = self
+            .core
+            .lock()
+            .expect("we never panic while holding this lock");
 
         let pool = core
             .get_mut(&self.key)

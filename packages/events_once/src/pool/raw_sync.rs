@@ -5,11 +5,13 @@ use std::cell::UnsafeCell;
 use std::fmt;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
+#[cfg(debug_assertions)]
+use std::panic::{self, AssertUnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
+use std::sync::Mutex;
 
 use infinity_pool::RawPinnedPool;
-use parking_lot::Mutex;
 
 use crate::{Event, RawPooledReceiver, RawPooledRef, RawPooledSender, ReceiverCore, SenderCore};
 
@@ -114,7 +116,10 @@ impl<T: Send + 'static> RawEventPool<T> {
             // SAFETY: UnsafeCell pointer is never null.
             let core = unsafe { core_maybe.unwrap_unchecked() };
 
-            let mut pool = core.pool.lock();
+            let mut pool = core
+                .pool
+                .lock()
+                .expect("we never panic while holding this lock");
 
             #[expect(
                 clippy::multiple_unsafe_ops_per_block,
@@ -163,7 +168,10 @@ impl<T: Send + 'static> RawEventPool<T> {
         // SAFETY: UnsafeCell pointer is never null.
         let core = unsafe { core_maybe.unwrap_unchecked() };
 
-        let pool = core.pool.lock();
+        let pool = core
+            .pool
+            .lock()
+            .expect("we never panic while holding this lock");
 
         pool.is_empty()
     }
@@ -181,7 +189,10 @@ impl<T: Send + 'static> RawEventPool<T> {
         // SAFETY: UnsafeCell pointer is never null.
         let core = unsafe { core_maybe.unwrap_unchecked() };
 
-        let pool = core.pool.lock();
+        let pool = core
+            .pool
+            .lock()
+            .expect("we never panic while holding this lock");
 
         pool.len()
     }
@@ -206,29 +217,37 @@ impl<T: Send + 'static> RawEventPool<T> {
         // SAFETY: UnsafeCell pointer is never null.
         let core = unsafe { core_maybe.unwrap_unchecked() };
 
-        let pool = core.pool.lock();
+        let pool = core
+            .pool
+            .lock()
+            .expect("we never panic while holding this lock");
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            for event_ptr in pool.iter() {
+                // SAFETY: The pool remains alive for the duration of this function call, satisfying
+                // the lifetime requirement. The pointer is valid as it comes from the pool's iterator.
+                // We only ever create shared references to the events, so no conflicting exclusive
+                // references can exist.
+                let event_cell = unsafe { event_ptr.as_ref() };
 
-        for event_ptr in pool.iter() {
-            // SAFETY: The pool remains alive for the duration of this function call, satisfying
-            // the lifetime requirement. The pointer is valid as it comes from the pool's iterator.
-            // We only ever create shared references to the events, so no conflicting exclusive
-            // references can exist.
-            let event_cell = unsafe { event_ptr.as_ref() };
+                // SAFETY: See above.
+                let event_maybe = unsafe { event_cell.get().as_ref() };
 
-            // SAFETY: See above.
-            let event_maybe = unsafe { event_cell.get().as_ref() };
+                // SAFETY: UnsafeCell pointer is never null.
+                let event = unsafe { event_maybe.unwrap_unchecked() };
 
-            // SAFETY: UnsafeCell pointer is never null.
-            let event = unsafe { event_maybe.unwrap_unchecked() };
+                // SAFETY: We only ever create shared references, never exclusive ones.
+                let event = unsafe { event.assume_init_ref() };
 
-            // SAFETY: We only ever create shared references, never exclusive ones.
-            let event = unsafe { event.assume_init_ref() };
-
-            event.inspect_awaiter(|bt| {
-                if let Some(bt) = bt {
-                    f(bt);
-                }
-            });
+                event.inspect_awaiter(|bt| {
+                    if let Some(bt) = bt {
+                        f(bt);
+                    }
+                });
+            }
+        }));
+        drop(pool);
+        if let Err(payload) = result {
+            panic::resume_unwind(payload);
         }
     }
 }

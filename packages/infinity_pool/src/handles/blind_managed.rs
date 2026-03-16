@@ -177,7 +177,10 @@ struct Remover {
 
 impl Drop for Remover {
     fn drop(&mut self) {
-        let mut core = self.core.lock();
+        let mut core = self
+            .core
+            .lock()
+            .expect("we never panic while holding this lock");
 
         let pool = core
             .get_mut(&self.key)

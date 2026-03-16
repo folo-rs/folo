@@ -10,11 +10,13 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 #[cfg(test)]
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::MutexGuard;
 use std::sync::atomic::{self, AtomicU8};
 use std::task::Waker;
 
 #[cfg(any(debug_assertions, test))]
-use parking_lot::Mutex;
+use std::sync::Mutex;
 
 #[cfg(debug_assertions)]
 use crate::{BacktraceType, capture_backtrace};
@@ -50,6 +52,15 @@ thread_local! {
     /// Marks the current thread as a participant in a hook-based test. Only threads with
     /// this flag set to `true` will trigger test hooks when they reach a hook callsite.
     static HOOK_PARTICIPANT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::redundant_closure_for_method_calls,
+    reason = "test hooks must recover from poisoned mutexes after panics in earlier tests"
+)]
+fn lock_test_hook<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Coordinates delivery of a `T` at most once from a sender to a receiver on any thread.
@@ -238,7 +249,10 @@ where
     /// The closure receives `None` if no one is awaiting the event.
     #[cfg(debug_assertions)]
     pub(crate) fn inspect_awaiter(&self, f: impl FnOnce(Option<&Backtrace>)) {
-        let backtrace = self.backtrace.lock();
+        let backtrace = self
+            .backtrace
+            .lock()
+            .expect("we never panic while holding this lock");
         f(backtrace.as_ref());
     }
 
@@ -309,7 +323,7 @@ where
                 // concurrent test thread can observe and act on the SIGNALING state.
                 #[cfg(test)]
                 if HOOK_PARTICIPANT.get()
-                    && let Some(hook) = HOOK_SET_IN_SIGNALING.lock().clone()
+                    && let Some(hook) = lock_test_hook(&HOOK_SET_IN_SIGNALING).clone()
                 {
                     hook();
                 }
@@ -455,7 +469,10 @@ where
     #[must_use]
     pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         #[cfg(debug_assertions)]
-        self.backtrace.lock().replace(capture_backtrace());
+        self.backtrace
+            .lock()
+            .expect("we never panic while holding this lock")
+            .replace(capture_backtrace());
 
         // We use Acquire because we are (depending on the state) acquiring the synchronization
         // block for `value` and/or `awaiter`.
@@ -497,7 +514,7 @@ where
         // state before we attempt the CAS below.
         #[cfg(test)]
         if HOOK_PARTICIPANT.get()
-            && let Some(hook) = HOOK_POLL_BOUND_PRE_CAS.lock().clone()
+            && let Some(hook) = lock_test_hook(&HOOK_POLL_BOUND_PRE_CAS).clone()
         {
             hook();
         }
@@ -619,7 +636,7 @@ where
         // state before we attempt the CAS below.
         #[cfg(test)]
         if HOOK_PARTICIPANT.get()
-            && let Some(hook) = HOOK_POLL_AWAITING_PRE_CAS.lock().clone()
+            && let Some(hook) = lock_test_hook(&HOOK_POLL_AWAITING_PRE_CAS).clone()
         {
             hook();
         }
@@ -762,7 +779,11 @@ where
         let event = unsafe { event_maybe.unwrap_unchecked() };
 
         #[cfg(debug_assertions)]
-        event.backtrace.lock().replace(capture_backtrace());
+        event
+            .backtrace
+            .lock()
+            .expect("we never panic while holding this lock")
+            .replace(capture_backtrace());
 
         // The receiver (who is calling this) may still own the waker if the waker has not
         // been used. If this is the case, we need to destroy the waker before proceeding.
@@ -1788,12 +1809,12 @@ mod tests {
         struct ClearOnDrop<'a>(&'a Mutex<Option<Arc<HookFn>>>);
         impl Drop for ClearOnDrop<'_> {
             fn drop(&mut self) {
-                *self.0.lock() = None;
+                *lock_test_hook(self.0) = None;
             }
         }
 
-        let _guard = HOOK_SERIALIZATION_MUTEX.lock();
-        *hook.lock() = Some(closure);
+        let _guard = lock_test_hook(&HOOK_SERIALIZATION_MUTEX);
+        *lock_test_hook(hook) = Some(closure);
         let _clear = ClearOnDrop(hook);
 
         body();

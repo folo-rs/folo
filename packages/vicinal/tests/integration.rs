@@ -1,7 +1,6 @@
 //! Integration tests for the vicinal worker pool.
 //!
-//! These tests verify full pool functionality with real threads. They are ignored under Miri
-//! because the `parking_lot` crate uses platform-specific FFI calls that Miri does not support.
+//! These tests verify full pool functionality with real threads.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -15,7 +14,6 @@ use new_zealand::nz;
 use testing::with_watchdog;
 use vicinal::Pool;
 
-#[cfg_attr(miri, ignore)]
 #[test]
 fn spawn_and_await_value() {
     with_watchdog(|| {
@@ -29,7 +27,6 @@ fn spawn_and_await_value() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 fn spawn_and_await_unit() {
     with_watchdog(|| {
@@ -41,7 +38,6 @@ fn spawn_and_await_unit() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 #[should_panic]
 fn spawn_and_await_panic() {
@@ -54,7 +50,6 @@ fn spawn_and_await_panic() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 fn clone_scheduler_spawn_from_both() {
     with_watchdog(|| {
@@ -70,7 +65,6 @@ fn clone_scheduler_spawn_from_both() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 fn nested_spawn_via_captured_scheduler() {
     with_watchdog(|| {
@@ -87,7 +81,6 @@ fn nested_spawn_via_captured_scheduler() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 fn drop_pool_with_no_tasks() {
     with_watchdog(|| {
@@ -96,7 +89,6 @@ fn drop_pool_with_no_tasks() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 fn drop_pool_after_awaiting_task() {
     with_watchdog(|| {
@@ -110,7 +102,6 @@ fn drop_pool_after_awaiting_task() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 fn spawn_many_tasks_await_all() {
     with_watchdog(|| {
@@ -123,7 +114,6 @@ fn spawn_many_tasks_await_all() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 fn scheduler_sent_to_another_thread() {
     with_watchdog(|| {
@@ -140,7 +130,6 @@ fn scheduler_sent_to_another_thread() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 fn concurrent_spawns_from_multiple_threads() {
     with_watchdog(|| {
@@ -179,7 +168,6 @@ fn concurrent_spawns_from_multiple_threads() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 fn spawn_and_forget_completes() {
     with_watchdog(|| {
@@ -198,7 +186,6 @@ fn spawn_and_forget_completes() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 fn spawn_urgent_and_forget_completes() {
     with_watchdog(|| {
@@ -217,7 +204,6 @@ fn spawn_urgent_and_forget_completes() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 fn spawn_and_forget_multiple_tasks() {
     with_watchdog(|| {
@@ -248,7 +234,6 @@ fn spawn_and_forget_multiple_tasks() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 fn spawn_and_await_with_fake_hardware() {
     with_watchdog(|| {
@@ -262,7 +247,6 @@ fn spawn_and_await_with_fake_hardware() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 fn spawn_many_tasks_with_single_processor_hardware() {
     with_watchdog(|| {
@@ -277,7 +261,6 @@ fn spawn_many_tasks_with_single_processor_hardware() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 fn fire_and_forget_with_fake_hardware() {
     with_watchdog(|| {
@@ -296,7 +279,6 @@ fn fire_and_forget_with_fake_hardware() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 fn concurrent_spawns_with_fake_hardware() {
     with_watchdog(|| {
@@ -337,7 +319,6 @@ fn concurrent_spawns_with_fake_hardware() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 #[should_panic]
 fn spawn_and_await_panic_with_fake_hardware() {
@@ -352,7 +333,6 @@ fn spawn_and_await_panic_with_fake_hardware() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 fn spawn_urgent_with_fake_hardware() {
     with_watchdog(|| {
@@ -366,7 +346,6 @@ fn spawn_urgent_with_fake_hardware() {
     });
 }
 
-#[cfg_attr(miri, ignore)]
 #[test]
 fn nested_spawn_with_fake_hardware() {
     with_watchdog(|| {

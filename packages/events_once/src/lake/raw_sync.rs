@@ -3,11 +3,13 @@ use std::any::{Any, TypeId, type_name};
 use std::backtrace::Backtrace;
 use std::cell::UnsafeCell;
 use std::fmt;
+#[cfg(debug_assertions)]
+use std::panic::{self, AssertUnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
+use std::sync::Mutex;
 
 use hash_hasher::HashedMap;
-use parking_lot::Mutex;
 
 use crate::{RawEventPool, RawPooledReceiver, RawPooledSender};
 
@@ -106,7 +108,10 @@ impl RawEventLake {
         // SAFETY: UnsafeCell pointer is never null.
         let core = unsafe { core_maybe.unwrap_unchecked() };
 
-        let mut pools = core.pools.lock();
+        let mut pools = core
+            .pools
+            .lock()
+            .expect("we never panic while holding this lock");
 
         let entry = pools
             .entry(type_id)
@@ -136,7 +141,10 @@ impl RawEventLake {
         // SAFETY: UnsafeCell pointer is never null.
         let core = unsafe { core_maybe.unwrap_unchecked() };
 
-        let pools = core.pools.lock();
+        let pools = core
+            .pools
+            .lock()
+            .expect("we never panic while holding this lock");
 
         pools.values().all(|x| x.is_empty())
     }
@@ -154,7 +162,10 @@ impl RawEventLake {
         // SAFETY: UnsafeCell pointer is never null.
         let core = unsafe { core_maybe.unwrap_unchecked() };
 
-        let pools = core.pools.lock();
+        let pools = core
+            .pools
+            .lock()
+            .expect("we never panic while holding this lock");
 
         pools.values().map(|x| x.len()).sum()
     }
@@ -179,10 +190,18 @@ impl RawEventLake {
         // SAFETY: UnsafeCell pointer is never null.
         let core = unsafe { core_maybe.unwrap_unchecked() };
 
-        let pools = core.pools.lock();
-
-        for entry in pools.values() {
-            entry.inspect_awaiters(&mut f);
+        let pools = core
+            .pools
+            .lock()
+            .expect("we never panic while holding this lock");
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            for entry in pools.values() {
+                entry.inspect_awaiters(&mut f);
+            }
+        }));
+        drop(pools);
+        if let Err(payload) = result {
+            panic::resume_unwind(payload);
         }
     }
 }

@@ -2,10 +2,12 @@ use std::any::{Any, TypeId, type_name};
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
 use std::fmt;
+#[cfg(debug_assertions)]
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use hash_hasher::HashedMap;
-use parking_lot::Mutex;
 
 use crate::{EventPool, PooledReceiver, PooledSender};
 
@@ -78,7 +80,11 @@ impl EventLake {
     pub fn rent<T: Send + 'static>(&self) -> (PooledSender<T>, PooledReceiver<T>) {
         let type_id = TypeId::of::<T>();
 
-        let mut pools = self.core.pools.lock();
+        let mut pools = self
+            .core
+            .pools
+            .lock()
+            .expect("we never panic while holding this lock");
 
         let entry = pools
             .entry(type_id)
@@ -95,14 +101,22 @@ impl EventLake {
     /// Returns `true` if no events have currently been rented from the lake.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        let pools = self.core.pools.lock();
+        let pools = self
+            .core
+            .pools
+            .lock()
+            .expect("we never panic while holding this lock");
         pools.values().all(|x| x.is_empty())
     }
 
     /// Returns the number of events that have currently been rented from the lake.
     #[must_use]
     pub fn len(&self) -> usize {
-        let pools = self.core.pools.lock();
+        let pools = self
+            .core
+            .pools
+            .lock()
+            .expect("we never panic while holding this lock");
         pools.values().map(|x| x.len()).sum()
     }
 
@@ -116,10 +130,19 @@ impl EventLake {
     /// in the past.
     #[cfg(debug_assertions)]
     pub fn inspect_awaiters(&self, mut f: impl FnMut(&Backtrace)) {
-        let pools = self.core.pools.lock();
-
-        for entry in pools.values() {
-            entry.inspect_awaiters(&mut f);
+        let pools = self
+            .core
+            .pools
+            .lock()
+            .expect("we never panic while holding this lock");
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            for entry in pools.values() {
+                entry.inspect_awaiters(&mut f);
+            }
+        }));
+        drop(pools);
+        if let Err(payload) = result {
+            panic::resume_unwind(payload);
         }
     }
 }
