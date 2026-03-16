@@ -10,8 +10,6 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 #[cfg(test)]
 use std::sync::Arc;
-#[cfg(test)]
-use std::sync::MutexGuard;
 use std::sync::atomic::{self, AtomicU8};
 use std::task::Waker;
 
@@ -52,15 +50,6 @@ thread_local! {
     /// Marks the current thread as a participant in a hook-based test. Only threads with
     /// this flag set to `true` will trigger test hooks when they reach a hook callsite.
     static HOOK_PARTICIPANT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-#[cfg(test)]
-#[expect(
-    clippy::redundant_closure_for_method_calls,
-    reason = "test hooks must recover from poisoned mutexes after panics in earlier tests"
-)]
-fn lock_test_hook<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Coordinates delivery of a `T` at most once from a sender to a receiver on any thread.
@@ -323,7 +312,7 @@ where
                 // concurrent test thread can observe and act on the SIGNALING state.
                 #[cfg(test)]
                 if HOOK_PARTICIPANT.get()
-                    && let Some(hook) = lock_test_hook(&HOOK_SET_IN_SIGNALING).clone()
+                    && let Some(hook) = HOOK_SET_IN_SIGNALING.lock().unwrap().clone()
                 {
                     hook();
                 }
@@ -514,7 +503,7 @@ where
         // state before we attempt the CAS below.
         #[cfg(test)]
         if HOOK_PARTICIPANT.get()
-            && let Some(hook) = lock_test_hook(&HOOK_POLL_BOUND_PRE_CAS).clone()
+            && let Some(hook) = HOOK_POLL_BOUND_PRE_CAS.lock().unwrap().clone()
         {
             hook();
         }
@@ -636,7 +625,7 @@ where
         // state before we attempt the CAS below.
         #[cfg(test)]
         if HOOK_PARTICIPANT.get()
-            && let Some(hook) = lock_test_hook(&HOOK_POLL_AWAITING_PRE_CAS).clone()
+            && let Some(hook) = HOOK_POLL_AWAITING_PRE_CAS.lock().unwrap().clone()
         {
             hook();
         }
@@ -1806,18 +1795,19 @@ mod tests {
     /// Installs a hook closure and runs the test body while holding the
     /// serialization mutex. The hook is always removed on exit.
     fn with_hook(hook: &Mutex<Option<Arc<HookFn>>>, closure: Arc<HookFn>, body: impl FnOnce()) {
-        struct ClearOnDrop<'a>(&'a Mutex<Option<Arc<HookFn>>>);
-        impl Drop for ClearOnDrop<'_> {
-            fn drop(&mut self) {
-                *lock_test_hook(self.0) = None;
-            }
+        let guard = HOOK_SERIALIZATION_MUTEX.lock().unwrap();
+        *hook.lock().unwrap() = Some(closure);
+
+        // We catch panics from the test body so that we can clean up the hook and
+        // drop the serialization guard while not panicking, preventing mutex poisoning.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+
+        *hook.lock().unwrap() = None;
+        drop(guard);
+
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
         }
-
-        let _guard = lock_test_hook(&HOOK_SERIALIZATION_MUTEX);
-        *lock_test_hook(hook) = Some(closure);
-        let _clear = ClearOnDrop(hook);
-
-        body();
     }
 
     struct BarrierHook {

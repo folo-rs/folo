@@ -1,7 +1,7 @@
 use std::alloc::Layout;
 use std::iter::FusedIterator;
 use std::mem::MaybeUninit;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{AssertUnwindSafe, UnwindSafe, catch_unwind};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
@@ -262,7 +262,7 @@ impl OpaquePool {
     pub unsafe fn insert_with<T, F>(&self, f: F) -> PooledMut<T>
     where
         T: Send + 'static,
-        F: FnOnce(&mut MaybeUninit<T>),
+        F: FnOnce(&mut MaybeUninit<T>) + UnwindSafe,
     {
         let mut inner = self
             .inner
@@ -297,7 +297,7 @@ impl OpaquePool {
     pub unsafe fn insert_with_unchecked<T, F>(&self, f: F) -> PooledMut<T>
     where
         T: Send + 'static,
-        F: FnOnce(&mut MaybeUninit<T>),
+        F: FnOnce(&mut MaybeUninit<T>) + UnwindSafe,
     {
         let mut inner = self
             .inner
@@ -353,7 +353,7 @@ impl OpaquePool {
     /// ```
     pub fn with_iter<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(OpaquePoolIterator<'_>) -> R,
+        F: FnOnce(OpaquePoolIterator<'_>) -> R + UnwindSafe,
     {
         let guard = self
             .inner

@@ -7,9 +7,6 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle as ThreadJoinHandle};
 use std::{fmt, mem, panic};
 
-#[cfg(test)]
-use std::sync::PoisonError;
-
 use event_listener::{Listener, listener};
 use many_cpus::{ProcessorId, SystemHardware};
 use new_zealand::nz;
@@ -133,10 +130,7 @@ impl PoolInner {
         // before we acquire the lock below, exercising the re-check branch.
         #[cfg(test)]
         if HOOK_PARTICIPANT.get()
-            && let Some(hook) = HOOK_ENSURE_WORKERS_POST_SPAWN
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone()
+            && let Some(hook) = HOOK_ENSURE_WORKERS_POST_SPAWN.lock().unwrap().clone()
         {
             hook();
         }
@@ -379,7 +373,7 @@ impl PoolBuilder {
 mod tests {
     use std::num::NonZero;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Barrier, PoisonError};
+    use std::sync::{Arc, Barrier};
     use std::thread;
 
     use many_cpus::SystemHardware;
@@ -453,20 +447,19 @@ mod tests {
         closure: Arc<super::HookFn>,
         body: impl FnOnce(),
     ) {
-        struct ClearOnDrop<'a>(&'a super::Mutex<Option<Arc<super::HookFn>>>);
-        impl Drop for ClearOnDrop<'_> {
-            fn drop(&mut self) {
-                *self.0.lock().unwrap_or_else(PoisonError::into_inner) = None;
-            }
+        let guard = super::HOOK_SERIALIZATION_MUTEX.lock().unwrap();
+        *hook.lock().unwrap() = Some(closure);
+
+        // We catch panics from the test body so that we can clean up the hook and
+        // drop the serialization guard while not panicking, preventing mutex poisoning.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+
+        *hook.lock().unwrap() = None;
+        drop(guard);
+
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
         }
-
-        let _guard = super::HOOK_SERIALIZATION_MUTEX
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        *hook.lock().unwrap_or_else(PoisonError::into_inner) = Some(closure);
-        let _clear = ClearOnDrop(hook);
-
-        body();
     }
 
     struct BarrierHook {

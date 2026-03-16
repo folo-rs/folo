@@ -1,6 +1,6 @@
 use std::alloc::Layout;
 use std::mem::MaybeUninit;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{AssertUnwindSafe, UnwindSafe, catch_unwind};
 use std::sync::{Arc, MutexGuard};
 
 use crate::{
@@ -223,7 +223,7 @@ impl BlindPool {
     #[must_use]
     pub unsafe fn insert_with<T: Send + 'static, F>(&self, f: F) -> BlindPooledMut<T>
     where
-        F: FnOnce(&mut MaybeUninit<T>),
+        F: FnOnce(&mut MaybeUninit<T>) + UnwindSafe,
     {
         let mut core = self
             .core

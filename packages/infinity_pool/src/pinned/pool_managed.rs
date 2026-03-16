@@ -3,7 +3,7 @@ use std::fmt;
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{AssertUnwindSafe, UnwindSafe, catch_unwind};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
@@ -211,7 +211,7 @@ where
     #[must_use]
     pub unsafe fn insert_with<F>(&self, f: F) -> PooledMut<T>
     where
-        F: FnOnce(&mut MaybeUninit<T>),
+        F: FnOnce(&mut MaybeUninit<T>) + UnwindSafe,
     {
         let mut inner = self
             .inner
@@ -268,7 +268,7 @@ where
     /// ```
     pub fn with_iter<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(PinnedPoolIterator<'_, T>) -> R,
+        F: FnOnce(PinnedPoolIterator<'_, T>) -> R + UnwindSafe,
     {
         let guard = self
             .inner
