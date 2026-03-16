@@ -11,7 +11,15 @@ use crate::{
 /// All values in the pool remain pinned for their entire lifetime.
 ///
 /// The pool automatically expands its capacity when needed.
-#[doc = include_str!("../../doc/snippets/raw_pool_is_potentially_thread_safe.md")]
+/// # Thread safety
+///
+/// The pool is nominally single-threaded because the compiler cannot know what types of objects
+/// are stored inside a given instance, so it must default to assuming they are single-threaded
+/// objects.
+///
+/// If all the objects inserted are `Send` then the owner of the pool is allowed to treat
+/// the pool itself as thread-safe (`Send` and `Sync`) but must do so using unsafe code,
+/// such as via a wrapper type that explicitly implements `Send` and `Sync`.
 ///
 /// # Example: unique object ownership
 ///
@@ -78,13 +86,13 @@ pub struct RawBlindPool {
 }
 
 impl RawBlindPool {
-    #[doc = include_str!("../../doc/snippets/pool_builder.md")]
+    /// Starts configuring and creating a new instance of the pool.
     #[cfg_attr(test, mutants::skip)] // Gets mutated to alternate version of itself.
     pub fn builder() -> RawBlindPoolBuilder {
         RawBlindPoolBuilder::new()
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_new.md")]
+    /// Creates a new pool with the default configuration.
     #[must_use]
     pub fn new() -> Self {
         Self::builder().build()
@@ -98,14 +106,20 @@ impl RawBlindPool {
         }
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_len.md")]
+    /// The number of objects currently in the pool.
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
         self.pools.values().map(RawOpaquePool::len).sum()
     }
 
-    #[doc = include_str!("../../doc/snippets/blind_pool_capacity.md")]
+    /// The total capacity of the pool for objects of type `T`.
+    ///
+    /// This is the maximum number of objects (including current contents) that the pool can contain
+    /// without capacity extension. The pool will automatically extend its capacity if more than
+    /// this many objects of type `T` are inserted.
+    ///
+    /// Capacity may be shared between different types of objects.
     #[must_use]
     #[inline]
     pub fn capacity_for<T>(&self) -> usize {
@@ -114,20 +128,27 @@ impl RawBlindPool {
             .unwrap_or_default()
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
+    /// Whether the pool contains zero objects.
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    #[doc = include_str!("../../doc/snippets/blind_pool_reserve.md")]
+    /// Ensures that the pool has capacity for at least `additional` more objects of type `T`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new capacity would exceed the size of virtual memory (`usize::MAX`).
     #[inline]
     pub fn reserve_for<T>(&mut self, additional: usize) {
         self.inner_pool_of_mut::<T>().reserve(additional);
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
+    /// Drops unused pool capacity to reduce memory usage.
+    ///
+    /// There is no guarantee that any unused capacity can be dropped. The exact outcome depends
+    /// on the specific pool structure and which objects remain in the pool.
     #[inline]
     pub fn shrink_to_fit(&mut self) {
         for pool in self.pools.values_mut() {
@@ -135,7 +156,7 @@ impl RawBlindPool {
         }
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_insert.md")]
+    /// Inserts an object into the pool and returns a handle to it.
     #[inline]
     #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert<T: 'static>(&mut self, value: T) -> RawBlindPooledMut<T> {
@@ -150,7 +171,15 @@ impl RawBlindPool {
         RawBlindPooledMut::new(key, inner_handle)
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
+    /// Inserts an object into the pool via closure and returns a handle to it.
+    ///
+    /// This method allows the caller to partially initialize the object, skipping any `MaybeUninit`
+    /// fields that are intentionally not initialized at insertion time. This can make insertion of
+    /// objects containing `MaybeUninit` fields faster, although requires unsafe code to implement.
+    ///
+    /// This method is NOT faster than `insert()` for fully initialized objects.
+    /// Prefer `insert()` for a better safety posture if you do not intend to
+    /// skip initialization of any `MaybeUninit` fields.
     ///
     /// # Example
     ///
@@ -185,7 +214,8 @@ impl RawBlindPool {
     /// ```
     ///
     /// # Safety
-    #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
+    /// The closure must correctly initialize the object. All fields that
+    /// are not `MaybeUninit` must be initialized when the closure returns.
     #[inline]
     pub unsafe fn insert_with<T, F>(&mut self, f: F) -> RawBlindPooledMut<T>
     where
@@ -204,7 +234,11 @@ impl RawBlindPool {
         RawBlindPooledMut::new(key, inner_handle)
     }
 
-    #[doc = include_str!("../../doc/snippets/raw_pool_remove.md")]
+    /// Removes an object from the pool, dropping the object.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the handle is for an object currently present in this pool.
     #[inline]
     pub unsafe fn remove<T: ?Sized>(&mut self, handle: impl Into<RawBlindPooled<T>>) {
         let handle = handle.into();
@@ -221,7 +255,11 @@ impl RawBlindPool {
         }
     }
 
-    #[doc = include_str!("../../doc/snippets/raw_pool_remove_unpin.md")]
+    /// Removes an object from the pool and returns the object.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the handle is for an object currently present in this pool.
     #[must_use]
     #[inline]
     pub unsafe fn remove_unpin<T: Unpin>(&mut self, handle: impl Into<RawBlindPooled<T>>) -> T {

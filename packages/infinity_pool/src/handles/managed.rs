@@ -15,9 +15,20 @@ use crate::{PooledMut, RawOpaquePoolThreadSafe, RawPooled, RawPooledMut};
 // It is the responsibility of the pool to ensure that only `Send` objects are inserted.
 
 /// A shared thread-safe reference-counting handle for a pooled object.
-#[doc = include_str!("../../doc/snippets/ref_counted_handle_implications.md")]
-#[doc = include_str!("../../doc/snippets/shared_handle_implications.md")]
-#[doc = include_str!("../../doc/snippets/nonlocal_handle_thread_safety.md")]
+/// # Implications of reference counted handles
+///
+/// The handle can be used to access the pooled object.
+///
+/// This is a reference-counted handle that automatically removes the object when the
+/// handle is dropped. Dropping the handle is the only way to remove the object from
+/// the pool.
+///
+/// This is a shared handle that only grants shared access to the object. No exclusive
+/// references can be created through this handle.
+///
+/// # Thread safety
+///
+/// The handle is always `Sync`. The handle is `Send` if `T` is `Send`.
 pub struct Pooled<T: ?Sized> {
     // We inherit our thread-safety traits from this one (Send from T, Sync always).
     inner: RawPooled<T>,
@@ -52,7 +63,14 @@ impl<T: ?Sized> Pooled<T> {
         }
     }
 
-    #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
+    /// Get a pointer to the target object.
+    ///
+    /// All pooled objects are guaranteed to be pinned for their entire lifetime, so this pointer
+    /// remains valid for as long as the object remains in the pool.
+    ///
+    /// The object pool implementation does not keep any references to the pooled objects, so
+    /// you have the option of using this pointer to create Rust references directly without fear
+    /// of any conflicting references created by the pool.
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
@@ -60,7 +78,9 @@ impl<T: ?Sized> Pooled<T> {
         self.inner.ptr()
     }
 
-    #[doc = include_str!("../../doc/snippets/ref_counted_as_pin.md")]
+    /// Borrows the target object as a pinned shared reference.
+    ///
+    /// All pooled objects are guaranteed to be pinned for their entire lifetime.
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.

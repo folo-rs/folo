@@ -1,1 +1,0 @@
-Whether the pool contains zero objects.
