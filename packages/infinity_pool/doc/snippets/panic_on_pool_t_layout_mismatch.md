@@ -1,1 +1,0 @@
-Panics if the layout of `T` does not match the object layout of the pool.

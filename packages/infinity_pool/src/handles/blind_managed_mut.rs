@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::{fmt, mem, ptr};
 
+use crate::NEVER_POISONED;
 use crate::{BlindPoolCore, BlindPooled, LayoutKey, RawPooledMut};
 
 // Note that while this is a thread-safe handle, we do not require `T: Send` because
@@ -12,9 +13,21 @@ use crate::{BlindPoolCore, BlindPooled, LayoutKey, RawPooledMut};
 // It is the responsibility of the pool to ensure that only `Send` objects are inserted.
 
 /// A unique thread-safe reference-counting handle for a pooled object.
-#[doc = include_str!("../../doc/snippets/ref_counted_handle_implications.md")]
-#[doc = include_str!("../../doc/snippets/unique_handle_implications.md")]
-#[doc = include_str!("../../doc/snippets/nonlocal_handle_thread_safety.md")]
+/// # Implications of reference counted handles
+///
+/// The handle can be used to access the pooled object.
+///
+/// This is a reference-counted handle that automatically removes the object when the
+/// handle is dropped. Dropping the handle is the only way to remove the object from
+/// the pool.
+///
+/// This is a unique handle, guaranteeing that no other handles to the same object exist.
+/// You may create both shared and exclusive references to the object through this handle.
+/// The handle may also be converted to a shared handle via `.into_shared()`.
+///
+/// # Thread safety
+///
+/// The handle is always `Sync`. The handle is `Send` if `T` is `Send`.
 pub struct BlindPooledMut<T: ?Sized> {
     inner: RawPooledMut<T>,
     key: LayoutKey,
@@ -32,7 +45,14 @@ impl<T: ?Sized> BlindPooledMut<T> {
         Self { inner, key, core }
     }
 
-    #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
+    /// Get a pointer to the target object.
+    ///
+    /// All pooled objects are guaranteed to be pinned for their entire lifetime, so this pointer
+    /// remains valid for as long as the object remains in the pool.
+    ///
+    /// The object pool implementation does not keep any references to the pooled objects, so
+    /// you have the option of using this pointer to create Rust references directly without fear
+    /// of any conflicting references created by the pool.
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
@@ -40,7 +60,14 @@ impl<T: ?Sized> BlindPooledMut<T> {
         self.inner.ptr()
     }
 
-    #[doc = include_str!("../../doc/snippets/handle_into_shared.md")]
+    /// Transforms the unique handle into a shared handle that can be cloned as needed.
+    ///
+    /// A shared handle does not support the creation of exclusive references to the target object.
+    ///
+    /// # Thread Safety
+    ///
+    /// The resulting shared handle has the same `Send` bound as the unique handle -
+    /// it is `Send` if `T: Send`.
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
@@ -70,7 +97,9 @@ impl<T: ?Sized> BlindPooledMut<T> {
         (inner, key, core)
     }
 
-    #[doc = include_str!("../../doc/snippets/ref_counted_as_pin.md")]
+    /// Borrows the target object as a pinned shared reference.
+    ///
+    /// All pooled objects are guaranteed to be pinned for their entire lifetime.
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
@@ -79,7 +108,9 @@ impl<T: ?Sized> BlindPooledMut<T> {
         unsafe { Pin::new_unchecked(self) }
     }
 
-    #[doc = include_str!("../../doc/snippets/ref_counted_as_pin_mut.md")]
+    /// Borrows the target object as a pinned exclusive reference.
+    ///
+    /// All pooled objects are guaranteed to be pinned for their entire lifetime.
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
@@ -144,13 +175,13 @@ impl<T> BlindPooledMut<T>
 where
     T: Unpin,
 {
-    #[doc = include_str!("../../doc/snippets/ref_counted_into_inner.md")]
+    /// Removes the item from the pool and returns it to the caller.
     #[must_use]
     #[inline]
     pub fn into_inner(self) -> T {
         let (inner, key, core) = self.into_parts();
 
-        let mut core = core.lock();
+        let mut core = core.lock().expect(NEVER_POISONED);
 
         let pool = core
             .get_mut(&key)
@@ -250,7 +281,7 @@ impl<T: ?Sized> Drop for BlindPooledMut<T> {
         // SAFETY: The target is valid for reads.
         let inner = unsafe { ptr::read(&raw const self.inner) };
 
-        let mut core = self.core.lock();
+        let mut core = self.core.lock().expect(NEVER_POISONED);
 
         let pool = core
             .get_mut(&self.key)

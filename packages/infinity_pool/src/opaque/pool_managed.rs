@@ -1,11 +1,11 @@
 use std::alloc::Layout;
 use std::iter::FusedIterator;
 use std::mem::MaybeUninit;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::ptr::NonNull;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use parking_lot::Mutex;
-
+use crate::NEVER_POISONED;
 use crate::opaque::pool_raw::RawOpaquePoolIterator;
 use crate::{PooledMut, RawOpaquePool, RawOpaquePoolThreadSafe};
 
@@ -15,8 +15,17 @@ use crate::{PooledMut, RawOpaquePool, RawOpaquePoolThreadSafe};
 /// time. All values in the pool remain pinned for their entire lifetime.
 ///
 /// The pool automatically expands its capacity when needed.
-#[doc = include_str!("../../doc/snippets/managed_pool_lifetimes.md")]
-#[doc = include_str!("../../doc/snippets/managed_pool_is_thread_safe.md")]
+/// # Lifetime management
+///
+/// When inserting an object into the pool, a handle to the object is returned.
+/// The object is removed from the pool when the last remaining handle to the object
+/// is dropped (`Arc`-like behavior).
+///
+/// Clones of the pool are functionally equivalent views over the same memory capacity.
+///
+/// # Thread safety
+///
+/// The pool is thread-safe (`Send` and `Sync`) and requires that any inserted items are `Send`.
 ///
 /// # Example: unique object ownership
 ///
@@ -127,74 +136,100 @@ impl OpaquePool {
         Self::with_layout(Layout::new::<T>())
     }
 
-    #[doc = include_str!("../../doc/snippets/opaque_pool_layout.md")]
+    /// The layout of objects stored in this pool.
+    ///
+    /// All inserted objects must match this layout.
     #[must_use]
     #[inline]
     pub fn object_layout(&self) -> Layout {
-        self.inner.lock().object_layout()
+        self.inner.lock().expect(NEVER_POISONED).object_layout()
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_len.md")]
+    /// The number of objects currently in the pool.
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        self.inner.lock().len()
+        self.inner.lock().expect(NEVER_POISONED).len()
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_capacity.md")]
+    /// The total capacity of the pool.
+    ///
+    /// This is the maximum number of objects (including current contents) that the pool can contain
+    /// without capacity extension. The pool will automatically extend its capacity if more than
+    /// this many objects are inserted.
     #[must_use]
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.inner.lock().capacity()
+        self.inner.lock().expect(NEVER_POISONED).capacity()
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
+    /// Whether the pool contains zero objects.
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.inner.lock().is_empty()
+        self.inner.lock().expect(NEVER_POISONED).is_empty()
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
+    /// Ensures that the pool has capacity for at least `additional` more objects.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new capacity would exceed the size of virtual memory (`usize::MAX`).
     #[inline]
     pub fn reserve(&self, additional: usize) {
-        self.inner.lock().reserve(additional);
+        self.inner.lock().expect(NEVER_POISONED).reserve(additional);
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
+    /// Drops unused pool capacity to reduce memory usage.
+    ///
+    /// There is no guarantee that any unused capacity can be dropped. The exact outcome depends
+    /// on the specific pool structure and which objects remain in the pool.
     #[inline]
     pub fn shrink_to_fit(&self) {
-        self.inner.lock().shrink_to_fit();
+        self.inner.lock().expect(NEVER_POISONED).shrink_to_fit();
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_insert.md")]
+    /// Inserts an object into the pool and returns a handle to it.
     ///
-    ///  # Panics
-    #[doc = include_str!("../../doc/snippets/panic_on_pool_t_layout_mismatch.md")]
+    /// # Panics
+    /// Panics if the layout of `T` does not match the object layout of the pool.
     #[inline]
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert<T: Send + 'static>(&self, value: T) -> PooledMut<T> {
-        let inner = self.inner.lock().insert(value);
+        let inner = self.inner.lock().expect(NEVER_POISONED).insert(value);
 
         // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
         unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_insert.md")]
+    /// Inserts an object into the pool and returns a handle to it.
     /// # Safety
-    #[doc = include_str!("../../doc/snippets/safety_pool_t_layout_must_match.md")]
+    /// The caller must ensure that the layout of `T` matches the pool's object layout.
     #[inline]
     #[must_use]
     pub unsafe fn insert_unchecked<T: Send + 'static>(&self, value: T) -> PooledMut<T> {
         // SAFETY: Forwarding safety guarantees from caller.
-        let inner = unsafe { self.inner.lock().insert_unchecked(value) };
+        let inner = unsafe {
+            self.inner
+                .lock()
+                .expect(NEVER_POISONED)
+                .insert_unchecked(value)
+        };
 
         // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
         unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
+    /// Inserts an object into the pool via closure and returns a handle to it.
+    ///
+    /// This method allows the caller to partially initialize the object, skipping any `MaybeUninit`
+    /// fields that are intentionally not initialized at insertion time. This can make insertion of
+    /// objects containing `MaybeUninit` fields faster, although requires unsafe code to implement.
+    ///
+    /// This method is NOT faster than `insert()` for fully initialized objects.
+    /// Prefer `insert()` for a better safety posture if you do not intend to
+    /// skip initialization of any `MaybeUninit` fields.
     ///
     /// # Example
     ///
@@ -227,10 +262,11 @@ impl OpaquePool {
     /// ```
     ///
     /// # Panics
-    #[doc = include_str!("../../doc/snippets/panic_on_pool_t_layout_mismatch.md")]
+    /// Panics if the layout of `T` does not match the object layout of the pool.
     ///
     /// # Safety
-    #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
+    /// The closure must correctly initialize the object. All fields that
+    /// are not `MaybeUninit` must be initialized when the closure returns.
     #[inline]
     #[must_use]
     pub unsafe fn insert_with<T, F>(&self, f: F) -> PooledMut<T>
@@ -238,21 +274,45 @@ impl OpaquePool {
         T: Send + 'static,
         F: FnOnce(&mut MaybeUninit<T>),
     {
-        // SAFETY: Forwarding safety guarantees from caller.
-        let inner = unsafe { self.inner.lock().insert_with(f) };
+        let mut inner = self.inner.lock().expect(NEVER_POISONED);
 
-        // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
-        unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
+        // AssertUnwindSafe: covers both the user closure and the MutexGuard,
+        // which are inherently !UnwindSafe. We drop the guard cleanly before
+        // resume_unwind, so our state is never observed in a potentially
+        // inconsistent state. The user's panic is re-thrown without tampering.
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: Forwarding safety guarantees from caller.
+            unsafe { inner.insert_with(f) }
+        }));
+        drop(inner);
+
+        match result {
+            Ok(inner) => {
+                // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
+                unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
+            }
+            Err(payload) => resume_unwind(payload),
+        }
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
+    /// Inserts an object into the pool via closure and returns a handle to it.
+    ///
+    /// This method allows the caller to partially initialize the object, skipping any `MaybeUninit`
+    /// fields that are intentionally not initialized at insertion time. This can make insertion of
+    /// objects containing `MaybeUninit` fields faster, although requires unsafe code to implement.
+    ///
+    /// This method is NOT faster than `insert()` for fully initialized objects.
+    /// Prefer `insert()` for a better safety posture if you do not intend to
+    /// skip initialization of any `MaybeUninit` fields.
     ///
     /// This unchecked variant of the method skips the layout verification step, requiring
     /// the caller to ensure that the object has a matching layout with the pool.
     ///
     /// # Safety
-    #[doc = include_str!("../../doc/snippets/safety_pool_t_layout_must_match.md")]
-    #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
+    /// The caller must ensure that the layout of `T` matches the pool's object layout.
+    ///
+    /// The closure must correctly initialize the object. All fields that
+    /// are not `MaybeUninit` must be initialized when the closure returns.
     #[inline]
     #[must_use]
     pub unsafe fn insert_with_unchecked<T, F>(&self, f: F) -> PooledMut<T>
@@ -260,11 +320,25 @@ impl OpaquePool {
         T: Send + 'static,
         F: FnOnce(&mut MaybeUninit<T>),
     {
-        // SAFETY: Forwarding safety guarantees from caller.
-        let inner = unsafe { self.inner.lock().insert_with_unchecked(f) };
+        let mut inner = self.inner.lock().expect(NEVER_POISONED);
 
-        // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
-        unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
+        // AssertUnwindSafe: covers both the user closure and the MutexGuard,
+        // which are inherently !UnwindSafe. We drop the guard cleanly before
+        // resume_unwind, so our state is never observed in a potentially
+        // inconsistent state. The user's panic is re-thrown without tampering.
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: Forwarding safety guarantees from caller.
+            unsafe { inner.insert_with_unchecked(f) }
+        }));
+        drop(inner);
+
+        match result {
+            Ok(inner) => {
+                // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
+                unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
+            }
+            Err(payload) => resume_unwind(payload),
+        }
     }
 
     /// Calls a closure with an iterator over all objects in the pool.
@@ -303,9 +377,19 @@ impl OpaquePool {
     where
         F: FnOnce(OpaquePoolIterator<'_>) -> R,
     {
-        let guard = self.inner.lock();
+        let guard = self.inner.lock().expect(NEVER_POISONED);
         let iter = OpaquePoolIterator::new(&guard);
-        f(iter)
+        // AssertUnwindSafe: covers both the user closure and `iter` (which
+        // borrows from a MutexGuard and is therefore inherently !UnwindSafe).
+        // We drop the guard cleanly before resume_unwind, so our state is never
+        // observed in a potentially inconsistent state.
+        let result = catch_unwind(AssertUnwindSafe(|| f(iter)));
+        drop(guard);
+
+        match result {
+            Ok(value) => value,
+            Err(payload) => resume_unwind(payload),
+        }
     }
 }
 
@@ -836,7 +920,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Blocking on a parking_lot Mutex in Miri is not supported.
     fn concurrent_access_basic() {
         use std::sync::{Arc, Barrier};
         use std::thread;
@@ -856,7 +939,7 @@ mod tests {
 
                 let value = (i + 1) * 100;
                 let handle = {
-                    let pool_guard = pool_clone.lock();
+                    let pool_guard = pool_clone.lock().unwrap();
                     pool_guard.insert(value)
                 };
 
@@ -877,7 +960,7 @@ mod tests {
 
         // Verify final pool state
         {
-            let pool_guard = pool.lock();
+            let pool_guard = pool.lock().unwrap();
             assert_eq!(pool_guard.len(), 3);
 
             let mut values: Vec<u32> = pool_guard.with_iter(|iter| {
@@ -1119,5 +1202,44 @@ mod tests {
         drop(handle3);
         drop(handle4);
         assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "intentional panic to verify pass-through")]
+    fn insert_with_propagates_panic_from_closure() {
+        let pool = OpaquePool::with_layout_of::<u32>();
+
+        // SAFETY: The closure panics before initialization completes. The pool catches
+        // the panic to drop the mutex guard cleanly, then re-throws via resume_unwind.
+        unsafe {
+            drop(pool.insert_with(|_: &mut MaybeUninit<u32>| {
+                panic!("intentional panic to verify pass-through");
+            }));
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "intentional panic to verify pass-through")]
+    fn insert_with_unchecked_propagates_panic_from_closure() {
+        let pool = OpaquePool::with_layout_of::<u32>();
+
+        // SAFETY: The closure panics before initialization completes, and the layout
+        // matches. The pool catches the panic and re-throws via resume_unwind.
+        unsafe {
+            drop(pool.insert_with_unchecked(|_: &mut MaybeUninit<u32>| {
+                panic!("intentional panic to verify pass-through");
+            }));
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "intentional panic to verify pass-through")]
+    fn with_iter_propagates_panic_from_closure() {
+        let pool = OpaquePool::with_layout_of::<u32>();
+        let _handle = pool.insert(42_u32);
+
+        pool.with_iter(|_iter| {
+            panic!("intentional panic to verify pass-through");
+        });
     }
 }

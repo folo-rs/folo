@@ -13,9 +13,13 @@ use std::sync::Arc;
 use std::sync::atomic::{self, AtomicU8};
 use std::task::Waker;
 
+#[cfg(debug_assertions)]
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 #[cfg(any(debug_assertions, test))]
-use parking_lot::Mutex;
+use std::sync::Mutex;
 
+#[cfg(debug_assertions)]
+use crate::NEVER_POISONED;
 #[cfg(debug_assertions)]
 use crate::{BacktraceType, capture_backtrace};
 use crate::{
@@ -238,8 +242,23 @@ where
     /// The closure receives `None` if no one is awaiting the event.
     #[cfg(debug_assertions)]
     pub(crate) fn inspect_awaiter(&self, f: impl FnOnce(Option<&Backtrace>)) {
-        let backtrace = self.backtrace.lock();
-        f(backtrace.as_ref());
+        let guard = self.backtrace.lock().expect(NEVER_POISONED);
+
+        // We catch panics from the closure to drop the guard cleanly, preventing
+        // poisoning of the backtrace mutex. Without this, a panicking closure would
+        // poison the mutex, and the receiver's drop handler (which calls final_poll)
+        // would double-panic when trying to lock it during unwinding.
+        //
+        // AssertUnwindSafe: only covers the MutexGuard, which is inherently
+        // !UnwindSafe. We drop it cleanly before resume_unwind.
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            f(guard.as_ref());
+        }));
+        drop(guard);
+
+        if let Err(payload) = result {
+            resume_unwind(payload);
+        }
     }
 
     /// Sets the value of the event and notifies the receiver's awaiter, if there is one.
@@ -309,7 +328,7 @@ where
                 // concurrent test thread can observe and act on the SIGNALING state.
                 #[cfg(test)]
                 if HOOK_PARTICIPANT.get()
-                    && let Some(hook) = HOOK_SET_IN_SIGNALING.lock().clone()
+                    && let Some(hook) = HOOK_SET_IN_SIGNALING.lock().unwrap().clone()
                 {
                     hook();
                 }
@@ -455,7 +474,10 @@ where
     #[must_use]
     pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         #[cfg(debug_assertions)]
-        self.backtrace.lock().replace(capture_backtrace());
+        self.backtrace
+            .lock()
+            .expect(NEVER_POISONED)
+            .replace(capture_backtrace());
 
         // We use Acquire because we are (depending on the state) acquiring the synchronization
         // block for `value` and/or `awaiter`.
@@ -497,7 +519,7 @@ where
         // state before we attempt the CAS below.
         #[cfg(test)]
         if HOOK_PARTICIPANT.get()
-            && let Some(hook) = HOOK_POLL_BOUND_PRE_CAS.lock().clone()
+            && let Some(hook) = HOOK_POLL_BOUND_PRE_CAS.lock().unwrap().clone()
         {
             hook();
         }
@@ -619,7 +641,7 @@ where
         // state before we attempt the CAS below.
         #[cfg(test)]
         if HOOK_PARTICIPANT.get()
-            && let Some(hook) = HOOK_POLL_AWAITING_PRE_CAS.lock().clone()
+            && let Some(hook) = HOOK_POLL_AWAITING_PRE_CAS.lock().unwrap().clone()
         {
             hook();
         }
@@ -762,7 +784,11 @@ where
         let event = unsafe { event_maybe.unwrap_unchecked() };
 
         #[cfg(debug_assertions)]
-        event.backtrace.lock().replace(capture_backtrace());
+        event
+            .backtrace
+            .lock()
+            .expect(NEVER_POISONED)
+            .replace(capture_backtrace());
 
         // The receiver (who is calling this) may still own the waker if the waker has not
         // been used. If this is the case, we need to destroy the waker before proceeding.
@@ -922,6 +948,7 @@ impl<T: Send + 'static> fmt::Debug for Event<T> {
 )]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
     use std::sync::Barrier;
     use std::task::Poll;
     use std::{task, thread};
@@ -1785,18 +1812,19 @@ mod tests {
     /// Installs a hook closure and runs the test body while holding the
     /// serialization mutex. The hook is always removed on exit.
     fn with_hook(hook: &Mutex<Option<Arc<HookFn>>>, closure: Arc<HookFn>, body: impl FnOnce()) {
-        struct ClearOnDrop<'a>(&'a Mutex<Option<Arc<HookFn>>>);
-        impl Drop for ClearOnDrop<'_> {
-            fn drop(&mut self) {
-                *self.0.lock() = None;
-            }
+        let guard = HOOK_SERIALIZATION_MUTEX.lock().unwrap();
+        *hook.lock().unwrap() = Some(closure);
+
+        // We catch panics from the test body so that we can clean up the hook and
+        // drop the serialization guard while not panicking, preventing mutex poisoning.
+        let result = catch_unwind(AssertUnwindSafe(body));
+
+        *hook.lock().unwrap() = None;
+        drop(guard);
+
+        if let Err(payload) = result {
+            resume_unwind(payload);
         }
-
-        let _guard = HOOK_SERIALIZATION_MUTEX.lock();
-        *hook.lock() = Some(closure);
-        let _clear = ClearOnDrop(hook);
-
-        body();
     }
 
     struct BarrierHook {

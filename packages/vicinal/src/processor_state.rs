@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use event_listener::Event;
 use events_once::EventLake;
 use infinity_pool::{BlindPool, BlindPooledMut};
-use parking_lot::Mutex;
+use std::sync::Mutex;
 
 use crate::VicinalTask;
 
@@ -80,8 +80,8 @@ mod tests {
     fn new_creates_empty_queues() {
         let state = ProcessorState::new();
 
-        assert!(state.urgent_queue.lock().pop_front().is_none());
-        assert!(state.regular_queue.lock().pop_front().is_none());
+        assert!(state.urgent_queue.lock().unwrap().pop_front().is_none());
+        assert!(state.regular_queue.lock().unwrap().pop_front().is_none());
     }
 
     #[test]

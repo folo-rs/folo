@@ -4,8 +4,9 @@ use std::collections::VecDeque;
 use std::sync::atomic::{self, AtomicBool, Ordering};
 
 use infinity_pool::BlindPooledMut;
-use parking_lot::Mutex;
+use std::sync::Mutex;
 
+use crate::NEVER_POISONED;
 use crate::VicinalTask;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,13 +46,13 @@ impl<'a> WorkerCore<'a> {
             return IterationResult::Shutdown;
         }
 
-        let task = self.urgent_queue.lock().pop_front();
+        let task = self.urgent_queue.lock().expect(NEVER_POISONED).pop_front();
         if let Some(mut task) = task {
             task.as_pin_mut().call();
             return IterationResult::ExecutedUrgent;
         }
 
-        let task = self.regular_queue.lock().pop_front();
+        let task = self.regular_queue.lock().expect(NEVER_POISONED).pop_front();
         if let Some(mut task) = task {
             task.as_pin_mut().call();
             return IterationResult::ExecutedRegular;
@@ -130,7 +131,7 @@ mod tests {
         let shutdown = AtomicBool::new(false);
 
         let task = pool.insert(CountingTask::new(&COUNTER));
-        urgent.lock().push_back(task.cast_vicinal_task());
+        urgent.lock().unwrap().push_back(task.cast_vicinal_task());
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
 
@@ -152,8 +153,14 @@ mod tests {
 
         let urgent_task = pool.insert(CountingTask::new(&URGENT_COUNTER));
         let regular_task = pool.insert(CountingTask::new(&REGULAR_COUNTER));
-        urgent.lock().push_back(urgent_task.cast_vicinal_task());
-        regular.lock().push_back(regular_task.cast_vicinal_task());
+        urgent
+            .lock()
+            .unwrap()
+            .push_back(urgent_task.cast_vicinal_task());
+        regular
+            .lock()
+            .unwrap()
+            .push_back(regular_task.cast_vicinal_task());
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
 
@@ -174,7 +181,7 @@ mod tests {
         let shutdown = AtomicBool::new(false);
 
         let task = pool.insert(CountingTask::new(&COUNTER));
-        regular.lock().push_back(task.cast_vicinal_task());
+        regular.lock().unwrap().push_back(task.cast_vicinal_task());
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
 
@@ -193,7 +200,7 @@ mod tests {
         let shutdown = AtomicBool::new(true);
 
         let task = pool.insert(CountingTask::new(&COUNTER));
-        regular.lock().push_back(task.cast_vicinal_task());
+        regular.lock().unwrap().push_back(task.cast_vicinal_task());
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
 

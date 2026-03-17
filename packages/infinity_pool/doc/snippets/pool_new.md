@@ -1,1 +1,0 @@
-Creates a new pool with the default configuration.
