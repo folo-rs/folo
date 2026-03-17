@@ -614,6 +614,14 @@ Package dependencies of UI tests must be excluded from `udeps` scanner logic via
 Tests that use `#[should_panic]` or use `Display` output of error types must not check for specific
 panic or error messages - these messages are not an API contract and may change at any time.
 
+Exceptions where checking for a specific message is acceptable:
+
+* **Canary substrings**: checking that a panic message contains a stable keyword (e.g.
+  `#[should_panic(expected = "overflow")]`) when the keyword is inherent to the scenario and
+  unlikely to be removed by refactoring.
+* **Pass-through verification**: checking the exact panic message when the test verifies that a
+  panic is forwarded without tampering (e.g. through `catch_unwind` + `resume_unwind`).
+
 This only pertains to error messages - non-error outputs of `Display` should still be tested.
 
 # Type names
@@ -655,3 +663,14 @@ Avoid unnecessary and repetitive prefixes and suffixes.
 For example:
 
 * Builder methods are just a noun. It is `FooBuilder::bar(value)` not `FooBuilder::with_bar(value)`.
+
+# Creating GitHub pull requests
+
+When creating PRs with `gh pr create`, do not pass the `--body` flag with an inline string because
+PowerShell mangles backticks and special characters. Instead, write the PR body to a temporary file
+and use `--body-file path/to/file.md`.
+
+# Addressing pull request review comments
+
+When addressing PR review comments, reply to each comment thread with the disposition (what you
+did to address it) and mark the thread as resolved after pushing the commit that addresses it.

@@ -19,11 +19,58 @@ miri FILTER="":
 
 [group('testing')]
 [script]
-miri-harder FILTER="":
+miri-harder SHARD="" FILTER="":
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    $env:MIRIFLAGS = "-Zmiri-many-seeds=..64"
+    $totalSeeds = 64
+    $shard = "{{ SHARD }}"
+
+    if ($shard -eq "") {
+        $seedRange = "..$totalSeeds"
+    } else {
+        $parts = $shard -split "/"
+
+        if ($parts.Length -ne 2) {
+            Write-Error "Invalid SHARD value '$shard'. Expected format 'N/M'."
+            exit 1
+        }
+
+        $shardIndex = 0
+        $shardCount = 0
+        if (-not [int]::TryParse($parts[0], [ref]$shardIndex) -or -not [int]::TryParse($parts[1], [ref]$shardCount)) {
+            Write-Error "Invalid SHARD value '$shard'. N and M must be integers in 'N/M'."
+            exit 1
+        }
+
+        if ($shardCount -le 0) {
+            Write-Error "Invalid SHARD value '$shard'. M must be a positive integer in 'N/M'."
+            exit 1
+        }
+
+        if ($shardIndex -lt 1 -or $shardIndex -gt $shardCount) {
+            Write-Error "Invalid SHARD value '$shard'. N must satisfy 1 <= N <= M in 'N/M'."
+            exit 1
+        }
+
+        $seedsPerShard = [math]::Floor($totalSeeds / $shardCount)
+        if ($seedsPerShard -lt 1) {
+            Write-Error "Invalid SHARD value '$shard'. Too many shards for $totalSeeds seeds."
+            exit 1
+        }
+
+        $start = ($shardIndex - 1) * $seedsPerShard
+        if ($shardIndex -eq $shardCount) {
+            # Last shard picks up any remainder from uneven division.
+            $end = $totalSeeds
+        } else {
+            $end = $shardIndex * $seedsPerShard
+        }
+        $seedRange = "$start..$end"
+    }
+
+    $env:MIRIFLAGS = "-Zmiri-many-seeds=$seedRange"
+    Write-Host "Running miri-harder with seed range: $seedRange"
     cargo +$env:RUST_NIGHTLY miri test {{ target_package }} --no-fail-fast --all-features --lib {{ FILTER }} --locked -- --quiet
 
 [group('testing')]
@@ -62,18 +109,22 @@ test-docs FILTER="":
         # Workspace-wide doctests - run normally
         cargo +$env:RUST_MSRV test --all-features --doc {{ FILTER }} --locked
     } else {
-        # Single package - check if it's a library crate
-        $package_name = $target_package_var -replace "^ -p ", ""
-        $lib_path = "packages/$package_name/src/lib.rs"
-        
-        if (Test-Path $lib_path) {
-            # Library crate - run doctests
-            cargo +$env:RUST_MSRV test {{ target_package }} --all-features --doc {{ FILTER }} --locked
-        } else {
-            # Binary-only crate - skip doctests because Cargo expects library targets for doctests.
-            # Binary crates (with only main.rs) cannot contain doctests, so running `cargo test --doc`
-            # on them results in an error rather than gracefully running zero tests.
-            Write-Host "Skipping doctests for binary-only package: $package_name"
+        # One or more packages specified via -p flags. We need to check each package
+        # individually because binary-only crates do not support doctests.
+        $package_names = "{{ package }}".Split(" ", [StringSplitOptions]::RemoveEmptyEntries)
+
+        foreach ($pkg in $package_names) {
+            $lib_path = "packages/$pkg/src/lib.rs"
+
+            if (Test-Path $lib_path) {
+                cargo +$env:RUST_MSRV test -p $pkg --all-features --doc {{ FILTER }} --locked
+            } else {
+                # Binary-only crate - skip doctests because Cargo expects library targets
+                # for doctests. Binary crates (with only main.rs) cannot contain doctests,
+                # so running `cargo test --doc` on them results in an error rather than
+                # gracefully running zero tests.
+                Write-Host "Skipping doctests for binary-only package: $pkg"
+            }
         }
     }
 
@@ -99,7 +150,8 @@ run-examples:
         $workspace_members = Get-ChildItem -Path "packages" -Directory | Where-Object { Test-Path (Join-Path $_.FullName "Cargo.toml") }
         $packages_to_process = $workspace_members | ForEach-Object { $_.Name }
     } else {
-        $packages_to_process = @("{{ package }}")
+        # Support space-separated package lists (e.g. from cargo-delta output).
+        $packages_to_process = "{{ package }}".Split(" ", [StringSplitOptions]::RemoveEmptyEntries)
     }
     
     Write-Host "Running examples for packages: $($packages_to_process -join ', ')"
@@ -115,6 +167,17 @@ run-examples:
             continue
         }
         
+        # Pre-compile all examples for this package so compilation time does not eat into the
+        # per-example execution timeout. On slow CI runners, first-time compilation can exceed the
+        # timeout even though the example itself exits instantly.
+        Write-Host "Building examples for package '$pkg'..." -ForegroundColor DarkGray
+        $env:IS_TESTING = "1"
+        cargo build --package $pkg --examples --all-features --locked
+        if ($LASTEXITCODE -ne 0) {
+            $failures += "$pkg::* (build failed)"
+            continue
+        }
+
         # Find .rs files directly in examples directory
         $example_files = Get-ChildItem -Path $examples_dir -Filter "*.rs" | Where-Object { $_.Name -ne "mod.rs" }
         

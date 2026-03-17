@@ -2,11 +2,14 @@ use std::any::{Any, TypeId, type_name};
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
 use std::fmt;
+#[cfg(debug_assertions)]
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use hash_hasher::HashedMap;
-use parking_lot::Mutex;
 
+use crate::NEVER_POISONED;
 use crate::{EventPool, PooledReceiver, PooledSender};
 
 /// Rents out thread-safe events of different payloads.
@@ -78,7 +81,7 @@ impl EventLake {
     pub fn rent<T: Send + 'static>(&self) -> (PooledSender<T>, PooledReceiver<T>) {
         let type_id = TypeId::of::<T>();
 
-        let mut pools = self.core.pools.lock();
+        let mut pools = self.core.pools.lock().expect(NEVER_POISONED);
 
         let entry = pools
             .entry(type_id)
@@ -95,14 +98,14 @@ impl EventLake {
     /// Returns `true` if no events have currently been rented from the lake.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        let pools = self.core.pools.lock();
+        let pools = self.core.pools.lock().expect(NEVER_POISONED);
         pools.values().all(|x| x.is_empty())
     }
 
     /// Returns the number of events that have currently been rented from the lake.
     #[must_use]
     pub fn len(&self) -> usize {
-        let pools = self.core.pools.lock();
+        let pools = self.core.pools.lock().expect(NEVER_POISONED);
         pools.values().map(|x| x.len()).sum()
     }
 
@@ -116,10 +119,27 @@ impl EventLake {
     /// in the past.
     #[cfg(debug_assertions)]
     pub fn inspect_awaiters(&self, mut f: impl FnMut(&Backtrace)) {
-        let pools = self.core.pools.lock();
+        let pools = self.core.pools.lock().expect(NEVER_POISONED);
 
+        let mut panic_payload = None;
         for entry in pools.values() {
-            entry.inspect_awaiters(&mut f);
+            // We catch panics from the user closure to drop the pools guard cleanly,
+            // preventing mutex poisoning.
+            // AssertUnwindSafe: only covers `&mut f` (inherently !UnwindSafe due to
+            // &mut). The user closure itself determines unwind safety of captured state.
+            let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                entry.inspect_awaiters(&mut f);
+            }));
+            if let Err(payload) = result {
+                panic_payload = Some(payload);
+                break;
+            }
+        }
+
+        drop(pools);
+
+        if let Some(payload) = panic_payload {
+            panic::resume_unwind(payload);
         }
     }
 }
@@ -319,5 +339,21 @@ mod tests {
         });
 
         assert_eq!(call_count, 1);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "intentional panic to verify pass-through")]
+    fn inspect_awaiters_propagates_panic_from_closure() {
+        let lake = EventLake::new();
+        let (_sender, receiver) = lake.rent::<i32>();
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = receiver.as_mut().poll(&mut cx);
+
+        lake.inspect_awaiters(|_| {
+            panic!("intentional panic to verify pass-through");
+        });
     }
 }

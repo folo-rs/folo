@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use tracing::trace;
 
+use crate::NEVER_POISONED;
 use crate::metrics::CLOCK;
 use crate::{JoinHandle, PoolInner, PooledCastVicinalTask, wrap_task};
 
@@ -168,13 +169,21 @@ impl Scheduler {
 
         // Push to the appropriate queue.
         if urgent {
-            state.urgent_queue.lock().push_back(dyn_task);
+            state
+                .urgent_queue
+                .lock()
+                .expect(NEVER_POISONED)
+                .push_back(dyn_task);
             trace!(
                 pool_id = self.inner.pool_id,
                 processor_id, "spawned urgent task"
             );
         } else {
-            state.regular_queue.lock().push_back(dyn_task);
+            state
+                .regular_queue
+                .lock()
+                .expect(NEVER_POISONED)
+                .push_back(dyn_task);
             trace!(
                 pool_id = self.inner.pool_id,
                 processor_id, "spawned regular task"
@@ -216,13 +225,21 @@ impl Scheduler {
 
         // Push to the appropriate queue.
         if urgent {
-            state.urgent_queue.lock().push_back(dyn_task);
+            state
+                .urgent_queue
+                .lock()
+                .expect(NEVER_POISONED)
+                .push_back(dyn_task);
             trace!(
                 pool_id = self.inner.pool_id,
                 processor_id, "spawned urgent fire-and-forget task"
             );
         } else {
-            state.regular_queue.lock().push_back(dyn_task);
+            state
+                .regular_queue
+                .lock()
+                .expect(NEVER_POISONED)
+                .push_back(dyn_task);
             trace!(
                 pool_id = self.inner.pool_id,
                 processor_id, "spawned fire-and-forget task"

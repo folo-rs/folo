@@ -2,17 +2,17 @@
 
 use std::any::type_name;
 use std::num::NonZero;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle as ThreadJoinHandle};
 use std::{fmt, mem, panic};
 
 use event_listener::{Listener, listener};
 use many_cpus::{ProcessorId, SystemHardware};
 use new_zealand::nz;
-use parking_lot::Mutex;
 use tracing::{debug, trace};
 
+use crate::NEVER_POISONED;
 use crate::{IterationResult, ProcessorRegistry, Scheduler, WorkerCore};
 
 /// Experimentally determined as providing good throughput under
@@ -53,7 +53,7 @@ pub(crate) struct PoolInner {
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl fmt::Debug for PoolInner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let handle_count = self.worker_handles.lock().len();
+        let handle_count = self.worker_handles.lock().expect(NEVER_POISONED).len();
 
         f.debug_struct(type_name::<Self>())
             .field("pool_id", &self.pool_id)
@@ -127,12 +127,12 @@ impl PoolInner {
         // before we acquire the lock below, exercising the re-check branch.
         #[cfg(test)]
         if HOOK_PARTICIPANT.get()
-            && let Some(hook) = HOOK_ENSURE_WORKERS_POST_SPAWN.lock().clone()
+            && let Some(hook) = HOOK_ENSURE_WORKERS_POST_SPAWN.lock().unwrap().clone()
         {
             hook();
         }
 
-        let mut worker_handles = self.worker_handles.lock();
+        let mut worker_handles = self.worker_handles.lock().expect(NEVER_POISONED);
 
         // Re-check shutdown flag under the lock to avoid race condition where
         // join_all_workers() runs concurrently and we add new handles after it
@@ -169,7 +169,7 @@ impl PoolInner {
         // ensure_workers_spawned() will not add any new handles to the list after
         // we release the lock (or if it does, it will see the shutdown flag and
         // return early).
-        let handles = mem::take(&mut *self.worker_handles.lock());
+        let handles = mem::take(&mut *self.worker_handles.lock().expect(NEVER_POISONED));
 
         for handle in handles {
             if let Err(payload) = handle.join() {
@@ -213,8 +213,8 @@ fn worker_loop(inner: &PoolInner, processor_id: ProcessorId, worker_index: u32) 
 
                 // Re-check after registering listener to avoid lost wakeups.
                 // Acquire ordering synchronizes with Release in signal_shutdown and task push.
-                if !state.urgent_queue.lock().is_empty()
-                    || !state.regular_queue.lock().is_empty()
+                if !state.urgent_queue.lock().expect(NEVER_POISONED).is_empty()
+                    || !state.regular_queue.lock().expect(NEVER_POISONED).is_empty()
                     || state.shutdown_flag.load(Ordering::Acquire)
                 {
                     continue;
@@ -353,6 +353,7 @@ impl PoolBuilder {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::num::NonZero;
+    use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -360,7 +361,6 @@ mod tests {
     use many_cpus::SystemHardware;
     use many_cpus::fake::HardwareBuilder;
     use new_zealand::nz;
-    use parking_lot::Mutex;
 
     use crate::Pool;
 
@@ -408,7 +408,7 @@ mod tests {
             registry: super::ProcessorRegistry::new(&hardware),
             hardware,
             workers_per_processor: nz!(1_u32),
-            worker_handles: Mutex::new(Vec::new()),
+            worker_handles: super::Mutex::new(Vec::new()),
             shutdown: AtomicBool::new(false),
         });
 
@@ -419,28 +419,29 @@ mod tests {
         // because the shutdown flag is already true.
         inner.ensure_workers_spawned(0);
 
-        assert!(inner.worker_handles.lock().is_empty());
+        assert!(inner.worker_handles.lock().unwrap().is_empty());
     }
 
     /// Installs a hook closure and runs the test body while holding the
     /// serialization mutex. The hook is always removed on exit.
     fn with_hook(
-        hook: &Mutex<Option<Arc<super::HookFn>>>,
+        hook: &super::Mutex<Option<Arc<super::HookFn>>>,
         closure: Arc<super::HookFn>,
         body: impl FnOnce(),
     ) {
-        struct ClearOnDrop<'a>(&'a Mutex<Option<Arc<super::HookFn>>>);
-        impl Drop for ClearOnDrop<'_> {
-            fn drop(&mut self) {
-                *self.0.lock() = None;
-            }
+        let guard = super::HOOK_SERIALIZATION_MUTEX.lock().unwrap();
+        *hook.lock().unwrap() = Some(closure);
+
+        // We catch panics from the test body so that we can clean up the hook and
+        // drop the serialization guard while not panicking, preventing mutex poisoning.
+        let result = catch_unwind(AssertUnwindSafe(body));
+
+        *hook.lock().unwrap() = None;
+        drop(guard);
+
+        if let Err(payload) = result {
+            resume_unwind(payload);
         }
-
-        let _guard = super::HOOK_SERIALIZATION_MUTEX.lock();
-        *hook.lock() = Some(closure);
-        let _clear = ClearOnDrop(hook);
-
-        body();
     }
 
     struct BarrierHook {
@@ -493,7 +494,7 @@ mod tests {
                     registry: super::ProcessorRegistry::new(&hardware),
                     hardware,
                     workers_per_processor: nz!(1_u32),
-                    worker_handles: Mutex::new(Vec::new()),
+                    worker_handles: super::Mutex::new(Vec::new()),
                     shutdown: AtomicBool::new(false),
                 });
 
@@ -521,7 +522,7 @@ mod tests {
                 spawner.join().unwrap();
 
                 // All handles should have been joined (none leaked).
-                assert!(inner.worker_handles.lock().is_empty());
+                assert!(inner.worker_handles.lock().unwrap().is_empty());
             });
         });
     }

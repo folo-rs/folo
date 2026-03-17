@@ -24,3 +24,14 @@ impl TimeSource for RustTimeSource {
         Instant::now()
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use super::*;
+
+    static_assertions::assert_impl_all!(RustPlatform: UnwindSafe, RefUnwindSafe);
+    static_assertions::assert_impl_all!(RustTimeSource: UnwindSafe, RefUnwindSafe);
+}

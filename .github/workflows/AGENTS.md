@@ -30,8 +30,10 @@ Split from the monolithic `just validate-local` into individual jobs:
   - test-docs
   - **docs** — Multi-platform because conditional compilation affects generated documentation
   - miri
-  - **miri-harder-events-once** / **miri-harder-infinity-pool** — Windows-only, `timeout-minutes: 120`
+  - **miri-harder-events-once** / **miri-harder-infinity-pool** — Windows-only, sharded
     - Runs Miri with 64 seeds per test (`-Zmiri-many-seeds=..64`) for select packages
+    - Sharded across parallel runners to reduce wall-clock time (4 shards for events_once,
+      8 shards for infinity_pool)
     - Very slow, so only run for specific packages on a single platform
   - **machete** — Multi-platform because conditional compilation affects dependency analysis
   - check-release
@@ -44,11 +46,20 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
 - **mutants** — `timeout-minutes: 90`
   - Runs mutation testing (very slow)
   
-- **run-examples** — `timeout-minutes: 30`
+- **run-examples** — `timeout-minutes: 90`
   - Executes all example binaries
   
-- **hack** — `timeout-minutes: 30`
+- **hack** — `timeout-minutes: 90`
   - Tests all feature combinations with `cargo hack --feature-powerset`
+
+### cache-warmup.yml
+
+A scheduled workflow that keeps GitHub Actions caches warm. GitHub evicts caches after
+7 days of inactivity, and a cold cache means every parallel validation job must independently
+compile all Rust dependencies from scratch (the setup-environment step becomes very expensive).
+This workflow runs once daily on all three platforms (ubuntu, macos, windows) to ensure the
+`shared-key: prerequisites` Rust cache is always populated. It also supports `workflow_dispatch`
+for manual cache warming after toolchain updates.
 
 ## Design Decisions
 
@@ -60,7 +71,7 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
 2. **Platform matrix considerations**:
    - `format-check` is single-platform (Ubuntu) to save resources
    - `docs` and `machete` remain multi-platform due to conditional compilation differences
-   - `miri-harder-*` jobs are Windows-only due to high cost; one job per package
+   - `miri-harder-*` jobs are Windows-only due to high cost; sharded across parallel runners
    - All other checks run on 3 platforms (ubuntu, macos, windows)
 
 3. **Timeouts**:

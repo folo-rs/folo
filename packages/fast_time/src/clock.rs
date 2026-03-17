@@ -162,9 +162,11 @@ impl Default for Clock {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use super::*;
 
-    static_assertions::assert_impl_all!(Clock: Clone, Send);
+    static_assertions::assert_impl_all!(Clock: Clone, Send, UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn now_is_approximately_now() {

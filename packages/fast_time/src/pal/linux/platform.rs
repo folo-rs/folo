@@ -26,3 +26,13 @@ impl Platform for BuildTargetPlatform {
         Self::TimeSource::new(self.bindings.clone())
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use super::*;
+
+    static_assertions::assert_impl_all!(BuildTargetPlatform: UnwindSafe, RefUnwindSafe);
+}

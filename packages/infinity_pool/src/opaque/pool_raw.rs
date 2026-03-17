@@ -14,7 +14,15 @@ use crate::{
 /// time. All values in the pool remain pinned for their entire lifetime.
 ///
 /// The pool automatically expands its capacity when needed.
-#[doc = include_str!("../../doc/snippets/raw_pool_is_potentially_thread_safe.md")]
+/// # Thread safety
+///
+/// The pool is nominally single-threaded because the compiler cannot know what types of objects
+/// are stored inside a given instance, so it must default to assuming they are single-threaded
+/// objects.
+///
+/// If all the objects inserted are `Send` then the owner of the pool is allowed to treat
+/// the pool itself as thread-safe (`Send` and `Sync`) but must do so using unsafe code,
+/// such as via a wrapper type that explicitly implements `Send` and `Sync`.
 ///
 /// # Example: unique object ownership
 ///
@@ -95,7 +103,7 @@ pub struct RawOpaquePool {
 }
 
 impl RawOpaquePool {
-    #[doc = include_str!("../../doc/snippets/pool_builder.md")]
+    /// Starts configuring and creating a new instance of the pool.
     #[cfg_attr(test, mutants::skip)] // Gets mutated to alternate version of itself.
     pub fn builder() -> RawOpaquePoolBuilder {
         RawOpaquePoolBuilder::new()
@@ -146,21 +154,27 @@ impl RawOpaquePool {
         }
     }
 
-    #[doc = include_str!("../../doc/snippets/opaque_pool_layout.md")]
+    /// The layout of objects stored in this pool.
+    ///
+    /// All inserted objects must match this layout.
     #[must_use]
     #[inline]
     pub fn object_layout(&self) -> Layout {
         self.slab_layout.object_layout()
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_len.md")]
+    /// The number of objects currently in the pool.
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
         self.length
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_capacity.md")]
+    /// The total capacity of the pool.
+    ///
+    /// This is the maximum number of objects (including current contents) that the pool can contain
+    /// without capacity extension. The pool will automatically extend its capacity if more than
+    /// this many objects are inserted.
     #[must_use]
     #[inline]
     pub fn capacity(&self) -> usize {
@@ -171,14 +185,18 @@ impl RawOpaquePool {
             .wrapping_mul(self.slab_layout.capacity().get())
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_is_empty.md")]
+    /// Whether the pool contains zero objects.
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.length == 0
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_reserve.md")]
+    /// Ensures that the pool has capacity for at least `additional` more objects.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new capacity would exceed the size of virtual memory (`usize::MAX`).
     pub fn reserve(&mut self, additional: usize) {
         let required_capacity = self
             .len()
@@ -202,7 +220,10 @@ impl RawOpaquePool {
         self.vacancy_tracker.update_slab_count(self.slabs.len());
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_shrink_to_fit.md")]
+    /// Drops unused pool capacity to reduce memory usage.
+    ///
+    /// There is no guarantee that any unused capacity can be dropped. The exact outcome depends
+    /// on the specific pool structure and which objects remain in the pool.
     #[cfg_attr(test, mutants::skip)] // Vacant slot cache mutation - hard to test. Revisit later.
     pub fn shrink_to_fit(&mut self) {
         // Find the last non-empty slab by scanning from the end
@@ -233,10 +254,10 @@ impl RawOpaquePool {
         self.vacancy_tracker.update_slab_count(self.slabs.len());
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_insert.md")]
+    /// Inserts an object into the pool and returns a handle to it.
     ///
     /// # Panics
-    #[doc = include_str!("../../doc/snippets/panic_on_pool_t_layout_mismatch.md")]
+    /// Panics if the layout of `T` does not match the object layout of the pool.
     #[inline]
     #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert<T: 'static>(&mut self, value: T) -> RawPooledMut<T> {
@@ -250,9 +271,9 @@ impl RawOpaquePool {
         unsafe { self.insert_unchecked(value) }
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_insert.md")]
+    /// Inserts an object into the pool and returns a handle to it.
     /// # Safety
-    #[doc = include_str!("../../doc/snippets/safety_pool_t_layout_must_match.md")]
+    /// The caller must ensure that the layout of `T` matches the pool's object layout.
     #[inline]
     pub unsafe fn insert_unchecked<T: 'static>(&mut self, value: T) -> RawPooledMut<T> {
         // Implement insert() in terms of insert_with() to reduce logic duplication.
@@ -264,7 +285,15 @@ impl RawOpaquePool {
         }
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
+    /// Inserts an object into the pool via closure and returns a handle to it.
+    ///
+    /// This method allows the caller to partially initialize the object, skipping any `MaybeUninit`
+    /// fields that are intentionally not initialized at insertion time. This can make insertion of
+    /// objects containing `MaybeUninit` fields faster, although requires unsafe code to implement.
+    ///
+    /// This method is NOT faster than `insert()` for fully initialized objects.
+    /// Prefer `insert()` for a better safety posture if you do not intend to
+    /// skip initialization of any `MaybeUninit` fields.
     ///
     /// # Example
     ///
@@ -299,10 +328,11 @@ impl RawOpaquePool {
     /// ```
     ///
     /// # Panics
-    #[doc = include_str!("../../doc/snippets/panic_on_pool_t_layout_mismatch.md")]
+    /// Panics if the layout of `T` does not match the object layout of the pool.
     ///
     /// # Safety
-    #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
+    /// The closure must correctly initialize the object. All fields that
+    /// are not `MaybeUninit` must be initialized when the closure returns.
     #[inline]
     pub unsafe fn insert_with<T, F>(&mut self, f: F) -> RawPooledMut<T>
     where
@@ -319,14 +349,24 @@ impl RawOpaquePool {
         unsafe { self.insert_with_unchecked(f) }
     }
 
-    #[doc = include_str!("../../doc/snippets/pool_insert_with.md")]
+    /// Inserts an object into the pool via closure and returns a handle to it.
+    ///
+    /// This method allows the caller to partially initialize the object, skipping any `MaybeUninit`
+    /// fields that are intentionally not initialized at insertion time. This can make insertion of
+    /// objects containing `MaybeUninit` fields faster, although requires unsafe code to implement.
+    ///
+    /// This method is NOT faster than `insert()` for fully initialized objects.
+    /// Prefer `insert()` for a better safety posture if you do not intend to
+    /// skip initialization of any `MaybeUninit` fields.
     ///
     /// This unchecked variant of the method skips the layout verification step, requiring
     /// the caller to ensure that the object has a matching layout with the pool.
     ///
     /// # Safety
-    #[doc = include_str!("../../doc/snippets/safety_pool_t_layout_must_match.md")]
-    #[doc = include_str!("../../doc/snippets/safety_closure_must_initialize_object.md")]
+    /// The caller must ensure that the layout of `T` matches the pool's object layout.
+    ///
+    /// The closure must correctly initialize the object. All fields that
+    /// are not `MaybeUninit` must be initialized when the closure returns.
     pub unsafe fn insert_with_unchecked<T, F>(&mut self, f: F) -> RawPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
@@ -362,7 +402,11 @@ impl RawOpaquePool {
         RawPooledMut::new(slab_index, slab_handle)
     }
 
-    #[doc = include_str!("../../doc/snippets/raw_pool_remove.md")]
+    /// Removes an object from the pool, dropping the object.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the handle is for an object currently present in this pool.
     pub unsafe fn remove<T: ?Sized>(&mut self, handle: impl Into<RawPooled<T>>) {
         let handle = handle.into();
 
@@ -392,7 +436,11 @@ impl RawOpaquePool {
         }
     }
 
-    #[doc = include_str!("../../doc/snippets/raw_pool_remove_unpin.md")]
+    /// Removes an object from the pool and returns the object.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the handle is for an object currently present in this pool.
     #[must_use]
     pub unsafe fn remove_unpin<T: Unpin>(&mut self, handle: impl Into<RawPooled<T>>) -> T {
         let handle = handle.into();
@@ -430,7 +478,10 @@ impl RawOpaquePool {
         value
     }
 
-    #[doc = include_str!("../../doc/snippets/raw_pool_iter.md")]
+    /// Returns an iterator over all objects in the pool.
+    ///
+    /// The iterator yields untyped pointers (`NonNull<()>`) to the objects stored in the pool.
+    /// It is the caller's responsibility to cast these pointers to the appropriate type.
     #[must_use]
     #[inline]
     pub fn iter(&self) -> RawOpaquePoolIterator<'_> {

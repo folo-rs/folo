@@ -5,11 +5,14 @@ use std::cell::UnsafeCell;
 use std::fmt;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
+#[cfg(debug_assertions)]
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use infinity_pool::RawPinnedPool;
-use parking_lot::Mutex;
 
+use crate::NEVER_POISONED;
 use crate::{Event, PooledReceiver, PooledRef, PooledSender, ReceiverCore, SenderCore};
 
 /// A pool of reusable one-time thread-safe events.
@@ -70,7 +73,7 @@ impl<T: Send + 'static> EventPool<T> {
     #[must_use]
     pub fn rent(&self) -> (PooledSender<T>, PooledReceiver<T>) {
         let storage = {
-            let mut pool = self.core.pool.lock();
+            let mut pool = self.core.pool.lock().expect(NEVER_POISONED);
 
             #[expect(
                 clippy::multiple_unsafe_ops_per_block,
@@ -109,7 +112,7 @@ impl<T: Send + 'static> EventPool<T> {
     /// Returns `true` if no events have currently been rented from the pool.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        let pool = self.core.pool.lock();
+        let pool = self.core.pool.lock().expect(NEVER_POISONED);
 
         pool.is_empty()
     }
@@ -117,7 +120,7 @@ impl<T: Send + 'static> EventPool<T> {
     /// Returns the number of events that have currently been rented from the pool.
     #[must_use]
     pub fn len(&self) -> usize {
-        let pool = self.core.pool.lock();
+        let pool = self.core.pool.lock().expect(NEVER_POISONED);
 
         pool.len()
     }
@@ -132,8 +135,9 @@ impl<T: Send + 'static> EventPool<T> {
     /// in the past.
     #[cfg(debug_assertions)]
     pub fn inspect_awaiters(&self, mut f: impl FnMut(&Backtrace)) {
-        let pool = self.core.pool.lock();
+        let pool = self.core.pool.lock().expect(NEVER_POISONED);
 
+        let mut panic_payload = None;
         for event_ptr in pool.iter() {
             // SAFETY: The pool remains alive for the duration of this function call, satisfying
             // the lifetime requirement. The pointer is valid as it comes from the pool's iterator.
@@ -150,11 +154,27 @@ impl<T: Send + 'static> EventPool<T> {
             // SAFETY: We only ever create shared references, never exclusive ones.
             let event = unsafe { event.assume_init_ref() };
 
-            event.inspect_awaiter(|bt| {
-                if let Some(bt) = bt {
-                    f(bt);
-                }
-            });
+            // We catch panics from the user closure to drop the pool guard cleanly,
+            // preventing mutex poisoning.
+            // AssertUnwindSafe: only covers `&mut f` (inherently !UnwindSafe due to
+            // &mut). The user closure itself determines unwind safety of captured state.
+            let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                event.inspect_awaiter(|bt| {
+                    if let Some(bt) = bt {
+                        f(bt);
+                    }
+                });
+            }));
+            if let Err(payload) = result {
+                panic_payload = Some(payload);
+                break;
+            }
+        }
+
+        drop(pool);
+
+        if let Some(payload) = panic_payload {
+            panic::resume_unwind(payload);
         }
     }
 }
@@ -726,5 +746,21 @@ mod tests {
 
         let poll_result = receiver.as_mut().poll(&mut cx);
         assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "intentional panic to verify pass-through")]
+    fn inspect_awaiters_propagates_panic_from_closure() {
+        let pool = EventPool::<i32>::new();
+        let (_sender, receiver) = pool.rent();
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = receiver.as_mut().poll(&mut cx);
+
+        pool.inspect_awaiters(|_bt| {
+            panic!("intentional panic to verify pass-through");
+        });
     }
 }
