@@ -23,13 +23,13 @@ pub(crate) struct WakerMeta {
     ref_count: AtomicUsize,
 
     // Per-slot activation flag. Set by the waker when the future is woken,
-    // cleared by drive_inner when the future is polled. Represented as an
+    // cleared by poll() when the future is polled. Represented as an
     // AtomicUsize with strict 0/1 semantics: 0 = not activated, 1 = activated.
     pub(crate) activated: AtomicUsize,
 
     // Shared parent waker, one per FutureDequeCore instance. All slots in the same deque
     // share this Arc, ensuring that parent waker changes propagate automatically without
-    // per-slot iteration. Initialized to Waker::noop() and updated in drive() when the
+    // per-slot iteration. Initialized to Waker::noop() and updated in poll() when the
     // executor provides a real waker.
     shared_parent: Arc<Mutex<Waker>>,
 

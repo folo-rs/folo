@@ -13,6 +13,10 @@ Both types poll active futures in deterministic front-to-back order and allow re
 popped from either end with strict deque semantics (only the actual front or back item can
 be popped, and only if it has completed).
 
+Both types implement `Future<Output = ()>`, returning `Poll::Ready(())` when all contained
+futures have completed (or the deque is empty). This enables `.await` to wait for all
+futures to finish before popping results.
+
 With the `futures-stream` feature (enabled by default), both types also implement
 `futures_core::Stream`, yielding completed results from the front.
 

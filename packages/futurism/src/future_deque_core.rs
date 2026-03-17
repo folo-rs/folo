@@ -121,7 +121,10 @@ impl<T, H> FutureDequeCore<T, H> {
 
 impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
     /// Polls all activated futures front-to-back, transitioning completed ones to ready.
-    pub(crate) fn drive(&mut self, cx: &Context<'_>) {
+    ///
+    /// Returns `Poll::Ready(())` when no pending futures remain (all have completed or the
+    /// deque is empty), `Poll::Pending` otherwise.
+    pub(crate) fn poll(&mut self, cx: &Context<'_>) -> Poll<()> {
         // Update the shared parent waker if it has changed. All slot wakers read
         // the parent through this shared location, so a single update here ensures
         // every future's waker uses the latest parent without per-slot iteration.
@@ -168,11 +171,19 @@ impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
                 }
             }
         }
+
+        if self.slots.iter().any(|s| matches!(s, Slot::Pending { .. })) {
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        }
     }
 
-    /// Drives all futures and pops the front if ready.
+    /// Polls all futures and pops the front if ready.
     pub(crate) fn poll_next(&mut self, cx: &Context<'_>) -> Poll<Option<T>> {
-        self.drive(cx);
+        // The overall readiness returned by poll() is not relevant here because
+        // poll_next has its own return semantics based on the front slot state.
+        let _readiness = self.poll(cx);
 
         if let Some(value) = self.pop_front() {
             Poll::Ready(Some(value))
@@ -183,9 +194,11 @@ impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
         }
     }
 
-    /// Drives all futures and pops the back if ready.
+    /// Polls all futures and pops the back if ready.
     pub(crate) fn poll_back(&mut self, cx: &Context<'_>) -> Poll<Option<T>> {
-        self.drive(cx);
+        // The overall readiness returned by poll() is not relevant here because
+        // poll_back has its own return semantics based on the back slot state.
+        let _readiness = self.poll(cx);
 
         if let Some(value) = self.pop_back() {
             Poll::Ready(Some(value))
@@ -198,7 +211,7 @@ impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
 }
 
 impl<T, H> Drop for FutureDequeCore<T, H> {
-    // When a pending slot is dropped normally (e.g. via mem::replace in drive()), its
+    // When a pending slot is dropped normally (e.g. via mem::replace in poll()), its
     // waker metadata reference is released explicitly. This Drop impl handles the case
     // where the entire deque is dropped with pending slots still present — it ensures
     // metadata references are released so the waker metadata pool entries can be freed.
@@ -242,7 +255,7 @@ mod tests {
 
     /// Starts a background thread (at most once) that terminates the process
     /// after 10 seconds. Prevents tests from hanging indefinitely on mutations
-    /// that break the drive or poll loop.
+    /// that break the poll loop.
     #[allow(clippy::exit, reason = "watchdog must terminate the process on hang")]
     fn watchdog() {
         // The watchdog is only needed for mutation testing, which runs under
@@ -395,7 +408,7 @@ mod tests {
         deque.push_back(CountdownFuture::pending(2, 10));
         deque.push_back(CountdownFuture::ready(20));
 
-        // Drive all futures by calling poll_next via the stream.
+        // Poll all futures by calling poll_next via the stream.
         // The front is not ready yet, so stream returns Pending (internally).
         // But pop_back should return the completed back future.
         let waker = Waker::noop();
@@ -456,7 +469,7 @@ mod tests {
             deque.push_back(CountdownFuture::pending(3, 100));
             deque.push_back(CountdownFuture::pending(1, 200));
 
-            // The stream will drive futures until the front one completes.
+            // The stream will poll futures until the front one completes.
             assert_eq!(deque.next().await, Some(100));
             assert_eq!(deque.next().await, Some(200));
         });
@@ -626,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn local_pop_front_returns_value_after_drive() {
+    fn local_pop_front_returns_value_after_poll() {
         let mut deque = LocalFutureDeque::new();
         deque.push_back(CountdownFuture::ready(10));
         deque.push_back(CountdownFuture::ready(20));
@@ -634,11 +647,11 @@ mod tests {
         let waker = Waker::noop();
         let cx = &mut Context::from_waker(waker);
 
-        // Drive and consume the front item via poll_next.
+        // Poll and consume the front item via poll_next.
         let result = deque.poll_front(cx);
         assert_eq!(result, Poll::Ready(Some(10)));
 
-        // The second item was also driven and is ready. Pop it manually.
+        // The second item was also polled and is ready. Pop it manually.
         assert_eq!(deque.pop_front(), Some(20));
     }
 
@@ -696,7 +709,7 @@ mod tests {
                 std::future::pending::<i32>().await
             });
 
-            // Drive once so the first future completes (becomes Ready).
+            // Poll once so the first future completes (becomes Ready).
             let waker = Waker::noop();
             let cx = &mut Context::from_waker(waker);
             let result = deque.poll_front(cx);
@@ -734,11 +747,11 @@ mod tests {
         let waker = Waker::noop();
         let cx = &mut Context::from_waker(waker);
 
-        // Drive and consume the front item via poll_next.
+        // Poll and consume the front item via poll_next.
         let result = deque.poll_front(cx);
         assert_eq!(result, Poll::Ready(Some(10)));
 
-        // The second item was also driven and is ready. Pop it manually.
+        // The second item was also polled and is ready. Pop it manually.
         assert_eq!(deque.pop_front(), Some(20));
     }
 
@@ -751,7 +764,7 @@ mod tests {
         let waker = Waker::noop();
         let cx = &mut Context::from_waker(waker);
 
-        // Drive: front future still pending, back future ready.
+        // Poll: front future still pending, back future ready.
         let result = deque.poll_front(cx);
         assert!(result.is_pending());
 
@@ -818,7 +831,7 @@ mod tests {
             sender.send(99);
         });
 
-        // block_on uses a different parent waker. drive() updates the shared
+        // block_on uses a different parent waker. poll() updates the shared
         // parent, so wake notifications from the slot waker reach the correct
         // executor.
         block_on(async {

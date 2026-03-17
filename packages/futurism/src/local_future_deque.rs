@@ -38,13 +38,19 @@ impl<T> FutureHandle<T> for LocalBlindPooledMut<dyn ErasedFuture<T>> {
 /// Like `FutureDeque`, it polls active futures in deterministic front-to-back order and
 /// allows results to be popped from either end with strict deque semantics.
 ///
-/// # Driving the deque
+/// # Polling the deque
 ///
-/// Before results can be popped, futures must be driven by calling [`drive`][Self::drive]
+/// Before results can be popped, futures must be polled by calling [`poll`][Self::poll]
 /// with a task context. This polls all activated futures and transitions completed ones to
-/// ready state.
+/// ready state. Returns `Poll::Ready(())` when all contained futures have completed (or
+/// the deque is empty), and `Poll::Pending` while any futures remain pending. Pushing new
+/// futures resets readiness back to pending.
 ///
-/// [`poll_front`][Self::poll_front] and [`poll_back`][Self::poll_back] combine driving with
+/// The deque also implements [`Future`], allowing `.await` to wait for all contained
+/// futures to complete. The deque may be polled again after returning `Poll::Ready(())`
+/// (e.g. after pushing new futures).
+///
+/// [`poll_front`][Self::poll_front] and [`poll_back`][Self::poll_back] combine polling with
 /// popping for convenience.
 ///
 /// With the `futures-stream` feature (enabled by default), `LocalFutureDeque` also
@@ -52,13 +58,10 @@ impl<T> FutureHandle<T> for LocalBlindPooledMut<dyn ErasedFuture<T>> {
 ///
 /// # Examples
 ///
-/// Using `poll_front` to drive and retrieve results:
+/// Using `poll_front` to poll and retrieve results:
 ///
 /// ```rust
-/// use std::{
-///     pin::Pin,
-///     task::{Context, Poll, Waker},
-/// };
+/// use std::task::{Context, Poll, Waker};
 ///
 /// use futurism::LocalFutureDeque;
 ///
@@ -75,10 +78,10 @@ impl<T> FutureHandle<T> for LocalBlindPooledMut<dyn ErasedFuture<T>> {
 /// assert_eq!(deque.poll_front(cx), Poll::Ready(None));
 /// ```
 ///
-/// Manually driving and popping from either end:
+/// Polling all futures to completion, then popping results:
 ///
 /// ```rust
-/// use std::task::{Context, Waker};
+/// use std::task::{Context, Poll, Waker};
 ///
 /// use futurism::LocalFutureDeque;
 ///
@@ -90,7 +93,7 @@ impl<T> FutureHandle<T> for LocalBlindPooledMut<dyn ErasedFuture<T>> {
 ///
 /// let waker = Waker::noop();
 /// let cx = &mut Context::from_waker(waker);
-/// deque.drive(cx);
+/// assert_eq!(deque.poll(cx), Poll::Ready(()));
 ///
 /// assert_eq!(deque.pop_back(), Some(3));
 /// assert_eq!(deque.pop_front(), Some(1));
@@ -125,15 +128,17 @@ impl<T> LocalFutureDeque<T> {
         self.core.push_front_handle(handle);
     }
 
-    /// Drives all active futures, polling each activated one front-to-back.
+    /// Polls all active futures, polling each activated one front-to-back.
     ///
     /// Futures that complete are transitioned to ready state and can be retrieved
     /// via [`pop_front`][Self::pop_front] or [`pop_back`][Self::pop_back].
-    pub fn drive(&mut self, cx: &Context<'_>) {
-        self.core.drive(cx);
+    ///
+    /// Returns `Poll::Ready(())` when no pending futures remain, `Poll::Pending` otherwise.
+    pub fn poll(&mut self, cx: &Context<'_>) -> Poll<()> {
+        self.core.poll(cx)
     }
 
-    /// Drives all active futures and pops the front result if ready.
+    /// Polls all active futures and pops the front result if ready.
     ///
     /// Returns `Poll::Ready(Some(value))` if the frontmost future has completed,
     /// `Poll::Ready(None)` if the deque is empty, or `Poll::Pending` if all
@@ -142,7 +147,7 @@ impl<T> LocalFutureDeque<T> {
         self.core.poll_next(cx)
     }
 
-    /// Drives all active futures and pops the back result if ready.
+    /// Polls all active futures and pops the back result if ready.
     ///
     /// Returns `Poll::Ready(Some(value))` if the backmost future has completed,
     /// `Poll::Ready(None)` if the deque is empty, or `Poll::Pending` if all
@@ -194,6 +199,18 @@ impl<T> fmt::Debug for LocalFutureDeque<T> {
     }
 }
 
+/// `LocalFutureDeque` implements [`Future`] to allow waiting for all contained futures to
+/// complete. `Poll::Ready(())` indicates that every future in the deque has finished
+/// (or the deque is empty). The deque may be polled again after returning `Ready`, for
+/// example after pushing new futures.
+impl<T> Future for LocalFutureDeque<T> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        self.get_mut().core.poll(cx)
+    }
+}
+
 #[cfg(feature = "futures-stream")]
 #[cfg_attr(docsrs, doc(cfg(feature = "futures-stream")))]
 impl<T> futures_core::Stream for LocalFutureDeque<T> {
@@ -209,14 +226,15 @@ impl<T> futures_core::Stream for LocalFutureDeque<T> {
 mod tests {
     use std::task::{Context, Poll, Waker};
 
-    use static_assertions::assert_not_impl_any;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
     assert_not_impl_any!(LocalFutureDeque<u32>: Send, Sync);
+    assert_impl_all!(LocalFutureDeque<u32>: Unpin, Future);
 
     #[test]
-    fn drive_then_pop_both_ends() {
+    fn poll_then_pop_both_ends() {
         let mut deque = LocalFutureDeque::new();
         deque.push_back(async { 10 });
         deque.push_back(async { 20 });
@@ -225,7 +243,7 @@ mod tests {
         let waker = Waker::noop();
         let cx = &mut Context::from_waker(waker);
 
-        deque.drive(cx);
+        assert_eq!(deque.poll(cx), Poll::Ready(()));
 
         assert_eq!(deque.pop_back(), Some(30));
         assert_eq!(deque.pop_front(), Some(10));

@@ -16,6 +16,10 @@
 //! to be popped from either end with strict deque semantics (only the actual front or back
 //! item can be popped, and only if it has completed).
 //!
+//! Both types implement [`Future<Output = ()>`][std::future::Future], returning
+//! `Poll::Ready(())` when all contained futures have completed (or the deque is empty).
+//! This enables `.await` to wait for all futures to finish before popping results.
+//!
 //! # Basic usage
 //!
 //! ```rust

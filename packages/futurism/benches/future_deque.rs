@@ -71,7 +71,7 @@ fn bench_local_future_deque(c: &mut Criterion) {
             }
             let waker = Waker::noop();
             let cx = &mut Context::from_waker(waker);
-            // Drive one round to poll all futures and activate the ones that
+            // Poll one round to poll all futures and activate the ones that
             // are immediately ready.
             for _ in 0..ACTIVE_RATIO_LOW {
                 let result = deque.poll_front(cx);
