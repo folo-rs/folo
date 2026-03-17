@@ -235,7 +235,7 @@ mod tests {
     use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier, mpsc};
-    use std::task::{Context, Poll, Waker};
+    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
     use futures::StreamExt;
     use futures::executor::block_on;
@@ -1119,5 +1119,417 @@ mod tests {
 
         let result = deque.poll_front(cx);
         assert_eq!(result, Poll::Ready(Some(42)));
+    }
+
+    // --- Future impl and poll() return value tests ---
+
+    #[test]
+    fn poll_returns_ready_when_empty() {
+        let mut deque = LocalFutureDeque::<u32>::new();
+
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+        assert_eq!(deque.poll(cx), Poll::Ready(()));
+    }
+
+    #[test]
+    fn poll_returns_ready_when_all_complete() {
+        let mut deque = LocalFutureDeque::new();
+        deque.push_back(CountdownFuture::ready(1));
+        deque.push_back(CountdownFuture::ready(2));
+        deque.push_back(CountdownFuture::ready(3));
+
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+
+        // All futures are immediately ready, so poll() should return Ready.
+        assert_eq!(deque.poll(cx), Poll::Ready(()));
+
+        // Results remain in the deque for popping.
+        assert_eq!(deque.pop_front(), Some(1));
+        assert_eq!(deque.pop_front(), Some(2));
+        assert_eq!(deque.pop_front(), Some(3));
+    }
+
+    #[test]
+    fn poll_returns_pending_while_futures_pending() {
+        let mut deque = LocalFutureDeque::new();
+        deque.push_back(CountdownFuture::pending(100, 99));
+
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+
+        assert_eq!(deque.poll(cx), Poll::Pending);
+    }
+
+    #[test]
+    fn push_after_ready_resets_to_pending() {
+        let mut deque = LocalFutureDeque::new();
+        deque.push_back(CountdownFuture::ready(1));
+
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+
+        // All futures complete, poll returns Ready.
+        assert_eq!(deque.poll(cx), Poll::Ready(()));
+
+        // Push a pending future — readiness should reset.
+        deque.push_back(CountdownFuture::pending(100, 99));
+
+        assert_eq!(deque.poll(cx), Poll::Pending);
+    }
+
+    // --- Push during active polling ---
+
+    #[test]
+    fn push_between_polls() {
+        let mut deque = LocalFutureDeque::new();
+        deque.push_back(CountdownFuture::ready(1));
+
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+
+        // Poll the first future.
+        assert_eq!(deque.poll(cx), Poll::Ready(()));
+        assert_eq!(deque.pop_front(), Some(1));
+
+        // Push a second future after the first one was consumed.
+        deque.push_back(CountdownFuture::ready(2));
+
+        // Poll the newly pushed future.
+        assert_eq!(deque.poll(cx), Poll::Ready(()));
+        assert_eq!(deque.pop_front(), Some(2));
+    }
+
+    #[test]
+    fn push_front_between_polls_reorders() {
+        let mut deque = LocalFutureDeque::new();
+        deque.push_back(CountdownFuture::ready(2));
+
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+
+        // Poll drives the first future to completion.
+        assert_eq!(deque.poll(cx), Poll::Ready(()));
+
+        // Push a new future to the front before popping.
+        deque.push_front(CountdownFuture::ready(1));
+
+        // Poll drives the new front future.
+        assert_eq!(deque.poll(cx), Poll::Ready(()));
+
+        // Front is the newly pushed future.
+        assert_eq!(deque.pop_front(), Some(1));
+        assert_eq!(deque.pop_front(), Some(2));
+    }
+
+    // --- Larger deque ---
+
+    #[test]
+    fn many_futures_ordering() {
+        const COUNT: usize = 16;
+
+        let mut deque = LocalFutureDeque::new();
+        for i in 0..COUNT {
+            deque.push_back(CountdownFuture::ready(i));
+        }
+
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+
+        assert_eq!(deque.poll(cx), Poll::Ready(()));
+
+        for i in 0..COUNT {
+            assert_eq!(deque.pop_front(), Some(i));
+        }
+        assert!(deque.is_empty());
+    }
+
+    #[test]
+    fn many_futures_mixed_readiness() {
+        const COUNT: usize = 16;
+
+        let mut deque = LocalFutureDeque::new();
+        // Push a mix of immediately-ready and countdown futures.
+        for i in 0..COUNT {
+            if i % 2 == 0 {
+                deque.push_back(CountdownFuture::ready(i));
+            } else {
+                deque.push_back(CountdownFuture::pending(1, i));
+            }
+        }
+
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+
+        // First poll: even futures complete, odd futures return Pending
+        // and wake themselves.
+        assert_eq!(deque.poll(cx), Poll::Pending);
+
+        // Second poll: odd futures complete on their second poll.
+        assert_eq!(deque.poll(cx), Poll::Ready(()));
+
+        // All results come out in push order.
+        for i in 0..COUNT {
+            assert_eq!(deque.pop_front(), Some(i));
+        }
+    }
+
+    // --- Waker update path ---
+
+    #[test]
+    fn waker_update_routes_to_new_parent() {
+        // Poll with a noop waker, then poll with a real waker. The real
+        // waker should receive the wake notification when the future signals.
+        let (waker_tx, waker_rx) = mpsc::channel();
+        let value_ready = Arc::new(AtomicBool::new(false));
+
+        let mut deque = FutureDeque::new();
+        deque.push_back(WakerCaptureFuture {
+            waker_tx: Some(waker_tx),
+            value_ready: Arc::clone(&value_ready),
+        });
+
+        // First poll with noop waker — captures the slot waker.
+        let noop = Waker::noop();
+        let cx = &mut Context::from_waker(noop);
+        let result = deque.poll_front(cx);
+        assert!(result.is_pending());
+
+        let captured_waker = waker_rx.recv().unwrap();
+
+        // Create a custom waker that sets a flag when woken.
+        let parent_woken = Arc::new(AtomicBool::new(false));
+        let real_waker = waker_from_flag(Arc::clone(&parent_woken));
+        let cx = &mut Context::from_waker(&real_waker);
+
+        // Second poll with the real waker — updates the shared parent.
+        let result = deque.poll_front(cx);
+        assert!(result.is_pending());
+
+        // Wake the captured slot waker — should propagate to the real parent.
+        value_ready.store(true, Ordering::Release);
+        captured_waker.wake();
+
+        // The real waker should have been notified.
+        assert!(parent_woken.load(Ordering::Acquire));
+
+        // Final poll to collect the result.
+        let result = deque.poll_front(cx);
+        assert_eq!(result, Poll::Ready(Some(42)));
+    }
+
+    /// Creates a [`Waker`] that sets an [`AtomicBool`] flag when woken.
+    fn waker_from_flag(flag: Arc<AtomicBool>) -> Waker {
+        const VTABLE: RawWakerVTable = RawWakerVTable::new(
+            // clone
+            |data| {
+                // SAFETY: data is a valid *const Arc<AtomicBool> from Box::into_raw.
+                let flag = unsafe { &*(data as *const Arc<AtomicBool>) };
+                let cloned = Box::new(Arc::clone(flag));
+                RawWaker::new(Box::into_raw(cloned) as *const (), &VTABLE)
+            },
+            // wake (owned)
+            |data| {
+                // SAFETY: data is a valid *const Arc<AtomicBool> from Box::into_raw.
+                let flag = unsafe { Box::from_raw(data as *mut Arc<AtomicBool>) };
+                flag.store(true, Ordering::Release);
+            },
+            // wake_by_ref
+            |data| {
+                // SAFETY: data is a valid *const Arc<AtomicBool> from Box::into_raw.
+                let flag = unsafe { &*(data as *const Arc<AtomicBool>) };
+                flag.store(true, Ordering::Release);
+            },
+            // drop
+            |data| {
+                // SAFETY: data is a valid *const Arc<AtomicBool> from Box::into_raw.
+                drop(unsafe { Box::from_raw(data as *mut Arc<AtomicBool>) });
+            },
+        );
+
+        let flag_box = Box::new(flag);
+        let raw = RawWaker::new(Box::into_raw(flag_box) as *const (), &VTABLE);
+
+        // SAFETY: The vtable functions correctly match the data pointer layout.
+        unsafe { Waker::from_raw(raw) }
+    }
+
+    // --- Wake deduplication ---
+
+    #[test]
+    fn duplicate_wake_does_not_rewake_parent() {
+        // When a slot is already activated, subsequent wakes should not
+        // re-wake the parent waker. We verify this by counting parent wakes.
+        let (waker_tx, waker_rx) = mpsc::channel();
+        let value_ready = Arc::new(AtomicBool::new(false));
+
+        let mut deque = FutureDeque::new();
+        deque.push_back(WakerCaptureFuture {
+            waker_tx: Some(waker_tx),
+            value_ready: Arc::clone(&value_ready),
+        });
+
+        // Track how many times the parent waker is invoked.
+        let wake_count = Arc::new(AtomicUsize::new(0));
+        let parent_waker = waker_from_counter(Arc::clone(&wake_count));
+        let cx = &mut Context::from_waker(&parent_waker);
+
+        let result = deque.poll_front(cx);
+        assert!(result.is_pending());
+
+        let captured_waker = waker_rx.recv().unwrap();
+
+        // First wake: activates the slot, should wake the parent once.
+        captured_waker.wake_by_ref();
+        assert_eq!(wake_count.load(Ordering::Relaxed), 1);
+
+        // Second wake: slot already activated, should NOT wake the parent again.
+        captured_waker.wake_by_ref();
+        assert_eq!(wake_count.load(Ordering::Relaxed), 1);
+    }
+
+    /// Creates a [`Waker`] that increments an [`AtomicUsize`] counter when woken.
+    fn waker_from_counter(counter: Arc<AtomicUsize>) -> Waker {
+        const VTABLE: RawWakerVTable = RawWakerVTable::new(
+            // clone
+            |data| {
+                // SAFETY: data is a valid *const Arc<AtomicUsize> from Box::into_raw.
+                let counter = unsafe { &*(data as *const Arc<AtomicUsize>) };
+                let cloned = Box::new(Arc::clone(counter));
+                RawWaker::new(Box::into_raw(cloned) as *const (), &VTABLE)
+            },
+            // wake (owned)
+            |data| {
+                // SAFETY: data is a valid *const Arc<AtomicUsize> from Box::into_raw.
+                let counter = unsafe { Box::from_raw(data as *mut Arc<AtomicUsize>) };
+                counter.fetch_add(1, Ordering::Relaxed);
+            },
+            // wake_by_ref
+            |data| {
+                // SAFETY: data is a valid *const Arc<AtomicUsize> from Box::into_raw.
+                let counter = unsafe { &*(data as *const Arc<AtomicUsize>) };
+                counter.fetch_add(1, Ordering::Relaxed);
+            },
+            // drop
+            |data| {
+                // SAFETY: data is a valid *const Arc<AtomicUsize> from Box::into_raw.
+                drop(unsafe { Box::from_raw(data as *mut Arc<AtomicUsize>) });
+            },
+        );
+
+        let counter_box = Box::new(counter);
+        let raw = RawWaker::new(Box::into_raw(counter_box) as *const (), &VTABLE);
+
+        // SAFETY: The vtable functions correctly match the data pointer layout.
+        unsafe { Waker::from_raw(raw) }
+    }
+
+    // --- Pop after drain ---
+
+    #[test]
+    fn pop_after_drain_returns_none() {
+        let mut deque = LocalFutureDeque::new();
+        deque.push_back(CountdownFuture::ready(1));
+        deque.push_back(CountdownFuture::ready(2));
+
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+
+        // Consume all items via poll_front.
+        assert_eq!(deque.poll_front(cx), Poll::Ready(Some(1)));
+        assert_eq!(deque.poll_front(cx), Poll::Ready(Some(2)));
+
+        // Deque is now drained. Both pop methods should return None.
+        assert!(deque.pop_front().is_none());
+        assert!(deque.pop_back().is_none());
+        assert!(deque.is_empty());
+    }
+
+    // --- Unit-output futures ---
+
+    #[test]
+    fn unit_output_futures() {
+        let mut deque = LocalFutureDeque::<()>::new();
+        deque.push_back(async {});
+        deque.push_back(async {});
+
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+
+        assert_eq!(deque.poll(cx), Poll::Ready(()));
+
+        assert_eq!(deque.pop_front(), Some(()));
+        assert_eq!(deque.pop_front(), Some(()));
+        assert!(deque.is_empty());
+    }
+
+    #[test]
+    fn unit_output_via_poll_front() {
+        let mut deque = LocalFutureDeque::<()>::new();
+        deque.push_back(async {});
+        deque.push_back(async {});
+
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+
+        assert_eq!(deque.poll_front(cx), Poll::Ready(Some(())));
+        assert_eq!(deque.poll_front(cx), Poll::Ready(Some(())));
+        assert_eq!(deque.poll_front(cx), Poll::Ready(None));
+    }
+
+    // --- Future trait await integration ---
+
+    #[test]
+    fn await_empty_deque_completes_immediately() {
+        testing::with_watchdog(|| {
+            block_on(async {
+                let mut deque = LocalFutureDeque::<u32>::new();
+
+                // Awaiting an empty deque should complete immediately.
+                (&mut deque).await;
+
+                assert!(deque.is_empty());
+            });
+        });
+    }
+
+    #[test]
+    fn await_deque_waits_for_all_futures() {
+        testing::with_watchdog(|| {
+            block_on(async {
+                let mut deque = LocalFutureDeque::new();
+                deque.push_back(CountdownFuture::pending(2, 10));
+                deque.push_back(CountdownFuture::ready(20));
+                deque.push_back(CountdownFuture::pending(1, 30));
+
+                // Await waits for all futures to complete.
+                (&mut deque).await;
+
+                // All results available for popping.
+                assert_eq!(deque.pop_front(), Some(10));
+                assert_eq!(deque.pop_front(), Some(20));
+                assert_eq!(deque.pop_front(), Some(30));
+            });
+        });
+    }
+
+    #[test]
+    fn await_then_push_then_await_again() {
+        testing::with_watchdog(|| {
+            block_on(async {
+                let mut deque = LocalFutureDeque::new();
+                deque.push_back(CountdownFuture::ready(1));
+
+                // First await: completes.
+                (&mut deque).await;
+                assert_eq!(deque.pop_front(), Some(1));
+
+                // Push more futures and await again.
+                deque.push_back(CountdownFuture::pending(1, 2));
+                (&mut deque).await;
+                assert_eq!(deque.pop_front(), Some(2));
+            });
+        });
     }
 }
