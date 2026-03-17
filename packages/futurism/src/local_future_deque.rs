@@ -207,9 +207,74 @@ impl<T> futures_core::Stream for LocalFutureDeque<T> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::task::{Context, Poll, Waker};
+
     use static_assertions::assert_not_impl_any;
 
     use super::*;
 
     assert_not_impl_any!(LocalFutureDeque<u32>: Send, Sync);
+
+    #[test]
+    fn drive_then_pop_both_ends() {
+        let mut deque = LocalFutureDeque::new();
+        deque.push_back(async { 10 });
+        deque.push_back(async { 20 });
+        deque.push_back(async { 30 });
+
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+
+        deque.drive(cx);
+
+        assert_eq!(deque.pop_back(), Some(30));
+        assert_eq!(deque.pop_front(), Some(10));
+        assert_eq!(deque.pop_front(), Some(20));
+        assert!(deque.is_empty());
+    }
+
+    #[test]
+    fn poll_back_returns_last_ready() {
+        let mut deque = LocalFutureDeque::new();
+        deque.push_back(async { 1 });
+        deque.push_back(async { 2 });
+        deque.push_back(async { 3 });
+
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+
+        assert_eq!(deque.poll_back(cx), Poll::Ready(Some(3)));
+        assert_eq!(deque.poll_back(cx), Poll::Ready(Some(2)));
+        assert_eq!(deque.poll_back(cx), Poll::Ready(Some(1)));
+        assert_eq!(deque.poll_back(cx), Poll::Ready(None));
+    }
+
+    #[test]
+    fn poll_front_ordering() {
+        let mut deque = LocalFutureDeque::new();
+        deque.push_back(async { 1 });
+        deque.push_back(async { 2 });
+
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+
+        assert_eq!(deque.poll_front(cx), Poll::Ready(Some(1)));
+        assert_eq!(deque.poll_front(cx), Poll::Ready(Some(2)));
+        assert_eq!(deque.poll_front(cx), Poll::Ready(None));
+    }
+
+    #[test]
+    fn default_creates_empty() {
+        let deque: LocalFutureDeque<i32> = LocalFutureDeque::default();
+        assert!(deque.is_empty());
+    }
+
+    #[test]
+    fn debug_output() {
+        let mut deque = LocalFutureDeque::new();
+        deque.push_back(async { 1 });
+        let debug = format!("{deque:?}");
+        assert!(debug.contains("LocalFutureDeque"));
+        assert!(debug.contains("len: 1"));
+    }
 }

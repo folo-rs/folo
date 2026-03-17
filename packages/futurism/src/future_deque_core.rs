@@ -560,6 +560,32 @@ mod tests {
     }
 
     #[test]
+    fn poll_back_returns_pending_when_future_not_ready() {
+        let mut deque = LocalFutureDeque::new();
+        deque.push_back(SilentPendingFuture {
+            poll_count: Arc::new(AtomicUsize::new(0)),
+        });
+
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+
+        // The future returns Pending and does not wake itself, so poll_back
+        // should return Pending (the deque is not empty, but nothing is ready).
+        let result = deque.poll_back(cx);
+        assert!(result.is_pending());
+    }
+
+    #[test]
+    fn poll_back_returns_none_for_empty_deque() {
+        let mut deque = LocalFutureDeque::<u32>::new();
+
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+        let result = deque.poll_back(cx);
+        assert_eq!(result, Poll::Ready(None));
+    }
+
+    #[test]
     fn multi_poll_future_completes_via_activation() {
         let mut deque = LocalFutureDeque::new();
         deque.push_back(CountdownFuture::pending(1, 42));
