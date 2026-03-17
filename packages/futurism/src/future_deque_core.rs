@@ -5,7 +5,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use parking_lot::Mutex;
+use std::sync::Mutex;
 
 use crate::{
     deque_future::DequeFuture,
@@ -108,7 +108,10 @@ impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
         // the parent through this shared location, so a single update here ensures
         // every future's waker uses the latest parent without per-slot iteration.
         {
-            let mut parent = self.shared_parent.lock();
+            let mut parent = self
+                .shared_parent
+                .lock()
+                .expect("we never panic while holding this lock");
             if !parent.as_ref().is_some_and(|w| w.will_wake(cx.waker())) {
                 *parent = Some(cx.waker().clone());
             }

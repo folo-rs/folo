@@ -7,8 +7,9 @@ use std::{
     task::{RawWaker, RawWakerVTable, Waker},
 };
 
+use std::sync::Mutex;
+
 use infinity_pool::{RawPinnedPool, RawPooled, RawPooledMut};
-use parking_lot::Mutex;
 
 // Per-slot metadata for activation tracking and waker management.
 //
@@ -61,7 +62,7 @@ static WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
 #[derive(Clone, Copy)]
 pub(crate) struct MetaPtr(*const WakerMeta);
 
-// SAFETY: WakerMeta fields are all thread-safe (AtomicUsize, Arc, parking_lot::Mutex).
+// SAFETY: WakerMeta fields are all thread-safe (AtomicUsize, Arc, std::sync::Mutex).
 // The pool slab provides a stable (pinned) address, and the pool itself is protected
 // by Arc<Mutex<...>>. The UnsafeCell<Option<RawPooled<WakerMeta>>> is only written
 // during bootstrapping (under pool lock) and read when refcount reaches zero
@@ -79,7 +80,7 @@ unsafe impl Sync for MetaPtr {}
 pub(crate) fn create_waker_meta(shared_parent: &Arc<Mutex<Option<Waker>>>) -> MetaPtr {
     WAKER_META_POOL.with(|pool_arc| {
         let pool = Arc::clone(pool_arc);
-        let mut pool_guard = pool.lock();
+        let mut pool_guard = pool.lock().expect("we never panic while holding this lock");
 
         let handle: RawPooledMut<WakerMeta> = pool_guard.insert(WakerMeta {
             ref_count: AtomicUsize::new(1),
@@ -156,7 +157,9 @@ pub(crate) fn release_ref(meta: MetaPtr) {
         // SAFETY: The handle was stored during creation and has not been removed.
         // The pool is alive (we hold an Arc clone).
         unsafe {
-            pool.lock().remove(self_handle);
+            pool.lock()
+                .expect("we never panic while holding this lock")
+                .remove(self_handle);
         }
     }
 }
@@ -194,7 +197,11 @@ unsafe fn wake_by_ref_raw_waker(data: *const ()) {
         // Clone the parent waker under the lock, then drop the lock before waking
         // to avoid potential deadlock if the wake path re-enters and tries to lock
         // shared_parent again (e.g. some executor waker implementations).
-        let parent = meta.shared_parent.lock().clone();
+        let parent = meta
+            .shared_parent
+            .lock()
+            .expect("we never panic while holding this lock")
+            .clone();
 
         if let Some(parent) = parent {
             parent.wake_by_ref();

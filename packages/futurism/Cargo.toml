@@ -19,7 +19,6 @@ default = []
 [dependencies]
 futures = { workspace = true }
 infinity_pool = { workspace = true }
-parking_lot = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

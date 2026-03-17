@@ -843,7 +843,6 @@ dependencies = [
  "futures",
  "infinity_pool",
  "mutants",
- "parking_lot",
  "static_assertions",
 ]
 
