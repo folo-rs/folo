@@ -1,4 +1,4 @@
-# futurism
+# future_deque
 
 Utilities for working with futures, providing collection types for managing groups of futures
 with precise control over polling order and result retrieval.
@@ -25,7 +25,7 @@ With the `futures-stream` feature (enabled by default), both types also implemen
 ```rust
 use std::task::{Context, Poll, Waker};
 
-use futurism::LocalFutureDeque;
+use future_deque::LocalFutureDeque;
 
 let mut deque = LocalFutureDeque::new();
 
@@ -44,6 +44,6 @@ assert_eq!(deque.poll_front(cx), Poll::Ready(None));
 
 ## See also
 
-[API documentation on docs.rs.](https://docs.rs/futurism/latest/futurism/)
+[API documentation on docs.rs.](https://docs.rs/future_deque/latest/future_deque/)
 
 Part of the [Folo](https://github.com/folo-rs/folo) project.

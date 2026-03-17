@@ -1,5 +1,5 @@
 [package]
-name = "futurism"
+name = "future_deque"
 description = "Utilities for working with futures"
 publish = true
 version = "0.1.0"

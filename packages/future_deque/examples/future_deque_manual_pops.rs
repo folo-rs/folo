@@ -3,7 +3,7 @@
 
 use std::task::{Context, Poll, Waker};
 
-use futurism::LocalFutureDeque;
+use future_deque::LocalFutureDeque;
 
 fn main() {
     manual_pop_front();

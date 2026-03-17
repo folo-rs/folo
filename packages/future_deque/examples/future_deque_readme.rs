@@ -1,10 +1,10 @@
 //! Example code for the `README.md` file.
 //!
-//! This contains the same code that appears in the `futurism` package `README.md`.
+//! This contains the same code that appears in the `future_deque` package `README.md`.
 
 use std::task::{Context, Poll, Waker};
 
-use futurism::LocalFutureDeque;
+use future_deque::LocalFutureDeque;
 
 fn main() {
     let mut deque = LocalFutureDeque::new();

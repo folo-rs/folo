@@ -65,7 +65,7 @@ impl<T> FutureHandle<T> for BlindPooledMut<dyn ErasedFuture<T>> {
 /// ```rust
 /// use std::task::{Context, Poll, Waker};
 ///
-/// use futurism::FutureDeque;
+/// use future_deque::FutureDeque;
 ///
 /// let mut deque = FutureDeque::new();
 ///
@@ -85,7 +85,7 @@ impl<T> FutureHandle<T> for BlindPooledMut<dyn ErasedFuture<T>> {
 /// ```rust
 /// use std::task::{Context, Poll, Waker};
 ///
-/// use futurism::FutureDeque;
+/// use future_deque::FutureDeque;
 ///
 /// let mut deque = FutureDeque::new();
 ///

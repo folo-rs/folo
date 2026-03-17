@@ -8,7 +8,7 @@ use std::{
 };
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use futurism::{FutureDeque, LocalFutureDeque};
+use future_deque::{FutureDeque, LocalFutureDeque};
 
 /// A future that returns `Pending` for `remaining` polls, then `Ready(value)`.
 struct CountdownFuture {

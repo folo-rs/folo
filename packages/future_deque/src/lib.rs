@@ -25,7 +25,7 @@
 //! ```rust
 //! use std::task::{Context, Poll, Waker};
 //!
-//! use futurism::LocalFutureDeque;
+//! use future_deque::LocalFutureDeque;
 //!
 //! let mut deque = LocalFutureDeque::new();
 //!
