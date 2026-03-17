@@ -1,11 +1,11 @@
 use std::alloc::Layout;
 use std::iter::FusedIterator;
 use std::mem::MaybeUninit;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::ptr::NonNull;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use parking_lot::Mutex;
-
+use crate::NEVER_POISONED;
 use crate::opaque::pool_raw::RawOpaquePoolIterator;
 use crate::{PooledMut, RawOpaquePool, RawOpaquePoolThreadSafe};
 
@@ -142,14 +142,14 @@ impl OpaquePool {
     #[must_use]
     #[inline]
     pub fn object_layout(&self) -> Layout {
-        self.inner.lock().object_layout()
+        self.inner.lock().expect(NEVER_POISONED).object_layout()
     }
 
     /// The number of objects currently in the pool.
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        self.inner.lock().len()
+        self.inner.lock().expect(NEVER_POISONED).len()
     }
 
     /// The total capacity of the pool.
@@ -160,14 +160,14 @@ impl OpaquePool {
     #[must_use]
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.inner.lock().capacity()
+        self.inner.lock().expect(NEVER_POISONED).capacity()
     }
 
     /// Whether the pool contains zero objects.
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.inner.lock().is_empty()
+        self.inner.lock().expect(NEVER_POISONED).is_empty()
     }
 
     /// Ensures that the pool has capacity for at least `additional` more objects.
@@ -177,7 +177,7 @@ impl OpaquePool {
     /// Panics if the new capacity would exceed the size of virtual memory (`usize::MAX`).
     #[inline]
     pub fn reserve(&self, additional: usize) {
-        self.inner.lock().reserve(additional);
+        self.inner.lock().expect(NEVER_POISONED).reserve(additional);
     }
 
     /// Drops unused pool capacity to reduce memory usage.
@@ -186,7 +186,7 @@ impl OpaquePool {
     /// on the specific pool structure and which objects remain in the pool.
     #[inline]
     pub fn shrink_to_fit(&self) {
-        self.inner.lock().shrink_to_fit();
+        self.inner.lock().expect(NEVER_POISONED).shrink_to_fit();
     }
 
     /// Inserts an object into the pool and returns a handle to it.
@@ -197,7 +197,7 @@ impl OpaquePool {
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert<T: Send + 'static>(&self, value: T) -> PooledMut<T> {
-        let inner = self.inner.lock().insert(value);
+        let inner = self.inner.lock().expect(NEVER_POISONED).insert(value);
 
         // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
         unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
@@ -210,7 +210,12 @@ impl OpaquePool {
     #[must_use]
     pub unsafe fn insert_unchecked<T: Send + 'static>(&self, value: T) -> PooledMut<T> {
         // SAFETY: Forwarding safety guarantees from caller.
-        let inner = unsafe { self.inner.lock().insert_unchecked(value) };
+        let inner = unsafe {
+            self.inner
+                .lock()
+                .expect(NEVER_POISONED)
+                .insert_unchecked(value)
+        };
 
         // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
         unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
@@ -269,11 +274,25 @@ impl OpaquePool {
         T: Send + 'static,
         F: FnOnce(&mut MaybeUninit<T>),
     {
-        // SAFETY: Forwarding safety guarantees from caller.
-        let inner = unsafe { self.inner.lock().insert_with(f) };
+        let mut inner = self.inner.lock().expect(NEVER_POISONED);
 
-        // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
-        unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
+        // AssertUnwindSafe: covers both the user closure and the MutexGuard,
+        // which are inherently !UnwindSafe. We drop the guard cleanly before
+        // resume_unwind, so our state is never observed in a potentially
+        // inconsistent state. The user's panic is re-thrown without tampering.
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: Forwarding safety guarantees from caller.
+            unsafe { inner.insert_with(f) }
+        }));
+        drop(inner);
+
+        match result {
+            Ok(inner) => {
+                // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
+                unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
+            }
+            Err(payload) => resume_unwind(payload),
+        }
     }
 
     /// Inserts an object into the pool via closure and returns a handle to it.
@@ -301,11 +320,25 @@ impl OpaquePool {
         T: Send + 'static,
         F: FnOnce(&mut MaybeUninit<T>),
     {
-        // SAFETY: Forwarding safety guarantees from caller.
-        let inner = unsafe { self.inner.lock().insert_with_unchecked(f) };
+        let mut inner = self.inner.lock().expect(NEVER_POISONED);
 
-        // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
-        unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
+        // AssertUnwindSafe: covers both the user closure and the MutexGuard,
+        // which are inherently !UnwindSafe. We drop the guard cleanly before
+        // resume_unwind, so our state is never observed in a potentially
+        // inconsistent state. The user's panic is re-thrown without tampering.
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: Forwarding safety guarantees from caller.
+            unsafe { inner.insert_with_unchecked(f) }
+        }));
+        drop(inner);
+
+        match result {
+            Ok(inner) => {
+                // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
+                unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
+            }
+            Err(payload) => resume_unwind(payload),
+        }
     }
 
     /// Calls a closure with an iterator over all objects in the pool.
@@ -344,9 +377,19 @@ impl OpaquePool {
     where
         F: FnOnce(OpaquePoolIterator<'_>) -> R,
     {
-        let guard = self.inner.lock();
+        let guard = self.inner.lock().expect(NEVER_POISONED);
         let iter = OpaquePoolIterator::new(&guard);
-        f(iter)
+        // AssertUnwindSafe: covers both the user closure and `iter` (which
+        // borrows from a MutexGuard and is therefore inherently !UnwindSafe).
+        // We drop the guard cleanly before resume_unwind, so our state is never
+        // observed in a potentially inconsistent state.
+        let result = catch_unwind(AssertUnwindSafe(|| f(iter)));
+        drop(guard);
+
+        match result {
+            Ok(value) => value,
+            Err(payload) => resume_unwind(payload),
+        }
     }
 }
 
@@ -877,7 +920,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Blocking on a parking_lot Mutex in Miri is not supported.
     fn concurrent_access_basic() {
         use std::sync::{Arc, Barrier};
         use std::thread;
@@ -897,7 +939,7 @@ mod tests {
 
                 let value = (i + 1) * 100;
                 let handle = {
-                    let pool_guard = pool_clone.lock();
+                    let pool_guard = pool_clone.lock().unwrap();
                     pool_guard.insert(value)
                 };
 
@@ -918,7 +960,7 @@ mod tests {
 
         // Verify final pool state
         {
-            let pool_guard = pool.lock();
+            let pool_guard = pool.lock().unwrap();
             assert_eq!(pool_guard.len(), 3);
 
             let mut values: Vec<u32> = pool_guard.with_iter(|iter| {
@@ -1160,5 +1202,44 @@ mod tests {
         drop(handle3);
         drop(handle4);
         assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "intentional panic to verify pass-through")]
+    fn insert_with_propagates_panic_from_closure() {
+        let pool = OpaquePool::with_layout_of::<u32>();
+
+        // SAFETY: The closure panics before initialization completes. The pool catches
+        // the panic to drop the mutex guard cleanly, then re-throws via resume_unwind.
+        unsafe {
+            drop(pool.insert_with(|_: &mut MaybeUninit<u32>| {
+                panic!("intentional panic to verify pass-through");
+            }));
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "intentional panic to verify pass-through")]
+    fn insert_with_unchecked_propagates_panic_from_closure() {
+        let pool = OpaquePool::with_layout_of::<u32>();
+
+        // SAFETY: The closure panics before initialization completes, and the layout
+        // matches. The pool catches the panic and re-throws via resume_unwind.
+        unsafe {
+            drop(pool.insert_with_unchecked(|_: &mut MaybeUninit<u32>| {
+                panic!("intentional panic to verify pass-through");
+            }));
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "intentional panic to verify pass-through")]
+    fn with_iter_propagates_panic_from_closure() {
+        let pool = OpaquePool::with_layout_of::<u32>();
+        let _handle = pool.insert(42_u32);
+
+        pool.with_iter(|_iter| {
+            panic!("intentional panic to verify pass-through");
+        });
     }
 }

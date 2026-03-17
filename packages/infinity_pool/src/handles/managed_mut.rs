@@ -3,11 +3,10 @@ use std::borrow::{Borrow, BorrowMut};
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::ptr::NonNull;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::{fmt, mem, ptr};
 
-use parking_lot::Mutex;
-
+use crate::NEVER_POISONED;
 use crate::{Pooled, RawOpaquePoolThreadSafe, RawPooledMut};
 
 // Note that while this is a thread-safe handle, we do not require `T: Send` because
@@ -184,7 +183,7 @@ where
     pub fn into_inner(self) -> T {
         let (inner, pool) = self.into_parts();
 
-        let mut pool = pool.lock();
+        let mut pool = pool.lock().expect(NEVER_POISONED);
         // SAFETY: We are a managed unique handle, so we are the only one who is allowed to remove
         // the object from the pool - as long as we exist, the object exists in the pool. We keep
         // the pool alive for as long as any handle to it exists, so the pool must still exist.
@@ -278,7 +277,7 @@ impl<T: ?Sized> Drop for PooledMut<T> {
         // SAFETY: The target is valid for reads.
         let inner = unsafe { ptr::read(&raw const self.inner) };
 
-        let mut pool = self.pool.lock();
+        let mut pool = self.pool.lock().expect(NEVER_POISONED);
 
         // SAFETY: We are a managed unique handle, so we are the only one who is allowed to remove
         // the object from the pool - as long as we exist, the object exists in the pool. We keep

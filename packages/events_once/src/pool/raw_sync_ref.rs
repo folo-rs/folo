@@ -7,6 +7,7 @@ use std::{fmt, mem};
 
 use infinity_pool::RawPooled;
 
+use crate::NEVER_POISONED;
 use crate::{Event, EventRef, RawEventPoolCore};
 
 pub(crate) struct RawPooledRef<T: Send + 'static> {
@@ -46,7 +47,7 @@ impl<T: Send + 'static> EventRef<T> for RawPooledRef<T> {
         // SAFETY: UnsafeCell pointer is never null.
         let core = unsafe { core_maybe.unwrap_unchecked() };
 
-        let mut pool = core.pool.lock();
+        let mut pool = core.pool.lock().expect(NEVER_POISONED);
 
         // SAFETY: The event state machine guarantees that nothing references the event
         // once it signals the "you need to clean me up now". We hold the last reference.

@@ -6,6 +6,7 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
+use crate::NEVER_POISONED;
 use crate::{BlindPoolCore, BlindPooledMut, LayoutKey, RawPooled, RawPooledMut};
 
 // Note that while this is a thread-safe handle, we do not require `T: Send` because
@@ -197,7 +198,7 @@ struct Remover {
 
 impl Drop for Remover {
     fn drop(&mut self) {
-        let mut core = self.core.lock();
+        let mut core = self.core.lock().expect(NEVER_POISONED);
 
         let pool = core
             .get_mut(&self.key)

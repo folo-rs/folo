@@ -1,9 +1,9 @@
 use std::alloc::Layout;
 use std::mem::MaybeUninit;
-use std::sync::Arc;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::sync::{Arc, MutexGuard};
 
-use parking_lot::MutexGuard;
-
+use crate::NEVER_POISONED;
 use crate::{
     BlindPoolCore, BlindPoolInnerMap, BlindPooledMut, LayoutKey, RawOpaquePool,
     RawOpaquePoolThreadSafe,
@@ -113,7 +113,7 @@ impl BlindPool {
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        let core = self.core.lock();
+        let core = self.core.lock().expect(NEVER_POISONED);
 
         core.values().map(|pool| pool.len()).sum()
     }
@@ -130,7 +130,7 @@ impl BlindPool {
     pub fn capacity_for<T: Send + 'static>(&self) -> usize {
         let key = LayoutKey::with_layout_of::<T>();
 
-        let core = self.core.lock();
+        let core = self.core.lock().expect(NEVER_POISONED);
 
         core.get(&key)
             .map(|pool| pool.capacity())
@@ -151,7 +151,7 @@ impl BlindPool {
     /// Panics if the new capacity would exceed the size of virtual memory (`usize::MAX`).
     #[inline]
     pub fn reserve_for<T: Send + 'static>(&self, additional: usize) {
-        let mut core = self.core.lock();
+        let mut core = self.core.lock().expect(NEVER_POISONED);
 
         let pool = ensure_inner_pool::<T>(&mut core);
 
@@ -164,7 +164,7 @@ impl BlindPool {
     /// on the specific pool structure and which objects remain in the pool.
     #[inline]
     pub fn shrink_to_fit(&self) {
-        let mut core = self.core.lock();
+        let mut core = self.core.lock().expect(NEVER_POISONED);
 
         for pool in core.values_mut() {
             pool.shrink_to_fit();
@@ -176,7 +176,7 @@ impl BlindPool {
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert<T: Send + 'static>(&self, value: T) -> BlindPooledMut<T> {
-        let mut core = self.core.lock();
+        let mut core = self.core.lock().expect(NEVER_POISONED);
 
         let pool = ensure_inner_pool::<T>(&mut core);
 
@@ -242,21 +242,33 @@ impl BlindPool {
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {
-        let mut core = self.core.lock();
+        let mut core = self.core.lock().expect(NEVER_POISONED);
 
         let pool = ensure_inner_pool::<T>(&mut core);
 
-        // SAFETY: inner pool selector guarantees matching layout.
-        // Initialization guarantee is forwarded from the caller.
-        let inner_handle = unsafe { pool.insert_with_unchecked(f) };
+        // AssertUnwindSafe: covers both the user closure and the MutexGuard,
+        // which are inherently !UnwindSafe. We drop the guard cleanly before
+        // resume_unwind, so our state is never observed in a potentially
+        // inconsistent state. The user's panic is re-thrown without tampering.
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: inner pool selector guarantees matching layout.
+            // Initialization guarantee is forwarded from the caller.
+            unsafe { pool.insert_with_unchecked(f) }
+        }));
+        drop(core);
 
-        // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
-        unsafe {
-            BlindPooledMut::new(
-                inner_handle,
-                LayoutKey::with_layout_of::<T>(),
-                Arc::clone(&self.core),
-            )
+        match result {
+            Ok(inner_handle) => {
+                // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
+                unsafe {
+                    BlindPooledMut::new(
+                        inner_handle,
+                        LayoutKey::with_layout_of::<T>(),
+                        Arc::clone(&self.core),
+                    )
+                }
+            }
+            Err(payload) => resume_unwind(payload),
         }
     }
 }
@@ -650,6 +662,20 @@ mod tests {
             attempts += 1;
             assert!(attempts <= 100, "Object was not dropped after 100 attempts");
             thread::yield_now();
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "intentional panic to verify pass-through")]
+    fn insert_with_propagates_panic_from_closure() {
+        let pool = BlindPool::new();
+
+        // SAFETY: The closure panics before initialization completes. The pool catches
+        // the panic to drop the mutex guard cleanly, then re-throws via resume_unwind.
+        unsafe {
+            drop(pool.insert_with(|_: &mut MaybeUninit<u32>| {
+                panic!("intentional panic to verify pass-through");
+            }));
         }
     }
 }

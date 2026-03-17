@@ -1,9 +1,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::sync::Arc;
-
-use parking_lot::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::{LayoutKey, RawOpaquePool, RawOpaquePoolThreadSafe};
 

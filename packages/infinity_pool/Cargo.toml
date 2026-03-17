@@ -19,7 +19,6 @@ default = []
 [dependencies]
 new_zealand = { workspace = true }
 num-integer = { workspace = true }
-parking_lot = { workspace = true }
 pastey = { workspace = true }
 
 [dev-dependencies]

@@ -24,7 +24,6 @@ infinity_pool = { workspace = true }
 many_cpus = { workspace = true }
 new_zealand = { workspace = true }
 nm = { workspace = true }
-parking_lot = { workspace = true }
 pin-project = { workspace = true }
 tracing = { workspace = true }
 
