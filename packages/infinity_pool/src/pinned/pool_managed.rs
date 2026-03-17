@@ -230,8 +230,6 @@ where
         // which are inherently !UnwindSafe. We drop the guard cleanly before
         // resume_unwind, so our state is never observed in a potentially
         // inconsistent state. The user's panic is re-thrown without tampering.
-        // !UnwindSafe. We drop it cleanly before resume_unwind, so it is never
-        // observed in a potentially inconsistent state.
         let result = catch_unwind(AssertUnwindSafe(|| {
             // SAFETY: Forwarding safety guarantees from caller.
             unsafe { inner.insert_with(f) }
