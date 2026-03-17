@@ -1,6 +1,6 @@
 [package]
 name = "future_deque"
-description = "Utilities for working with futures"
+description = "Pool-backed deque collections for managing groups of futures"
 publish = true
 version = "0.1.0"
 
@@ -17,14 +17,14 @@ all-features = true
 futures-stream = ["dep:futures-core"]
 
 [dependencies]
-futures-core = { version = "0.3", optional = true }
+futures-core = { workspace = true, optional = true }
 infinity_pool = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
 events_once = { path = "../events_once" }
 futures = { workspace = true }
-futures-core = { version = "0.3" }
+futures-core = { workspace = true }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }

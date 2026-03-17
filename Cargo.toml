@@ -29,6 +29,7 @@ foldhash = { version = "0.2", default-features = false, features = ["std"] }
 folo_ffi = { version = "0.1.12", path = "packages/folo_ffi", default-features = false }
 frozen-collections = { version = "0.8", default-features = false }
 future_deque = { version = "0.1.0", path = "packages/future_deque", default-features = false }
+futures-core = { version = "0.3", default-features = false }
 futures = { version = "0.3", default-features = false, features = [
     "std",
     "executor",

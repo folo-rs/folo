@@ -52,9 +52,11 @@ impl<T> FutureHandle<T> for LocalBlindPooledMut<dyn ErasedFuture<T>> {
 /// (e.g. after pushing new futures).
 ///
 /// [`poll_front`][Self::poll_front] and [`poll_back`][Self::poll_back] combine polling with
-/// popping for convenience.
+/// popping for convenience. They return `Poll::Ready(Some(value))` when the respective
+/// end has a completed future, `Poll::Ready(None)` when the deque is empty, or
+/// `Poll::Pending` when the respective end is not yet ready.
 ///
-/// With the `futures-stream` feature (enabled by default), `LocalFutureDeque` also
+/// With the `futures-stream` feature, `LocalFutureDeque` also
 /// implements [`Stream`][futures_core::Stream], yielding completed results from the front.
 ///
 /// # Examples
