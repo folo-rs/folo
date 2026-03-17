@@ -14,10 +14,11 @@ rust-version.workspace = true
 all-features = true
 
 [features]
-default = []
+default = ["futures-stream"]
+futures-stream = ["dep:futures-core"]
 
 [dependencies]
-futures = { workspace = true }
+futures-core = { version = "0.3", optional = true }
 infinity_pool = { workspace = true }
 
 [dev-dependencies]

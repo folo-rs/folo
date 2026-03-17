@@ -8,7 +8,6 @@ use std::{
 };
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use futures::Stream;
 use futurism::{FutureDeque, LocalFutureDeque};
 
 /// A future that returns `Pending` for `remaining` polls, then `Ready(value)`.
@@ -57,7 +56,7 @@ fn bench_local_future_deque(c: &mut Criterion) {
             let waker = Waker::noop();
             let cx = &mut Context::from_waker(waker);
             for _ in 0..FEW_ITEMS {
-                let result = Pin::new(&mut deque).poll_next(cx);
+                let result = deque.poll_front(cx);
                 let _result = black_box(result);
             }
         });
@@ -75,7 +74,7 @@ fn bench_local_future_deque(c: &mut Criterion) {
             // Drive one round to poll all futures and activate the ones that
             // are immediately ready.
             for _ in 0..ACTIVE_RATIO_LOW {
-                let result = Pin::new(&mut deque).poll_next(cx);
+                let result = deque.poll_front(cx);
                 let _result = black_box(result);
             }
         });
@@ -91,7 +90,7 @@ fn bench_local_future_deque(c: &mut Criterion) {
             let waker = Waker::noop();
             let cx = &mut Context::from_waker(waker);
             for _ in 0..ACTIVE_RATIO_HIGH {
-                let result = Pin::new(&mut deque).poll_next(cx);
+                let result = deque.poll_front(cx);
                 let _result = black_box(result);
             }
         });
@@ -112,7 +111,7 @@ fn bench_future_deque(c: &mut Criterion) {
             let waker = Waker::noop();
             let cx = &mut Context::from_waker(waker);
             for _ in 0..FEW_ITEMS {
-                let result = Pin::new(&mut deque).poll_next(cx);
+                let result = deque.poll_front(cx);
                 let _result = black_box(result);
             }
         });
@@ -128,7 +127,7 @@ fn bench_future_deque(c: &mut Criterion) {
             let waker = Waker::noop();
             let cx = &mut Context::from_waker(waker);
             for _ in 0..ACTIVE_RATIO_LOW {
-                let result = Pin::new(&mut deque).poll_next(cx);
+                let result = deque.poll_front(cx);
                 let _result = black_box(result);
             }
         });
@@ -144,7 +143,7 @@ fn bench_future_deque(c: &mut Criterion) {
             let waker = Waker::noop();
             let cx = &mut Context::from_waker(waker);
             for _ in 0..ACTIVE_RATIO_HIGH {
-                let result = Pin::new(&mut deque).poll_next(cx);
+                let result = deque.poll_front(cx);
                 let _result = black_box(result);
             }
         });

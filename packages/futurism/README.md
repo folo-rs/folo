@@ -13,26 +13,29 @@ Both types poll active futures in deterministic front-to-back order and allow re
 popped from either end with strict deque semantics (only the actual front or back item can
 be popped, and only if it has completed).
 
-Both implement `Stream`, yielding completed results from the front.
+With the `futures-stream` feature (enabled by default), both types also implement
+`futures_core::Stream`, yielding completed results from the front.
 
 ## Example
 
 ```rust
-use futures::{executor::block_on, StreamExt};
+use std::task::{Context, Poll, Waker};
+
 use futurism::LocalFutureDeque;
 
-block_on(async {
-    let mut deque = LocalFutureDeque::new();
+let mut deque = LocalFutureDeque::new();
 
-    deque.push_back(async { 1 });
-    deque.push_back(async { 2 });
-    deque.push_front(async { 0 });
+deque.push_back(async { 1 });
+deque.push_back(async { 2 });
+deque.push_front(async { 0 });
 
-    assert_eq!(deque.next().await, Some(0));
-    assert_eq!(deque.next().await, Some(1));
-    assert_eq!(deque.next().await, Some(2));
-    assert_eq!(deque.next().await, None);
-});
+let waker = Waker::noop();
+let cx = &mut Context::from_waker(waker);
+
+assert_eq!(deque.poll_front(cx), Poll::Ready(Some(0)));
+assert_eq!(deque.poll_front(cx), Poll::Ready(Some(1)));
+assert_eq!(deque.poll_front(cx), Poll::Ready(Some(2)));
+assert_eq!(deque.poll_front(cx), Poll::Ready(None));
 ```
 
 ## See also

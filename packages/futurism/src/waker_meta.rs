@@ -40,10 +40,19 @@ pub(crate) struct WakerMeta {
     self_handle: UnsafeCell<Option<RawPooled<Self>>>,
 
     // Reference to the creating thread's metadata pool for self-cleanup. Waker drops
-    // can happen on any thread; this Arc keeps the pool alive and accessible.
+    // can happen on any thread after the origin thread has terminated, so this must be
+    // an Arc to keep the pool alive and accessible from any thread.
     pool: Arc<Mutex<RawPinnedPool<Self>>>,
 }
 
+// Thread-local pool for waker metadata. Uses `RawPinnedPool` (behind `Arc<Mutex<...>>`)
+// instead of `PinnedPool` because:
+// 1. Waker drops can happen on any thread, so the pool must be accessible cross-thread.
+//    `PinnedPool` is `!Send` (thread-local only), so we need the raw variant.
+// 2. We need stable (pinned) addresses for the RawWaker data pointer, which
+//    `RawPinnedPool` provides via slab-based allocation.
+// 3. The Arc keeps the pool alive even after the creating thread has terminated,
+//    ensuring late waker drops on foreign threads can still return metadata to the pool.
 thread_local! {
     static WAKER_META_POOL: Arc<Mutex<RawPinnedPool<WakerMeta>>> =
         Arc::new(Mutex::new(RawPinnedPool::new()));

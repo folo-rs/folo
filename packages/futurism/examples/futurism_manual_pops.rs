@@ -1,12 +1,8 @@
 //! Demonstrates using manual `pop_front` and `pop_back` to retrieve results
-//! from a `LocalFutureDeque` without relying on the `Stream` implementation.
+//! from a `LocalFutureDeque` after driving the futures.
 
-use std::{
-    pin::Pin,
-    task::{Context, Waker},
-};
+use std::task::{Context, Waker};
 
-use futures::Stream;
 use futurism::LocalFutureDeque;
 
 fn main() {
@@ -22,15 +18,14 @@ fn manual_pop_front() {
     deque.push_back(async { 20 });
     deque.push_back(async { 30 });
 
-    // Drive all futures by polling the stream once.
     let waker = Waker::noop();
     let cx = &mut Context::from_waker(waker);
 
-    // poll_next drives all futures and consumes the front result (10).
-    let poll = Pin::new(&mut deque).poll_next(cx);
-    assert_eq!(poll, std::task::Poll::Ready(Some(10)));
+    // Drive all futures.
+    deque.drive(cx);
 
-    // The remaining futures were also driven and completed. Pop them manually.
+    // Pop all results from front.
+    assert_eq!(deque.pop_front(), Some(10));
     assert_eq!(deque.pop_front(), Some(20));
     assert_eq!(deque.pop_front(), Some(30));
     assert!(deque.is_empty());
@@ -46,16 +41,17 @@ fn manual_pop_back() {
     deque.push_back(async { 200 });
     deque.push_back(async { 300 });
 
-    // Drive all futures.
     let waker = Waker::noop();
     let cx = &mut Context::from_waker(waker);
-    let poll = Pin::new(&mut deque).poll_next(cx);
-    assert_eq!(poll, std::task::Poll::Ready(Some(100)));
 
-    // Pop from the back instead.
+    // Drive all futures.
+    deque.drive(cx);
+
+    // Pop from the back first, then front.
     assert_eq!(deque.pop_back(), Some(300));
+    assert_eq!(deque.pop_front(), Some(100));
     assert_eq!(deque.pop_front(), Some(200));
     assert!(deque.is_empty());
 
-    println!("Popped from back (300), then front (200).");
+    println!("Popped from back (300), then front (100, 200).");
 }

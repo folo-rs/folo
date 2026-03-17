@@ -841,6 +841,7 @@ dependencies = [
  "criterion",
  "events_once",
  "futures",
+ "futures-core",
  "infinity_pool",
  "mutants",
  "static_assertions",

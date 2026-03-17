@@ -8,14 +8,14 @@ use std::{
 use std::sync::Mutex;
 
 use crate::{
-    deque_future::DequeFuture,
+    erased_future::ErasedFuture,
     waker_meta::{self, MetaPtr},
 };
 
 /// Abstracts over managed ([`BlindPooledMut`][infinity_pool::BlindPooledMut]) and raw
 /// pool handles, allowing [`FutureDequeCore`] to work with both Send and !Send variants.
 pub(crate) trait FutureHandle<T> {
-    fn as_pin_mut(&mut self) -> Pin<&mut dyn DequeFuture<T>>;
+    fn as_pin_mut(&mut self) -> Pin<&mut dyn ErasedFuture<T>>;
 }
 
 /// Shared core implementation for both [`FutureDeque`][crate::FutureDeque]
@@ -45,8 +45,10 @@ impl<T, H> Slot<T, H> {
         matches!(self, Self::Ready { .. })
     }
 
-    // Callers always verify is_ready() before calling take_value(), so the
-    // Pending branch is unreachable under normal operation.
+    // Callers always check is_ready() before calling take_value(), making the
+    // Pending branch unreachable under normal operation. However, returning Option
+    // lets callers use combinators like and_then, and also makes the code safe against
+    // future refactors that might remove the precondition check.
     #[cfg_attr(coverage_nightly, coverage(off))]
     fn take_value(self) -> Option<T> {
         match self {
@@ -152,7 +154,7 @@ impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
 
                 let sub_cx = &mut Context::from_waker(waker);
 
-                handle.as_pin_mut().poll_deque(sub_cx)
+                handle.as_pin_mut().poll_erased(sub_cx)
             };
 
             if let Poll::Ready(value) = poll_result {
@@ -168,7 +170,7 @@ impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
         }
     }
 
-    /// Drives all futures and pops the front if ready. Used by `Stream::poll_next`.
+    /// Drives all futures and pops the front if ready.
     pub(crate) fn poll_next(&mut self, cx: &Context<'_>) -> Poll<Option<T>> {
         self.drive(cx);
 
@@ -180,13 +182,32 @@ impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
             Poll::Pending
         }
     }
+
+    /// Drives all futures and pops the back if ready.
+    pub(crate) fn poll_back(&mut self, cx: &Context<'_>) -> Poll<Option<T>> {
+        self.drive(cx);
+
+        if let Some(value) = self.pop_back() {
+            Poll::Ready(Some(value))
+        } else if self.is_empty() {
+            Poll::Ready(None)
+        } else {
+            Poll::Pending
+        }
+    }
 }
 
 impl<T, H> Drop for FutureDequeCore<T, H> {
-    // Defense in depth: release metadata references for all pending slots. The handles
-    // are dropped as part of slot destruction, which removes futures from their pools.
+    // When a pending slot is dropped normally (e.g. via mem::replace in drive()), its
+    // waker metadata reference is released explicitly. This Drop impl handles the case
+    // where the entire deque is dropped with pending slots still present — it ensures
+    // metadata references are released so the waker metadata pool entries can be freed.
+    //
+    // The pool handles in each slot are dropped as part of normal Slot destruction,
+    // which auto-removes futures from their object pools.
     #[cfg_attr(test, mutants::skip)]
-    #[cfg_attr(coverage_nightly, coverage(off))] // Defense in depth.
+    #[cfg_attr(coverage_nightly, coverage(off))] // Only runs when deque is dropped with
+    // pending slots, which is a cleanup path.
     fn drop(&mut self) {
         for slot in self.slots.drain(..) {
             if let Slot::Pending { meta, .. } = slot {
@@ -215,7 +236,7 @@ mod tests {
         task::{Context, Poll, Waker},
     };
 
-    use futures::{Stream, StreamExt, executor::block_on};
+    use futures::{StreamExt, executor::block_on};
 
     use crate::{FutureDeque, LocalFutureDeque};
 
@@ -379,7 +400,7 @@ mod tests {
         // But pop_back should return the completed back future.
         let waker = Waker::noop();
         let cx = &mut Context::from_waker(waker);
-        let poll = Pin::new(&mut deque).poll_next(cx);
+        let poll = deque.poll_front(cx);
         assert!(poll.is_pending());
         assert_eq!(deque.pop_back(), Some(20));
         assert_eq!(deque.len(), 1);
@@ -394,7 +415,7 @@ mod tests {
         let waker = Waker::noop();
         let cx = &mut Context::from_waker(waker);
         // Front is ready but back is not.
-        let poll = Pin::new(&mut deque).poll_next(cx);
+        let poll = deque.poll_front(cx);
         assert_eq!(poll, Poll::Ready(Some(10)));
         // Back is still pending.
         assert!(deque.pop_back().is_none());
@@ -524,7 +545,7 @@ mod tests {
 
         let waker = Waker::noop();
         let cx = &mut Context::from_waker(waker);
-        let result = Pin::new(&mut deque).poll_next(cx);
+        let result = deque.poll_front(cx);
         assert_eq!(result, Poll::Ready(Some(42)));
     }
 
@@ -534,7 +555,7 @@ mod tests {
 
         let waker = Waker::noop();
         let cx = &mut Context::from_waker(waker);
-        let result = Pin::new(&mut deque).poll_next(cx);
+        let result = deque.poll_front(cx);
         assert_eq!(result, Poll::Ready(None));
     }
 
@@ -547,11 +568,11 @@ mod tests {
         let cx = &mut Context::from_waker(waker);
 
         // First poll: future returns Pending and wakes itself via the slot waker.
-        let result = Pin::new(&mut deque).poll_next(cx);
+        let result = deque.poll_front(cx);
         assert!(result.is_pending());
 
         // Second poll: future was re-activated and completes.
-        let result = Pin::new(&mut deque).poll_next(cx);
+        let result = deque.poll_front(cx);
         assert_eq!(result, Poll::Ready(Some(42)));
     }
 
@@ -567,13 +588,13 @@ mod tests {
         let cx = &mut Context::from_waker(waker);
 
         // First poll: the future is activated (newly inserted) and gets polled.
-        let result = Pin::new(&mut deque).poll_next(cx);
+        let result = deque.poll_front(cx);
         assert!(result.is_pending());
         assert_eq!(poll_count.load(Ordering::Relaxed), 1);
 
         // Second poll with the same waker: the future did not wake itself,
         // so it should not be re-polled.
-        let result = Pin::new(&mut deque).poll_next(cx);
+        let result = deque.poll_front(cx);
         assert!(result.is_pending());
         assert_eq!(poll_count.load(Ordering::Relaxed), 1);
     }
@@ -588,7 +609,7 @@ mod tests {
         let cx = &mut Context::from_waker(waker);
 
         // Drive and consume the front item via poll_next.
-        let result = Pin::new(&mut deque).poll_next(cx);
+        let result = deque.poll_front(cx);
         assert_eq!(result, Poll::Ready(Some(10)));
 
         // The second item was also driven and is ready. Pop it manually.
@@ -652,7 +673,7 @@ mod tests {
             // Drive once so the first future completes (becomes Ready).
             let waker = Waker::noop();
             let cx = &mut Context::from_waker(waker);
-            let result = Pin::new(&mut deque).poll_next(cx);
+            let result = deque.poll_front(cx);
             assert_eq!(result, Poll::Ready(Some(42)));
 
             // Deque now has one pending slot. Drop it.
@@ -688,7 +709,7 @@ mod tests {
         let cx = &mut Context::from_waker(waker);
 
         // Drive and consume the front item via poll_next.
-        let result = Pin::new(&mut deque).poll_next(cx);
+        let result = deque.poll_front(cx);
         assert_eq!(result, Poll::Ready(Some(10)));
 
         // The second item was also driven and is ready. Pop it manually.
@@ -705,7 +726,7 @@ mod tests {
         let cx = &mut Context::from_waker(waker);
 
         // Drive: front future still pending, back future ready.
-        let result = Pin::new(&mut deque).poll_next(cx);
+        let result = deque.poll_front(cx);
         assert!(result.is_pending());
 
         // Pop the ready back item.
@@ -763,7 +784,7 @@ mod tests {
         // the sender fires from another thread.
         let waker = Waker::noop();
         let cx = &mut Context::from_waker(waker);
-        let result = Pin::new(&mut deque).poll_next(cx);
+        let result = deque.poll_front(cx);
         assert!(result.is_pending());
 
         // Signal from another thread. May arrive before or during block_on.
@@ -960,7 +981,7 @@ mod tests {
         // First poll: captures waker and sends it via channel.
         let waker = Waker::noop();
         let cx = &mut Context::from_waker(waker);
-        let result = Pin::new(&mut deque).poll_next(cx);
+        let result = deque.poll_front(cx);
         assert!(result.is_pending());
 
         let captured_waker = waker_rx.recv().unwrap();
@@ -987,7 +1008,7 @@ mod tests {
             h.join().unwrap();
         }
 
-        let result = Pin::new(&mut deque).poll_next(cx);
+        let result = deque.poll_front(cx);
         assert_eq!(result, Poll::Ready(Some(42)));
     }
 
@@ -1005,7 +1026,7 @@ mod tests {
         // First poll: captures waker.
         let waker = Waker::noop();
         let cx = &mut Context::from_waker(waker);
-        let result = Pin::new(&mut deque).poll_next(cx);
+        let result = deque.poll_front(cx);
         assert!(result.is_pending());
 
         let captured_waker = waker_rx.recv().unwrap();
@@ -1014,7 +1035,7 @@ mod tests {
         value_ready.store(true, Ordering::Release);
         captured_waker.wake_by_ref();
 
-        let result = Pin::new(&mut deque).poll_next(cx);
+        let result = deque.poll_front(cx);
         assert_eq!(result, Poll::Ready(Some(42)));
 
         // The slot released its metadata reference when the future completed.
@@ -1044,7 +1065,7 @@ mod tests {
         // First poll: captures waker.
         let waker = Waker::noop();
         let cx = &mut Context::from_waker(waker);
-        let result = Pin::new(&mut deque).poll_next(cx);
+        let result = deque.poll_front(cx);
         assert!(result.is_pending());
 
         let captured_waker = waker_rx.recv().unwrap();
@@ -1054,7 +1075,7 @@ mod tests {
         value_ready.store(true, Ordering::Release);
         captured_waker.wake();
 
-        let result = Pin::new(&mut deque).poll_next(cx);
+        let result = deque.poll_front(cx);
         assert_eq!(result, Poll::Ready(Some(42)));
     }
 }
