@@ -29,8 +29,9 @@ pub(crate) struct WakerMeta {
 
     // Shared parent waker, one per FutureDequeCore instance. All slots in the same deque
     // share this Arc, ensuring that parent waker changes propagate automatically without
-    // per-slot iteration.
-    shared_parent: Arc<Mutex<Option<Waker>>>,
+    // per-slot iteration. Initialized to Waker::noop() and updated in drive() when the
+    // executor provides a real waker.
+    shared_parent: Arc<Mutex<Waker>>,
 
     // Self-referential pool handle for cleanup when refcount reaches zero. Set to Some
     // immediately after pool insertion; None only during the brief construction window.
@@ -55,8 +56,6 @@ static WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
     drop_raw_waker,
 );
 
-/// A raw pointer to a [`WakerMeta`] in a pinned pool slab.
-///
 /// All fields of `WakerMeta` are thread-safe (atomics, Arc, Mutex), and the pool
 /// is behind `Arc<Mutex<...>>`, so this pointer is safe to send across threads.
 #[derive(Clone, Copy)]
@@ -77,7 +76,7 @@ unsafe impl Sync for MetaPtr {}
 ///
 /// The returned pointer is stable (pinned in pool slab) and valid until the metadata
 /// is removed from the pool (when its refcount reaches zero).
-pub(crate) fn create_waker_meta(shared_parent: &Arc<Mutex<Option<Waker>>>) -> MetaPtr {
+pub(crate) fn create_waker_meta(shared_parent: &Arc<Mutex<Waker>>) -> MetaPtr {
     WAKER_META_POOL.with(|pool_arc| {
         let pool = Arc::clone(pool_arc);
         let mut pool_guard = pool.lock().expect("we never panic while holding this lock");
@@ -203,9 +202,7 @@ unsafe fn wake_by_ref_raw_waker(data: *const ()) {
             .expect("we never panic while holding this lock")
             .clone();
 
-        if let Some(parent) = parent {
-            parent.wake_by_ref();
-        }
+        parent.wake_by_ref();
     }
 }
 

@@ -22,16 +22,22 @@ pub(crate) trait FutureHandle<T> {
 /// and [`LocalFutureDeque`][crate::LocalFutureDeque].
 ///
 /// Generic over `H`, the pool handle type. The Send variant uses managed handles
-/// (auto-remove on drop), while the Local variant uses raw handles wrapped in a
-/// type that removes on drop via a shared pool reference.
+/// (auto-remove on drop), while the Local variant uses local handles
+/// (auto-remove on drop via Rc-based pool reference).
 pub(crate) struct FutureDequeCore<T, H> {
-    pub(crate) shared_parent: Arc<Mutex<Option<Waker>>>,
+    pub(crate) shared_parent: Arc<Mutex<Waker>>,
     slots: VecDeque<Slot<T, H>>,
 }
 
 enum Slot<T, H> {
-    Pending { handle: H, meta: MetaPtr },
-    Ready { value: T },
+    Pending {
+        handle: H,
+        meta: MetaPtr,
+        waker: Waker,
+    },
+    Ready {
+        value: T,
+    },
 }
 
 impl<T, H> Slot<T, H> {
@@ -53,7 +59,7 @@ impl<T, H> Slot<T, H> {
 impl<T, H> FutureDequeCore<T, H> {
     pub(crate) fn new() -> Self {
         Self {
-            shared_parent: Arc::new(Mutex::new(None)),
+            shared_parent: Arc::new(Mutex::new(Waker::noop().clone())),
             slots: VecDeque::new(),
         }
     }
@@ -61,13 +67,23 @@ impl<T, H> FutureDequeCore<T, H> {
     /// Adds a pre-inserted pool handle to the back of the deque.
     pub(crate) fn push_back_handle(&mut self, handle: H) {
         let meta = waker_meta::create_waker_meta(&self.shared_parent);
-        self.slots.push_back(Slot::Pending { handle, meta });
+        let waker = waker_meta::make_waker(meta);
+        self.slots.push_back(Slot::Pending {
+            handle,
+            meta,
+            waker,
+        });
     }
 
     /// Adds a pre-inserted pool handle to the front of the deque.
     pub(crate) fn push_front_handle(&mut self, handle: H) {
         let meta = waker_meta::create_waker_meta(&self.shared_parent);
-        self.slots.push_front(Slot::Pending { handle, meta });
+        let waker = waker_meta::make_waker(meta);
+        self.slots.push_front(Slot::Pending {
+            handle,
+            meta,
+            waker,
+        });
     }
 
     /// Returns the number of entries (both pending and ready) in the deque.
@@ -112,14 +128,19 @@ impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
                 .shared_parent
                 .lock()
                 .expect("we never panic while holding this lock");
-            if !parent.as_ref().is_some_and(|w| w.will_wake(cx.waker())) {
-                *parent = Some(cx.waker().clone());
+            if !parent.will_wake(cx.waker()) {
+                parent.clone_from(cx.waker());
             }
         }
 
         for slot in &mut self.slots {
             let poll_result = {
-                let Slot::Pending { handle, meta } = slot else {
+                let Slot::Pending {
+                    handle,
+                    meta,
+                    waker,
+                } = slot
+                else {
                     continue;
                 };
 
@@ -129,8 +150,7 @@ impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
                     continue;
                 }
 
-                let waker = waker_meta::make_waker(*meta);
-                let sub_cx = &mut Context::from_waker(&waker);
+                let sub_cx = &mut Context::from_waker(waker);
 
                 handle.as_pin_mut().poll_deque(sub_cx)
             };
@@ -140,8 +160,7 @@ impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
 
                 // Release the Slot's metadata reference. The handle is dropped as
                 // part of the old Slot destruction, which auto-removes the future
-                // from the futures pool (managed handles) or explicitly removes it
-                // (local handles with Drop).
+                // from the futures pool.
                 if let Slot::Pending { meta, .. } = old {
                     waker_meta::release_ref(meta);
                 }
