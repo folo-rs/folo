@@ -141,8 +141,10 @@ impl<T> LocalFutureDeque<T> {
     /// Polls all active futures and pops the front result if ready.
     ///
     /// Returns `Poll::Ready(Some(value))` if the frontmost future has completed,
-    /// `Poll::Ready(None)` if the deque is empty, or `Poll::Pending` if all
-    /// remaining futures are still pending.
+    /// `Poll::Ready(None)` if the deque is empty, or `Poll::Pending` if the front
+    /// future has not yet completed. Note that `Ready(None)` means the deque has no
+    /// entries at all, unlike [`poll`][Self::poll] which returns `Ready(())` when all
+    /// entries have finished but may still contain poppable results.
     pub fn poll_front(&mut self, cx: &Context<'_>) -> Poll<Option<T>> {
         self.core.poll_next(cx)
     }
@@ -150,8 +152,9 @@ impl<T> LocalFutureDeque<T> {
     /// Polls all active futures and pops the back result if ready.
     ///
     /// Returns `Poll::Ready(Some(value))` if the backmost future has completed,
-    /// `Poll::Ready(None)` if the deque is empty, or `Poll::Pending` if all
-    /// remaining futures are still pending.
+    /// `Poll::Ready(None)` if the deque is empty, or `Poll::Pending` if the back
+    /// future has not yet completed. See [`poll_front`][Self::poll_front] for details
+    /// on how this differs from [`poll`][Self::poll].
     pub fn poll_back(&mut self, cx: &Context<'_>) -> Poll<Option<T>> {
         self.core.poll_back(cx)
     }
@@ -211,8 +214,7 @@ impl<T> Future for LocalFutureDeque<T> {
     }
 }
 
-#[cfg(feature = "futures-stream")]
-#[cfg_attr(docsrs, doc(cfg(feature = "futures-stream")))]
+#[cfg(any(test, feature = "futures-stream"))]
 impl<T> futures_core::Stream for LocalFutureDeque<T> {
     type Item = T;
 

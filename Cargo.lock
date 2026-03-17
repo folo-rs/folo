@@ -744,6 +744,7 @@ dependencies = [
  "infinity_pool",
  "mutants",
  "static_assertions",
+ "testing",
 ]
 
 [[package]]

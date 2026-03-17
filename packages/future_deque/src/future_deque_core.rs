@@ -218,7 +218,6 @@ impl<T, H> Drop for FutureDequeCore<T, H> {
     //
     // The pool handles in each slot are dropped as part of normal Slot destruction,
     // which auto-removes futures from their object pools.
-    #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Only runs when deque is dropped with
     // pending slots, which is a cleanup path.
     fn drop(&mut self) {
@@ -252,27 +251,6 @@ mod tests {
     use futures::{StreamExt, executor::block_on};
 
     use crate::{FutureDeque, LocalFutureDeque};
-
-    /// Starts a background thread (at most once) that terminates the process
-    /// after 10 seconds. Prevents tests from hanging indefinitely on mutations
-    /// that break the poll loop.
-    #[allow(clippy::exit, reason = "watchdog must terminate the process on hang")]
-    fn watchdog() {
-        // The watchdog is only needed for mutation testing, which runs under
-        // native cargo test. Under Miri, tests are too slow for a timed watchdog.
-        #[cfg(not(miri))]
-        {
-            use std::{sync::Once, time::Duration};
-
-            static INIT: Once = Once::new();
-            INIT.call_once(|| {
-                std::thread::spawn(|| {
-                    std::thread::sleep(Duration::from_secs(10));
-                    std::process::exit(1);
-                });
-            });
-        }
-    }
 
     /// A future that returns `Pending` for a configurable number of polls, then
     /// returns `Ready(value)`. Used to control activation patterns in tests.
@@ -343,61 +321,61 @@ mod tests {
 
     #[test]
     fn empty_stream_returns_none() {
-        watchdog();
-
-        block_on(async {
-            let mut deque = LocalFutureDeque::<u32>::new();
-            assert!(deque.next().await.is_none());
+        testing::with_watchdog(|| {
+            block_on(async {
+                let mut deque = LocalFutureDeque::<u32>::new();
+                assert!(deque.next().await.is_none());
+            });
         });
     }
 
     #[test]
     fn push_back_pop_front_single() {
-        watchdog();
+        testing::with_watchdog(|| {
+            block_on(async {
+                let mut deque = LocalFutureDeque::new();
+                deque.push_back(CountdownFuture::ready(42));
 
-        block_on(async {
-            let mut deque = LocalFutureDeque::new();
-            deque.push_back(CountdownFuture::ready(42));
-
-            assert_eq!(deque.len(), 1);
-            let value = deque.next().await;
-            assert_eq!(value, Some(42));
-            assert!(deque.is_empty());
+                assert_eq!(deque.len(), 1);
+                let value = deque.next().await;
+                assert_eq!(value, Some(42));
+                assert!(deque.is_empty());
+            });
         });
     }
 
     #[test]
     fn push_back_pop_front_ordering() {
-        watchdog();
+        testing::with_watchdog(|| {
+            block_on(async {
+                let mut deque = LocalFutureDeque::new();
+                deque.push_back(CountdownFuture::ready(1));
+                deque.push_back(CountdownFuture::ready(2));
+                deque.push_back(CountdownFuture::ready(3));
 
-        block_on(async {
-            let mut deque = LocalFutureDeque::new();
-            deque.push_back(CountdownFuture::ready(1));
-            deque.push_back(CountdownFuture::ready(2));
-            deque.push_back(CountdownFuture::ready(3));
-
-            assert_eq!(deque.next().await, Some(1));
-            assert_eq!(deque.next().await, Some(2));
-            assert_eq!(deque.next().await, Some(3));
-            assert!(deque.next().await.is_none());
+                assert_eq!(deque.next().await, Some(1));
+                assert_eq!(deque.next().await, Some(2));
+                assert_eq!(deque.next().await, Some(3));
+                assert!(deque.next().await.is_none());
+            });
         });
     }
 
     #[test]
     fn push_front_pop_front_ordering() {
-        watchdog();
+        testing::with_watchdog(|| {
+            block_on(async {
+                let mut deque = LocalFutureDeque::new();
+                deque.push_front(CountdownFuture::ready(1));
+                deque.push_front(CountdownFuture::ready(2));
+                deque.push_front(CountdownFuture::ready(3));
 
-        block_on(async {
-            let mut deque = LocalFutureDeque::new();
-            deque.push_front(CountdownFuture::ready(1));
-            deque.push_front(CountdownFuture::ready(2));
-            deque.push_front(CountdownFuture::ready(3));
-
-            // push_front reverses insertion order.
-            assert_eq!(deque.next().await, Some(3));
-            assert_eq!(deque.next().await, Some(2));
-            assert_eq!(deque.next().await, Some(1));
-            assert!(deque.next().await.is_none());
+                // push_front reverses insertion order.
+                assert_eq!(deque.next().await, Some(3));
+                assert_eq!(deque.next().await, Some(2));
+                assert_eq!(deque.next().await, Some(1));
+                assert!(deque.next().await.is_none());
+            });
         });
     }
 
@@ -446,47 +424,47 @@ mod tests {
 
     #[test]
     fn mixed_push_front_and_push_back() {
-        watchdog();
+        testing::with_watchdog(|| {
+            block_on(async {
+                let mut deque = LocalFutureDeque::new();
+                deque.push_back(CountdownFuture::ready(2));
+                deque.push_front(CountdownFuture::ready(1));
+                deque.push_back(CountdownFuture::ready(3));
 
-        block_on(async {
-            let mut deque = LocalFutureDeque::new();
-            deque.push_back(CountdownFuture::ready(2));
-            deque.push_front(CountdownFuture::ready(1));
-            deque.push_back(CountdownFuture::ready(3));
-
-            assert_eq!(deque.next().await, Some(1));
-            assert_eq!(deque.next().await, Some(2));
-            assert_eq!(deque.next().await, Some(3));
+                assert_eq!(deque.next().await, Some(1));
+                assert_eq!(deque.next().await, Some(2));
+                assert_eq!(deque.next().await, Some(3));
+            });
         });
     }
 
     #[test]
     fn pending_futures_eventually_complete() {
-        watchdog();
+        testing::with_watchdog(|| {
+            block_on(async {
+                let mut deque = LocalFutureDeque::new();
+                deque.push_back(CountdownFuture::pending(3, 100));
+                deque.push_back(CountdownFuture::pending(1, 200));
 
-        block_on(async {
-            let mut deque = LocalFutureDeque::new();
-            deque.push_back(CountdownFuture::pending(3, 100));
-            deque.push_back(CountdownFuture::pending(1, 200));
-
-            // The stream will poll futures until the front one completes.
-            assert_eq!(deque.next().await, Some(100));
-            assert_eq!(deque.next().await, Some(200));
+                // The stream will poll futures until the front one completes.
+                assert_eq!(deque.next().await, Some(100));
+                assert_eq!(deque.next().await, Some(200));
+            });
         });
     }
 
     #[test]
     fn front_blocks_stream_even_if_back_is_ready() {
-        watchdog();
+        testing::with_watchdog(|| {
+            block_on(async {
+                let mut deque = LocalFutureDeque::new();
+                deque.push_back(CountdownFuture::pending(2, 10));
+                deque.push_back(CountdownFuture::ready(20));
 
-        block_on(async {
-            let mut deque = LocalFutureDeque::new();
-            deque.push_back(CountdownFuture::pending(2, 10));
-            deque.push_back(CountdownFuture::ready(20));
-
-            // Stream yields front first, even though back is ready sooner.
-            assert_eq!(deque.next().await, Some(10));
-            assert_eq!(deque.next().await, Some(20));
+                // Stream yields front first, even though back is ready sooner.
+                assert_eq!(deque.next().await, Some(10));
+                assert_eq!(deque.next().await, Some(20));
+            });
         });
     }
 
@@ -519,12 +497,12 @@ mod tests {
 
     #[test]
     fn send_variant_works() {
-        watchdog();
-
-        block_on(async {
-            let mut deque = FutureDeque::new();
-            deque.push_back(CountdownFuture::ready(42));
-            assert_eq!(deque.next().await, Some(42));
+        testing::with_watchdog(|| {
+            block_on(async {
+                let mut deque = FutureDeque::new();
+                deque.push_back(CountdownFuture::ready(42));
+                assert_eq!(deque.next().await, Some(42));
+            });
         });
     }
 
@@ -664,26 +642,26 @@ mod tests {
 
     #[test]
     fn push_after_consume_reuses_deque() {
-        watchdog();
+        testing::with_watchdog(|| {
+            block_on(async {
+                let mut deque = LocalFutureDeque::new();
 
-        block_on(async {
-            let mut deque = LocalFutureDeque::new();
+                deque.push_back(CountdownFuture::ready(1));
+                deque.push_back(CountdownFuture::ready(2));
 
-            deque.push_back(CountdownFuture::ready(1));
-            deque.push_back(CountdownFuture::ready(2));
+                assert_eq!(deque.next().await, Some(1));
+                assert_eq!(deque.next().await, Some(2));
+                assert!(deque.is_empty());
 
-            assert_eq!(deque.next().await, Some(1));
-            assert_eq!(deque.next().await, Some(2));
-            assert!(deque.is_empty());
+                // Push new futures after consuming all previous ones.
+                deque.push_back(CountdownFuture::ready(3));
+                deque.push_front(CountdownFuture::ready(0));
 
-            // Push new futures after consuming all previous ones.
-            deque.push_back(CountdownFuture::ready(3));
-            deque.push_front(CountdownFuture::ready(0));
-
-            assert_eq!(deque.len(), 2);
-            assert_eq!(deque.next().await, Some(0));
-            assert_eq!(deque.next().await, Some(3));
-            assert!(deque.next().await.is_none());
+                assert_eq!(deque.len(), 2);
+                assert_eq!(deque.next().await, Some(0));
+                assert_eq!(deque.next().await, Some(3));
+                assert!(deque.next().await.is_none());
+            });
         });
     }
 
@@ -725,16 +703,55 @@ mod tests {
     }
 
     #[test]
-    fn send_push_front_ordering() {
-        watchdog();
+    fn drop_releases_waker_metadata_refs() {
+        // Verify that dropping a deque with pending slots correctly releases the
+        // waker metadata references held by those slots (the Drop impl path).
+        //
+        // We do this by capturing a waker clone from a pending future, then
+        // dropping the deque. After the drop, the captured waker clone should
+        // still be valid and its wake/drop should succeed without issues. If the
+        // Drop impl failed to release its reference, the refcount would be off
+        // and cleanup would not function correctly.
+        let (waker_tx, waker_rx) = mpsc::channel();
+        let value_ready = Arc::new(AtomicBool::new(false));
 
-        block_on(async {
+        let captured_waker;
+        {
             let mut deque = FutureDeque::new();
-            deque.push_front(CountdownFuture::ready(1));
-            deque.push_front(CountdownFuture::ready(2));
+            deque.push_back(WakerCaptureFuture {
+                waker_tx: Some(waker_tx),
+                value_ready: Arc::clone(&value_ready),
+            });
 
-            assert_eq!(deque.next().await, Some(2));
-            assert_eq!(deque.next().await, Some(1));
+            // Poll once to capture the waker.
+            let waker = Waker::noop();
+            let cx = &mut Context::from_waker(waker);
+            let result = deque.poll_front(cx);
+            assert!(result.is_pending());
+
+            captured_waker = waker_rx.recv().unwrap();
+
+            // Deque is dropped here with one pending slot. The Drop impl
+            // should call release_ref for that slot's metadata.
+        }
+
+        // The captured waker clone still holds a reference. Waking and dropping
+        // it should succeed — the metadata was not prematurely removed because
+        // the captured clone keeps the refcount above zero.
+        captured_waker.wake();
+    }
+
+    #[test]
+    fn send_push_front_ordering() {
+        testing::with_watchdog(|| {
+            block_on(async {
+                let mut deque = FutureDeque::new();
+                deque.push_front(CountdownFuture::ready(1));
+                deque.push_front(CountdownFuture::ready(2));
+
+                assert_eq!(deque.next().await, Some(2));
+                assert_eq!(deque.next().await, Some(1));
+            });
         });
     }
 
@@ -791,82 +808,82 @@ mod tests {
 
     #[test]
     fn cross_thread_event_completion() {
-        watchdog();
+        testing::with_watchdog(|| {
+            let (sender, receiver) = events_once::Event::<i32>::boxed();
 
-        let (sender, receiver) = events_once::Event::<i32>::boxed();
+            let mut deque = FutureDeque::new();
+            deque.push_back(async move { receiver.await.unwrap() });
 
-        let mut deque = FutureDeque::new();
-        deque.push_back(async move { receiver.await.unwrap() });
+            std::thread::spawn(move || {
+                sender.send(42);
+            })
+            .join()
+            .unwrap();
 
-        std::thread::spawn(move || {
-            sender.send(42);
-        })
-        .join()
-        .unwrap();
-
-        block_on(async {
-            assert_eq!(deque.next().await, Some(42));
+            block_on(async {
+                assert_eq!(deque.next().await, Some(42));
+            });
         });
     }
 
     #[test]
     fn cross_thread_event_waker_activation() {
-        watchdog();
+        testing::with_watchdog(|| {
+            let (sender, receiver) = events_once::Event::<i32>::boxed();
 
-        let (sender, receiver) = events_once::Event::<i32>::boxed();
+            let mut deque = FutureDeque::new();
+            deque.push_back(async move { receiver.await.unwrap() });
 
-        let mut deque = FutureDeque::new();
-        deque.push_back(async move { receiver.await.unwrap() });
+            // Pre-poll with a noop waker so the future registers an initial
+            // slot waker. Then switch to block_on (different parent waker) while
+            // the sender fires from another thread.
+            let waker = Waker::noop();
+            let cx = &mut Context::from_waker(waker);
+            let result = deque.poll_front(cx);
+            assert!(result.is_pending());
 
-        // Pre-poll with a noop waker so the future registers an initial
-        // slot waker. Then switch to block_on (different parent waker) while
-        // the sender fires from another thread.
-        let waker = Waker::noop();
-        let cx = &mut Context::from_waker(waker);
-        let result = deque.poll_front(cx);
-        assert!(result.is_pending());
+            // Signal from another thread. May arrive before or during block_on.
+            let handle = std::thread::spawn(move || {
+                sender.send(99);
+            });
 
-        // Signal from another thread. May arrive before or during block_on.
-        let handle = std::thread::spawn(move || {
-            sender.send(99);
+            // block_on uses a different parent waker. poll() updates the shared
+            // parent, so wake notifications from the slot waker reach the correct
+            // executor.
+            block_on(async {
+                assert_eq!(deque.next().await, Some(99));
+            });
+
+            handle.join().unwrap();
         });
-
-        // block_on uses a different parent waker. poll() updates the shared
-        // parent, so wake notifications from the slot waker reach the correct
-        // executor.
-        block_on(async {
-            assert_eq!(deque.next().await, Some(99));
-        });
-
-        handle.join().unwrap();
     }
 
     #[test]
     fn cross_thread_multiple_events() {
-        watchdog();
+        testing::with_watchdog(|| {
+            let (sender1, receiver1) = events_once::Event::<i32>::boxed();
+            let (sender2, receiver2) = events_once::Event::<i32>::boxed();
+            let (sender3, receiver3) = events_once::Event::<i32>::boxed();
 
-        let (sender1, receiver1) = events_once::Event::<i32>::boxed();
-        let (sender2, receiver2) = events_once::Event::<i32>::boxed();
-        let (sender3, receiver3) = events_once::Event::<i32>::boxed();
+            let mut deque = FutureDeque::new();
+            deque.push_back(async move { receiver1.await.unwrap() });
+            deque.push_back(async move { receiver2.await.unwrap() });
+            deque.push_back(async move { receiver3.await.unwrap() });
 
-        let mut deque = FutureDeque::new();
-        deque.push_back(async move { receiver1.await.unwrap() });
-        deque.push_back(async move { receiver2.await.unwrap() });
-        deque.push_back(async move { receiver3.await.unwrap() });
+            // Signal all events from separate threads.
+            let t1 = std::thread::spawn(move || sender1.send(10));
+            let t2 = std::thread::spawn(move || sender2.send(20));
+            let t3 = std::thread::spawn(move || sender3.send(30));
+            t1.join().unwrap();
+            t2.join().unwrap();
+            t3.join().unwrap();
 
-        // Signal all events from separate threads.
-        let t1 = std::thread::spawn(move || sender1.send(10));
-        let t2 = std::thread::spawn(move || sender2.send(20));
-        let t3 = std::thread::spawn(move || sender3.send(30));
-        t1.join().unwrap();
-        t2.join().unwrap();
-        t3.join().unwrap();
-
-        // Results come out in deque order, not completion order.
-        block_on(async {
-            assert_eq!(deque.next().await, Some(10));
-            assert_eq!(deque.next().await, Some(20));
-            assert_eq!(deque.next().await, Some(30));
+            // Results come out in deque order, not completion order.
+            block_on(async {
+                assert_eq!(deque.next().await, Some(10));
+                assert_eq!(deque.next().await, Some(20));
+                assert_eq!(deque.next().await, Some(30));
+            });
         });
     }
 
@@ -905,108 +922,106 @@ mod tests {
 
     #[test]
     fn concurrent_signals_during_active_poll() {
-        const FUTURE_COUNT: usize = 4;
+        testing::with_watchdog(|| {
+            const FUTURE_COUNT: usize = 4;
 
-        watchdog();
+            let mut senders = Vec::new();
+            let mut deque = FutureDeque::new();
 
-        let mut senders = Vec::new();
-        let mut deque = FutureDeque::new();
-
-        for _ in 0..FUTURE_COUNT {
-            let (sender, receiver) = events_once::Event::<i32>::boxed();
-            senders.push(sender);
-            deque.push_back(async move { receiver.await.unwrap() });
-        }
-
-        // Use a barrier to ensure all sender threads fire concurrently
-        // while block_on is actively polling.
-        let barrier = Arc::new(Barrier::new(FUTURE_COUNT));
-
-        let handles: Vec<_> = senders
-            .into_iter()
-            .enumerate()
-            .map(|(i, sender)| {
-                let barrier = Arc::clone(&barrier);
-                let value = i32::try_from(i).unwrap();
-                std::thread::spawn(move || {
-                    barrier.wait();
-                    sender.send(value);
-                })
-            })
-            .collect();
-
-        block_on(async {
-            let mut results = Vec::new();
-            while let Some(value) = deque.next().await {
-                results.push(value);
+            for _ in 0..FUTURE_COUNT {
+                let (sender, receiver) = events_once::Event::<i32>::boxed();
+                senders.push(sender);
+                deque.push_back(async move { receiver.await.unwrap() });
             }
-            let expected: Vec<i32> = (0..FUTURE_COUNT)
-                .map(|i| i32::try_from(i).unwrap())
-                .collect();
-            assert_eq!(results, expected);
-        });
 
-        for h in handles {
-            h.join().unwrap();
-        }
+            // Use a barrier to ensure all sender threads fire concurrently
+            // while block_on is actively polling.
+            let barrier = Arc::new(Barrier::new(FUTURE_COUNT));
+
+            let handles: Vec<_> = senders
+                .into_iter()
+                .enumerate()
+                .map(|(i, sender)| {
+                    let barrier = Arc::clone(&barrier);
+                    let value = i32::try_from(i).unwrap();
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        sender.send(value);
+                    })
+                })
+                .collect();
+
+            block_on(async {
+                let mut results = Vec::new();
+                while let Some(value) = deque.next().await {
+                    results.push(value);
+                }
+                let expected: Vec<i32> = (0..FUTURE_COUNT)
+                    .map(|i| i32::try_from(i).unwrap())
+                    .collect();
+                assert_eq!(results, expected);
+            });
+
+            for h in handles {
+                h.join().unwrap();
+            }
+        });
     }
 
     #[test]
     fn deque_consumed_on_different_thread() {
-        watchdog();
+        testing::with_watchdog(|| {
+            let (sender1, receiver1) = events_once::Event::<i32>::boxed();
+            let (sender2, receiver2) = events_once::Event::<i32>::boxed();
 
-        let (sender1, receiver1) = events_once::Event::<i32>::boxed();
-        let (sender2, receiver2) = events_once::Event::<i32>::boxed();
+            let mut deque = FutureDeque::new();
+            deque.push_back(async move { receiver1.await.unwrap() });
+            deque.push_back(async move { receiver2.await.unwrap() });
 
-        let mut deque = FutureDeque::new();
-        deque.push_back(async move { receiver1.await.unwrap() });
-        deque.push_back(async move { receiver2.await.unwrap() });
+            sender1.send(10);
+            sender2.send(20);
 
-        sender1.send(10);
-        sender2.send(20);
-
-        // Move the deque to a different thread for consumption.
-        let handle = std::thread::spawn(move || {
-            block_on(async {
-                assert_eq!(deque.next().await, Some(10));
-                assert_eq!(deque.next().await, Some(20));
+            // Move the deque to a different thread for consumption.
+            let handle = std::thread::spawn(move || {
+                block_on(async {
+                    assert_eq!(deque.next().await, Some(10));
+                    assert_eq!(deque.next().await, Some(20));
+                });
             });
-        });
 
-        handle.join().unwrap();
+            handle.join().unwrap();
+        });
     }
 
     #[test]
     fn deque_polled_on_foreign_thread_with_concurrent_signals() {
-        watchdog();
+        testing::with_watchdog(|| {
+            let (sender1, receiver1) = events_once::Event::<i32>::boxed();
+            let (sender2, receiver2) = events_once::Event::<i32>::boxed();
 
-        let (sender1, receiver1) = events_once::Event::<i32>::boxed();
-        let (sender2, receiver2) = events_once::Event::<i32>::boxed();
+            let mut deque = FutureDeque::new();
+            deque.push_back(async move { receiver1.await.unwrap() });
+            deque.push_back(async move { receiver2.await.unwrap() });
 
-        let mut deque = FutureDeque::new();
-        deque.push_back(async move { receiver1.await.unwrap() });
-        deque.push_back(async move { receiver2.await.unwrap() });
-
-        // Move the deque to another thread for polling while signals
-        // arrive from the main thread.
-        let consumer = std::thread::spawn(move || {
-            block_on(async {
-                assert_eq!(deque.next().await, Some(10));
-                assert_eq!(deque.next().await, Some(20));
+            // Move the deque to another thread for polling while signals
+            // arrive from the main thread.
+            let consumer = std::thread::spawn(move || {
+                block_on(async {
+                    assert_eq!(deque.next().await, Some(10));
+                    assert_eq!(deque.next().await, Some(20));
+                });
             });
+
+            sender1.send(10);
+            sender2.send(20);
+
+            consumer.join().unwrap();
         });
-
-        sender1.send(10);
-        sender2.send(20);
-
-        consumer.join().unwrap();
     }
 
     #[test]
     fn concurrent_wakes_on_same_slot() {
         const WAKER_COUNT: usize = 4;
-
-        watchdog();
 
         let (waker_tx, waker_rx) = mpsc::channel();
         let value_ready = Arc::new(AtomicBool::new(false));
@@ -1090,8 +1105,6 @@ mod tests {
 
     #[test]
     fn owned_wake_activates_future() {
-        watchdog();
-
         let (waker_tx, waker_rx) = mpsc::channel();
         let value_ready = Arc::new(AtomicBool::new(false));
 

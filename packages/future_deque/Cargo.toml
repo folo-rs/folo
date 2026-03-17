@@ -14,7 +14,6 @@ rust-version.workspace = true
 all-features = true
 
 [features]
-default = ["futures-stream"]
 futures-stream = ["dep:futures-core"]
 
 [dependencies]
@@ -25,8 +24,10 @@ infinity_pool = { workspace = true }
 criterion = { workspace = true }
 events_once = { path = "../events_once" }
 futures = { workspace = true }
+futures-core = { version = "0.3" }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 
 [lints]
 workspace = true

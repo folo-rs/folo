@@ -9,7 +9,7 @@ use std::{
 
 use std::sync::Mutex;
 
-use infinity_pool::{RawPinnedPool, RawPooled, RawPooledMut};
+use infinity_pool::{PinnedPool, Pooled, PooledMut};
 
 // Per-slot metadata for activation tracking and waker management.
 //
@@ -33,29 +33,20 @@ pub(crate) struct WakerMeta {
     // executor provides a real waker.
     shared_parent: Arc<Mutex<Waker>>,
 
-    // Self-referential pool handle for cleanup when refcount reaches zero. Set to Some
-    // immediately after pool insertion; None only during the brief construction window.
+    // Self-referential pool handle for cleanup when refcount reaches zero. Dropping the
+    // Pooled handle auto-removes the entry from the pool. Set to Some immediately after
+    // pool insertion; None only during the brief construction window and after cleanup.
     // Uses UnsafeCell because we need interior mutability during bootstrapping (writing
-    // the handle back through a shared reference obtained from as_ref).
-    self_handle: UnsafeCell<Option<RawPooled<Self>>>,
-
-    // Reference to the creating thread's metadata pool for self-cleanup. Waker drops
-    // can happen on any thread after the origin thread has terminated, so this must be
-    // an Arc to keep the pool alive and accessible from any thread.
-    pool: Arc<Mutex<RawPinnedPool<Self>>>,
+    // the handle back through a shared reference obtained from the pool).
+    self_handle: UnsafeCell<Option<Pooled<Self>>>,
 }
 
-// Thread-local pool for waker metadata. Uses `RawPinnedPool` (behind `Arc<Mutex<...>>`)
-// instead of `PinnedPool` because:
-// 1. Waker drops can happen on any thread, so the pool must be accessible cross-thread.
-//    `PinnedPool` is `!Send` (thread-local only), so we need the raw variant.
-// 2. We need stable (pinned) addresses for the RawWaker data pointer, which
-//    `RawPinnedPool` provides via slab-based allocation.
-// 3. The Arc keeps the pool alive even after the creating thread has terminated,
-//    ensuring late waker drops on foreign threads can still return metadata to the pool.
+// Thread-local pool for waker metadata. PinnedPool provides stable (pinned) addresses
+// for the RawWaker data pointer via slab-based allocation, and is internally
+// reference-counted (Arc) and synchronized (Mutex), so cross-thread waker drops can
+// safely access the pool even after the creating thread has terminated.
 thread_local! {
-    static WAKER_META_POOL: Arc<Mutex<RawPinnedPool<WakerMeta>>> =
-        Arc::new(Mutex::new(RawPinnedPool::new()));
+    static WAKER_META_POOL: PinnedPool<WakerMeta> = PinnedPool::new();
 }
 
 static WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
@@ -66,15 +57,15 @@ static WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
 );
 
 /// All fields of `WakerMeta` are thread-safe (atomics, Arc, Mutex), and the pool
-/// is behind `Arc<Mutex<...>>`, so this pointer is safe to send across threads.
+/// is internally synchronized, so this pointer is safe to send across threads.
 #[derive(Clone, Copy)]
 pub(crate) struct MetaPtr(*const WakerMeta);
 
 // SAFETY: WakerMeta fields are all thread-safe (AtomicUsize, Arc, std::sync::Mutex).
-// The pool slab provides a stable (pinned) address, and the pool itself is protected
-// by Arc<Mutex<...>>. The UnsafeCell<Option<RawPooled<WakerMeta>>> is only written
-// during bootstrapping (under pool lock) and read when refcount reaches zero
-// (no concurrent access possible).
+// The pool slab provides a stable (pinned) address, and the pool itself is internally
+// reference-counted and synchronized. The UnsafeCell<Option<Pooled<WakerMeta>>> is
+// only written during bootstrapping and read when refcount reaches zero (no concurrent
+// access possible).
 unsafe impl Send for MetaPtr {}
 
 // SAFETY: Same justification as Send above. All WakerMeta fields use thread-safe
@@ -86,37 +77,35 @@ unsafe impl Sync for MetaPtr {}
 /// The returned pointer is stable (pinned in pool slab) and valid until the metadata
 /// is removed from the pool (when its refcount reaches zero).
 pub(crate) fn create_waker_meta(shared_parent: &Arc<Mutex<Waker>>) -> MetaPtr {
-    WAKER_META_POOL.with(|pool_arc| {
-        let pool = Arc::clone(pool_arc);
-        let mut pool_guard = pool.lock().expect("we never panic while holding this lock");
-
-        let handle: RawPooledMut<WakerMeta> = pool_guard.insert(WakerMeta {
+    WAKER_META_POOL.with(|pool| {
+        let handle: PooledMut<WakerMeta> = pool.insert(WakerMeta {
             ref_count: AtomicUsize::new(1),
             activated: AtomicUsize::new(1),
             shared_parent: Arc::clone(shared_parent),
             self_handle: UnsafeCell::new(None),
-            pool: Arc::clone(&pool),
         });
 
         // Get stable pointer before consuming the mutable handle.
-        // SAFETY: The pool is alive (we hold the lock) and the handle is valid.
-        let meta_ptr: *const WakerMeta = unsafe { handle.as_ref() };
+        let meta_ptr: *const WakerMeta = handle.ptr().as_ptr();
 
-        // Convert to shared (Copy) handle for self-cleanup.
-        let shared: RawPooled<WakerMeta> = handle.into_shared();
+        // Convert to shared (Clone) handle for self-cleanup.
+        let shared: Pooled<WakerMeta> = handle.into_shared();
 
         // Write back the self-handle through UnsafeCell. We have exclusive access:
-        // the pool lock is held and no other code has a reference to this
-        // freshly-inserted slot.
+        // the entry was just inserted and no other code has a reference to it.
         //
-        // SAFETY: Exclusive access guaranteed by the pool lock and fresh insertion.
-        // UnsafeCell provides the interior mutability needed to write through a
-        // pointer derived from a shared reference.
-        let self_handle_ptr = unsafe { (*meta_ptr).self_handle.get() };
+        // SAFETY: Exclusive access guaranteed by fresh insertion — no other code
+        // path can reach this entry until we return MetaPtr.
+        let cell_ptr = unsafe { core::ptr::addr_of!((*meta_ptr).self_handle) };
 
-        // SAFETY: The pointer from UnsafeCell::get is valid and we have exclusive access.
+        // UnsafeCell is #[repr(transparent)] over T, so we cast to access
+        // the inner value directly.
+        let inner_ptr = cell_ptr as *mut Option<Pooled<WakerMeta>>;
+
+        // SAFETY: Exclusive access guaranteed by fresh insertion. The
+        // UnsafeCell provides interior mutability for this bootstrapping write.
         unsafe {
-            (*self_handle_ptr) = Some(shared);
+            *inner_ptr = Some(shared);
         }
 
         MetaPtr(meta_ptr)
@@ -149,26 +138,29 @@ pub(crate) fn check_activated(meta: MetaPtr) -> bool {
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn release_ref(meta: MetaPtr) {
     // SAFETY: The metadata is valid (refcount > 0 guarantees it has not been removed).
-    let meta_ref = unsafe { &*meta.0 };
+    let previous = unsafe { &*meta.0 }.ref_count.fetch_sub(1, Ordering::AcqRel);
 
-    if meta_ref.ref_count.fetch_sub(1, Ordering::AcqRel) == 1 {
-        // Last reference — extract cleanup data before removing (which drops the
-        // WakerMeta). Read order matters: we must read fields before the remove
-        // call frees the pool slot.
+    if previous == 1 {
+        // Last reference — extract the self-handle. Dropping it auto-removes the
+        // entry from the pool. We must not hold any reference to the WakerMeta
+        // across the drop because the pool slot is freed.
         //
-        // SAFETY: No concurrent access is possible (refcount was 1, now 0). The
-        // UnsafeCell is read-only at this point and was written during bootstrapping.
-        let self_handle = unsafe { (*meta_ref.self_handle.get()).take() }
-            .expect("self_handle is always set immediately after pool insertion");
-        let pool = Arc::clone(&meta_ref.pool);
+        // We use addr_of! to project a raw pointer to the self_handle field
+        // without creating an intermediate &WakerMeta reference.
+        //
+        // SAFETY: No concurrent access is possible (refcount was 1, now 0).
+        let cell_ptr = unsafe { core::ptr::addr_of!((*meta.0).self_handle) };
 
-        // SAFETY: The handle was stored during creation and has not been removed.
-        // The pool is alive (we hold an Arc clone).
-        unsafe {
-            pool.lock()
-                .expect("we never panic while holding this lock")
-                .remove(self_handle);
-        }
+        // UnsafeCell is #[repr(transparent)] over T, so *const UnsafeCell<T>
+        // has the same layout as *mut T. We cast to access the inner value.
+        let inner_ptr = cell_ptr as *mut Option<Pooled<WakerMeta>>;
+
+        // SAFETY: The UnsafeCell was written during bootstrapping. No concurrent
+        // access is possible because the refcount reached zero.
+        let self_handle = unsafe { (*inner_ptr).take() }
+            .expect("self_handle is always set immediately after pool insertion");
+
+        drop(self_handle);
     }
 }
 
