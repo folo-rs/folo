@@ -63,22 +63,29 @@ for manual cache warming after toolchain updates.
 
 ## Design Decisions
 
-1. **Parallelization over sequential execution** — Individual jobs provide:
+1. **Concurrency control** — Workflows triggered by push or pull request use the `concurrency`
+   key with `group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}` and
+   `cancel-in-progress: true`. This automatically cancels in-progress runs when new commits
+   are pushed to the same PR branch or to main, avoiding wasted runner time on outdated code.
+   The `cache-warmup` workflow is excluded because it is schedule-triggered and not
+   commit-driven.
+
+2. **Parallelization over sequential execution** — Individual jobs provide:
    - Faster CI feedback (first failure visible immediately)
    - Clear failure identification (specific check names in GitHub status)
    - Better resource utilization across GitHub runners
 
-2. **Platform matrix considerations**:
+3. **Platform matrix considerations**:
    - `format-check` is single-platform (Ubuntu) to save resources
    - `docs` and `machete` remain multi-platform due to conditional compilation differences
    - `miri-harder-*` jobs are Windows-only due to high cost; sharded across parallel runners
    - All other checks run on 3 platforms (ubuntu, macos, windows)
 
-3. **Timeouts**:
+4. **Timeouts**:
    - Default timeout for most jobs
    - Explicit timeouts for long-running jobs to prevent runaway processes
 
-4. **Shared infrastructure**:
+5. **Shared infrastructure**:
    - All jobs use the common `.github/actions/setup-environment` action
    - Rust cache uses `shared-key: prerequisites` for cross-job cache sharing
    - `fail-fast: false` ensures all platform checks complete even if one fails
