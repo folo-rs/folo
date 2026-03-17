@@ -205,12 +205,14 @@
 //!
 //! // By taking both senders and receivers from the same original processor set, we
 //! // guarantee that all worker threads combined cannot exceed the processor time quota.
-//! let mail_senders = hw.processors()
+//! let mail_senders = hw
+//!     .processors()
 //!     .take(nz!(2))
 //!     .expect("need at least 2 processors for mail workers")
 //!     .spawn_threads(|_| send_mail());
 //!
-//! let mail_receivers = hw.processors()
+//! let mail_receivers = hw
+//!     .processors()
 //!     .take(nz!(2))
 //!     .expect("need at least 2 processors for mail workers")
 //!     .spawn_threads(|_| receive_mail());

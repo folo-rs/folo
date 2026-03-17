@@ -1,13 +1,7 @@
-use std::{
-    cell::UnsafeCell,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    task::{RawWaker, RawWakerVTable, Waker},
-};
-
-use std::sync::Mutex;
+use std::cell::UnsafeCell;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::{RawWaker, RawWakerVTable, Waker};
 
 use infinity_pool::{PinnedPool, Pooled, PooledMut};
 

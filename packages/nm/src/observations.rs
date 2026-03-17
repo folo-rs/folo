@@ -357,9 +357,8 @@ impl ObservationBagSnapshot {
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
-    use std::iter;
     use std::sync::Arc;
-    use std::thread;
+    use std::{iter, thread};
 
     use super::*;
 

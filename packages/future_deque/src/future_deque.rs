@@ -1,16 +1,12 @@
-use std::{
-    fmt,
-    future::Future,
-    pin::Pin,
-    task::{Context, Poll},
-};
+use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use infinity_pool::{BlindPool, BlindPooledMut};
 
-use crate::{
-    erased_future::{ErasedFuture, PooledCastErasedFuture as _},
-    future_deque_core::{FutureDequeCore, FutureHandle},
-};
+use crate::erased_future::{ErasedFuture, PooledCastErasedFuture as _};
+use crate::future_deque_core::{FutureDequeCore, FutureHandle};
 
 // Thread-local object pool for storing type-erased futures. Each thread gets its own pool
 // instance, so futures inserted on one thread are backed by that thread's slab allocator.

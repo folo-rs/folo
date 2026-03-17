@@ -7,8 +7,7 @@ use std::{fmt, mem};
 
 use infinity_pool::RawPooled;
 
-use crate::NEVER_POISONED;
-use crate::{Event, EventPoolCore, EventRef};
+use crate::{Event, EventPoolCore, EventRef, NEVER_POISONED};
 
 pub(crate) struct PooledRef<T: Send + 'static> {
     core: Arc<EventPoolCore<T>>,

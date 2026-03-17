@@ -5,8 +5,7 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::{fmt, mem, ptr};
 
-use crate::NEVER_POISONED;
-use crate::{BlindPoolCore, BlindPooled, LayoutKey, RawPooledMut};
+use crate::{BlindPoolCore, BlindPooled, LayoutKey, NEVER_POISONED, RawPooledMut};
 
 // Note that while this is a thread-safe handle, we do not require `T: Send` because
 // we do not want to require every trait we cast into via trait object to be `Send`.

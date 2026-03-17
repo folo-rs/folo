@@ -1,16 +1,12 @@
-use std::{
-    fmt,
-    future::Future,
-    pin::Pin,
-    task::{Context, Poll},
-};
+use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use infinity_pool::{LocalBlindPool, LocalBlindPooledMut};
 
-use crate::{
-    erased_future::{ErasedFuture, PooledCastErasedFuture as _},
-    future_deque_core::{FutureDequeCore, FutureHandle},
-};
+use crate::erased_future::{ErasedFuture, PooledCastErasedFuture as _};
+use crate::future_deque_core::{FutureDequeCore, FutureHandle};
 
 // Thread-local object pool for storing type-erased futures in the `!Send` variant.
 // Uses `LocalBlindPool` (Rc-based) instead of `BlindPool` (Arc-based) because the

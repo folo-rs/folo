@@ -1,16 +1,10 @@
-use std::{
-    collections::VecDeque,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll, Waker},
-};
+use std::collections::VecDeque;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
 
-use std::sync::Mutex;
-
-use crate::{
-    erased_future::ErasedFuture,
-    waker_meta::{self, MetaPtr},
-};
+use crate::erased_future::ErasedFuture;
+use crate::waker_meta::{self, MetaPtr};
 
 /// Abstracts over managed ([`BlindPooledMut`][infinity_pool::BlindPooledMut]) and raw
 /// pool handles, allowing [`FutureDequeCore`] to work with both Send and !Send variants.
@@ -237,18 +231,14 @@ impl<T, H> Unpin for FutureDequeCore<T, H> {}
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::{
-        future::Future,
-        pin::Pin,
-        sync::{
-            Arc, Barrier,
-            atomic::{AtomicBool, AtomicUsize, Ordering},
-            mpsc,
-        },
-        task::{Context, Poll, Waker},
-    };
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier, mpsc};
+    use std::task::{Context, Poll, Waker};
 
-    use futures::{StreamExt, executor::block_on};
+    use futures::StreamExt;
+    use futures::executor::block_on;
 
     use crate::{FutureDeque, LocalFutureDeque};
 

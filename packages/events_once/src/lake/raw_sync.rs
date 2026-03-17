@@ -11,8 +11,7 @@ use std::sync::Mutex;
 
 use hash_hasher::HashedMap;
 
-use crate::NEVER_POISONED;
-use crate::{RawEventPool, RawPooledReceiver, RawPooledSender};
+use crate::{NEVER_POISONED, RawEventPool, RawPooledReceiver, RawPooledSender};
 
 /// Rents out events of different payloads.
 ///

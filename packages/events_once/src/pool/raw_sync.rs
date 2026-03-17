@@ -13,8 +13,10 @@ use std::sync::Mutex;
 
 use infinity_pool::RawPinnedPool;
 
-use crate::NEVER_POISONED;
-use crate::{Event, RawPooledReceiver, RawPooledRef, RawPooledSender, ReceiverCore, SenderCore};
+use crate::{
+    Event, NEVER_POISONED, RawPooledReceiver, RawPooledRef, RawPooledSender, ReceiverCore,
+    SenderCore,
+};
 
 /// A pool of reusable thread-safe one-time events with manual pool lifecycle management.
 ///

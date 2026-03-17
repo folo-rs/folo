@@ -4,13 +4,11 @@ use std::backtrace::Backtrace;
 use std::fmt;
 #[cfg(debug_assertions)]
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use hash_hasher::HashedMap;
 
-use crate::NEVER_POISONED;
-use crate::{EventPool, PooledReceiver, PooledSender};
+use crate::{EventPool, NEVER_POISONED, PooledReceiver, PooledSender};
 
 /// Rents out thread-safe events of different payloads.
 ///

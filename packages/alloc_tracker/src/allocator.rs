@@ -301,8 +301,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Allocator<A> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::iter;
-    use std::thread;
+    use std::{iter, thread};
 
     use super::*;
 

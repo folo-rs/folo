@@ -1,11 +1,9 @@
 #![expect(missing_docs, reason = "benchmarks do not require API documentation")]
 
-use std::{
-    future::Future,
-    hint::black_box,
-    pin::Pin,
-    task::{Context, Poll, Waker},
-};
+use std::future::Future;
+use std::hint::black_box;
+use std::pin::Pin;
+use std::task::{Context, Poll, Waker};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use future_deque::{FutureDeque, LocalFutureDeque};

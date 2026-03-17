@@ -3,9 +3,8 @@ use std::mem::MaybeUninit;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::{Arc, MutexGuard};
 
-use crate::NEVER_POISONED;
 use crate::{
-    BlindPoolCore, BlindPoolInnerMap, BlindPooledMut, LayoutKey, RawOpaquePool,
+    BlindPoolCore, BlindPoolInnerMap, BlindPooledMut, LayoutKey, NEVER_POISONED, RawOpaquePool,
     RawOpaquePoolThreadSafe,
 };
 
