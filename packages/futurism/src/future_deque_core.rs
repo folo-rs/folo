@@ -208,8 +208,9 @@ mod tests {
         future::Future,
         pin::Pin,
         sync::{
-            Arc,
+            Arc, Barrier,
             atomic::{AtomicBool, AtomicUsize, Ordering},
+            mpsc,
         },
         task::{Context, Poll, Waker},
     };
@@ -745,5 +746,253 @@ mod tests {
             assert_eq!(deque.next().await, Some(20));
             assert_eq!(deque.next().await, Some(30));
         });
+    }
+
+    // --- Additional multithreaded tests ---
+    //
+    // These tests exercise the waker machinery (atomic activation, refcounting,
+    // cross-thread clone/wake/drop) under real concurrency. They are especially
+    // valuable when run under Miri with many-seeds (miri-harder) to detect
+    // data races and incorrect memory orderings.
+
+    /// A future that captures a clone of its waker on first poll and sends it
+    /// via a channel. Completes when a shared flag is set.
+    struct WakerCaptureFuture {
+        waker_tx: Option<mpsc::Sender<Waker>>,
+        value_ready: Arc<AtomicBool>,
+    }
+
+    impl Unpin for WakerCaptureFuture {}
+
+    impl Future for WakerCaptureFuture {
+        type Output = i32;
+
+        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<i32> {
+            let this = self.get_mut();
+            if let Some(tx) = this.waker_tx.take() {
+                tx.send(cx.waker().clone()).unwrap();
+            }
+
+            if this.value_ready.load(Ordering::Acquire) {
+                Poll::Ready(42)
+            } else {
+                Poll::Pending
+            }
+        }
+    }
+
+    #[test]
+    fn concurrent_signals_during_active_poll() {
+        const FUTURE_COUNT: usize = 4;
+
+        watchdog();
+
+        let mut senders = Vec::new();
+        let mut deque = FutureDeque::new();
+
+        for _ in 0..FUTURE_COUNT {
+            let (sender, receiver) = events_once::Event::<i32>::boxed();
+            senders.push(sender);
+            deque.push_back(async move { receiver.await.unwrap() });
+        }
+
+        // Use a barrier to ensure all sender threads fire concurrently
+        // while block_on is actively polling.
+        let barrier = Arc::new(Barrier::new(FUTURE_COUNT));
+
+        let handles: Vec<_> = senders
+            .into_iter()
+            .enumerate()
+            .map(|(i, sender)| {
+                let barrier = Arc::clone(&barrier);
+                let value = i32::try_from(i).unwrap();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    sender.send(value);
+                })
+            })
+            .collect();
+
+        block_on(async {
+            let mut results = Vec::new();
+            while let Some(value) = deque.next().await {
+                results.push(value);
+            }
+            let expected: Vec<i32> = (0..FUTURE_COUNT)
+                .map(|i| i32::try_from(i).unwrap())
+                .collect();
+            assert_eq!(results, expected);
+        });
+
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn deque_consumed_on_different_thread() {
+        watchdog();
+
+        let (sender1, receiver1) = events_once::Event::<i32>::boxed();
+        let (sender2, receiver2) = events_once::Event::<i32>::boxed();
+
+        let mut deque = FutureDeque::new();
+        deque.push_back(async move { receiver1.await.unwrap() });
+        deque.push_back(async move { receiver2.await.unwrap() });
+
+        sender1.send(10);
+        sender2.send(20);
+
+        // Move the deque to a different thread for consumption.
+        let handle = std::thread::spawn(move || {
+            block_on(async {
+                assert_eq!(deque.next().await, Some(10));
+                assert_eq!(deque.next().await, Some(20));
+            });
+        });
+
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn deque_polled_on_foreign_thread_with_concurrent_signals() {
+        watchdog();
+
+        let (sender1, receiver1) = events_once::Event::<i32>::boxed();
+        let (sender2, receiver2) = events_once::Event::<i32>::boxed();
+
+        let mut deque = FutureDeque::new();
+        deque.push_back(async move { receiver1.await.unwrap() });
+        deque.push_back(async move { receiver2.await.unwrap() });
+
+        // Move the deque to another thread for polling while signals
+        // arrive from the main thread.
+        let consumer = std::thread::spawn(move || {
+            block_on(async {
+                assert_eq!(deque.next().await, Some(10));
+                assert_eq!(deque.next().await, Some(20));
+            });
+        });
+
+        sender1.send(10);
+        sender2.send(20);
+
+        consumer.join().unwrap();
+    }
+
+    #[test]
+    fn concurrent_wakes_on_same_slot() {
+        const WAKER_COUNT: usize = 4;
+
+        watchdog();
+
+        let (waker_tx, waker_rx) = mpsc::channel();
+        let value_ready = Arc::new(AtomicBool::new(false));
+
+        let mut deque = FutureDeque::new();
+        deque.push_back(WakerCaptureFuture {
+            waker_tx: Some(waker_tx),
+            value_ready: Arc::clone(&value_ready),
+        });
+
+        // First poll: captures waker and sends it via channel.
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+        let result = Pin::new(&mut deque).poll_next(cx);
+        assert!(result.is_pending());
+
+        let captured_waker = waker_rx.recv().unwrap();
+
+        // Set value ready before waking.
+        value_ready.store(true, Ordering::Release);
+
+        // Clone the waker to multiple threads and wake concurrently.
+        // This exercises the atomic activation dedup: only the first
+        // swap(1, AcqRel) that sees 0 wakes the parent.
+        let barrier = Arc::new(Barrier::new(WAKER_COUNT));
+        let handles: Vec<_> = std::iter::repeat_with(|| {
+            let w = captured_waker.clone();
+            let b = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                b.wait();
+                w.wake_by_ref();
+            })
+        })
+        .take(WAKER_COUNT)
+        .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let result = Pin::new(&mut deque).poll_next(cx);
+        assert_eq!(result, Poll::Ready(Some(42)));
+    }
+
+    #[test]
+    fn waker_clone_dropped_on_foreign_thread() {
+        let (waker_tx, waker_rx) = mpsc::channel();
+        let value_ready = Arc::new(AtomicBool::new(false));
+
+        let mut deque = FutureDeque::new();
+        deque.push_back(WakerCaptureFuture {
+            waker_tx: Some(waker_tx),
+            value_ready: Arc::clone(&value_ready),
+        });
+
+        // First poll: captures waker.
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+        let result = Pin::new(&mut deque).poll_next(cx);
+        assert!(result.is_pending());
+
+        let captured_waker = waker_rx.recv().unwrap();
+
+        // Complete the future via the captured waker.
+        value_ready.store(true, Ordering::Release);
+        captured_waker.wake_by_ref();
+
+        let result = Pin::new(&mut deque).poll_next(cx);
+        assert_eq!(result, Poll::Ready(Some(42)));
+
+        // The slot released its metadata reference when the future completed.
+        // The captured waker clone still holds a reference. Dropping it on
+        // another thread exercises the cross-thread release_ref path, including
+        // pool.lock().remove() from a foreign thread.
+        std::thread::spawn(move || {
+            drop(captured_waker);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn owned_wake_activates_future() {
+        watchdog();
+
+        let (waker_tx, waker_rx) = mpsc::channel();
+        let value_ready = Arc::new(AtomicBool::new(false));
+
+        let mut deque = FutureDeque::new();
+        deque.push_back(WakerCaptureFuture {
+            waker_tx: Some(waker_tx),
+            value_ready: Arc::clone(&value_ready),
+        });
+
+        // First poll: captures waker.
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+        let result = Pin::new(&mut deque).poll_next(cx);
+        assert!(result.is_pending());
+
+        let captured_waker = waker_rx.recv().unwrap();
+
+        // Use owned wake (consumes the waker), which calls
+        // wake_raw_waker → wake_by_ref + drop.
+        value_ready.store(true, Ordering::Release);
+        captured_waker.wake();
+
+        let result = Pin::new(&mut deque).poll_next(cx);
+        assert_eq!(result, Poll::Ready(Some(42)));
     }
 }
