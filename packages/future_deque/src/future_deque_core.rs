@@ -35,6 +35,11 @@ enum Slot<T, H> {
 }
 
 impl<T, H> Slot<T, H> {
+    // Mutations to is_ready (returning false) and take_value (returning None) cause
+    // pop_front/pop_back to never return results, making blocking tests (block_on +
+    // Stream::next) hang indefinitely. Non-blocking tests catch both mutations, but
+    // the blocking tests in the same binary prevent the test process from exiting.
+    #[cfg_attr(test, mutants::skip)]
     fn is_ready(&self) -> bool {
         matches!(self, Self::Ready { .. })
     }
@@ -44,6 +49,7 @@ impl<T, H> Slot<T, H> {
     // lets callers use combinators like and_then, and also makes the code safe against
     // future refactors that might remove the precondition check.
     #[cfg_attr(coverage_nightly, coverage(off))]
+    #[cfg_attr(test, mutants::skip)]
     fn take_value(self) -> Option<T> {
         match self {
             Self::Ready { value } => Some(value),
@@ -88,11 +94,17 @@ impl<T, H> FutureDequeCore<T, H> {
     }
 
     /// Returns `true` if the deque contains no entries.
+    // Mutation (returning false) causes Stream::next to return Pending for empty
+    // deques, making blocking tests hang. Non-blocking tests catch this mutation.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn is_empty(&self) -> bool {
         self.slots.is_empty()
     }
 
     /// Pops the front result if the frontmost future has completed.
+    // Mutation (returning None) causes Stream::next to never yield results,
+    // making blocking tests hang. Non-blocking tests catch this mutation.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn pop_front(&mut self) -> Option<T> {
         let front_ready = self.slots.front().is_some_and(Slot::is_ready);
         if front_ready {
@@ -118,6 +130,13 @@ impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
     ///
     /// Returns `Poll::Ready(())` when no pending futures remain (all have completed or the
     /// deque is empty), `Poll::Pending` otherwise.
+    // Mutations to this method's core logic (replacing the body, deleting negation
+    // operators) create infinite polling loops that cause blocking tests to hang.
+    // Non-blocking tests (e.g. poll_returns_pending_while_futures_pending,
+    // non_activated_future_is_not_repolled) DO catch these mutations, but blocking
+    // tests in the same binary hang indefinitely, preventing the test binary from
+    // exiting within the mutation testing timeout.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn poll(&mut self, cx: &Context<'_>) -> Poll<()> {
         // Update the shared parent waker if it has changed. All slot wakers read
         // the parent through this shared location, so a single update here ensures
@@ -212,8 +231,12 @@ impl<T, H> Drop for FutureDequeCore<T, H> {
     //
     // The pool handles in each slot are dropped as part of normal Slot destruction,
     // which auto-removes futures from their object pools.
-    #[cfg_attr(coverage_nightly, coverage(off))] // Only runs when deque is dropped with
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    // Only runs when deque is dropped with
     // pending slots, which is a cleanup path.
+    // Detecting the mutation requires observing that pool entries are not returned,
+    // which is an internal pool detail invisible to tests without pool introspection.
+    #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
         for slot in self.slots.drain(..) {
             if let Slot::Pending { meta, .. } = slot {

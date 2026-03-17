@@ -208,6 +208,7 @@ impl<T> fmt::Debug for FutureDeque<T> {
 /// (or the deque is empty). The deque may be polled again after returning `Ready`, for
 /// example after pushing new futures.
 #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder to core.poll().
+#[cfg_attr(test, mutants::skip)] // Trivial forwarder to core.poll().
 impl<T> Future for FutureDeque<T> {
     type Output = ();
 

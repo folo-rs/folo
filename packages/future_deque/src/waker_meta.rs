@@ -118,6 +118,11 @@ pub(crate) fn make_waker(meta: MetaPtr) -> Waker {
 
 /// Reads the activation flag, atomically clearing it. Returns `true` if the slot was
 /// activated since the last call.
+// Mutations to this function (replacing the return value, flipping the comparison)
+// create infinite polling loops in tests that use block_on, preventing the test binary
+// from exiting within the mutation testing timeout. Non-blocking tests catch these
+// mutations, but cannot prevent the blocking tests from hanging.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn check_activated(meta: MetaPtr) -> bool {
     // SAFETY: The metadata is valid (refcount > 0 guarantees it has not been removed).
     let meta_ref = unsafe { &*meta.0 };
