@@ -603,6 +603,68 @@ mod tests {
     }
 
     #[test]
+    fn push_after_consume_reuses_deque() {
+        watchdog();
+
+        block_on(async {
+            let mut deque = LocalFutureDeque::new();
+
+            deque.push_back(CountdownFuture::ready(1));
+            deque.push_back(CountdownFuture::ready(2));
+
+            assert_eq!(deque.next().await, Some(1));
+            assert_eq!(deque.next().await, Some(2));
+            assert!(deque.is_empty());
+
+            // Push new futures after consuming all previous ones.
+            deque.push_back(CountdownFuture::ready(3));
+            deque.push_front(CountdownFuture::ready(0));
+
+            assert_eq!(deque.len(), 2);
+            assert_eq!(deque.next().await, Some(0));
+            assert_eq!(deque.next().await, Some(3));
+            assert!(deque.next().await.is_none());
+        });
+    }
+
+    #[test]
+    fn drop_with_mix_of_ready_and_pending() {
+        let dropped_pending = Arc::new(AtomicBool::new(false));
+        let dropped_ready = Arc::new(AtomicBool::new(false));
+
+        {
+            let mut deque = LocalFutureDeque::new();
+
+            // A future that will complete.
+            let guard = DropGuard(Arc::clone(&dropped_ready));
+            deque.push_back(async move {
+                let _guard = guard;
+                42
+            });
+
+            // A future that will remain pending.
+            let guard = DropGuard(Arc::clone(&dropped_pending));
+            deque.push_back(async move {
+                let _guard = guard;
+                std::future::pending::<i32>().await
+            });
+
+            // Drive once so the first future completes (becomes Ready).
+            let waker = Waker::noop();
+            let cx = &mut Context::from_waker(waker);
+            let result = Pin::new(&mut deque).poll_next(cx);
+            assert_eq!(result, Poll::Ready(Some(42)));
+
+            // Deque now has one pending slot. Drop it.
+        }
+
+        // The pending future's captured guard should have been dropped.
+        assert!(dropped_pending.load(Ordering::Relaxed));
+        // The ready future's guard was already consumed via poll_next.
+        assert!(dropped_ready.load(Ordering::Relaxed));
+    }
+
+    #[test]
     fn send_push_front_ordering() {
         watchdog();
 
