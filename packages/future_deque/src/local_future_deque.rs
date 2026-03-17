@@ -23,6 +23,7 @@ thread_local! {
 
 // Bridges the generic `FutureHandle<T>` abstraction to the concrete
 // `LocalBlindPooledMut` handle type used by the `!Send` variant.
+#[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder to pool handle method.
 impl<T> FutureHandle<T> for LocalBlindPooledMut<dyn ErasedFuture<T>> {
     fn as_pin_mut(&mut self) -> Pin<&mut dyn ErasedFuture<T>> {
         LocalBlindPooledMut::as_pin_mut(self)
@@ -206,6 +207,7 @@ impl<T> fmt::Debug for LocalFutureDeque<T> {
 /// complete. `Poll::Ready(())` indicates that every future in the deque has finished
 /// (or the deque is empty). The deque may be polled again after returning `Ready`, for
 /// example after pushing new futures.
+#[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder to core.poll().
 impl<T> Future for LocalFutureDeque<T> {
     type Output = ();
 
@@ -215,6 +217,7 @@ impl<T> Future for LocalFutureDeque<T> {
 }
 
 #[cfg(any(test, feature = "futures-stream"))]
+#[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder to core.poll_next().
 impl<T> futures_core::Stream for LocalFutureDeque<T> {
     type Item = T;
 
