@@ -125,9 +125,13 @@ impl<T> Stream for FutureDeque<T> {
     }
 }
 
-// SAFETY: All inserted futures are required to be Send (enforced by push method bounds).
-// Pool handles (BlindPooledMut) are Send when contents are Send. The shared_parent Arc
-// and MetaPtr are Send+Sync. The BlindPool clone is Send+Sync.
+// SAFETY: The erased type `dyn DequeFuture<T>` does not carry a `Send` bound, so
+// `BlindPooledMut<dyn DequeFuture<T>>` is not automatically `Send`. However, `push_back`
+// and `push_front` both require `F: Future + Send + 'static`, guaranteeing that every
+// value behind the trait object is in fact `Send`. This is the intended usage pattern of
+// `BlindPooledMut` — it deliberately does not require `T: Send` so that trait object
+// casts do not need to carry marker bounds. All other fields (`BlindPool`, waker metadata
+// behind `Arc<Mutex<…>>`) are `Send + Sync`.
 unsafe impl<T: Send> Send for FutureDeque<T> {}
 
 #[cfg(test)]
