@@ -6,10 +6,26 @@ use std::ptr::NonNull;
 use crate::{RawPooledMut, SlabHandle};
 
 /// A shared handle to an object in an object pool.
-#[doc = include_str!("../../doc/snippets/raw_handle_implications.md")]
-#[doc = include_str!("../../doc/snippets/shared_handle_implications.md")]
-#[doc = include_str!("../../doc/snippets/shared_raw_handle_implications.md")]
-#[doc = include_str!("../../doc/snippets/nonlocal_handle_thread_safety.md")]
+/// # Implications of raw handles
+///
+/// The handle can be used to access the pooled object, as well as to remove
+/// it from the pool when no longer needed.
+///
+/// This is a raw handle that requires manual lifetime management of the pooled objects.
+/// * Accessing the target object is only possible via unsafe code as the handle does not
+///   know when the pool has been dropped - the caller must guarantee the pool still exists.
+/// * You must explicitly remove the target object from the pool when it is no longer needed.
+///   If the handle is merely dropped, the object it references remains in the pool until
+///   the pool itself is dropped.
+///
+/// This is a shared handle that only grants shared access to the object. No exclusive
+/// references can be created through this handle.
+///
+/// All handles become invalid once the object is removed from the pool or the pool is dropped.
+///
+/// # Thread safety
+///
+/// The handle is always `Sync`. The handle is `Send` if `T` is `Send`.
 pub struct RawPooled<T>
 where
     // We support casting to trait objects, hence `?Sized`.
@@ -52,7 +68,14 @@ impl<T: ?Sized> RawPooled<T> {
         self.slab_handle
     }
 
-    #[doc = include_str!("../../doc/snippets/handle_ptr.md")]
+    /// Get a pointer to the target object.
+    ///
+    /// All pooled objects are guaranteed to be pinned for their entire lifetime, so this pointer
+    /// remains valid for as long as the object remains in the pool.
+    ///
+    /// The object pool implementation does not keep any references to the pooled objects, so
+    /// you have the option of using this pointer to create Rust references directly without fear
+    /// of any conflicting references created by the pool.
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
@@ -82,7 +105,14 @@ impl<T: ?Sized> RawPooled<T> {
         }
     }
 
-    #[doc = include_str!("../../doc/snippets/raw_as_pin.md")]
+    /// Borrows the target object as a pinned shared reference.
+    ///
+    /// All pooled objects are guaranteed to be pinned for their entire lifetime.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the pool will remain alive for the duration the returned
+    /// reference is used.
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
@@ -94,7 +124,15 @@ impl<T: ?Sized> RawPooled<T> {
         unsafe { Pin::new_unchecked(as_ref) }
     }
 
-    #[doc = include_str!("../../doc/snippets/raw_as_ref.md")]
+    /// Borrows the target object via shared reference.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the pool remains alive for
+    /// the duration the returned reference is used.
+    ///
+    /// The caller must guarantee that the object remains in the pool
+    /// for the duration the returned reference is used.
     #[must_use]
     #[inline]
     #[cfg_attr(test, mutants::skip)] // cargo-mutants tries many unviable mutations, wasting precious build minutes.
