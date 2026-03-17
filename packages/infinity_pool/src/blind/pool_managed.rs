@@ -1,6 +1,6 @@
 use std::alloc::Layout;
 use std::mem::MaybeUninit;
-use std::panic::{AssertUnwindSafe, UnwindSafe, catch_unwind, resume_unwind};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::{Arc, MutexGuard};
 
 use crate::NEVER_POISONED;
@@ -240,16 +240,16 @@ impl BlindPool {
     #[must_use]
     pub unsafe fn insert_with<T: Send + 'static, F>(&self, f: F) -> BlindPooledMut<T>
     where
-        F: FnOnce(&mut MaybeUninit<T>) + UnwindSafe,
+        F: FnOnce(&mut MaybeUninit<T>),
     {
         let mut core = self.core.lock().expect(NEVER_POISONED);
 
         let pool = ensure_inner_pool::<T>(&mut core);
 
-        // AssertUnwindSafe: the user closure `f` is already UnwindSafe by bound.
-        // This assertion only covers the MutexGuard (`core`), which is inherently
-        // !UnwindSafe. We drop it cleanly before resume_unwind, so it is never
-        // observed in a potentially inconsistent state.
+        // AssertUnwindSafe: covers both the user closure and the MutexGuard,
+        // which are inherently !UnwindSafe. We drop the guard cleanly before
+        // resume_unwind, so our state is never observed in a potentially
+        // inconsistent state. The user's panic is re-thrown without tampering.
         let result = catch_unwind(AssertUnwindSafe(|| {
             // SAFETY: inner pool selector guarantees matching layout.
             // Initialization guarantee is forwarded from the caller.
@@ -666,7 +666,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "intentional panic to verify pass-through")]
     fn insert_with_propagates_panic_from_closure() {
         let pool = BlindPool::new();
 
@@ -674,7 +674,7 @@ mod tests {
         // the panic to drop the mutex guard cleanly, then re-throws via resume_unwind.
         unsafe {
             drop(pool.insert_with(|_: &mut MaybeUninit<u32>| {
-                panic!();
+                panic!("intentional panic to verify pass-through");
             }));
         }
     }

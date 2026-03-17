@@ -3,7 +3,7 @@ use std::fmt;
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
-use std::panic::{AssertUnwindSafe, UnwindSafe, catch_unwind, resume_unwind};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
@@ -222,12 +222,14 @@ where
     #[must_use]
     pub unsafe fn insert_with<F>(&self, f: F) -> PooledMut<T>
     where
-        F: FnOnce(&mut MaybeUninit<T>) + UnwindSafe,
+        F: FnOnce(&mut MaybeUninit<T>),
     {
         let mut inner = self.inner.lock().expect(NEVER_POISONED);
 
-        // AssertUnwindSafe: the user closure `f` is already UnwindSafe by bound.
-        // This assertion only covers the MutexGuard (`inner`), which is inherently
+        // AssertUnwindSafe: covers both the user closure and the MutexGuard,
+        // which are inherently !UnwindSafe. We drop the guard cleanly before
+        // resume_unwind, so our state is never observed in a potentially
+        // inconsistent state. The user's panic is re-thrown without tampering.
         // !UnwindSafe. We drop it cleanly before resume_unwind, so it is never
         // observed in a potentially inconsistent state.
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -280,14 +282,14 @@ where
     /// ```
     pub fn with_iter<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(PinnedPoolIterator<'_, T>) -> R + UnwindSafe,
+        F: FnOnce(PinnedPoolIterator<'_, T>) -> R,
     {
         let guard = self.inner.lock().expect(NEVER_POISONED);
         let iter = PinnedPoolIterator::new(&guard);
-        // AssertUnwindSafe: the user closure `f` is already UnwindSafe by bound.
-        // This assertion only covers `iter`, which borrows from a MutexGuard and
-        // is therefore inherently !UnwindSafe. We drop the guard cleanly before
-        // resume_unwind, so it is never observed in a potentially inconsistent state.
+        // AssertUnwindSafe: covers both the user closure and `iter` (which
+        // borrows from a MutexGuard and is therefore inherently !UnwindSafe).
+        // We drop the guard cleanly before resume_unwind, so our state is never
+        // observed in a potentially inconsistent state.
         let result = catch_unwind(AssertUnwindSafe(|| f(iter)));
         drop(guard);
 
@@ -826,7 +828,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "intentional panic to verify pass-through")]
     fn insert_with_propagates_panic_from_closure() {
         let pool = PinnedPool::<u32>::new();
 
@@ -834,19 +836,19 @@ mod tests {
         // the panic to drop the mutex guard cleanly, then re-throws via resume_unwind.
         unsafe {
             drop(pool.insert_with(|_: &mut MaybeUninit<u32>| {
-                panic!();
+                panic!("intentional panic to verify pass-through");
             }));
         }
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "intentional panic to verify pass-through")]
     fn with_iter_propagates_panic_from_closure() {
         let pool = PinnedPool::<u32>::new();
         let _handle = pool.insert(42_u32);
 
         pool.with_iter(|_iter| {
-            panic!();
+            panic!("intentional panic to verify pass-through");
         });
     }
 }

@@ -403,7 +403,7 @@ mod tests {
 
     #[cfg(debug_assertions)]
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "intentional panic to verify pass-through")]
     fn inspect_awaiters_propagates_panic_from_closure() {
         let lake = RawEventLake::new();
 
@@ -415,7 +415,7 @@ mod tests {
         _ = receiver.as_mut().poll(&mut cx);
 
         lake.inspect_awaiters(|_| {
-            panic!();
+            panic!("intentional panic to verify pass-through");
         });
     }
 }

@@ -750,7 +750,7 @@ mod tests {
 
     #[cfg(debug_assertions)]
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "intentional panic to verify pass-through")]
     fn inspect_awaiters_propagates_panic_from_closure() {
         let pool = EventPool::<i32>::new();
         let (_sender, receiver) = pool.rent();
@@ -760,7 +760,7 @@ mod tests {
         _ = receiver.as_mut().poll(&mut cx);
 
         pool.inspect_awaiters(|_bt| {
-            panic!();
+            panic!("intentional panic to verify pass-through");
         });
     }
 }
