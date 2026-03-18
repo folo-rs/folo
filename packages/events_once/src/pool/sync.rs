@@ -7,13 +7,13 @@ use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 #[cfg(debug_assertions)]
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use infinity_pool::RawPinnedPool;
 
-use crate::NEVER_POISONED;
-use crate::{Event, PooledReceiver, PooledRef, PooledSender, ReceiverCore, SenderCore};
+use crate::{
+    Event, NEVER_POISONED, PooledReceiver, PooledRef, PooledSender, ReceiverCore, SenderCore,
+};
 
 /// A pool of reusable one-time thread-safe events.
 ///

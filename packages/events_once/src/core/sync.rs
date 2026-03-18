@@ -6,17 +6,16 @@ use std::fmt;
 use std::hint::spin_loop;
 use std::marker::PhantomPinned;
 use std::mem::{MaybeUninit, offset_of};
+#[cfg(debug_assertions)]
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::pin::Pin;
 use std::ptr::NonNull;
 #[cfg(test)]
 use std::sync::Arc;
-use std::sync::atomic::{self, AtomicU8};
-use std::task::Waker;
-
-#[cfg(debug_assertions)]
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 #[cfg(any(debug_assertions, test))]
 use std::sync::Mutex;
+use std::sync::atomic::{self, AtomicU8};
+use std::task::Waker;
 
 #[cfg(debug_assertions)]
 use crate::NEVER_POISONED;

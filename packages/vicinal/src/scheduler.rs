@@ -4,9 +4,8 @@ use std::sync::Arc;
 
 use tracing::trace;
 
-use crate::NEVER_POISONED;
 use crate::metrics::CLOCK;
-use crate::{JoinHandle, PoolInner, PooledCastVicinalTask, wrap_task};
+use crate::{JoinHandle, NEVER_POISONED, PoolInner, PooledCastVicinalTask, wrap_task};
 
 /// A handle for spawning tasks on a [`Pool`][crate::Pool].
 ///

@@ -1,13 +1,12 @@
 //! Worker thread logic for executing tasks from queues.
 
 use std::collections::VecDeque;
+use std::sync::Mutex;
 use std::sync::atomic::{self, AtomicBool, Ordering};
 
 use infinity_pool::BlindPooledMut;
-use std::sync::Mutex;
 
-use crate::NEVER_POISONED;
-use crate::VicinalTask;
+use crate::{NEVER_POISONED, VicinalTask};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum IterationResult {

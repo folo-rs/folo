@@ -1,0 +1,37 @@
+[package]
+name = "future_deque"
+description = "Pool-backed deque collections for managing groups of futures"
+publish = true
+version = "0.1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+futures-stream = ["dep:futures-core"]
+
+[dependencies]
+futures-core = { workspace = true, optional = true }
+infinity_pool = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+events_once = { path = "../events_once" }
+futures = { workspace = true }
+futures-core = { workspace = true }
+mutants = { workspace = true }
+static_assertions = { workspace = true }
+testing = { path = "../testing" }
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "future_deque"
+harness = false

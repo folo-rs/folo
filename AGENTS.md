@@ -355,6 +355,26 @@ Exceptions:
 
 Dependencies are sorted alphabetically by name of the package.
 
+# Default features
+
+Do not define default features in `Cargo.toml` unless there is a specific, justified reason
+to do so. Features should be opt-in, not opt-out.
+
+# Feature-gated documentation
+
+Use `#![cfg_attr(docsrs, feature(doc_cfg))]` at the crate root. The `doc_cfg` feature
+now includes automatic inference of feature gates from `#[cfg(feature = "...")]` attributes,
+so per-item `#[cfg_attr(docsrs, doc(cfg(...)))]` annotations are not needed.
+
+Do not use `doc_auto_cfg` — it has been removed and merged into `doc_cfg`.
+
+Ensure `Cargo.toml` contains:
+
+```toml
+[package.metadata.docs.rs]
+all-features = true
+```
+
 # Do not use `\n` in println!() statements
 
 To empty an empty line to the terminal, use use `println!();` instead of
@@ -375,7 +395,14 @@ as long as there are no delays or wait-loops in the test code itself.
 # Tests must not hang
 
 When there is a danger that a test may hang (e.g. it contains a `.wait()`, `.recv()` or
-similar call), you must use a watchdog timer to force a timeout after 10 seconds.
+similar call), you must use `testing::with_watchdog(|| { ... })` to wrap the test body with
+a timeout. Do not implement custom watchdog timers — always use the existing watchdog from
+the `testing` package.
+
+Watchdogs are automatically disabled during mutation testing (`MUTATION_TESTING=1` environment
+variable). A mutation that causes a test to hang should be fixed by either redesigning the test
+to catch the mutation without blocking (e.g. adding `debug_assert!` checks) or by skipping the
+mutation if it is impractical to catch.
 
 # Named constants
 
@@ -515,6 +542,16 @@ Exclude such tests from running under Miri.
 
 Doctests are not executed under Miri. There is no need to make doctests Miri-compatible.
 
+# Testing atomic operations and custom synchronization
+
+Any code that uses atomic operations, custom wakers, or other synchronization primitives must
+include tests that exercise real multithreaded scenarios (e.g. signaling completion from another
+thread via `events_once::Event`). These tests should be Miri-compatible (no OS-specific calls)
+and verified via `just package=<name> miri-harder`, which runs Miri with many random seeds
+(`-Zmiri-many-seeds=..64`). The combination of true multithreaded tests and miri-harder is
+highly effective at detecting data races, incorrect memory orderings, and other concurrency bugs
+that are nearly impossible to catch with single-threaded tests alone.
+
 # Mutation testing coverage and skipping mutations
 
 We expect all mutations to either be unviable or to be caught. Uncaught mutations and mutants that
@@ -559,7 +596,12 @@ with `#[cfg(test)]`. Do not just suppress "dead code" warnings.
 
 # Feature-gated code should also be enabled by `test` build
 
-If code is feature-grated, it should always also be enabled in test builds: `#[cfg(any(test, feature = "foo"))]`
+If code is feature-gated, it should always also be enabled in test builds:
+`#[cfg(any(test, feature = "foo"))]`
+
+When a feature gate controls a dependency (e.g. `dep:futures-core` behind `futures-stream`),
+ensure the dependency is also listed as a dev-dependency so it is available in test builds
+without requiring the feature to be explicitly activated.
 
 # There are many files in the workspace
 

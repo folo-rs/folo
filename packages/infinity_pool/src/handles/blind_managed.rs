@@ -6,8 +6,7 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use crate::NEVER_POISONED;
-use crate::{BlindPoolCore, BlindPooledMut, LayoutKey, RawPooled, RawPooledMut};
+use crate::{BlindPoolCore, BlindPooledMut, LayoutKey, NEVER_POISONED, RawPooled, RawPooledMut};
 
 // Note that while this is a thread-safe handle, we do not require `T: Send` because
 // we do not want to require every trait we cast into via trait object to be `Send`.

@@ -7,8 +7,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
-use crate::NEVER_POISONED;
-use crate::{PooledMut, RawOpaquePool, RawOpaquePoolIterator, RawOpaquePoolThreadSafe};
+use crate::{
+    NEVER_POISONED, PooledMut, RawOpaquePool, RawOpaquePoolIterator, RawOpaquePoolThreadSafe,
+};
 
 /// A thread-safe pool of reference-counted objects of type `T`.
 ///

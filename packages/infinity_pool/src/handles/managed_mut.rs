@@ -6,8 +6,7 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::{fmt, mem, ptr};
 
-use crate::NEVER_POISONED;
-use crate::{Pooled, RawOpaquePoolThreadSafe, RawPooledMut};
+use crate::{NEVER_POISONED, Pooled, RawOpaquePoolThreadSafe, RawPooledMut};
 
 // Note that while this is a thread-safe handle, we do not require `T: Send` because
 // we do not want to require every trait we cast into via trait object to be `Send`.

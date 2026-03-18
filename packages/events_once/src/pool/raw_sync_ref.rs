@@ -7,8 +7,7 @@ use std::{fmt, mem};
 
 use infinity_pool::RawPooled;
 
-use crate::NEVER_POISONED;
-use crate::{Event, EventRef, RawEventPoolCore};
+use crate::{Event, EventRef, NEVER_POISONED, RawEventPoolCore};
 
 pub(crate) struct RawPooledRef<T: Send + 'static> {
     core: NonNull<UnsafeCell<RawEventPoolCore<T>>>,

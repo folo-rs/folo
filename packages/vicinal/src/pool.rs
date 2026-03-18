@@ -12,8 +12,7 @@ use many_cpus::{ProcessorId, SystemHardware};
 use new_zealand::nz;
 use tracing::{debug, trace};
 
-use crate::NEVER_POISONED;
-use crate::{IterationResult, ProcessorRegistry, Scheduler, WorkerCore};
+use crate::{IterationResult, NEVER_POISONED, ProcessorRegistry, Scheduler, WorkerCore};
 
 /// Experimentally determined as providing good throughput under
 /// heavy I/O primitive create/destroy workload.

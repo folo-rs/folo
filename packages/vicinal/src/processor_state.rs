@@ -1,12 +1,12 @@
 //! Per-processor state for worker threads.
 
 use std::collections::VecDeque;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use event_listener::Event;
 use events_once::EventLake;
 use infinity_pool::{BlindPool, BlindPooledMut};
-use std::sync::Mutex;
 
 use crate::VicinalTask;
 

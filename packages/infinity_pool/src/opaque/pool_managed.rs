@@ -5,9 +5,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
-use crate::NEVER_POISONED;
 use crate::opaque::pool_raw::RawOpaquePoolIterator;
-use crate::{PooledMut, RawOpaquePool, RawOpaquePoolThreadSafe};
+use crate::{NEVER_POISONED, PooledMut, RawOpaquePool, RawOpaquePoolThreadSafe};
 
 /// A thread-safe pool of reference-counted objects with uniform memory layout.
 ///
