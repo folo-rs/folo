@@ -709,4 +709,67 @@ mod tests {
         assert!(f2.as_mut().poll(&mut cx).is_ready());
         assert!(f3.as_mut().poll(&mut cx).is_ready());
     }
+
+    // --- re-entrancy tests (prove wake() is called outside waiter list borrow) ---
+    //
+    // These tests use a custom waker that re-entrantly accesses the same event
+    // when woken. If wake() were called while a &WaiterList borrow from
+    // UnsafeCell is still active, the re-entrant mutable access would create
+    // aliased references and Miri would flag the UB.
+
+    #[test]
+    fn set_with_reentrant_waker_does_not_alias() {
+        use crate::test_helpers::ReentrantWakerData;
+
+        let event = LocalManualResetEvent::boxed();
+        let event_clone = event.clone();
+
+        let waker_data = ReentrantWakerData::new(move || {
+            // Re-entrantly call reset() + poll a new wait() future, which
+            // accesses the waiter list to register a new node.
+            event_clone.reset();
+            let mut new_future = Box::pin(event_clone.wait());
+            let noop = Waker::noop();
+            let mut cx = task::Context::from_waker(noop);
+            assert!(new_future.as_mut().poll(&mut cx).is_pending());
+        });
+        let waker = waker_data.waker();
+        let mut cx = task::Context::from_waker(&waker);
+
+        let mut future = Box::pin(event.wait());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        // set() collects the waker from the list, releases the borrow, then
+        // calls wake(). The re-entrant waker resets the event and polls a new
+        // future that registers in the waiter list.
+        event.set();
+
+        assert!(waker_data.was_woken());
+    }
+
+    #[test]
+    fn embedded_set_with_reentrant_waker_does_not_alias() {
+        use crate::test_helpers::ReentrantWakerData;
+
+        let container = Box::pin(EmbeddedLocalManualResetEvent::new());
+        // SAFETY: The container outlives the handle.
+        let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
+
+        let waker_data = ReentrantWakerData::new(move || {
+            event.reset();
+            let mut new_future = Box::pin(event.wait());
+            let noop = Waker::noop();
+            let mut cx = task::Context::from_waker(noop);
+            assert!(new_future.as_mut().poll(&mut cx).is_pending());
+        });
+        let waker = waker_data.waker();
+        let mut cx = task::Context::from_waker(&waker);
+
+        let mut future = Box::pin(event.wait());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        event.set();
+
+        assert!(waker_data.was_woken());
+    }
 }

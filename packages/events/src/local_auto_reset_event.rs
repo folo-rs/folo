@@ -107,24 +107,30 @@ impl LocalAutoResetEvent {
     /// the event remains unset. If no task is waiting, the event transitions
     /// to the set state.
     pub fn set(&self) {
-        // SAFETY: Single-threaded access guaranteed by !Send.
-        let waiters = unsafe { &mut *self.inner.waiters.get() };
-
-        // SAFETY: Single-threaded.
-        if let Some(node_ptr) = unsafe { waiters.pop_front() } {
-            // SAFETY: Single-threaded, node was just popped.
-            unsafe {
-                (*node_ptr).notified = true;
-            }
+        // Capture the waker while borrowing the waiter list, then wake after
+        // the borrow ends to avoid aliased mutable access if the waker is
+        // re-entrant.
+        let waker = {
+            // SAFETY: Single-threaded access guaranteed by !Send.
+            let waiters = unsafe { &mut *self.inner.waiters.get() };
 
             // SAFETY: Single-threaded.
-            let waker = unsafe { (*node_ptr).waker.take() };
+            if let Some(node_ptr) = unsafe { waiters.pop_front() } {
+                // SAFETY: Single-threaded, node was just popped.
+                unsafe {
+                    (*node_ptr).notified = true;
+                }
 
-            if let Some(w) = waker {
-                w.wake();
+                // SAFETY: Single-threaded.
+                unsafe { (*node_ptr).waker.take() }
+            } else {
+                self.inner.is_set.set(true);
+                None
             }
-        } else {
-            self.inner.is_set.set(true);
+        };
+
+        if let Some(w) = waker {
+            w.wake();
         }
     }
 
@@ -228,23 +234,29 @@ impl Drop for LocalAutoResetWaitFuture {
         // SAFETY: Single-threaded access.
         if unsafe { (*node_ptr).notified } {
             // Cancelled after notification — forward to next waiter.
-            // SAFETY: Single-threaded.
-            let waiters = unsafe { &mut *self.inner.waiters.get() };
-
-            // SAFETY: Single-threaded.
-            if let Some(next_node) = unsafe { waiters.pop_front() } {
+            // Capture the waker while borrowing the waiter list, then wake
+            // after the borrow ends to avoid aliased mutable access if the
+            // waker is re-entrant.
+            let waker = {
                 // SAFETY: Single-threaded.
-                unsafe {
-                    (*next_node).notified = true;
-                }
-                // SAFETY: Single-threaded.
-                let waker = unsafe { (*next_node).waker.take() };
+                let waiters = unsafe { &mut *self.inner.waiters.get() };
 
-                if let Some(w) = waker {
-                    w.wake();
+                // SAFETY: Single-threaded.
+                if let Some(next_node) = unsafe { waiters.pop_front() } {
+                    // SAFETY: Single-threaded.
+                    unsafe {
+                        (*next_node).notified = true;
+                    }
+                    // SAFETY: Single-threaded.
+                    unsafe { (*next_node).waker.take() }
+                } else {
+                    self.inner.is_set.set(true);
+                    None
                 }
-            } else {
-                self.inner.is_set.set(true);
+            };
+
+            if let Some(w) = waker {
+                w.wake();
             }
         } else {
             // Not notified — just remove from the list.
@@ -367,24 +379,30 @@ impl RawLocalAutoResetEvent {
     /// the event remains unset. If no task is waiting, the event transitions
     /// to the set state.
     pub fn set(&self) {
-        // SAFETY: Single-threaded access guaranteed by !Send.
-        let waiters = unsafe { &mut *self.inner().waiters.get() };
-
-        // SAFETY: Single-threaded.
-        if let Some(node_ptr) = unsafe { waiters.pop_front() } {
-            // SAFETY: Single-threaded, node was just popped.
-            unsafe {
-                (*node_ptr).notified = true;
-            }
+        // Capture the waker while borrowing the waiter list, then wake after
+        // the borrow ends to avoid aliased mutable access if the waker is
+        // re-entrant.
+        let waker = {
+            // SAFETY: Single-threaded access guaranteed by !Send.
+            let waiters = unsafe { &mut *self.inner().waiters.get() };
 
             // SAFETY: Single-threaded.
-            let waker = unsafe { (*node_ptr).waker.take() };
+            if let Some(node_ptr) = unsafe { waiters.pop_front() } {
+                // SAFETY: Single-threaded, node was just popped.
+                unsafe {
+                    (*node_ptr).notified = true;
+                }
 
-            if let Some(w) = waker {
-                w.wake();
+                // SAFETY: Single-threaded.
+                unsafe { (*node_ptr).waker.take() }
+            } else {
+                self.inner().is_set.set(true);
+                None
             }
-        } else {
-            self.inner().is_set.set(true);
+        };
+
+        if let Some(w) = waker {
+            w.wake();
         }
     }
 
@@ -496,23 +514,29 @@ impl Drop for RawLocalAutoResetWaitFuture {
         // SAFETY: Single-threaded access.
         if unsafe { (*node_ptr).notified } {
             // Cancelled after notification — forward to next waiter.
-            // SAFETY: Single-threaded.
-            let waiters = unsafe { &mut *inner.waiters.get() };
-
-            // SAFETY: Single-threaded.
-            if let Some(next_node) = unsafe { waiters.pop_front() } {
+            // Capture the waker while borrowing the waiter list, then wake
+            // after the borrow ends to avoid aliased mutable access if the
+            // waker is re-entrant.
+            let waker = {
                 // SAFETY: Single-threaded.
-                unsafe {
-                    (*next_node).notified = true;
-                }
-                // SAFETY: Single-threaded.
-                let waker = unsafe { (*next_node).waker.take() };
+                let waiters = unsafe { &mut *inner.waiters.get() };
 
-                if let Some(w) = waker {
-                    w.wake();
+                // SAFETY: Single-threaded.
+                if let Some(next_node) = unsafe { waiters.pop_front() } {
+                    // SAFETY: Single-threaded.
+                    unsafe {
+                        (*next_node).notified = true;
+                    }
+                    // SAFETY: Single-threaded.
+                    unsafe { (*next_node).waker.take() }
+                } else {
+                    inner.is_set.set(true);
+                    None
                 }
-            } else {
-                inner.is_set.set(true);
+            };
+
+            if let Some(w) = waker {
+                w.wake();
             }
         } else {
             // Not notified — just remove from the list.
@@ -801,5 +825,120 @@ mod tests {
         drop(future1);
 
         assert!(future2.as_mut().poll(&mut cx).is_ready());
+    }
+
+    // --- re-entrancy tests (prove wake() is called outside &mut WaiterList borrow) ---
+    //
+    // These tests use a custom waker that re-entrantly accesses the same event
+    // when woken. If wake() were called while an &mut WaiterList borrow from
+    // UnsafeCell is still active, the re-entrant access would create aliased
+    // mutable references and Miri would flag the UB.
+
+    #[test]
+    fn set_with_reentrant_waker_does_not_alias() {
+        use crate::test_helpers::ReentrantWakerData;
+
+        let event = LocalAutoResetEvent::boxed();
+        let event_clone = event.clone();
+
+        let waker_data = ReentrantWakerData::new(move || {
+            // Re-entrantly call set(), which accesses the waiter list.
+            event_clone.set();
+        });
+        let waker = waker_data.waker();
+        let mut cx = task::Context::from_waker(&waker);
+
+        let mut future = Box::pin(event.wait());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        // Outer set() pops the waiter, releases the waiter list borrow,
+        // then calls wake(). The re-entrant set() safely obtains its own
+        // &mut WaiterList.
+        event.set();
+
+        assert!(waker_data.was_woken());
+    }
+
+    #[test]
+    fn drop_forwarding_with_reentrant_waker_does_not_alias() {
+        use crate::test_helpers::ReentrantWakerData;
+
+        let event = LocalAutoResetEvent::boxed();
+        let event_clone = event.clone();
+
+        // future1 uses a noop waker.
+        let mut future1 = Box::pin(event.wait());
+        let noop_waker = Waker::noop();
+        let mut noop_cx = task::Context::from_waker(noop_waker);
+        assert!(future1.as_mut().poll(&mut noop_cx).is_pending());
+
+        // future2 uses a re-entrant waker.
+        let waker_data = ReentrantWakerData::new(move || {
+            event_clone.set();
+        });
+        let waker = waker_data.waker();
+        let mut reentrant_cx = task::Context::from_waker(&waker);
+        let mut future2 = Box::pin(event.wait());
+        assert!(future2.as_mut().poll(&mut reentrant_cx).is_pending());
+
+        // set() notifies future1 (noop waker, harmless).
+        event.set();
+
+        // Drop future1 — it was notified, so it forwards to future2,
+        // calling the re-entrant waker which accesses the waiter list.
+        drop(future1);
+
+        assert!(waker_data.was_woken());
+    }
+
+    #[test]
+    fn embedded_set_with_reentrant_waker_does_not_alias() {
+        use crate::test_helpers::ReentrantWakerData;
+
+        let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
+        // SAFETY: The container outlives the handle.
+        let event = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
+
+        let waker_data = ReentrantWakerData::new(move || {
+            event.set();
+        });
+        let waker = waker_data.waker();
+        let mut cx = task::Context::from_waker(&waker);
+
+        let mut future = Box::pin(event.wait());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        event.set();
+
+        assert!(waker_data.was_woken());
+    }
+
+    #[test]
+    fn embedded_drop_forwarding_with_reentrant_waker_does_not_alias() {
+        use crate::test_helpers::ReentrantWakerData;
+
+        let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
+        // SAFETY: The container outlives the handle.
+        let event = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
+
+        // future1 uses a noop waker.
+        let mut future1 = Box::pin(event.wait());
+        let noop_waker = Waker::noop();
+        let mut noop_cx = task::Context::from_waker(noop_waker);
+        assert!(future1.as_mut().poll(&mut noop_cx).is_pending());
+
+        // future2 uses a re-entrant waker.
+        let waker_data = ReentrantWakerData::new(move || {
+            event.set();
+        });
+        let waker = waker_data.waker();
+        let mut reentrant_cx = task::Context::from_waker(&waker);
+        let mut future2 = Box::pin(event.wait());
+        assert!(future2.as_mut().poll(&mut reentrant_cx).is_pending());
+
+        event.set();
+        drop(future1);
+
+        assert!(waker_data.was_woken());
     }
 }

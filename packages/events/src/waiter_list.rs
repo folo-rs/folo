@@ -54,7 +54,7 @@ impl WaiterList {
         self.head.is_null()
     }
 
-    /// Appends a nodeto the back of the list (FIFO enqueue).
+    /// Appends a node to the back of the list (FIFO enqueue).
     ///
     /// # Safety
     ///

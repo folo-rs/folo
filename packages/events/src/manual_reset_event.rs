@@ -25,7 +25,7 @@ fn collect_waker(wakers: &mut Vec<Waker>, node: *mut WaiterNode) {
     }
 }
 
-/// Thread-safe async eventthat, once set, releases all current and future
+/// Thread-safe async event that, once set, releases all current and future
 /// awaiters until explicitly reset.
 ///
 /// A `ManualResetEvent` acts as a gate: while set, every call to

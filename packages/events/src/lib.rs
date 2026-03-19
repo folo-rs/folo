@@ -54,6 +54,9 @@ mod local_manual_reset_event;
 mod manual_reset_event;
 mod waiter_list;
 
+#[cfg(test)]
+mod test_helpers;
+
 pub use auto_reset_event::*;
 pub use local_auto_reset_event::*;
 pub use local_manual_reset_event::*;
