@@ -118,11 +118,11 @@ impl ManualResetEvent {
     /// # Examples
     ///
     /// ```
-    /// use std::pin::Pin;
+    /// use std::pin::pin;
     /// use events::{EmbeddedManualResetEvent, ManualResetEvent};
     ///
     /// # futures::executor::block_on(async {
-    /// let container = Box::pin(EmbeddedManualResetEvent::new());
+    /// let container = pin!(EmbeddedManualResetEvent::new());
     ///
     /// // SAFETY: The container outlives the handle.
     /// let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
@@ -248,8 +248,7 @@ impl ManualResetEvent {
 /// Future returned by [`ManualResetEvent::wait()`].
 ///
 /// Completes with `()` when the event is in the set state at the time of
-/// polling. The future is `!Unpin` because it contains an intrusive list node
-/// that must remain at a stable address once registered.
+/// polling.
 pub struct ManualResetWaitFuture {
     inner: Arc<Inner>,
 
@@ -367,11 +366,11 @@ impl fmt::Debug for ManualResetWaitFuture {
 /// # Examples
 ///
 /// ```
-/// use std::pin::Pin;
+/// use std::pin::pin;
 /// use events::{EmbeddedManualResetEvent, ManualResetEvent};
 ///
 /// # futures::executor::block_on(async {
-/// let container = Box::pin(EmbeddedManualResetEvent::new());
+/// let container = pin!(EmbeddedManualResetEvent::new());
 ///
 /// // SAFETY: The container outlives the handle.
 /// let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };

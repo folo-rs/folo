@@ -27,9 +27,16 @@ use crate::waiter_list::{WaiterList, WaiterNode};
 ///
 /// # futures::executor::block_on(async {
 /// let event = LocalAutoResetEvent::boxed();
+/// let consumer = event.clone();
+///
+/// // Producer signals.
 /// event.set();
-/// event.wait().await;
-/// assert!(!event.try_acquire());
+///
+/// // Consumer receives.
+/// consumer.wait().await;
+///
+/// // Signal was consumed.
+/// assert!(!consumer.try_acquire());
 /// # });
 /// ```
 #[derive(Clone)]
@@ -80,11 +87,11 @@ impl LocalAutoResetEvent {
     /// # Examples
     ///
     /// ```
-    /// use std::pin::Pin;
+    /// use std::pin::pin;
     /// use events::{EmbeddedLocalAutoResetEvent, LocalAutoResetEvent};
     ///
     /// # futures::executor::block_on(async {
-    /// let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
+    /// let container = pin!(EmbeddedLocalAutoResetEvent::new());
     ///
     /// // SAFETY: The container outlives the handle.
     /// let event = unsafe {
@@ -103,7 +110,7 @@ impl LocalAutoResetEvent {
 
     /// Signals the event, releasing exactly one waiter.
     ///
-    /// If one or more tasks are waiting, the oldest waiter is released and
+    /// If one or more tasks are waiting, a single waiter is released and
     /// the event remains unset. If no task is waiting, the event transitions
     /// to the set state.
     pub fn set(&self) {
@@ -302,11 +309,11 @@ impl fmt::Debug for LocalAutoResetWaitFuture {
 /// # Examples
 ///
 /// ```
-/// use std::pin::Pin;
+/// use std::pin::pin;
 /// use events::{EmbeddedLocalAutoResetEvent, LocalAutoResetEvent};
 ///
 /// # futures::executor::block_on(async {
-/// let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
+/// let container = pin!(EmbeddedLocalAutoResetEvent::new());
 ///
 /// // SAFETY: The container outlives the handle.
 /// let event = unsafe {
@@ -375,7 +382,7 @@ impl RawLocalAutoResetEvent {
 
     /// Signals the event, releasing exactly one waiter.
     ///
-    /// If one or more tasks are waiting, the oldest waiter is released and
+    /// If one or more tasks are waiting, a single waiter is released and
     /// the event remains unset. If no task is waiting, the event transitions
     /// to the set state.
     pub fn set(&self) {

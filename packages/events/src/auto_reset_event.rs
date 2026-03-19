@@ -17,7 +17,7 @@ const NEVER_POISONED: &str = "we never panic while holding this lock";
 ///
 /// If no one is waiting when `set()` is called, the event remembers the signal
 /// so that the next [`wait()`][Self::wait] completes immediately (consuming the
-/// signal). If one or more tasks are waiting, the oldest waiter is released and
+/// signal). If one or more tasks are waiting, a single waiter is released and
 /// the event stays unset.
 ///
 /// The event is a lightweight cloneable handle. All clones derived from the
@@ -27,17 +27,21 @@ const NEVER_POISONED: &str = "we never panic while holding this lock";
 ///
 /// ```
 /// use events::AutoResetEvent;
+/// use std::thread;
 ///
 /// # futures::executor::block_on(async {
 /// let event = AutoResetEvent::boxed();
+/// let setter = event.clone();
 ///
-/// // No waiter yet — the signal is stored.
-/// event.set();
+/// // A producer signals from another thread.
+/// thread::spawn(move || {
+///     setter.set();
+/// });
 ///
-/// // First wait consumes the stored signal.
+/// // The consumer waits for the signal.
 /// event.wait().await;
 ///
-/// // Signal is consumed — try_acquire returns false.
+/// // Signal was consumed — no more signals pending.
 /// assert!(!event.try_acquire());
 /// # });
 /// ```
@@ -102,11 +106,11 @@ impl AutoResetEvent {
     /// # Examples
     ///
     /// ```
-    /// use std::pin::Pin;
+    /// use std::pin::pin;
     /// use events::{EmbeddedAutoResetEvent, AutoResetEvent};
     ///
     /// # futures::executor::block_on(async {
-    /// let container = Box::pin(EmbeddedAutoResetEvent::new());
+    /// let container = pin!(EmbeddedAutoResetEvent::new());
     ///
     /// // SAFETY: The container outlives the handle.
     /// let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
@@ -123,7 +127,7 @@ impl AutoResetEvent {
 
     /// Signals the event, releasing exactly one waiter.
     ///
-    /// * If one or more tasks are waiting, the oldest waiter is released and
+    /// * If one or more tasks are waiting, a single waiter is released and
     ///   the event remains unset.
     /// * If no task is waiting, the event transitions to the set state so that
     ///   the next [`wait()`][Self::wait] or [`try_acquire()`][Self::try_acquire]
@@ -148,7 +152,7 @@ impl AutoResetEvent {
 
             // SAFETY: We hold the lock, so all node pointers are valid.
             if let Some(node_ptr) = unsafe { state.waiters.pop_front() } {
-                // Directly notify the oldest waiter.
+                // Notify the next waiter.
                 // SAFETY: We hold the lock and just popped this node.
                 unsafe {
                     (*node_ptr).notified = true;
@@ -200,17 +204,16 @@ impl AutoResetEvent {
 
     /// Returns a future that completes when the event is signaled.
     ///
-    /// The future registers itself in a FIFO queue. When [`set()`][Self::set]
-    /// is called, the oldest waiting future is released. If the event is
-    /// already set (no prior waiter consumed it), the future completes
-    /// immediately and consumes the signal.
+    /// When [`set()`][Self::set] is called, a single waiting future is
+    /// released. If the event is already set (no prior waiter consumed it),
+    /// the future completes immediately and consumes the signal.
     ///
     /// # Cancellation safety
     ///
     /// If a future that has been notified is dropped before it is polled to
-    /// completion, the notification is forwarded to the next waiter in the
-    /// queue (or the event is re-set if the queue is empty). No signals are
-    /// lost due to cancellation.
+    /// completion, the notification is forwarded to the next waiter (or the
+    /// event is re-set if no waiters remain). No signals are lost due to
+    /// cancellation.
     ///
     /// # Examples
     ///
@@ -236,9 +239,7 @@ impl AutoResetEvent {
 
 /// Future returned by [`AutoResetEvent::wait()`].
 ///
-/// Completes with `()` when the event signal is acquired. The future is
-/// `!Unpin` because it contains an intrusive list node that must remain at a
-/// stable address once registered.
+/// Completes with `()` when the event signal is acquired.
 pub struct AutoResetWaitFuture {
     inner: Arc<Inner>,
     node: UnsafeCell<WaiterNode>,
@@ -378,11 +379,11 @@ impl fmt::Debug for AutoResetWaitFuture {
 /// # Examples
 ///
 /// ```
-/// use std::pin::Pin;
+/// use std::pin::pin;
 /// use events::{EmbeddedAutoResetEvent, AutoResetEvent};
 ///
 /// # futures::executor::block_on(async {
-/// let container = Box::pin(EmbeddedAutoResetEvent::new());
+/// let container = pin!(EmbeddedAutoResetEvent::new());
 ///
 /// // SAFETY: The container outlives the handle.
 /// let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
@@ -458,7 +459,7 @@ impl RawAutoResetEvent {
 
             // SAFETY: We hold the lock, so all node pointers are valid.
             if let Some(node_ptr) = unsafe { state.waiters.pop_front() } {
-                // Directly notify the oldest waiter.
+                // Notify the next waiter.
                 // SAFETY: We hold the lock and just popped this node.
                 unsafe {
                     (*node_ptr).notified = true;
@@ -1008,7 +1009,7 @@ mod tests {
         assert!(future1.as_mut().poll(&mut cx).is_pending());
         assert!(future2.as_mut().poll(&mut cx).is_pending());
 
-        // set() notifies future1 (FIFO order).
+        // set() notifies the first registered future.
         event.set();
 
         // Drop future1 without re-polling — notification should forward

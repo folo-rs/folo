@@ -110,11 +110,11 @@ impl LocalManualResetEvent {
     /// # Examples
     ///
     /// ```
-    /// use std::pin::Pin;
+    /// use std::pin::pin;
     /// use events::{EmbeddedLocalManualResetEvent, LocalManualResetEvent};
     ///
     /// # futures::executor::block_on(async {
-    /// let container = Box::pin(EmbeddedLocalManualResetEvent::new());
+    /// let container = pin!(EmbeddedLocalManualResetEvent::new());
     ///
     /// // SAFETY: The container outlives the handle.
     /// let event = unsafe {
@@ -281,11 +281,11 @@ impl fmt::Debug for LocalManualResetWaitFuture {
 /// # Examples
 ///
 /// ```
-/// use std::pin::Pin;
+/// use std::pin::pin;
 /// use events::{EmbeddedLocalManualResetEvent, LocalManualResetEvent};
 ///
 /// # futures::executor::block_on(async {
-/// let container = Box::pin(EmbeddedLocalManualResetEvent::new());
+/// let container = pin!(EmbeddedLocalManualResetEvent::new());
 ///
 /// // SAFETY: The container outlives the handle.
 /// let event = unsafe {

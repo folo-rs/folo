@@ -40,11 +40,16 @@
 //!
 //! # futures::executor::block_on(async {
 //! let event = AutoResetEvent::boxed();
+//! let consumer = event.clone();
+//!
+//! // Producer signals.
 //! event.set();
-//! event.wait().await;
+//!
+//! // Consumer receives.
+//! consumer.wait().await;
 //!
 //! // Signal was consumed.
-//! assert!(!event.try_acquire());
+//! assert!(!consumer.try_acquire());
 //! # });
 //! ```
 
@@ -57,7 +62,25 @@ mod waiter_list;
 #[cfg(test)]
 mod test_helpers;
 
-pub use auto_reset_event::*;
-pub use local_auto_reset_event::*;
-pub use local_manual_reset_event::*;
-pub use manual_reset_event::*;
+pub use auto_reset_event::{AutoResetEvent, EmbeddedAutoResetEvent, RawAutoResetEvent};
+pub use local_auto_reset_event::{
+    EmbeddedLocalAutoResetEvent, LocalAutoResetEvent, RawLocalAutoResetEvent,
+};
+pub use local_manual_reset_event::{
+    EmbeddedLocalManualResetEvent, LocalManualResetEvent, RawLocalManualResetEvent,
+};
+pub use manual_reset_event::{EmbeddedManualResetEvent, ManualResetEvent, RawManualResetEvent};
+
+/// Future types returned by event `wait()` methods.
+///
+/// These futures are `!Unpin` and must be pinned before polling.
+pub mod futures {
+    pub use crate::auto_reset_event::{AutoResetWaitFuture, RawAutoResetWaitFuture};
+    pub use crate::local_auto_reset_event::{
+        LocalAutoResetWaitFuture, RawLocalAutoResetWaitFuture,
+    };
+    pub use crate::local_manual_reset_event::{
+        LocalManualResetWaitFuture, RawLocalManualResetWaitFuture,
+    };
+    pub use crate::manual_reset_event::{ManualResetWaitFuture, RawManualResetWaitFuture};
+}
