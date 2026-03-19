@@ -1,0 +1,620 @@
+use std::cell::{Cell, UnsafeCell};
+use std::fmt;
+use std::future::Future;
+use std::marker::{PhantomData, PhantomPinned};
+use std::panic::{RefUnwindSafe, UnwindSafe};
+use std::pin::Pin;
+use std::ptr::NonNull;
+use std::rc::Rc;
+use std::task::{self, Poll, Waker};
+
+use crate::waiter_list::{WaiterList, WaiterNode};
+
+/// Clones the waker from a waiter node and pushes it into the collector.
+///
+/// # Safety
+///
+/// The caller must guarantee that `node` points to a valid [`WaiterNode`].
+fn collect_waker(wakers: &mut Vec<Waker>, node: *mut WaiterNode) {
+    // SAFETY: Caller guarantees the node pointer is valid.
+    if let Some(waker) = unsafe { (*node).waker.as_ref() } {
+        wakers.push(waker.clone());
+    }
+}
+
+/// Single-threaded async event that, once set, releases all current and future
+/// awaiters until explicitly reset.
+///
+/// This is the `!Send` counterpart of [`ManualResetEvent`][crate::ManualResetEvent].
+/// It avoids atomic operations and locking, making it more efficient on
+/// single-threaded executors.
+///
+/// The event is a lightweight cloneable handle. All clones derived from the
+/// same [`boxed()`][Self::boxed] call share the same underlying state.
+///
+/// # Examples
+///
+/// ```
+/// use events::LocalManualResetEvent;
+///
+/// # futures::executor::block_on(async {
+/// let event = LocalManualResetEvent::boxed();
+/// let waiter = event.clone();
+///
+/// event.set();
+/// waiter.wait().await;
+///
+/// event.reset();
+/// assert!(!event.is_set());
+/// # });
+/// ```
+#[derive(Clone)]
+pub struct LocalManualResetEvent {
+    inner: Rc<Inner>,
+}
+
+struct Inner {
+    is_set: Cell<bool>,
+
+    // UnsafeCell because we mutate the list through shared references (Rc).
+    // All access is single-threaded, guaranteed by the !Send marker.
+    waiters: UnsafeCell<WaiterList>,
+
+    // Prevent Send and Sync.
+    _not_send: PhantomData<*const ()>,
+}
+
+// The Cell and UnsafeCell fields make Inner !RefUnwindSafe by auto-trait
+// inference. However, all access is single-threaded and the state machine
+// prevents observing inconsistent state during unwind.
+impl UnwindSafe for Inner {}
+impl RefUnwindSafe for Inner {}
+
+impl LocalManualResetEvent {
+    /// Creates a new event in the unset state.
+    ///
+    /// The returned handle is backed by an [`Rc`]-allocated shared state.
+    /// Clone the handle to obtain additional references to the same event.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use events::LocalManualResetEvent;
+    ///
+    /// let event = LocalManualResetEvent::boxed();
+    /// let clone = event.clone();
+    ///
+    /// clone.set();
+    /// assert!(event.is_set());
+    /// ```
+    #[must_use]
+    pub fn boxed() -> Self {
+        Self {
+            inner: Rc::new(Inner {
+                is_set: Cell::new(false),
+                waiters: UnsafeCell::new(WaiterList::new()),
+                _not_send: PhantomData,
+            }),
+        }
+    }
+
+    /// Creates a handle backed by an [`EmbeddedLocalManualResetEvent`]
+    /// container instead of a heap-allocated [`Rc`].
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the [`EmbeddedLocalManualResetEvent`]
+    /// outlives all returned handles and any
+    /// [`RawLocalManualResetWaitFuture`]s created from them.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::pin::Pin;
+    /// use events::{EmbeddedLocalManualResetEvent, LocalManualResetEvent};
+    ///
+    /// # futures::executor::block_on(async {
+    /// let container = Box::pin(EmbeddedLocalManualResetEvent::new());
+    ///
+    /// // SAFETY: The container outlives the handle.
+    /// let event = unsafe {
+    ///     LocalManualResetEvent::embedded(container.as_ref())
+    /// };
+    ///
+    /// event.set();
+    /// event.wait().await;
+    /// # });
+    /// ```
+    #[must_use]
+    pub unsafe fn embedded(place: Pin<&EmbeddedLocalManualResetEvent>) -> RawLocalManualResetEvent {
+        let inner = NonNull::from(&place.get_ref().inner);
+        RawLocalManualResetEvent { inner }
+    }
+
+    /// Opens the gate, releasing all current awaiters and allowing future
+    /// awaiters to pass through immediately.
+    pub fn set(&self) {
+        self.inner.is_set.set(true);
+
+        // Collect wakers before waking to avoid re-entrancy issues: a waker
+        // might cause the executor to poll a future that accesses our list.
+        let mut wakers: Vec<Waker> = Vec::new();
+
+        // SAFETY: Single-threaded access guaranteed by !Send on Self.
+        let waiters = unsafe { &*self.inner.waiters.get() };
+
+        // SAFETY: Single-threaded — no concurrent access.
+        unsafe {
+            waiters.for_each(|node| {
+                collect_waker(&mut wakers, node);
+            });
+        }
+
+        for waker in wakers {
+            waker.wake();
+        }
+    }
+
+    /// Closes the gate.
+    pub fn reset(&self) {
+        self.inner.is_set.set(false);
+    }
+
+    /// Returns `true` if the event is currently set.
+    #[must_use]
+    pub fn is_set(&self) -> bool {
+        self.inner.is_set.get()
+    }
+
+    /// Non-blocking check equivalent to [`is_set()`][Self::is_set].
+    #[must_use]
+    pub fn try_acquire(&self) -> bool {
+        self.is_set()
+    }
+
+    /// Returns a future that completes when the event is set.
+    #[must_use]
+    pub fn wait(&self) -> LocalManualResetWaitFuture {
+        LocalManualResetWaitFuture {
+            inner: Rc::clone(&self.inner),
+            node: UnsafeCell::new(WaiterNode::new()),
+            registered: false,
+            _pinned: PhantomPinned,
+        }
+    }
+}
+
+/// Future returned by [`LocalManualResetEvent::wait()`].
+pub struct LocalManualResetWaitFuture {
+    inner: Rc<Inner>,
+    node: UnsafeCell<WaiterNode>,
+    registered: bool,
+    _pinned: PhantomPinned,
+}
+
+impl UnwindSafe for LocalManualResetWaitFuture {}
+impl RefUnwindSafe for LocalManualResetWaitFuture {}
+
+impl Future for LocalManualResetWaitFuture {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
+        // SAFETY: We only access fields, we do not move self.
+        let this = unsafe { self.get_unchecked_mut() };
+        let node_ptr = this.node.get();
+
+        if this.inner.is_set.get() {
+            if this.registered {
+                // SAFETY: Single-threaded, node is in the list.
+                let waiters = unsafe { &mut *this.inner.waiters.get() };
+                // SAFETY: Single-threaded, node is registered in this list.
+                unsafe {
+                    waiters.remove(node_ptr);
+                }
+                this.registered = false;
+            }
+            return Poll::Ready(());
+        }
+
+        // SAFETY: Single-threaded access.
+        unsafe {
+            (*node_ptr).waker = Some(cx.waker().clone());
+        }
+
+        if !this.registered {
+            // SAFETY: Single-threaded, node is pinned and not in any list.
+            let waiters = unsafe { &mut *this.inner.waiters.get() };
+            // SAFETY: Single-threaded, node is not in any list.
+            unsafe {
+                waiters.push_back(node_ptr);
+            }
+            this.registered = true;
+        }
+
+        Poll::Pending
+    }
+}
+
+impl Drop for LocalManualResetWaitFuture {
+    fn drop(&mut self) {
+        if self.registered {
+            // SAFETY: Single-threaded, node is in the list.
+            let waiters = unsafe { &mut *self.inner.waiters.get() };
+            // SAFETY: Single-threaded, node is registered in this list.
+            unsafe {
+                waiters.remove(self.node.get());
+            }
+        }
+    }
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+impl fmt::Debug for LocalManualResetEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocalManualResetEvent")
+            .field("is_set", &self.inner.is_set.get())
+            .finish()
+    }
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+impl fmt::Debug for LocalManualResetWaitFuture {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocalManualResetWaitFuture")
+            .field("registered", &self.registered)
+            .finish_non_exhaustive()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Embedded variant
+// ---------------------------------------------------------------------------
+
+/// Container for embedding a [`LocalManualResetEvent`]'s state directly in a
+/// struct, avoiding the heap allocation that [`LocalManualResetEvent::boxed()`]
+/// requires.
+///
+/// Create the container with [`new()`][Self::new], pin it, then call
+/// [`LocalManualResetEvent::embedded()`] to obtain a
+/// [`RawLocalManualResetEvent`] handle.
+///
+/// # Examples
+///
+/// ```
+/// use std::pin::Pin;
+/// use events::{EmbeddedLocalManualResetEvent, LocalManualResetEvent};
+///
+/// # futures::executor::block_on(async {
+/// let container = Box::pin(EmbeddedLocalManualResetEvent::new());
+///
+/// // SAFETY: The container outlives the handle.
+/// let event = unsafe {
+///     LocalManualResetEvent::embedded(container.as_ref())
+/// };
+/// let waiter = event.clone();
+///
+/// event.set();
+/// waiter.wait().await;
+/// # });
+/// ```
+pub struct EmbeddedLocalManualResetEvent {
+    inner: Inner,
+    _pinned: PhantomPinned,
+}
+
+impl EmbeddedLocalManualResetEvent {
+    /// Creates a new embedded event container in the unset state.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            inner: Inner {
+                is_set: Cell::new(false),
+                waiters: UnsafeCell::new(WaiterList::new()),
+                _not_send: PhantomData,
+            },
+            _pinned: PhantomPinned,
+        }
+    }
+}
+
+impl Default for EmbeddedLocalManualResetEvent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// Inner already implements UnwindSafe and RefUnwindSafe.
+impl UnwindSafe for EmbeddedLocalManualResetEvent {}
+impl RefUnwindSafe for EmbeddedLocalManualResetEvent {}
+
+/// Handle to an embedded [`LocalManualResetEvent`] created via
+/// [`LocalManualResetEvent::embedded()`].
+///
+/// This handle uses a raw pointer to the embedded state instead of an
+/// [`Rc`]. The caller is responsible for ensuring the
+/// [`EmbeddedLocalManualResetEvent`] outlives all handles and wait futures.
+///
+/// The API is identical to [`LocalManualResetEvent`].
+#[derive(Clone, Copy)]
+pub struct RawLocalManualResetEvent {
+    inner: NonNull<Inner>,
+}
+
+// NonNull is !Send and !Sync by default, which is correct for local types.
+
+impl UnwindSafe for RawLocalManualResetEvent {}
+impl RefUnwindSafe for RawLocalManualResetEvent {}
+
+impl RawLocalManualResetEvent {
+    fn inner(&self) -> &Inner {
+        // SAFETY: The caller of `embedded()` guarantees the container
+        // outlives this handle.
+        unsafe { self.inner.as_ref() }
+    }
+
+    /// Opens the gate, releasing all current awaiters.
+    pub fn set(&self) {
+        self.inner().is_set.set(true);
+
+        let mut wakers: Vec<Waker> = Vec::new();
+
+        // SAFETY: Single-threaded access guaranteed by !Send on Self.
+        let waiters = unsafe { &*self.inner().waiters.get() };
+
+        // SAFETY: Single-threaded — no concurrent access.
+        unsafe {
+            waiters.for_each(|node| {
+                collect_waker(&mut wakers, node);
+            });
+        }
+
+        for waker in wakers {
+            waker.wake();
+        }
+    }
+
+    /// Closes the gate.
+    pub fn reset(&self) {
+        self.inner().is_set.set(false);
+    }
+
+    /// Returns `true` if the event is currently set.
+    #[must_use]
+    pub fn is_set(&self) -> bool {
+        self.inner().is_set.get()
+    }
+
+    /// Non-blocking check equivalent to [`is_set()`][Self::is_set].
+    #[must_use]
+    pub fn try_acquire(&self) -> bool {
+        self.is_set()
+    }
+
+    /// Returns a future that completes when the event is set.
+    #[must_use]
+    pub fn wait(&self) -> RawLocalManualResetWaitFuture {
+        RawLocalManualResetWaitFuture {
+            inner: self.inner,
+            node: UnsafeCell::new(WaiterNode::new()),
+            registered: false,
+            _pinned: PhantomPinned,
+        }
+    }
+}
+
+/// Future returned by [`RawLocalManualResetEvent::wait()`].
+pub struct RawLocalManualResetWaitFuture {
+    inner: NonNull<Inner>,
+    node: UnsafeCell<WaiterNode>,
+    registered: bool,
+    _pinned: PhantomPinned,
+}
+
+// NonNull and UnsafeCell make this !Send and !Sync by default, which is
+// correct for local types.
+
+impl UnwindSafe for RawLocalManualResetWaitFuture {}
+impl RefUnwindSafe for RawLocalManualResetWaitFuture {}
+
+impl Future for RawLocalManualResetWaitFuture {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
+        // SAFETY: We only access fields, we do not move self.
+        let this = unsafe { self.get_unchecked_mut() };
+        // SAFETY: The container outlives this future per the embedded()
+        // contract.
+        let inner = unsafe { this.inner.as_ref() };
+        let node_ptr = this.node.get();
+
+        if inner.is_set.get() {
+            if this.registered {
+                // SAFETY: Single-threaded, node is in the list.
+                let waiters = unsafe { &mut *inner.waiters.get() };
+                // SAFETY: Single-threaded, node is registered in this list.
+                unsafe {
+                    waiters.remove(node_ptr);
+                }
+                this.registered = false;
+            }
+            return Poll::Ready(());
+        }
+
+        // SAFETY: Single-threaded access.
+        unsafe {
+            (*node_ptr).waker = Some(cx.waker().clone());
+        }
+
+        if !this.registered {
+            // SAFETY: Single-threaded, node is pinned and not in any list.
+            let waiters = unsafe { &mut *inner.waiters.get() };
+            // SAFETY: Single-threaded, node is not in any list.
+            unsafe {
+                waiters.push_back(node_ptr);
+            }
+            this.registered = true;
+        }
+
+        Poll::Pending
+    }
+}
+
+impl Drop for RawLocalManualResetWaitFuture {
+    fn drop(&mut self) {
+        if self.registered {
+            // SAFETY: The container outlives this future.
+            let inner = unsafe { self.inner.as_ref() };
+            // SAFETY: Single-threaded, node is in the list.
+            let waiters = unsafe { &mut *inner.waiters.get() };
+            // SAFETY: Single-threaded, node is registered in this list.
+            unsafe {
+                waiters.remove(self.node.get());
+            }
+        }
+    }
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+impl fmt::Debug for EmbeddedLocalManualResetEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EmbeddedLocalManualResetEvent")
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+impl fmt::Debug for RawLocalManualResetEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let is_set = self.is_set();
+        f.debug_struct("RawLocalManualResetEvent")
+            .field("is_set", &is_set)
+            .finish()
+    }
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+impl fmt::Debug for RawLocalManualResetWaitFuture {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawLocalManualResetWaitFuture")
+            .field("registered", &self.registered)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+    use super::*;
+
+    assert_impl_all!(LocalManualResetEvent: Clone, UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(LocalManualResetEvent: Send, Sync);
+    assert_impl_all!(LocalManualResetWaitFuture: UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(LocalManualResetWaitFuture: Send, Sync, Unpin);
+
+    assert_impl_all!(EmbeddedLocalManualResetEvent: UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(EmbeddedLocalManualResetEvent: Send, Sync, Unpin);
+    assert_impl_all!(RawLocalManualResetEvent: Clone, Copy, UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(RawLocalManualResetEvent: Send, Sync);
+    assert_impl_all!(RawLocalManualResetWaitFuture: UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(RawLocalManualResetWaitFuture: Send, Sync, Unpin);
+
+    #[test]
+    fn starts_unset() {
+        let event = LocalManualResetEvent::boxed();
+        assert!(!event.is_set());
+    }
+
+    #[test]
+    fn set_and_reset() {
+        let event = LocalManualResetEvent::boxed();
+        event.set();
+        assert!(event.is_set());
+        event.reset();
+        assert!(!event.is_set());
+    }
+
+    #[test]
+    fn clone_shares_state() {
+        let a = LocalManualResetEvent::boxed();
+        let b = a.clone();
+        a.set();
+        assert!(b.is_set());
+    }
+
+    #[tokio::test]
+    async fn wait_completes_when_already_set() {
+        let event = LocalManualResetEvent::boxed();
+        event.set();
+        event.wait().await;
+    }
+
+    #[tokio::test]
+    async fn wait_completes_after_set() {
+        let event = LocalManualResetEvent::boxed();
+
+        // Set before the future is polled.
+        let future = event.wait();
+        event.set();
+        future.await;
+    }
+
+    #[tokio::test]
+    async fn drop_future_while_waiting() {
+        let event = LocalManualResetEvent::boxed();
+        {
+            let _f = event.wait();
+        }
+        event.set();
+        event.wait().await;
+    }
+
+    // --- embedded variant tests ---
+
+    #[tokio::test]
+    async fn embedded_set_and_wait() {
+        let container = Box::pin(EmbeddedLocalManualResetEvent::new());
+        // SAFETY: The container outlives the handle.
+        let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
+
+        event.set();
+        event.wait().await;
+    }
+
+    #[tokio::test]
+    async fn embedded_clone_shares_state() {
+        let container = Box::pin(EmbeddedLocalManualResetEvent::new());
+        // SAFETY: The container outlives the handle.
+        let a = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
+        let b = a;
+
+        a.set();
+        assert!(b.is_set());
+        b.wait().await;
+    }
+
+    #[tokio::test]
+    async fn embedded_reset_after_set() {
+        let container = Box::pin(EmbeddedLocalManualResetEvent::new());
+        // SAFETY: The container outlives the handle.
+        let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
+
+        event.set();
+        event.reset();
+        assert!(!event.is_set());
+    }
+
+    #[tokio::test]
+    async fn embedded_drop_future_while_waiting() {
+        let container = Box::pin(EmbeddedLocalManualResetEvent::new());
+        // SAFETY: The container outlives the handle.
+        let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
+
+        {
+            let _future = event.wait();
+        }
+        event.set();
+        event.wait().await;
+    }
+}
