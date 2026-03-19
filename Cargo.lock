@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "all_the_time"
-version = "0.4.13"
+version = "0.4.14"
 dependencies = [
  "cpu-time",
  "criterion",
@@ -23,7 +23,7 @@ dependencies = [
 
 [[package]]
 name = "alloc_tracker"
-version = "0.5.17"
+version = "0.5.18"
 dependencies = [
  "criterion",
  "mutants",
@@ -353,7 +353,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "cargo-detect-package"
-version = "1.0.13"
+version = "1.0.14"
 dependencies = [
  "argh",
  "mockall",
@@ -486,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "cpulist"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "itertools 0.14.0",
  "new_zealand",
@@ -636,7 +636,7 @@ version = "0.5.3"
 
 [[package]]
 name = "events_once"
-version = "0.5.17"
+version = "0.5.18"
 dependencies = [
  "criterion",
  "futures",
@@ -660,7 +660,7 @@ dependencies = [
 
 [[package]]
 name = "fast_time"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "criterion",
  "libc",
@@ -690,7 +690,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "folo_ffi"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "mutants",
  "static_assertions",
@@ -1040,7 +1040,7 @@ dependencies = [
 
 [[package]]
 name = "infinity_pool"
-version = "0.8.9"
+version = "0.8.10"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -1103,7 +1103,7 @@ checksum = "b5b646652bf6661599e1da8901b3b9522896f01e736bad5f723fe7a3a27f899d"
 
 [[package]]
 name = "linked"
-version = "1.0.8"
+version = "1.0.9"
 dependencies = [
  "criterion",
  "hash_hasher",
@@ -1120,7 +1120,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros"
-version = "1.0.8"
+version = "1.0.9"
 dependencies = [
  "linked_macros_impl",
  "proc-macro2",
@@ -1128,7 +1128,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros_impl"
-version = "1.0.8"
+version = "1.0.9"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1161,7 +1161,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus"
-version = "2.3.0"
+version = "2.4.0"
 dependencies = [
  "cpulist",
  "criterion",
@@ -1185,7 +1185,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_benchmarking"
-version = "0.1.42"
+version = "0.1.43"
 dependencies = [
  "cpulist",
  "criterion",
@@ -1266,7 +1266,7 @@ version = "1.0.6"
 
 [[package]]
 name = "nm"
-version = "0.1.29"
+version = "0.1.30"
 dependencies = [
  "criterion",
  "fast_time",
@@ -1281,7 +1281,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "foldhash 0.2.0",
  "futures",
@@ -1419,7 +1419,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.31"
+version = "0.2.32"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -1689,7 +1689,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "region_cached"
-version = "1.0.13"
+version = "1.0.14"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1710,7 +1710,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "1.0.13"
+version = "1.0.14"
 dependencies = [
  "arc-swap",
  "axum",
@@ -2273,7 +2273,7 @@ checksum = "7ba6f5989077681266825251a52748b8c1d8a4ad098cc37e440103d0ea717fc0"
 
 [[package]]
 name = "vicinal"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
